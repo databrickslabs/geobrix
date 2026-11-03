@@ -170,6 +170,21 @@ def test_registration_makes_grid_consulted():
     )
 
 
+def test_worker_grid_dirs_survive_the_transform_itself():
+    """A worker holds no driver registry: its UDF closure puts the grid dirs on the search path, and the transform
+    that follows must not read the empty registry as "no grids" and take them off again. The driver registry stays
+    empty here, as on a worker, so this holds on any machine (a PROJ data dir that already holds the grid, as the
+    dev container's does, cannot hide a regression)."""
+    from databricks.labs.gbx.pyrx import _env
+
+    assert proj_grids.get_registered_dirs() == []
+    _env.configure_gdal_env(extra_proj_dirs=[GRID_DIR])
+
+    lat = _lonlat(_crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS))[1]
+
+    assert lat == pytest.approx(EXPECT_LAT, abs=1e-6)
+
+
 _SERVERLESS_ORDER_PROBE = """
 import sys
 from pyspark.sql import SparkSession

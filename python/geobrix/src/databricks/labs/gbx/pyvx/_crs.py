@@ -528,9 +528,14 @@ def st_transformcrs(
     # the dirs into pyproj's search path (a PROJ_DATA env var alone never reaches
     # pyproj), so a CRS string that references a grid by filename (e.g. +nadgrids=..)
     # actually resolves it. Idempotent and cheap when nothing new is registered.
+    # Only when the registry holds dirs: it is driver-side state, so a worker's is empty
+    # and a call here would read that as "no grids" and undo the dirs the UDF closure
+    # just put on the worker's search path (_build_transformcrs_udf).
+    from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.pyrx._env import configure_gdal_env
 
-    configure_gdal_env()
+    if proj_grids.get_registered_dirs():
+        configure_gdal_env()
     tr = get_transformer(src, tgt)
     g_proj = transform(tr.transform, g)
 

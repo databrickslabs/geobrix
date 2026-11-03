@@ -15,6 +15,7 @@ import os
 import tempfile
 import threading
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
@@ -64,6 +65,7 @@ class Case:
     # of the second argument), and materialized (True: the raster bytes are in the tile and it has no path; False: a
     # path and no bytes). A result that is still a virtual tile is read as its next reader reads it.
     expect: Any = None
+    # "python" alone: a row of the Python API leg only (a behaviour SQL does not share).
     surfaces: Tuple[str, ...] = ("session", "uc")
     geom_srid: int = (
         4326  # the integer SRID UC GEOMETRY args are built with (never a CRS string)
@@ -72,6 +74,8 @@ class Case:
     # The UC warehouse statement is the primary `args` only. A column holds one type, so a variant that changes an
     # argument's type (a WKT string for WKB bytes) is a row of its own.
     variants: Tuple[Tuple[Any, ...], ...] = ()
+    # Keywords the Python API leg adds to the call, as (name, value) pairs: a Python-only keyword has no SQL argument.
+    py_kw: Tuple[Tuple[str, Any], ...] = ()
 
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
@@ -2015,11 +2019,11 @@ def _raster_of(tile) -> Optional[bytes]:
     if isinstance(tile, (bytes, bytearray)):  # a constructor's content argument
         return bytes(tile)
     if isinstance(tile, str):  # a constructor's path argument
-        return open(tile, "rb").read()
+        return Path(tile).read_bytes()
     if _field(tile, "raster") is not None:
         return bytes(_field(tile, "raster"))
     p = _field(tile, "path")
-    return open(p, "rb").read() if p else None
+    return Path(p).read_bytes() if p else None
 
 
 def _reference_warp(src, target_crs: str):
@@ -3631,7 +3635,9 @@ def run_session(
     man = manifest.load()
     results = []
     for case in cases:
-        if surface not in case.surfaces:
+        if surface not in case.surfaces and not (
+            column_of is not None and "python" in case.surfaces
+        ):
             continue
         rows = _argument_rows(case, tmpdir)
         args = rows[0]
@@ -3659,7 +3665,8 @@ def run_session(
                 from pyspark.sql import functions as F
 
                 fcols = [F.col(f"c{i}") for i in range(len(args))]
-                got = df.select(column_of(case.fn)(*fcols).alias("out")).collect()
+                call_py = column_of(case.fn)(*fcols, **dict(case.py_kw))
+                got = df.select(call_py.alias("out")).collect()
             outs = [r["out"] for r in got]
             results.append((case, verdict(case, outs, rows, tmpdir)))
         except (

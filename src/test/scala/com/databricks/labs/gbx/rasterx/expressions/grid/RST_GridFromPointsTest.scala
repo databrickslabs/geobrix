@@ -84,6 +84,11 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
         an[IllegalArgumentException] should be thrownBy {
             RST_GridFromPoints.execute(cornerPoints(), 0.0, 0.0, 100.0, 100.0, 50, 50, 32633, 0.0, 12)
         }
+        // an explicit out_srid of 0 with an out_crs is "both set"; only a NULL (NoSrid) or no out_crs is unset
+        val crs = org.apache.spark.unsafe.types.UTF8String.fromString("EPSG:3857")
+        an[IllegalArgumentException] should be thrownBy RST_GridFromPoints.outputCrs(0, crs)
+        RST_GridFromPoints.outputCrs(RST_GridFromPoints.NoSrid, crs) shouldBe "EPSG:3857"
+        RST_GridFromPoints.outputCrs(0, null) shouldBe null
     }
 
     test("RST_GridFromPointsAgg produces the same center pixel as the non-aggregator") {

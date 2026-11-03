@@ -25,6 +25,9 @@ GRID_META = {"count": 1, "dtype": "float64", "nodata": -9999.0, "crs": "EPSG:385
 PTS = [(1.0, 1.0), (8.0, 2.0), (2.0, 9.0), (9.0, 8.0)]
 VALS = [10.0, 20.0, 30.0, 40.0]
 PTS_WKT = [f"POINT({x} {y})" for x, y in PTS]
+# one more point, exactly on the centre of the top-left pixel of a 4 x 4 grid over BOX (no pixel has two nearest points)
+CENTRE_PTS = [*PTS, (1.25, 8.75)]
+CENTRE_VALS = [*VALS, 50.0]
 # the points of the binning rows: two share a pixel (column 1, row 1), one on the east edge and one outside are left out
 BX = [1.5, 1.5, 3.5, 8.5, 10.0, -1.0]
 BY = [8.5, 8.5, 6.5, 0.5, 5.0, 5.0]
@@ -71,6 +74,13 @@ def _gp_points_wkb(tmpdir):
     return [shapely.to_wkb(shapely.Point(x, y)) for x, y in PTS]
 
 
+@builder("gp_centre_points_wkb")
+def _gp_centre_points_wkb(tmpdir):
+    import shapely
+
+    return [shapely.to_wkb(shapely.Point(x, y)) for x, y in CENTRE_PTS]
+
+
 @builder("dtm_points_wkb")
 def _dtm_points_wkb(tmpdir):
     import shapely
@@ -84,6 +94,7 @@ SQ_WKB, SQ_EWKB, LONLAT = (
     Build("rz_lonlat_ewkb"),
 )
 GP_WKB, DTM_WKB = Build("gp_points_wkb"), Build("dtm_points_wkb")
+GP_CENTRE_WKB = Build("gp_centre_points_wkb")
 LONLAT_EWKT = "SRID=4326;POLYGON((0.5 0.5, 1.5 0.5, 1.5 1.5, 0.5 1.5, 0.5 0.5))"
 # 2 degrees east and north in Web Mercator metres: x = R * radians(lon); y = R * ln(tan(pi / 4 + radians(lat) / 2))
 MERC_X2, MERC_Y2 = 222638.98158654713, 222684.20850554318
@@ -233,6 +244,15 @@ RASTER_RASTERIZE = (
         "gridfrompoints",
         ONLY,
     ),
+    # a point exactly on a pixel centre gives that pixel its value (distance 0), also in the nearest-point search
+    Case(
+        "gridfrompoints_nearest_on_centre",
+        GP,
+        (GP_CENTRE_WKB, CENTRE_VALS, *BOX, 4, 4, 3857, 2.0, 1),
+        "ref",
+        "gridfrompoints",
+        ONLY,
+    ),
     Case(
         "gridfrompoints_no_points",
         GP,
@@ -255,6 +275,15 @@ RASTER_RASTERIZE = (
         (GP_WKB, VALS, *BOX, 4, 4, None, 2.0, 12, "EPSG:3857"),
         "tile_meta",
         {"crs": "EPSG:3857"},
+        ONLY,
+    ),
+    # the 8-argument form: no output CRS at all
+    Case(
+        "gridfrompoints_no_crs",
+        GP,
+        (GP_WKB, VALS, *BOX, 4, 4),
+        "tile_meta",
+        {"no_crs": True, "width": 4},
         ONLY,
     ),
     Case(

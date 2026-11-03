@@ -22,7 +22,7 @@ class Staged(bytes):
     """Raster bytes that also live in a file at ``path``.
 
     The heavy tier reads the bytes (``rst_fromcontent``). The light tier reads the file as
-    a VIRTUAL tile (``rst_fromfile`` with ``materialize=False``), the way a
+    a VIRTUAL tile (``rst_fromfile`` without ``materialize``, its default), the way a
     lazily read source reaches every light operation. Anywhere else it is plain bytes.
     """
 
@@ -51,16 +51,19 @@ def light_tile_df(spark, raster):
     the file of a :class:`Staged` source, else a materialized tile of the bytes."""
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx.pyrx import functions as prx
+
     path = getattr(raster, "path", None)
     if path is not None:
         df = spark.createDataFrame([(path,)], ["path"]).select(
-            rx.rst_fromfile("path", materialize=False).alias("tile")
+            rx.rst_fromfile("path").alias("tile")
         )
         # a "virtual" case that quietly started from bytes would test nothing
         assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"
         return df
+    # the light tier builds its own tile: the L3 UDF, not the manager's choice of level (L1 when the JAR is loaded)
     return spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        prx._fromcontent_udf(f.col("raster"), f.lit("GTiff")).alias("tile")
     )
 
 

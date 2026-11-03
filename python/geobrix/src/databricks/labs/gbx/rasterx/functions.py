@@ -79,13 +79,16 @@ def register(_spark: SparkSession) -> None:
         # Python-binding variant and must NOT be registered here, or 2-arg SQL
         # calls break on arity.)
         from databricks.labs.gbx import _gdal_policy
+        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
         from databricks.labs.gbx.pyrx.functions import (
-            _fromfile_sql_materialized_udf as _pyrx_fromfile_materialized_udf,
+            _build_fromfile_sql_materialized_udf,
         )
 
-        # the light implementation it registers carries the driver's remote-path switch to the workers
+        # the light implementation it registers carries the driver's remote-path switch to the workers, and the
+        # driver's connect-aware materialize cap (a worker cannot measure it)
         _gdal_policy.carrying_session(_spark).udf.register(
-            "gbx_rst_fromfile", _pyrx_fromfile_materialized_udf
+            "gbx_rst_fromfile",
+            _build_fromfile_sql_materialized_udf(report_detected_cap(_spark)),
         )
     except (
         Exception
@@ -3033,7 +3036,8 @@ def rst_fromcontent(
         content: The raster file's bytes, for example the `content` column of the
             `binaryFile` reader.
         driver: The GDAL driver short name the bytes are in, for example `'GTiff'`, in
-            any case. It goes into the tile's `driver` metadata; a name no driver has
+            any case. It goes into the tile's `driver` metadata; a name that is no raster
+            driver (no driver of that name, or a vector-only one such as `'GeoJSON'`)
             raises.
 
     Returns:
@@ -3061,8 +3065,9 @@ def rst_fromfile(
         path: The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A
             remote URL is refused unless the driver's remote-read switch is on.
         driver: The GDAL driver short name hint, in any case. It goes into the tile's
-            `driver` metadata; a name no driver has raises. SQL default: ``'GTiff'``.
-        materialize: Python only: ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.
+            `driver` metadata; a name that is no raster driver (no driver of that name, or a
+            vector-only one such as `'GeoJSON'`) raises. SQL default: ``'GTiff'``.
+        materialize: Python only: unset or ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.
 
     Returns:
         A tile that holds the file's bytes, re-encoded as a GeoTIFF. NULL for a NULL
@@ -3071,15 +3076,9 @@ def rst_fromfile(
 
     SQL: ``gbx_rst_fromfile(path, [driver])``
     """
-    if _api.given(materialize):
-        return _api.extra_call(
-            "gbx_rst_fromfile",
-            (materialize,),
-            path,
-            driver,
-        )
-    return _api.call(
+    return _api.extra_call(
         "gbx_rst_fromfile",
+        (materialize,),
         path,
         driver,
     )

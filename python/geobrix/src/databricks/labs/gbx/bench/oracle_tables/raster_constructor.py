@@ -17,6 +17,9 @@ FILE, PNG_FILE, GARBAGE_FILE = (
     Build("rc_garbage_file"),
 )
 ONLY = ("session",)
+MATERIALIZE = (
+    ("materialize", True),
+)  # the Python entry returns a virtual tile unless it is asked for the pixels
 FILE_META = {
     "width": 64,
     "height": 48,
@@ -133,6 +136,15 @@ RASTER_CONSTRUCTOR = (
         "NoSuchDriver",
         ONLY,
     ),
+    # a vector-only driver is no raster driver: refused, naming it
+    Case(
+        "fromcontent_vector_driver",
+        FC,
+        (GTIFF, "GeoJSON"),
+        "raises",
+        "GeoJSON",
+        ONLY,
+    ),
     Case("fromcontent_null_content", FC, (None, "GTiff"), "null", None, ONLY),
     Case("fromcontent_null_driver", FC, (GTIFF, None), "null", None, ONLY),
     Case("fromcontent_corrupt", FC, (GARBAGE, "GTiff"), "error_fix", None, ONLY),
@@ -146,6 +158,7 @@ RASTER_CONSTRUCTOR = (
         "tile_meta",
         {**FILE_META, "meta_driver": "GTiff", "materialized": True},
         ONLY,
+        py_kw=MATERIALIZE,
     ),
     Case(
         "fromfile_default_driver",
@@ -154,6 +167,17 @@ RASTER_CONSTRUCTOR = (
         "tile_meta",
         {"meta_driver": "GTiff", "materialized": True, "pixels_of_arg0": True},
         ONLY,
+        py_kw=MATERIALIZE,
+    ),
+    # the Python entry alone: without `materialize` the tile is virtual (a path, no pixels read), as the light API always
+    # returned; SQL reads the pixels
+    Case(
+        "fromfile_python_default_virtual",
+        FF,
+        (FILE,),
+        "tile_meta",
+        {**FILE_META, "materialized": False},
+        ("python",),
     ),
     # another format comes out as a GeoTIFF of the same pixels, the driver argument only a hint
     Case(
@@ -170,6 +194,7 @@ RASTER_CONSTRUCTOR = (
             "pixels_of_arg0": True,
         },
         ONLY,
+        py_kw=MATERIALIZE,
     ),
     Case(
         "fromfile_missing",

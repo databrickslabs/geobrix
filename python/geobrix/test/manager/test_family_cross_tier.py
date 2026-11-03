@@ -104,7 +104,7 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
     cases = [
         c
         for c in oracles.TABLES[fn.oracle]
-        if c.fn == sql_name and "session" in c.surfaces
+        if c.fn == sql_name and ("session" in c.surfaces or "python" in c.surfaces)
     ]
     column_of = (
         (lambda f: manifest.resolve_ref(manifest.load().functions[f].python.ref))

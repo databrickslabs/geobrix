@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
+import org.apache.spark.sql.catalyst.expressions.{Expression, If, IsNull, Literal, Or}
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -71,8 +71,13 @@ case class RST_BinPoints(
     override def dataType: DataType   = RST_ExpressionUtil.tileDataType(BinaryType)
     override def nullable: Boolean    = true
     override def prettyName: String   = RST_BinPoints.name
-    // a NULL statistic means unset (max): it must reach eval, which guards the arrays
-    override def replacement: Expression = invoke(RST_BinPoints, propagateNull = false)
+    // a NULL statistic means unset (max): it must reach eval, which guards the arrays. A NULL required scalar (extent,
+    // size, srid) is NULL: propagateNull = false would hand a primitive parameter 0 instead, so it is tested here.
+    override def replacement: Expression = {
+        val required = Seq(xminExpr, yminExpr, xmaxExpr, ymaxExpr, widthPxExpr, heightPxExpr, sridExpr)
+        If(required.map(IsNull(_): Expression).reduce(Or(_, _)), Literal.create(null, dataType),
+           invoke(RST_BinPoints, propagateNull = false))
+    }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10))

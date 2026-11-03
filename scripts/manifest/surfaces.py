@@ -42,7 +42,7 @@ GROUP_EXTRA_DOCS = {
     (
         "materialize",
         "materialize",
-    ): "Python only: ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.",
+    ): "Python only: unset or ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.",
 }
 SECTION_OF_PREFIX = {
     "rst": "rasterx",
@@ -143,13 +143,14 @@ def render_python_entry(fn) -> str:
         lines += _call("_api.table", ["df", f'"{fn.sql_name}"', *names], 4)
     else:
         if py.extras == "materialize":
-            lines.append(f"    if _api.given({', '.join(extras)}):")
+            # the row's `extra_impl` is the whole Python entry: an unset keyword is its default, not the SQL name's
             lines += _call(
                 "_api.extra_call",
                 [f'"{fn.sql_name}"', f"({', '.join(extras)},)", *names],
-                8,
+                4,
             )
-        elif extras:
+            return "\n".join(lines) + "\n"
+        if extras:
             lines.append(f"    if _api.forced({', '.join(extras)}):")
             lines += _call(
                 "_api.force_output", [f'"{fn.sql_name}"', *extras, *names], 8

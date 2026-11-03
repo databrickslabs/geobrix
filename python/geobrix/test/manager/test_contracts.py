@@ -80,7 +80,7 @@ def test_oracle_rows_fit_signature(fn):
             fn.min_args <= len(r) + extra <= fn.max_args for r in arg_rows
         ), c.cid
         assert c.kind != "exact_rows" or len(c.expect) == len(c.args), c.cid
-        assert c.surfaces and set(c.surfaces) <= {"session", "uc"}, c.cid
+        assert c.surfaces and set(c.surfaces) <= {"session", "uc", "python"}, c.cid
         assert not c.variants or c.kind in ("exact", "null", "geom_srid"), c.cid
         if (
             c.kind == "raises"
@@ -1472,7 +1472,7 @@ def test_first_python_call_carries_the_remote_read_switch(spark, monkeypatch):
     _api._done(spark).discard("gbx_rst_fromfile")
     _api.ensure(spark, "gbx_rst_fromfile")
     # the row has an optional driver, so the UDF sits under its private name behind a wrapper
-    assert any(n.endswith("rst_fromfile") and carried for n, carried in seen), seen
+    assert ("gbx__l3d_rst_fromfile", True) in seen, seen
 
 
 def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):

@@ -9,6 +9,7 @@ import os
 
 import rasterio
 import shapely.wkb
+from rasterio._base import driver_supports_mode
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
@@ -101,14 +102,15 @@ def driver_name(new_format: str) -> str:
 
 def known_driver(name, fn: str) -> str:
     """GDAL's spelling of the driver short name ``name`` (any case) for a constructor's driver hint; ValueError
-    naming the value when this GDAL build has no such driver."""
+    naming the value when this GDAL build has no such driver, or the driver is vector-only (no ``DCAP_RASTER``,
+    such as 'GeoJSON' or 'ESRI Shapefile')."""
     with rasterio.Env() as env:
         registered = env.drivers()
     by_lower = {d.lower(): d for d in registered}
     hit = by_lower.get(str(name).lower())
-    if hit is None:
+    if hit is None or not driver_supports_mode(hit, "DCAP_RASTER"):
         raise ValueError(
-            f"{fn}: driver '{name}' is not a GDAL driver in this build. "
+            f"{fn}: driver '{name}' is not a GDAL raster driver in this build. "
             "Fix: use a GDAL raster driver short name such as 'GTiff', 'PNG' or 'netCDF'."
         )
     return hit

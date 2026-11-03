@@ -8,7 +8,7 @@ import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, Literal}
+import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, If, IsNull, Literal, Or}
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -60,8 +60,14 @@ case class RST_GridFromPoints(
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(BinaryType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_GridFromPoints.name
-    // optional NULL arguments (out_srid, out_crs, power, max_pts) mean unset: a NULL must reach eval, which guards the arrays
-    override def replacement: Expression = invoke(RST_GridFromPoints, propagateNull = false)
+    // optional NULL arguments (out_srid, out_crs, power, max_pts) mean unset: a NULL must reach eval, which guards the arrays.
+    // A NULL required scalar (extent, size) is NULL: propagateNull = false would hand a primitive parameter 0 instead,
+    // so it is tested here.
+    override def replacement: Expression = {
+        val required = Seq(xminExpr, yminExpr, xmaxExpr, ymaxExpr, widthPxExpr, heightPxExpr)
+        If(required.map(IsNull(_): Expression).reduce(Or(_, _)), Literal.create(null, dataType),
+           invoke(RST_GridFromPoints, propagateNull = false))
+    }
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11))
 
@@ -104,13 +110,17 @@ object RST_GridFromPoints extends WithExpressionInfo {
         conf
     )
 
-    /** The output CRS as text: `out_crs` wins over `out_srid`; both set raises; neither (a NULL or 0 `out_srid`) is no
-      * CRS (null). The two never reach `safeEval`, which would turn the refusal into an error tile. */
+    /** What the builder passes for an `out_srid` that is NULL: no EPSG code, so it never equals a user's 0. */
+    val NoSrid: Int = Int.MinValue
+
+    /** The output CRS as text: `out_crs` wins over `out_srid`; both set (an `out_srid` of 0 counts) raises; neither (a
+      * NULL or 0 `out_srid`) is no CRS (null). The two never reach `safeEval`, which would turn the refusal into an
+      * error tile. */
     def outputCrs(outSrid: Int, outCrs: UTF8String): String =
-        if (outCrs != null && outSrid != 0) {
+        if (outCrs != null && outSrid != NoSrid) {
             throw new IllegalArgumentException("rst_gridfrompoints: provide out_srid OR out_crs, not both")
         } else if (outCrs != null) outCrs.toString
-        else if (outSrid != 0) outSrid.toString
+        else if (outSrid != 0 && outSrid != NoSrid) outSrid.toString
         else null
 
     /** The arguments that need no raster, checked before `safeEval` so that a wrong one names its value. */
@@ -283,6 +293,8 @@ object RST_GridFromPoints extends WithExpressionInfo {
                             (if (errMsg == null || errMsg.isEmpty) "<no error>" else errMsg))
                 }
                 try {
+                    // the GeoJSON source reads as WGS84 when it names no CRS, and gdal.Grid copies that onto the grid
+                    if (crs == null) result.SetProjection("")
                     result.FlushCache()
                     val bytes = VectorRasterBridge.toGTiffBytes(result)
                     tileRow(bytes)
@@ -407,7 +419,8 @@ object RST_GridFromPoints extends WithExpressionInfo {
     override def name: String = "gbx_rst_gridfrompoints"
 
     /** 8 to 12 arguments; a NULL `out_srid`, `power` or `max_pts` is unset (no CRS, 2.0, 12): the SQL default NULL is
-      * coalesced here because a NULL reaching a primitive parameter would make the whole result NULL. */
+      * coalesced here because a NULL reaching a primitive parameter would otherwise arrive as 0 (`out_srid` becomes
+      * [[NoSrid]], so that an explicit 0 stays distinct from unset). */
     override def builder(): FunctionBuilder = (c: Seq[Expression]) =>
         if (c.length < 8 || c.length > 12) {
             throw new IllegalArgumentException(
@@ -416,7 +429,7 @@ object RST_GridFromPoints extends WithExpressionInfo {
         } else {
             def opt(i: Int, default: Expression): Expression = if (c.length > i) Coalesce(Seq(c(i), default)) else default
             RST_GridFromPoints(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7),
-                opt(8, Literal(0)), opt(9, Literal(DefaultPower)), opt(10, Literal(DefaultMaxPoints)),
+                opt(8, Literal(NoSrid)), opt(9, Literal(DefaultPower)), opt(10, Literal(DefaultMaxPoints)),
                 if (c.length > 11) c(11) else Literal.create(null, StringType))
         }
 }

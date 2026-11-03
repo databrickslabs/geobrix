@@ -557,7 +557,7 @@ def _light_tessellate_ids(
 
     prx.register(spark)
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        prx._fromcontent_udf(f.col("raster"), f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_ras_light_tess")
     rows = spark.sql(
@@ -1645,7 +1645,7 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
 
     prx.register(spark)
     df2 = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        prx._fromcontent_udf(f.col("raster"), f.lit("GTiff")).alias("tile")
     )
     df2.createOrReplaceTempView("_ras_default_h3")
     light_2arg_rows = spark.sql(

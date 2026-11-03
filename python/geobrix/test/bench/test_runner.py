@@ -6,7 +6,6 @@ import pytest
 from databricks.labs.gbx.bench import datagen as dg
 from databricks.labs.gbx.bench import runner as rn
 from databricks.labs.gbx.bench import spec as s
-from databricks.labs.gbx.rasterx import functions as rx
 
 
 def test_time_iters_returns_distribution():
@@ -1029,13 +1028,6 @@ def test_creation_microleg_defined():
     from databricks.labs.gbx.bench import runner as rn
 
     assert hasattr(rn, "_run_sp_creation")
-
-
-def test_rst_fromfile_column_builds():
-    from pyspark.sql import functions as F
-
-    c = rx.rst_fromfile(F.col("path"), "GTiff")
-    assert c is not None
 
 
 def test_spark_virtual_leg_smoke(spark, tmp_path):

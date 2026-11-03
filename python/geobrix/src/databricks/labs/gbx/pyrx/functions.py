@@ -905,9 +905,10 @@ def _fromcontent_udf(raster, drv):
 
 
 def _fromfile_extra(path, driver, materialize):
-    """The Python-only ``materialize`` keyword of the generated ``rst_fromfile``: columns in, a tile Column out.
-    ``materialize=False`` is a virtual tile of the file (no pixel is read); ``True`` reads the pixels now, with the
-    driver's materialize cap carried in (a worker cannot measure it)."""
+    """The Python entry of ``rst_fromfile``: columns in, a tile Column out. ``materialize`` unset (None) or ``False`` is
+    a virtual tile of the file (no pixel is read), as the light API always returned; ``True`` reads the pixels now, as
+    the SQL name does, with the driver's materialize cap carried in (a worker cannot measure it).
+    """
     from databricks.labs.gbx.ds.file_gbx import (
         _connect_aware_lru_sizing,
         _resolve_session_for_cap,
@@ -1185,13 +1186,23 @@ def _fromfile_sql_udf(path, driver):
     return _fromfile_impl(path, driver, False)
 
 
-@f.udf(V2_TILE_SCHEMA)
-def _fromfile_sql_materialized_udf(path, driver):
-    """SQL UDF registered by the HEAVY (rasterx) tier: 2-arg (path, driver) → a
-    MATERIALIZED tile (bytes present). Same call text as the light registration;
-    the heavyweight tier reads the pixels because JVM/heavy expressions cannot use
-    a virtual path-only tile. Whichever tier's register() ran last wins."""
-    return _fromfile_impl(path, driver, True)
+def _build_fromfile_sql_materialized_udf(cap_bytes=None):
+    """The SQL UDF behind ``gbx_rst_fromfile``: 2-arg (path, driver) → a MATERIALIZED tile (bytes present). Same call
+    text as the light registration; the heavyweight tier reads the pixels because JVM/heavy expressions cannot use a
+    virtual path-only tile. Whichever tier's register() ran last wins.
+
+    ``cap_bytes`` is the driver's connect-aware materialize cap (64 MiB on Serverless), which the registrar captures
+    (``factory_args: read_cap``): a worker has no session to measure it, and would use the classic 256 MiB.
+    """
+
+    @f.udf(V2_TILE_SCHEMA)
+    def fromfile_sql_materialized_udf(path, driver):
+        return _fromfile_impl(path, driver, True, cap_bytes=cap_bytes)
+
+    return fromfile_sql_materialized_udf
+
+
+_fromfile_sql_materialized_udf = _build_fromfile_sql_materialized_udf()
 
 
 # rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.
@@ -4374,6 +4385,8 @@ def _rasterize_udf(
     _check_grid("rst_rasterize", xmin, ymin, xmax, ymax, width_px, height_px)
     try:
         geom = parse_geom(geom_wkb)
+        if geom is None:  # an empty or blank string parses to nothing
+            raise ValueError("it holds no geometry")
     except Exception as exc:  # noqa: BLE001 - shapely's text does not name the value
         raise ValueError(
             f"rst_rasterize: the geometry {str(geom_wkb)[:80]!r} is not WKB, EWKB, WKT or EWKT ({exc})"

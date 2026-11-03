@@ -373,7 +373,7 @@ def _tile_df(spark, path, *, virtual_start):
 
     if virtual_start:
         df = spark.createDataFrame([(str(path),)], ["path"]).select(
-            rx.rst_fromfile("path", materialize=False).alias("tile")
+            rx.rst_fromfile("path").alias("tile")
         )
         # the "virtual" case must start from a tile without bytes
         assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"

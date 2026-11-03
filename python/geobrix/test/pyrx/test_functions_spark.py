@@ -1047,9 +1047,7 @@ def test_rst_fromfile_virtual_by_default(spark, tmp_path):
     with rasterio.open(p, "w", **profile) as dst:
         dst.write(data)
     df = spark.createDataFrame([(p,)], ["path"])
-    tile = df.select(
-        rx.rst_fromfile("path", f.lit("GTiff"), materialize=False).alias("t")
-    ).first()["t"]
+    tile = df.select(rx.rst_fromfile("path", f.lit("GTiff")).alias("t")).first()["t"]
     assert tile is not None
     assert tile["raster"] is None  # bytes-free
     assert tile["path"] == p  # BARE path stored (no dbfs:/file: scheme)

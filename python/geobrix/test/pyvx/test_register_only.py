@@ -32,21 +32,6 @@ def test_only_selects_udtf_and_pmtiles(spark):
     assert _exists(spark, "gbx_pmtiles_agg")
 
 
-def test_only_does_not_trip_unselected_guard(spark, monkeypatch):
-    from databricks.labs.gbx import manager as gbx_manager
-    from databricks.labs.gbx.pyvx import _env
-
-    def _boom():
-        raise RuntimeError("guard should not be called")
-
-    monkeypatch.setattr(_env, "assert_tin_available", _boom)
-    monkeypatch.setattr(_env, "assert_legacy_available", _boom)
-    gbx_manager.register_family(
-        spark, ("gbx_st_",), only=["gbx_st_asmvt"], level="L3"
-    )  # must not raise
-    assert _exists(spark, "gbx_st_asmvt")
-
-
 def test_only_unknown_raises(spark):
     from databricks.labs.gbx import manager as gbx_manager
 

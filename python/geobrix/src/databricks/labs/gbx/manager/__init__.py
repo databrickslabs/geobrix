@@ -106,7 +106,7 @@ def register(
     messages.say_grouped(spark, lines)
     from databricks.labs.gbx import _api
 
-    _api.mark_registered(spark, out.keys())
+    _api.mark_registered(spark, out.keys(), out)
     return out
 
 
@@ -131,6 +131,18 @@ def register_sources(spark=None, only: Optional[Iterable[str]] = None) -> List[s
     return _ds._install(spark if spark is not None else _active(), only)
 
 
+def names_at_level(prefixes: Iterable[str], level: str) -> list:
+    """The names under ``prefixes`` that have a row at ``level``: the ``only=`` a pinned leg passes to
+    ``register_family`` when it wants "every function of these prefixes that has this level" (a bench or parity
+    leg over a whole family, where some names exist at L3 only)."""
+    man = manifest.load()
+    return [
+        n
+        for n, f in man.functions.items()
+        if f.status != "mvp" and n.startswith(tuple(prefixes)) and level in f.levels
+    ]
+
+
 def register_family(
     spark,
     prefixes: Iterable[str],
@@ -141,7 +153,8 @@ def register_family(
     """Register the names under ``prefixes`` (``('gbx_rst_',)``, ``('gbx_bng_', 'gbx_h3_')``), or ``only``, and
     nothing else: the part of a session a test, a bench leg or a self-check needs. ``level`` ('L1', 'L2' or 'L3')
     forces that level for them, so a test can compare two levels; without it the manager chooses, as in
-    ``register(spark)``. With ``level`` and no ``only``, the names that have no such level are left out.
+    ``register(spark)``. With ``level``, a name that has no row at that level raises ``ValueError`` naming the names
+    (with ``only`` or without), so a leg pinned to a level can never fall back to another one without saying so.
     """
     man = manifest.load()
     if only is None:
@@ -150,11 +163,21 @@ def register_family(
             for n, f in man.functions.items()
             if f.status != "mvp" and n.startswith(tuple(prefixes))
         ]
-        if level is not None:
-            names = [n for n in names if level in man.functions[n].levels]
     else:
         names = [n if n.lower().startswith("gbx_") else f"gbx_{n}" for n in only]
         names = [n.lower() for n in names]
+    if level is not None:
+        missing = sorted(
+            n
+            for n in names
+            if n not in man.functions or level not in man.functions[n].levels
+        )
+        if missing:
+            raise ValueError(
+                f"register_family(level={level!r}): {len(missing)} name(s) have no {level} row in the manifest: "
+                f"{', '.join(missing)}. Fix: pass only= with names that have {level} rows, or drop level= to let "
+                f"the manager choose."
+            )
     forced = None if level is None else {n: (level, "-") for n in names}
     return register(spark, only=names, _levels=forced) if names else {}
 

@@ -2886,15 +2886,36 @@ def test_every_helper_lives_under_a_public_package(helper):
     assert helper.status in manifest.STATUSES
 
 
-def test_removed_registrars_name_gbx_register():
-    from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.pyrx import functions as old
+_REGISTRAR_MODULES = (
+    "rasterx",
+    "vectorx",
+    "gridx.bng",
+    "gridx.quadbin",
+    "gridx.custom",
+    "gridx.h3",
+    "pmtiles",
+    "pyrx",
+    "pygx",
+    "pyvx",
+)
 
-    for mod in (old, bx):
-        with pytest.raises(
-            AttributeError, match=r"Fix: databricks\.labs\.gbx\.register\(spark\)"
-        ):
-            mod.register
+
+@pytest.mark.parametrize("pkg", _REGISTRAR_MODULES)
+def test_removed_registrars_name_gbx_register(pkg):
+    """The 7 generated modules and the 3 light ones: ``.register`` raises the pointer to the one call, and any other
+    unknown attribute gets the plain AttributeError (so ``hasattr`` and ``getattr(..., default)`` keep working).
+    """
+    import importlib
+
+    mod = importlib.import_module(f"databricks.labs.gbx.{pkg}.functions")
+    with pytest.raises(
+        AttributeError, match=r"Fix: databricks\.labs\.gbx\.register\(spark\)"
+    ):
+        mod.register
+    with pytest.raises(AttributeError, match="has no attribute 'no_such_name'") as ei:
+        mod.no_such_name
+    assert "Fix:" not in str(ei.value)
+    assert not hasattr(mod, "no_such_name") and getattr(mod, "no_such_name", 1) == 1
 
 
 def test_register_family_registers_the_prefixes_alone_at_the_level_asked(monkeypatch):
@@ -2915,6 +2936,27 @@ def test_register_family_registers_the_prefixes_alone_at_the_level_asked(monkeyp
     assert seen["_levels"] == {n: ("L3", "-") for n in names}
     manager.register_family(None, ("gbx_bng_",), only=["bng_aswkb"])
     assert seen["only"] == ["gbx_bng_aswkb"] and seen["_levels"] is None
+
+
+def test_register_family_with_a_level_raises_for_names_without_it(monkeypatch):
+    """A leg pinned to a level never falls back silently: a name with no row at that level raises and is named,
+    with ``only=`` and without it."""
+    from databricks.labs.gbx import manager
+
+    monkeypatch.setattr(manager, "register", lambda *a, **k: pytest.fail("registered"))
+    no_l1 = [
+        n
+        for n, f in MAN.functions.items()
+        if "L1" not in f.levels and f.status != "mvp"
+    ]
+    name = next(n for n in no_l1 if n.startswith("gbx_h3_"))
+    with pytest.raises(ValueError, match=name) as ei:
+        manager.register_family(None, ("gbx_h3_",), level="L1")
+    assert "no L1 row" in str(ei.value) and "Fix:" in str(ei.value)
+    with pytest.raises(ValueError, match=name):
+        manager.register_family(None, ("gbx_h3_",), only=[name], level="L1")
+    with pytest.raises(ValueError, match="gbx_no_such_fn"):
+        manager.register_family(None, ("gbx_h3_",), only=["no_such_fn"], level="L3")
 
 
 def test_register_sources_registers_the_named_formats_and_refuses_an_unknown_one():

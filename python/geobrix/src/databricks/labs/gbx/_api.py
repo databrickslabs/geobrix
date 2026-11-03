@@ -13,6 +13,8 @@ from typing import Any, Dict, Iterable, Set
 
 _DONE: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _DONE_BY_ID: Dict[int, Set[str]] = {}
+_CHOSEN: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_CHOSEN_BY_ID: Dict[int, Dict[str, tuple]] = {}
 
 
 def _active():
@@ -28,9 +30,20 @@ def _done(spark) -> Set[str]:
         return _DONE_BY_ID.setdefault(id(spark), set())
 
 
-def mark_registered(spark, names: Iterable[str]) -> None:
-    """Called by the manager after it registers names, so a later Python call costs nothing."""
+def chosen(spark) -> Dict[str, tuple]:
+    """``{sql_name: (level, variant)}`` for every name the manager registered in ``spark``, as it installed it."""
+    try:
+        return _CHOSEN.setdefault(spark, {})
+    except TypeError:  # a session object that cannot be weakly referenced
+        return _CHOSEN_BY_ID.setdefault(id(spark), {})
+
+
+def mark_registered(spark, names: Iterable[str], choices=None) -> None:
+    """Called by the manager after it registers names, so a later Python call costs nothing. ``choices`` (the
+    manager's ``{name: Choice}``) also records the level each name was installed at."""
     _done(spark).update(names)
+    if choices:
+        chosen(spark).update({n: (c.level, c.variant) for n, c in choices.items()})
 
 
 def ensure(spark, sql_name: str) -> None:

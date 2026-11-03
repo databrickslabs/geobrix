@@ -168,3 +168,67 @@ def test_registration_makes_grid_consulted():
         f"expected +{SHIFT_SEC} arc-sec lat shift to {EXPECT_LAT}, got {lat}; "
         f"the registered grid was not consulted"
     )
+
+
+_SERVERLESS_ORDER_PROBE = """
+import sys
+from pyspark.sql import SparkSession
+from shapely import wkb
+from databricks.labs.gbx import _api, crs_grids, manager
+
+spark = SparkSession.builder.master("local[2]").getOrCreate()
+name = "gbx_st_transformcrs"
+manager.register_family(spark, ("gbx_st_",), only=[name], level="L3")
+assert _api.chosen(spark)[name][0] == "L3"
+crs_grids.register_proj_grids(spark, sys.argv[1])
+assert _api.chosen(spark)[name][0] == "L3"
+query = "SELECT %s('%s', '%s', '%s') AS g" % (name, sys.argv[2], sys.argv[3], sys.argv[4])
+blob = spark.sql(query).collect()[0]["g"]
+print("LAT", wkb.loads(bytes(blob)).y if blob is not None else None)
+"""
+
+
+def test_grids_registered_after_the_function_reach_the_live_binding():
+    """The documented Serverless order: register the function, then the grids. The function stays at its level and
+    its live SQL binding sees the new grid dirs (a re-registered closure), not the dirs of its first registration.
+    Runs in its own process: a Python worker that already started PROJ keeps its search path.
+    """
+    import subprocess
+    import sys
+
+    out = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _SERVERLESS_ORDER_PROBE,
+            GRID_DIR,
+            PT_WKT,
+            TGT_CRS,
+            SRC_CRS,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    lat = [ln for ln in out.stdout.splitlines() if ln.startswith("LAT ")][-1][4:]
+    assert (
+        lat != "None"
+    ), "the live binding returned NULL after the grids were registered"
+    assert float(lat) == pytest.approx(EXPECT_LAT, abs=1e-6)
+
+
+def test_grid_dirs_reregistration_keeps_the_recorded_level(spark, monkeypatch):
+    """Each name is registered again at the level the session recorded for it, not at the manager's own pick."""
+    from databricks.labs.gbx import _api, manager
+
+    name = "gbx_st_transformcrs"
+    manager.register_family(spark, ("gbx_st_",), only=[name], level="L3")
+    monkeypatch.setitem(_api.chosen(spark), name, ("L1", "-"))
+    seen = {}
+    monkeypatch.setattr(manager, "register", lambda s, **kw: seen.update(kw))
+
+    crs_grids._reregister_active_light_tiers(spark)
+
+    assert seen["only"] == [name]
+    assert seen["_levels"] == {name: ("L1", "-")}

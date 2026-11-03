@@ -45,13 +45,15 @@ def _warn_if_unusable(d: str) -> None:
 
 def _reregister_active_light_tiers(spark) -> None:
     """Register again the functions this session already has whose light implementation embeds the grid dirs
-    (``factory_args: proj_grid_dirs``), so live SQL bindings get fresh closures with the current dirs.
+    (``factory_args: proj_grid_dirs``), so live SQL bindings get fresh closures with the current dirs. Each name
+    is registered again at the level the session installed it at, never at the manager's own pick.
     """
     if spark is None:
         return
     from databricks.labs.gbx import _api, manager, manifest
 
     functions = manifest.load().functions
+    chosen = _api.chosen(spark)
     names = sorted(
         n
         for n in _api._done(spark)
@@ -59,7 +61,11 @@ def _reregister_active_light_tiers(spark) -> None:
         and functions[n].levels.get("L3", {}).get("factory_args") == "proj_grid_dirs"
     )
     if names:
-        manager.register(spark, only=names)
+        manager.register(
+            spark,
+            only=names,
+            _levels={n: chosen[n] for n in names if n in chosen} or None,
+        )
 
 
 def _warn_heavy_volume_grids(result) -> None:

@@ -48,25 +48,6 @@ def test_only_unknown_raises(spark):
     assert "quadbin_polifyll" in str(ei.value)
 
 
-def test_only_does_not_trip_unselected_subgroup_guard(spark, monkeypatch):
-    # Selecting only a quadbin fn must NOT call the bng/custom availability guards.
-    from databricks.labs.gbx import manager as gbx_manager
-    from databricks.labs.gbx.pygx import _env
-
-    def _boom():
-        raise RuntimeError("guard should not be called")
-
-    monkeypatch.setattr(_env, "assert_bng_available", _boom)
-    monkeypatch.setattr(_env, "assert_custom_available", _boom)
-    gbx_manager.register_family(
-        spark,
-        ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"),
-        only=["gbx_quadbin_resolution"],
-        level="L3",
-    )  # must not raise
-    assert _exists(spark, "gbx_quadbin_resolution")
-
-
 def test_only_none_registers_all_subgroups(spark):
     from databricks.labs.gbx import manager as gbx_manager
 

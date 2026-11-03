@@ -40,7 +40,14 @@ def spark():
 
     from test._heavy import heavy_register
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     heavy_register(spark, ("gbx_rst_",))
+    # heavy_register serves the JAR's companions and the names that have an L1 row. The SQL below also names
+    # functions that have no L1 row (the light function is the only form): register them at L3.
+    gbx_manager.register_family(
+        spark, ("gbx_rst_",), only=["gbx_rst_histogram"], level="L3"
+    )
     return spark
 
 

@@ -1180,6 +1180,53 @@ def test_fromfile_remote_switch_on_refuses_a_remote_vrt_and_a_raster_over_the_ca
         server.close()
 
 
+_VRT = (
+    '<VRTDataset rasterXSize="8" rasterYSize="6"><VRTRasterBand dataType="Byte" band="1">'
+    '<SimpleSource><SourceFilename relativeToVRT="0">/nonexistent/src.tif</SourceFilename>'
+    "<SourceBand>1</SourceBand></SimpleSource></VRTRasterBand></VRTDataset>"
+)
+
+
+@pytest.mark.parametrize(
+    "served_name",
+    ["a.vrt?token=x", "a.vrt#frag", "a.tif"],
+    ids=["query", "fragment", "tif_name"],
+)
+def test_fromfile_remote_switch_on_refuses_a_vrt_whatever_its_name(
+    spark8, monkeypatch, served_name
+):
+    """The refusal of a remote VRT does not hang on the URL ending in ``.vrt``: one with a query string or a fragment
+    after the name, and a VRT served under a ``.tif`` name, are refused by the opened driver, with the same Fix, before
+    any pixel is read."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    _rasterio_or_skip()
+    spark = spark8
+    server = _RangeHandler(_VRT.encode())
+    url = server.url.replace("a.tif", served_name)
+    try:
+        monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+        gbx_manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_fromfile"], level="L3"
+        )
+        tile = spark.sql(f"SELECT gbx_rst_fromfile('{url}', 'GTiff') AS t").collect()[
+            0
+        ]["t"]
+        assert tile["raster"] is None
+        assert "remote location" in tile["metadata"]["last_error"]
+        assert "Fix:" in tile["metadata"]["last_error"]
+    finally:
+        server.close()
+
+
+def test_a_name_with_a_query_or_fragment_still_names_a_vrt():
+    from databricks.labs.gbx.pyrx.functions import _names_a_vrt
+
+    assert _names_a_vrt("https://h/a.vrt?token=x")
+    assert _names_a_vrt("https://h/a.VRT#part")
+    assert not _names_a_vrt("https://h/a.tif?x=a.vrt")
+
+
 def _served_tif(tmp_path):
     import numpy as np
     import rasterio

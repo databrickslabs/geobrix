@@ -826,6 +826,10 @@ def _names_a_vrt(local) -> bool:
     optional whitespace and an XML declaration). A file named for a known raster format is not opened to look.
     """
     name = str(local).lower()
+    if (
+        "://" in name
+    ):  # a URL: its query string and fragment are no part of the file's name
+        name = name.split("#", 1)[0].split("?", 1)[0]
     if name.endswith(".vrt"):
         return True
     if name.endswith(_RASTER_SUFFIXES):
@@ -899,6 +903,15 @@ def _fromfile_render_vrt(path, local, drv, cap_bytes):
     return _serde.build_tile(new_bytes, drv, 0)
 
 
+def _remote_vrt_refusal(path) -> str:
+    """The reason (with its Fix) a materialized read refuses a VRT at a remote location."""
+    return (
+        f"rst_fromfile materialize=True unsuccessful: the VRT {path} is a remote location, and a VRT "
+        "names its own sources, which the remote-path gate does not check. Fix: read the VRT as a virtual "
+        "tile (omit materialize=True), or copy the VRT and its sources to a Volume."
+    )
+
+
 def _fromfile_read_remote(url, drv, cap_bytes):
     """``rst_fromfile`` materialized over a remote location the driver's switch allows: open it through GDAL, gate the
     DECODED size by the same cap as a local file (header only, before any pixel), then read and re-encode it.
@@ -908,6 +921,14 @@ def _fromfile_read_remote(url, drv, cap_bytes):
     from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
 
     with open_data(url) as src:
+        # the name says nothing of what a remote file is (``a.vrt?token=x``, a VRT served as ``.tif``): the opened
+        # driver does. A VRT, or any driver the byte-open policy refuses because it can name other files, names its
+        # own sources, which the remote-path gate never sees: refused before any pixel is read
+        if (
+            src.driver == "VRT"
+            or src.driver in _gdal_policy.bytes_refused_light_names()
+        ):
+            raise DriverPolicyError(_remote_vrt_refusal(url))
         decoded = (
             src.count
             * src.width
@@ -955,12 +976,7 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
         if _gdal_policy.remote_location(str(path)) is not None:
             # the switch is on (data_path above refused it otherwise), but a VRT names its own sources and the
             # remote-path gate never sees them: a remote VRT would open whatever it names, from this worker
-            return _serde.build_error_tile(
-                f"rst_fromfile materialize=True unsuccessful: the VRT {path} is a remote location, and a VRT "
-                "names its own sources, which the remote-path gate does not check. Fix: read the VRT as a virtual "
-                "tile (omit materialize=True), or copy the VRT and its sources to a Volume.",
-                0,
-            )
+            return _serde.build_error_tile(_remote_vrt_refusal(path), 0)
         return _fromfile_render_vrt(str(path), local, drv, cap_bytes)
 
     if materialize:

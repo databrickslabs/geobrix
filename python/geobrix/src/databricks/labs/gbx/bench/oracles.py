@@ -104,6 +104,12 @@ _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its
 # is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
 # read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
 _DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the source's data type, and a wrong function is not an error at the call (H20; companion deleted in the decision sweep)"
+# The L3-first web-tile and file functions keep their JVM companion for a restore on measured numbers; these rows are
+# where it differs from the contract, and the companions go in the decision sweep (Task 21) if no restore comes.
+_BUILDOVERVIEWS_L1 = "the JVM builds the overviews in a sidecar the tile bytes do not carry, and turns a bad resampling or level into an error tile, not a raised error; the companion is deleted in the decision sweep"
+_COG_BLOCK_L1 = "the JVM serializes a tile through a GeoTIFF translate whose block is at least 64 pixels, so a smaller COG block is lost; the companion is deleted in the decision sweep"
+_XYZ_ERROR_L1 = "the JVM answers a tile that is an error tile or cannot be read with one row whose bytes are NULL (a deliberate, auditable row); the contract is no rows; the companion is deleted in the decision sweep"
+_VIEWSHED_L1 = "the JVM dispatch wrapper declares one type for the observer geometry (BINARY or STRING), validates after reading the tile and turns a failure into NULL or an error tile; the companion is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
         cid: {"L1": _DERIVEDBAND_L1}
@@ -114,6 +120,33 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         )
     },
     "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
+    "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
+    **{
+        cid: {"L1": _BUILDOVERVIEWS_L1}
+        for cid in (
+            "buildoverviews_levels",
+            "buildoverviews_resampling",
+            "buildoverviews_bad_resampling",
+            "buildoverviews_bad_levels",
+        )
+    },
+    "cog_convert_blocksize": {"L1": _COG_BLOCK_L1},
+    **{
+        cid: {"L1": _XYZ_ERROR_L1}
+        for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
+    },
+    **{
+        cid: {"L1": _VIEWSHED_L1}
+        for cid in (
+            "viewshed_wall",
+            "viewshed_wkb",
+            "viewshed_virtual",
+            "viewshed_max_distance",
+            "viewshed_not_a_point",
+            "viewshed_negative_height",
+            "viewshed_corrupt",
+        )
+    },
     **{
         cid: {"L1": _QUADBIN_L1}
         for cid in (
@@ -173,6 +206,12 @@ READ_CAP_ROWS: Dict[str, int] = {
     "tile_op_decoded_over_cap": 4096,
     "align_to_big_reference": 4096,
     "rt_over_cap_windows": 4096,
+    # the array functions: a member of pair_aligned is 4 KiB decoded. One over the cap on its own; two together over a
+    # budget that each fits (the group is refused whole, with the route that streams it)
+    "array_decoded_over_cap": 1024,
+    "merge_array_over_budget_refused": 6000,
+    "combineavg_array_over_budget_refused": 6000,
+    "combinesum_array_over_budget_refused": 6000,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
@@ -2189,6 +2228,10 @@ def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
         layout = got.tags(ns="IMAGE_STRUCTURE").get("LAYOUT")
         if layout != want["layout"]:
             return f"layout {layout!r} is not {want['layout']!r}"
+    if "overviews" in want and list(got.overviews(1)) != list(want["overviews"]):
+        return f"overviews {list(got.overviews(1))} are not {list(want['overviews'])}"
+    if "blocksize" in want and tuple(got.block_shapes[0]) != tuple(want["blocksize"]):
+        return f"blocks {tuple(got.block_shapes[0])} are not {tuple(want['blocksize'])}"
     return None
 
 
@@ -2756,7 +2799,77 @@ def _ref_plane(coeffs, hull):
     return ref
 
 
+def _ref_viewshed_wall(args):
+    """rst_viewshed of the `vs_wall` DEM from pixel (6, 10): visible (255) up to the wall in column 14, 0 behind it."""
+    import numpy as np
+
+    out = np.zeros((21, 21))
+    out[:, :15] = 255.0
+    return out, np.zeros(out.shape, bool)
+
+
+def _ref_color_relief(alpha: bool):
+    """rst_color_relief of the DEM args[0] through the table of oracle_refs.COLOR_STOPS (oracle_refs.color_relief)."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        z, nodata, _, _ = _dem_band(args)
+        return oracle_refs.color_relief(z, nodata, alpha)
+
+    return ref
+
+
+def _members_of(group):
+    """The first band of each readable tile of an array argument, masked by its NoData: an error tile (no bytes) or
+    bytes that are no raster are not members, as the array functions skip them."""
+    out = []
+    for t in group:
+        raw = _raster_of(t)
+        if raw is None:
+            continue
+        try:
+            out.append(_masked_band(raw))
+        except Exception:  # noqa: BLE001 - a member that cannot be read is skipped
+            continue
+    return out
+
+
+def _ref_combine(stat):
+    """rst_combine<stat>: the statistic of the valid values at each pixel across the readable tiles of args[0]
+    (oracle_refs.combine); a pixel that is NoData in every tile is NoData."""
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        return oracle_refs.combine(stat, _members_of(args[0]))
+
+    return ref
+
+
+def _ref_frombands(args):
+    """rst_frombands: the first band of each readable tile of args[0], in array order, as one band each."""
+    import numpy as np
+
+    members = _members_of(args[0])
+    return (
+        np.stack([m.data.astype("float64") for m in members]),
+        np.stack([np.ma.getmaskarray(m) for m in members]),
+    )
+
+
 _REFS = {
+    "viewshed_wall": _ref_viewshed_wall,
+    "color_relief_rgb": _ref_color_relief(False),
+    "color_relief_rgba": _ref_color_relief(True),
+    "combine_avg": _ref_combine("avg"),
+    "combine_count": _ref_combine("count"),
+    "combine_max": _ref_combine("max"),
+    "combine_median": _ref_combine("median"),
+    "combine_min": _ref_combine("min"),
+    "combine_stddev": _ref_combine("stddev"),
+    "combine_sum": _ref_combine("sum"),
+    "frombands": _ref_frombands,
     "rasterize": _ref_rasterize,
     "gridfrompoints": _ref_gridfrompoints,
     "binpoints": _ref_binpoints,
@@ -2808,20 +2921,45 @@ _REF_ATOL = {
     "percentile_stretch": 1.0,  # the cast to 8 bits truncates; a reference that rounded would differ by one level
     "hillshade": 1.0,
     "aspect": 0.01,
+    "color_relief_rgb": 1.0,  # GDAL rounds the interpolated channel to a Byte
+    "color_relief_rgba": 1.0,
     "proximity_geo": 15.0,
     "proximity_pixel": 1.5,
 }  # GDAL computes aspect in float32
 
 
 def _check_ref(case: Case, out, args) -> Optional[str]:
-    """The output's first band equals the reference (to float32 rounding) on the same NoData mask."""
-    import numpy as np
+    """The output's first band equals the reference (to float32 rounding) on the same NoData mask. A reference of
+    several bands (3-D arrays) is held to every band of the output, in order, and to the band count.
+    """
+    from rasterio.io import MemoryFile
 
     raster = _field(out, "raster")
     if raster is None:
         return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
     want, want_mask = _REFS[case.expect](args)
-    got = _masked_band(raster)
+    if want.ndim == 3:
+        with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+            if ds.count != want.shape[0]:
+                return (
+                    f"{case.cid}: {ds.count} bands, the reference has {want.shape[0]}"
+                )
+        pairs = [
+            (_masked_band(raster, b + 1), want[b], want_mask[b])
+            for b in range(want.shape[0])
+        ]
+    else:
+        pairs = [(_masked_band(raster), want, want_mask)]
+    for got, w, w_mask in pairs:
+        why = _ref_flaw(case, got, w, w_mask)
+        if why:
+            return why
+    return None
+
+
+def _ref_flaw(case: Case, got, want, want_mask) -> Optional[str]:
+    import numpy as np
+
     if got.shape != want.shape:
         return f"{case.cid}: shape {got.shape} vs reference {want.shape}"
     off = int((np.ma.getmaskarray(got) != want_mask).sum())
@@ -3005,7 +3143,91 @@ def _check_tile_size(case: Case, out) -> Optional[str]:
     )
 
 
+@contextlib.contextmanager
+def _quiet_no_georeference():
+    """An image (a web tile) has no georeferencing and rasterio says so; the docs tests turn warnings into errors."""
+    import warnings
+
+    from rasterio.errors import NotGeoreferencedWarning
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NotGeoreferencedWarning)
+        yield
+
+
+def _check_image_meta(case: Case, out) -> Optional[str]:
+    """`out` is the bytes of an image (a web tile) with the format, size and band count of `case.expect`, and the alpha
+    band it names: ``transparent`` (every pixel 0), ``opaque`` (every pixel 255) or ``mixed``.
+    """
+    if out is None:
+        return f"{case.cid}: got NULL, want an image"
+    want = dict(case.expect)
+    with _quiet_no_georeference(), open_bytes(bytes(out)) as ds:
+        for key, got in (
+            ("driver", ds.driver),
+            ("width", ds.width),
+            ("height", ds.height),
+            ("count", ds.count),
+        ):
+            if key in want and got != want[key]:
+                return f"{case.cid}: {key} {got!r} is not {want[key]!r}"
+        if "alpha" in want:
+            if ds.count != 4:
+                return f"{case.cid}: {ds.count} bands, no alpha band to judge"
+            a = ds.read(4)
+            state = (
+                "transparent"
+                if not a.any()
+                else "opaque" if (a == 255).all() else "mixed"
+            )
+            if state != want["alpha"]:
+                return f"{case.cid}: the alpha band is {state}, want {want['alpha']}"
+    return None
+
+
+def _check_pmtiles_archive(case: Case, out) -> Optional[str]:
+    """`out` is a PMTiles v3 archive holding exactly the tiles of `case.expect["tiles"]` ({(z, x, y): payload}), the
+    metadata JSON `expect["metadata"]`, and the header's tile type `expect["tile_type"]` (png, jpeg, webp or mvt),
+    read with the pmtiles library's header decoder and the spec's directory layout."""
+    from pmtiles.tile import TileType, deserialize_header
+
+    from databricks.labs.gbx.pmtiles import _directory
+
+    if out is None:
+        return f"{case.cid}: got NULL, want an archive"
+    raw = bytes(out)
+    want = case.expect
+    header = deserialize_header(raw[:127])
+    kinds = {
+        TileType.PNG: "png",
+        TileType.JPEG: "jpeg",
+        TileType.WEBP: "webp",
+        TileType.MVT: "mvt",
+    }
+    if kinds.get(header["tile_type"]) != want["tile_type"]:
+        return f"{case.cid}: tile type {header['tile_type']}, want {want['tile_type']}"
+    from pmtiles.tile import Compression
+
+    meta_raw = raw[
+        header["metadata_offset"] : header["metadata_offset"]
+        + header["metadata_length"]
+    ]
+    if header["internal_compression"] == Compression.GZIP:
+        import gzip
+
+        meta_raw = gzip.decompress(meta_raw)
+    meta = json.loads(meta_raw)
+    if meta != want["metadata"]:
+        return f"{case.cid}: metadata {meta!r}, want {want['metadata']!r}"
+    got = {zxy: payload for zxy, payload in _directory.iter_tiles(raw)}
+    if got != dict(want["tiles"]):
+        return f"{case.cid}: tiles {sorted(got)}, want {sorted(want['tiles'])}"
+    return None
+
+
 _VALUE_CHECKS = {
+    "image_meta": _check_image_meta,
+    "pmtiles_archive": _check_pmtiles_archive,
     "tile_size": _check_tile_size,
     "geom_equals": _check_geom_equals,
     "json_subset": _check_json_subset,
@@ -3476,6 +3698,7 @@ _SQL = {
     "STRING": "string",
     "BINARY": "binary",
     "BOOLEAN": "boolean",
+    "ARRAY<INT>": "array<int>",
     "ARRAY<BIGINT>": "array<bigint>",
     "ARRAY<DOUBLE>": "array<double>",
     "ARRAY<BINARY>": "array<binary>",
@@ -3744,6 +3967,8 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     ]  # one `tile` column (JVM), or the tile fields (light)
     if case.kind == "no_rows":
         return None if not rows else f"{case.cid}: {len(rows)} rows, want none"
+    if case.kind == "xyz_tiles":
+        return _check_xyz_tiles(case, tiles)
     if case.kind == "error_tile":
         if len(rows) != 1:
             return f"{case.cid}: {len(rows)} rows, want the one error tile"
@@ -3813,6 +4038,30 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     raise ValueError(case.kind)
 
 
+def _check_xyz_tiles(case: Case, rows: list) -> Optional[str]:
+    """The rows of a pyramid are exactly the (z, x, y) tiles of `case.expect["tiles"]`, each once, and every `bytes` is
+    a PNG of `expect["size"]` pixels square with an alpha band."""
+    got = [
+        (int(_field(r, "z")), int(_field(r, "x")), int(_field(r, "y"))) for r in rows
+    ]
+    want = sorted(case.expect["tiles"])
+    if sorted(got) != want:
+        return f"{case.cid}: tiles {sorted(set(got))[:6]}.., {len(got)} rows, want {len(want)} tiles {want[:6]}.."
+    size = case.expect["size"]
+    image = Case(
+        case.cid,
+        case.fn,
+        (),
+        "image_meta",
+        {"driver": "PNG", "width": size, "height": size, "count": 4},
+    )
+    for r in rows:
+        why = _check_image_meta(image, _field(r, "bytes"))
+        if why:
+            return why
+    return None
+
+
 def run_rows(
     spark,
     cases,
@@ -3874,7 +4123,10 @@ def _typed_literal(value, param, case: Case) -> str:
 
 
 def group_width(params) -> int:
-    """How many leading parameters one row of an aggregate's group fills: a tile, or a (cellid, value) pair."""
+    """How many leading parameters one row of an aggregate's group fills: a tile, a (cellid, value) pair, or a
+    PMTiles member (bytes, z, x, y)."""
+    if params[0].name == "bytes":
+        return 4
     return 1 if params[0].session == ("TILE",) else 2
 
 

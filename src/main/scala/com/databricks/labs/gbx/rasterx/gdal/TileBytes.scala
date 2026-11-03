@@ -153,6 +153,26 @@ object TileBytes {
         } else None
     }
 
+    /** The refusal of an array of tiles whose decoded sizes add up to more than the read cap of one call, else None
+      * (the light tier's `check_array_budget`): the members each fit, but the function decodes them together. The
+      * Fix names the route that streams them from files. Until the array functions stream their inputs, this is the
+      * answer for such a group. */
+    def checkGroup(dss: Seq[Dataset]): Option[TileBytesRefused] = {
+        val limit = readCap
+        val total = dss.map(decodedSize).sum
+        if (total > limit) {
+            def size(n: Long) = if (n >= (1L << 20)) s"${n >> 20} MiB" else s"${n >> 10} KiB"
+            Some(
+              new TileBytesRefused(
+                s"the ${dss.size} tiles are ${size(total)} decoded together, over this compute's memory budget " +
+                    s"(${size(limit)}) for one call. Fix: keep the tiles as files and mosaic them with " +
+                    "databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method=\"vrt\"), or retile them first " +
+                    "(gbx_rst_retile) into fewer, smaller tiles"
+              )
+            )
+        } else None
+    }
+
     /** Refuse `ds` when it is decoded over the read cap: [[checkDecoded]] for its header's decoded size. */
     private[gdal] def checkSize(ds: Dataset): Unit =
         checkDecoded(decodedSize(ds), None).foreach(r => throw r)

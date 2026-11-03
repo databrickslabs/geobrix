@@ -200,9 +200,23 @@ def _validate_rescale(rescale):
     if rescale is None:
         return "auto"
     if isinstance(rescale, str):
-        r = rescale.lower()
+        r = rescale.strip().lower()
         if r in ("auto", "none"):
             return r
+        parts = [q.strip() for q in rescale.split(",")]
+        if len(parts) == 2:  # the SQL form of a pair: 'min,max'
+            try:
+                rescale = (float(parts[0]), float(parts[1]))
+            except ValueError:
+                raise ValueError(
+                    f"rst_tilexyz: rescale (min,max) must be two numbers; got '{rescale}'"
+                )
+            lo, hi = rescale
+            if not (lo < hi):
+                raise ValueError(
+                    f"rst_tilexyz: rescale (min, max) must have min < max; got ({lo}, {hi})"
+                )
+            return rescale
         raise ValueError(
             f"rst_tilexyz: rescale must be 'auto', 'none', or a (min, max) pair; "
             f"got string '{rescale}'"
@@ -255,6 +269,22 @@ def _resolve_in_range(ds, rescale):
 # --- render_tile (two backends) ---------------------------------------------
 
 
+def _grey_as_rgb(img):
+    """A one-band image as three equal bands, so a web tile is display RGB(A) (PNG and WebP RGBA, JPEG RGB) whatever the
+    band count of the source; the NoData mask is kept and becomes the alpha band."""
+    if img.count != 1:
+        return img
+    from rio_tiler.models import ImageData
+
+    return ImageData(
+        np.ma.concatenate([img.array] * 3),
+        assets=img.assets,
+        crs=img.crs,
+        bounds=img.bounds,
+        metadata=img.metadata,
+    )
+
+
 def _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes:
     """Render a single XYZ tile via rio-tiler (primary backend).
 
@@ -271,7 +301,7 @@ def _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
             )
             if in_range is not None:
                 img = img.post_process(in_range=in_range)
-            out = img.render(img_format=fmt_u)
+            out = _grey_as_rgb(img).render(img_format=fmt_u)
         if not out:
             return transparent_png(s)
         return out
@@ -342,9 +372,9 @@ def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
         u8 = _to_uint8(dst, in_range)
         a = alpha[0]
         if fmt_u == "JPEG":
-            out_arr = u8[: min(nb, 3)]
+            out_arr = np.repeat(u8, 3, axis=0) if nb == 1 else u8[: min(nb, 3)]
         elif nb == 1:
-            out_arr = np.stack([u8[0], a], axis=0)  # GA
+            out_arr = np.stack([u8[0], u8[0], u8[0], a], axis=0)  # RGBA of a grey
         elif nb == 3:
             out_arr = np.concatenate([u8, a[np.newaxis]], axis=0)  # RGBA
         else:
@@ -353,6 +383,13 @@ def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
         return _encode(out_arr, driver)
     except Exception:
         return transparent_png(s)
+
+
+def validate_render_args(fmt, size, resampling, rescale) -> None:
+    """Raise ValueError, naming the value, for a bad format, size, resampling or rescale: the arguments of a render
+    are parameters, not data, so they are checked before any tile is opened."""
+    _validate(fmt, size, resampling)
+    _validate_rescale(rescale)
 
 
 def render_tile(

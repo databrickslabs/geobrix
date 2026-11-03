@@ -132,6 +132,42 @@ def _sized(width, height, fill=0.0, nodata=None):
     )
 
 
+def _png(alpha_value, size=4):
+    """A size x size RGBA PNG whose alpha band is all `alpha_value`."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    px = np.full((4, size, size), alpha_value, dtype="uint8")
+    return oracles._encode(px, "PNG")
+
+
+def _with_overviews(levels):
+    """The `_sized(32, 24)` raster with overviews at `levels` (none for an empty list)."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import ops
+
+    raster = _sized(32, 24)["raster"]
+    if not levels:
+        return {**_sized(32, 24)}
+    with MemoryFile(raster) as mf, mf.open() as ds:
+        return {**_sized(32, 24), "raster": ops.build_overviews(ds, levels, "average")}
+
+
+def _blocked(size):
+    """The `_sized(32, 24)` raster as a COG with `size` x `size` blocks."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core import analysis
+
+    with MemoryFile(_sized(32, 24)["raster"]) as mf, mf.open() as ds:
+        return {
+            **_sized(32, 24),
+            "raster": analysis.cog_convert(ds, "AUTO", size, "AVERAGE"),
+        }
+
+
 # the arguments a tile_meta key that compares the result with them reads (the other probes read none)
 _META_ARGS = {
     "pixels_of_arg0": (_sized(32, 24),),
@@ -169,6 +205,20 @@ _META_ARGS = {
                 "path": "/tmp/x.tif",
             },  # bytes and a path: not a materialized tile
         ),
+        ("tile_meta", {"overviews": [2]}, _with_overviews([2]), _with_overviews([])),
+        ("tile_meta", {"blocksize": (16, 16)}, _blocked(16), _blocked(32)),
+        (
+            "image_meta",
+            {"driver": "PNG", "width": 4, "height": 4, "count": 4, "alpha": "opaque"},
+            _png(255),
+            _png(0),
+        ),
+        (
+            "image_meta",
+            {"width": 4, "alpha": "transparent"},
+            _png(0),
+            _png(255),
+        ),
         (
             "json_subset",
             {"size": [4, 3], "bands": [{"min": 2.0}]},
@@ -205,3 +255,71 @@ def test_geom_srid_without_a_fixed_srid_follows_the_first_argument():
     assert oracles.check(case, _ewkb("POINT(1 2)", 4326), case.args) is None
     assert oracles.check(case, _ewkb("POINT(1 2)", 3857), case.args) is not None
     assert oracles.check(case, _ewkb("POINT Z(1 2 3)", 4326), case.args) is not None
+
+
+def test_a_reference_of_several_bands_holds_every_band_in_order():
+    """`ref` with a 3-D reference (frombands, colour relief) compares each band, and the band count."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    def two_bands(first, second):
+        bands = np.stack([np.full((6, 8), first), np.full((6, 8), second)])
+        return oracles._tile(oracles._gtiff(bands, "EPSG:3857"))
+
+    a, b = _sized(8, 6, 1.0), _sized(8, 6, 2.0)
+    case = oracles.Case("probe", "gbx_rst_frombands", ([a, b],), "ref", "frombands")
+    assert oracles.check(case, two_bands(1.0, 2.0), case.args) is None
+    assert (
+        oracles.check(case, two_bands(2.0, 1.0), case.args) is not None
+    )  # wrong band order
+    assert (
+        oracles.check(case, a, case.args) is not None
+    )  # one band, the reference has two
+
+
+def test_a_pmtiles_archive_has_exactly_its_tiles_metadata_and_type():
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.pmtiles._agg_light import _assemble_archive
+
+    png = b"\x89PNG\r\n\x1a\ntile"
+    expect = {"tile_type": "png", "metadata": {"a": 1}, "tiles": {(0, 0, 0): png}}
+    case = oracles.Case("probe", "gbx_pmtiles_agg", (), "pmtiles_archive", expect)
+    good = _assemble_archive([png], [0], [0], [0], {"a": 1})
+    assert oracles.check(case, good, ()) is None
+    assert (
+        oracles.check(case, _assemble_archive([png], [0], [0], [0], {"a": 2}), ())
+        is not None
+    )
+    assert (
+        oracles.check(
+            case, _assemble_archive([png, png], [0, 1], [0, 0], [0, 0], {"a": 1}), ()
+        )
+        is not None
+    )
+    assert oracles.check(case, None, ()) is not None
+
+
+def test_the_tiles_of_a_pyramid_are_exactly_the_expected_ones_as_png_images():
+    from databricks.labs.gbx.bench import oracles
+
+    img = _png(255, 8)
+    case = oracles.Case(
+        "probe",
+        "gbx_rst_xyzpyramid",
+        (),
+        "xyz_tiles",
+        {"tiles": [(8, 127, 84), (8, 127, 85)], "size": 8},
+    )
+    row = lambda z, x, y, b=img: {"z": z, "x": x, "y": y, "bytes": b}  # noqa: E731
+    assert oracles._check_rows(case, [row(8, 127, 85), row(8, 127, 84)], ()) is None
+    assert (
+        oracles._check_rows(case, [row(8, 127, 84)], ()) is not None
+    )  # a tile missing
+    assert (
+        oracles._check_rows(case, [row(8, 127, 84), row(8, 127, 84)], ()) is not None
+    )  # one twice
+    assert (
+        oracles._check_rows(case, [row(8, 127, 84), row(8, 127, 85, _png(255, 4))], ())
+        is not None
+    )  # size

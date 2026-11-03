@@ -1,14 +1,15 @@
 package com.databricks.labs.gbx.rasterx.util
 
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes}
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes, TileBytesRefused}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.util.ArrayData
-import org.apache.spark.sql.types.DataType
+import org.apache.spark.sql.types.{BinaryType, DataType}
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.Dataset
 
 import scala.util.Try
+import scala.util.control.NonFatal
 
 /** Raised by [[RasterSerializationUtil.guardMaterialized]] when a virtual (non-materialized)
   * tile is passed to a heavyweight rst_* function. Extends IllegalArgumentException so it
@@ -216,6 +217,59 @@ object RasterSerializationUtil {
             val row = array.getStruct(i, elementFieldCount)
             rowToTile(row, dataType)
         }
+    }
+
+
+    /** Runs an array function over the usable members of an array of tile structs, and answers as the light tier does:
+      *
+      *   - a NULL element, an error tile, a tile with no raster and a tile whose bytes cannot be opened are skipped
+      *     (the corrupt ones are counted in the result's `last_error`);
+      *   - an array with no usable member is NULL (also the empty array), except an array of nothing but error tiles,
+      *     which is the first of them as it is;
+      *   - a member decoded over the read cap, or members that add up to more than it, are refused
+      *     ([[TileBytesRefused]]) and the caller's `safeEval` turns that into the row's error tile with its Fix.
+      *
+      * `compute` gets the usable members and returns the result tile; the inputs and the result are released here.
+      */
+    def withMembers(array: ArrayData, elementFieldCount: Int, who: String, hconf: SerializableConfiguration)(
+        compute: Seq[(Long, Dataset, Map[String, String])] => (Long, Dataset, Map[String, String])
+    ): InternalRow = {
+        val tiles = scala.collection.mutable.ArrayBuffer.empty[(Long, Dataset, Map[String, String])]
+        val errors = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
+        var skipped = 0
+        var empty = 0
+        try {
+            (0 until array.numElements()).foreach { i =>
+                if (array.isNullAt(i)) empty += 1
+                else {
+                    val row = array.getStruct(i, elementFieldCount)
+                    if (isErrorTile(row)) errors += row.copy()
+                    else if (row.isNullAt(tileLayout(row).raster)) {
+                        guardMaterialized(row, tileLayout(row)) // a virtual tile is not for the heavy tier
+                        empty += 1
+                    } else {
+                        try {
+                            val t = rowToTile(row, BinaryType)
+                            if (t._2 == null) skipped += 1 else tiles += t
+                        } catch {
+                            case e: VirtualTileException => throw e
+                            case e: TileBytesRefused     => throw e
+                            case NonFatal(_)             => skipped += 1
+                        }
+                    }
+                }
+            }
+            if (tiles.isEmpty) {
+                if (errors.nonEmpty && skipped == 0 && empty == 0) RST_ErrorHandler.errorTileOfGroup(errors.toSeq) else null
+            } else {
+                TileBytes.checkGroup(tiles.map(_._2).toSeq).foreach(r => throw r)
+                val (cell, ds, mtd) = compute(tiles.toSeq)
+                val metadata =
+                    if (skipped > 0) mtd + ("last_error" -> s"$who: skipped $skipped corrupt input tile(s)") else mtd
+                try tileToRow((cell, ds, metadata), BinaryType, hconf)
+                finally RasterDriver.releaseDataset(ds)
+            }
+        } finally tiles.foreach(t => RasterDriver.releaseDataset(t._2))
     }
 
 }

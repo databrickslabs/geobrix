@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
+import com.databricks.labs.gbx.rasterx.util.RasterArgumentException
 import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 
@@ -69,8 +70,8 @@ object RasterAlignment {
     }
 
     /**
-      * Require every dataset in `rasters` to share tile 0's grid, else throw an
-      * [[IllegalArgumentException]] naming the first offending tile and pointing at
+      * Require every dataset in `rasters` to share tile 0's grid, else throw a
+      * [[RasterArgumentException]] naming the first offending tile and pointing at
       * `gbx_rst_align_to`. A stack of 0 or 1 tiles is trivially aligned.
       */
     def requireAligned(rasters: Seq[Dataset], funcName: String): Unit = {
@@ -78,7 +79,7 @@ object RasterAlignment {
         val ref = rasters.head
         rasters.zipWithIndex.tail.foreach { case (ds, i) =>
             if (!isAligned(ref, ds)) {
-                throw new IllegalArgumentException(
+                throw new RasterArgumentException(
                     s"$funcName requires all input tiles to share an identical grid " +
                         s"(CRS, extent, pixel size, and dimensions), but tile $i does not match tile 0. " +
                         s"tile 0: ${describe(ref)}; tile $i: ${describe(ds)}. Cross-raster combine does NOT " +

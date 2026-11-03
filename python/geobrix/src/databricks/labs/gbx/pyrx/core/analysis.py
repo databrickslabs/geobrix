@@ -165,6 +165,42 @@ def proximity(ds, target_values, distunits, max_distance):
         return mf.read()
 
 
+def check_cog_args(compression, blocksize, overview_resampling):
+    """The validated ``(compression upper-cased with NONE read as RAW, blocksize, overview resampling upper-cased,
+    is-AUTO)`` of a cog_convert call; ValueError, naming the value, for an unusable one.
+    """
+    blocksize = int(blocksize)
+    if blocksize <= 0 or blocksize % 16:
+        raise ValueError(
+            f"rst_cog_convert: blocksize must be a positive multiple of 16; got {blocksize}"
+        )
+    if compression is None or str(compression).strip() == "":
+        raise ValueError("rst_cog_convert: compression must be non-empty")
+    if overview_resampling is None or str(overview_resampling).strip() == "":
+        raise ValueError("rst_cog_convert: overview_resampling must be non-empty")
+    compression = str(compression).upper()
+    if compression == "NONE":
+        compression = "RAW"  # the rio-cogeo profile table calls "no compression" raw
+    overview_resampling = str(overview_resampling).upper()
+
+    # "AUTO" is a special sentinel meaning "size-adaptive ZSTD" — it bypasses
+    # the profile-name validation (which has no "auto" entry) and routes through
+    # creation_opts(compress="auto", decoded_bytes=...) so size-adaptive level +
+    # predictor are preserved, matching the GTiff path's ZSTD baseline.
+    is_auto = compression == "AUTO"
+    # Validate compression against rio-cogeo's profile names (compression.COG_PROFILES, a
+    # local copy: rio-cogeo itself is not needed), so callers passing profile names (e.g.
+    # "deflate", "lzw", "raw") still work. "raw" (and "none", read as "raw" above) means no
+    # compression: the authority emits compress=none below, since the COG driver compresses
+    # with LZW when none is named.
+    if not is_auto and compression.lower() not in _comp.COG_PROFILES:
+        raise ValueError(
+            f"rst_cog_convert: unknown compression '{compression}'; "
+            f"valid profiles: {', '.join(sorted(_comp.COG_PROFILES))}"
+        )
+    return compression, blocksize, overview_resampling, is_auto
+
+
 def cog_convert(ds, compression, blocksize, overview_resampling):
     """Convert a raster to a Cloud Optimized GeoTIFF (COG) layout.
 
@@ -197,34 +233,9 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     Returns:
         COG-layout GTiff bytes.
     """
-    blocksize = int(blocksize)
-    if blocksize <= 0:
-        raise ValueError(f"rst_cog_convert: blocksize must be > 0; got {blocksize}")
-    if compression is None or str(compression).strip() == "":
-        raise ValueError("rst_cog_convert: compression must be non-empty")
-    if overview_resampling is None or str(overview_resampling).strip() == "":
-        raise ValueError("rst_cog_convert: overview_resampling must be non-empty")
-    compression = str(compression).upper()
-    if compression == "NONE":
-        compression = "RAW"  # the rio-cogeo profile table calls "no compression" raw
-    overview_resampling = str(overview_resampling).upper()
-
-    # "AUTO" is a special sentinel meaning "size-adaptive ZSTD" — it bypasses
-    # the profile-name validation (which has no "auto" entry) and routes through
-    # creation_opts(compress="auto", decoded_bytes=...) so size-adaptive level +
-    # predictor are preserved, matching the GTiff path's ZSTD baseline.
-    _is_auto = compression == "AUTO"
-
-    # Validate compression against rio-cogeo's profile names (compression.COG_PROFILES, a
-    # local copy: rio-cogeo itself is not needed), so callers passing profile names (e.g.
-    # "deflate", "lzw", "raw") still work. "raw" (and "none", read as "raw" above) means no
-    # compression: the authority emits compress=none below, since the COG driver compresses
-    # with LZW when none is named.
-    if not _is_auto and compression.lower() not in _comp.COG_PROFILES:
-        raise ValueError(
-            f"rst_cog_convert: unknown compression '{compression}'; "
-            f"valid profiles: {', '.join(sorted(_comp.COG_PROFILES))}"
-        )
+    compression, blocksize, overview_resampling, _is_auto = check_cog_args(
+        compression, blocksize, overview_resampling
+    )
 
     # Read decoded data from the source dataset FIRST, then free it after
     # writing to minimise concurrent-buffer overlap.

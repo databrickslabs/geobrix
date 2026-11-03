@@ -21,6 +21,7 @@ from databricks.labs.gbx.bench.oracles import (
 
 SL, AS, HS = "gbx_rst_slope", "gbx_rst_aspect", "gbx_rst_hillshade"
 TRI, TPI, RGH = "gbx_rst_tri", "gbx_rst_tpi", "gbx_rst_roughness"
+CR = "gbx_rst_color_relief"
 DEM, PLANE, FLAT = Build("dem_3857"), Build("dem_plane_east"), Build("dem_flat")
 ERR, CORRUPT, VIRT = Build("tile_error"), Build("tile_corrupt"), Build("dem_file")
 ONLY = ("session",)
@@ -54,6 +55,38 @@ def _file(tmpdir):
     return _tile(None, path, {"col_off": 0, "row_off": 0, "width": 64, "height": 64})
 
 
+def _colour_table(tmpdir, name, alpha):
+    """A gdaldem colour file of oracle_refs.COLOR_STOPS (and its `nv` line), RGB or RGBA."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    n = 4 if alpha else 3
+    lines = [
+        f"{e:g} " + " ".join(str(c) for c in col[:n])
+        for e, col in oracle_refs.COLOR_STOPS
+    ]
+    lines.append("nv " + " ".join(str(c) for c in oracle_refs.COLOR_NV[:n]))
+    path = os.path.join(tmpdir, name)
+    with open(path, "w") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
+
+
+@builder("cr_table")
+def _cr_table(tmpdir):
+    return _colour_table(tmpdir, "oracle_colors.txt", False)
+
+
+@builder("cr_table_alpha")
+def _cr_table_alpha(tmpdir):
+    return _colour_table(tmpdir, "oracle_colors_alpha.txt", True)
+
+
+@builder("cr_table_missing")
+def _cr_table_missing(tmpdir):
+    return os.path.join(tmpdir, "no_such_colors.txt")
+
+
+TABLE, TABLE_A = Build("cr_table"), Build("cr_table_alpha")
 SPEC_DEM = (
     # slope: the engine's own rows (SPEC_SE) hold its edge cases; this one is the docs example.
     Case("slope_example", SL, (DEM, "degrees"), "ref", "slope", ONLY),
@@ -122,4 +155,23 @@ SPEC_DEM = (
     Case("tri_error_tile", TRI, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("tpi", TPI, (DEM,), "ref", "tpi", ONLY),
     Case("roughness", RGH, (DEM,), "ref", "roughness", ONLY),
+    # color_relief: stops, clamping outside them and the nv colour against numpy; a table with an alpha column is RGBA
+    Case("color_relief_rgb", CR, (DEM, TABLE), "ref", "color_relief_rgb", ONLY),
+    Case("color_relief_rgba", CR, (DEM, TABLE_A), "ref", "color_relief_rgba", ONLY),
+    Case("color_relief_virtual", CR, (VIRT, TABLE), "ref", "color_relief_rgb", ONLY),
+    Case("color_relief_null_tile", CR, (None, TABLE), "null", None, ONLY),
+    Case("color_relief_null_table", CR, (DEM, None), "null", None, ONLY),
+    Case(
+        "color_relief_error_tile", CR, (ERR, TABLE), "error_tile", UPSTREAM_ERROR, ONLY
+    ),
+    Case("color_relief_corrupt", CR, (CORRUPT, TABLE), "error_tile", None, ONLY),
+    # a colour file that does not exist raises and names the path
+    Case(
+        "color_relief_missing_table",
+        CR,
+        (DEM, Build("cr_table_missing")),
+        "raises",
+        "no_such_colors",
+        ONLY,
+    ),
 )

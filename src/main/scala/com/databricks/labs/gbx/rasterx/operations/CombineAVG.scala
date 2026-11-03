@@ -23,6 +23,7 @@ object CombineAVG {
 
     /** Average per-pixel, excluding per-source NoData; preserves first-source NoData on output band. */
     def compute(rasters: Array[Dataset], options: Map[String, String]): (Dataset, Map[String, String]) = {
+        RasterAlignment.requireAligned(rasters.toSeq, "gbx_rst_combineavg")
         val sourceNoData: Array[Option[Double]] = rasters.map { ds =>
             val v = BandAccessors.getNoDataValue(ds.GetRasterBand(1))
             if (v.isNaN) None else Some(v)

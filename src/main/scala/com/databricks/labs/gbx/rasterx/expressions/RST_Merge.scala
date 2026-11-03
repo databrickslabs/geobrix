@@ -46,14 +46,10 @@ object RST_Merge extends WithExpressionInfo {
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val tiles = RasterSerializationUtil.arrayToTiles(array, BinaryType, elementFieldCount)
-              val dss = tiles.map(_._2)
-              val cell = tiles.head._1
-              val (mergedDs, options) = execute(dss.toArray, tiles.head._3)
-              dss.foreach(ds => RasterDriver.releaseDataset(ds))
-              val res = RasterSerializationUtil.tileToRow((cell, mergedDs, options), BinaryType, exprConf.hConf)
-              RasterDriver.releaseDataset(mergedDs)
-              res
+              RasterSerializationUtil.withMembers(array, elementFieldCount, "RST_Merge", exprConf.hConf) { tiles =>
+                  val (mergedDs, options) = execute(tiles.map(_._2).toArray, tiles.head._3)
+                  (tiles.head._1, mergedDs, options)
+              }
           },
           array,
           BinaryType,

@@ -88,6 +88,7 @@ object RST_ErrorHandler extends Logging {
             underHdfLock((0 until rows.numElements()).exists(i => RasterSerializationUtil.isHdfTile(rows.getStruct(i, elementFieldCount))))(eval)
         } catch {
             case e: VirtualTileException => throw e
+            case e: RasterArgumentException => throw e
             case NonFatal(e) =>
                 // Check if an input already was an error tile (read structurally, without opening any raster)
                 val errorIdx = (0 until rows.numElements()).find { i =>

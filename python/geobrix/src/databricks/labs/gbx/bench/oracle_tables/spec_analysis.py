@@ -14,6 +14,10 @@ from databricks.labs.gbx.bench.oracles import (
 )
 
 S, PRX, FND = "gbx_rst_summary", "gbx_rst_proximity", "gbx_rst_fillnodata"
+VS = "gbx_rst_viewshed"
+# The observer of the viewshed rows: pixel (6, 10) of the 21 x 21 `vs_wall` DEM (10 m pixels from (400000, 5760000)).
+OBSERVER = "POINT(400065 5759895)"
+OBSERVER_WKB = bytes.fromhex("010100000000000000046b1841000000c0e5f85541")
 STATS, VIRT, ERR = Build("acc_stats"), Build("tile_virtual"), Build("tile_error")
 CLASSES, DEM, CORRUPT = (
     Build("analysis_classes"),
@@ -50,6 +54,32 @@ def _classes(tmpdir):
         return _tile(mf.read())
 
 
+@builder("vs_wall")
+def _vs_wall(tmpdir):
+    """A flat 21 x 21 DEM (100 m, EPSG:3857, 10 m pixels) with a 1000 m wall in column 14: from the observer in
+    column 6 every cell east of the wall is hidden and every other cell is visible."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    z = np.full((1, 21, 21), 100.0)
+    z[0, :, 14] = 1000.0
+    return _tile(_gtiff(z, "EPSG:3857"))
+
+
+@builder("vs_wall_file")
+def _vs_wall_file(tmpdir):
+    import os
+
+    from databricks.labs.gbx.bench.oracles import _build
+
+    path = os.path.join(tmpdir, "oracle_wall.tif")
+    with open(path, "wb") as fh:
+        fh.write(bytes(_build("vs_wall", tmpdir)["raster"]))
+    return _tile(None, path, {"col_off": 0, "row_off": 0, "width": 21, "height": 21})
+
+
+WALL = Build("vs_wall")
 SPEC_ANALYSIS = (
     Case(
         "summary",
@@ -140,4 +170,44 @@ SPEC_ANALYSIS = (
     Case("fillnodata_null_distance", FND, (DEM, None, 0), "null", None, ONLY),
     Case("fillnodata_error_in", FND, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("fillnodata_corrupt", FND, (CORRUPT,), "error_tile", None, ONLY),
+    # viewshed: 255 up to and including the wall (column 14), 0 behind it
+    Case("viewshed_wall", VS, (WALL, OBSERVER, 2.0), "ref", "viewshed_wall", ONLY),
+    Case("viewshed_wkb", VS, (WALL, OBSERVER_WKB, 2.0), "ref", "viewshed_wall", ONLY),
+    Case(
+        "viewshed_virtual",
+        VS,
+        (Build("vs_wall_file"), OBSERVER, 2.0),
+        "ref",
+        "viewshed_wall",
+        ONLY,
+    ),
+    # a distance limit gives the window around the observer: 3 pixels either side of pixel (6, 10)
+    Case(
+        "viewshed_max_distance",
+        VS,
+        (WALL, OBSERVER, 2.0, 1.6, 30.0),
+        "tile_meta",
+        {"width": 7, "height": 7, "dtype": "uint8"},
+        ONLY,
+    ),
+    Case(
+        "viewshed_not_a_point",
+        VS,
+        (WALL, "LINESTRING(400065 5759895, 400075 5759895)", 2.0),
+        "raises",
+        "POINT",
+        ONLY,
+    ),
+    Case("viewshed_negative_height", VS, (WALL, OBSERVER, -1.0), "raises", "-1", ONLY),
+    Case("viewshed_null_tile", VS, (None, OBSERVER, 2.0), "null", None, ONLY),
+    Case("viewshed_null_observer", VS, (WALL, None, 2.0), "null", None, ONLY),
+    Case(
+        "viewshed_error_tile",
+        VS,
+        (ERR, OBSERVER, 2.0),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ONLY,
+    ),
+    Case("viewshed_corrupt", VS, (CORRUPT, OBSERVER, 2.0), "error_tile", None, ONLY),
 )

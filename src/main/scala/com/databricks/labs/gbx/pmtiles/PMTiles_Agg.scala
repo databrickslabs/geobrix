@@ -35,7 +35,7 @@ final case class PMTiles_Agg(
 ) extends TypedImperativeAggregate[PMTilesAcc] {
 
     override lazy val deterministic: Boolean = true
-    override val nullable: Boolean = false
+    override val nullable: Boolean = true
     override val dataType: DataType = BinaryType
     override def prettyName: String = PMTiles_Agg.name
 
@@ -80,8 +80,8 @@ final case class PMTiles_Agg(
 
     override def eval(buffer: PMTilesAcc): Any = {
         if (buffer.tiles.isEmpty) {
-            // Empty group: emit a valid header-only PMTile so downstream callers always get bytes.
-            return PMTilesV3Encoder.encode(Iterator.empty, buffer.metadataJson)
+            // A group with no tile payload has no archive: NULL, as the light tier answers it.
+            return null
         }
         val firstNonNull = buffer.tiles.iterator.map(_._4).find(b => b != null && b.nonEmpty)
         val tileType = firstNonNull

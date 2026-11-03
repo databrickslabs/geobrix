@@ -154,16 +154,9 @@ def as_format(ds, new_format: str) -> bytes:
         return mf.read()
 
 
-def build_overviews(ds, levels, resampling: str = "average") -> bytes:
-    """Build internal pyramid overviews at ``levels`` and return GTiff bytes.
-
-    Mirrors the heavyweight ``gbx_rst_buildoverviews``:
-      * ``levels`` is a non-empty list of integer decimation factors, each >= 2.
-      * ``resampling`` defaults to "average"; mapped to rasterio's Resampling
-        enum (near->nearest, cubicspline->cubic_spline, ...).
-
-    Overviews are embedded internally in the GTiff (no .ovr sidecar).
-    """
+def check_overview_args(levels, resampling):
+    """The validated ``(levels as ints, lower-case resampling key)`` of a build_overviews call; ValueError, naming the
+    value, for no levels, a level below 2 or a resampling word that names none."""
     if levels is None or len(levels) == 0:
         raise ValueError(
             "rst_buildoverviews: levels must be a non-empty integer array "
@@ -173,7 +166,7 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     for level in levels:
         if level < 2:
             raise ValueError(
-                f"rst_buildoverviews: each level must be >= 2; got {level}"
+                f"rst_buildoverviews: each level must be >= 2; got {level} in levels {levels}"
             )
     resampling = (
         "average" if resampling is None or resampling == "" else str(resampling)
@@ -185,6 +178,20 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
             f"rst_buildoverviews: unsupported resampling '{resampling}'; "
             f"allowed: {allowed}"
         )
+    return levels, key
+
+
+def build_overviews(ds, levels, resampling: str = "average") -> bytes:
+    """Build internal pyramid overviews at ``levels`` and return GTiff bytes.
+
+    Mirrors the heavyweight ``gbx_rst_buildoverviews``:
+      * ``levels`` is a non-empty list of integer decimation factors, each >= 2.
+      * ``resampling`` defaults to "average"; mapped to rasterio's Resampling
+        enum (near->nearest, cubicspline->cubic_spline, ...).
+
+    Overviews are embedded internally in the GTiff (no .ovr sidecar).
+    """
+    levels, key = check_overview_args(levels, resampling)
     resampling_enum = Resampling[_OVERVIEW_RESAMPLING_MAP[key]]
 
     data = ds.read()

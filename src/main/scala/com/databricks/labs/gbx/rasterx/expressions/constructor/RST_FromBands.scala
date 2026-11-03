@@ -46,10 +46,10 @@ object RST_FromBands extends WithExpressionInfo {
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val tiles = RasterSerializationUtil.arrayToTiles(row, BinaryType, elementFieldCount)
-              val (ds, mtd) = execute(tiles)
-              tiles.foreach(t => RasterDriver.releaseDataset(t._2))
-              RasterSerializationUtil.tileToRow((tiles.head._1, ds, mtd), BinaryType, exprConf.hConf)
+              RasterSerializationUtil.withMembers(row, elementFieldCount, "RST_FromBands", exprConf.hConf) { tiles =>
+                  val (ds, mtd) = execute(tiles)
+                  (tiles.head._1, ds, mtd)
+              }
           },
           row,
           BinaryType,

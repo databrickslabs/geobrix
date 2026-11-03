@@ -103,7 +103,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
         }
     }
 
-    test("pmtiles_agg returns valid header-only PMTile for empty input") {
+    test("pmtiles_agg returns NULL for a group with no tile payload (as the light tier does)") {
         spark.sparkContext.setLogLevel("ERROR")
         functions.register(spark)
         import functions._
@@ -112,8 +112,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
             .toDF("z", "x", "y", "bytes")
         val out = df.agg(pmtiles_agg(col("bytes"), col("z"), col("x"), col("y")).as("pmt"))
             .collect().head.getAs[Array[Byte]]("pmt")
-        assert(out != null && out.length >= 127)
-        assert(out(0) == 'P'.toByte && out(7) == 0x03.toByte)
+        assert(out == null)
     }
 
     test("pmtiles_agg survives a multi-partition shuffle merge") {

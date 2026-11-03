@@ -41,7 +41,12 @@ object RST_ColorRelief extends WithExpressionInfo {
     def eval(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String): InternalRow =
         runDispatch(row, colorTablePath, conf, BinaryType)
 
-    private def runDispatch(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String, dt: DataType): InternalRow =
+    private def runDispatch(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String, dt: DataType): InternalRow = {
+        // A colour file that does not exist is a bad argument: it raises, naming the path, whatever the tile is.
+        if (colorTablePath != null && !localFile(colorTablePath.toString).isFile) {
+            throw new java.io.FileNotFoundException(
+              s"gbx_rst_color_relief: the colour table '${colorTablePath.toString}' does not exist")
+        }
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -57,12 +62,29 @@ object RST_ColorRelief extends WithExpressionInfo {
           row,
           dt
         )
+    }
+
+    private def localFile(path: String): java.io.File = {
+        val bare = if (path.startsWith("dbfs:")) path.stripPrefix("dbfs:") else if (path.startsWith("file:")) path.stripPrefix("file:") else path
+        new java.io.File(bare)
+    }
+
+    /** True when a stop of the colour file has an alpha column (`elevation R G B A`): the output is then RGBA, as
+      * the light tier writes it. The `nv` line and comments do not count. */
+    private def hasAlpha(path: String): Boolean =
+        scala.util.Try {
+            val src = scala.io.Source.fromFile(localFile(path))
+            try src.getLines().map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#") && !l.toLowerCase.startsWith("nv"))
+                .exists(_.split("[\\s,]+").length >= 5)
+            finally src.close()
+        }.getOrElse(false)
 
     /** Pure compute path - extracted for direct unit-testing without Spark. */
     def execute(ds: Dataset, colorTablePath: String): (Dataset, Map[String, String]) = {
         require(colorTablePath != null && colorTablePath.nonEmpty,
             "gbx_rst_color_relief: color_table_path is required")
-        RST_DEMProcessingHelper.process(ds, "color-relief", Seq.empty, colorFilename = colorTablePath)
+        val options = if (hasAlpha(colorTablePath)) Seq("-alpha") else Seq.empty[String]
+        RST_DEMProcessingHelper.process(ds, "color-relief", options, colorFilename = colorTablePath)
     }
 
     override def name: String = "gbx_rst_color_relief"

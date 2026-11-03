@@ -46,12 +46,7 @@ object RST_CombineAvg extends WithExpressionInfo {
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val tiles = RasterSerializationUtil.arrayToTiles(array, BinaryType, elementFieldCount)
-              val (cellID, combinedRaster, mtd) = execute(tiles)
-              tiles.foreach(t => RasterDriver.releaseDataset(t._2))
-              val res = RasterSerializationUtil.tileToRow((cellID, combinedRaster, mtd), BinaryType, exprConf.hConf)
-              RasterDriver.releaseDataset(combinedRaster)
-              res
+              RasterSerializationUtil.withMembers(array, elementFieldCount, "RST_CombineAvg", exprConf.hConf)(execute)
           },
           array,
           BinaryType,

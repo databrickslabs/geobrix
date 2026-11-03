@@ -75,7 +75,30 @@ object RST_CogConvert extends WithExpressionInfo {
         overviewResampling: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, compression, blocksize.toInt, overviewResampling, conf, BinaryType)
 
+    /** The codecs `compression` takes (GDAL's COG driver, the light tier's profile names), and `AUTO`/`NONE`. */
+    private val Codecs: Set[String] = Set(
+      "AUTO", "NONE", "RAW", "ZSTD", "DEFLATE", "LZW", "LERC", "LERC_DEFLATE", "LERC_ZSTD", "JPEG", "WEBP", "PACKBITS", "LZMA"
+    )
+
+    /** A bad compression word or block size is a bad argument: it raises, naming the value (before any tile is read). */
+    private def checkArgs(compression: String, blocksize: Int): Unit = {
+        // scalastyle:off caselocale
+        require(Codecs.contains(compression.toUpperCase),
+            s"gbx_rst_cog_convert: unknown compression '$compression'; valid: ${Codecs.toSeq.sorted.mkString(", ")}")
+        // scalastyle:on caselocale
+        require(blocksize > 0 && blocksize % 16 == 0,
+            s"gbx_rst_cog_convert: blocksize must be a positive multiple of 16; got $blocksize")
+    }
+
     private def runDispatch(
+        row: InternalRow, compression: UTF8String, blocksize: Int,
+        overviewResampling: UTF8String, conf: UTF8String, dt: DataType
+    ): InternalRow = {
+        checkArgs(Option(compression).map(_.toString).getOrElse(CogDefaultCompression), blocksize)
+        runChecked(row, compression, blocksize, overviewResampling, conf, dt)
+    }
+
+    private def runChecked(
         row: InternalRow, compression: UTF8String, blocksize: Int,
         overviewResampling: UTF8String, conf: UTF8String, dt: DataType
     ): InternalRow =
@@ -111,6 +134,14 @@ object RST_CogConvert extends WithExpressionInfo {
     ): (Dataset, Map[String, String]) = {
         require(ds != null, "RST_CogConvert.execute: source Dataset is null")
         require(blocksize > 0, s"gbx_rst_cog_convert: blocksize must be > 0; got $blocksize")
+        // AUTO is the light tier's size-adaptive ZSTD; the JVM's baseline codec is ZSTD, and NONE is no compression
+        // scalastyle:off caselocale
+        val codec = compression.toUpperCase match {
+            case "AUTO" => CogDefaultCompression
+            case "RAW"  => "NONE"
+            case other  => other
+        }
+        // scalastyle:on caselocale
         require(compression != null && compression.nonEmpty,
             "gbx_rst_cog_convert: compression must be non-empty")
         require(overviewResampling != null && overviewResampling.nonEmpty,
@@ -124,7 +155,7 @@ object RST_CogConvert extends WithExpressionInfo {
         // Pass the COG-specific options (format=COG, blocksize, overview_resampling) alongside compression.
         val writeOpts = options ++ Map(
             "format" -> "COG",
-            "compression" -> compression,
+            "compression" -> codec,
             "blocksize" -> blocksize.toString,
             "overview_resampling" -> overviewResampling
         )
@@ -161,12 +192,12 @@ object RST_CogConvert extends WithExpressionInfo {
             // COG is a GTiff variant on disk — downstream serialization expects GTiff here.
             "driver" -> "GTiff",
             "extension" -> "tif",
-            "last_command" -> s"gdal.Translate(-of COG -co COMPRESS=$compression -co BLOCKSIZE=$blocksize -co OVERVIEW_RESAMPLING=$overviewResampling)",
+            "last_command" -> s"gdal.Translate(-of COG -co COMPRESS=$codec -co BLOCKSIZE=$blocksize -co OVERVIEW_RESAMPLING=$overviewResampling)",
             "last_error" -> (if (errMsg == null) "" else errMsg),
             "all_parents" -> Option(ds.GetDescription()).getOrElse(""),
             "size" -> "-1",
             "format" -> "GTiff",
-            "compression" -> compression,
+            "compression" -> codec,
             "layout" -> "COG",
             "isZipped" -> "false",
             "isSubset" -> "false"

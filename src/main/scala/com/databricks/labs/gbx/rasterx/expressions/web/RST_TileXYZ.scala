@@ -60,7 +60,9 @@ case class RST_TileXYZ(
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = RST_TileXYZ.name
-    override def replacement: Expression = invoke(RST_TileXYZ)
+    // propagateNull = false: a NULL tile is a transparent image (never NULL, for a slippy-map server); a NULL
+    // coordinate is a primitive and still nulls the result
+    override def replacement: Expression = invoke(RST_TileXYZ, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 }

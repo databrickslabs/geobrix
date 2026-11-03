@@ -248,3 +248,48 @@ def plane(coeffs, hull, grid, nodata=-9999.0):
     gx, gy = pixel_centres(*grid)
     inside = (gx >= hull[0]) & (gx <= hull[2]) & (gy >= hull[1]) & (gy <= hull[3])
     return np.where(inside, coeffs[0] * gx + coeffs[1] * gy, nodata), ~inside
+
+
+def combine(stat: str, members):
+    """The per-pixel statistic of the valid values across the masked 2-D arrays `members`, written from its
+    definition: the mean, sum, minimum, maximum, count of valid values, median (the mean of the two middle values for
+    an even count) or population standard deviation (divisor n). A pixel that is NoData in every member is NoData,
+    also for the count. Returns ``(values float64, mask bool)``."""
+    stack = np.ma.stack([np.ma.asarray(m, dtype="float64") for m in members])
+    if stat == "count":
+        res = np.ma.masked_equal(stack.count(axis=0), 0)
+    elif stat == "median":
+        res = np.ma.median(stack, axis=0)
+    else:
+        res = getattr(stack, {"avg": "mean", "stddev": "std"}.get(stat, stat))(axis=0)
+    res = np.ma.asarray(res)
+    return res.filled(0.0).astype("float64"), np.ma.getmaskarray(res)
+
+
+# The colour table of the color_relief rows: elevation, then red, green, blue, alpha (the alpha column is only written
+# for the RGBA table); `nv` colours the NoData pixels. The DEM `dem_3857` runs from about 90 to 160.
+COLOR_STOPS = (
+    (90.0, (255, 0, 0, 255)),
+    (120.0, (0, 255, 0, 128)),
+    (160.0, (0, 0, 255, 0)),
+)
+COLOR_NV = (10, 20, 30, 77)
+
+
+def color_relief(z, nodata, alpha: bool):
+    """gdaldem colour-relief written from its definition: each channel is linear between the stops (clamped to the
+    first and last colour outside them) and the NoData pixels take the `nv` colour. Returns ``(bands float64 (n, h, w),
+    mask)`` with no NoData in the output."""
+    n = 4 if alpha else 3
+    elev = [s[0] for s in COLOR_STOPS]
+    valid = z != nodata
+    bands = [
+        np.where(
+            valid,
+            np.interp(z, elev, [s[1][ch] for s in COLOR_STOPS]),
+            COLOR_NV[ch],
+        )
+        for ch in range(n)
+    ]
+    out = np.stack(bands).astype("float64")
+    return out, np.zeros(out.shape, bool)

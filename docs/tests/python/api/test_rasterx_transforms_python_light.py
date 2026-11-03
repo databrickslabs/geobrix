@@ -81,14 +81,14 @@ def test_rst_xyzpyramid_python_light_example(spark):
 
 def test_rst_h3_tessellate_python_light_example(spark):
     """rst_h3_tessellate (UDTF via LATERAL) yields one v2-Tile row per H3 cell."""
-    rows = transforms_examples.rst_h3_tessellate_python_light_example(spark)
+    rows = transforms_examples.rst_h3_tessellate_python_example(spark)
     assert isinstance(rows, list) and len(rows) >= 1
     assert "cellid" in rows[0].asDict() and rows[0]["raster"] is not None
 
 
 def test_rst_bng_tessellate_python_light_example(spark):
     """rst_bng_tessellate (UDTF via LATERAL) yields 1km BNG cell rows over London."""
-    rows = transforms_examples.rst_bng_tessellate_python_light_example(spark)
+    rows = transforms_examples.rst_bng_tessellate_python_example(spark)
     # Synthetic 2km London raster (EPSG:27700) → several overlapping 1km cells.
     assert isinstance(rows, list) and len(rows) >= 1
     assert "cellid" in rows[0].asDict() and rows[0]["raster"] is not None
@@ -96,7 +96,7 @@ def test_rst_bng_tessellate_python_light_example(spark):
 
 def test_rst_quadbin_tessellate_python_light_example(spark):
     """rst_quadbin_tessellate (UDTF via LATERAL) yields one row per quadbin cell."""
-    rows = transforms_examples.rst_quadbin_tessellate_python_light_example(spark)
+    rows = transforms_examples.rst_quadbin_tessellate_python_example(spark)
     assert isinstance(rows, list) and len(rows) >= 1
     assert "cellid" in rows[0].asDict() and rows[0]["raster"] is not None
 
@@ -107,7 +107,7 @@ def test_rst_custom_tessellate_python_light_example(spark):
     Synthesizes a 2km London raster (EPSG:27700) and tessellates it into four
     1km custom-grid cells. Expects at least one chip row with [cellid, raster].
     """
-    rows = transforms_examples.rst_custom_tessellate_python_light_example(spark)
+    rows = transforms_examples.rst_custom_tessellate_python_example(spark)
     assert isinstance(rows, list) and len(rows) >= 1, (
         "rst_custom_tessellate should yield >=1 chip row for a 2km London raster at res=1"
     )

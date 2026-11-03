@@ -191,10 +191,10 @@
     "gbx_rst_bng_tessellate": {
       "examples": "Examples:\n      > SELECT gbx_rst_bng_tessellate(tile, '1km', 'covering') FROM rasters;",
       "usage_args": "tile, resolution, [assignment], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Cut a tile in EPSG:27700 into BNG cells, one tile per cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.3"
@@ -354,10 +354,10 @@
     "gbx_rst_contour": {
       "examples": "Examples:\n      > SELECT gbx_rst_contour(tile, array(), 50.0, 0.0, 'elev') AS contours FROM dem_rasters;",
       "usage_args": "tile, levels, [interval], [base], [attr_field]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Trace contour lines of the first band at given values or at a regular interval.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -484,12 +484,12 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r;",
+      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_tessellate(c0, c1, 0) AS gbx_out;",
       "usage_args": "tile, grid, resolution, [assignment], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Cut a tile into custom-grid cells, one tile per cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -780,10 +780,10 @@
     "gbx_rst_h3_tessellate": {
       "examples": "Examples:\n      > SELECT gbx_rst_h3_tessellate(tile, 7, 'covering') FROM rasters;",
       "usage_args": "tile, resolution, [assignment], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Cut a tile into H3 cells, one tile per cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -855,10 +855,10 @@
     "gbx_rst_isoband": {
       "examples": "Examples:\n      > SELECT gbx_rst_isoband(tile, array(0.0, 50.0, 100.0, 150.0, 200.0)) AS patches FROM dem_rasters;",
       "usage_args": "tile, breaks",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Group the pixels of the first band into value bands and return one polygon per connected patch.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.2"
@@ -876,10 +876,10 @@
     "gbx_rst_maketiles": {
       "examples": "Examples:\n      > SELECT gbx_rst_maketiles(tile, 4) FROM rasters;",
       "usage_args": "tile, size_in_mb",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Split a tile into tiles of about the given size in megabytes.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1059,11 +1059,10 @@
     "gbx_rst_polygonize": {
       "examples": "Examples:\n      > SELECT gbx_rst_polygonize( gbx_rst_rasterize( unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'), 42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326 ) ) AS features;",
       "usage_args": "tile, [band], [connectedness]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Extract a polygon for each connected region of equal pixel values.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1180,10 +1179,10 @@
     "gbx_rst_quadbin_tessellate": {
       "examples": "Examples:\n      > SELECT gbx_rst_quadbin_tessellate(tile, 12, 'covering') FROM rasters;",
       "usage_args": "tile, resolution, [assignment], [coverage]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Cut a tile into quadbin cells, one tile per cell.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.3"
@@ -1281,8 +1280,7 @@
       "description": "Partition a tile into non-overlapping sub-tiles of the given pixel size.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1354,10 +1352,10 @@
     "gbx_rst_separatebands": {
       "examples": "Examples:\n      > SELECT gbx_rst_separatebands(tile) FROM multiband_rasters;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Split a multi-band tile into single-band tiles, one row per band.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -1484,10 +1482,10 @@
     "gbx_rst_tooverlappingtiles": {
       "examples": "Examples:\n      > SELECT gbx_rst_tooverlappingtiles(tile, 256, 256, 10) FROM rasters;",
       "usage_args": "tile, tile_width, tile_height, overlap",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Partition a tile into overlapping tiles of the given pixel size.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"

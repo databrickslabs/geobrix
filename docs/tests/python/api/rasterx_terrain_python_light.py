@@ -185,12 +185,11 @@ rst_proximity_python_example_output = """
 """
 
 
-def rst_contour_python_light_example(spark):
+def rst_contour_python_example(spark):
     """Generate contour LineStrings at equal intervals from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql import functions as f
 
-    rx.register(spark)
     df = dem_tile_df(spark)
     result = df.select(
         rx.rst_contour("tile", f.lit([]), f.lit(50.0), f.lit(0.0), f.lit("elev")).alias(
@@ -200,7 +199,7 @@ def rst_contour_python_light_example(spark):
     return result["contours"]
 
 
-rst_contour_python_light_example_output = """
+rst_contour_python_example_output = """
 +-----------------------------------------------------------------------------------------------------------------+
 |contours                                                                                                         |
 +-----------------------------------------------------------------------------------------------------------------+

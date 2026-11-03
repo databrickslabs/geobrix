@@ -95,7 +95,7 @@ def test_rst_proximity_python_example(spark):
 def test_rst_contour_python_light_example(spark):
     """rst_contour returns an array of contour line feature structs."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_contour_python_light_example(spark)
+    result = terrain_examples.rst_contour_python_example(spark)
     assert result is not None, "rst_contour: result should not be None"
     assert isinstance(
         result, list

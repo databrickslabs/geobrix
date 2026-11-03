@@ -2407,26 +2407,6 @@ result.show(truncate = false)
   // Generator Functions (Scala)
   // =========================================================================
 
-  val rst_retile_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_retile(col("tile"), lit(64), lit(64)).alias("tiles"))
-result.show(truncate = false)
-""".trim
-
-  val rst_retile_scala_example_output: String =
-    """
-+-----+
-|tiles|
-+-----+
-|[{0, |
-+-----+
-(array of tile structs: [{0, raster, path, metadata}, ...])
-"""
-
   val rst_tooverlappingtiles_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -2465,26 +2445,6 @@ result.show(truncate = false)
 |[{0, |
 +-----+
 (array of tile structs: one per band from the multiband raster)
-"""
-
-  val rst_polygonize_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_polygonize(col("tile")).alias("features"))
-result.show(truncate = false)
-""".trim
-
-  val rst_polygonize_scala_example_output: String =
-    """
-+--------+
-|features|
-+--------+
-|[{...}] |
-+--------+
-(array of {geom_wkb: binary (WKB), value: double})
 """
 
   val rst_maketiles_scala_example: String =

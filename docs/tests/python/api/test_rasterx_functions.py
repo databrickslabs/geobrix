@@ -132,18 +132,6 @@ def test_rst_custom_rasterize_agg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_custom_rasterize_agg")
 
 
-def test_rst_isoband_python_heavy_example(spark):
-    """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
-    assert rasterx_functions is not None
-    patches = rasterx_functions.rst_isoband_python_heavy_example(spark)
-    assert isinstance(patches, list), "rst_isoband must return a list of patches"
-    assert len(patches) > 0, "rst_isoband must return at least one patch for a DEM with real elevation"
-    patch = patches[0]
-    assert patch["geom_wkb"] is not None, "patch geom_wkb must be non-null"
-    assert patch["band"] is not None, "patch band must be non-null"
-    assert hasattr(rasterx_functions, "rst_isoband_python_heavy_example_output")
-
-
 # ---------------------------------------------------------------------------
 # Band-math examples (tabbed docs: 10 functions)
 # All heavy band-math fns currently hit the GDAL null-output-dataset bug:
@@ -180,17 +168,6 @@ _BAND_MATH_ERROR_TILE_BUG = (
 
 
 
-def test_rst_contour_python_heavy_example(spark):
-    """rst_contour returns an array of contour line feature structs."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_contour_python_heavy_example(spark)
-    assert result is not None, "rst_contour: result should not be None"
-    assert isinstance(result, list), "rst_contour: result should be a list"
-    assert len(result) > 0, "rst_contour: should contain at least one contour line"
-
-
-
-
 # ============================================================================
 # Coordinate Transforms & Tiling (Heavy)
 # ============================================================================
@@ -198,31 +175,6 @@ def test_rst_contour_python_heavy_example(spark):
 
 
 
-
-
-def test_rst_h3_tessellate_python_heavy_example(spark):
-    """rst_h3_tessellate returns an array of structs."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_h3_tessellate_python_heavy_example(spark)
-    assert result is not None
-
-
-def test_rst_bng_tessellate_python_heavy_example(spark):
-    """rst_bng_tessellate (generator) yields 1km BNG cell rows over a London raster."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_bng_tessellate_python_heavy_example(spark)
-    # Synthetic 2km London raster (EPSG:27700) → several overlapping 1km cells.
-    assert isinstance(result, list) and len(result) > 0
-    # Generator explodes to rows; each row is a v2 tile struct.
-    first = result[0].asDict()
-    assert "bng_cell" in first and first["bng_cell"] is not None
-
-
-def test_rst_quadbin_tessellate_python_heavy_example(spark):
-    """rst_quadbin_tessellate returns an array of tile structs."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_quadbin_tessellate_python_heavy_example(spark)
-    assert result is not None
 
 
 # ============================================================================
@@ -242,57 +194,6 @@ _SEPARATEBANDS_ERROR_TILE_BUG = (
 _POLYGONIZE_ERROR_TILE_BUG = (
     "rst_polygonize works correctly; returns array of feature structs"
 )
-
-
-def test_rst_tooverlappingtiles_python_heavy_example(spark):
-    """rst_tooverlappingtiles (heavyweight generator) returns one `tile` row per tile."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_tooverlappingtiles_python_heavy_example(spark)
-    assert result is not None
-    assert isinstance(result, list)
-    assert len(result) > 0
-    assert list(result[0].asDict()) == ["tile"]
-
-
-def test_rst_separatebands_python_heavy_example(spark):
-    """rst_separatebands (heavyweight generator) returns one `tile` row per band."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_separatebands_python_heavy_example(spark)
-    assert result is not None
-    assert isinstance(result, list)
-    assert len(result) == 3  # multiband fixture has 3 bands
-    assert list(result[0].asDict()) == ["tile"]
-
-
-def test_rst_polygonize_python_heavy_example(spark):
-    """rst_polygonize returns an ARRAY<struct(geom_wkb, value)> of regions."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_polygonize_python_heavy_example(spark)
-    assert result is not None
-    assert isinstance(result, list)
-    assert len(result) > 0
-    assert "geom_wkb" in result[0].asDict() and "value" in result[0].asDict()
-
-
-def test_rst_maketiles_python_heavy_example(spark):
-    """rst_maketiles (heavyweight generator) returns one `tile` row per sub-tile."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_maketiles_python_heavy_example(spark)
-    assert result is not None
-    assert isinstance(result, list)
-    assert len(result) > 0
-    assert list(result[0].asDict()) == ["tile"]
-
-
-def test_rst_custom_tessellate_python_heavy_example(spark):
-    """rst_custom_tessellate (heavyweight generator) returns one `tile` row per cell."""
-    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
-
-    cx.register(spark)
-    result = rasterx_functions.rst_custom_tessellate_python_heavy_example(spark)
-    assert isinstance(result, list) and len(result) > 0
-    assert list(result[0].asDict()) == ["tile"]
-    assert result[0]["tile"]["cellid"] is not None
 
 
 # ============================================================================

@@ -314,6 +314,11 @@ EXAMPLES = {
         "br_nan_beside_numbers",
         "SELECT gbx_rst_bng_rasterize_agg(c0, c1, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example",
     ),
+    "gbx_rst_bng_tessellate": (
+        "RASTER_GENERATOR",
+        "bng_tess_1km",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_bng_tessellate(c0, 3) AS gbx_out",
+    ),
     "gbx_rst_boundingbox": (
         "RASTER_ACCESSOR",
         "boundingbox",
@@ -379,6 +384,11 @@ EXAMPLES = {
         "combinesum_stack",
         "SELECT gbx_rst_combinesum(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_contour": (
+        "SPEC_DEM",
+        "contour_levels",
+        "SELECT gbx_rst_contour(c0, c1) AS out FROM gbx_example",
+    ),
     "gbx_rst_convolve": (
         "RASTER_TILE_OP",
         "convolve_asymmetric",
@@ -388,6 +398,11 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "crs",
         "SELECT gbx_rst_crs(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_custom_tessellate": (
+        "RASTER_GENERATOR",
+        "cg_tess_res0",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_tessellate(c0, c1, 0) AS gbx_out",
     ),
     "gbx_rst_derivedband": (
         "RASTER_TILE_OP",
@@ -454,6 +469,11 @@ EXAMPLES = {
         "gridfrompoints_wkb",
         "SELECT gbx_rst_gridfrompoints(c0, c1, 0.0D, 0.0D, 10.0D, 10.0D, 4, 4, 3857) AS out FROM gbx_example",
     ),
+    "gbx_rst_h3_tessellate": (
+        "RASTER_GENERATOR",
+        "h3_tess_res4",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_h3_tessellate(c0, 4) AS gbx_out",
+    ),
     "gbx_rst_height": (
         "RASTER_ACCESSOR",
         "height",
@@ -484,10 +504,20 @@ EXAMPLES = {
         "isempty",
         "SELECT gbx_rst_isempty(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_isoband": (
+        "RASTER_VECTORIZE",
+        "isoband_three_bands",
+        "SELECT gbx_rst_isoband(c0, c1) AS out FROM gbx_example",
+    ),
     "gbx_rst_land_cover": (
         "RASTER_TILE_OP",
         "land_cover_spectral",
         "SELECT gbx_rst_land_cover(c0, 'spectral', 6, 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_maketiles": (
+        "RASTER_GENERATOR",
+        "maketiles_5mb",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_maketiles(c0, 1) AS gbx_out",
     ),
     "gbx_rst_mapalgebra": (
         "SPEC_SE",
@@ -569,10 +599,20 @@ EXAMPLES = {
         "pixelwidth",
         "SELECT gbx_rst_pixelwidth(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_polygonize": (
+        "SPEC_ANALYSIS",
+        "polygonize_two_values",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_polygonize(c0) AS gbx_out",
+    ),
     "gbx_rst_proximity": (
         "SPEC_ANALYSIS",
         "proximity_targets",
         "SELECT gbx_rst_proximity(c0, '1,2') AS out FROM gbx_example",
+    ),
+    "gbx_rst_quadbin_tessellate": (
+        "RASTER_GENERATOR",
+        "qb_tess_z10",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_quadbin_tessellate(c0, 10) AS gbx_out",
     ),
     "gbx_rst_rasterize": (
         "RASTER_RASTERIZE",
@@ -644,6 +684,11 @@ EXAMPLES = {
         "scaley",
         "SELECT gbx_rst_scaley(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_separatebands": (
+        "RASTER_GENERATOR",
+        "separatebands_three",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_separatebands(c0) AS gbx_out",
+    ),
     "gbx_rst_setcrs": (
         "RASTER_TILE_OP",
         "setcrs_epsg",
@@ -698,6 +743,11 @@ EXAMPLES = {
         "SPEC_WARP",
         "webmercator_default",
         "SELECT gbx_rst_to_webmercator(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_tooverlappingtiles": (
+        "RASTER_GENERATOR",
+        "overlap_half",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_tooverlappingtiles(c0, 32, 32, 50) AS gbx_out",
     ),
     "gbx_rst_tpi": (
         "SPEC_DEM",

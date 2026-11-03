@@ -49,7 +49,7 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
     private def tileGenerators(): Seq[(String, Column => Column)] = {
         import com.databricks.labs.gbx.rasterx.functions._
         Seq(
-          "gbx_rst_retile"             -> ((r: Column) => rst_retile(r, lit(256), lit(256))),
+          "gbx_rst_retile"             -> ((r: Column) => call_function("gbx_rst_retile", r, lit(256), lit(256))),
           "gbx_rst_separatebands"      -> ((r: Column) => rst_separatebands(r)),
           "gbx_rst_tooverlappingtiles" -> ((r: Column) => rst_tooverlappingtiles(r, lit(256), lit(256), lit(10))),
           "gbx_rst_maketiles"          -> ((r: Column) => rst_maketiles(r, lit(4))),

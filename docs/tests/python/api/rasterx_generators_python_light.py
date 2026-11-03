@@ -46,7 +46,7 @@ rst_retile_python_example_output = """
 """
 
 
-def rst_tooverlappingtiles_python_light_example(spark):
+def rst_tooverlappingtiles_python_example(spark):
     """Create overlapping tiles for edge-aware processing (UDTF via LATERAL).
 
     Overlap percentage is applied to tile dimensions for seamless processing.
@@ -63,7 +63,7 @@ def rst_tooverlappingtiles_python_light_example(spark):
     ).take(3)
 
 
-rst_tooverlappingtiles_python_light_example_output = """
+rst_tooverlappingtiles_python_example_output = """
 +------+--------------+-----+----------------------+
 |cellid|raster        |path |...                   |
 +------+--------------+-----+----------------------+
@@ -73,7 +73,7 @@ rst_tooverlappingtiles_python_light_example_output = """
 """
 
 
-def rst_separatebands_python_light_example(spark):
+def rst_separatebands_python_example(spark):
     """Separate multi-band raster into individual bands (UDTF via LATERAL).
 
     Each band is returned as a separate v2-Tile struct.
@@ -89,7 +89,7 @@ def rst_separatebands_python_light_example(spark):
     ).collect()
 
 
-rst_separatebands_python_light_example_output = """
+rst_separatebands_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -99,7 +99,7 @@ rst_separatebands_python_light_example_output = """
 """
 
 
-def rst_polygonize_python_light_example(spark):
+def rst_polygonize_python_example(spark):
     """Extract polygons from raster regions (UDTF via LATERAL).
 
     One row per contiguous-value region: (geom_wkb, value). band and
@@ -115,7 +115,7 @@ def rst_polygonize_python_light_example(spark):
     ).take(3)
 
 
-rst_polygonize_python_light_example_output = """
+rst_polygonize_python_example_output = """
 +---------+-----+
 |geom_wkb |value|
 +---------+-----+
@@ -125,7 +125,7 @@ rst_polygonize_python_light_example_output = """
 """
 
 
-def rst_maketiles_python_light_example(spark):
+def rst_maketiles_python_example(spark):
     """Subdivide raster into tiles by approximate size (UDTF via LATERAL).
 
     Size is in MB; the tile grid is derived from the MB budget.
@@ -141,7 +141,7 @@ def rst_maketiles_python_light_example(spark):
     ).collect()
 
 
-rst_maketiles_python_light_example_output = """
+rst_maketiles_python_example_output = """
 +------+--------------+-----+----------------------+
 |cellid|raster        |path |...                   |
 +------+--------------+-----+----------------------+

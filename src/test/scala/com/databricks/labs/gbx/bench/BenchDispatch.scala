@@ -1290,7 +1290,7 @@ object BenchDispatch {
       // not fingerprint-compared, so the args only need to be valid). maketiles takes
       // an MB budget, matching the sizeInMB BalancedSubdivision the pure-core path uses.
       case "rst_maketiles"   => rst_maketiles(tile, argI(a, "size_in_mb", 1))
-      case "rst_retile"      => rst_retile(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128))
+      case "rst_retile"      => org.apache.spark.sql.functions.call_function("gbx_rst_retile", tile, org.apache.spark.sql.functions.lit(argI(a, "tile_width", 128)), org.apache.spark.sql.functions.lit(argI(a, "tile_height", 128)))
       case "rst_tooverlappingtiles" =>
         rst_tooverlappingtiles(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128), argI(a, "overlap", 25))
       case "rst_separatebands" => rst_separatebands(tile)
@@ -1338,7 +1338,7 @@ object BenchDispatch {
         rst_contour(tile, org.apache.spark.sql.functions.array(
           levels.map(org.apache.spark.sql.functions.lit): _*))
       case "rst_polygonize" =>
-        rst_polygonize(tile, org.apache.spark.sql.functions.lit(argI(a, "band", 1)),
+        org.apache.spark.sql.functions.call_function("gbx_rst_polygonize", tile, org.apache.spark.sql.functions.lit(argI(a, "band", 1)),
           org.apache.spark.sql.functions.lit(argI(a, "connectedness", 4)))
       // rst_isoband: vector-out fn. Defaults match the pyrx FnSpec.
       case "rst_isoband" =>

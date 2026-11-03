@@ -853,7 +853,7 @@ rst_chm_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_isoband_python_light_example(spark):
+def rst_isoband_python_example(spark):
     """Reclassify a DEM tile into elevation bands and return contour polygons (light pyrx tier).
 
     Uses the DEM fixture (64×64 Float32, EPSG:32618, 0–311 m elevation range).
@@ -861,7 +861,7 @@ def rst_isoband_python_light_example(spark):
     cover the full elevation range. Returns ARRAY<struct(geom_wkb, band, lower, upper)>
     — one struct per contiguous patch of pixels in the same elevation band.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
     from ._fixtures import dem_tile_df  # noqa: PLC0415
 
@@ -878,7 +878,7 @@ def rst_isoband_python_light_example(spark):
     return result["patches"]
 
 
-rst_isoband_python_light_example_output = """
+rst_isoband_python_example_output = """
 +-----------------------------------------------------------+
 |patches                                                    |
 +-----------------------------------------------------------+

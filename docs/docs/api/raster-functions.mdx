@@ -1991,9 +1991,21 @@ buffers the whole cloud. See [Performance](./performance) and the [LiDAR reader]
 
 ---
 
-### rst_isoband {#rst_isoband}
+### rst_isoband
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_isoband: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_isoband(tile, breaks)` | `array<struct<geom_wkb:binary,band:int,lower:double,upper:double>>` |
+| Python | `rasterx.functions.rst_isoband(tile, breaks)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to classify. |
+| `breaks` | `ARRAY<DOUBLE>` |  | The N+1 boundaries of N bands, strictly ascending. Band i holds the pixels from `breaks[i]` up to, not including, `breaks[i+1]`. |
+{/* END GENERATED gbx_rst_isoband */}
 
 Reclassify a raster band into value bins defined by a `breaks` array and return one
 polygon per **contiguous patch** of pixels in the same bin. Useful for producing
@@ -2011,15 +2023,10 @@ the `[100.0, 150.0)` band and `200.0` (equal to `breaks[-1]`) is dropped.
 
 Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL required.
 
-**Signature:** `rst_isoband(tile, breaks)`
-
-**Parameters:** `tile` — tile struct column; `breaks` — `ARRAY<DOUBLE>` of N+1 strictly-ascending boundary values defining N bands.
-
 <FunctionExamples
   name="rst_isoband"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -2070,9 +2077,29 @@ to the output. Output is a Float32 GeoTIFF tile with NoData −9999.
 
 Produce multiple tiles or bands (7 total).
 
+The generators are table functions: call them in the `FROM` clause with `LATERAL`, at every implementation level. The Python entry takes the input DataFrame first and returns it joined with the generated rows, for example `rasterx.functions.rst_retile(df, "tile", 512, 512)`.
+
 ### rst_bng_tessellate
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_bng_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])` | rows |
+| Python | `rasterx.functions.rst_bng_tessellate(df, tile, resolution, assignment=None, coverage=None)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+{/* END GENERATED gbx_rst_bng_tessellate */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. It auto-warps the input to **EPSG:27700** via `rasterio.warp`, enumerates the overlapping BNG cells, and clips one tile per cell — rendering **STRING** BNG cell IDs at the row boundary and matching the heavyweight cell set and clip windows.
@@ -2082,64 +2109,113 @@ Tessellate a raster to British National Grid (BNG) cells — one row per overlap
 
 Natural fit for CV image-tiling workflows that require Ordnance Survey–scale cells aligned to the national grid — for example tiling aerial or satellite imagery into 1 km BNG cells for object-detection model inference. See issue [#49](https://github.com/databrickslabs/geobrix/issues/49) for the background.
 
-**Signature:** `rst_bng_tessellate(tile: Column, resolution: Column, [assignment: Column], [coverage: Column]): Column` — assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
+Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
 
 **SQL:**
 
 <FunctionExamples
   name="rst_bng_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_h3_tessellate
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_h3_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])` | rows |
+| Python | `rasterx.functions.rst_h3_tessellate(df, tile, resolution, assignment=None, coverage=None)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+{/* END GENERATED gbx_rst_h3_tessellate */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **h3**. Clips the raster to each overlapping H3 cell at `resolution`, returning one row per cell via streaming UDTF (matches the heavyweight generator behavior).
 :::
 
-**Signature:** `rst_h3_tessellate(tile: Column, resolution: Column, [assignment: Column], [coverage: Column]): Column` — Tessellate raster to H3 cells. assignment is `"centroid"` (default — pixel-centroid single-assignment) or `"covering"` (every overlapping cell, clipped); coverage is `"complete"` (default) or `"sparse"`. See [Grid raster tessellation](./grid-raster-tessellation) for the full guide.
+Tessellate raster to H3 cells. assignment is `"centroid"` (default — pixel-centroid single-assignment) or `"covering"` (every overlapping cell, clipped); coverage is `"complete"` (default) or `"sparse"`. See [Grid raster tessellation](./grid-raster-tessellation) for the full guide.
 
 Covering mode uses a **positive-area overlap** rule (shared by all three grids — `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`): a cell is emitted **iff its geometry has greater-than-zero area overlap** with the raster. A cell that merely touches the raster along a boundary edge or corner (zero pixel overlap — common on grid-aligned tiles where the raster edges land on cell boundaries) is **excluded**. A within-extent cell whose pixels are all NoData **is** emitted — NoData renders in place, it does not punch a gap into the mosaic. This rule is identical on the lightweight and heavyweight tiers, so covering-mode cell sets match exactly across tiers.
 
 <FunctionExamples
   name="rst_h3_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_maketiles
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_maketiles: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_maketiles(tile, size_in_mb)` | rows |
+| Python | `rasterx.functions.rst_maketiles(df, tile, size_in_mb)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `size_in_mb` | `INT` |  | The most megabytes one tile may hold. The tile is cut into a 2^k by 2^k grid (1, 4, 16 ... at most 256 tiles) until each part fits; 0 or less does not cut. A fraction is cut to a whole number. |
+{/* END GENERATED gbx_rst_maketiles */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. The lightweight tier applies the same size thresholds and power-of-4 split as the heavyweight tier. With `size_in_mb > 0`, every window is emitted, including windows whose pixels are all NoData, in both tiers.
 :::
 
-**Signature:** `rst_maketiles(tile: Column, sizeInMB: Column): Column` — Subdivide into smaller tiles by approximate size in MB.
+Subdivide into smaller tiles by approximate size in MB.
 
 **SQL:**
 
 <FunctionExamples
   name="rst_maketiles"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
 ### rst_quadbin_tessellate
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_quadbin_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])` | rows |
+| Python | `rasterx.functions.rst_quadbin_tessellate(df, tile, resolution, assignment=None, coverage=None)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+{/* END GENERATED gbx_rst_quadbin_tessellate */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the quadbin cells that overlap the raster footprint and clips one tile per cell, matching the heavyweight cell set.
@@ -2147,22 +2223,40 @@ The lightweight implementation is backed by `pygx._quadbin` cell math and `raste
 
 Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. A raster in another CRS is accepted: its footprint is reprojected to EPSG:4326 to find the overlapping cells (see [Grid raster tessellation](./grid-raster-tessellation) for the antimeridian and pole limits). Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
 
-**Signature:** `rst_quadbin_tessellate(tile: Column, resolution: Column, [assignment: Column], [coverage: Column]): Column` — assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
+Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
 
 **SQL:**
 
 <FunctionExamples
   name="rst_quadbin_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
 
 ### rst_custom_tessellate
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_custom_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])` | rows |
+| Python | `rasterx.functions.rst_custom_tessellate(df, tile, grid, resolution, assignment=None, coverage=None)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+{/* END GENERATED gbx_rst_custom_tessellate */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by **pygx** custom-grid cell math and **rasterio**. It enumerates the overlapping custom-grid cells for the raster and clips one tile per cell, emitting Long-keyed chips (custom cell IDs as BIGINT). The raster is expected to be in the custom grid's native CRS — no automatic reprojection is performed; reproject upstream with `rst_transform` if needed.
@@ -2170,15 +2264,14 @@ The lightweight implementation is backed by **pygx** custom-grid cell math and *
 
 Tessellate a raster to user-defined custom-grid cells — one row per overlapping cell, each clipped to that cell's extent. Pass a custom-grid struct (from `gbx_custom_grid(...)`) and a resolution integer that selects the cell size level. Cell IDs are **BIGINT** encoded by the custom-grid layout. For the covering-mode overlap rule (positive-area overlap, boundary touches excluded), see [`rst_h3_tessellate`](#rst_h3_tessellate).
 
-**Signature:** `rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, [assignment: Column], [coverage: Column]): Column` — assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
+Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
 
 **SQL:**
 
 <FunctionExamples
   name="rst_custom_tessellate"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTransformsLightCode} pythonLightSource="docs/tests/python/api/rasterx_transforms_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTransformsLightCode} pythonSource="docs/tests/python/api/rasterx_transforms_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_transforms_python_light.py"
 />
@@ -2186,7 +2279,7 @@ Tessellate a raster to user-defined custom-grid cells — one row per overlappin
 ### rst_retile
 
 {/* BEGIN GENERATED gbx_rst_retile: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2216,48 +2309,78 @@ Retile to uniform dimensions.
   name="rst_retile"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
 ### rst_separatebands
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_separatebands: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_separatebands(tile)` | rows |
+| Python | `rasterx.functions.rst_separatebands(df, tile)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+{/* END GENERATED gbx_rst_separatebands */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Streams one band-tile row per band via streaming UDTF — O(1) worker memory regardless of band count (matches the heavyweight generator behavior).
 :::
 
-**Signature:** `rst_separatebands(tile: Column): Column` — Split multi-band into array of bands.
+Split multi-band into array of bands.
 
 **SQL:**
 
 <FunctionExamples
   name="rst_separatebands"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
 ### rst_tooverlappingtiles
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_tooverlappingtiles: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap)` | rows |
+| Python | `rasterx.functions.rst_tooverlappingtiles(df, tile, tile_width, tile_height, overlap)` | DataFrame |
+
+Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to split. |
+| `tile_width` | `INT` |  | The width of each tile in pixels, above 0. |
+| `tile_height` | `INT` |  | The height of each tile in pixels, above 0. |
+| `overlap` | `INT` |  | The overlap as a percentage of the tile size, from 0 to below 100. Each edge overlaps by the tile size times this, rounded up. |
+{/* END GENERATED gbx_rst_tooverlappingtiles */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Streams one tile row per overlapping region via streaming UDTF. Every window is emitted, including windows whose pixels are all NoData, in both tiers. To drop them, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
 :::
 
-**Signature:** `rst_tooverlappingtiles(tile: Column, tileWidth: Column, tileHeight: Column, overlap: Column): Column` — Create overlapping tiles.
+Create overlapping tiles.
 
 **SQL:**
 
 <FunctionExamples
   name="rst_tooverlappingtiles"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
@@ -4401,32 +4524,41 @@ Move data between the raster (`tile`) and vector (`geom`) worlds.
 
 ### rst_polygonize
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_rst_polygonize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_polygonize(tile, [band], [connectedness])` | rows |
+| Python | `rasterx.functions.rst_polygonize(df, tile, band=None, connectedness=None)` | DataFrame |
+
+Rows: `geom_wkb` `BINARY`, `value` `DOUBLE`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to polygonize. |
+| `band` | `INT` | `1` | The band to read, from 1. |
+| `connectedness` | `INT` | `4` | `4` joins pixels that share an edge; `8` also joins pixels that touch at a corner. |
+{/* END GENERATED gbx_rst_polygonize */}
+
+<Impl udtf/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.features`).
 :::
 
-:::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_polygonize` as a scalar (ARRAY-returning) function — call
-it directly: `SELECT gbx_rst_polygonize(tile, band, connectedness) AS features FROM <table>`,
-where each array element is a `struct(geom_wkb, value)`. The lightweight (pyrx) tier
-registers it as a streaming Python **table function**, so lightweight SQL must use `LATERAL`
-— which also streams polygon rows without buffering (avoids OOM on rasters with unbounded
-polygon fan-out): `SELECT t.geom_wkb, t.value FROM <table>, LATERAL gbx_rst_polygonize(tile, band, connectedness) t`.
-Both forms appear in the SQL tab below.
-:::
+`gbx_rst_polygonize` is a table function: call it with `LATERAL`. It streams one row per region, so a raster with many regions does not buffer an array. The manager serves this form at every level; the JVM class that returns an array from a scalar call is not selected.
 
-**Signature (heavyweight):** `rst_polygonize(tile: Column, band: Column, connectedness: Column): Column` — Trace contiguous-value regions of a tile into an array of features. Each feature carries the source pixel value as the `value` field.
+```sql
+SELECT t.geom_wkb, t.value FROM <table>, LATERAL gbx_rst_polygonize(tile, band, connectedness) t
+```
 
 **SQL:**
 
 <FunctionExamples
   name="rst_polygonize"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 
@@ -5290,19 +5422,33 @@ Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG
 
 ### rst_contour
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_contour: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_contour(tile, levels, [interval], [base], [attr_field])` | `array<struct<geom_wkb:binary,value:double>>` |
+| Python | `rasterx.functions.rst_contour(tile, levels, interval=None, base=None, attr_field=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile to trace. |
+| `levels` | `ARRAY<DOUBLE>` |  | The values to trace; NULL or empty to use `interval` and `base`. |
+| `interval` | `DOUBLE` | `0.0` | The spacing of the lines, used when `levels` is empty; above 0. |
+| `base` | `DOUBLE` | `0.0` | The value one line is drawn at, used with `interval`. |
+| `attr_field` | `STRING` | `'elev'` | Accepted for compatibility; the value is always the struct field `value`. |
+{/* END GENERATED gbx_rst_contour */}
 
 :::note Lightweight tier (pyrx)
 Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geom_wkb, value)>` of contour LineStrings (in the raster CRS) at each fixed `level`, or at `base + k*interval` across the data range when `levels` is empty; NoData is masked before tracing. The marching-squares line geometry differs slightly from the heavyweight GDAL contours.
 :::
 
-**Signature:** `rst_contour(tile: Column, levels: Column, [interval: Column = lit(0.0), base: Column = lit(0.0), attrField: Column = lit("elev")]): Column` — Generate contour LineString features via `gdal.ContourGenerateEx`. Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values, or pass `array()` and set `interval` (>0) for equal-step contours at `base + n*interval`. Returns `ARRAY<struct(geom_wkb BINARY, value DOUBLE)>` — one entry per contour line in the source raster's CRS.
+Generate contour LineString features via `gdal.ContourGenerateEx`. Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values, or pass `array()` and set `interval` (>0) for equal-step contours at `base + n*interval`. Returns `ARRAY<struct(geom_wkb BINARY, value DOUBLE)>` — one entry per contour line in the source raster's CRS.
 
 <FunctionExamples
   name="rst_contour"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />

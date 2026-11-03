@@ -2156,7 +2156,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"size_in_mb": 1},
         core_fn=lambda ds, a: tiling.make_tiles(ds, float(a["size_in_mb"])),
-        col_fn=lambda t, a: prx.rst_maketiles(t, a["size_in_mb"]),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
@@ -2189,9 +2189,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: tiling.to_overlapping_tiles(
             ds, a["tile_width"], a["tile_height"], a["overlap"]
         ),
-        col_fn=lambda t, a: prx.rst_tooverlappingtiles(
-            t, a["tile_width"], a["tile_height"], a["overlap"]
-        ),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
@@ -2208,7 +2206,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {},
         core_fn=lambda ds, a: tiling.separate_bands(ds),
-        col_fn=lambda t, a: prx.rst_separatebands(t),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
@@ -2286,7 +2284,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"resolution": 7},
         core_fn=lambda ds, a: [tessellate.tessellate_h3(ds, a["resolution"])],
-        col_fn=lambda t, a: prx.rst_h3_tessellate(t, a["resolution"]),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
@@ -2318,9 +2316,7 @@ REGISTRY: Dict[str, FnSpec] = {
                 )
             )
         ],
-        col_fn=lambda t, a: prx.rst_h3_tessellate(
-            t, a["resolution"], a["assignment"], a["coverage"]
-        ),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         fingerprint_kind="dggs_grid",
         udtf=True,
         sources=_TESSELLATE_LIGHT
@@ -2933,7 +2929,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             list(tessellate.iter_tessellate_quadbin(ds, a["resolution"]))
         ],
-        col_fn=lambda t, a: prx.rst_quadbin_tessellate(t, a["resolution"]),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         fingerprint_kind="dggs_grid",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
@@ -2954,7 +2950,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: [
             list(tessellate.iter_tessellate_bng(ds, a["resolution"]))
         ],
-        col_fn=lambda t, a: prx.rst_bng_tessellate(t, a["resolution"]),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TESSELLATE_LIGHT
@@ -2991,7 +2987,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"levels": [0.2, 0.4, 0.6, 0.8]},
         core_fn=lambda ds, a: analysis_core.contour(ds, a["levels"], 0.0, 0.0, "elev"),
-        col_fn=lambda t, a: prx.rst_contour(
+        col_fn=lambda t, a: rx.rst_contour(
             t, F.array(*[F.lit(float(v)) for v in a["levels"]])
         ),
         fingerprint_kind="vector",
@@ -3016,9 +3012,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"band": 1, "connectedness": 4},
         core_fn=lambda ds, a: features.polygonize(ds, a["band"], a["connectedness"]),
-        col_fn=lambda t, a: prx.rst_polygonize(
-            t, F.lit(a["band"]), F.lit(a["connectedness"])
-        ),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         # Reads every pixel to vectorize and emits geometry rows, not an output tile:
         # the disposition sampler finds no tile-struct column, so we pin it explicitly.
@@ -3614,7 +3608,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {"resolution": 1},
         core_fn=lambda ds, a: None,
-        col_fn=lambda t, a: prx.rst_custom_tessellate(t, None, a["resolution"]),
+        col_fn=lambda t, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         fingerprint_kind="dggs_grid",
         udtf=True,
         fingerprint=False,
@@ -4179,7 +4173,7 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"breaks": [0.2, 0.4, 0.6, 0.8]},
         core_fn=lambda ds, a: features.isoband(ds, a["breaks"]),
-        col_fn=lambda t, a: prx.rst_isoband(
+        col_fn=lambda t, a: rx.rst_isoband(
             t, F.array(*[F.lit(float(v)) for v in a["breaks"]])
         ),
         fingerprint_kind="vector",

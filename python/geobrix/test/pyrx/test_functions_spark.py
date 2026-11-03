@@ -1444,7 +1444,7 @@ def test_rst_contour_column_api(spark):
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     rows = (
-        df.select(f.explode(prx.rst_contour("tile", f.array(f.lit(2.5)))).alias("c"))
+        df.select(f.explode(rx.rst_contour("tile", f.array(f.lit(2.5)))).alias("c"))
         .select(f.col("c.value").alias("v"), f.col("c.geom_wkb").alias("g"))
         .collect()
     )

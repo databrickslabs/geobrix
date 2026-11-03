@@ -258,10 +258,10 @@ def test_rst_chm_python_example(spark):
 def test_rst_isoband_python_light_example(spark):
     """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
     assert tileops_examples is not None
-    patches = tileops_examples.rst_isoband_python_light_example(spark)
+    patches = tileops_examples.rst_isoband_python_example(spark)
     assert isinstance(patches, list), "rst_isoband must return a list of patches"
     assert len(patches) > 0, "rst_isoband must return at least one patch for a DEM with real elevation"
     patch = patches[0]
     assert patch["geom_wkb"] is not None, "patch geom_wkb must be non-null"
     assert patch["band"] is not None, "patch band must be non-null"
-    assert hasattr(tileops_examples, "rst_isoband_python_light_example_output")
+    assert hasattr(tileops_examples, "rst_isoband_python_example_output")

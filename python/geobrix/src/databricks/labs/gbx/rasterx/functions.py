@@ -273,92 +273,6 @@ def rst_h3_rasterize_agg(
 # Generators
 
 
-def rst_h3_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into H3 cells at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: H3 resolution (0–15).
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            the one cell whose hexagon contains its centroid (chips partition the
-            valid pixels); ``"covering"`` keeps every cell whose hexagon overlaps
-            the raster footprint (chips may share pixels). String literals are
-            auto-wrapped in ``f.lit``; pass a ``Column`` to defer.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell,
-            including synthetic all-NoData chips for covered cells with no
-            assigned pixels (centroid) or all-NoData clipped chips (covering);
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of array of (H3 index, tile) or similar.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_h3_tessellate",
-        _col(tile),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_maketiles(tile: ColLike, size_in_mb: ColLike) -> Column:
-    """Split the raster into smaller tiles by approximate size in MB.
-
-    Args:
-        tile: Raster tile column.
-        size_in_mb: Target tile size in megabytes (column).
-
-    Returns:
-        Column of array of raster tiles.
-    """
-    return f.call_function("gbx_rst_maketiles", _col(tile), _col(size_in_mb))
-
-
-def rst_separatebands(tile: ColLike) -> Column:
-    """Split the raster into one tile per band.
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of array of single-band raster tiles.
-    """
-    return f.call_function("gbx_rst_separatebands", _col(tile))
-
-
-def rst_tooverlappingtiles(
-    tile: ColLike, tile_width: ColLike, tile_height: ColLike, overlap: ColLike
-) -> Column:
-    """Produce overlapping tiles with the given dimensions and overlap.
-
-    Args:
-        tile: Raster tile column.
-        tile_width: Width of each tile (pixels).
-        tile_height: Height of each tile (pixels).
-        overlap: Overlap in pixels (e.g. for stitching).
-
-    Returns:
-        Column of array of raster tiles.
-    """
-    return f.call_function(
-        "gbx_rst_tooverlappingtiles",
-        _col(tile),
-        _col(tile_width),
-        _col(tile_height),
-        _col(overlap),
-    )
-
-
 # Grid
 
 
@@ -1376,121 +1290,6 @@ def rst_custom_rastertogridstddev(
     )
 
 
-def rst_quadbin_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into CARTO quadbin v0 cells at the given zoom level.
-
-    Args:
-        tile: Raster tile column.
-        resolution: Quadbin resolution / zoom (0–20).
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            the one cell containing its centroid (chips partition the valid
-            pixels); ``"covering"`` keeps every cell whose tile overlaps the
-            raster footprint. String literals are auto-wrapped in ``f.lit``; pass a
-            ``Column`` to defer.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of array of (quadbin cell id BIGINT, tile) pairs.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_quadbin_tessellate",
-        _col(tile),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_bng_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into BNG grid cells at the given resolution.
-
-    Args:
-        tile: Raster tile column.
-        resolution: BNG resolution — integer index ±1..±6 (1=100km … 6=1m;
-            negative indices select quadrant subdivisions) or a resolution
-            string such as ``"1km"`` or ``"100m"``.
-        assignment: ``"centroid"`` (default) single-assigns each valid pixel to
-            the one cell containing its centroid; ``"covering"`` keeps every cell
-            whose grid square overlaps the raster footprint. String literals are
-            auto-wrapped in ``f.lit``; pass a ``Column`` to defer.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of array of (BNG cell id STRING, tile) pairs.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_bng_tessellate",
-        _col(tile),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
-def rst_custom_tessellate(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-) -> Column:
-    """Tessellate the raster into user-defined custom-grid cells.
-
-    One chip per overlapping cell, each clipped to that cell's extent. The
-    raster must already be in the custom grid's native CRS — no automatic
-    reprojection is performed (use ``rst_transform`` upstream if needed). Cell
-    IDs are BIGINT encoded by the custom-grid layout.
-
-    Args:
-        tile: Raster tile column.
-        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        assignment: ``"centroid"`` (default) — each pixel assigned to one cell
-            by its centroid; ``"covering"`` — every cell overlapping the raster
-            bbox receives a chip. String literals are auto-wrapped in ``f.lit``.
-        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
-            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
-            in ``f.lit``; pass a ``Column`` to defer.
-
-    Returns:
-        Column of (cellid BIGINT, raster TILE_STRUCT) pairs — one row per chip.
-    """
-    assignment_col = (
-        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
-    )
-    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
-    return f.call_function(
-        "gbx_rst_custom_tessellate",
-        _col(tile),
-        _col(grid),
-        _col(resolution),
-        assignment_col,
-        coverage_col,
-    )
-
-
 def rst_quadbin_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
@@ -1560,47 +1359,6 @@ def rst_quadbin_rasterize_agg(
 
 
 # Operations
-
-
-def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
-    """Reclassify a raster band into value bins and return contour polygons.
-
-    Returns ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>`` —
-    one entry per contiguous region in the same break interval. NoData pixels are
-    excluded. Bins are half-open ``[breaks[i], breaks[i+1])``.
-
-    Args:
-        tile: Raster tile column.
-        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
-            defining N bands.
-
-    Returns:
-        Column of ``ARRAY<struct>`` — one polygon per contiguous patch.
-    """
-    return f.call_function("gbx_rst_isoband", _col(tile), _col(breaks))
-
-
-def rst_polygonize(
-    tile: ColLike,
-    band: ColLike = None,
-    connectedness: ColLike = None,
-) -> Column:
-    """Extract vector polygons from a raster tile's contiguous value regions.
-
-    Returns ``ARRAY<struct(geom_wkb BINARY, value DOUBLE)>``, one entry per
-    connected component of equal pixel values. NoData pixels are excluded.
-
-    Args:
-        tile: Raster tile column.
-        band: 1-based band index to polygonize (default 1).
-        connectedness: 4 or 8; passed as GDAL ``8CONNECTED`` option (default 4).
-
-    Returns:
-        Array column of structs (use ``F.explode`` to get one row per polygon).
-    """
-    band_col = f.lit(1) if band is None else _col(band)
-    conn_col = f.lit(4) if connectedness is None else _col(connectedness)
-    return f.call_function("gbx_rst_polygonize", _col(tile), band_col, conn_col)
 
 
 # ---------------------------------------------------------------------------
@@ -1857,44 +1615,6 @@ def rst_dtmfromgeoms_agg(
 # GetHistogram, threshold (via MapAlgebra), BuildOverviews, single-band
 # extraction.
 # ---------------------------------------------------------------------------
-
-
-def rst_contour(
-    tile: ColLike,
-    levels: ColLike,
-    interval: ColLike = None,
-    base: ColLike = None,
-    attr_field: Union[ColLike, None] = None,
-) -> Column:
-    """Generate contour LineStrings from a raster as ``ARRAY<struct(geom_wkb, value)>``.
-
-    Wraps ``gdal.ContourGenerateEx``. Supply EITHER a non-empty ``levels`` array
-    (explicit contour values) OR ``interval`` (equal-step contours at
-    ``base + n*interval``). Pass ``levels=array()`` to use interval mode.
-
-    Args:
-        tile: Raster tile column.
-        levels: ``ARRAY<DOUBLE>`` of explicit contour values; empty -> use
-            ``interval``.
-        interval: Step between contours; ignored if ``levels`` is non-empty.
-        base: Contour base value; only meaningful with ``interval``. Default 0.
-        attr_field: Internal OGR field name carrying the contour value
-            (default ``"elev"``). Read back via the ``value`` member of each
-            output struct.
-
-    Returns:
-        Column of ``ARRAY<struct(geom_wkb BINARY, value DOUBLE)>``.
-    """
-    int_col = f.lit(0.0) if interval is None else _col(interval)
-    base_col = f.lit(0.0) if base is None else _col(base)
-    af_col = (
-        f.lit("elev")
-        if attr_field is None
-        else (f.lit(attr_field) if isinstance(attr_field, str) else _col(attr_field))
-    )
-    return f.call_function(
-        "gbx_rst_contour", _col(tile), _col(levels), int_col, base_col, af_col
-    )
 
 
 # BEGIN GENERATED by gbx:manifest:gen: edit manifest/functions.json, then run the generator
@@ -2208,6 +1928,44 @@ def rst_bng_rasterize_agg(
         mode,
         kring_pad,
         out_crs,
+    )
+
+
+def rst_bng_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile in EPSG:27700 into BNG cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        resolution: BNG resolution: an index (1 to 6, negative for a quadrant) or a size
+            such as `'1km'` or `'100m'`.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_bng_tessellate",
+        tile,
+        resolution,
+        assignment,
+        coverage,
     )
 
 
@@ -2699,6 +2457,41 @@ def rst_combinesum(
     )
 
 
+def rst_contour(
+    tile: ColLike,
+    levels: ColLike,
+    interval: ColLike = None,
+    base: ColLike = None,
+    attr_field: ColLike = None,
+) -> Column:
+    """Trace contour lines of the first band at given values or at a regular interval.
+
+    Args:
+        tile: The tile to trace.
+        levels: The values to trace; NULL or empty to use `interval` and `base`.
+        interval: The spacing of the lines, used when `levels` is empty; above 0. SQL
+            default: ``0.0``.
+        base: The value one line is drawn at, used with `interval`. SQL default:
+            ``0.0``.
+        attr_field: Accepted for compatibility; the value is always the struct field
+            `value`. SQL default: ``'elev'``.
+
+    Returns:
+        An array of structs, one per line: `geom_wkb` (a WKB line in the tile's CRS) and
+        `value`. NULL for a NULL tile.
+
+    SQL: ``gbx_rst_contour(tile, levels, [interval], [base], [attr_field])``
+    """
+    return _api.call(
+        "gbx_rst_contour",
+        tile,
+        levels,
+        interval,
+        base,
+        attr_field,
+    )
+
+
 def rst_convolve(
     tile: ColLike,
     kernel: ColLike,
@@ -2755,6 +2548,47 @@ def rst_crs(
     return _api.call(
         "gbx_rst_crs",
         tile,
+    )
+
+
+def rst_custom_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile into custom-grid cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        grid: The grid, as built by `gbx_custom_grid`.
+        resolution: The grid resolution: 0 is the root cells, each level splits a cell
+            into `cell_splits` by `cell_splits`.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_custom_tessellate",
+        tile,
+        grid,
+        resolution,
+        assignment,
+        coverage,
     )
 
 
@@ -3251,6 +3085,43 @@ def rst_gridfrompoints(
     )
 
 
+def rst_h3_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile into H3 cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_h3_tessellate",
+        tile,
+        resolution,
+        assignment,
+        coverage,
+    )
+
+
 def rst_height(
     tile: ColLike,
 ) -> Column:
@@ -3458,6 +3329,31 @@ def rst_isempty(
     )
 
 
+def rst_isoband(
+    tile: ColLike,
+    breaks: ColLike,
+) -> Column:
+    """Group the pixels of the first band into value bands and return one polygon per connected patch.
+
+    Args:
+        tile: The tile to classify.
+        breaks: The N+1 boundaries of N bands, strictly ascending. Band i holds the
+            pixels from `breaks[i]` up to, not including, `breaks[i+1]`.
+
+    Returns:
+        An array of structs, one per patch: `geom_wkb` (a WKB polygon in the tile's
+        CRS), `band` (the zero-based band), `lower` and `upper`. NoData pixels and
+        pixels outside the breaks are left out. NULL for a NULL tile or NULL breaks.
+
+    SQL: ``gbx_rst_isoband(tile, breaks)``
+    """
+    return _api.call(
+        "gbx_rst_isoband",
+        tile,
+        breaks,
+    )
+
+
 def rst_land_cover(
     tile: ColLike,
     method: ColLike = None,
@@ -3507,6 +3403,34 @@ def rst_land_cover(
         method,
         n_clusters,
         smooth,
+    )
+
+
+def rst_maketiles(
+    df: DataFrame,
+    tile: ColLike,
+    size_in_mb: ColLike,
+) -> DataFrame:
+    """Split a tile into tiles of about the given size in megabytes.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        size_in_mb: The most megabytes one tile may hold. The tile is cut into a 2^k by
+            2^k grid (1, 4, 16 ... at most 256 tiles) until each part fits; 0 or less does
+            not cut. A fraction is cut to a whole number.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+
+    SQL: ``gbx_rst_maketiles(tile, size_in_mb)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_maketiles",
+        tile,
+        size_in_mb,
     )
 
 
@@ -3961,6 +3885,36 @@ def rst_pixelwidth(
     )
 
 
+def rst_polygonize(
+    df: DataFrame,
+    tile: ColLike,
+    band: ColLike = None,
+    connectedness: ColLike = None,
+) -> DataFrame:
+    """Extract a polygon for each connected region of equal pixel values.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to polygonize.
+        band: The band to read, from 1. SQL default: ``1``.
+        connectedness: `4` joins pixels that share an edge; `8` also joins pixels that
+            touch at a corner. SQL default: ``4``.
+
+    Returns:
+        One row per region: `geom_wkb` (a WKB polygon in the tile's CRS) and `value`.
+        NoData pixels give no polygon. A NULL tile gives no rows.
+
+    SQL: ``gbx_rst_polygonize(tile, [band], [connectedness])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_polygonize",
+        tile,
+        band,
+        connectedness,
+    )
+
+
 def rst_proximity(
     tile: ColLike,
     target_values: ColLike = None,
@@ -4007,6 +3961,43 @@ def rst_proximity(
         target_values,
         dist_units,
         max_distance,
+    )
+
+
+def rst_quadbin_tessellate(
+    df: DataFrame,
+    tile: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Cut a tile into quadbin cells, one tile per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        resolution: The quadbin zoom level, a whole number from 0 to 20.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps). Any other word raises.
+            SQL default: ``'centroid'``.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word
+            raises. SQL default: ``'complete'``.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile is clipped to its cell and carries the cell id in `cellid`.
+
+    SQL: ``gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_quadbin_tessellate",
+        tile,
+        resolution,
+        assignment,
+        coverage,
     )
 
 
@@ -4470,6 +4461,30 @@ def rst_scaley(
     )
 
 
+def rst_separatebands(
+    df: DataFrame,
+    tile: ColLike,
+) -> DataFrame:
+    """Split a multi-band tile into single-band tiles, one row per band.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        Each tile records its band number in its metadata.
+
+    SQL: ``gbx_rst_separatebands(tile)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_separatebands",
+        tile,
+    )
+
+
 def rst_setcrs(
     tile: ColLike,
     crs: ColLike,
@@ -4806,6 +4821,41 @@ def rst_to_webmercator(
         "gbx_rst_to_webmercator",
         tile,
         resampling,
+    )
+
+
+def rst_tooverlappingtiles(
+    df: DataFrame,
+    tile: ColLike,
+    tile_width: ColLike,
+    tile_height: ColLike,
+    overlap: ColLike,
+) -> DataFrame:
+    """Partition a tile into overlapping tiles of the given pixel size.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        tile: The tile to split.
+        tile_width: The width of each tile in pixels, above 0.
+        tile_height: The height of each tile in pixels, above 0.
+        overlap: The overlap as a percentage of the tile size, from 0 to below 100. Each
+            edge overlaps by the tile size times this, rounded up.
+
+    Returns:
+        One row per tile, with the columns of a tile. A NULL tile gives no rows. An
+        error tile comes out as itself. A tile that cannot be read is one error tile.
+        The tiles at the right and bottom edges are smaller. Every window is a row, also
+        one that holds only NoData.
+
+    SQL: ``gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap)``
+    """
+    return _api.table(
+        df,
+        "gbx_rst_tooverlappingtiles",
+        tile,
+        tile_width,
+        tile_height,
+        overlap,
     )
 
 

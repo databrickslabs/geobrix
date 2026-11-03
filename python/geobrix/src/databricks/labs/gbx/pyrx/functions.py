@@ -2881,7 +2881,9 @@ def _open_or_none(tile):
 
 
 @f.udf(_CONTOUR_SCHEMA)
-def _contour_udf(tile, levels, interval, base, attr_field):
+def _contour_udf(
+    tile, levels, interval=0.0, base=0.0, attr_field="elev"
+):  # the row's defaults: no SQL wrapper
     if _tile_is_empty(tile):
         return None
     from databricks.labs.gbx.pyrx import _env

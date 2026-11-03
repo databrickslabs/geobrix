@@ -252,7 +252,7 @@ rst_xyzpyramid_python_example_output = """
 # ============================================================================
 
 
-def rst_h3_tessellate_python_light_example(spark):
+def rst_h3_tessellate_python_example(spark):
     """Tessellate a raster into H3 hexagonal grid cells (resolution 3).
 
     rst_h3_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
@@ -268,7 +268,7 @@ def rst_h3_tessellate_python_light_example(spark):
     ).take(3)
 
 
-rst_h3_tessellate_python_light_example_output = """
+rst_h3_tessellate_python_example_output = """
 +-------------------+-----------------------------------------------------------+
 |cellid             |...                                                        |
 +-------------------+-----------------------------------------------------------+
@@ -278,7 +278,7 @@ rst_h3_tessellate_python_light_example_output = """
 """
 
 
-def rst_bng_tessellate_python_light_example(spark):
+def rst_bng_tessellate_python_example(spark):
     """Tessellate a raster into British National Grid cells (resolution 3 = 1km).
 
     rst_bng_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
@@ -316,7 +316,7 @@ def rst_bng_tessellate_python_light_example(spark):
     ).take(3)
 
 
-rst_bng_tessellate_python_light_example_output = """
+rst_bng_tessellate_python_example_output = """
 +------+-----------------------------------------------------------+
 |cellid|...                                                        |
 +------+-----------------------------------------------------------+
@@ -329,7 +329,7 @@ BNG grid-square STRING)
 """
 
 
-def rst_quadbin_tessellate_python_light_example(spark):
+def rst_quadbin_tessellate_python_example(spark):
     """Tessellate a raster into CARTO quadbin grid cells (resolution 5).
 
     rst_quadbin_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
@@ -344,7 +344,7 @@ def rst_quadbin_tessellate_python_light_example(spark):
     ).take(3)
 
 
-rst_quadbin_tessellate_python_light_example_output = """
+rst_quadbin_tessellate_python_example_output = """
 +-------------------+-----------------------------------------------------------+
 |cellid             |...                                                        |
 +-------------------+-----------------------------------------------------------+
@@ -354,7 +354,7 @@ rst_quadbin_tessellate_python_light_example_output = """
 """
 
 
-def rst_custom_tessellate_python_light_example(spark):
+def rst_custom_tessellate_python_example(spark):
     """Tessellate a raster into custom-grid cells (light tier UDTF via LATERAL).
 
     rst_custom_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
@@ -398,7 +398,7 @@ def rst_custom_tessellate_python_light_example(spark):
     ).take(3)
 
 
-rst_custom_tessellate_python_light_example_output = """
+rst_custom_tessellate_python_example_output = """
 +--------------------+-----------------------------------------------------------+
 |cellid              |raster                                                     |
 +--------------------+-----------------------------------------------------------+

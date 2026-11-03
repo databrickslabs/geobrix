@@ -414,10 +414,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution, lit(assignment)))
     def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, assignment: String, coverage: String): Column =
         ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution, lit(assignment), lit(coverage)))
-    def rst_maketiles(tile: Column, sizeInMB: Column): Column =
-        ColumnAdapter(RST_MakeTiles.name, Seq(tile, sizeInMB))
-    def rst_retile(tile: Column, tileWidth: Column, tileHeight: Column): Column =
-        ColumnAdapter(RST_ReTile.name, Seq(tile, tileWidth, tileHeight))
+    def rst_maketiles(tile: Column, sizeInMb: Column): Column =
+        ColumnAdapter(RST_MakeTiles.name, Seq(tile, sizeInMb))
     def rst_separatebands(tile: Column): Column = ColumnAdapter(RST_SeparateBands.name, Seq(tile))
     def rst_tooverlappingtiles(tile: Column, tileWidth: Column, tileHeight: Column, overlap: Column): Column =
         ColumnAdapter(RST_ToOverlappingTiles.name, Seq(tile, tileWidth, tileHeight, overlap))
@@ -697,10 +695,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_bng_tessellate(tile, lit(resolution), assignment)
     def rst_bng_tessellate(tile: Column, resolution: String, assignment: String, coverage: String): Column =
         rst_bng_tessellate(tile, lit(resolution), assignment, coverage)
-    def rst_maketiles(tile: Column, sizeInMB: Int): Column =
-        rst_maketiles(tile, lit(sizeInMB))
-    def rst_retile(tile: Column, tileWidth: Int, tileHeight: Int): Column =
-        rst_retile(tile, lit(tileWidth), lit(tileHeight))
+    def rst_maketiles(tile: Column, sizeInMb: Int): Column =
+        rst_maketiles(tile, lit(sizeInMb))
     def rst_tooverlappingtiles(tile: Column, tileWidth: Int, tileHeight: Int, overlap: Int): Column =
         rst_tooverlappingtiles(tile, lit(tileWidth), lit(tileHeight), lit(overlap))
     def rst_h3_rastertogridavg(tile: Column, resolution: Int): Column = rst_h3_rastertogridavg(tile, lit(resolution))
@@ -808,12 +804,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_xyzpyramid(tile, lit(minZ), lit(maxZ), lit(format), lit(size), lit(resampling))
 
     // Vector<->raster bridge (Column form)
-    def rst_polygonize(tile: Column): Column =
-        ColumnAdapter(RST_Polygonize.name, Seq(tile, lit(1), lit(4)))
-    def rst_polygonize(tile: Column, band: Column): Column =
-        ColumnAdapter(RST_Polygonize.name, Seq(tile, band, lit(4)))
-    def rst_polygonize(tile: Column, band: Column, connectedness: Column): Column =
-        ColumnAdapter(RST_Polygonize.name, Seq(tile, band, connectedness))
     def rst_isoband(tile: Column, breaks: Column): Column =
         ColumnAdapter(RST_Isoband.name, Seq(tile, breaks))
 

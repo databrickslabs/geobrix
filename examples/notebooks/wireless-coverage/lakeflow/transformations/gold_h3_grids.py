@@ -132,7 +132,7 @@ def _surface_to_h3_cells(
     else:
         clipped = t4326.withColumnRenamed("tile_4326", "tile")
     patches = clipped.select(
-        F.explode(rx.rst_isoband("tile", breaks_array)).alias("p")
+        F.explode(rx_api.rst_isoband("tile", breaks_array)).alias("p")
     ).select(
         F.col("p.band").alias("band_level"),
         F.col("p.geom_wkb").alias("geom_wkb"),
@@ -229,7 +229,7 @@ def wc_dem_isobands():
     clipped = spark.read.table("wc_dem_clipped").repartition(512, "tx", "ty")
     breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
     patches = clipped.select(
-        F.explode(rx.rst_isoband("tile", breaks_arr)).alias("p")
+        F.explode(rx_api.rst_isoband("tile", breaks_arr)).alias("p")
     ).select(
         F.col("p.band").alias("band_level"),
         F.col("p.geom_wkb").alias("geom_wkb"),

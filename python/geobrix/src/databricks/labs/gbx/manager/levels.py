@@ -39,6 +39,11 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_quadbin_cellunion": ("L3",),
     "gbx_rst_merge_agg": ("L3",),
     "gbx_rst_bng_rasterize_agg": ("L3",),
+    # The rasterize family is L1 first (gridfrompoints is 5x to 16x faster on the JVM on a cluster; binpoints has no
+    # timing, so the highest level). Two rows are light: the terrain model is 18x faster on light, and rasterize is
+    # 15x faster in the pure-core timing (no cluster number; default, unmeasured). Neither keeps a JVM level.
+    "gbx_rst_rasterize": ("L3",),
+    "gbx_rst_dtmfromgeoms": ("L3",),
     # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.
     "gbx_rst_slope": ("L1", "L3"),
     "gbx_rst_mapalgebra": ("L1", "L3"),

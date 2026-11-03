@@ -141,7 +141,7 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
         try {
             val sourceFiles = gdb.toFile.list().toSet
             NodeFileManager.init(localConf())
-            // OGR_DataSource.inferSchema passes HadoopUtils.cleanPath(<load path>): file:/... here, bare /Volumes/...
+            // A load path goes through HadoopUtils.cleanPath: file:/... here, bare /Volumes/...
             // on a cluster. With or without a trailing slash, the copy must be the .gdb directory itself.
             for (remote <- Seq(HadoopUtils.cleanPath(gdb.toString), HadoopUtils.cleanPath(s"$gdb/"))) {
                 val local = Paths.get(NodeFileManager.readRemote(remote))

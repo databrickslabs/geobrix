@@ -27,6 +27,21 @@ df = (spark.read.format("netcdf_gbx")
       .load("/Volumes/main/geobrix_samples/netcdf/s5p_ch4_sample.nc"))
 # columns: <vars...>, geom_0 (WKB), geom_0_srid, geom_0_srid_proj"""
 
+READ_VECTOR_PROFILE = """# Vector mode reads a CF discrete sampling geometry (featureType "profile"):
+# one point per observation. The altitude is the point's Z; the profile id and
+# the time, stored once per profile, repeat on each of its observations.
+df = (spark.read.format("netcdf_gbx")
+      .option("mode", "vector")
+      .load("/Volumes/main/geobrix_samples/netcdf/ocean_profiles.nc"))
+# columns: profile, temp, time, geom_0 (WKB, POINT Z), geom_0_srid, geom_0_srid_proj"""
+
+READ_VECTOR_TRAJECTORY = """# A trajectory file (featureType "trajectory") gives one point per observation,
+# with its trajectory id, time and measurements as columns.
+df = (spark.read.format("netcdf_gbx")
+      .option("mode", "vector")
+      .load("/Volumes/main/geobrix_samples/netcdf/ship_tracks.nc"))
+# columns: trajectory, temp, time, geom_0 (WKB, POINT), geom_0_srid, geom_0_srid_proj"""
+
 
 def _register(spark):
     from databricks.labs.gbx import manager as gbx_manager
@@ -56,4 +71,32 @@ def read_vector(spark, path, variables, group=None):
     df = reader.load(path)
     assert "geom_0" in df.columns and "geom_0_srid" in df.columns
     assert df.count() >= 1
+    return df
+
+
+def read_vector_profile(spark, path):
+    """Verify READ_VECTOR_PROFILE: one 3D point per observation, the profile's id and time repeated on it."""
+    import shapely
+
+    _register(spark)
+    df = spark.read.format("netcdf_gbx").option("mode", "vector").load(path)
+    assert set(df.columns) == {"profile", "temp", "time", "geom_0", "geom_0_srid", "geom_0_srid_proj"}
+    rows = df.collect()
+    assert len(rows) == 9
+    assert all(shapely.from_wkb(bytes(r["geom_0"])).has_z for r in rows)
+    assert {r["profile"] for r in rows} == {101, 102, 103}
+    return df
+
+
+def read_vector_trajectory(spark, path):
+    """Verify READ_VECTOR_TRAJECTORY: one 2D point per observation with the trajectory id and the time."""
+    import shapely
+
+    _register(spark)
+    df = spark.read.format("netcdf_gbx").option("mode", "vector").load(path)
+    assert set(df.columns) == {"trajectory", "temp", "time", "geom_0", "geom_0_srid", "geom_0_srid_proj"}
+    rows = df.collect()
+    assert len(rows) == 6
+    assert not any(shapely.from_wkb(bytes(r["geom_0"])).has_z for r in rows)
+    assert {r["trajectory"] for r in rows} == {7, 8}
     return df

@@ -56,7 +56,7 @@ bash scripts/commands/gbx-coverage-scala.sh --open
 # Generate report only (no test execution)
 bash scripts/commands/gbx-coverage-scala.sh --report-only --open
 
-# By package (sequence: rasterx, gridx, vectorx, ds, expressions, util; merge then report)
+# By package (sequence: rasterx, gridx, vectorx, expressions, util; merge then report)
 bash scripts/commands/gbx-coverage-scala.sh --by-package --open
 ```
 

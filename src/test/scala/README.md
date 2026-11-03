@@ -33,17 +33,12 @@ Tests that test expressions **through Spark execution**. These test the end-to-e
 src/test/scala/
 ├── README.md (this file)
 ├── com/databricks/labs/gbx/
-│   ├── ds/
-│   │   ├── RegisterDSTest.scala           # Data source registration tests
-│   │   └── WhitelistDSTest.scala          # Whitelist data source tests
 │   ├── expressions/
 │   │   └── CoreClassesTest.scala          # Core expression classes
 │   ├── gridx/bng/
 │   │   ├── BNG_ExpressionEvalTest.scala   # BNG Spark execution tests
 │   │   └── BNG_ExpressionExecuteTest.scala # BNG operation tests
 │   ├── rasterx/
-│   │   ├── ds/
-│   │   │   └── GDAL_DataSourceTest.scala  # GDAL data source tests
 │   │   ├── expressions/
 │   │   │   ├── RST_AccessorsEvalTest.scala          # Accessor Spark tests
 │   │   │   ├── RST_AccessorsExecuteTest.scala       # Accessor operation tests
@@ -63,9 +58,6 @@ src/test/scala/
 │   │   ├── GDALOperationsTest.scala         # GDAL operations tests
 │   │   └── RasterDebugger.scala             # Debugging utilities
 │   ├── vectorx/
-│   │   ├── ds/
-│   │   │   ├── OGR_DataSourceTest.scala     # OGR data source tests
-│   │   │   └── OGRInferenceTest.scala       # OGR type inference tests
 │   │   └── jts/
 │   │       ├── JTSTest.scala                # JTS tests
 │   │       └── ST_LegacyTest.scala          # Legacy ST functions tests

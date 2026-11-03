@@ -25,7 +25,7 @@ jobs:
   test-package:
     name: Test ${{ matrix.package }}
     needs: native-payload
-    # Heavy per matrix shard: mvn install + Scala tests for one package (rasterx/gridx/vectorx/ds/expressions/util). 6 shards in parallel.
+    # Heavy per matrix shard: mvn install + Scala tests for one package (rasterx/gridx/vectorx/expressions/util). 5 shards in parallel.
     runs-on:
       group: larger-runners
       labels: larger
@@ -40,7 +40,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [rasterx, gridx, vectorx, ds, expressions, util]
+        package: [rasterx, gridx, vectorx, expressions, util]
         python: [3.12.3]
         pytest: [9.1.1]
         numpy: [2.1.3]

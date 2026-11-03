@@ -29,7 +29,7 @@ jobs:
   coverage-package:
     name: Coverage ${{ matrix.package }}
     needs: native-payload
-    # Heavy per matrix shard: mvn scoverage:test for one package + GDAL native install. 6 shards in parallel; per-shard fan-out keeps wall-clock down.
+    # Heavy per matrix shard: mvn scoverage:test for one package + GDAL native install. 5 shards in parallel; per-shard fan-out keeps wall-clock down.
     runs-on:
       group: larger-runners
       labels: larger
@@ -44,7 +44,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        package: [rasterx, gridx, vectorx, ds, expressions, util]
+        package: [rasterx, gridx, vectorx, expressions, util]
         python: [3.12.3]
         pytest: [9.1.1]
         numpy: [2.1.3]

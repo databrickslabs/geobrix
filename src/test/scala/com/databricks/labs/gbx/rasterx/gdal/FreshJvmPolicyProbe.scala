@@ -30,7 +30,7 @@ object FreshJvmPolicyProbe {
                 GDALManager.initOgr()
             }
             else if (mode == "ogr-force")
-                com.databricks.labs.gbx.vectorx.ds.ogr.OGR_SchemaInference.enableOGRDrivers(force = true)
+                GDALManager.reregisterOgr()
             else GDALManager.init(ExpressionConfig(configs, new SerializableConfiguration(new Configuration(false))))
         } catch {
             case e: Throwable =>

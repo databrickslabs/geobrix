@@ -109,7 +109,7 @@ show_separator
 SUITES='com.databricks.labs.gbx.*'
 # report-only with one aggregated report (aggregateOnly avoids many per-module HTMLs)
 SCOV_REPORT_ONLY="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -q scoverage:report-only -Druntime=standard -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true"
-GBX_PACKAGES="rasterx gridx vectorx ds expressions util"
+GBX_PACKAGES="rasterx gridx vectorx expressions util"
 
 if [ "$REPORT_ONLY" = true ]; then
     echo -e "${CYAN}Generating report from existing data...${NC}"

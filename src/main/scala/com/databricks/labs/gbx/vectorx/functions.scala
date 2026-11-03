@@ -11,8 +11,7 @@ import org.apache.spark.sql.Column
   * VectorX API entry point: Column-based helpers for the expression-level `gbx_st_*` functions.
   *
   * Registration belongs to the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
-  * (VectorX data sources are registered separately via
-  * `META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.)
+  * (The JAR registers no data source: the readers and writers are the lightweight `*_gbx` Python data sources.)
   *
   * This package exposes the `gbx_st_asmvt` MVT aggregator (see [[ST_AsMvt]]), the `gbx_st_triangulate`
   * constrained-Delaunay TIN generator (see [[ST_Triangulate]]), and the

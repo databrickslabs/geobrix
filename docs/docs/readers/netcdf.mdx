@@ -217,6 +217,26 @@ the same shape as the other lightweight vector readers, so the GeoBrix built-in
 curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
 no target grid or resampling method is chosen for you.
 
+#### CF discrete sampling geometries
+
+A file with a `featureType` of `point`, `profile` or `trajectory` gives one point per observation.
+The columns are the id variable (`cf_role`), then the other variables by name.
+A variable stored once per profile, such as its time, repeats on each of its observations.
+The altitude of a profile (`standard_name = "altitude"` or `axis = "Z"`) is the point's Z, not a column.
+A time variable in these files is a `TIMESTAMP`, as in the other vector files, and the CRS is EPSG:4326.
+
+<CodeFromTest code={netcdfExamples} language="python" functionName="READ_VECTOR_PROFILE"
+  source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
+
+<CodeFromTest code={netcdfExamples} language="python" functionName="READ_VECTOR_TRAJECTORY"
+  source="docs/tests/python/readers/netcdf_gbx_read_examples.py"
+  testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
+
+A profile file stores its observations flat or as a ragged array. In an indexed ragged array, a variable on the
+observation dimension with an `instance_dimension` attribute says which profile each belongs to. In a contiguous ragged
+array, a variable with a `sample_dimension` attribute counts the observations of each profile.
+
 Attribute columns take their type from the variable's CF attributes: a time variable
 is a `TIMESTAMP` (read as UTC), except an integer count of whole days (`days since …`, a
 midnight base, no `scale_factor` or `add_offset`), which is a `DATE`; and a

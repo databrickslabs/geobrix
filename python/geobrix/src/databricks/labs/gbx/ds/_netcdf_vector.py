@@ -1,4 +1,4 @@
-"""netcdf_gbx vector mode: DSG points, or any 2-D field coerced to per-cell points.
+"""netcdf_gbx vector mode: CF DSG points, profiles and trajectories, or any 2-D field coerced to per-cell points.
 
 Output schema mirrors the light vector reader convention: attribute columns (one
 per requested variable, typed) then geom_0 (plain WKB) + geom_0_srid +
@@ -73,8 +73,14 @@ class NetcdfVectorReader(DataSourceReader):
             if not variables:
                 return
             kinds = [_netcdf.column_kind(ds[name]) for name in variables]
-            lon, lat, attrs, srid = _netcdf.point_arrays(ds, variables)
-        wkb = shapely.to_wkb(shapely.points(lon, lat))
+            layout = _netcdf.dsg_layout(ds)
+            if layout is not None:  # a CF DSG file: its points carry the altitude as Z
+                lon, lat, z, attrs, srid = _netcdf.dsg_arrays(ds, layout, variables)
+            else:
+                lon, lat, attrs, srid = _netcdf.point_arrays(ds, variables)
+                z = None
+        points = shapely.points(lon, lat) if z is None else shapely.points(lon, lat, z)
+        wkb = shapely.to_wkb(points, flavor="iso")
         proj = f"EPSG:{srid}"
         for i in range(len(lon)):
             row = tuple(

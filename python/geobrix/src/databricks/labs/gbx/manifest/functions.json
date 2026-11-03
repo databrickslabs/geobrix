@@ -412,14 +412,6 @@
       "ref": "databricks.labs.gbx.zarr.datasource:ZarrGbxDataSource",
       "page": "readers/zarr",
       "since": "0.6.0"
-    },
-    {
-      "name": "netcdf_ogr",
-      "kind": "reader",
-      "impl": "scala",
-      "ref": "com.databricks.labs.gbx.vectorx.ds.netcdf.NetCDF_OGR_DataSource",
-      "page": "readers/netcdf",
-      "since": "0.4.3"
     }
   ],
   "functions": [

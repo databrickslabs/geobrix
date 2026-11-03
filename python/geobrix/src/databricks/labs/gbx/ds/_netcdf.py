@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Tuple
 
 _logger = logging.getLogger(__name__)
@@ -353,13 +354,142 @@ def point_arrays(
     return lon_flat, lat_flat, attrs, "4326"
 
 
+# CF-1.8 discrete sampling geometry (DSG) feature types the vector mode reads, one point per observation.
+DSG_TYPES = frozenset({"point", "profile", "trajectory"})
+
+
+@dataclass(frozen=True)
+class Dsg:
+    """The layout of a CF-1.8 DSG file: where its points come from and which variables become columns.
+
+    ``obs_dim`` is the dimension of the observations (one point each). ``lat``, ``lon`` and the optional altitude
+    ``z`` (the point's Z) sit on it, or, in a ragged array representation, on ``instance_dim`` (the profile or
+    trajectory dimension). Indexed ragged: ``index`` is the variable on ``obs_dim`` whose ``instance_dimension``
+    attribute names ``instance_dim`` and whose values say which instance each observation belongs to. Contiguous
+    ragged: ``counts`` is the variable on ``instance_dim`` whose ``sample_dimension`` attribute names ``obs_dim``
+    and whose values count the observations of each instance, which follow one another.
+    ``attributes`` are the variables that become columns, the id variable (``cf_role``) first, then by name.
+    """
+
+    obs_dim: str
+    lat: str
+    lon: str
+    z: Optional[str]
+    index: Optional[str]
+    instance_dim: Optional[str]
+    attributes: Tuple[str, ...]
+    counts: Optional[str] = None
+
+
+def _is_z(var) -> bool:
+    return (
+        str(var.attrs.get("axis", "")).upper() == "Z"
+        or str(var.attrs.get("standard_name", "")).lower() == "altitude"
+    )
+
+
+def dsg_layout(ds) -> Optional[Dsg]:
+    """The DSG layout of ``ds`` (a ``featureType`` of point, profile or trajectory), else None.
+
+    A file that carries no ``featureType`` (a swath, a grid, a plain table of points) has none: the other vector
+    paths read it. A DSG file the layout cannot place (no lat/lon, or a lat/lon on neither the observation nor the
+    instance dimension) has none either.
+    """
+    if str(ds.attrs.get("featureType", "")).strip().lower() not in DSG_TYPES:
+        return None
+    lat, lon = _find_lat_lon(ds)
+    if lat is None or lon is None or lat.dims != lon.dims or len(lat.dims) != 1:
+        return None
+    index = counts = instance_dim = None
+    for name in ds.variables:
+        v = ds[name]
+        inst, sample = v.attrs.get("instance_dimension"), v.attrs.get(
+            "sample_dimension"
+        )
+        if inst is not None and len(v.dims) == 1 and str(inst) in ds.sizes:
+            index, instance_dim = str(name), str(inst)
+            break
+        if sample is not None and len(v.dims) == 1 and str(sample) in ds.sizes:
+            counts, instance_dim = str(name), v.dims[0]
+            obs_dim = str(sample)
+            break
+    if index is not None:
+        obs_dim = ds[index].dims[0]
+    elif counts is None:
+        obs_dim = lat.dims[0]
+    if instance_dim is not None and lat.dims != (instance_dim,):
+        return None
+    z = next(
+        (
+            str(n)
+            for n in ds.variables
+            if ds[n].dims in ((obs_dim,), (instance_dim,)) and _is_z(ds[n])
+        ),
+        None,
+    )
+    skip = {str(lat.name), str(lon.name), z, index, counts, obs_dim}
+    wanted = {obs_dim} | ({instance_dim} if instance_dim else set())
+    names = [
+        str(n)
+        for n in ds.variables
+        if str(n) not in skip
+        and len(ds[n].dims) == 1
+        and ds[n].dims[0] in wanted
+        and (ds[n].dims[0] != obs_dim or str(n) != obs_dim)
+    ]
+    names.sort(key=lambda n: (not ds[n].attrs.get("cf_role"), n))
+    return Dsg(
+        obs_dim,
+        str(lat.name),
+        str(lon.name),
+        z,
+        index,
+        instance_dim,
+        tuple(names),
+        counts,
+    )
+
+
+def dsg_arrays(
+    ds, layout: Dsg, variables: List[str]
+) -> Tuple["object", "object", Optional["object"], Dict[str, "object"], str]:
+    """Per-observation arrays of a DSG file: lon, lat, z (or None) and the ``variables``, an instance-dimension
+    variable expanded to its observations through the index variable."""
+    import numpy as np
+
+    ix = None  # the instance of each observation
+    if layout.index is not None:
+        ix = np.asarray(ds[layout.index].values).astype("int64")
+    elif layout.counts is not None:
+        sizes = np.asarray(ds[layout.counts].values).astype("int64")
+        ix = np.repeat(np.arange(len(sizes)), sizes)
+
+    def per_obs(name: str):
+        values = np.asarray(ds[name].values)
+        return (
+            values[ix]
+            if ix is not None and ds[name].dims[0] != layout.obs_dim
+            else values
+        )
+
+    lon, lat = per_obs(layout.lon), per_obs(layout.lat)
+    z = per_obs(layout.z) if layout.z is not None else None
+    return lon, lat, z, {name: per_obs(name) for name in variables}, "4326"
+
+
 def readable_variables(ds, mode: str) -> List[str]:
     """Data variables readable in `mode` ('raster' -> GRID; 'vector' -> POINTS/CURVILINEAR).
 
     Iterates ds.data_vars only: with open_dataset's decode_coords="all", lat/lon,
     grid-mapping, and bounds coordinate variables are xarray coords, not data_vars,
-    so they are never surfaced as readable fields.
+    so they are never surfaced as readable fields. A DSG file (``featureType`` point,
+    profile or trajectory) is the exception in vector mode: its columns are the variables
+    of :func:`dsg_layout` (the id and the time are coordinates there, and are columns).
     """
+    if mode != "raster":
+        layout = dsg_layout(ds)
+        if layout is not None:
+            return list(layout.attributes)
     keep = {GRID} if mode == "raster" else {POINTS, CURVILINEAR}
     return [name for name in list(ds.data_vars) if classify(ds, name) in keep]
 

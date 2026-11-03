@@ -47,7 +47,13 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 
 ## Which suites run
 
-The suites are **discovered**, not listed: every `python/geobrix/test/**/test_parity*.py`, `test_*_parity.py` and `*_cross_tier.py` (the cross-tier suites that need the JAR are parity suites in intent), sorted, minus a short exclusion list (`PARITY_EXCLUDE` in the script) of files that are not cross-tier gates: `core/test_check_binding_parity.py` (a unit test of the binding-parity checker, run by `gbx:test:bindings`), `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py` (light-only writer round trips), and `ds/test_reader_parity.py` (a light-only reader check against the source file). These four are not part of any parity gate: they run only under `gbx:test:python --with-integration` (which also runs their `ds` tests that need the container's sample data). A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
+The suites are **discovered**, not listed. The gate runs every `python/geobrix/test/**/test_parity*.py`, `test_*_parity.py` and `*_cross_tier.py`, sorted. A cross-tier suite that needs the JAR counts as a parity suite. A short exclusion list (`PARITY_EXCLUDE` in the script) holds the files that are not cross-tier gates:
+
+- `core/test_check_binding_parity.py`: a unit test of the binding-parity checker, run by `gbx:test:bindings`.
+- `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py`: light-only writer round trips.
+- `ds/test_reader_parity.py`: a light-only reader check against the source file.
+
+These four are not part of any parity gate. They run only under `gbx:test:python --with-integration`, which also runs their `ds` tests that need the container's sample data. A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
 
 `--path` may be given several times and each value may be a file or a directory (`./x` and `x/` are the same path, so the exclusions still apply); they run once each, in the order given:
 

@@ -10,7 +10,7 @@ bash scripts/commands/gbx-test-scala.sh [OPTIONS]
 
 ## Options
 
-- `--by-package` - Run tests per package in sequence (rasterx, gridx, vectorx, ds, expressions, util); reports pass/fail per package (same packages as CI matrix)
+- `--by-package` - Run tests per package in sequence (rasterx, gridx, vectorx, expressions, util); reports pass/fail per package (same packages as CI matrix)
 - `--suite <pattern>` - Run specific test suite (single pattern)
 - `--suites <list>` - Run specific test suites (comma-separated class/package patterns; same as `-Dsuites=`)
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
@@ -47,7 +47,7 @@ bash scripts/commands/gbx-test-scala.sh
 bash scripts/commands/gbx-test-scala.sh --suite com.databricks.labs.gbx.rasterx.expressions.*
 
 # Run multiple suites (comma-separated)
-bash scripts/commands/gbx-test-scala.sh --suites 'com.databricks.labs.gbx.rasterx.operations.SpatialRefOpsTest,com.databricks.labs.gbx.rasterx.ds.GTiff_DataSourceTest'
+bash scripts/commands/gbx-test-scala.sh --suites 'com.databricks.labs.gbx.rasterx.operations.SpatialRefOpsTest,com.databricks.labs.gbx.rasterx.operations.RasterAccessorsTest'
 
 # Run with logging
 bash scripts/commands/gbx-test-scala.sh --log scala-tests.log

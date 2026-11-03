@@ -697,12 +697,9 @@ def add_payload(args, tree, natives, bindings, version):
     jar = pkg / "_jar" / f"geobrix-{version.split('+')[0]}-jar-with-dependencies.jar"
     jar.parent.mkdir(parents=True)
     with zipfile.ZipFile(args.jar) as zf:
-        if (
-            "META-INF/services/org.apache.spark.sql.sources.DataSourceRegister"
-            not in zf.namelist()
-        ):
+        if "com/databricks/labs/gbx/kernels/L1Installer.class" not in zf.namelist():
             fail(
-                f"{args.jar} has no Spark DataSourceRegister service file: not the GeoBrix JAR"
+                f"{args.jar} has no com.databricks.labs.gbx.kernels.L1Installer class: not the GeoBrix JAR"
             )
     shutil.copy2(args.jar, jar)
 

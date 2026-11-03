@@ -4,20 +4,20 @@
 
 Speed up Scala coverage on CI by:
 
-1. **Splitting tests by package** (rasterx, gridx, vectorx, ds, expressions, util) and running each in its own job in parallel.
+1. **Splitting tests by package** (rasterx, gridx, vectorx, expressions, util) and running each in its own job in parallel.
 2. **Assembling a single report** by merging per-package scoverage data, then uploading to Codecov.
 
 ## Why it helps
 
 - **Current (single job):** One runner runs all tests with `-T 1C`. Wall time ≈ 30–45 min with scoverage.
-- **Granular (matrix):** N jobs run in parallel (e.g. 6 packages). Wall time ≈ max(rasterx, gridx, …) + merge + upload, e.g. ~8–12 min if the slowest package is ~10 min and merge is ~1 min.
+- **Granular (matrix):** N jobs run in parallel (e.g. 5 packages). Wall time ≈ max(rasterx, gridx, …) + merge + upload, e.g. ~8–12 min if the slowest package is ~10 min and merge is ~1 min.
 - **Cost:** More runner-minutes (6 jobs × ~10 min) but faster feedback.
 
 ## Approach
 
 ### 1. Matrix job per package
 
-- **Strategy:** `matrix: package: [rasterx, gridx, vectorx, ds, expressions, util]`
+- **Strategy:** `matrix: package: [rasterx, gridx, vectorx, expressions, util]`
 - **Each job:**  
   `./mvnw -T 1C -q clean scoverage:test -Dsuites='com.databricks.labs.gbx.<package>.*' -Druntime=large -Dscalastyle.fail=false`  
   then upload `target/scoverage.xml` (or `target/scoverage-report/`) as artifact `scoverage-${{ matrix.package }}`.

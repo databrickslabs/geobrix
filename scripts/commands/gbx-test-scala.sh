@@ -12,7 +12,7 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:scala${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--by-package${NC}           Run tests per package in sequence (rasterx, gridx, vectorx, ds, expressions, util); reports pass/fail per package"
+    echo -e "  ${GREEN}--by-package${NC}           Run tests per package in sequence (rasterx, gridx, vectorx, expressions, util); reports pass/fail per package"
     echo -e "  ${GREEN}--suite <pattern>${NC}       Run specific test suite (single pattern)"
     echo -e "  ${GREEN}--suites <list>${NC}        Run specific test suites (comma-separated class/package patterns)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -101,7 +101,7 @@ gbx_native_env_args
 SCALA_ENV_ARGS=(-e LC_ALL=C.UTF-8 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"})
 
 # Package list for --by-package (same as CI matrix)
-GBX_PACKAGES="rasterx gridx vectorx ds expressions util"
+GBX_PACKAGES="rasterx gridx vectorx expressions util"
 
 if [ "$BY_PACKAGE" = true ]; then
     echo -e "${CYAN}🎯 Running tests by package (sequence): $GBX_PACKAGES${NC}"

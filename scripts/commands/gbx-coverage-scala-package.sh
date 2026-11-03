@@ -14,7 +14,6 @@ show_help() {
     echo -e "${CYAN}Packages:${NC}"
     echo -e "  ${GREEN}rasterx${NC}              All raster operations (~5-7 min, 5,788 statements)"
     echo -e "  ${GREEN}rasterx.operator${NC}     Raster operators (232 statements, ~30 sec) ⭐"
-    echo -e "  ${GREEN}rasterx.ds${NC}           Raster data sources (147 statements, ~20 sec)"
     echo -e "  ${GREEN}rasterx.util${NC}         Raster utilities (278 statements, ~30 sec)"
     echo -e "  ${GREEN}rasterx.gdal${NC}         GDAL operations (737 statements, ~1 min)"
     echo -e "  ${GREEN}rasterx.operations${NC}   Raster operations (1,091 statements, ~1-2 min)"
@@ -26,9 +25,7 @@ show_help() {
     echo -e ""
     echo -e "  ${GREEN}vectorx${NC}              Vector operations (~1-2 min)"
     echo -e "  ${GREEN}vectorx.jts${NC}          JTS geometry operations (342 statements, ~40 sec)"
-    echo -e "  ${GREEN}vectorx.ds${NC}           Vector data sources (535 statements, ~50 sec)"
     echo -e ""
-    echo -e "  ${GREEN}ds${NC}                   Data sources (~30 sec)"
     echo -e "  ${GREEN}expressions${NC}          Expression framework (~30 sec)"
     echo -e "  ${GREEN}util${NC}                 Utilities (502 statements, ~45 sec)"
     echo ""
@@ -139,9 +136,6 @@ map_package_to_suite() {
         vectorx)
             echo "com.databricks.labs.gbx.vectorx.*"
             ;;
-        ds)
-            echo "com.databricks.labs.gbx.ds.*"
-            ;;
         expressions)
             echo "com.databricks.labs.gbx.expressions.*"
             ;;
@@ -167,9 +161,6 @@ map_package_to_suite() {
         rasterx.util)
             echo "com.databricks.labs.gbx.rasterx.util.*"
             ;;
-        rasterx.ds)
-            echo "com.databricks.labs.gbx.rasterx.ds.*"
-            ;;
         # GridX sub-packages
         gridx.bng)
             echo "com.databricks.labs.gbx.gridx.bng.*"
@@ -180,13 +171,6 @@ map_package_to_suite() {
         # VectorX sub-packages
         vectorx.jts)
             echo "com.databricks.labs.gbx.vectorx.jts.*"
-            ;;
-        vectorx.ds)
-            echo "com.databricks.labs.gbx.vectorx.ds.*"
-            ;;
-        # DS sub-packages
-        ds.whitelist)
-            echo "com.databricks.labs.gbx.ds.whitelist.*"
             ;;
         *)
             echo ""
@@ -200,10 +184,10 @@ if [ -z "$SUITE_PATTERN" ]; then
     echo -e "${RED}❌ Error: Unknown package '$PACKAGE'${NC}"
     echo ""
     echo -e "${CYAN}Available packages (use --help for full list):${NC}"
-    echo -e "  ${GREEN}Top-level:${NC} rasterx, gridx, vectorx, ds, expressions, util"
+    echo -e "  ${GREEN}Top-level:${NC} rasterx, gridx, vectorx, expressions, util"
     echo -e "  ${GREEN}RasterX:${NC} rasterx.operator, rasterx.expressions, rasterx.operations, etc."
     echo -e "  ${GREEN}GridX:${NC} gridx.bng, gridx.grid"
-    echo -e "  ${GREEN}VectorX:${NC} vectorx.jts, vectorx.ds"
+    echo -e "  ${GREEN}VectorX:${NC} vectorx.jts"
     echo ""
     exit 1
 fi

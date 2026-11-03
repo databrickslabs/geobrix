@@ -48,7 +48,7 @@ class GDALManagerPolicyTest extends AnyFunSuite {
             s"refused drivers registered after an OGR-first init: ${out("PRESENT")}")
     }
 
-    test("a forced OGR registration (OGR_SchemaInference) applies the policy") {
+    test("a forced OGR registration (GDALManager.reregisterOgr) applies the policy") {
         val out = probe("ogr-force")
         assert(out("GDAL_SKIP") == GDALManager.DefaultSkippedDrivers, s"GDAL_SKIP was ${out("GDAL_SKIP")}")
         assert(out("PRESENT").split(",").filter(_.nonEmpty).toSet.intersect(Refused).isEmpty,

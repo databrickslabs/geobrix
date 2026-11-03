@@ -31,7 +31,7 @@ from shapely.geometry import Point as _Point
 from shapely.geometry import box as _box
 
 from . import _dilate
-from ._geom import parse_geom
+from ._geom import jvm_rect, parse_geom
 
 ID_BITS = 56  # GridConf.idBits — low 56 bits hold the cell position
 RES_BITS = 8  # GridConf.resBits — top 8 bits hold the resolution
@@ -251,8 +251,8 @@ def cell_id_to_polygon(conf: CustomGridConf, cell_id: int):
     """Closed custom-grid cell polygon (shapely), NO SRID.
 
     Port of CustomGridSystem.scala:213-235 — the closed ring
-    ``(x,y),(x+w,y),(x+w,y+h),(x,y+h),(x,y)``. shapely ``box`` produces the same
-    axis-aligned rectangle.
+    ``(x,y),(x+w,y),(x+w,y+h),(x,y+h),(x,y)``, built with ``jvm_rect`` so the WKB
+    and WKT carry the same vertex order.
     """
     resolution = get_cell_resolution(cell_id)
     cell_number = get_cell_position(cell_id)
@@ -262,7 +262,7 @@ def cell_id_to_polygon(conf: CustomGridConf, cell_id: int):
     h = cell_height(conf, resolution)
     x = cell_x * w + conf.bound_x_min
     y = cell_y * h + conf.bound_y_min
-    return _box(x, y, x + w, y + h)
+    return jvm_rect(x, y, x + w, y + h)
 
 
 def cell_id_to_centroid(conf: CustomGridConf, cell_id: int):

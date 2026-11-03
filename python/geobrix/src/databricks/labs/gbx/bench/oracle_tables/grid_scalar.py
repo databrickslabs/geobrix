@@ -83,8 +83,29 @@ CINT, CUNI = "gbx_bng_cellintersection", "gbx_bng_cellunion"
 # bytes can only differ by byte order or flags.)
 TQ3080_CENTRE_WKB = struct.pack("<BIdd", 1, 1, 530500.0, 180500.0)
 
+
+def _square_wkb(x0, y0, x1, y1):
+    """A square's plain WKB, laid out by hand in the JVM's ring: little-endian polygon, one ring of five points that
+    starts at the south-west corner and runs counter-clockwise."""
+    ring = ((x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0))
+    return struct.pack("<BIII", 1, 3, 1, 5) + b"".join(
+        struct.pack("<dd", x, y) for x, y in ring
+    )
+
+
+TQ3080_WKB = _square_wkb(530000.0, 180000.0, 531000.0, 181000.0)
+
 GRID_SCALAR = (
     Case("aswkb_tq3080", AWKB, ("TQ3080",), "geom_equals", TQ3080),
+    # The exact bytes (session surface only: the UC handler returns EWKB with the SRID).
+    Case(
+        "aswkb_tq3080_bytes",
+        AWKB,
+        ("TQ3080",),
+        "wkb_bytes",
+        TQ3080_WKB,
+        surfaces=("session",),
+    ),
     Case("aswkb_null", AWKB, (None,), "null"),
     # A malformed cell id is a data error: NULL, not a failed query.
     Case("aswkb_bad_cell", AWKB, ("XX9999",), "null"),
@@ -414,6 +435,15 @@ GRID_SCALAR += (
     ),
     Case("custom_inf_point", CPAC, (INF_POINT, G, 1), "null"),
     Case("cg_aswkb", CAWKB, (CG_CELL, G), "geom_equals", CG_BOX),
+    # The exact bytes: the same ring start and direction as the JVM's.
+    Case(
+        "cg_aswkb_bytes",
+        CAWKB,
+        (CG_CELL, G),
+        "wkb_bytes",
+        _square_wkb(530500.0, 180500.0, 531000.0, 181000.0),
+        surfaces=("session",),
+    ),
     Case("cg_aswkb_null", CAWKB, (None, G), "null", variants=((CG_CELL, None),)),
     Case("cg_aswkt", CAWKT, (CG_CELL, G), "geom_equals", CG_BOX),
     Case("cg_aswkt_null", CAWKT, (None, G), "null"),

@@ -63,3 +63,10 @@ def geom_to_wkb(x: Any) -> Optional[bytes]:
     if geom is None:
         return None
     return shapely.to_wkb(geom)
+
+
+def jvm_rect(x0: float, y0: float, x1: float, y1: float) -> BaseGeometry:
+    """The rectangle (x0,y0)-(x1,y1) with the JVM grid cell's ring: south-west corner first, counter-clockwise,
+    closed. shapely's ``box`` starts at the south-east corner, so its WKB and WKT differ from the JVM's.
+    """
+    return shapely.Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)])

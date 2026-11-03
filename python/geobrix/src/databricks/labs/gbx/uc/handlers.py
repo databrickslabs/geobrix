@@ -344,13 +344,11 @@ def _ewkb(g, srid: int) -> bytes:
 
 def _cell_polygon(cid):
     """The BNG cell polygon with the JVM's ring (south-west corner first, counter-clockwise), the ring the Scala
-    handler writes; shapely's box starts at the south-east corner."""
-    import shapely
-
+    handler writes; the kernel builds it, so the light and UC surfaces share one ring.
+    """
     from databricks.labs.gbx.pygx import _bng
 
-    x0, y0, x1, y1 = _bng.cell_id_to_geometry(cid).bounds
-    return shapely.Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)])
+    return _bng.cell_id_to_geometry(cid)
 
 
 def bng_pointascell(geom, resolution):

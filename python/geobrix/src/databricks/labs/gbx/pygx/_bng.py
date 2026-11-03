@@ -32,11 +32,10 @@ from shapely import to_wkb as _to_wkb
 from shapely import union_all as _union_all
 from shapely.geometry import Point as _Point
 from shapely.geometry import Polygon as _Polygon
-from shapely.geometry import box as _box
 from shapely.geometry import mapping as _mapping
 
 from . import _dilate
-from ._geom import parse_geom
+from ._geom import jvm_rect, parse_geom
 
 CRS_ID = 27700
 NAME = "BNG"
@@ -392,7 +391,7 @@ east_north_as_bng = point_as_cell
 #
 # Heavy emits PLAIN WKB (no SRID) via JTS.toWKB and plain WKT via JTS.toWKT.
 # BNG does NOT stamp an SRID (unlike quadbin, which is EWKB SRID 4326), so the
-# cell polygon is built with shapely ``box`` and serialized WITHOUT include_srid.
+# cell polygon is built with the JVM's ring (``jvm_rect``) and serialized WITHOUT include_srid.
 # ---------------------------------------------------------------------------
 
 
@@ -407,7 +406,7 @@ def cell_id_to_geometry(cell_id: int):
     edge = get_edge_size(resolution)
     x = get_x(digits, edge)
     y = get_y(digits, edge)
-    return _box(x, y, x + edge, y + edge)
+    return jvm_rect(x, y, x + edge, y + edge)
 
 
 def cell_aswkb(cell_id: int) -> bytes:

@@ -10,6 +10,6 @@ pygx dependency — so re-exporting it never drags in another tier's deps and
 keeps decoding behavior identical across pyrx / pyvx / pygx.
 """
 
-from databricks.labs.gbx._geom import geom_to_wkb, parse_geom
+from databricks.labs.gbx._geom import geom_to_wkb, jvm_rect, parse_geom
 
-__all__ = ["parse_geom", "geom_to_wkb"]
+__all__ = ["parse_geom", "geom_to_wkb", "jvm_rect"]

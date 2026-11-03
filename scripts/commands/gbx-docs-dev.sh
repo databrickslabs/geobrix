@@ -125,7 +125,9 @@ echo -e "${CYAN}   Hot reload: ${GREEN}enabled${NC}"
 print_separator
 
 # Start dev server in background; same PID file pattern as serve so gbx-docs-stop works
-nohup npm run start -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 &
+# The server outlives this script: detach it from every inherited descriptor (stdin, and fd 3, where
+# setup_log_file saves the caller's stdout), or a caller piping this command waits on it forever.
+nohup npm run start -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 < /dev/null 3>&- &
 SERVER_PID=$!
 echo $SERVER_PID > /tmp/docusaurus-$PORT.pid
 

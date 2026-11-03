@@ -128,7 +128,9 @@ echo -e "${CYAN}   Port: ${YELLOW}$PORT${NC}"
 print_separator
 
 # Start the server in the background
-nohup npm run serve -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 &
+# The server outlives this script: detach it from every inherited descriptor (stdin, and fd 3, where
+# setup_log_file saves the caller's stdout), or a caller piping this command waits on it forever.
+nohup npm run serve -- --port $PORT > /tmp/docusaurus-$PORT.log 2>&1 < /dev/null 3>&- &
 SERVER_PID=$!
 
 # Store PID for stop command

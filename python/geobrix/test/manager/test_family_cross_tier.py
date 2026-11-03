@@ -201,6 +201,22 @@ def test_every_uc_function_of_the_slice_has_its_uc_rows():
     assert {"uc_wkb_into_geometry_refused", "uc_bng_aswkb_srid"} <= ids
 
 
+# The bytes of gbx_bng_aswkb / gbx_bng_centroid for TQ3080 (little-endian EWKB, SRID 27700, the ring from the south-west
+# corner): the UC Python handler here, the UC Scala handler in KernelFacadesSmokeTest, one expected hex.
+TQ3080_ASWKB_HEX = (
+    "0103000020346c0000010000000500000000000000a02c20410000000000f9054100000000703420410000000000f9054100"
+    "00000070342041000000004018064100000000a02c2041000000004018064100000000a02c20410000000000f90541"
+)
+TQ3080_CENTROID_HEX = "0101000020346c0000000000008830204100000000a0080641"
+
+
+def test_the_uc_python_handlers_write_the_bytes_the_uc_scala_handlers_write():
+    from databricks.labs.gbx.uc import handlers
+
+    assert handlers.bng_aswkb("TQ3080").hex() == TQ3080_ASWKB_HEX
+    assert handlers.bng_centroid("TQ3080").hex() == TQ3080_CENTROID_HEX
+
+
 SLICE = {
     "gbx_bng_pointascell", "gbx_bng_polyfill", "gbx_bng_aswkb", "gbx_bng_centroid", "gbx_bng_kring",
     "gbx_bng_geomkring", "gbx_bng_cellarea", "gbx_quadbin_pointascell", "gbx_quadbin_polyfill",

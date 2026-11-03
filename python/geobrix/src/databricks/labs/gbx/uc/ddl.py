@@ -58,6 +58,23 @@ def check_volume_dir(path: str) -> str:
     return path
 
 
+def check_jar_path(path: str) -> str:
+    """An explicit ``jar=``: an absolute /Volumes/... path ending in ``.jar``, nothing that needs escaping."""
+    if (
+        not isinstance(path, str)
+        or _UNSAFE_IN_PATH.search(path)
+        or not path.startswith("/Volumes/")
+        or not path.endswith(".jar")
+        or not _VOLUME_FOLDER.fullmatch(path.rsplit("/", 1)[0])
+    ):
+        raise ValueError(
+            f"jar {path!r} must be an absolute /Volumes/<catalog>/<schema>/<volume>/.../<name>.jar path without "
+            "quotes, backslashes or control characters. Fix: pass the JAR with dependencies staged on a Volume, "
+            "for example /Volumes/main/geobrix/artifacts/env6/geobrix-<version>-jar-with-dependencies.jar."
+        )
+    return path
+
+
 def comment_text(fn, version: str) -> str:
     """The COMMENT of a UC function: ``geobrix <version>: <summary>``. ``uc.verify`` and ``register`` read the text
     before the first colon as the version of the wheel that created it."""

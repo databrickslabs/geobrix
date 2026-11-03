@@ -9,6 +9,7 @@ import org.locationtech.jts.io.{WKBReader, WKBWriter, WKTReader, WKTWriter}
 import org.locationtech.jts.operation.union.UnaryUnionOp
 import org.locationtech.jts.simplify.DouglasPeuckerSimplifier
 
+import scala.collection.concurrent.TrieMap
 import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
@@ -76,16 +77,17 @@ object JTS {
         result
     }
 
-    // Per-thread caches: JTS readers/writers are not thread-safe and this object is shared across tasks.
-    private val geometryFactories = mutable.Map[Long, GeometryFactory]()
-    private val wkbReaders = mutable.Map[Long, WKBReader]()
-    private val wkbWriters = mutable.Map[Long, WKBWriter]()
-    private val wkb3Writers = mutable.Map[Long, WKBWriter]()
-    private val ewkbWriters = mutable.Map[Long, WKBWriter]()
-    private val ewkb3Writers = mutable.Map[Long, WKBWriter]()
-    private val wtkWriters = mutable.Map[Long, WKTWriter]()
-    private val wtk3Writers = mutable.Map[Long, WKTWriter]()
-    private val wtkReaders = mutable.Map[Long, WKTReader]()
+    // Per-thread caches: JTS readers/writers are not thread-safe and this object is shared across tasks,
+    // so the caches are concurrent maps (two threads can add their entries at the same moment).
+    private val geometryFactories = TrieMap[Long, GeometryFactory]()
+    private val wkbReaders = TrieMap[Long, WKBReader]()
+    private val wkbWriters = TrieMap[Long, WKBWriter]()
+    private val wkb3Writers = TrieMap[Long, WKBWriter]()
+    private val ewkbWriters = TrieMap[Long, WKBWriter]()
+    private val ewkb3Writers = TrieMap[Long, WKBWriter]()
+    private val wtkWriters = TrieMap[Long, WKTWriter]()
+    private val wtk3Writers = TrieMap[Long, WKTWriter]()
+    private val wtkReaders = TrieMap[Long, WKTReader]()
 
     /** Creates a JTS Point at (x, y); uses per-thread GeometryFactory. */
     def point(x: Double, y: Double): Point = {

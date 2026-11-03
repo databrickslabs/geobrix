@@ -295,6 +295,15 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(BngUc.asWkb("XX9999") == null && BngUc.centroid(null) == null)
     }
 
+    test("BngUc cell handlers write the bytes the UC Python handlers write") {
+        // the same expected hex as test_family_cross_tier.py: little-endian EWKB, SRID 27700, ring from the south-west corner
+        def hex(b: Array[Byte]): String = b.map(x => f"${x & 0xff}%02x").mkString
+        assert(hex(BngUc.asWkb("TQ3080")) ==
+            "0103000020346c0000010000000500000000000000a02c20410000000000f9054100000000703420410000000000f9054100" +
+            "00000070342041000000004018064100000000a02c2041000000004018064100000000a02c20410000000000f90541")
+        assert(hex(BngUc.centroid("TQ3080")) == "0101000020346c0000000000008830204100000000a0080641")
+    }
+
     test("BngTessellateJob tessellates a polygon column in one mapPartitions") {
         // 2800 x 800 m, offset 100 m into the cells it covers: three 1 km border cells
         val poly = "POLYGON((530100 180100, 532900 180100, 532900 180900, 530100 180900, 530100 180100))"

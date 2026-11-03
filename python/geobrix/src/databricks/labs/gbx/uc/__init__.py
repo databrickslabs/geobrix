@@ -76,10 +76,15 @@ def _single_wheel(volume_dir: str) -> str:
     )
 
 
+def _jar_name() -> str:
+    return f"geobrix-{_public_version()}-jar-with-dependencies.jar"
+
+
 def _single_jar(volume_dir: str) -> Optional[str]:
     """The geobrix JAR in ``volume_dir`` (the UC Scala handlers load it), or None when the folder holds none.
 
-    More than one is refused: a function created from the wrong JAR would answer with the wrong code.
+    Only the JAR with dependencies of THIS wheel's version is a candidate: a thin JAR has no JTS, and a JAR of another
+    version answers with other code. Any other geobrix JAR in the folder is refused, with the name to stage.
     """
     from databricks.labs.gbx.ds._listing import list_files
 
@@ -89,13 +94,15 @@ def _single_jar(volume_dir: str) -> Optional[str]:
         recursive=False,
         raise_on_empty=False,
     )
-    if len(found) > 1:
+    ok = [p for p in found if os.path.basename(p) == _jar_name()]
+    other = [os.path.basename(p) for p in found if os.path.basename(p) != _jar_name()]
+    if other:
         raise RuntimeError(
-            f"{volume_dir} holds {len(found)} geobrix JARs ({', '.join(os.path.basename(p) for p in found)}); "
-            "keep exactly one JAR (the one built with this wheel) in the folder, or none to create the "
-            "functions as Python handlers"
+            f"{volume_dir} holds {', '.join(other)}, not {_jar_name()} (the JAR with dependencies built with this "
+            f"wheel). Fix: stage {_jar_name()} there and remove the others, or keep no geobrix JAR in the folder "
+            "to create the functions as Python handlers."
         )
-    return found[0] if found else None
+    return ok[0] if ok else None
 
 
 def _l4_names(only: Optional[Iterable[str]]) -> List[str]:
@@ -151,10 +158,12 @@ def install(
         if dry_run
         else _single_wheel(volume_dir)
     )
-    if jar is None and not dry_run:
-        jar = _single_jar(volume_dir)
-    elif jar is not None:
-        ddl.check_volume_dir(jar)
+    if jar is not None:
+        ddl.check_jar_path(jar)
+    elif not dry_run and any("scala" in man.functions[n].levels["L4"] for n in names):
+        jar = _single_jar(
+            volume_dir
+        )  # only a selected function with a Scala handler needs a JAR
     stmts: List[str] = []
     for n in names:
         stmts += ddl.function_ddl(

@@ -1026,19 +1026,33 @@ def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
     assert spark.stmts[: len(stmts)] == stmts
 
 
-def test_uc_install_refuses_two_jars_and_dry_run_reads_no_folder(volume, monkeypatch):
+@pytest.mark.parametrize(
+    "jars",
+    [
+        ["geobrix-0.6.0.jar", "geobrix-0.6.0-jar-with-dependencies.jar"],
+        ["geobrix-0.6.0.jar"],
+        ["geobrix-0.5.3-jar-with-dependencies.jar"],
+    ],
+    ids=["thin-beside-the-right-one", "thin-only", "other-version"],
+)
+def test_uc_install_takes_only_the_jar_with_dependencies_of_this_wheel(
+    volume, monkeypatch, jars
+):
     from databricks.labs.gbx import uc
 
-    volume.files = [
-        ENV6_WHEEL,
-        "geobrix-0.6.0.jar",
-        "geobrix-0.6.0-jar-with-dependencies.jar",
-    ]
+    volume.files = [ENV6_WHEEL, *jars]
     monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
     spark = _UcSpark(UC_NAMES)
-    with pytest.raises(RuntimeError, match="exactly one JAR"):
+    with pytest.raises(
+        RuntimeError, match=r"Fix: stage geobrix-0\.6\.0-jar-with-dependencies\.jar"
+    ):
         uc.install("cat", "sch", VOLUME_DIR, spark=spark)
     assert not spark.stmts
+    # only Python-handler functions are selected: no function needs the JAR, so the folder's JARs are not read
+    stmts = uc.install(
+        "cat", "sch", VOLUME_DIR, spark=_UcSpark(UC_NAMES), only=["gbx_st_wrapx"]
+    )
+    assert stmts and not any("LANGUAGE SCALA" in s for s in stmts)
     plain = uc.install("cat", "sch", VOLUME_DIR, dry_run=True)
     assert not any("LANGUAGE SCALA" in s for s in plain)
     with_jar = uc.install("cat", "sch", VOLUME_DIR, dry_run=True, jar=JAR)
@@ -1186,6 +1200,8 @@ def test_register_session_says_once_when_the_uc_schema_has_another_version(
         "gbx_bng_cellarea": "geobrix 0.5.3: Return the area of a BNG cell in square kilometres.",
         "gbx_st_makevalid": "geobrix 0.5.4: Repair an invalid geometry.",
         "gbx_other": "someone else's function",
+        "gbx_mvp_probe_batch": "geobrix 0.4.0: A probe an older wheel left.",
+        "gbx__private": "geobrix 0.4.1: A private name.",
     }
     fake = _UcSpark(routines)
     session = _ThroughUc(spark, fake)
@@ -1198,7 +1214,10 @@ def test_register_session_says_once_when_the_uc_schema_has_another_version(
     )
     assert out.count(line) == 1  # once per session, whatever the number of calls
     (query,) = [q for q in fake.stmts if "information_schema" in q][:1]
-    assert "`cat`.information_schema.routines" in query and "LIKE 'gbx_%'" in query
+    assert (
+        "`cat`.information_schema.routines" in query
+        and "LIKE 'gbx!_%' ESCAPE '!'" in query
+    )
     # the same schema at this version, and a call without a catalog, say nothing
     same = _ThroughUc(
         spark, _UcSpark({"gbx_bng_cellarea": UC_NAMES["gbx_bng_cellarea"]})
@@ -1206,6 +1225,29 @@ def test_register_session_says_once_when_the_uc_schema_has_another_version(
     register(same, only=["gbx_bng_cellarea"], catalog="cat", schema="sch")
     register(spark, only=["gbx_bng_cellarea"])
     assert "Unity Catalog schema" not in capsys.readouterr().out
+
+
+def test_register_session_survives_an_unreadable_uc_schema(spark, capsys):
+    """The schema check is advisory: a query that raises is one line, and `register` still returns its names."""
+    from databricks.labs.gbx import register
+
+    class _Unreadable(_UcSpark):
+        def sql(self, query):
+            self.stmts.append(query)
+            raise PermissionError("no USE SCHEMA")
+
+    fake = _Unreadable()
+    out_levels = register(
+        _ThroughUc(spark, fake),
+        only=["gbx_bng_cellarea"],
+        catalog="cat",
+        schema="sch",
+    )
+    assert list(out_levels) == ["gbx_bng_cellarea"]
+    assert any("information_schema" in q for q in fake.stmts)
+    out = capsys.readouterr().out
+    line = "Unity Catalog schema cat.sch was not checked (PermissionError)"
+    assert out.count(line) == 1
 
 
 def test_register_session_validates_the_catalog_and_schema_names(spark):

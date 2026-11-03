@@ -294,6 +294,32 @@ def _mode(fn: str, mode):
         raise _parameter(fn, exc) from exc
 
 
+def _coverage(fn: str, coverage) -> str:
+    """The coverage basis (``None`` is the default); an unknown one is a PARAMETER error, before the kernel runs."""
+    from databricks.labs.gbx.pygx import _dilate
+
+    if coverage is None:
+        return _dilate.DEFAULT_COVERAGE
+    if coverage not in _dilate.COVERAGE:
+        raise _parameter(
+            fn,
+            ValueError(
+                f"unknown coverage {coverage!r}; expected one of {_dilate.COVERAGE}"
+            ),
+        )
+    return coverage
+
+
+def _range(fn: str, name: str, value: int, lo: int, hi: int) -> int:
+    """An integer parameter inside the grid's own range; one outside it is a PARAMETER error."""
+    if not lo <= value <= hi:
+        raise _parameter(fn, ValueError(f"{name} must be in [{lo}, {hi}]; got {value}"))
+    return value
+
+
+H3_MAX_RES = 15
+
+
 def _finite(g) -> bool:
     import numpy as np
     import shapely
@@ -309,9 +335,22 @@ def _bng_cell(cellid):
 
 
 def _ewkb(g, srid: int) -> bytes:
+    """EWKB, always little-endian: the bytes the UC Scala handlers write, so a Volume with or without the JAR gives
+    the same BINARY."""
     import shapely
 
-    return shapely.to_wkb(shapely.set_srid(g, srid), include_srid=True)
+    return shapely.to_wkb(shapely.set_srid(g, srid), include_srid=True, byte_order=1)
+
+
+def _cell_polygon(cid):
+    """The BNG cell polygon with the JVM's ring (south-west corner first, counter-clockwise), the ring the Scala
+    handler writes; shapely's box starts at the south-east corner."""
+    import shapely
+
+    from databricks.labs.gbx.pygx import _bng
+
+    x0, y0, x1, y1 = _bng.cell_id_to_geometry(cid).bounds
+    return shapely.Polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)])
 
 
 def bng_pointascell(geom, resolution):
@@ -356,20 +395,20 @@ def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         return None
     res = _bng_res(fn, resolution)
     _mode(fn, mode)
+    coverage = _coverage(fn, coverage)
+    k = int(k)  # a UC INT
     g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
     if g is None or not _finite(g):
         return None  # a non-finite coordinate has no cell
     try:
         return sorted(
-            _bng.geometry_k_ring_str(
-                g, res, int(k), mode or "boundary-out", coverage or "coveras"
-            )
+            _bng.geometry_k_ring_str(g, res, k, mode or "boundary-out", coverage)
         )
     except (MemoryError, RecursionError, ImportError):
         raise
-    except ValueError as exc:  # a coverage the engine does not know
-        raise _parameter(fn, exc) from exc
-    except Exception:  # noqa: BLE001 - a geometry that cannot be dilated is NULL on UC
+    except (
+        Exception
+    ):  # noqa: BLE001 - the parameters are checked above: a geometry that cannot be dilated is NULL
         return None
 
 
@@ -393,20 +432,14 @@ def bng_cellarea(cellid):
 
 def bng_aswkb(cellid):
     """The cell polygon as EWKB with SRID 27700 (a UC BINARY result carries the integer SRID)."""
-    from databricks.labs.gbx.pygx import _bng
-
     cid = _bng_cell(cellid)
-    return None if cid is None else _ewkb(_bng.cell_id_to_geometry(cid), BNG_SRID)
+    return None if cid is None else _ewkb(_cell_polygon(cid), BNG_SRID)
 
 
 def bng_centroid(cellid):
     """The cell centre as EWKB with SRID 27700."""
-    from databricks.labs.gbx.pygx import _bng
-
     cid = _bng_cell(cellid)
-    return (
-        None if cid is None else _ewkb(_bng.cell_id_to_geometry(cid).centroid, BNG_SRID)
-    )
+    return None if cid is None else _ewkb(_cell_polygon(cid).centroid, BNG_SRID)
 
 
 def quadbin_pointascell(longitude, latitude, resolution):
@@ -416,13 +449,10 @@ def quadbin_pointascell(longitude, latitude, resolution):
     if longitude is None or latitude is None or resolution is None:
         return None
     lon, lat = float(longitude), float(latitude)
+    z = _range(fn, "zoom", _whole(fn, resolution), 0, _quadbin._MAX_RES)
     if not (math.isfinite(lon) and math.isfinite(lat)):
         return None  # a coordinate that is not finite has no cell
-    z = _whole(fn, resolution)
-    try:
-        return _quadbin.point_as_cell(lon, lat, z)
-    except ValueError as exc:  # a zoom outside the grid
-        raise _parameter(fn, exc) from exc
+    return _quadbin.point_as_cell(lon, lat, z)
 
 
 def quadbin_polyfill(geom, resolution):
@@ -431,17 +461,17 @@ def quadbin_polyfill(geom, resolution):
     fn = "gbx_quadbin_polyfill"
     if geom is None or resolution is None:
         return None
-    z = _whole(fn, resolution)
+    z = _range(fn, "zoom", _whole(fn, resolution), 0, _quadbin._MAX_POLYFILL_RES)
     g = _grid_geometry(fn, geom, WGS84_SRID, "quadbin")
     if g is None:
         return None
     try:
         return _quadbin.polyfill(g, z)
-    except ValueError as exc:  # a zoom outside the grid, or too many cells
-        raise _parameter(fn, exc) from exc
     except (MemoryError, RecursionError, ImportError):
         raise
-    except Exception:  # noqa: BLE001 - a geometry that cannot be filled is NULL on UC
+    except (
+        Exception
+    ):  # noqa: BLE001 - the zoom is checked above: a geometry that cannot be filled (too many cells) is NULL
         return None
 
 
@@ -452,21 +482,21 @@ def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if geom is None or resolution is None or k is None:
         return None
     _mode(fn, mode)
-    res = _whole(fn, resolution)
+    coverage = _coverage(fn, coverage)
+    res = _range(fn, "resolution", _whole(fn, resolution), 0, H3_MAX_RES)
+    k = int(k)  # a UC INT
     g = _grid_geometry(fn, geom, WGS84_SRID, "H3")
     if g is None or not _finite(g):
         return None
     try:
         return sorted(
-            _h3.geom_expand(
-                "ring", g, res, int(k), mode or "boundary-out", coverage or "coveras"
-            )
+            _h3.geom_expand("ring", g, res, k, mode or "boundary-out", coverage)
         )
     except (MemoryError, RecursionError, ImportError):
         raise
-    except ValueError as exc:  # a coverage or resolution the engine does not know
-        raise _parameter(fn, exc) from exc
-    except Exception:  # noqa: BLE001 - a geometry that cannot be dilated is NULL on UC
+    except (
+        Exception
+    ):  # noqa: BLE001 - the parameters are checked above: a geometry that cannot be dilated is NULL
         return None
 
 

@@ -43,6 +43,12 @@ def register(
     """
     if target not in ("session", "uc"):
         raise ValueError(f"target must be 'session' or 'uc' (got {target!r})")
+    # A catalog or schema name is checked first: a bad one fails before any session function is created.
+    from databricks.labs.gbx.uc import ddl
+
+    for kind, value in (("catalog", catalog), ("schema", schema)):
+        if value is not None:
+            ddl.quote_ident(kind, value)
     spark = spark if spark is not None else _active()
     messages.reminder(spark)
     man = manifest.load()
@@ -125,13 +131,12 @@ def _warn_uc_version(spark, catalog: str, schema: str) -> None:
     from databricks.labs.gbx import __version__
     from databricks.labs.gbx.uc import ddl
 
-    qc = ddl.quote_ident("catalog", catalog)
-    ddl.quote_ident("schema", schema)
+    qc = ddl.quote_ident("catalog", catalog)  # already checked by register
     wheel = __version__.split("+", 1)[0]
     try:
         rows = spark.sql(
             f"SELECT routine_name, comment FROM {qc}.information_schema.routines "
-            f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())} AND routine_name LIKE 'gbx_%'"
+            f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())} AND routine_name LIKE 'gbx!_%' ESCAPE '!'"
         ).collect()
     except (
         Exception
@@ -142,8 +147,14 @@ def _warn_uc_version(spark, catalog: str, schema: str) -> None:
             "the version of its GeoBrix functions is unknown",
         )
         return
+    # the product functions only: the private (gbx__) and probe (gbx_mvp_) names are not versioned with the wheel
+    product = [
+        r
+        for r in rows
+        if not r["routine_name"].lower().startswith(("gbx_mvp_", "gbx__"))
+    ]
     have = sorted(
-        {v for v in (ddl.version_of_comment(r["comment"]) for r in rows) if v}
+        {v for v in (ddl.version_of_comment(r["comment"]) for r in product) if v}
     )
     other = [v for v in have if v != wheel]
     if other:

@@ -108,6 +108,25 @@ SETS: Dict[str, SetSpec] = {
 }
 
 
+def needs(spec: SetSpec) -> Tuple[bool, bool]:
+    """``(jar, rust)``: whether the set's forms need the geobrix JAR (an L1/L2/JVM-DF form) and the Rust payload (the
+    L3 ``d`` form). The IO set's forms are Python only and need neither; a form the pass cannot run here is
+    ``na_by_design`` in ``levels`` (see ``levels._cannot_run_here``), so this only decides which preconditions to
+    demand up front."""
+    from databricks.labs.gbx.bench import levels
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    chosen = [
+        f
+        for f in lf.FORMS[spec.mvp]
+        if f.variant in spec.forms and (spec.fn is None or f.fn == spec.fn)
+    ]
+    return (
+        any(f.level in levels._JVM_LEVELS for f in chosen),
+        any(f.level == "L3" and f.variant == "d" for f in chosen),
+    )
+
+
 def _ok(t) -> bool:
     """A usable time: present, not NaN (failed or skipped) and above zero (a ratio of it would divide by zero)."""
     return t is not None and not math.isnan(t) and t > 0
@@ -564,14 +583,19 @@ def _launch_env_without_pyrx_readdir():
             os.environ[key] = held
 
 
-def _spark():
+def _spark(with_jar: bool = True):
+    """The local[8] session. ``with_jar`` adds the geobrix JAR (and fails without one); a set whose forms are Python
+    only (``needs``) starts without it."""
     from pyspark.sql import SparkSession
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    jars = _jar() if with_jar else None
     with _launch_env_without_pyrx_readdir():
+        builder = SparkSession.builder.master("local[8]").appName("gbx-local-timing")
+        if jars:
+            builder = builder.config("spark.jars", jars)
         spark = (
-            SparkSession.builder.master("local[8]").appName("gbx-local-timing").config("spark.jars", _jar())
-            .config("spark.driver.memory", "6g").config("spark.ui.enabled", "false").getOrCreate()
+            builder.config("spark.driver.memory", "6g").config("spark.ui.enabled", "false").getOrCreate()
         )  # fmt: skip
     spark.sparkContext.setLogLevel("ERROR")
     return spark
@@ -588,7 +612,7 @@ def measure_runs(
     from databricks.labs.gbx.bench import levels
     from databricks.labs.gbx.bench import levels_forms as lf
 
-    spark = spark or _spark()
+    spark = spark or _spark(needs(spec)[0])
     chosen = sorted(
         (
             f
@@ -692,7 +716,20 @@ def main(argv=None) -> int:
         help="measured runs per n; the table and the baseline use their median (default 1 for the plain pass, "
         f"{BASELINE_REPEATS} with --baseline or --baseline-write; --baseline-write needs at least {BASELINE_REPEATS})",
     )
+    ap.add_argument(
+        "--needs",
+        action="store_true",
+        help="print `jar=<0|1> rust=<0|1>`, whether the set's forms need the JAR and the Rust payload, and exit 0",
+    )
     a = ap.parse_args(argv)
+    if a.needs:
+        if a.set not in SETS:
+            ap.error(
+                f"set {a.set!r} is not implemented (have: {', '.join(sorted(SETS))})"
+            )
+        jar, rust = needs(SETS[a.set])
+        print(f"jar={int(jar)} rust={int(rust)}")
+        return 0
     if a.repeats is None:
         a.repeats = (
             BASELINE_REPEATS if (a.baseline is not None or a.baseline_write) else 1

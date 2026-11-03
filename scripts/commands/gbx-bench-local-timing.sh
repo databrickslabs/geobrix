@@ -25,14 +25,17 @@ show_help() {
     echo -e "  ${GREEN}--corpus-dir <path>${NC}  A folder named rows is read in place (no copy; it must hold the tiles). Use the big folder"
     echo -e "                      /Volumes/main/default/bench-corpus/rows once before a cluster round: the default pass times a"
     echo -e "                      96-file copy in /tmp, where a worker's folder listing never shows. Prints the readdir_mode its tiles get"
+    echo -e "  ${GREEN}--dry-run${NC}        Check the set's preconditions, print the command and stop (no lock, no pass)"
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file (filename -> test-logs/<name>)"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}           Show this help"
     echo ""
-    echo -e "${CYAN}Needs:${NC} a built JAR (python/geobrix/lib or target/) and the Rust payload"
-    echo -e "  (GBX_NATIVE_ROOT, default build/env-wheel/env6/payload, from gbx:build:wheel --env 6)."
-    echo -e "  Exit 2 with a PRECONDITION MISSING line when either is absent, or the corpus is short, or the baseline"
-    echo -e "  is missing; exit 1 when the pass flags a form; exit 3 when the pass itself fails."
+    echo -e "${CYAN}Needs:${NC} only what the set's forms use (the module's --needs says). The IO set (b, udf, d-py, floor) is"
+    echo -e "  Python only: it needs neither. The S set needs the Rust payload for its d form (GBX_NATIVE_ROOT, default"
+    echo -e "  build/env-wheel/env6/payload, from gbx:build:wheel --env 6). A form at level L1/L2/JVM-DF would need a built"
+    echo -e "  JAR (python/geobrix/lib or target/). Exit 2 with a PRECONDITION MISSING line when a needed artifact is absent,"
+    echo -e "  or the corpus is short, or the baseline is missing; exit 1 when the pass flags a form; exit 3 when the pass"
+    echo -e "  itself fails."
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh${NC}"
@@ -48,6 +51,7 @@ K=""
 LOG_PATH=""
 BASELINE_ARGS=""
 CORPUS_ARGS=""
+DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -75,6 +79,7 @@ while [[ $# -gt 0 ]]; do
             esac
             shift 2
             ;;
+        --dry-run) DRY_RUN=true; shift ;;
         --no-wait) GBX_LOCK_NO_WAIT=true; shift ;;
         --help|-h) show_help; exit 0 ;;
         *)
@@ -90,20 +95,41 @@ cd "$PROJECT_ROOT"
 show_banner "GeoBrix: Local Timing Pass ($SET)"
 check_docker
 setup_log_file "$LOG_PATH"
-gbx_acquire_test_lock
 
-# Preconditions next (a run that holds the lock): a missing artifact is not a code defect, so say so and stop (exit 2).
-if ! compgen -G "python/geobrix/lib/geobrix-*-jar-with-dependencies.jar" >/dev/null && ! compgen -G "target/geobrix-*-jar-with-dependencies.jar" >/dev/null; then
-    echo -e "${RED}PRECONDITION MISSING: no built JAR (python/geobrix/lib, target/); local timing not run. Build it: gbx:test:parity (or gbx:docker:exec \"mvn clean package -PskipScoverage -DskipTests\")${NC}"
-    exit 2
+# What the set's forms need (the module knows: an L1/L2 form the JAR, the L3 d form the Rust payload). Read-only, so
+# before the lock; an unknown set ends here with the module's own usage error.
+NEEDS=$(docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src "$GBX_DEV_CONTAINER" \
+    python3 -m databricks.labs.gbx.bench.local_timing --set "$SET" --needs) || { echo "$NEEDS" >&2; exit 2; }
+NEED_JAR=0; NEED_RUST=0
+[[ "$NEEDS" == *"jar=1"* ]] && NEED_JAR=1
+[[ "$NEEDS" == *"rust=1"* ]] && NEED_RUST=1
+echo -e "${CYAN}The $SET forms need: $NEEDS${NC}"
+
+# A missing artifact is not a code defect, so say so and stop (exit 2). Only an artifact the set's forms need is demanded.
+check_preconditions() {
+    if [ "$NEED_JAR" = 1 ] && ! compgen -G "python/geobrix/lib/geobrix-*-jar-with-dependencies.jar" >/dev/null && ! compgen -G "target/geobrix-*-jar-with-dependencies.jar" >/dev/null; then
+        echo -e "${RED}PRECONDITION MISSING: no built JAR (python/geobrix/lib, target/); local timing not run. Build it: gbx:test:parity (or gbx:docker:exec \"mvn clean package -PskipScoverage -DskipTests\")${NC}"
+        exit 2
+    fi
+    local root="${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload}"
+    [[ "$root" = /* ]] || root="$PROJECT_ROOT/$root"
+    if [ "$NEED_RUST" = 1 ] && ! ls "$root"/_native/*/rs/_gbxrs*.so >/dev/null 2>&1; then
+        echo -e "${RED}PRECONDITION MISSING: no Rust payload at ${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload} (needs _native/<arch>/rs/_gbxrs*.so); local timing not run. Build it: gbx:build:wheel --env 6${NC}"
+        exit 2
+    fi
+    # The payload also carries the GDAL the timed reads use: pass it on when it is there, even if no form needs its kernels.
+    if [ -n "${GBX_NATIVE_ROOT:-}" ] || [ -d "$root/_native" ]; then
+        export GBX_NATIVE_ROOT="${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload}"
+    fi
+}
+
+if [ "$DRY_RUN" = true ]; then
+    check_preconditions
+    echo -e "${GREEN}Dry run: the preconditions for the $SET set hold; no lock taken, no pass run.${NC}"
+    exit 0
 fi
-export GBX_NATIVE_ROOT="${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload}"
-payload="$GBX_NATIVE_ROOT"
-[[ "$payload" = /* ]] || payload="$PROJECT_ROOT/$payload"
-if ! ls "$payload"/_native/*/rs/_gbxrs*.so >/dev/null 2>&1; then
-    echo -e "${RED}PRECONDITION MISSING: no Rust payload at $GBX_NATIVE_ROOT (needs _native/<arch>/rs/_gbxrs*.so); local timing not run. Build it: gbx:build:wheel --env 6${NC}"
-    exit 2
-fi
+gbx_acquire_test_lock
+check_preconditions
 
 gbx_native_env_args
 

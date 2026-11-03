@@ -16,6 +16,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `--baseline-k <number>`: the multiple of the baseline that flags a form. Default `1.5`.
 - `--repeats <n>`: measured runs per n. The table, the flags and the baseline use their median. Default `1` for the plain pass and `3` with `--baseline` or `--baseline-write`. `--baseline-write` refuses fewer than 3 (exit 2).
 - `--corpus-dir <path>`: the corpus to time. A folder named `rows` is read in place: nothing is copied, and the pass exits 2 if it holds fewer than 96 tiles. Any other path is the parent of the 96-tile copy. Pass `/Volumes/main/default/bench-corpus/rows` (10,000 tiles) to time the folder shape of a cluster run. The pass then also prints the `readdir_mode` the first tiles get and how long the one cold listing took. The listing cache is cleared first; the operating system's own cache is not. A set whose forms write under the corpus (the `_synth` folder) is refused with exit 2, as the folder is shared.
+- `--dry-run`: check the set's preconditions, print what they are and stop. It takes no lock and runs no pass.
 - `--log <path>`: write the output to a log file (a filename goes to `test-logs/<name>`).
 - `--no-wait`: exit 75 at once if another test run holds the container lock.
 - `--help`: print the help.
@@ -25,7 +26,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 **What it does:**
 - Runs with `GBX_NATIVE_PTH=0`. The image's startup `.pth` otherwise puts its own rasterio ahead of the payload's, while pyrx's per-open sidecar mode reaches the payload's libgdal. The two differ, and the mode is silently off: the timed forms never get the `EMPTY_DIR` or `TRUE` a cluster gives them.
 - Starts Spark without the `GDAL_DISABLE_READDIR_ON_OPEN=TRUE` that importing pyrx sets in the driver. A JVM started with it hands it to the Python workers. There it reads as a value you set, which turns the per-file sidecar mode off. A value you export yourself is kept.
-- Checks for a built JAR and the Rust payload (`GBX_NATIVE_ROOT`, default `build/env-wheel/env6/payload`). A missing one prints `PRECONDITION MISSING` and exits 2; so does a corpus with fewer than 96 tiles, a missing baseline, or a baseline of another set.
+- Asks the module which artifacts the set's forms use (`--needs`), and checks only those. The IO set is Python only and needs neither the JAR nor the Rust payload. The S set needs the Rust payload for its `d` form (`GBX_NATIVE_ROOT`, default `build/env-wheel/env6/payload`). A set with an L1, L2 or JVM-DF form needs a built JAR. A missing one prints `PRECONDITION MISSING` and exits 2; so does a corpus with fewer than 96 tiles, a missing baseline, or a baseline of another set.
 - Copies 96 tiles from `/Volumes/main/default/bench-corpus/rows` to `/tmp/gbx-local-timing/IO/rows` in the container, once.
 - Runs forms `b`, `udf`, `d-py` and `floor` at n = 6, 24 and 96. A dropped warmup pass comes first, then `--repeats` measured runs of each n.
 - Prints the median seconds per n, the ratio to `floor`, the ratio to `udf` and t96/t24. With more than one run it also prints each form's cost per tile in every run and the max/min spread.

@@ -754,6 +754,49 @@ def test_the_spark_session_is_started_through_the_env_wrapper(monkeypatch):
     assert state["entered"] == 1 and state["created_in"] is True
 
 
+def test_the_io_set_needs_neither_the_jar_nor_the_rust_payload_and_the_bng_set_needs_the_rust_one():
+    assert lt.needs(lt.SETS["IO"]) == (False, False)
+    assert lt.needs(lt.SETS["S"]) == (False, True)  # the `d` form is the Rust kernel
+
+
+def test_needs_flag_prints_what_the_set_needs_and_runs_no_pass(capsys, monkeypatch):
+    monkeypatch.setattr(
+        lt, "measure_runs", lambda *a: pytest.fail("the pass must not run")
+    )
+    assert lt.main(["--set", "IO", "--needs"]) == 0
+    assert capsys.readouterr().out.strip() == "jar=0 rust=0"
+    assert lt.main(["--set", "S", "--needs"]) == 0
+    assert capsys.readouterr().out.strip() == "jar=0 rust=1"
+
+
+def test_the_spark_session_starts_without_a_jar_when_the_set_needs_none(monkeypatch):
+    import pyspark.sql
+
+    seen = {}
+
+    class _Builder:
+        def config(self, key, value):
+            seen[key] = value
+            return self
+
+        def __getattr__(self, name):
+            return lambda *a, **k: self
+
+        def getOrCreate(self):
+            return types.SimpleNamespace(
+                sparkContext=types.SimpleNamespace(setLogLevel=lambda lvl: None)
+            )
+
+    monkeypatch.setattr(
+        lt, "_jar", lambda: pytest.fail("a Python-only set must not look for the JAR")
+    )
+    monkeypatch.setattr(
+        pyspark.sql, "SparkSession", types.SimpleNamespace(builder=_Builder())
+    )
+    lt._spark(False)
+    assert "spark.jars" not in seen
+
+
 # ---- an in-place corpus is never written to
 
 

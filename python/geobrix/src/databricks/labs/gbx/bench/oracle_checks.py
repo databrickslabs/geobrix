@@ -180,3 +180,115 @@ def check_polygons(case, tiles, args) -> Optional[str]:
     )
     want = sorted((float(v), round(a, 6)) for v, a in case.expect)
     return None if got == want else f"{case.cid}: polygons {got}, want {want}"
+
+
+def _bng_square(e: float, n: float, size: int) -> str:
+    """The Ordnance Survey grid reference of the `size` m square holding (e, n): two letters for the 100 km square,
+    then the easting and northing digits within it (the published OS algorithm, not the grid code under test).
+    """
+    e100, n100 = int(e // 100000), int(n // 100000)
+    first = (19 - n100) - (19 - n100) % 5 + (e100 + 10) // 5
+    second = ((19 - n100) * 5) % 25 + e100 % 5
+    first += first > 7  # the alphabet has no I
+    second += second > 7
+    width = len(str(100000 // size)) - 1
+    return (
+        chr(first + 65)
+        + chr(second + 65)
+        + str(int(e % 100000 // size)).zfill(width)
+        + str(int(n % 100000 // size)).zfill(width)
+    )
+
+
+def _grid_keys(grid: str, res, cx, cy) -> list:
+    """The id of the cell each pixel centre is in: a number for h3, quadbin and custom, the OS reference for BNG."""
+    if grid != "bng":
+        return _pixel_cells(grid, res, cx, cy)
+    size = {1: 100000, 2: 10000, 3: 1000, 4: 100, 5: 10, 6: 1}[res]
+    return [_bng_square(x, y, size) for x, y in zip(cx, cy)]
+
+
+def _reduce(stat: str, vals):
+    """The statistic of the valid pixel values of one cell (population variance and standard deviation)."""
+    import numpy as np
+
+    return float(
+        {
+            "avg": np.mean,
+            "count": len,
+            "max": np.max,
+            "median": np.median,
+            "min": np.min,
+            "stddev": np.std,
+            "sum": np.sum,
+            "variance": np.var,
+        }[stat](vals)
+    )
+
+
+def check_grid_stats(case, rows, args) -> Optional[str]:
+    """`grid_stats`: `expect` is {"grid", "res" (an index), "stat"} and optionally "coverage" ("sparse": no cell
+    but those with a valid pixel), "assignment" ("covering": the counts of a band add up to its valid pixels,
+    each pixel shared out by area) and "past_2_53" (a cell id past 2**53 must come out exact, as an int).
+
+    The rows are (band, cellID, measure). Each valid pixel of a band (its own NoData and mask) is in the cell its
+    centre is in, and numpy reduces them per cell. With the default `complete` coverage a cell that holds no valid
+    pixel may also come out, with a NULL measure (0.0 for a count).
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.bench.oracles import _raster_of
+
+    e = case.expect
+    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
+        bands = [src.read(b, masked=True) for b in range(1, src.count + 1)]
+        ys, xs = np.mgrid[0 : src.height, 0 : src.width]
+        cx, cy = src.transform * (xs.ravel() + 0.5, ys.ravel() + 0.5)
+    keys = _grid_keys(e["grid"], e["res"], cx, cy)
+    got: dict = {}
+    for r in rows:
+        k = (int(_field(r, "band")), _field(r, "cellID"))
+        if k in got:
+            return f"{case.cid}: band {k[0]} cell {k[1]} twice"
+        got[k] = _field(r, "measure")
+    if any(isinstance(c, float) or isinstance(c, bool) for _, c in got):
+        return f"{case.cid}: a cell id is not an int or a string: {sorted(map(str, got))[:3]}"
+    if e.get("assignment") == "covering":
+        for b, band in enumerate(bands, start=1):
+            have = sum(m for (bb, _), m in got.items() if bb == b and m is not None)
+            if abs(have - band.count()) > 1e-6:
+                return f"{case.cid}: band {b} counts add up to {have}, want its {band.count()} valid pixels"
+        return None
+    want: dict = {}
+    for b, band in enumerate(bands, start=1):
+        cells: dict = {}
+        flat, mask = band.data.ravel(), np.ma.getmaskarray(band).ravel()
+        for k, v, m in zip(keys, flat, mask):
+            if not m:
+                cells.setdefault(k, []).append(float(v))
+        want.update({(b, k): _reduce(e["stat"], v) for k, v in cells.items()})
+    if e.get("past_2_53") and not any(
+        isinstance(c, int) and c > 2**53 for _, c in want
+    ):
+        return f"{case.cid}: the row expects no cell id past 2**53"
+    missing = sorted(set(want) - set(got), key=str)
+    if missing:
+        return f"{case.cid}: {len(missing)} cells missing, e.g. {missing[:3]}"
+    extra = sorted(set(got) - set(want), key=str)
+    if extra and e.get("coverage") == "sparse":
+        return f"{case.cid}: {len(extra)} cells without a valid pixel, e.g. {extra[:3]}"
+    empty = 0.0 if e["stat"] == "count" else None
+    bad_extra = [k for k in extra if got[k] != empty]
+    if bad_extra:
+        return f"{case.cid}: empty cells {bad_extra[:3]} have the measure {got[bad_extra[0]]}, want {empty}"
+    off = {
+        k: (got[k], v)
+        for k, v in want.items()
+        if got[k] is None or abs(got[k] - v) > 1e-9 * max(1.0, abs(v))
+    }
+    return (
+        None
+        if not off
+        else f"{case.cid}: (got, want) differ: {dict(list(off.items())[:3])}"
+    )

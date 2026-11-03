@@ -58,7 +58,8 @@ class Case:
     # "props": {..}}; every row's `mvt_bytes` decodes to that layer with one feature of those properties.
     # The raster generators and vectorizers (see bench/oracle_checks.py): tile_rows (the first band of each row, in
     # order), tessellation (the cells and the pixel sum of each), polygons (value and area per row), isobands and
-    # contours (the structs of the array a scalar returns).
+    # contours (the structs of the array a scalar returns). grid_stats: the (band, cellID, measure) rows of a
+    # raster-to-grid reducer, each statistic recomputed with numpy over the pixels of the cells (see oracle_checks).
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
     # Aggregates use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
@@ -4209,6 +4210,7 @@ _ROW_CHECKS = {
     "tile_rows": _oracle_check("check_tile_rows"),
     "tessellation": _oracle_check("check_tessellation"),
     "polygons": _oracle_check("check_polygons"),
+    "grid_stats": _oracle_check("check_grid_stats"),
 }
 
 

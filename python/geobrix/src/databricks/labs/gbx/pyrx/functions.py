@@ -5662,6 +5662,45 @@ _GRID_FLAT_DOUBLE_SCHEMA = _grid_flat_schema(DoubleType())
 _GRID_FLAT_STRING_SCHEMA = _grid_flat_schema(DoubleType(), StringType())
 
 
+def _rastertogrid_rows(
+    tile, resolution, grid, agg, coverage, assignment, cellid_is_str, grid_struct=None
+):
+    """The (band, cellID, measure) rows of one raster->grid call. A NULL tile, resolution or grid gives no rows. A
+    resolution the grid does not define, or a coverage or assignment word that names none, raises naming it, also
+    for a tile that is an error tile or cannot be read. Those tiles give no rows."""
+    if tile is None or resolution is None or (grid == "custom" and grid_struct is None):
+        return
+    if grid == "bng":  # a size such as '1km' is its index, as in the grid functions
+        from databricks.labs.gbx.pygx.functions import _norm_res
+
+        resolution = _norm_res(resolution)
+    coverage, assignment = coverage or "complete", assignment or "centroid"
+    gridagg.check_arguments(resolution, grid, agg, coverage, assignment, grid_struct)
+    if _tile_is_empty(tile):  # an error tile: nothing to aggregate
+        return
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with _open_or_none(tile) as ds:
+        if ds is None:  # bytes GDAL cannot read
+            return
+        bands_data = gridagg.raster_to_grid(
+            ds,
+            resolution,
+            grid,
+            agg,
+            coverage=coverage,
+            assignment=assignment,
+            grid_conf=grid_struct,
+        )
+    # Flat rows (band, cellID, measure), never a nested list of the whole raster. BNG cell ids are formatted
+    # strings already; the others are Python ints, so a cell id past 2**53 never meets a float.
+    for band_idx, cells in enumerate(bands_data, start=1):
+        for cell in cells:
+            cid = cell["cellID"] if cellid_is_str else int(cell["cellID"])
+            yield (band_idx, cid, cell["measure"])
+
+
 def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
     """Factory for raster->grid aggregation UDTFs.
 
@@ -5677,54 +5716,25 @@ def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
             def eval(
                 self, tile, grid_struct, resolution, coverage=None, assignment=None
             ):
-                if _tile_is_empty(tile):
-                    return
-                from databricks.labs.gbx.pyrx import _env
-
-                _env.configure_gdal_env()
-                with ot._open(tile) as ds:
-                    bands_data = gridagg.raster_to_grid(
-                        ds,
-                        resolution,
-                        "custom",
-                        agg,
-                        coverage=coverage or "complete",
-                        assignment=assignment or "centroid",
-                        grid_conf=grid_struct,
-                    )
-                for band_idx, cells in enumerate(bands_data, start=1):
-                    for cell in cells:
-                        cid = int(cell["cellID"])  # custom ids are Long ints
-                        m = cell["measure"]
-                        yield (band_idx, cid, m)
+                yield from _rastertogrid_rows(
+                    tile,
+                    resolution,
+                    grid,
+                    agg,
+                    coverage,
+                    assignment,
+                    cellid_is_str,
+                    grid_struct,
+                )
 
         return _CustomRasterToGridUDTF
 
     @udtf(returnType=flat_schema)
     class _RasterToGridUDTF:
         def eval(self, tile, resolution, coverage=None, assignment=None):
-            if _tile_is_empty(tile):
-                return
-            from databricks.labs.gbx.pyrx import _env
-
-            _env.configure_gdal_env()
-            with ot._open(tile) as ds:
-                bands_data = gridagg.raster_to_grid(
-                    ds,
-                    resolution,
-                    grid,
-                    agg,
-                    coverage=coverage or "complete",
-                    assignment=assignment or "centroid",
-                )
-            # Yield flat rows (band, cellID, measure) — never buffer full nested list.
-            # BNG cellIDs are already formatted strings from gridagg; H3/quadbin
-            # cellIDs are Long ints (int() coerce numpy scalars).
-            for band_idx, cells in enumerate(bands_data, start=1):
-                for cell in cells:
-                    cid = cell["cellID"] if cellid_is_str else int(cell["cellID"])
-                    m = cell["measure"]
-                    yield (band_idx, cid, m)
+            yield from _rastertogrid_rows(
+                tile, resolution, grid, agg, coverage, assignment, cellid_is_str
+            )
 
     return _RasterToGridUDTF
 

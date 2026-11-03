@@ -468,3 +468,43 @@ def test_the_raster_generator_and_vectorize_kinds_can_fail():
     )  # GDAL moves a line off a pixel value by 1e-5
     assert oracles.check(case, [line(1.5, 21.0)], ()) is not None
     assert oracles.check(case, [line(2.5, 20.0)], ()) is not None
+
+
+def test_the_grid_stats_kind_can_fail():
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import cg_id
+
+    # a 2 x 2 raster of 1 km pixels at (0, 2000) is four custom-grid cells of resolution 0, with one NoData pixel
+    raster = oracles._gtiff(
+        np.array([[[1.0, 2.0], [3.0, -9999.0]]]),
+        "EPSG:27700",
+        origin=(0.0, 2000.0),
+        px=1000.0,
+    )
+    cells = {cg_id(0, 1, 0): 1.0, cg_id(1, 1, 0): 2.0, cg_id(0, 0, 0): 3.0}
+
+    def judge(rows, **extra):
+        expect = {"grid": "custom", "res": 0, "stat": "sum", **extra}
+        case = oracles.Case("probe", "f", (), "grid_stats", expect)
+        return oracles._check_rows(case, rows, ({"raster": raster},))
+
+    def row(cell, measure, band=1):
+        return {"band": band, "cellID": cell, "measure": measure}
+
+    rows = [row(c, m) for c, m in cells.items()]
+    empty = row(cg_id(1, 0, 0), None)
+    assert (
+        judge(rows + [empty]) is None
+    )  # complete: the cell with only NoData may come out empty
+    assert judge(rows + [empty], coverage="sparse") is not None  # sparse: it may not
+    assert judge(rows[1:]) is not None  # a cell missing
+    assert judge([row(rows[0]["cellID"], 9.0)] + rows[1:]) is not None  # a value
+    assert (
+        judge(rows + [row(cg_id(1, 0, 0), 5.0)]) is not None
+    )  # an empty cell with a value
+    assert (
+        judge([row(float(c), m) for c, m in cells.items()]) is not None
+    )  # an id through a float
+    assert judge(rows, past_2_53=True) is not None  # no id there is past 2**53

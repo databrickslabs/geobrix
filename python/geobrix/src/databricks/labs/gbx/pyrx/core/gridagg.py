@@ -472,6 +472,32 @@ def _warp_to_4326_if_needed(ds, crs):
         )
 
 
+def check_arguments(
+    resolution, grid: str, agg: str, coverage: str, assignment: str, grid_conf=None
+) -> None:
+    """Raise, naming the value, for an argument ``raster_to_grid`` cannot take. A function calls this before it
+    opens the tile, so a parameter error never hides behind a tile that is empty or cannot be read.
+    """
+    _validate_resolution(resolution, grid)
+    if agg not in _AGGS:
+        raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
+    if coverage not in _COVERAGES:
+        raise ValueError(f"coverage must be one of {_COVERAGES}; got {coverage!r}")
+    if assignment not in _ASSIGNMENTS:
+        raise ValueError(
+            f"assignment must be one of {_ASSIGNMENTS}; got {assignment!r}"
+        )
+    if grid == "custom":
+        from databricks.labs.gbx.pygx import _custom
+
+        max_res = _custom.conf_from_row(grid_conf).max_resolution
+        if resolution > max_res:
+            raise ValueError(
+                f"raster->custom: resolution ({resolution}) exceeds max "
+                f"{max_res} for this grid conf"
+            )
+
+
 def raster_to_grid(
     ds,
     resolution: int,
@@ -523,15 +549,7 @@ def raster_to_grid(
         H3/quadbin/custom and a formatted BNG ``str`` (e.g. ``"TQ3080"``) for
         BNG.
     """
-    _validate_resolution(resolution, grid)
-    if agg not in _AGGS:
-        raise ValueError(f"unknown agg {agg!r}; expected one of {_AGGS}")
-    if coverage not in _COVERAGES:
-        raise ValueError(f"coverage must be one of {_COVERAGES}; got {coverage!r}")
-    if assignment not in _ASSIGNMENTS:
-        raise ValueError(
-            f"assignment must be one of {_ASSIGNMENTS}; got {assignment!r}"
-        )
+    check_arguments(resolution, grid, agg, coverage, assignment, grid_conf)
 
     if grid == "custom":
         return _raster_to_custom(

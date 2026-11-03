@@ -249,6 +249,8 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         val lines = output.linesIterator.toSeq
         assert(lines.contains("L2 good: TQ3080"), output)
         assert(lines.contains("UC good: TQ38SW"), output)
+        // the cell handlers answer on the slim classpath too (JTS and the grid, no Catalyst): area, ring size, EWKB sizes
+        assert(lines.contains("UC cells: 1.0,9,97,25"), output)
         for (bad <- Seq("L2 bad: ", "UC bad: ")) {
             assert(lines.exists(l => l.startsWith(bad + "RAISES IllegalStateException") && l.contains("found 1001")), output)
         }
@@ -267,6 +269,30 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             assert(e.getMessage.contains(bad), s"resolution $bad: ${e.getMessage}")
         }
         assert(BngUc.gdalVersion().startsWith("ok:"))
+    }
+
+    test("BngUc cell handlers match the session functions and give NULL for data errors") {
+        assert(BngUc.cellArea("TQ3080") == 1.0 && BngUc.cellArea("TQ") == 10000.0 && BngUc.cellArea("TQ38SW") == 25.0)
+        assert(BngUc.cellArea("XX9999") == null && BngUc.cellArea(null) == null)
+        assert(BngUc.kRing("TQ3080", 0) == Seq("TQ3080"))
+        val ring = BngUc.kRing("TQ3080", 1)
+        assert(ring.size == 9 && ring.toSet.contains("TQ2979") && ring.toSet.contains("TQ3181"))
+        assert(BngUc.kRing("XX9999", 1) == null && BngUc.kRing(null, 1) == null && BngUc.kRing("TQ3080", null) == null)
+        // EWKB: byte order, type flagged with the SRID bit (0x20000000), then the SRID 27700
+        def srid(b: Array[Byte]): Int = {
+            val bb = java.nio.ByteBuffer.wrap(b).order(if (b(0) == 1) java.nio.ByteOrder.LITTLE_ENDIAN else java.nio.ByteOrder.BIG_ENDIAN)
+            assert((bb.getInt(1) & 0x20000000) != 0, "EWKB carries an SRID")
+            bb.getInt(5)
+        }
+        val cell = BngUc.asWkb("TQ3080")
+        assert(srid(cell) == 27700)
+        val poly = new org.locationtech.jts.io.WKBReader().read(cell)
+        assert(poly.getEnvelopeInternal.toString == "Env[530000.0 : 531000.0, 180000.0 : 181000.0]")
+        val centre = BngUc.centroid("TQ3080")
+        assert(srid(centre) == 27700)
+        val pt = new org.locationtech.jts.io.WKBReader().read(centre)
+        assert(pt.getCoordinate.x == 530500.0 && pt.getCoordinate.y == 180500.0)
+        assert(BngUc.asWkb("XX9999") == null && BngUc.centroid(null) == null)
     }
 
     test("BngTessellateJob tessellates a polygon column in one mapPartitions") {

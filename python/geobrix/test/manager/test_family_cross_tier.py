@@ -147,3 +147,81 @@ def test_l1_arity_contract_for_every_companion(jvm_spark):
                 fn.levels["L1"]["companion"], fn.min_args, fn.max_args
             )
             assert str(got) == want, fn.sql_name
+
+
+# --- Unity Catalog: the handler behind every UC row of the slice tables, on Python values (no Spark) ---------------
+# The warehouse statements of the same rows are run by bench.probes.run_uc_slice; a function that has a Scala handler
+# is answered by the same rows in KernelFacadesSmokeTest (the JAR, in the container).
+_UC_TABLES = ("GRID_SCALAR", "GRID_ARRAY", "GRID_GENERATOR", "VECTOR_SCALAR")
+
+
+def _uc_fns(table):
+    man = manifest.load()
+    return sorted(
+        {
+            c.fn
+            for c in oracles.TABLES[table]
+            if "uc" in c.surfaces and "L4" in man.functions[c.fn].levels
+        }
+    )
+
+
+UC_ROWS = [pytest.param(t, fn, id=f"{fn}-L4") for t in _UC_TABLES for fn in _uc_fns(t)]
+
+
+@pytest.mark.parametrize("table,sql_name", UC_ROWS)
+def test_family_oracle_uc_handlers(tmp_path, table, sql_name):
+    cases = [c for c in oracles.TABLES[table] if c.fn == sql_name]
+    fn = manifest.load().functions[sql_name]
+    run = (
+        oracles.run_handlers_rows
+        if "tvf_over" in fn.levels["L4"]
+        else oracles.run_handlers
+    )
+    ran = run(cases, tmpdir=str(tmp_path))
+    assert ran and sum("uc" in c.surfaces for c in cases) == len(ran)
+    assert [m for _, m in ran if m] == []
+
+
+def test_every_uc_function_of_the_slice_has_its_uc_rows():
+    """Each L4 function of the grid and vector tables has UC rows: a value, a NULL, and (for a geometry argument) a
+    refusal or SRID row; the refusal of a BINARY for a GEOMETRY and the SRID of the BNG cell geometry are named rows.
+    """
+    man = manifest.load()
+    for t in _UC_TABLES:
+        for name in _uc_fns(t):
+            rows = [c for c in oracles.TABLES[t] if c.fn == name and "uc" in c.surfaces]
+            kinds = {c.kind for c in rows}
+            assert "null" in kinds or any(c.kind in ("no_rows",) for c in rows), name
+            if any(
+                p.uc == "GEOMETRY" for p in man.functions[name].params
+            ) and name.split("_")[1] in ("bng", "h3", "quadbin"):
+                assert "uc_refused" in kinds, name
+    ids = {c.cid for c in oracles.TABLES["GRID_SCALAR"] if "uc" in c.surfaces}
+    assert {"uc_wkb_into_geometry_refused", "uc_bng_aswkb_srid"} <= ids
+
+
+SLICE = {
+    "gbx_bng_pointascell", "gbx_bng_polyfill", "gbx_bng_aswkb", "gbx_bng_centroid", "gbx_bng_kring",
+    "gbx_bng_geomkring", "gbx_bng_cellarea", "gbx_quadbin_pointascell", "gbx_quadbin_polyfill",
+    "gbx_h3_geomkring", "gbx_st_explainvalidity", "gbx_st_legacyaswkb", "gbx_st_wrapx",
+}  # fmt: skip
+TVFS = {"gbx_bng_kringexplode", "gbx_bng_geomkringexplode", "gbx_h3_geomkringexplode"}
+
+
+def test_the_uc_slice_probe_runs_every_slice_function_and_its_table_functions():
+    """bench.probes.run_uc_slice (run on the warehouse and Serverless env 6 in Task 28) takes these rows."""
+    from databricks.labs.gbx.bench import probes
+
+    cases = probes.uc_slice_cases()
+    assert SLICE | TVFS <= {c.fn for c in cases}
+    # statements it would send: every scalar row once, with 3-level names
+    sql = oracles.uc_sql([c for c in cases if c.fn in SLICE], "cat", "sch", "/tmp")
+    assert len(sql) == len([c for c in cases if c.fn in SLICE])
+    assert all("`cat`.`sch`.gbx_" in stmt for _, stmt in sql)
+    refused = dict(sql)["uc_wkb_into_geometry_refused"]
+    assert (
+        "X'" in refused and "st_geomfromwkt" not in refused
+    )  # a BINARY goes in as BINARY
+    legacy = dict(sql)["leg_polygon_hole"]
+    assert "named_struct('typeId', 5, 'srid', 0" in legacy and "st_asewkb(" in legacy

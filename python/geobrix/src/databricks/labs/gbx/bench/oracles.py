@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
-from databricks.labs.gbx.uc.ddl import UC_GEOMETRY
+from databricks.labs.gbx.uc.ddl import UC_GEOMETRY, sql_type
 
 MERC_PROJ = (
     "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 "
@@ -87,6 +87,30 @@ class Case:
     variants: Tuple[Tuple[Any, ...], ...] = ()
     # Keywords the Python API leg adds to the call, as (name, value) pairs: a Python-only keyword has no SQL argument.
     py_kw: Tuple[Tuple[str, Any], ...] = ()
+
+
+def uc_view(
+    cases: Tuple["Case", ...],
+    srids: Optional[Dict[str, int]] = None,
+    session_only: Sequence[str] = (),
+) -> Tuple["Case", ...]:
+    """A family table as the UC surface reads it: each row of a function in `srids` builds its GEOMETRY arguments with
+    that integer SRID (a BNG function takes 27700, a lon/lat one 4326), and the rows named in `session_only` stay off
+    UC (an argument UC cannot be handed: WKB bytes for a GEOMETRY, text that is no geometry, a non-finite coordinate
+    spelled in WKB). A name in `session_only` that is no row raises, so a renamed row cannot drop out unseen.
+    """
+    srids = srids or {}
+    missing = set(session_only) - {c.cid for c in cases}
+    if missing:
+        raise ValueError(f"uc_view: no such row(s) {sorted(missing)}")
+    out = []
+    for c in cases:
+        if c.cid in session_only:
+            c = replace(c, surfaces=tuple(s for s in c.surfaces if s != "uc"))
+        elif c.fn in srids and "uc" in c.surfaces:
+            c = replace(c, geom_srid=srids[c.fn])
+        out.append(c)
+    return tuple(out)
 
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
@@ -4066,7 +4090,11 @@ def run_session(
         cols = ", ".join(
             (
                 f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
-                if surface == "uc" and params[i].uc == "GEOMETRY"
+                if surface == "uc"
+                and params[i].uc == "GEOMETRY"
+                and not isinstance(
+                    args[i], (bytes, bytearray)
+                )  # BINARY goes in as it is: the engine refuses it
                 else f"c{i}"
             )
             for i in range(len(args))
@@ -4415,7 +4443,11 @@ def run_rows(
         cols = ", ".join(
             (
                 f"CAST(st_geomfromwkt(c{i}, {case.geom_srid}) AS {UC_GEOMETRY})"
-                if surface == "uc" and params[i].uc == "GEOMETRY"
+                if surface == "uc"
+                and params[i].uc == "GEOMETRY"
+                and not isinstance(
+                    args[i], (bytes, bytearray)
+                )  # BINARY goes in as it is: the engine refuses it
                 else f"c{i}"
             )
             for i in range(len(args))
@@ -4782,8 +4814,8 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
     out = []
     for case in cases:
         fn = man.functions[case.fn]
-        if "uc" not in case.surfaces or "L4" not in fn.levels:
-            continue
+        if "uc" not in case.surfaces or "handler" not in fn.levels.get("L4", {}):
+            continue  # not on UC, or a table function (run_handlers_rows runs the function behind it)
         handler = manifest.resolve_ref(fn.levels["L4"]["handler"])
         try:
             msgs = []
@@ -4793,10 +4825,12 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
                     None if p.default is None else p.default.strip("'")
                     for p in fn.params[len(args) :]
                 ]
-                args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
+                uc_args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
                 with _uc_geometry_type():
-                    got = _from_uc_geometry(handler(*args))
-                msgs.append(check(case, got, args))
+                    got = _from_uc_geometry(handler(*uc_args))
+                msgs.append(
+                    check(case, got, args)
+                )  # a bare-WKT expectation reads the session-shaped argument
             out.append((case, next(filter(None, msgs), None)))
         except (
             Exception
@@ -4829,7 +4863,12 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
             for a, p in zip(args, inner.params)
         ]
         try:
-            out.append((case, _check_rows(case, list(handler(*args) or []), args)))
+            elems = list(handler(*args) or [])
+            if (
+                len(fn.columns) == 1
+            ):  # an array of single values: the TVF's one column holds each
+                elems = [{fn.columns[0][0]: e} for e in elems]
+            out.append((case, _check_rows(case, elems, args)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
@@ -4837,9 +4876,25 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
     return out
 
 
+def _legacy_literal(value: dict, param) -> str:
+    """The legacy Mosaic geometry struct as a SQL literal cast to the parameter's declared type."""
+
+    def nest(v) -> str:
+        if isinstance(v, (list, tuple)):
+            return "array(" + ", ".join(nest(x) for x in v) + ")"
+        return repr(float(v)) + "D"
+
+    return (
+        f"CAST(named_struct('typeId', {int(value['typeId'])}, 'srid', {int(value['srid'])}, "
+        f"'boundaries', {nest(value['boundaries'])}, 'holes', {nest(value['holes'])}) AS {sql_type(param.uc)})"
+    )
+
+
 def _sql_literal(value, param, case: Case) -> str:
     if value is None:
         return "NULL"
+    if isinstance(value, dict) and "typeId" in value:
+        return _legacy_literal(value, param)
     if isinstance(value, dict):
         raster = (
             "NULL" if value["raster"] is None else "X'" + value["raster"].hex() + "'"
@@ -4853,8 +4908,12 @@ def _sql_literal(value, param, case: Case) -> str:
             "'crs', CAST(NULL AS STRING), 'metadata', CAST(map() AS map<string,string>))"
         )
     if param.uc == "GEOMETRY":
+        if isinstance(value, (bytes, bytearray)):
+            # a BINARY literal for a GEOMETRY parameter: the engine refuses it (the uc_wkb_into_geometry_refused row)
+            return "X'" + bytes(value).hex() + "'"
         # integer SRID only (product CRS facts); a UC GEOMETRY(ANY) parameter takes it through a CAST
         return f"CAST(st_geomfromwkt('{value}', {case.geom_srid}) AS {UC_GEOMETRY})"
+
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"
     if isinstance(value, float) and math.isnan(value):

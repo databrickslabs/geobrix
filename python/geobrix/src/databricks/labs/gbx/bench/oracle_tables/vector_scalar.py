@@ -9,7 +9,7 @@ and the UTM zone 33 centre (the central meridian 15 E maps to the false easting 
 the output carries the SRID of the first argument unless the row fixes one.
 """
 
-from databricks.labs.gbx.bench.oracles import Build, Case, builder
+from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
 
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
 BOWTIE = "POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))"
@@ -554,7 +554,6 @@ VECTOR_SCALAR = (
         ),
         "geom_srid",
         ("POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 4 2, 4 4, 2 4, 2 2))", 0),
-        SESSION,
     ),
     Case(
         "leg_point_z",
@@ -562,7 +561,6 @@ VECTOR_SCALAR = (
         ({"typeId": 1, "srid": 0, "boundaries": [[[1.0, 2.0, 3.0]]], "holes": []},),
         "geom_srid",
         ("POINT Z(1 2 3)", 0),
-        SESSION,
     ),
     Case(
         "leg_multipoint",
@@ -577,7 +575,6 @@ VECTOR_SCALAR = (
         ),
         "geom_srid",
         ("MULTIPOINT((30 10), (40 20))", 0),
-        SESSION,
     ),
     Case(
         "leg_multipolygon_holes",
@@ -608,7 +605,6 @@ VECTOR_SCALAR = (
             "((20 20, 25 20, 25 25, 20 25, 20 20)))",
             0,
         ),
-        SESSION,
     ),
     Case(
         "leg_collection_refused",
@@ -616,7 +612,60 @@ VECTOR_SCALAR = (
         ({"typeId": 8, "srid": 0, "boundaries": [[[1.0, 2.0]]], "holes": []},),
         "raises",
         "GeometryCollection",
-        SESSION,
     ),
-    Case("leg_null", LEG, (None,), "null", surfaces=SESSION),
+    Case("leg_null", LEG, (None,), "null"),
+)
+
+# --- Unity Catalog rows: a GEOMETRY result carries an integer SRID, and the SRID of the argument is kept.
+VECTOR_SCALAR += (
+    Case(
+        "uc_wrapx_east",
+        WRAPX,
+        (SHAPES["point_east"], 180.0, -360.0),
+        "geom_srid",
+        ("POINT(-170 10)", 4326),
+        ("uc",),
+    ),
+    Case(
+        "uc_wrapx_west",
+        WRAPX,
+        ("POINT(-190 10)", -180.0, 360.0),
+        "geom_srid",
+        ("POINT(170 10)", 4326),
+        ("uc",),
+    ),
+    Case(
+        "uc_wrapx_at_origin_west",
+        WRAPX,
+        ("POINT(180 10)", 180.0, -360.0),
+        "geom_srid",
+        ("POINT(-180 10)", 4326),
+        ("uc",),
+    ),
+    Case(
+        "uc_wrapx_at_origin_east",
+        WRAPX,
+        ("POINT(0 10)", 0.0, 360.0),
+        "geom_srid",
+        ("POINT(360 10)", 4326),
+        ("uc",),
+    ),
+    Case(
+        "uc_wrapx_keeps_srid",
+        WRAPX,
+        ("POINT(190 10)", 180.0, -360.0),
+        "geom_srid",
+        ("POINT(-170 10)", 3857),
+        ("uc",),
+        geom_srid=3857,
+    ),
+)
+VECTOR_SCALAR = uc_view(
+    VECTOR_SCALAR,
+    session_only=(
+        "wrapx_east",
+        "wrapx_west",
+        "wrapx_at_origin_west",
+        "wrapx_at_origin_east",
+    ),
 )

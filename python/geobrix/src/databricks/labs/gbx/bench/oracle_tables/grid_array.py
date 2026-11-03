@@ -15,7 +15,7 @@ from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
     G,
     cg_id,
 )
-from databricks.labs.gbx.bench.oracles import Case
+from databricks.labs.gbx.bench.oracles import Case, uc_view
 
 
 def _tq(e_km: int, n_km: int) -> str:
@@ -279,4 +279,59 @@ GRID_ARRAY += (
     Case("h3_res_3_5_raises", HGKR, (QB_PT, 3.5, 1), "raises", "3.5"),
     Case("h3_res_digit_string", HGKR, (QB_PT, "8", 1), "cell_set", H3_RING1),
     Case("h3_inf_point", HGKR, (INF_POINT, 8, 1), "null"),
+)
+
+# --- Unity Catalog rows: a grid is defined in one SRID, and a geometry in another is refused with a Fix:.
+
+GRID_ARRAY = uc_view(
+    GRID_ARRAY,
+    {"gbx_bng_polyfill": 27700, "gbx_bng_geomkring": 27700},
+    session_only=(
+        "polyfill_bad_geom",
+        "qb_polyfill_bad_geom",
+        "bng_inf_point_array",
+        "h3_inf_point",
+    ),
+)
+
+GRID_ARRAY += (
+    Case(
+        "uc_polyfill_wrong_srid",
+        "gbx_bng_polyfill",
+        (SQ2, 3),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_geomkring_wrong_srid",
+        "gbx_bng_geomkring",
+        (POINT, 3, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_qb_polyfill_wrong_srid",
+        "gbx_quadbin_polyfill",
+        (
+            "POLYGON((-122.6 37.8, -122.5 37.8, -122.5 37.9, -122.6 37.9, -122.6 37.8))",
+            10,
+        ),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_h3_geomkring_wrong_srid",
+        HGKR,
+        (QB_PT, 8, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
 )

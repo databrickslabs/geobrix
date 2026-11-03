@@ -60,6 +60,8 @@ object SlimClasspathProbe {
           "L2 bad: " + attempt(udf.call(530000.0, 180000.0, Integer.valueOf(1001))),
           "UC good: " + attempt(BngUc.eastNorthAsBng(530000.0, 180000.0, "-3")),
           "UC bad: " + attempt(BngUc.eastNorthAsBng(530000.0, 180000.0, "1001")),
+          "UC cells: " + attempt(Seq(BngUc.cellArea("TQ3080"), BngUc.kRing("TQ3080", 1).size, BngUc.asWkb("TQ3080").length,
+            BngUc.centroid("TQ3080").length).mkString(",")),
           // The raster facades run end to end, GDAL natives included (the image has them): a canvas burned from cells, the
           // pixels read back. A Catalyst or unsafe class anywhere on their path would raise here.
           "L2 rasterize: " + attempt(pixels(burn(Seq(

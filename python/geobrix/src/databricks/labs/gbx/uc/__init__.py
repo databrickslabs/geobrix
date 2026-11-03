@@ -76,6 +76,28 @@ def _single_wheel(volume_dir: str) -> str:
     )
 
 
+def _single_jar(volume_dir: str) -> Optional[str]:
+    """The geobrix JAR in ``volume_dir`` (the UC Scala handlers load it), or None when the folder holds none.
+
+    More than one is refused: a function created from the wrong JAR would answer with the wrong code.
+    """
+    from databricks.labs.gbx.ds._listing import list_files
+
+    found = list_files(
+        volume_dir,
+        filter_regex=r".*/geobrix[^/]*\.jar$",
+        recursive=False,
+        raise_on_empty=False,
+    )
+    if len(found) > 1:
+        raise RuntimeError(
+            f"{volume_dir} holds {len(found)} geobrix JARs ({', '.join(os.path.basename(p) for p in found)}); "
+            "keep exactly one JAR (the one built with this wheel) in the folder, or none to create the "
+            "functions as Python handlers"
+        )
+    return found[0] if found else None
+
+
 def _l4_names(only: Optional[Iterable[str]]) -> List[str]:
     man = manifest.load()
     uc_names = [n for n, f in man.functions.items() if "L4" in f.levels]
@@ -106,10 +128,15 @@ def install(
     spark=None,
     only: Optional[Iterable[str]] = None,
     dry_run: bool = False,
+    jar: Optional[str] = None,
 ) -> List[str]:
     """Create the UC functions in ``catalog.schema`` from the wheel in ``volume_dir``; return the DDL.
 
-    ``dry_run`` only returns the DDL (the wheel name is the env 6 wheel's, not looked up).
+    The JVM-only BNG functions become ``LANGUAGE SCALA`` functions on the geobrix JAR when ``volume_dir`` holds one
+    (``jar`` names a Volume JAR instead); without a JAR they are the Python handlers, and answer the same.
+
+    ``dry_run`` only returns the DDL (the wheel name is the env 6 wheel's, not looked up, and no folder is read for a
+    JAR: pass ``jar`` to see the Scala form).
     """
     # Everything that reaches a statement is checked before any statement is built or any folder read.
     ddl.quote_ident("catalog", catalog)
@@ -124,6 +151,10 @@ def install(
         if dry_run
         else _single_wheel(volume_dir)
     )
+    if jar is None and not dry_run:
+        jar = _single_jar(volume_dir)
+    elif jar is not None:
+        ddl.check_volume_dir(jar)
     stmts: List[str] = []
     for n in names:
         stmts += ddl.function_ddl(
@@ -133,6 +164,7 @@ def install(
             "file://" + wheel,
             man.uc_dependencies,
             _public_version(),
+            jar_uri=jar,
         )
     if not dry_run:
         if spark is None:
@@ -162,8 +194,9 @@ def verify(
         f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())}"
     ).collect()
     have = {r["routine_name"].lower(): r["comment"] for r in rows}
-    want = f"geobrix {_public_version()}"
-    bad = [n for n in names if have.get(n.lower()) != want]
+    # a function's COMMENT is `geobrix <version>: <summary>`: the text before the first colon is the version
+    want = _public_version()
+    bad = [n for n in names if ddl.version_of_comment(have.get(n.lower())) != want]
     if bad:
         raise RuntimeError(
             f"UC schema {catalog}.{schema} does not match wheel {__version__} for {bad} "

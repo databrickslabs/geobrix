@@ -52,8 +52,11 @@ LEVEL_KEYS = {
             "arrow",
         }
     ),
-    "L4": frozenset({"handler", "deps", "tvf_over", "engine"}),
+    "L4": frozenset({"handler", "deps", "tvf_over", "engine", "scala", "jar"}),
 }
+# `scala` (a UC Scala handler, `<class>.<method>` in the JAR) and `jar` go together: `jar: "volume"` says the JAR is read from
+# the Volume folder `gbx.uc.install` is given. The row keeps its Python `handler`, which `install` creates when that
+# folder holds no JAR.
 # `connect_class` is the Java handler a standard access mode (Spark Connect) session registers instead of `class`: its
 # sandbox loads only Java classes of a JAR added to the session, with concrete parameter types. A row without one has
 # no L2 there. `arg_types` (one SQL type per parameter) are the types the Java classes declare: the manager puts the

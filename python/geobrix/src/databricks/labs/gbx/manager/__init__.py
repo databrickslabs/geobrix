@@ -107,10 +107,51 @@ def register(
                 )
             )
     messages.say_grouped(spark, lines)
+    if catalog is not None and schema is not None:
+        _warn_uc_version(spark, catalog, schema)
     from databricks.labs.gbx import _api
 
     _api.mark_registered(spark, out.keys(), out)
     return out
+
+
+def _warn_uc_version(spark, catalog: str, schema: str) -> None:
+    """Say once when the GeoBrix functions of a Unity Catalog schema were created by another wheel version.
+
+    The session functions just registered shadow the schema's, so a user who reads unqualified ``gbx_`` names gets the
+    session ones: the line tells them the schema is behind (or ahead of) this wheel. A schema that cannot be read is
+    one line too, never a failed ``register``.
+    """
+    from databricks.labs.gbx import __version__
+    from databricks.labs.gbx.uc import ddl
+
+    qc = ddl.quote_ident("catalog", catalog)
+    ddl.quote_ident("schema", schema)
+    wheel = __version__.split("+", 1)[0]
+    try:
+        rows = spark.sql(
+            f"SELECT routine_name, comment FROM {qc}.information_schema.routines "
+            f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())} AND routine_name LIKE 'gbx_%'"
+        ).collect()
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - an advisory check must not fail the registration it follows
+        messages.say(
+            spark,
+            f"geobrix: Unity Catalog schema {catalog}.{schema} was not checked ({type(exc).__name__}); "
+            "the version of its GeoBrix functions is unknown",
+        )
+        return
+    have = sorted(
+        {v for v in (ddl.version_of_comment(r["comment"]) for r in rows) if v}
+    )
+    other = [v for v in have if v != wheel]
+    if other:
+        messages.say(
+            spark,
+            f"geobrix: Unity Catalog schema {catalog}.{schema} has geobrix {', '.join(other)}, this wheel is {wheel}; "
+            "unqualified gbx_ names resolve to the session functions (re-run gbx.uc.install to update UC)",
+        )
 
 
 def manifest_names(prefix: str = "gbx_") -> List[str]:

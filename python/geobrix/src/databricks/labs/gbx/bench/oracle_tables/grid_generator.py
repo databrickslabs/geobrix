@@ -22,7 +22,7 @@ from databricks.labs.gbx.bench.oracle_tables.grid_array import (
     _tq,
 )
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import QB_PT, G
-from databricks.labs.gbx.bench.oracles import Big, Case
+from databricks.labs.gbx.bench.oracles import Big, Case, uc_view
 
 BKR, BKL = "gbx_bng_kringexplode", "gbx_bng_kloopexplode"
 BGKR, BGKL = "gbx_bng_geomkringexplode", "gbx_bng_geomkloopexplode"
@@ -191,5 +191,37 @@ GRID_GENERATOR = (
     Case("h3_geomkloopx_null_k", HGKL, (QB_PT, 8, None), "no_rows"),
     Case(
         "h3_geomkloopx_bad_mode", HGKL, (QB_PT, 8, 1, "sideways"), "raises", "sideways"
+    ),
+)
+
+GRID_GENERATOR = uc_view(
+    GRID_GENERATOR,
+    {BGKR: 27700},
+    session_only=(
+        "geomkringx_inf_point",
+        "geomkringx_bad_geom",
+        "h3_geomkringx_inf_point",
+    ),
+)
+
+# --- Unity Catalog rows: a grid is defined in one SRID, and a geometry in another is refused with a Fix:.
+GRID_GENERATOR += (
+    Case(
+        "uc_geomkringx_wrong_srid",
+        BGKR,
+        (POINT, 3, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_h3_geomkringx_wrong_srid",
+        HGKR,
+        (QB_PT, 8, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
     ),
 )

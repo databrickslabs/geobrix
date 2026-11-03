@@ -58,6 +58,18 @@ def check_volume_dir(path: str) -> str:
     return path
 
 
+def comment_text(fn, version: str) -> str:
+    """The COMMENT of a UC function: ``geobrix <version>: <summary>``. ``uc.verify`` and ``register`` read the text
+    before the first colon as the version of the wheel that created it."""
+    return quote_str(f"geobrix {version}: {fn.doc.summary}".rstrip(": "))
+
+
+def version_of_comment(comment: Optional[str]) -> Optional[str]:
+    """The version a COMMENT written by :func:`comment_text` names (None for a comment that is not geobrix's)."""
+    head = (comment or "").split(":", 1)[0].strip()
+    return head[len("geobrix ") :] if head.startswith("geobrix ") else None
+
+
 def function_ddl(
     fn,
     catalog: str,
@@ -67,6 +79,7 @@ def function_ddl(
     version: str,
     style: str = "scalar",
     name: Optional[str] = None,
+    jar_uri: Optional[str] = None,
 ) -> List[str]:
     """One Python function, plus a SQL wrapper that carries the DEFAULTs when a parameter has one.
 
@@ -76,15 +89,20 @@ def function_ddl(
     ``style="batch"`` makes a ``PARAMETER STYLE PANDAS`` function: its handler is the manifest handler's
     ``<attr>_batch`` and it takes an iterator of Series. ``name`` replaces ``fn.sql_name`` (a probe
     function is created beside the product one, never over it).
+
+    ``jar_uri`` (the geobrix JAR on a Volume) makes a row that has a UC Scala handler (its L4 ``scala`` key) a
+    ``LANGUAGE SCALA`` function on that JAR; without it, or for a row without one, the function is the Python handler.
     """
     if style not in ("scalar", "batch"):
         raise ValueError(f"style must be 'scalar' or 'batch' (got {style!r})")
     sql_name = fn.sql_name if name is None else name
     q = f"{quote_ident('catalog', catalog)}.{quote_ident('schema', schema)}"
-    if _UNSAFE_IN_PATH.search(wheel_uri):
+    if _UNSAFE_IN_PATH.search(wheel_uri) or (
+        jar_uri is not None and _UNSAFE_IN_PATH.search(jar_uri)
+    ):
         raise ValueError(
             f"wheel_uri {wheel_uri!r} has a quote, backslash or control character. "
-            "Fix: stage the wheel under a plain /Volumes path."
+            "Fix: stage the wheel and the JAR under a plain /Volumes path."
         )
     if not _MANIFEST_NAME.fullmatch(sql_name):
         raise ValueError(f"function name {sql_name!r} is not a plain manifest name")
@@ -98,18 +116,28 @@ def function_ddl(
     env = json.dumps(
         [f"geobrix @ {wheel_uri}"] + [f"{n}=={deps[n]}" for n in l4["deps"]]
     )
-    comment = quote_str(f"geobrix {version}")
-    language = "LANGUAGE PYTHON\n" + (
-        "PARAMETER STYLE PANDAS\n" if style == "batch" else ""
-    )
-    handler = f"{attr}_batch" if style == "batch" else attr
-    stmts = [
-        f"CREATE OR REPLACE FUNCTION {q}.{impl}({params})\n"
-        f"RETURNS {sql_type(fn.returns_uc)}\n"
-        f"{language}DETERMINISTIC\nCOMMENT {comment}\n"
-        f"ENVIRONMENT (dependencies = {quote_str(env)}, environment_version = '6')\n"
-        f"HANDLER 'handler'\nAS $$\nfrom {mod} import {handler} as handler\n$$"
-    ]
+    comment = comment_text(fn, version)
+    if jar_uri is not None and "scala" in l4 and style == "scalar":
+        jars = json.dumps([jar_uri])
+        stmts = [
+            f"CREATE OR REPLACE FUNCTION {q}.{impl}({params})\n"
+            f"RETURNS {sql_type(fn.returns_uc)}\n"
+            f"LANGUAGE SCALA\nDETERMINISTIC\nCOMMENT {comment}\n"
+            f"ENVIRONMENT (java_dependencies = {quote_str(jars)}, environment_version = '6')\n"
+            f"HANDLER {quote_str(l4['scala'])}"
+        ]
+    else:
+        language = "LANGUAGE PYTHON\n" + (
+            "PARAMETER STYLE PANDAS\n" if style == "batch" else ""
+        )
+        handler = f"{attr}_batch" if style == "batch" else attr
+        stmts = [
+            f"CREATE OR REPLACE FUNCTION {q}.{impl}({params})\n"
+            f"RETURNS {sql_type(fn.returns_uc)}\n"
+            f"{language}DETERMINISTIC\nCOMMENT {comment}\n"
+            f"ENVIRONMENT (dependencies = {quote_str(env)}, environment_version = '6')\n"
+            f"HANDLER 'handler'\nAS $$\nfrom {mod} import {handler} as handler\n$$"
+        ]
     if has_default:
         sig = ", ".join(
             f"{p.name} {sql_type(p.uc)}"
@@ -134,6 +162,7 @@ def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> s
     """
     from databricks.labs.gbx import manifest
 
+    inner = over
     if any(p.default for p in manifest.load().functions[over].params):
         over = f"gbx__{over[len('gbx_'):]}"
     cols = ", ".join(f"{n} {sql_type(t)}" for n, t in fn.columns)
@@ -142,9 +171,20 @@ def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> s
         for p in fn.params
     )
     args = ", ".join(p.name for p in fn.params)
+    call = f"{q}.{over}({args})"
+    # an array of structs is one row per element with the struct's fields as columns (`inline`); an array of single
+    # values is one row per element in the table's one column (`explode`)
+    rows = (
+        f"inline({call})"
+        if manifest.load()
+        .functions[inner]
+        .returns_uc.lower()
+        .startswith("array<struct")
+        else f"explode({call}) AS {fn.columns[0][0]}"
+    )
     return (
         f"CREATE OR REPLACE FUNCTION {q}.{sql_name}({sig})\n"
         f"RETURNS TABLE ({cols})\n"
-        f"COMMENT {quote_str(f'geobrix {version}')}\n"
-        f"RETURN SELECT inline({q}.{over}({args}))"
+        f"COMMENT {comment_text(fn, version)}\n"
+        f"RETURN SELECT {rows}"
     )

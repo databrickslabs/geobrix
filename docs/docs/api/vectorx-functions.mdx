@@ -711,16 +711,17 @@ See [Geometry Validity](./geometry-validity).
 ### st_explainvalidity
 
 {/* BEGIN GENERATED gbx_st_explainvalidity: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_explainvalidity(geom)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_explainvalidity(geom)` | `STRING` |
 | Python | `vectorx.functions.st_explainvalidity(geom)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
 {/* END GENERATED gbx_st_explainvalidity */}
 
 Diagnoses geometry validity and returns a JSON string with four fields. `valid` is a boolean, `reason` the GEOS reason, `code` a stable integer for the violation class, and `location` the violation site as a `POINT(x y)` WKT string. `code` and `location` are `null` when GEOS does not provide them. Use `ST_IsValid` as a cheap boolean gate and call `gbx_st_explainvalidity` only on flagged rows.
@@ -1037,18 +1038,19 @@ See [Antimeridian](./antimeridian).
 ### st_wrapx
 
 {/* BEGIN GENERATED gbx_st_wrapx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_wrapx(geom, wrap_x_origin, wrap_direction)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_wrapx(geom, wrap_x_origin, wrap_direction)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_wrapx(geom, wrap_x_origin, wrap_direction)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
-| `wrap_x_origin` | `DOUBLE` |  | The x value the wrap starts from. |
-| `wrap_direction` | `DOUBLE` |  | The amount added to the coordinates that qualify: negative moves those at or east of the origin, positive those at or west of it. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `wrap_x_origin` | `DOUBLE` | `DOUBLE` |  | The x value the wrap starts from. |
+| `wrap_direction` | `DOUBLE` | `DOUBLE` |  | The amount added to the coordinates that qualify: negative moves those at or east of the origin, positive those at or west of it. |
 {/* END GENERATED gbx_st_wrapx */}
 
 Wraps x coordinates that exceed a threshold back by a fixed offset. The primary use is the reverse of `gbx_st_shiftlongitude`: after splitting at x=180, apply `gbx_st_wrapx(geom, 180, -360)` to the eastern pieces to move them from `[180, 360]` back into `[-180, 0]`. Apply only to the pieces where `ST_XMax(piece) > 180` — wrapping the western piece's shared 180° edge would produce a malformed geometry.
@@ -1102,16 +1104,17 @@ See [Antimeridian](./antimeridian).
 ### st_legacyaswkb
 
 {/* BEGIN GENERATED gbx_st_legacyaswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_legacyaswkb(geom)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_legacyaswkb(geom)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_legacyaswkb(geom)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `struct<typeId:int,srid:int,boundaries:array<array<array<double>>>,holes:array<array<array<array<double>>>>>` |  | The legacy Mosaic geometry struct: `typeId`, `srid`, `boundaries` and `holes`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `struct<typeId:int,srid:int,boundaries:array<array<array<double>>>,holes:array<array<array<array<double>>>>>` | `struct<typeId:int,srid:int,boundaries:array<array<array<double>>>,holes:array<array<array<array<double>>>>>` |  | The legacy Mosaic geometry struct: `typeId`, `srid`, `boundaries` and `holes`. |
 {/* END GENERATED gbx_st_legacyaswkb */}
 
 Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WKB). Pass the raw legacy geometry column through `st_legacyaswkb` to get a WKB binary that every downstream `ST_*` function accepts. This is the first step when moving a Mosaic-era table onto the product's native `GEOMETRY` and `GEOGRAPHY` types.

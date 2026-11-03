@@ -12,7 +12,7 @@ from the `h3` library.
 import math
 import struct
 
-from databricks.labs.gbx.bench.oracles import Build, Case, builder
+from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
 
 TQ3080 = "POLYGON((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))"
 # A point whose coordinates are infinite: there is no cell for it (WKB, since WKT cannot spell infinity).
@@ -439,4 +439,45 @@ GRID_SCALAR += (
         ),
     ),
     Case("h3bbox_null", HBBOX, (None,), "null"),
+)
+
+# --- Unity Catalog rows: the GEOMETRY argument arrives as a value with an integer SRID, never as bytes or text.
+
+GRID_SCALAR = uc_view(
+    GRID_SCALAR,
+    {PAC: 27700},
+    session_only=("pac_point_wkb", "bng_inf_point"),
+)
+
+GRID_SCALAR += (
+    # A WKB BINARY is not a GEOMETRY: the engine refuses it for a GEOMETRY parameter (never a silent NULL).
+    Case(
+        "uc_wkb_into_geometry_refused",
+        PAC,
+        (POINT_WKB, 3),
+        "raises",
+        "BINARY",  # the handler's message, and the engine's (a BINARY where GEOMETRY(ANY) is required)
+        ("uc",),
+        geom_srid=27700,
+    ),
+    # BNG cells are EPSG:27700: a geometry in another SRID is refused with a Fix:, not read as metres.
+    Case(
+        "uc_pac_wrong_srid",
+        PAC,
+        ("POINT(-0.1 51.5)", 3),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    # A UC BINARY result carries the integer SRID: EWKB with 27700 (the session's WKB carries none).
+    Case("uc_bng_aswkb_srid", AWKB, ("TQ3080",), "geom_srid", (TQ3080, 27700), ("uc",)),
+    Case(
+        "uc_bng_centroid_srid",
+        CENT,
+        ("TQ3080",),
+        "geom_srid",
+        ("POINT(530500 180500)", 27700),
+        ("uc",),
+    ),
 )

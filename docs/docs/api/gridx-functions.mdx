@@ -206,18 +206,19 @@ Resolution (zoom) range:
 ### quadbin_pointascell
 
 {/* BEGIN GENERATED gbx_quadbin_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_pointascell(longitude, latitude, resolution)` | `BIGINT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_pointascell(longitude, latitude, resolution)` | `BIGINT` |
 | Python | `gridx.quadbin.functions.quadbin_pointascell(longitude, latitude, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `longitude` | `DOUBLE` |  | Longitude in EPSG:4326 degrees. |
-| `latitude` | `DOUBLE` |  | Latitude in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 26. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `longitude` | `DOUBLE` | `DOUBLE` |  | Longitude in EPSG:4326 degrees. |
+| `latitude` | `DOUBLE` | `DOUBLE` |  | Latitude in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 26. |
 {/* END GENERATED gbx_quadbin_pointascell */}
 
 Convert a lon/lat coordinate (EPSG:4326) to the quadbin cell containing it at the given zoom.
@@ -340,17 +341,18 @@ Powered by the **quadbin** package (numpy-vectorized). Extracts the zoom level f
 ### quadbin_polyfill
 
 {/* BEGIN GENERATED gbx_quadbin_polyfill: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_polyfill(geom, resolution)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_polyfill(geom, resolution)` | `array<bigint>` |
 | Python | `gridx.quadbin.functions.quadbin_polyfill(geom, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
 {/* END GENERATED gbx_quadbin_polyfill */}
 
 Polyfill a geometry's bounding box with all quadbin cells at the given zoom.
@@ -839,16 +841,17 @@ Functions to convert BNG cell IDs to standard geometry formats.
 ### bng_aswkb
 
 {/* BEGIN GENERATED gbx_bng_aswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_aswkb(cellid)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_aswkb(cellid)` | `BINARY` |
 | Python | `gridx.bng.functions.bng_aswkb(cellid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
 {/* END GENERATED gbx_bng_aswkb */}
 
 Convert a BNG cell ID to Well-Known Binary (WKB) format.
@@ -911,16 +914,17 @@ Fundamental operations on BNG cells.
 ### bng_cellarea
 
 {/* BEGIN GENERATED gbx_bng_cellarea: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_cellarea(cellid)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_cellarea(cellid)` | `DOUBLE` |
 | Python | `gridx.bng.functions.bng_cellarea(cellid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
 {/* END GENERATED gbx_bng_cellarea */}
 
 Calculate the area of a BNG grid cell.
@@ -945,16 +949,17 @@ Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **s
 ### bng_centroid
 
 {/* BEGIN GENERATED gbx_bng_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_centroid(cellid)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_centroid(cellid)` | `BINARY` |
 | Python | `gridx.bng.functions.bng_centroid(cellid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
 {/* END GENERATED gbx_bng_centroid */}
 
 Get the centroid (center point) of a BNG cell.
@@ -1168,17 +1173,18 @@ Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). E
 ### bng_pointascell
 
 {/* BEGIN GENERATED gbx_bng_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_pointascell(geom, resolution)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_pointascell(geom, resolution)` | `STRING` |
 | Python | `gridx.bng.functions.bng_pointascell(geom, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
 {/* END GENERATED gbx_bng_pointascell */}
 
 Convert a point geometry to a BNG grid cell. The point must be supplied as **WKT or WKB** (GeoBrix does not accept native Databricks geometry types).
@@ -1207,17 +1213,18 @@ Generate neighboring cells using k-ring patterns.
 ### bng_kring
 
 {/* BEGIN GENERATED gbx_bng_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_kring(cellid, k)` | `array<string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_kring(cellid, k)` | `array<string>` |
 | Python | `gridx.bng.functions.bng_kring(cellid, k)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
-| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
 {/* END GENERATED gbx_bng_kring */}
 
 Generate a k-ring of cells around a center cell (filled disk).
@@ -1277,20 +1284,21 @@ Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring di
 ### bng_geomkring
 
 {/* BEGIN GENERATED gbx_bng_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_geomkring(geom, resolution, k, [mode], [coverage])` | `array<string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_geomkring(geom, resolution, k, [mode], [coverage])` | `array<string>` |
 | Python | `gridx.bng.functions.bng_geomkring(geom, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
-| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_bng_geomkring */}
 
 Generate a k-ring of cells around a geometry at specified resolution.
@@ -1357,17 +1365,18 @@ Fill geometries with grid cells.
 ### bng_polyfill
 
 {/* BEGIN GENERATED gbx_bng_polyfill: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_polyfill(geom, resolution)` | `array<string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_polyfill(geom, resolution)` | `array<string>` |
 | Python | `gridx.bng.functions.bng_polyfill(geom, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
 {/* END GENERATED gbx_bng_polyfill */}
 
 Fill a geometry with BNG cells at specified resolution.
@@ -1580,19 +1589,20 @@ Explode array results into individual rows.
 ### bng_kringexplode
 
 {/* BEGIN GENERATED gbx_bng_kringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_kringexplode(cellid, k)` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_kringexplode(cellid, k)` | rows |
 | Python | `gridx.bng.functions.bng_kringexplode(df, cellid, k)` | DataFrame |
 
 Rows: `cellid` `STRING`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
-| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
 {/* END GENERATED gbx_bng_kringexplode */}
 
 <Impl udtf/>
@@ -1656,22 +1666,23 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 ### bng_geomkringexplode
 
 {/* BEGIN GENERATED gbx_bng_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.bng.functions.bng_geomkringexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `STRING`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
-| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_bng_geomkringexplode */}
 
 <Impl udtf/>
@@ -2358,20 +2369,21 @@ df.withColumn("kring", hx.h3_geomkring("geom_col", 9, 1))
 ### h3_geomkring
 
 {/* BEGIN GENERATED gbx_h3_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_h3_geomkring(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_h3_geomkring(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
 | Python | `gridx.h3.functions.h3_geomkring(geom, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
-| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_h3_geomkring */}
 
 Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ring steps — the polyfill and neighbour walk both use the `h3` library.
@@ -2424,22 +2436,23 @@ Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
 ### h3_geomkringexplode
 
 {/* BEGIN GENERATED gbx_h3_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_h3_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_h3_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.h3.functions.h3_geomkringexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
-| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_h3_geomkringexplode */}
 
 <Impl udtf/>

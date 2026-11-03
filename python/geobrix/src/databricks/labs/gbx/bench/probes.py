@@ -218,6 +218,73 @@ def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) ->
     return out
 
 
+UC_SLICE_TABLES = ("GRID_SCALAR", "GRID_ARRAY", "GRID_GENERATOR", "VECTOR_SCALAR")
+
+
+def uc_slice_cases() -> list:
+    """Every UC row of the slice tables whose function has an L4 level."""
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench import oracles
+
+    man = manifest.load()
+    return [
+        c
+        for tbl in UC_SLICE_TABLES
+        for c in oracles.TABLES[tbl]
+        if "uc" in c.surfaces and "L4" in man.functions[c.fn].levels
+    ]
+
+
+def run_uc_slice(
+    spark, catalog: str, schema: str, volume_dir: str, tmpdir: str
+) -> dict:
+    """The Unity Catalog slice on a warehouse or Serverless env 6: install, every UC row of the slice tables through
+    3-level names, then the same SQL text with unqualified names (S3).
+
+    1. times ``gbx.uc.install`` (a JAR in ``volume_dir`` makes the JVM-only BNG functions Scala functions);
+    2. runs every UC row of the slice tables (scalars through ``run_session``, the table functions through
+       ``run_rows``) against ``catalog.schema.<name>``;
+    3. ``register(spark, target='uc', ...)`` (the schema is at this wheel's version), then ``USE catalog.schema`` and the
+       same rows with the bare names: the same text must give the same answers.
+
+    Returns ``{"install_s", "statements", "scala", "failures", "cases", "unqualified_failures", "unqualified_cases"}``;
+    ``scala`` counts the functions created on the JAR.
+    """
+    from databricks.labs.gbx import manifest, register, uc
+    from databricks.labs.gbx.bench import oracles
+
+    man = manifest.load()
+    t = time.time()
+    stmts = uc.install(catalog, schema, volume_dir, spark=spark)
+    out = {
+        "install_s": time.time() - t,
+        "statements": len(stmts),
+        "scala": sum("LANGUAGE SCALA" in s for s in stmts),
+    }
+    cases = uc_slice_cases()
+
+    def run(name_of):
+        scalar = [c for c in cases if man.functions[c.fn].kind != "generator"]
+        rows = [c for c in cases if man.functions[c.fn].kind == "generator"]
+        res = oracles.run_session(
+            spark, scalar, name_of=name_of, tmpdir=tmpdir, surface="uc"
+        )
+        res += oracles.run_rows(
+            spark, rows, name_of=name_of, tmpdir=tmpdir, surface="uc"
+        )
+        return res
+
+    res = run(lambda f: f"`{catalog}`.`{schema}`.{f}")
+    out["failures"] = [m for _, m in res if m]
+    out["cases"] = len(res)
+    register(spark, target="uc", catalog=catalog, schema=schema)
+    spark.sql(f"USE `{catalog}`.`{schema}`")
+    res = run(lambda f: f)
+    out["unqualified_failures"] = [m for _, m in res if m]
+    out["unqualified_cases"] = len(res)
+    return out
+
+
 def uc_probe_sql(
     catalog: str, schema: str, jar_path: str, n: int = 1_000_000
 ) -> List[Tuple[str, str]]:

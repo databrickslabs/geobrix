@@ -1726,6 +1726,7 @@
       "description": "Return the H3 cells of a geometry dilated by k rings.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -1736,6 +1737,7 @@
       "description": "Return the H3 cells of a geometry dilated by k rings, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -1747,6 +1749,7 @@
       "description": "Return a BNG cell's boundary polygon as WKB.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1769,6 +1772,7 @@
       "description": "Return the area of a BNG cell in square kilometres.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1833,6 +1837,7 @@
       "description": "Return the centre point of a BNG cell as WKB.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1900,6 +1905,7 @@
       "description": "Return the BNG cells of a geometry dilated by k rings.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1911,6 +1917,7 @@
       "description": "Return the BNG cells of a geometry dilated by k rings, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1944,6 +1951,7 @@
       "description": "Return the cells within ring distance k of a BNG cell, the cell included.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1955,6 +1963,7 @@
       "description": "Return the cells within ring distance k of a BNG cell, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1966,6 +1975,7 @@
       "description": "Return the BNG cell id of a geometry's centroid.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1977,6 +1987,7 @@
       "description": "Return the BNG cells whose centre lies inside a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2220,6 +2231,7 @@
       "description": "Diagnose whether a geometry is valid under the OGC Simple Features rules.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2252,6 +2264,7 @@
       "description": "Decode a legacy Mosaic geometry struct to ISO WKB, with Z and holes kept.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2377,6 +2390,7 @@
       "description": "Wrap x coordinates around an origin by a shift.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2520,6 +2534,7 @@
       "description": "Return the quadbin cell that holds a longitude and latitude.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -2530,6 +2545,7 @@
       "description": "Return the quadbin cells that cover the bounding box of a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

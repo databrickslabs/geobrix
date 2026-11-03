@@ -635,6 +635,14 @@ def test_bad_target():
 
 
 UC_FNS = [f for f in FNS if "L4" in f.levels]
+UC_SCALA_FNS = [f for f in UC_FNS if "scala" in f.levels["L4"]]
+
+
+def tvf_inner(fn):
+    return fn.levels["L4"]["tvf_over"]
+
+
+JAR = "/Volumes/c/s/v/geobrix-0.6.0-jar-with-dependencies.jar"
 
 
 @pytest.mark.parametrize("fn", UC_FNS, ids=lambda f: f.sql_name)
@@ -657,17 +665,23 @@ def test_uc_ddl_contract(fn):
             p.default for p in MAN.functions[over].params
         ):  # its public name is a SQL wrapper
             over = f"gbx__{over[len('gbx_'):]}"
-        assert "COMMENT 'geobrix 0.6.0'" in tvf and "LANGUAGE PYTHON" not in tvf
+        assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in tvf
+        assert "LANGUAGE PYTHON" not in tvf
         assert f"RETURNS TABLE ({', '.join(f'{n} {t}' for n, t in fn.columns)})" in tvf
-        assert tvf.endswith(
-            f"RETURN SELECT inline(`cat`.`sch`.{over}({', '.join(p.name for p in fn.params)}))"
-        )
-        assert (
-            all(f"{p.name} {p.uc}" in tvf for p in fn.params) and "DEFAULT false" in tvf
-        )
+        call = f"`cat`.`sch`.{over}({', '.join(p.name for p in fn.params)})"
+        # one row per struct element (`inline`), or per single value in the table's one column (`explode`)
+        if MAN.functions[tvf_inner(fn)].returns_uc.startswith("array<struct"):
+            assert tvf.endswith(f"RETURN SELECT inline({call})")
+        else:
+            assert tvf.endswith(f"RETURN SELECT explode({call}) AS {fn.columns[0][0]}")
+        assert all(f"{p.name} {p.uc}" in tvf for p in fn.params)
+        for p in fn.params:
+            if p.default:
+                assert f"{p.name} {ddl.sql_type(p.uc)} DEFAULT {p.default}" in tvf
         return
     assert "environment_version = '6'" in impl and "geobrix @ file:///Volumes/" in impl
-    assert "COMMENT 'geobrix 0.6.0'" in impl and "LANGUAGE PYTHON" in impl
+    assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in impl
+    assert "LANGUAGE PYTHON" in impl and "LANGUAGE SCALA" not in impl
     has_default = any(p.default for p in fn.params)
     assert len(stmts) == (2 if has_default else 1)
     if has_default:
@@ -679,6 +693,73 @@ def test_uc_ddl_contract(fn):
     for p in fn.params:
         if "GEOMETRY" in p.session or p.uc == "GEOMETRY":
             assert f"{p.name} GEOMETRY" in impl
+
+
+@pytest.mark.parametrize("fn", UC_SCALA_FNS, ids=lambda f: f.sql_name)
+def test_uc_scala_ddl_contract(fn):
+    """A row with a UC Scala handler becomes a LANGUAGE SCALA function on the Volume JAR: `java_dependencies`, env 6,
+    DETERMINISTIC, the handler the manifest names. No JAR given: the Python function, as for every other row.
+    """
+    l4 = fn.levels["L4"]
+    assert (
+        l4["jar"] == "volume" and l4["handler"]
+    ), "the Scala key comes with `jar` and keeps the Python handler"
+    assert re.fullmatch(
+        r"com\.databricks\.labs\.gbx\.kernels\.uc\.[A-Za-z]+\.[A-Za-z]+", l4["scala"]
+    )
+    args = (
+        fn,
+        "cat",
+        "sch",
+        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        MAN.uc_dependencies,
+        "0.6.0",
+    )
+    (impl,) = ddl.function_ddl(*args, jar_uri=JAR)
+    assert "LANGUAGE SCALA\nDETERMINISTIC\n" in impl and "LANGUAGE PYTHON" not in impl
+    assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in impl
+    assert (
+        f"ENVIRONMENT (java_dependencies = '[\"{JAR}\"]', environment_version = '6')"
+        in impl
+    )
+    assert impl.endswith(f"HANDLER '{l4['scala']}'")
+    assert "geobrix @" not in impl and "AS $$" not in impl
+    assert "`cat`.`sch`." in impl
+    # the declared types are the UC types the Scala method takes: STRING, INT, DOUBLE, BINARY, ARRAY<STRING>
+    for p in fn.params:
+        assert p.uc in ("STRING", "INT", "DOUBLE"), (fn.sql_name, p.name, p.uc)
+    assert fn.returns_uc in ("STRING", "DOUBLE", "BINARY", "array<string>")
+    (py,) = ddl.function_ddl(*args)
+    assert "LANGUAGE PYTHON" in py
+
+
+def test_uc_scala_jar_path_is_checked_like_the_wheel():
+    fn = MAN.functions["gbx_bng_cellarea"]
+    with pytest.raises(ValueError, match="Fix:"):
+        ddl.function_ddl(
+            fn,
+            "cat",
+            "sch",
+            "file:///v/w.whl",
+            MAN.uc_dependencies,
+            "0.6.0",
+            jar_uri="/Volumes/a'b.jar",
+        )
+
+
+def test_uc_batch_style_is_python_even_with_a_jar():
+    (stmt,) = ddl.function_ddl(
+        MAN.functions["gbx_bng_eastnorthasbng"],
+        "cat",
+        "sch",
+        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        MAN.uc_dependencies,
+        "0.6.0",
+        style="batch",
+        name="gbx_mvp_bng_eastnorthasbng_batch",
+        jar_uri=JAR,
+    )
+    assert "LANGUAGE PYTHON\nPARAMETER STYLE PANDAS\n" in stmt
 
 
 def test_uc_ddl_batch_style_names_a_pandas_handler_beside_the_product_function():
@@ -773,6 +854,67 @@ def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
     )
 
 
+def _uc_handler_groups():
+    """The UC functions grouped by the dependencies their handler declares (a table function runs its array function's)."""
+    groups = {}
+    for f in UC_FNS:
+        l4 = f.levels["L4"]
+        deps = (
+            l4["deps"]
+            if "deps" in l4
+            else MAN.functions[l4["tvf_over"]].levels["L4"]["deps"]
+        )
+        groups.setdefault(tuple(sorted(deps)), []).append(f.sql_name)
+    return sorted(groups.items())
+
+
+@pytest.mark.parametrize(
+    "deps,names",
+    _uc_handler_groups(),
+    ids=lambda v: "+".join(v) if isinstance(v, tuple) else None,
+)
+def test_uc_handlers_import_only_the_dependencies_they_declare(deps, names):
+    """Every oracle row of a UC function runs in a process where pyspark, pandas and every optional dependency its
+    manifest block does not declare (h3, quadbin, rasterio, pyproj) cannot be imported: the sandbox installs the
+    declared list and nothing else."""
+    import os
+    import subprocess
+    import sys
+
+    optional = sorted({"h3", "quadbin", "rasterio", "pyproj"} - set(deps))
+    code = (
+        "import sys\n"
+        "from databricks.labs.gbx import manifest\n"
+        "from databricks.labs.gbx.bench import oracles\n"
+        f"names = {list(names)!r}\n"
+        "cases = [c for n in names for c in oracles.TABLES[manifest.load().functions[n].oracle] if c.fn == n]\n"
+        "assert cases, names\n"
+        "# the kernels re-import under the block\n"
+        "for m in [m for m in sys.modules if m.startswith(('databricks.labs.gbx.py',))]:\n"
+        "    del sys.modules[m]\n"
+        f"for blocked in ('pyspark', 'pandas', 'pyarrow', 'scipy', *{optional!r}):\n"
+        "    sys.modules[blocked] = None\n"
+        "import tempfile\n"
+        "ran = oracles.run_handlers(cases, tmpdir=tempfile.mkdtemp())\n"
+        "ran += oracles.run_handlers_rows(cases, tmpdir=tempfile.mkdtemp())\n"
+        "bad = [m for _, m in ran if m]\n"
+        "assert ran and not bad, bad\n"
+        "print(len(ran))\n"
+    )
+    src = Path(manifest.__file__).resolve().parents[4]
+    env = {
+        **os.environ,
+        "PYTHONPATH": os.pathsep.join(
+            filter(None, [str(src), os.environ.get("PYTHONPATH")])
+        ),
+    }
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert int(out.stdout) > 0
+
+
 class _UcSpark:
     """A session stand-in: records statements and answers information_schema.routines.
 
@@ -799,7 +941,7 @@ class _UcSpark:
 ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
 ENV5_WHEEL = "geobrix-0.6.0+env5-py3-none-any.whl"
 PLAIN_WHEEL = "geobrix-0.6.0-py3-none-any.whl"
-UC_NAMES = {f.sql_name: "geobrix 0.6.0" for f in UC_FNS}
+UC_NAMES = {f.sql_name: f"geobrix 0.6.0: {f.doc.summary}" for f in UC_FNS}
 VOLUME_DIR = "/Volumes/c/s/v/dir"
 
 
@@ -861,6 +1003,46 @@ def test_uc_install_deploys_one_env6_wheel_and_verifies(
     assert (
         "information_schema.routines" in spark.stmts[-1]
     )  # then the schema was verified
+
+
+def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
+    volume, monkeypatch
+):
+    from databricks.labs.gbx import uc
+
+    volume.files = [ENV6_WHEEL, "geobrix-0.6.0-jar-with-dependencies.jar"]
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    spark = _UcSpark(UC_NAMES)
+    stmts = uc.install("cat", "sch", VOLUME_DIR, spark=spark)
+    jar = f"{VOLUME_DIR}/geobrix-0.6.0-jar-with-dependencies.jar"
+    scala = [s for s in stmts if "LANGUAGE SCALA" in s]
+    assert len(scala) == len(UC_SCALA_FNS) and all(jar in s for s in scala)
+    assert {re.search(r"FUNCTION `cat`.`sch`.(\w+)\(", s).group(1) for s in scala} == {
+        f.sql_name for f in UC_SCALA_FNS
+    }
+    # every other function stays on the wheel
+    python = [f for f in UC_FNS if "tvf_over" not in f.levels["L4"]]
+    assert sum("LANGUAGE PYTHON" in s for s in stmts) == len(python) - len(UC_SCALA_FNS)
+    assert spark.stmts[: len(stmts)] == stmts
+
+
+def test_uc_install_refuses_two_jars_and_dry_run_reads_no_folder(volume, monkeypatch):
+    from databricks.labs.gbx import uc
+
+    volume.files = [
+        ENV6_WHEEL,
+        "geobrix-0.6.0.jar",
+        "geobrix-0.6.0-jar-with-dependencies.jar",
+    ]
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    spark = _UcSpark(UC_NAMES)
+    with pytest.raises(RuntimeError, match="exactly one JAR"):
+        uc.install("cat", "sch", VOLUME_DIR, spark=spark)
+    assert not spark.stmts
+    plain = uc.install("cat", "sch", VOLUME_DIR, dry_run=True)
+    assert not any("LANGUAGE SCALA" in s for s in plain)
+    with_jar = uc.install("cat", "sch", VOLUME_DIR, dry_run=True, jar=JAR)
+    assert sum("LANGUAGE SCALA" in s for s in with_jar) == len(UC_SCALA_FNS)
 
 
 def test_uc_install_refuses_a_runtime_that_is_not_env6(volume, monkeypatch):
@@ -944,7 +1126,10 @@ def test_uc_names_and_paths_are_validated_before_any_sql_is_built(
     [
         (UC_NAMES, "sch", "sch", None),
         (
-            {**UC_NAMES, "gbx_st_makevalid": "geobrix 0.5.3"},
+            {
+                **UC_NAMES,
+                "gbx_st_makevalid": "geobrix 0.5.3: Repair an invalid geometry.",
+            },
             "sch",
             "sch",
             "gbx_st_makevalid",
@@ -974,6 +1159,82 @@ def test_register_uc_checks_the_schema_against_this_wheel(
         assert register(spark, target="uc", catalog="cat", schema=schema) == {}
     with pytest.raises(ValueError, match="catalog= and schema="):
         register(_UcSpark(routines), target="uc")
+
+
+class _ThroughUc:
+    """A real session whose Unity Catalog metadata queries are answered by a `_UcSpark`."""
+
+    def __init__(self, real, uc):
+        self._real, self._uc = real, uc
+
+    def sql(self, query):
+        return (self._uc if "information_schema" in query else self._real).sql(query)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_register_session_says_once_when_the_uc_schema_has_another_version(
+    spark, capsys
+):
+    """A session registration given a catalog and a schema reads their GeoBrix COMMENTs, and one line says the schema
+    was made by another wheel (the unqualified names resolve to the session functions).
+    """
+    from databricks.labs.gbx import register
+
+    routines = {
+        "gbx_bng_cellarea": "geobrix 0.5.3: Return the area of a BNG cell in square kilometres.",
+        "gbx_st_makevalid": "geobrix 0.5.4: Repair an invalid geometry.",
+        "gbx_other": "someone else's function",
+    }
+    fake = _UcSpark(routines)
+    session = _ThroughUc(spark, fake)
+    register(session, only=["gbx_bng_cellarea"], catalog="cat", schema="sch")
+    register(session, only=["gbx_bng_cellarea"], catalog="cat", schema="sch")
+    out = capsys.readouterr().out
+    line = (
+        "geobrix: Unity Catalog schema cat.sch has geobrix 0.5.3, 0.5.4, this wheel is 0.6.0; unqualified gbx_ names "
+        "resolve to the session functions (re-run gbx.uc.install to update UC)"
+    )
+    assert out.count(line) == 1  # once per session, whatever the number of calls
+    (query,) = [q for q in fake.stmts if "information_schema" in q][:1]
+    assert "`cat`.information_schema.routines" in query and "LIKE 'gbx_%'" in query
+    # the same schema at this version, and a call without a catalog, say nothing
+    same = _ThroughUc(
+        spark, _UcSpark({"gbx_bng_cellarea": UC_NAMES["gbx_bng_cellarea"]})
+    )
+    register(same, only=["gbx_bng_cellarea"], catalog="cat", schema="sch")
+    register(spark, only=["gbx_bng_cellarea"])
+    assert "Unity Catalog schema" not in capsys.readouterr().out
+
+
+def test_register_session_validates_the_catalog_and_schema_names(spark):
+    from databricks.labs.gbx import register
+
+    fake = _UcSpark({})
+    with pytest.raises(ValueError, match="Fix:"):
+        register(
+            _ThroughUc(spark, fake),
+            only=["gbx_bng_cellarea"],
+            catalog="ca`t",
+            schema="sch",
+        )
+    assert not fake.stmts
+
+
+def test_uc_scala_key_is_closed_and_paired_with_a_python_handler():
+    """`scala` and `jar` come together, `jar` has the one value, and the row keeps the handler used without a JAR."""
+    for f in UC_FNS:
+        l4 = f.levels["L4"]
+        assert ("scala" in l4) == ("jar" in l4), f.sql_name
+        if "scala" in l4:
+            assert l4["jar"] == "volume" and "handler" in l4, f.sql_name
+            assert l4["scala"].startswith(
+                "com.databricks.labs.gbx.kernels.uc."
+            ), f.sql_name
+            klass, _, method = l4["scala"].rpartition(".")
+            src = REPO / "src/main/scala" / (klass.replace(".", "/") + ".scala")
+            assert re.search(rf"def {method}\(", src.read_text()), l4["scala"]
 
 
 # --- Java handlers on standard access mode -----------------------------------------------------------------

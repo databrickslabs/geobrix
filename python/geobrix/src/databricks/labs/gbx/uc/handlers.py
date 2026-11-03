@@ -143,7 +143,8 @@ def _geom_bytes(geom):
         g = shapely.from_wkb(bytes(get_wkb()))
         return shapely.to_wkb(shapely.set_srid(g, int(get_srid())), include_srid=True)
     raise TypeError(
-        f"gbx: unsupported GEOMETRY value {type(geom).__module__}.{type(geom).__name__}"
+        f"gbx: unsupported GEOMETRY value {type(geom).__module__}.{type(geom).__name__}: a BINARY or STRING is not a "
+        "GEOMETRY. Fix: build the GEOMETRY first, for example st_geomfromwkb(wkb, srid)."
     )
 
 
@@ -226,3 +227,283 @@ def st_makevalid(geom, level):
     return _geom_out(
         _makevalid(_geom_bytes(geom), level or "linework")
     )  # the SRID is kept
+
+
+# --- the grid and vector slice ----------------------------------------------------------------------------------
+# One shape for every handler: a NULL argument is NULL; a PARAMETER error (a resolution, a mode, a form the function
+# does not take) raises with a Fix: line; DATA the function cannot serve (a cell id that is no cell, a point that is not
+# finite) is NULL, because a UC function has no error tile. A GEOMETRY argument is checked against the SRID the grid is
+# defined in, and a geometry in another SRID is refused. The light kernels are the session functions' own.
+
+BNG_SRID, WGS84_SRID = 27700, 4326
+
+
+def _parameter(fn: str, exc: Exception) -> ValueError:
+    """A parameter error, with the message of the kernel and a Fix: line that names the session function."""
+    return ValueError(
+        f"{exc}. Fix: pass a value {fn} accepts; the session function {fn} takes the same parameters "
+        "(after databricks.labs.gbx.register(spark))."
+    )
+
+
+def _grid_geometry(fn: str, geom, srid: int, grid: str):
+    """A GEOMETRY(ANY) argument as a shapely geometry, or None when it cannot be read; a geometry in an SRID other than
+    the grid's is refused (a UC GEOMETRY always carries an integer SRID)."""
+    import shapely
+
+    raw = _geom_bytes(geom)
+    try:
+        g = shapely.from_wkb(raw)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except Exception:  # noqa: BLE001 - unreadable geometry is NULL on UC
+        return None
+    got = shapely.get_srid(g)
+    if got != srid:
+        raise _refuse(
+            fn,
+            f"{grid} needs geometry in SRID {srid}; got SRID {got} (st_transform(geom, {srid}) first)",
+        )
+    return g
+
+
+def _bng_res(fn: str, raw):
+    try:
+        return _res(raw)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except Exception as exc:  # noqa: BLE001 - the kernel names the value
+        raise _parameter(fn, exc) from exc
+
+
+def _whole(fn: str, raw) -> int:
+    from databricks.labs.gbx.pygx._params import _whole_res
+
+    try:
+        return _whole_res(fn, raw)
+    except ValueError as exc:
+        raise _parameter(fn, exc) from exc
+
+
+def _mode(fn: str, mode):
+    from databricks.labs.gbx.pygx._params import _dilate_check_mode
+
+    try:
+        _dilate_check_mode(mode)
+    except ValueError as exc:
+        raise _parameter(fn, exc) from exc
+
+
+def _finite(g) -> bool:
+    import numpy as np
+    import shapely
+
+    return bool(np.isfinite(shapely.get_coordinates(g)).all())
+
+
+def _bng_cell(cellid):
+    """A BNG cell id (STRING) as the kernel's integer id; a string that is no cell is None (data)."""
+    from databricks.labs.gbx.pygx import _bng
+
+    return None if cellid is None else _bng.parse_safe(cellid)
+
+
+def _ewkb(g, srid: int) -> bytes:
+    import shapely
+
+    return shapely.to_wkb(shapely.set_srid(g, srid), include_srid=True)
+
+
+def bng_pointascell(geom, resolution):
+    from databricks.labs.gbx.pygx import _bng
+
+    fn = "gbx_bng_pointascell"
+    if geom is None or resolution is None:
+        return None
+    res = _bng_res(fn, resolution)
+    g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
+    if g is None or g.is_empty:
+        return None
+    c = g.centroid  # the cell of the geometry's centroid
+    if not (math.isfinite(c.x) and math.isfinite(c.y)):
+        return None
+    return _bng.point_as_cell(c.x, c.y, res)
+
+
+def bng_polyfill(geom, resolution):
+    from databricks.labs.gbx.pygx import _bng
+
+    fn = "gbx_bng_polyfill"
+    if geom is None or resolution is None:
+        return None
+    res = _bng_res(fn, resolution)
+    g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
+    if g is None:
+        return None
+    try:
+        return _bng.polyfill_str(g, res)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except Exception:  # noqa: BLE001 - a geometry that cannot be filled is NULL on UC
+        return None
+
+
+def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
+    from databricks.labs.gbx.pygx import _bng
+
+    fn = "gbx_bng_geomkring"
+    if geom is None or resolution is None or k is None:
+        return None
+    res = _bng_res(fn, resolution)
+    _mode(fn, mode)
+    g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
+    if g is None or not _finite(g):
+        return None  # a non-finite coordinate has no cell
+    try:
+        return sorted(
+            _bng.geometry_k_ring_str(
+                g, res, int(k), mode or "boundary-out", coverage or "coveras"
+            )
+        )
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except ValueError as exc:  # a coverage the engine does not know
+        raise _parameter(fn, exc) from exc
+    except Exception:  # noqa: BLE001 - a geometry that cannot be dilated is NULL on UC
+        return None
+
+
+def bng_kring(cellid, k):
+    from databricks.labs.gbx.pygx import _bng
+
+    if cellid is None or k is None:
+        return None
+    cid = _bng_cell(cellid)
+    if cid is None:
+        return None  # a string that is no cell
+    return [_bng.format(c) for c in _bng.k_ring(cid, int(k))]
+
+
+def bng_cellarea(cellid):
+    from databricks.labs.gbx.pygx import _bng
+
+    cid = _bng_cell(cellid)
+    return None if cid is None else _bng.area(cid)
+
+
+def bng_aswkb(cellid):
+    """The cell polygon as EWKB with SRID 27700 (a UC BINARY result carries the integer SRID)."""
+    from databricks.labs.gbx.pygx import _bng
+
+    cid = _bng_cell(cellid)
+    return None if cid is None else _ewkb(_bng.cell_id_to_geometry(cid), BNG_SRID)
+
+
+def bng_centroid(cellid):
+    """The cell centre as EWKB with SRID 27700."""
+    from databricks.labs.gbx.pygx import _bng
+
+    cid = _bng_cell(cellid)
+    return (
+        None if cid is None else _ewkb(_bng.cell_id_to_geometry(cid).centroid, BNG_SRID)
+    )
+
+
+def quadbin_pointascell(longitude, latitude, resolution):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    fn = "gbx_quadbin_pointascell"
+    if longitude is None or latitude is None or resolution is None:
+        return None
+    lon, lat = float(longitude), float(latitude)
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        return None  # a coordinate that is not finite has no cell
+    z = _whole(fn, resolution)
+    try:
+        return _quadbin.point_as_cell(lon, lat, z)
+    except ValueError as exc:  # a zoom outside the grid
+        raise _parameter(fn, exc) from exc
+
+
+def quadbin_polyfill(geom, resolution):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    fn = "gbx_quadbin_polyfill"
+    if geom is None or resolution is None:
+        return None
+    z = _whole(fn, resolution)
+    g = _grid_geometry(fn, geom, WGS84_SRID, "quadbin")
+    if g is None:
+        return None
+    try:
+        return _quadbin.polyfill(g, z)
+    except ValueError as exc:  # a zoom outside the grid, or too many cells
+        raise _parameter(fn, exc) from exc
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except Exception:  # noqa: BLE001 - a geometry that cannot be filled is NULL on UC
+        return None
+
+
+def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
+    from databricks.labs.gbx.pygx import _h3
+
+    fn = "gbx_h3_geomkring"
+    if geom is None or resolution is None or k is None:
+        return None
+    _mode(fn, mode)
+    res = _whole(fn, resolution)
+    g = _grid_geometry(fn, geom, WGS84_SRID, "H3")
+    if g is None or not _finite(g):
+        return None
+    try:
+        return sorted(
+            _h3.geom_expand(
+                "ring", g, res, int(k), mode or "boundary-out", coverage or "coveras"
+            )
+        )
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except ValueError as exc:  # a coverage or resolution the engine does not know
+        raise _parameter(fn, exc) from exc
+    except Exception:  # noqa: BLE001 - a geometry that cannot be dilated is NULL on UC
+        return None
+
+
+def st_explainvalidity(geom):
+    from databricks.labs.gbx.pyvx._validity import explain_validity
+
+    if geom is None:
+        return None
+    try:
+        return explain_validity(_geom_bytes(geom))
+    except (MemoryError, RecursionError, ImportError, TypeError):
+        raise
+    except Exception:  # noqa: BLE001 - unreadable geometry is NULL on UC
+        return None
+
+
+def st_wrapx(geom, wrap_x_origin, wrap_direction):
+    from databricks.labs.gbx.pyvx._antimeridian import _udf_st_wrapx
+
+    if geom is None or wrap_x_origin is None or wrap_direction is None:
+        return None
+    return _geom_out(
+        _udf_st_wrapx(_geom_bytes(geom), wrap_x_origin, wrap_direction)
+    )  # the SRID is kept
+
+
+def st_legacyaswkb(geom):
+    """The legacy Mosaic struct as a GEOMETRY carrying the struct's own `srid` (0 when it has none)."""
+    from databricks.labs.gbx.pyvx import _legacy
+
+    fn = "gbx_st_legacyaswkb"
+    if geom is None:
+        return None
+    try:
+        g = _legacy.legacy_to_geom(geom)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except ValueError as exc:  # a collection, or a type id the form does not define
+        raise _parameter(fn, exc) from exc
+    return _geom_out(_ewkb(g, int(_legacy._field(geom, "srid", 1) or 0)))

@@ -65,7 +65,7 @@ rst_combineavg_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|avg_tile                                                   |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -106,7 +106,7 @@ rst_derivedband_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|derived                                                    |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -142,7 +142,7 @@ rst_frombands_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|stacked                                                    |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -180,7 +180,7 @@ rst_merge_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|mosaic                                                     |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -250,7 +250,7 @@ rst_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|burned                                                     |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -323,7 +323,7 @@ rst_gridfrompoints_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|idw                                                        |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -397,7 +397,7 @@ rst_dtmfromgeoms_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|dtm                                                        |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -476,7 +476,7 @@ rst_h3_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -541,7 +541,7 @@ rst_quadbin_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -610,7 +610,7 @@ rst_bng_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one GeoTIFF per group, returned as BINARY)
 """
@@ -679,7 +679,7 @@ rst_binpoints_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
 """
@@ -763,7 +763,7 @@ rst_custom_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |<GeoTIFF bytes>|
+|R1    |<GeoTIFF bytes>                                            |
 +------+-----------------------------------------------------------+
 (one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
 """

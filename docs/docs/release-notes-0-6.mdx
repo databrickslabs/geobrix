@@ -567,6 +567,12 @@ Both tiers apply one rule for which pixels are valid.
   - The heavyweight tier still counts a null value as `1.0`.
 - **The lightweight `*_cellfill` aggregates give the same fill whatever order rows arrive in.** `h3_cellfill`, `quadbin_cellfill`, `bng_cellfill` and `custom_cellfill` used the last row for a repeated cell id. They use the cell's largest non-null value. A cell stays `NULL` only when all its values are null. The heavyweight tier still keeps the last row it receives.
 
+### Cell rasterizers: scalar forms and table functions (new) {#cell-rasterizer-forms}
+
+- **`gbx_rst_h3_rasterize`, `gbx_rst_quadbin_rasterize`, `gbx_rst_bng_rasterize` and `gbx_rst_custom_rasterize` burn an array of cells into a raster tile.** Pass `collect_list(struct(cellid, value))` and get the bytes of one GeoTIFF without a `GROUP BY`.
+- **`gbx_rst_bng_rasterize_tvf` burns BNG cells into one raster per key without holding a whole group in memory.** Call it with `TABLE(...) PARTITION BY (key)` and an explicit canvas.
+- **`gbx_rst_merge_tvf` merges each key's tiles into one raster, reading them a row at a time.** Use it instead of `gbx_rst_merge_agg` for large groups.
+
 ## Grid functions {#grid-functions}
 
 ### `bng_tessellateexplode` columns (behavior change) {#bng-explode}

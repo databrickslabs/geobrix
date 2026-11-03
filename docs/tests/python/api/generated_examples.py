@@ -19,15 +19,30 @@ EXAMPLES = {
         "cellarea_1km",
         "SELECT gbx_bng_cellarea('TQ3080') AS out",
     ),
+    "gbx_bng_cellfill": (
+        "CELL_AGGREGATE",
+        "bng_fill_mean",
+        "SELECT gbx_bng_cellfill(c0, c1, 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_bng_cellintersection": (
         "GRID_SCALAR",
         "cellint_halves",
         "SELECT gbx_bng_cellintersection(c0, c1) AS out FROM gbx_example",
     ),
+    "gbx_bng_cellintersection_agg": (
+        "CELL_AGGREGATE",
+        "bi_agg_two_chips",
+        "SELECT gbx_bng_cellintersection_agg(c0) AS out FROM gbx_example",
+    ),
     "gbx_bng_cellunion": (
         "GRID_SCALAR",
         "cellunion_halves",
         "SELECT gbx_bng_cellunion(c0, c1) AS out FROM gbx_example",
+    ),
+    "gbx_bng_cellunion_agg": (
+        "CELL_AGGREGATE",
+        "bu_agg_two_chips",
+        "SELECT gbx_bng_cellunion_agg(c0) AS out FROM gbx_example",
     ),
     "gbx_bng_centroid": (
         "GRID_SCALAR",
@@ -119,6 +134,11 @@ EXAMPLES = {
         "cg_aswkt",
         "SELECT gbx_custom_cellaswkt(72057594038650997, c1) AS out FROM gbx_example",
     ),
+    "gbx_custom_cellfill": (
+        "CELL_AGGREGATE",
+        "cg_fill_mean",
+        "SELECT gbx_custom_cellfill(c0, c1, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_custom_centroid": (
         "GRID_SCALAR",
         "cg_centroid",
@@ -179,6 +199,11 @@ EXAMPLES = {
         "h3bbox_default",
         "SELECT gbx_h3_cell_bbox(613196570331971583) AS out",
     ),
+    "gbx_h3_cellfill": (
+        "CELL_AGGREGATE",
+        "h3_fill_mean",
+        "SELECT gbx_h3_cellfill(c0, c1, 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_h3_geomkloop": (
         "GRID_ARRAY",
         "h3_geomkloop_point_k1",
@@ -209,10 +234,20 @@ EXAMPLES = {
         "qb_aswkb",
         "SELECT gbx_quadbin_aswkb(5233961839712272383) AS out",
     ),
+    "gbx_quadbin_cellfill": (
+        "CELL_AGGREGATE",
+        "qb_fill_mean",
+        "SELECT gbx_quadbin_cellfill(c0, c1, 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_quadbin_cellunion": (
         "GRID_SCALAR",
         "qb_cellunion",
         "SELECT gbx_quadbin_cellunion(c0) AS out FROM gbx_example",
+    ),
+    "gbx_quadbin_cellunion_agg": (
+        "CELL_AGGREGATE",
+        "qu_agg_two_cells",
+        "SELECT gbx_quadbin_cellunion_agg(c0) AS out FROM gbx_example",
     ),
     "gbx_quadbin_centroid": (
         "GRID_SCALAR",
@@ -309,8 +344,18 @@ EXAMPLES = {
         "binpoints_max",
         "SELECT gbx_rst_binpoints(c0, c1, c2, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10, 3857, 'max') AS out FROM gbx_example",
     ),
+    "gbx_rst_binpoints_agg": (
+        "RASTER_AGGREGATE",
+        "bp_agg_max",
+        "SELECT gbx_rst_binpoints_agg(c0, c1, c2, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326, 'max') AS out FROM gbx_example",
+    ),
+    "gbx_rst_bng_rasterize": (
+        "RASTER_AGGREGATE",
+        "brt_dup_max",
+        "SELECT gbx_rst_bng_rasterize(c0, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example",
+    ),
     "gbx_rst_bng_rasterize_agg": (
-        "MVP_A",
+        "RASTER_AGGREGATE",
         "br_nan_beside_numbers",
         "SELECT gbx_rst_bng_rasterize_agg(c0, c1, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example",
     ),
@@ -394,6 +439,11 @@ EXAMPLES = {
         "combineavg_stack",
         "SELECT gbx_rst_combineavg(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_combineavg_agg": (
+        "RASTER_AGGREGATE",
+        "ca_agg_stack",
+        "SELECT gbx_rst_combineavg_agg(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_combinecount": (
         "RASTER_ARRAY_OP",
         "combinecount_stack",
@@ -438,6 +488,16 @@ EXAMPLES = {
         "RASTER_ACCESSOR",
         "crs",
         "SELECT gbx_rst_crs(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_custom_rasterize": (
+        "RASTER_AGGREGATE",
+        "cgrt_dup_max",
+        "SELECT gbx_rst_custom_rasterize(c0, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 27700, CAST(NULL AS DOUBLE), 529000.0D, 179000.0D, 533000.0D, 182000.0D, 8, 6, 'centroids', 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_custom_rasterize_agg": (
+        "RASTER_AGGREGATE",
+        "cgr_dup_max",
+        "SELECT gbx_rst_custom_rasterize_agg(c0, c1, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 27700, CAST(NULL AS DOUBLE), 529000.0D, 179000.0D, 533000.0D, 182000.0D, 8, 6, 'centroids', 0) AS out FROM gbx_example",
     ),
     "gbx_rst_custom_rastertogridavg": (
         "RASTER_TO_GRID",
@@ -489,10 +549,20 @@ EXAMPLES = {
         "derivedband_double_plus_one",
         "SELECT gbx_rst_derivedband(c0, 'def double_plus_one(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs): out_ar[:] = in_ar[0] * 2 + 1', 'double_plus_one') AS out FROM gbx_example",
     ),
+    "gbx_rst_derivedband_agg": (
+        "RASTER_AGGREGATE",
+        "db_agg_sum",
+        "SELECT gbx_rst_derivedband_agg(c0, 'def sum2(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs): out_ar[:] = in_ar[0] + in_ar[1]', 'sum2') AS out FROM gbx_example",
+    ),
     "gbx_rst_dtmfromgeoms": (
         "RASTER_RASTERIZE",
         "dtmfromgeoms_wkb",
         "SELECT gbx_rst_dtmfromgeoms(c0, c1, 0.0D, 0.0D, 0.0D, 0.0D, 10.0D, 10.0D, 5, 5, 3857) AS out FROM gbx_example",
+    ),
+    "gbx_rst_dtmfromgeoms_agg": (
+        "RASTER_AGGREGATE",
+        "dt_agg_plane",
+        "SELECT gbx_rst_dtmfromgeoms_agg(c0, CAST(NULL AS ARRAY<BINARY>), 0.0D, 0.0D, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10, 4326) AS out FROM gbx_example",
     ),
     "gbx_rst_evi": (
         "SPEC_CALC",
@@ -518,6 +588,11 @@ EXAMPLES = {
         "RASTER_ARRAY_OP",
         "frombands_three",
         "SELECT gbx_rst_frombands(c0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_frombands_agg": (
+        "RASTER_AGGREGATE",
+        "fb_agg_order",
+        "SELECT gbx_rst_frombands_agg(c0, c1) AS out FROM gbx_example",
     ),
     "gbx_rst_fromcontent": (
         "RASTER_CONSTRUCTOR",
@@ -548,6 +623,21 @@ EXAMPLES = {
         "RASTER_RASTERIZE",
         "gridfrompoints_wkb",
         "SELECT gbx_rst_gridfrompoints(c0, c1, 0.0D, 0.0D, 10.0D, 10.0D, 4, 4, 3857) AS out FROM gbx_example",
+    ),
+    "gbx_rst_gridfrompoints_agg": (
+        "RASTER_AGGREGATE",
+        "gp_agg_idw",
+        "SELECT gbx_rst_gridfrompoints_agg(c0, c1, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326) AS out FROM gbx_example",
+    ),
+    "gbx_rst_h3_rasterize": (
+        "RASTER_AGGREGATE",
+        "h3rt_dup_max",
+        "SELECT gbx_rst_h3_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -122.43D, 37.76D, -122.405D, 37.785D, 10, 10, 'centroids', 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_h3_rasterize_agg": (
+        "RASTER_AGGREGATE",
+        "h3r_dup_max",
+        "SELECT gbx_rst_h3_rasterize_agg(c0, c1, 4326, CAST(NULL AS DOUBLE), -122.43D, 37.76D, -122.405D, 37.785D, 10, 10, 'centroids', 0) AS out FROM gbx_example",
     ),
     "gbx_rst_h3_rastertogridavg": (
         "RASTER_TO_GRID",
@@ -665,7 +755,7 @@ EXAMPLES = {
         "SELECT gbx_rst_merge(c0) AS out FROM gbx_example",
     ),
     "gbx_rst_merge_agg": (
-        "MVP_A",
+        "RASTER_AGGREGATE",
         "ma_quad",
         "SELECT gbx_rst_merge_agg(c0) AS out FROM gbx_example",
     ),
@@ -729,6 +819,16 @@ EXAMPLES = {
         "proximity_targets",
         "SELECT gbx_rst_proximity(c0, '1,2') AS out FROM gbx_example",
     ),
+    "gbx_rst_quadbin_rasterize": (
+        "RASTER_AGGREGATE",
+        "qbrt_dup_max",
+        "SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -0.6D, 51.2D, 0.4D, 51.8D, 10, 6, 'centroids', 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_quadbin_rasterize_agg": (
+        "RASTER_AGGREGATE",
+        "qbr_dup_max",
+        "SELECT gbx_rst_quadbin_rasterize_agg(c0, c1, 4326, CAST(NULL AS DOUBLE), -0.6D, 51.2D, 0.4D, 51.8D, 10, 6, 'centroids', 0) AS out FROM gbx_example",
+    ),
     "gbx_rst_quadbin_rastertogridavg": (
         "RASTER_TO_GRID",
         "qb_rtg_avg",
@@ -778,6 +878,11 @@ EXAMPLES = {
         "RASTER_RASTERIZE",
         "rasterize_wkt",
         "SELECT gbx_rst_rasterize('POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))', 5.0D, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10, 3857) AS out",
+    ),
+    "gbx_rst_rasterize_agg": (
+        "RASTER_AGGREGATE",
+        "rz_agg_overlap",
+        "SELECT gbx_rst_rasterize_agg(c0, c1, 0.0D, 0.0D, 4.0D, 2.0D, 4, 2, 4326) AS out FROM gbx_example",
     ),
     "gbx_rst_rastertoworldcoord": (
         "RASTER_ACCESSOR",
@@ -984,10 +1089,25 @@ EXAMPLES = {
         "xyzpyramid_z8_9",
         "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_xyzpyramid(c0, 8, 9) AS gbx_out",
     ),
+    "gbx_st_asmvt": (
+        "VECTOR_AGGREGATE",
+        "asmvt_two_features",
+        "SELECT gbx_st_asmvt(c0, c1, 'lyr') AS out FROM gbx_example",
+    ),
     "gbx_st_asmvt_pyramid": (
         "VECTOR_GENERATOR",
         "pyramid_point_z0_1",
         "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_st_asmvt_pyramid('POINT (100 45)', c1, 0, 1) AS gbx_out",
+    ),
+    "gbx_st_coverageinvalidedges": (
+        "VECTOR_AGGREGATE",
+        "covedges_overlap",
+        "SELECT gbx_st_coverageinvalidedges(c0, 0.0D) AS out FROM gbx_example",
+    ),
+    "gbx_st_coverageisvalid": (
+        "VECTOR_AGGREGATE",
+        "covvalid_clean",
+        "SELECT gbx_st_coverageisvalid(c0, 0.0D) AS out FROM gbx_example",
     ),
     "gbx_st_crs": (
         "VECTOR_SCALAR",

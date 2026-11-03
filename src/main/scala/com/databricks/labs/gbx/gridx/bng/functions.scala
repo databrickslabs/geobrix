@@ -83,8 +83,6 @@ object functions extends Serializable {
         ColumnAdapter(BNG_Tessellate.name, Seq(geom, resolution, keepCoreGeom))
 
     // Aggregators
-    def bng_cellintersection_agg(c1: Column): Column = ColumnAdapter(BNG_CellIntersectionAgg.name, Seq(c1))
-    def bng_cellunion_agg(c1: Column): Column = ColumnAdapter(BNG_CellUnionAgg.name, Seq(c1))
     def bng_cellfill(cellid: Column, value: Column): Column =
         ColumnAdapter(BNG_CellFill.name, Seq(cellid, value))
     def bng_cellfill(cellid: Column, value: Column, k: Int): Column =

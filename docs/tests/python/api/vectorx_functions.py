@@ -68,29 +68,6 @@ _WKB_POINT_0_10 = "010100000000000000000000000000000000002440"
 _WKB_POINT_0_0 = "010100000000000000000000000000000000000000"
 
 
-def st_asmvt_python_heavy_example(spark):
-    """Aggregate tile-local features into an MVT protobuf blob per tile (heavy vectorx tier)."""
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
-
-    df = spark.table("mvt_features")
-    result = df.groupBy("z", "x", "y").agg(
-        vx.st_asmvt(f.col("geom_wkb"), f.col("attrs"), f.lit("layer")).alias("mvt")
-    )
-    row = result.first()
-    return row["mvt"]
-
-
-st_asmvt_python_heavy_example_output = """
-+---+---+---+---------+
-|  z|  x|  y|      mvt|
-+---+---+---+---------+
-|  0|  0|  0|[binary] |
-+---+---+---+---------+
-... (MVT binary)
-"""
-
-
 # ---------------------------------------------------------------------------
 # CRS family — heavy (vectorx) Python examples
 # Fixture: ``vector_geoms`` view — 1 row: geom STRING = 'SRID=4326;POINT (13 42)'

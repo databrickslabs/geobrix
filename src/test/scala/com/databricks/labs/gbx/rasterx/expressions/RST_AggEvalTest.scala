@@ -54,7 +54,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
                 .agg(
                   rst_combineavg_agg(col("raster")),
                   rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc"),
-                  rst_merge_agg(col("raster"))
+                  call_function("gbx_rst_merge_agg", col("raster"))
                 )
                 .collect()
         }
@@ -209,7 +209,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             val bytes = order.toDF("path")
                 .withColumn("tile", udfs.rasterFromPath(col("path")))
                 .groupBy(lit(1).alias("g"))
-                .agg(rst_merge_agg(col("tile")).alias("out"))
+                .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
                 .select(col("out.raster").alias("raster"))
                 .collect().head.getAs[Array[Byte]]("raster")
             val mem = s"/vsimem/merge_agg_det_${java.util.UUID.randomUUID()}.tif"
@@ -271,7 +271,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             val bytes = order.toDF("content")
                 .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
                 .groupBy(lit(1).alias("g"))
-                .agg(rst_merge_agg(col("tile")).alias("out"))
+                .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
                 .select(col("out.raster").alias("raster"))
                 .collect().head.getAs[Array[Byte]]("raster")
             val mem = s"/vsimem/merge_agg_sameorigin_${java.util.UUID.randomUUID()}.tif"
@@ -456,7 +456,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             df.groupBy(lit(1))
                 .agg(
                   rst_combineavg_agg(col("raster")),
-                  rst_merge_agg(col("raster")),
+                  call_function("gbx_rst_merge_agg", col("raster")),
                   rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc")
                 )
                 .collect()
@@ -517,7 +517,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val df = Seq(valid, corrupt).toDF("content")
             .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
             .groupBy(lit(1).alias("g"))
-            .agg(rst_merge_agg(col("tile")).alias("out"))
+            .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
             .select(col("out").as("out"), col("out.metadata").as("md"))
 
         noException should be thrownBy df.collect()
@@ -544,7 +544,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         assert(failed.select(col("tile.raster").isNull.as("n")).head().getBoolean(0), "the failed tile must have a NULL raster")
 
         val row = good.union(failed).groupBy(lit(1).alias("g"))
-            .agg(rst_merge_agg(col("tile")).alias("out"))
+            .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("out"))
             .select(col("out").as("out"), col("out.metadata").as("md"))
             .head()
         assert(row.get(0) != null, "out struct must be non-null (the good tile was merged)")
@@ -572,7 +572,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
         // One member or two, the answer is a member as it is: every key, not a rebuilt tile that kept the reason only.
         for (agg <- Seq(
-               rst_merge_agg(col("tile")),
+               call_function("gbx_rst_merge_agg", col("tile")),
                rst_combineavg_agg(col("tile")),
                rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc")
              )) {

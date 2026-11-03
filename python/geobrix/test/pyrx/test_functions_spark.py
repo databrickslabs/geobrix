@@ -669,7 +669,11 @@ def test_rst_combineavg_agg_mean_and_cellid(spark):
     a = _ras_bytes(np.array([[2.0, 4.0], [6.0, 8.0]]))
     b = _ras_bytes(np.array([[4.0, 8.0], [10.0, 12.0]]))
     df = _tiles_df(spark, [("g", a), ("g", b)])
-    tile = df.groupBy("k").agg(prx.rst_combineavg_agg("tile").alias("t")).first()["t"]
+    tile = (
+        df.groupBy("k")
+        .agg(prx._light_rst_combineavg_agg("tile").alias("t"))
+        .first()["t"]
+    )
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert np.allclose(ds.read(1), [[3.0, 6.0], [8.0, 10.0]])
     # cellid carried through from the group's first tile (fromcontent -> 0).
@@ -688,7 +692,7 @@ def test_rst_frombands_agg_ascending_order(spark):
     )
     tile = (
         df.groupBy("k")
-        .agg(prx.rst_frombands_agg("tile", "band_index").alias("t"))
+        .agg(prx._light_rst_frombands_agg("tile", "band_index").alias("t"))
         .first()["t"]
     )
     with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -707,7 +711,11 @@ def test_rst_rasterize_agg(spark):
     df = spark.createDataFrame([("g", g1, 1.0), ("g", g2, 2.0)], ["k", "geom", "val"])
     tile = (
         df.groupBy("k")
-        .agg(prx.rst_rasterize_agg("geom", "val", 0, 0, 4, 4, 4, 4, 32633).alias("t"))
+        .agg(
+            prx._light_rst_rasterize_agg("geom", "val", 0, 0, 4, 4, 4, 4, 32633).alias(
+                "t"
+            )
+        )
         .first()["t"]
     )
     with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -730,7 +738,11 @@ def test_rst_derivedband_agg(spark):
     df = _tiles_df(spark, [("g", a), ("g", b), ("g", c)])
     tile = (
         df.groupBy("k")
-        .agg(prx.rst_derivedband_agg("tile", PYFUNC_SUM_AGG, "addbands").alias("t"))
+        .agg(
+            prx._light_rst_derivedband_agg("tile", PYFUNC_SUM_AGG, "addbands").alias(
+                "t"
+            )
+        )
         .first()["t"]
     )
     with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -777,8 +789,8 @@ def _error_tiles_df(spark, *reasons):
     [
         lambda d: prx._light_rst_merge_agg("tile"),
         lambda d: prx._light_rst_merge_agg("tile", virtualize_dir=str(d)),
-        lambda d: prx.rst_combineavg_agg("tile"),
-        lambda d: prx.rst_derivedband_agg("tile", PYFUNC_SUM_AGG, "addbands"),
+        lambda d: prx._light_rst_combineavg_agg("tile"),
+        lambda d: prx._light_rst_derivedband_agg("tile", PYFUNC_SUM_AGG, "addbands"),
     ],
     ids=["merge", "merge-virtualize", "combineavg", "derivedband"],
 )
@@ -992,7 +1004,7 @@ def test_rst_gridfrompoints_agg_equals_constructor(spark):
     tile = (
         df.groupBy("k")
         .agg(
-            prx.rst_gridfrompoints_agg(
+            prx._light_rst_gridfrompoints_agg(
                 "pt", "v", 0.0, 0.0, 2.0, 2.0, 1, 1, 32633, 2.0, 2
             ).alias("t")
         )
@@ -1015,7 +1027,7 @@ def test_rst_dtmfromgeoms_agg_equals_constructor(spark):
     tile = (
         df.groupBy("k")
         .agg(
-            prx.rst_dtmfromgeoms_agg(
+            prx._light_rst_dtmfromgeoms_agg(
                 "pt", f.lit(None), 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10, 10, 32633
             ).alias("t")
         )
@@ -1131,7 +1143,7 @@ def test_rst_gridfrompoints_agg_geom_encodings(spark):
         tile = (
             df.groupBy("k")
             .agg(
-                prx.rst_gridfrompoints_agg(
+                prx._light_rst_gridfrompoints_agg(
                     "pt", "v", 0.0, 0.0, 2.0, 2.0, 1, 1, 32633, 2.0, 2
                 ).alias("t")
             )
@@ -1186,7 +1198,7 @@ def test_rst_dtmfromgeoms_agg_geom_encodings(spark):
         tile = (
             df.groupBy("k")
             .agg(
-                prx.rst_dtmfromgeoms_agg(
+                prx._light_rst_dtmfromgeoms_agg(
                     "pt", f.lit(None), 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10, 10, 32633
                 ).alias("t")
             )

@@ -23,7 +23,11 @@ def test_st_asmvt_aggregates_group_to_one_tile(spark):
 
     out = (
         df.groupBy("z", "x", "y")
-        .agg(vx.st_asmvt(f.col("geom"), f.struct("name", "pop"), "layer").alias("mvt"))
+        .agg(
+            vx._light_st_asmvt(f.col("geom"), f.struct("name", "pop"), "layer").alias(
+                "mvt"
+            )
+        )
         .collect()
     )
     assert len(out) == 1
@@ -52,7 +56,11 @@ def test_st_asmvt_accepts_wkt(spark):
     )
     out = (
         df.groupBy("z", "x", "y")
-        .agg(vx.st_asmvt(f.col("geom"), f.struct("name", "pop"), "layer").alias("mvt"))
+        .agg(
+            vx._light_st_asmvt(f.col("geom"), f.struct("name", "pop"), "layer").alias(
+                "mvt"
+            )
+        )
         .collect()
     )
     assert len(out) == 1

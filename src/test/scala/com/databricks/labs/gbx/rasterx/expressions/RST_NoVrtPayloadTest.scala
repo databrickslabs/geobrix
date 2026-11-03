@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.catalyst.plans.PlanTest
-import org.apache.spark.sql.functions.{array, col, lit}
+import org.apache.spark.sql.functions.{array, call_function, col, lit}
 import org.apache.spark.sql.test.SilentSparkSession
 import org.scalatest.matchers.should.Matchers._
 
@@ -65,7 +65,7 @@ class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
         ).toDF("path")
             .withColumn("tile", udfs.rasterFromPath(col("path")))
             .groupBy(lit(1).alias("g"))
-            .agg(rst_merge_agg(col("tile")).alias("merged"))
+            .agg(call_function("gbx_rst_merge_agg", col("tile")).alias("merged"))
             .select(
               col("merged.raster").alias("raster"),
               col("merged.metadata").alias("metadata")

@@ -6250,7 +6250,8 @@ def _rasterize_agg_udf(
     features_list = [
         (bytes(g), float(v))
         for g, v in zip(geom_wkb, value)
-        if g is not None and v is not None
+        if g is not None
+        and not pd.isna(v)  # a NULL value arrives as NaN: the row is skipped
     ]
     if not features_list:
         return None
@@ -6330,7 +6331,7 @@ def _gridfrompoints_agg_udf(
     ymax: pd.Series,
     width_px: pd.Series,
     height_px: pd.Series,
-    srid: pd.Series,
+    srid: pd.Series = None,
     power: pd.Series = None,
     max_pts: pd.Series = None,
     out_crs: pd.Series = None,
@@ -6342,7 +6343,7 @@ def _gridfrompoints_agg_udf(
     xy = []
     vals = []
     for g, v in zip(point, value):
-        if v is None:
+        if pd.isna(v) or g is None:  # a NULL value arrives as NaN
             continue
         geom = _parse_geom_elem(g)
         if geom is None or geom.is_empty:
@@ -6352,7 +6353,7 @@ def _gridfrompoints_agg_udf(
     if not xy:
         return None
     # Extent/size/out-CRS/power/max_pts are per-group constants; read from row 0.
-    srid0 = srid.iloc[0]
+    srid0 = None if srid is None else srid.iloc[0]
     out_crs0 = None if out_crs is None else out_crs.iloc[0]
     return tin_core.idw_grid(
         xy,
@@ -6382,7 +6383,7 @@ def _binpoints_agg_udf(
     w: pd.Series,
     h: pd.Series,
     srid: pd.Series,
-    statistic: pd.Series,
+    statistic: pd.Series = None,
 ) -> bytes:
     """Grouped-agg: stream one (x, y, z) scalar point per row into one raster.
 
@@ -6395,9 +6396,13 @@ def _binpoints_agg_udf(
     """
     if len(x) == 0:
         return None
+    if any(pd.isna(c.iloc[0]) for c in (xmin, ymin, xmax, ymax, w, h, srid)):
+        return None  # a NULL extent, size or srid: no raster
     stat = (
         str(statistic.iloc[0])
-        if len(statistic) > 0 and statistic.iloc[0] is not None
+        if statistic is not None
+        and len(statistic) > 0
+        and statistic.iloc[0] is not None
         else "max"
     )
     return binning.bin_points(
@@ -6427,7 +6432,7 @@ def _dtmfromgeoms_agg_udf(
     ymax: pd.Series,
     width_px: pd.Series,
     height_px: pd.Series,
-    srid: pd.Series,
+    srid: pd.Series = None,
     no_data: pd.Series = None,
     out_crs: pd.Series = None,
 ) -> bytes:
@@ -6453,7 +6458,7 @@ def _dtmfromgeoms_agg_udf(
     # read from row 0 and let delaunay_dtm decode each element.
     bl_arr = breaklines.iloc[0]
     bl = [b for b in bl_arr if b is not None] if bl_arr is not None else None
-    srid0 = srid.iloc[0]
+    srid0 = None if srid is None else srid.iloc[0]
     out_crs0 = None if out_crs is None else out_crs.iloc[0]
     return tin_core.delaunay_dtm(
         pts,
@@ -6897,6 +6902,236 @@ def _rst_custom_rasterize_agg_udf(
     )
 
 
+# --- the scalar twins of the cell rasterizers: the group arrives as an array of (cellid, value) structs ------------
+# The same answer as the aggregate over the same cells (the rules are `_max_value_per_cell` and `_rasterize_agg_body`),
+# for a group that is built in a step of its own (`collect_list(struct(cellid, value))`). A NULL cell id in the array is
+# skipped: an array holds the exact ints, so the float64 rounding that makes an aggregate refuse a NULL beside BIGINT ids
+# cannot happen here.
+
+
+def _as_series(v):
+    """One per-group constant as the Series the aggregates' bodies read it from."""
+    return pd.Series([v], dtype=object)
+
+
+def _twin_cells(cells):
+    """(ids, values) of the array's structs, the NULL cell ids dropped; values stay as they are (None or NaN)."""
+    rows = [
+        (c["cellid"], c["value"])
+        for c in (cells or ())
+        if c is not None and c["cellid"] is not None
+    ]
+    return [r[0] for r in rows], [r[1] for r in rows]
+
+
+def _twin_burn(
+    grid,
+    ad,
+    key,
+    ids,
+    values,
+    srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    vals = [None if v is None or v != v else float(v) for v in values]
+    cell_values = _max_value_per_cell(ids, vals, key, typed=True)
+    return _rasterize_agg_body(
+        cell_values,
+        ids,
+        ad,
+        grid,
+        srid,
+        *(
+            _as_series(v)
+            for v in (
+                pixel_size,
+                xmin,
+                ymin,
+                xmax,
+                ymax,
+                width,
+                height,
+                mode,
+                kring_pad,
+            )
+        ),
+    )
+
+
+@f.udf(BinaryType())
+def _rst_bng_rasterize_udf(
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs=None,
+):
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    if out_crs is not None:
+        raise ValueError(BNG_OUT_CRS_REFUSAL.replace("_agg:", ":", 1))
+    ids, values = _twin_cells(cells)
+    if not ids:
+        return None
+    ad = cr._adapter("bng")
+    return _twin_burn(
+        "bng", ad, ad.to_key, [str(c) for c in ids], values, 27700, pixel_size,
+        xmin, ymin, xmax, ymax, width, height, mode, kring_pad,
+    )  # fmt: skip
+
+
+def _twin_lonlat(
+    grid,
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs,
+):
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    ids, values = _twin_cells(cells)
+    if not ids:
+        return None
+    ad = cr._adapter(grid)
+    # out_crs (a string) wins over the int out_srid; neither: the grid-native EPSG:4326
+    srid = (
+        out_crs
+        if out_crs is not None
+        else (int(out_srid) if out_srid is not None else 4326)
+    )
+    return _twin_burn(
+        grid, ad, ad.to_key, [int(c) for c in ids], values, srid, pixel_size,
+        xmin, ymin, xmax, ymax, width, height, mode, kring_pad,
+    )  # fmt: skip
+
+
+@f.udf(BinaryType())
+def _rst_h3_rasterize_udf(
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs=None,
+):
+    return _twin_lonlat(
+        "h3",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+@f.udf(BinaryType())
+def _rst_quadbin_rasterize_udf(
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs=None,
+):
+    return _twin_lonlat(
+        "quadbin",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+@f.udf(BinaryType())
+def _rst_custom_rasterize_udf(
+    cells,
+    grid,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+):
+    from databricks.labs.gbx.pygx._custom import conf_from_row
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    ids, values = _twin_cells(cells)
+    if not ids:
+        return None
+    conf = conf_from_row(grid)
+    if out_srid is not None:
+        srid = int(out_srid)
+    elif conf.srid != -1:
+        srid = conf.srid
+    else:
+        raise ValueError(
+            "rst_custom_rasterize: grid has no CRS (srid=-1); supply out_srid explicitly."
+        )
+    ad = cr._CustomAdapter(conf, fallback_srid=srid)
+    return _twin_burn(
+        "custom", ad, None, [int(c) for c in ids], values, srid, pixel_size,
+        xmin, ymin, xmax, ymax, width, height, mode, kring_pad,
+    )  # fmt: skip
+
+
 # --- public Column wrappers (compose grouped-agg BINARY + scalar as_tile) ----
 def _merge_agg_forced(tile, virtualize_dir, virtualize_prefix, materialize):
     """The force-output form of ``gbx_rst_merge_agg`` that ``rasterx.functions.rst_merge_agg`` runs when
@@ -6958,7 +7193,7 @@ def _light_rst_merge_agg(
     return _as_tile_udf(_merge_agg_tile_udf(tc))
 
 
-def rst_combineavg_agg(tile: ColLike) -> Column:
+def _light_rst_combineavg_agg(tile: ColLike) -> Column:
     """Per-pixel mean across a group's aligned tiles, ignoring NoData.
 
     Use inside ``.agg()``::
@@ -6977,7 +7212,7 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
     return _as_tile_cellid_envelope_udf(_combineavg_agg_udf(tc))
 
 
-def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
+def _light_rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
     """Stack a group's single-band tiles into one multi-band tile.
 
     Bands are ordered by ``band_index`` ASCENDING (the ordering guarantee).
@@ -6997,7 +7232,7 @@ def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
     return _as_tile_udf(_frombands_agg_udf(tc, _col(band_index)))
 
 
-def rst_rasterize_agg(
+def _light_rst_rasterize_agg(
     geom: ColLike,
     value: ColLike,
     xmin: ColLike,
@@ -7034,7 +7269,7 @@ def rst_rasterize_agg(
     )
 
 
-def rst_derivedband_agg(
+def _light_rst_derivedband_agg(
     tile: ColLike, python_func: ColLike, func_name: ColLike
 ) -> Column:
     """Apply a user GDAL VRT pixel function across a group's tiles.
@@ -7053,7 +7288,7 @@ def rst_derivedband_agg(
     return _as_tile_udf(_derivedband_agg_tile_udf(_col(tile), pf, fn))
 
 
-def rst_gridfrompoints_agg(
+def _light_rst_gridfrompoints_agg(
     point: ColLike,
     value: ColLike,
     xmin: ColLike,
@@ -7099,7 +7334,7 @@ def rst_gridfrompoints_agg(
     )
 
 
-def rst_binpoints_agg(
+def _light_rst_binpoints_agg(
     x: ColLike,
     y: ColLike,
     z: ColLike,
@@ -7123,7 +7358,7 @@ def rst_binpoints_agg(
     Use inside ``.agg()``::
 
         df.groupBy(k).agg(
-            prx.rst_binpoints_agg(
+            prx._light_rst_binpoints_agg(
                 "x", "y", "z", xmin, ymin, xmax, ymax, w, h, srid
             ).alias("dsm")
         )
@@ -7170,7 +7405,7 @@ def bin_points_tiled(
     """Bounded-memory tiled point binning — memory is the raster grid (W×H), not the
     point count. Two-stage native pre-aggregation: per-point pixel index -> native
     groupBy(tile, cell).agg(stat) -> place the <=W*H per-cell values via
-    rst_binpoints_agg. Output matches df.groupBy(by).agg(rst_binpoints_agg(x,y,z,...,
+    _light_rst_binpoints_agg. Output matches df.groupBy(by).agg(_light_rst_binpoints_agg(x,y,z,...,
     stat)) for max/min/mean/count. median/percentile delegate to that buffered
     aggregator (memory-heavy; use decimate or smaller tiles). Returns [*by, 'tile']."""
     from pyspark.sql import functions as F
@@ -7181,7 +7416,7 @@ def bin_points_tiled(
 
     if st == "median" or st.startswith("percentile"):
         return df.groupBy(*by).agg(
-            rst_binpoints_agg(
+            _light_rst_binpoints_agg(
                 x, y, z, xmin, ymin, xmax, ymax, F.lit(w), F.lit(h), F.lit(sid), stat
             ).alias("tile")
         )
@@ -7222,7 +7457,7 @@ def bin_points_tiled(
     )
 
     return per_cell.groupBy(*by).agg(
-        rst_binpoints_agg(
+        _light_rst_binpoints_agg(
             "_cx",
             "_cy",
             "_v",
@@ -7238,7 +7473,7 @@ def bin_points_tiled(
     )
 
 
-def rst_dtmfromgeoms_agg(
+def _light_rst_dtmfromgeoms_agg(
     point: ColLike,
     breaklines: ColLike,
     merge_tolerance: ColLike,
@@ -7290,7 +7525,7 @@ def rst_dtmfromgeoms_agg(
     )
 
 
-def rst_h3_rasterize_agg(
+def _light_rst_h3_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
     out_srid: ColLike = None,
@@ -7344,7 +7579,7 @@ def rst_h3_rasterize_agg(
     )
 
 
-def rst_quadbin_rasterize_agg(
+def _light_rst_quadbin_rasterize_agg(
     cellid: ColLike,
     value: ColLike = None,
     out_srid: ColLike = None,
@@ -7456,7 +7691,7 @@ def _light_rst_bng_rasterize_agg(
     )
 
 
-def rst_custom_rasterize_agg(
+def _light_rst_custom_rasterize_agg(
     cellid: ColLike,
     grid: ColLike,
     value: ColLike = None,

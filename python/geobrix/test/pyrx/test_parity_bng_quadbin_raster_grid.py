@@ -125,6 +125,11 @@ def spark_with_jar():
 # ---------------------------------------------------------------------------
 
 
+def _raster_of(tile):
+    """The GeoTIFF bytes of an aggregate's result: the BINARY itself, or the raster of a tile struct."""
+    return bytes(tile["raster"] if hasattr(tile, "asDict") else tile)
+
+
 def _gtiff_bytes(data, *, epsg, origin, px, nodata=_NODATA):
     """Single-band north-up GTiff from a 2-D array at the given CRS/georeference."""
     from rasterio.io import MemoryFile
@@ -732,11 +737,7 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
     # the light BNG form is private now (its public Python API is rasterx.functions.rst_bng_rasterize_agg)
     light_fn = getattr(
         prx,
-        (
-            "_light_rst_bng_rasterize_agg"
-            if grid == "bng"
-            else f"rst_{grid}_rasterize_agg"
-        ),
+        (f"_light_rst_{grid}_rasterize_agg"),
     )
     light_out = (
         df.groupBy("tx")
@@ -771,7 +772,7 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
             f.call_function(
                 f"gbx_rst_{grid}_rasterize_agg",
                 f.col(heavy_cellid_col),
-                f.lit(None).cast("double"),
+                f.lit(None),  # value left out (an untyped NULL): the presence mask
                 f.lit(out_srid),
                 f.lit(pixel_size),
                 f.lit(xmin),
@@ -788,7 +789,7 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
     )
     assert len(heavy_out) == 1
     heavy_tile = heavy_out[0]["tile"]
-    assert heavy_tile is not None and heavy_tile["raster"] is not None
+    assert heavy_tile is not None
 
     with _serde.open_tile(bytes(light_tile["raster"])) as lds:
         light_arr = lds.read(1)
@@ -796,7 +797,7 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
         assert (
             lds.width == width and lds.height == height
         ), f"{grid} light grid {lds.width}x{lds.height} != {width}x{height}"
-    with _serde.open_tile(bytes(heavy_tile["raster"])) as hds:
+    with _serde.open_tile(_raster_of(heavy_tile)) as hds:
         heavy_arr = hds.read(1)
         assert hds.nodata == _NODATA, f"{grid} heavy band NoData must be -9999"
         assert (

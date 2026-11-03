@@ -203,7 +203,7 @@ def test_rst_custom_rasterize_agg_presence_mask(spark):
 
     out = (
         df.groupBy("tx")
-        .agg(rx.rst_custom_rasterize_agg("cellid", "grid").alias("tile"))
+        .agg(rx._light_rst_custom_rasterize_agg("cellid", "grid").alias("tile"))
         .collect()
     )
     tile = out[0]["tile"]
@@ -228,7 +228,7 @@ def test_rst_custom_rasterize_agg_burns_value(spark):
 
     out = (
         df.groupBy("tx")
-        .agg(rx.rst_custom_rasterize_agg("cellid", "grid", "val").alias("tile"))
+        .agg(rx._light_rst_custom_rasterize_agg("cellid", "grid", "val").alias("tile"))
         .collect()
     )
     with _serde.open_tile(bytes(out[0]["tile"]["raster"])) as ds:

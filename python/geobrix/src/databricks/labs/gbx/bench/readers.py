@@ -1312,7 +1312,7 @@ def run_mvt_agg(
             from databricks.labs.gbx.pyvx import functions as vx
 
             vx.register(spark)
-            asmvt_fn = vx.st_asmvt
+            asmvt_fn = vx._light_st_asmvt
         else:
             from databricks.labs.gbx.vectorx import functions as hx
 

@@ -69,7 +69,7 @@ def test_oracle_rows_fit_signature(fn):
     assert rows, "every manifest function needs oracle rows"
     assert len({c.cid for c in rows}) == len(rows), "oracle row ids must be unique"
     # an aggregate's first argument is the group's rows: one row fills 1 parameter (a tile) or 2 (cellid, value)
-    extra = oracles.group_width(fn.params) - 1 if fn.kind == "aggregate" else 0
+    extra = oracles.group_width(fn) - 1 if fn.kind == "aggregate" else 0
     for c in rows:
         arg_rows = (
             c.args
@@ -2000,7 +2000,7 @@ def _column_api_forms(tmp_path):
         "merge_agg-virtualize": lambda: prx._light_rst_merge_agg(
             "tile", virtualize_dir=out
         ),
-        "derivedband_agg": lambda: prx.rst_derivedband_agg("tile", _PYFUNC, "f"),
+        "derivedband_agg": lambda: prx._light_rst_derivedband_agg("tile", _PYFUNC, "f"),
     }
 
 

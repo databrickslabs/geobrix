@@ -155,6 +155,19 @@ A grouped aggregate realizes its whole group in the worker, so memory is proport
 
 :::
 
+#### The cell rasterizers over a collected group
+
+The four cell rasterizers also exist as scalar functions that take the whole group as one array, `ARRAY<STRUCT<cellid, value>>`, for example `collect_list(struct(cellid, value))`. They give the same GeoTIFF bytes as the aggregate over the same cells, with the same rules (a repeated cell burns its largest value, a NULL value in a typed column never wins against a number, a NULL cell id is skipped). They are session functions, a light function each, and they hold the group in a single value, so they suit a group that is already collected (a step of its own, or a compute where a grouped aggregate is the wrong shape) and not a group of millions of cells.
+
+| Scalar twin | Aggregate it matches | Cell ids |
+|---|---|---|
+| `gbx_rst_bng_rasterize` | `gbx_rst_bng_rasterize_agg` | `STRING`, for example `'TQ3080'` |
+| `gbx_rst_h3_rasterize` | `gbx_rst_h3_rasterize_agg` | `BIGINT` |
+| `gbx_rst_quadbin_rasterize` | `gbx_rst_quadbin_rasterize_agg` | `BIGINT` |
+| `gbx_rst_custom_rasterize` | `gbx_rst_custom_rasterize_agg` | `BIGINT`, with the grid as the second argument |
+
+The aggregates with no twin (`gbx_bng_cellunion_agg` and `gbx_bng_cellintersection_agg`, whose scalar names are two-argument chip functions, `gbx_h3_cellfill`, `gbx_quadbin_cellfill`, `gbx_bng_cellfill`, `gbx_custom_cellfill`, `gbx_st_asmvt` and `gbx_st_coverage*`, whose names are taken by the aggregate itself, and `gbx_pmtiles_agg`, whose archive can reach 100 MiB) are session aggregates; call them with `GROUP BY`.
+
 ### Arrow scalar UDFs
 
 A **vectorized Arrow scalar `pandas_udf`** receives an Arrow batch of rows as a `pd.Series`, calls the function once per batch, and returns a `pd.Series`. The JVM–Python boundary is crossed **once per batch**, not once per row — the primary serialization saving over a plain `@udf`.

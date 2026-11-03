@@ -1337,7 +1337,7 @@ if LIGHTWEIGHT:
             from databricks.labs.gbx.pyvx import functions as _vx
             _vx.register(spark)
             _lrows = (_df2.groupBy("z","x","y")
-                .agg(_vx.st_asmvt(_F_mvt.col("geom"), _F_mvt.col("attrs"), _F_mvt.lit("layer")).alias("mvt"))
+                .agg(_vx._light_st_asmvt(_F_mvt.col("geom"), _F_mvt.col("attrs"), _F_mvt.lit("layer")).alias("mvt"))
                 .collect())
             _mvt_light_blobs = {(r["z"], r["x"], r["y"]): bytes(r["mvt"]) for r in _lrows if r["mvt"]}
         except Exception as _pe:

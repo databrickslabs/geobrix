@@ -104,174 +104,6 @@ def register(_spark: SparkSession) -> None:
 # Aggregators
 
 
-def rst_combineavg_agg(tile: ColLike) -> Column:
-    """Aggregate multiple raster tiles by averaging (use with groupBy).
-
-    Args:
-        tile: Raster tile column.
-
-    Returns:
-        Column of combined raster tile.
-    """
-    return f.call_function("gbx_rst_combineavg_agg", _col(tile))
-
-
-def rst_derivedband_agg(
-    tile: ColLike, python_func: ColLike, func_name: ColLike
-) -> Column:
-    """Aggregate tiles and apply a Python UDF per band (use with groupBy).
-
-    Args:
-        tile: Raster tile column.
-        python_func: Python source code of the UDF (string).
-        func_name: Name of the callable in python_func.
-
-    Returns:
-        Column of derived raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_derivedband_agg", _col(tile), _col(python_func), _col(func_name)
-    )
-
-
-def rst_rasterize_agg(
-    geom: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-) -> Column:
-    """Rasterize streaming (geom, value) rows into a single raster tile (use with groupBy).
-
-    Streams one geometry/value pair per row; the extent and pixel-size arguments
-    are per-group constants.  Overlap is last-wins (nondeterministic across the group).
-
-    Args:
-        geom: Geometry (WKB, EWKB, WKT, or EWKT) column (Polygon, MultiPolygon, etc.).
-        value: DOUBLE burn value column.
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-
-    Returns:
-        Column of raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_rasterize_agg",
-        _col(geom),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-    )
-
-
-def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
-    """Stack single-band tiles into a multi-band tile by explicit band index (use with groupBy).
-
-    Streams one (tile, band_index) pair per row.  On evaluation the tiles are sorted
-    by ``band_index`` ascending and stacked via ``gbx_rst_frombands``.  Unlike the
-    non-aggregator :func:`rst_frombands` (which reads ARRAY position as band order),
-    this aggregator accepts an explicit integer ``band_index`` to guarantee ordering
-    independent of row arrival order.
-
-    ``band_index`` accepts both ``IntegerType`` and ``LongType`` columns; PySpark
-    infers Python ``int`` literals as ``LongType``, which is handled transparently.
-
-    Args:
-        tile: Single-band raster tile column.
-        band_index: Integer (or long) column (1-based) indicating the output band position.
-
-    Returns:
-        Column of multi-band raster tile.
-    """
-    return f.call_function(
-        "gbx_rst_frombands_agg",
-        _col(tile),
-        _col(band_index),
-    )
-
-
-def rst_h3_rasterize_agg(
-    cellid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = None,
-) -> Column:
-    """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
-
-    Use with ``groupBy``; each row contributes one H3 ``cellid`` (and optionally
-    a ``value``). When ``value`` is omitted (or ``None``), pixels covered by any
-    cell are burned with ``1.0`` (presence mask).  Supply an explicit canvas
-    (``xmin`` … ``height``) from ``rst_h3_gridspec`` for aligned multi-band
-    stacking; otherwise the grid is auto-derived from the cell set.
-
-    Every argument except ``cellid`` is optional and defaults to the same value
-    the lightweight tier uses, so the common call is simply
-    ``rx.rst_h3_rasterize_agg("cellid", "value")``. Because SQL binds
-    positionally, an omitted keyword is filled here with a correctly-typed SQL
-    literal (a typed ``NULL`` for the extent/size fields).
-
-    Args:
-        cellid:     LONG column of H3 cell ids.
-        value:      DOUBLE burn-value column; omit for a presence mask.
-        out_srid:   EPSG SRID of the output raster (default ``4326``).
-        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
-        xmin:       Minimum X of the output canvas (CRS units).
-        ymin:       Minimum Y of the output canvas (CRS units).
-        xmax:       Maximum X of the output canvas (CRS units).
-        ymax:       Maximum Y of the output canvas (CRS units).
-        width:      Canvas width in pixels (INTEGER).
-        height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (default ``"centroids"``).
-        kring_pad:  K-ring expansion around each cell before rasterizing
-                    (default ``1``; ``0`` = no expansion).
-
-    Returns:
-        Column of raster tile — the v2 tile struct with fields
-        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
-    """
-
-    def _c(x, default):
-        return _col(x) if x is not None else default
-
-    return f.call_function(
-        "gbx_rst_h3_rasterize_agg",
-        _col(cellid),
-        _c(value, f.lit(None).cast("double")),
-        _c(out_srid, f.lit(4326)),
-        _c(pixel_size, f.lit(None).cast("double")),
-        _c(xmin, f.lit(None).cast("double")),
-        _c(ymin, f.lit(None).cast("double")),
-        _c(xmax, f.lit(None).cast("double")),
-        _c(ymax, f.lit(None).cast("double")),
-        _c(width, f.lit(None).cast("int")),
-        _c(height, f.lit(None).cast("int")),
-        _c(mode, f.lit("centroids")),
-        _c(kring_pad, f.lit(1)),
-    )
-
-
 # Constructors
 
 
@@ -279,74 +111,6 @@ def rst_h3_rasterize_agg(
 
 
 # Grid
-
-
-def rst_quadbin_rasterize_agg(
-    cellid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = None,
-    kring_pad: ColLike = None,
-) -> Column:
-    """Rasterize a group's CARTO quadbin v0 cells into one tile (pixel-centroid burn).
-
-    Use with ``groupBy``; each row contributes one quadbin ``cellid`` (BIGINT) and
-    optionally a ``value``. When ``value`` is omitted (or ``None``), pixels covered
-    by any cell are burned with ``1.0`` (presence mask). Supply an explicit canvas
-    (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the grid is
-    auto-derived from the cell set.
-
-    Every argument except ``cellid`` is optional and defaults to the same value
-    the lightweight tier uses, so the common call is simply
-    ``rx.rst_quadbin_rasterize_agg("cellid", "value")``. Because SQL binds
-    positionally, an omitted keyword is filled here with a correctly-typed SQL
-    literal (a typed ``NULL`` for the extent/size fields).
-
-    Args:
-        cellid:     BIGINT column of quadbin cell ids.
-        value:      DOUBLE burn-value column; omit for a presence mask.
-        out_srid:   EPSG SRID of the output raster (default ``4326``).
-        pixel_size: Pixel size in CRS units (used when extent is auto-derived).
-        xmin:       Minimum X of the output canvas (CRS units).
-        ymin:       Minimum Y of the output canvas (CRS units).
-        xmax:       Maximum X of the output canvas (CRS units).
-        ymax:       Maximum Y of the output canvas (CRS units).
-        width:      Canvas width in pixels (INTEGER).
-        height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (default ``"centroids"``).
-        kring_pad:  K-ring expansion around each cell before rasterizing
-                    (default ``1``; ``0`` = no expansion).
-
-    Returns:
-        Column of raster tile — the v2 tile struct with fields
-        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
-    """
-
-    def _c(x, default):
-        return _col(x) if x is not None else default
-
-    return f.call_function(
-        "gbx_rst_quadbin_rasterize_agg",
-        _col(cellid),
-        _c(value, f.lit(None).cast("double")),
-        _c(out_srid, f.lit(4326)),
-        _c(pixel_size, f.lit(None).cast("double")),
-        _c(xmin, f.lit(None).cast("double")),
-        _c(ymin, f.lit(None).cast("double")),
-        _c(xmax, f.lit(None).cast("double")),
-        _c(ymax, f.lit(None).cast("double")),
-        _c(width, f.lit(None).cast("int")),
-        _c(height, f.lit(None).cast("int")),
-        _c(mode, f.lit("centroids")),
-        _c(kring_pad, f.lit(1)),
-    )
 
 
 # Operations
@@ -377,224 +141,12 @@ def rst_quadbin_rasterize_agg(
 # ---------------------------------------------------------------------------
 
 
-def rst_gridfrompoints_agg(
-    point: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-    power: ColLike = None,
-    max_pts: ColLike = None,
-) -> Column:
-    """IDW interpolation aggregator - one point/value per row.
-
-    Aggregator counterpart of :func:`rst_gridfrompoints`. Group rows by an
-    extent key and pass per-row ``point`` / ``value`` columns plus per-group
-    literal extent parameters.
-
-    Args:
-        point: Point geometry column (WKB binary or WKT string).
-        value: Double value column.
-        xmin: Minimum X of the output raster extent (per-group literal).
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-        power: IDW exponent (default 2.0).
-        max_pts: Maximum neighbour points per cell (default 12).
-
-    Returns:
-        Raster tile column.
-    """
-    power_col = f.lit(2.0) if power is None else _col(power)
-    max_pts_col = f.lit(12) if max_pts is None else _col(max_pts)
-    return f.call_function(
-        "gbx_rst_gridfrompoints_agg",
-        _col(point),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        power_col,
-        max_pts_col,
-    )
-
-
-def rst_binpoints_agg(
-    x: ColLike,
-    y: ColLike,
-    z: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    srid: ColLike,
-    statistic: ColLike = "max",
-) -> Column:
-    """Bin one ``(x, y, z)`` point per row into a Float32 raster tile (aggregator).
-
-    Aggregator counterpart of :func:`rst_binpoints`. Group rows by an extent
-    key and pass one scalar ``x`` / ``y`` / ``z`` per row together with
-    per-group literal extent parameters.
-
-    Args:
-        x: Column of X-coordinates (DOUBLE).
-        y: Column of Y-coordinates (DOUBLE).
-        z: Column of Z-values to bin (DOUBLE).
-        xmin: Minimum X of the output raster extent (per-group literal).
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        srid: EPSG SRID of the output raster.
-        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
-            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
-            (e.g. ``"percentile:90"``).
-
-    Returns:
-        Raster tile column (single-band Float32 GTiff).
-    """
-    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
-    return f.call_function(
-        "gbx_rst_binpoints_agg",
-        _col(x),
-        _col(y),
-        _col(z),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(srid),
-        stat_col,
-    )
-
-
-def rst_custom_rasterize_agg(
-    cellid: ColLike,
-    grid: ColLike,
-    value: ColLike = None,
-    out_srid: ColLike = None,
-    pixel_size: ColLike = None,
-    xmin: ColLike = None,
-    ymin: ColLike = None,
-    xmax: ColLike = None,
-    ymax: ColLike = None,
-    width: ColLike = None,
-    height: ColLike = None,
-    mode: ColLike = "centroids",
-    kring_pad: ColLike = 1,
-) -> Column:
-    """Rasterize a group's custom-grid cells into one tile (pixel-centroid burn, heavy tier).
-
-    Aggregator counterpart of :func:`rst_custom_rastertogrid*`: where those functions
-    reduce raster pixels to per-cell statistics, this function reconstructs a raster
-    from per-cell values.
-
-    ``grid`` is a custom-grid STRUCT column produced by ``gbx_custom_grid(...)``.
-    ``value`` omitted or null -> presence mask (1.0). Supply an explicit extent
-    (``xmin`` .. ``height``) for aligned band stacking; else the grid is auto-derived
-    from the cell set per ``mode``/``kring_pad``.
-
-    Output CRS: ``out_srid`` wins; falls back to the grid's own SRID when not supplied.
-    Use inside ``.agg()``::
-
-        df.groupBy(k).agg(rx.rst_custom_rasterize_agg("cellid", "grid").alias("tile"))
-
-    Args:
-        cellid: Column of BIGINT custom-grid cell IDs.
-        grid: Custom-grid STRUCT column from ``gbx_custom_grid(...)``.
-        value: Numeric burn value column (null -> 1.0 presence mask).
-        out_srid: EPSG SRID of the output CRS (null -> grid's SRID).
-        pixel_size: Output pixel size in target CRS units (null -> auto).
-        xmin, ymin, xmax, ymax: Output extent (null -> auto from cell set).
-        width, height: Output dimensions in pixels (null -> auto).
-        mode: ``"centroids"`` (default) or ``"spatial_envelope"``.
-        kring_pad: Neighbourhood expansion for auto-extent (default 1).
-
-    Returns:
-        Raster tile column (single-band GTiff).
-    """
-
-    return f.call_function(
-        "gbx_rst_custom_rasterize_agg",
-        _col(cellid),
-        f.lit(None).cast("double") if value is None else _col(value),
-        _col(grid),
-        f.lit(None).cast("int") if out_srid is None else _col(out_srid),
-        f.lit(None).cast("double") if pixel_size is None else _col(pixel_size),
-        f.lit(None).cast("double") if xmin is None else _col(xmin),
-        f.lit(None).cast("double") if ymin is None else _col(ymin),
-        f.lit(None).cast("double") if xmax is None else _col(xmax),
-        f.lit(None).cast("double") if ymax is None else _col(ymax),
-        f.lit(None).cast("int") if width is None else _col(width),
-        f.lit(None).cast("int") if height is None else _col(height),
-        f.lit(mode) if isinstance(mode, str) else _col(mode),
-        f.lit(kring_pad) if isinstance(kring_pad, int) else _col(kring_pad),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Delaunay-TIN Digital Terrain Model (DTM) interpolation
 #
 # `rst_dtmfromgeoms_agg` (aggregator, one Z-valued point per row) delegates to
 # gbx_rst_dtmfromgeoms_agg. The non-aggregator form is generated from the manifest.
 # ---------------------------------------------------------------------------
-
-
-def rst_dtmfromgeoms_agg(
-    point: ColLike,
-    breaklines: ColLike,
-    merge_tolerance: ColLike,
-    snap_tolerance: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-    no_data: ColLike = None,
-) -> Column:
-    """DTM aggregator - one Z-valued ``point`` per row, grouped by extent key.
-
-    Aggregator counterpart of :func:`rst_dtmfromgeoms`. ``point`` is the only
-    aggregated (per-row) input; ``breaklines`` and all extent/tolerance args are
-    per-group constants. Produces the same DTM as the non-agg form over the same grid.
-
-    Returns:
-        Raster tile column.
-    """
-    nd = f.lit(-9999.0) if no_data is None else _col(no_data)
-    return f.call_function(
-        "gbx_rst_dtmfromgeoms_agg",
-        _col(point),
-        _col(breaklines),
-        _col(merge_tolerance),
-        _col(snap_tolerance),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        nd,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -865,6 +417,114 @@ def rst_binpoints(
     )
 
 
+def rst_binpoints_agg(
+    x: ColLike,
+    y: ColLike,
+    z: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = None,
+) -> Column:
+    """Bin a group's points into one single-band tile.
+
+    Args:
+        x: The point's x.
+        y: The point's y.
+        z: The point's value.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        srid: The EPSG code of the output CRS.
+        statistic: `'max'`, `'min'`, `'mean'`, `'median'`, `'count'` or
+            `'percentile:<p>'`. SQL default: ``'max'``.
+
+    Returns:
+        GeoTIFF bytes, Float32; a pixel with no point is NoData; NULL for a group with
+        no point.
+
+    SQL: ``gbx_rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])``
+    """
+    return _api.call(
+        "gbx_rst_binpoints_agg",
+        x,
+        y,
+        z,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        srid,
+        statistic,
+    )
+
+
+def rst_bng_rasterize(
+    cells: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize an array of BNG cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        out_srid: Not read: the output is always EPSG:27700.
+        pixel_size: The pixel size in metres.
+        xmin: The west edge of the canvas in EPSG:27700 metres.
+        ymin: The south edge of the canvas in EPSG:27700 metres.
+        xmax: The east edge of the canvas in EPSG:27700 metres.
+        ymax: The north edge of the canvas in EPSG:27700 metres.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given, for example
+            `'centroids'`.
+        kring_pad: Cells of padding around the derived canvas.
+        out_crs: Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead.
+            SQL default: ``NULL``.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_bng_rasterize_agg` over the same cells:
+        GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_bng_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_bng_rasterize",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
 def rst_bng_rasterize_agg(
     cellid: ColLike,
     value: ColLike,
@@ -884,7 +544,10 @@ def rst_bng_rasterize_agg(
 
     Args:
         cellid: The BNG cell id, for example `'TQ3080'`.
-        value: The value burned for the cell. A repeated cell burns its largest value.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
+            and burns 1.0.
         out_srid: Not read: the output is always EPSG:27700.
         pixel_size: The pixel size in metres.
         xmin: The west edge of the canvas in EPSG:27700 metres.
@@ -900,7 +563,8 @@ def rst_bng_rasterize_agg(
             SQL default: ``NULL``.
 
     Returns:
-        The EPSG:27700 raster of the group; NoData is -9999.
+        GeoTIFF bytes, Float64 with NoData -9999, in EPSG:27700 over the canvas; NULL
+        for a group with no cell. The same on every compute.
 
     SQL: ``gbx_rst_bng_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
     """
@@ -1563,6 +1227,27 @@ def rst_combineavg(
     )
 
 
+def rst_combineavg_agg(
+    tile: ColLike,
+) -> Column:
+    """Per-pixel mean across a group's aligned tiles, ignoring NoData.
+
+    Args:
+        tile: The tile of one member. An error tile or a tile that cannot be read is
+            skipped.
+
+    Returns:
+        GeoTIFF bytes of the mean, on the grid of the first tile; NULL for a group with
+        no usable tile. Tiles of different shapes raise.
+
+    SQL: ``gbx_rst_combineavg_agg(tile)``
+    """
+    return _api.call(
+        "gbx_rst_combineavg_agg",
+        tile,
+    )
+
+
 def rst_combinecount(
     tiles: ColLike,
     virtualize_dir: Optional[str] = None,
@@ -1878,6 +1563,124 @@ def rst_crs(
     return _api.call(
         "gbx_rst_crs",
         tile,
+    )
+
+
+def rst_custom_rasterize(
+    cells: ColLike,
+    grid: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+) -> Column:
+    """Rasterize an array of custom cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        grid: The grid, from `gbx_custom_grid`. The same for every row of the group.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_custom_rasterize_agg` over the same
+        cells: GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_custom_rasterize(cells, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)``
+    """
+    return _api.call(
+        "gbx_rst_custom_rasterize",
+        cells,
+        grid,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+    )
+
+
+def rst_custom_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    grid: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+) -> Column:
+    """Rasterize a group's custom-grid cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The custom-grid cell id.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
+            and burns 1.0.
+        grid: The grid, from `gbx_custom_grid`. The same for every row of the group.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
+        no cell. The same on every compute.
+
+    SQL: ``gbx_rst_custom_rasterize_agg(cellid, value, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)``
+    """
+    return _api.call(
+        "gbx_rst_custom_rasterize_agg",
+        cellid,
+        value,
+        grid,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
     )
 
 
@@ -2323,6 +2126,32 @@ def rst_derivedband(
     )
 
 
+def rst_derivedband_agg(
+    tile: ColLike,
+    python_func: ColLike,
+    func_name: ColLike,
+) -> Column:
+    """Apply a GDAL VRT pixel function across a group's tiles.
+
+    Args:
+        tile: One input band per tile.
+        python_func: The source of a GDAL VRT pixel function. It runs in the process:
+            pass only trusted code.
+        func_name: The name of the function in `python_func`.
+
+    Returns:
+        GeoTIFF bytes of the single-band result; NULL for a group with no usable tile.
+
+    SQL: ``gbx_rst_derivedband_agg(tile, python_func, func_name)``
+    """
+    return _api.call(
+        "gbx_rst_derivedband_agg",
+        tile,
+        python_func,
+        func_name,
+    )
+
+
 def rst_dtmfromgeoms(
     points_array: ColLike,
     breaklines_array: ColLike,
@@ -2371,6 +2200,66 @@ def rst_dtmfromgeoms(
         "gbx_rst_dtmfromgeoms",
         points_array,
         breaklines_array,
+        merge_tolerance,
+        snap_tolerance,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        no_data,
+        out_crs,
+    )
+
+
+def rst_dtmfromgeoms_agg(
+    point: ColLike,
+    breaklines: ColLike,
+    merge_tolerance: ColLike,
+    snap_tolerance: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    no_data: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Build a digital terrain model from a group of Z points (Delaunay TIN).
+
+    Args:
+        point: A point with a Z coordinate: WKB, EWKB, WKT or EWKT. An empty one is
+            skipped.
+        breaklines: Breaklines, the same for the whole group. Accepted but not enforced.
+        merge_tolerance: Accepted, not applied.
+        snap_tolerance: Accepted, not applied.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS. SQL default: ``NULL``.
+        no_data: The NoData value. SQL default: ``-9999.0``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
+            `out_srid`. SQL default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64: the points' Z interpolated over an unconstrained
+        Delaunay triangulation, NoData outside their hull; NULL for a group with no
+        point.
+
+    SQL: ``gbx_rst_dtmfromgeoms_agg(point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_dtmfromgeoms_agg",
+        point,
+        breaklines,
         merge_tolerance,
         snap_tolerance,
         xmin,
@@ -2590,6 +2479,31 @@ def rst_frombands(
     )
 
 
+def rst_frombands_agg(
+    tile: ColLike,
+    band_index: ColLike,
+) -> Column:
+    """Stack a group's single-band tiles into one multi-band tile.
+
+    Args:
+        tile: A single-band tile. An error tile or a tile that cannot be read is
+            skipped.
+        band_index: The band the tile becomes, counted up from 1. A NULL index skips the
+            row.
+
+    Returns:
+        GeoTIFF bytes with the tiles' first bands in ascending `band_index` order; NULL
+        for a group with no usable tile.
+
+    SQL: ``gbx_rst_frombands_agg(tile, band_index)``
+    """
+    return _api.call(
+        "gbx_rst_frombands_agg",
+        tile,
+        band_index,
+    )
+
+
 def rst_fromcontent(
     content: ColLike,
     driver: ColLike,
@@ -2766,6 +2680,183 @@ def rst_gridfrompoints(
         out_srid,
         power,
         max_pts,
+        out_crs,
+    )
+
+
+def rst_gridfrompoints_agg(
+    point: ColLike,
+    value: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    power: ColLike = None,
+    max_pts: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Interpolate a group's points to a grid by inverse-distance weighting.
+
+    Args:
+        point: The point: WKB, EWKB, WKT or EWKT. A row with a NULL value or an empty
+            point is dropped.
+        value: The point's value.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS. SQL default: ``NULL``.
+        power: The inverse-distance exponent, above 0. SQL default: ``2.0``.
+        max_pts: The number of nearest points used per pixel, above 0. SQL default:
+            ``12``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
+            `out_srid`. SQL default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999 where a pixel has no point; NULL for a
+        group with no point.
+
+    SQL: ``gbx_rst_gridfrompoints_agg(point, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_gridfrompoints_agg",
+        point,
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        power,
+        max_pts,
+        out_crs,
+    )
+
+
+def rst_h3_rasterize(
+    cells: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize an array of H3 cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
+            default: ``NULL``.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_h3_rasterize_agg` over the same cells:
+        GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_h3_rasterize",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_h3_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The H3 cell id.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
+            and burns 1.0.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
+            default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
+        no cell. The same on every compute.
+
+    SQL: ``gbx_rst_h3_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_h3_rasterize_agg",
+        cellid,
+        value,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
         out_crs,
     )
 
@@ -3980,6 +4071,126 @@ def rst_proximity(
     )
 
 
+def rst_quadbin_rasterize(
+    cells: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize an array of quadbin cells into one tile (pixel-centroid burn).
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a
+            repeated cell burns its largest value, a NULL cell id is skipped.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
+            default: ``NULL``.
+
+    Returns:
+        The same bytes as the aggregate `gbx_rst_quadbin_rasterize_agg` over the same
+        cells: GeoTIFF, Float64, NoData -9999; NULL for an array with no cell.
+
+    SQL: ``gbx_rst_quadbin_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_quadbin_rasterize",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_quadbin_rasterize_agg(
+    cellid: ColLike,
+    value: ColLike,
+    out_srid: ColLike,
+    pixel_size: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width: ColLike,
+    height: ColLike,
+    mode: ColLike,
+    kring_pad: ColLike,
+    out_crs: ColLike = None,
+) -> Column:
+    """Rasterize a group's quadbin cells into one tile (pixel-centroid burn).
+
+    Args:
+        cellid: The quadbin cell id.
+        value: The value burned for the cell. A repeated cell burns its largest value; a
+            NULL value in a typed column never wins against a number, and a cell of nothing
+            but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask
+            and burns 1.0.
+        out_srid: The EPSG code of the output CRS.
+        pixel_size: The pixel size in CRS units; NULL takes it from the cells'
+            resolution.
+        xmin: The west edge of the canvas; NULL derives the canvas from the cells.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas.
+        ymax: The north edge of the canvas.
+        width: The canvas width in pixels.
+        height: The canvas height in pixels.
+        mode: How the canvas is derived when no extent is given: `'centroids'` or
+            `'spatial_envelope'`.
+        kring_pad: Rings of padding around the derived canvas.
+        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
+            default: ``NULL``.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
+        no cell. The same on every compute.
+
+    SQL: ``gbx_rst_quadbin_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_quadbin_rasterize_agg",
+        cellid,
+        value,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
 def rst_quadbin_rastertogridavg(
     df: DataFrame,
     tile: ColLike,
@@ -4396,6 +4607,52 @@ def rst_rasterize(
         height_px,
         out_srid,
         out_crs,
+    )
+
+
+def rst_rasterize_agg(
+    geom: ColLike,
+    value: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike,
+) -> Column:
+    """Burn a group's `(geom, value)` features into one tile.
+
+    Args:
+        geom: The feature geometry as WKB. A NULL one is skipped.
+        value: The value burned where the geometry covers a pixel centre. A NULL value
+            skips the row.
+        xmin: The west edge of the output.
+        ymin: The south edge.
+        xmax: The east edge.
+        ymax: The north edge.
+        width_px: The output width in pixels.
+        height_px: The output height in pixels.
+        out_srid: The EPSG code of the output CRS.
+
+    Returns:
+        GeoTIFF bytes, Float64 with NoData -9999, with each feature burned where it
+        covers a pixel centre. Where features overlap, the one whose WKB bytes sort last
+        wins, whatever order the rows arrive in. NULL for a group with no feature.
+
+    SQL: ``gbx_rst_rasterize_agg(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid)``
+    """
+    return _api.call(
+        "gbx_rst_rasterize_agg",
+        geom,
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
     )
 
 

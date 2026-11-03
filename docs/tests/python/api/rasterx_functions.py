@@ -546,76 +546,12 @@ def _get_multi_band_tiles_df_heavy(spark):
 # ---------------------------------------------------------------------------
 
 
-def rst_combineavg_agg_python_heavy_example(spark):
-    """Average aligned raster tiles per group using the heavy rasterx tier.
-
-    Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif split by rst_band.
-    All 3 tiles share the same grid, satisfying combineavg_agg's alignment requirement.
-    Grouped by region, producing 1 averaged tile row.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
-    df = _get_multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_combineavg_agg("tile").alias("avg_tile"))
-        .first()
-    )
-    return result["avg_tile"]
-
-
-rst_combineavg_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|avg_tile                                                   |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_derivedband_agg -- apply a Python pixel function across a group's tiles
 # Fixture: MULTI-TILE (3 per-band rows from rgb_nir_small.tif)
 # Pixel function: identity (returns band 0, i.e. the first input band)
 # Output: tile struct (returns a raster tile)
 # ---------------------------------------------------------------------------
-
-
-def rst_derivedband_agg_python_heavy_example(spark):
-    """Apply a Python pixel function across a group's band tiles using the heavy rasterx tier.
-
-    Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif.  Each tile
-    contributes one band to the VRT; the pixel function selects the first band.
-    Grouped by region, producing 1 derived tile row.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
-    pyfunc = (
-        "def fn(in_ar, out_ar, xoff, yoff, xsize, ysize, "
-        "raster_xsize, raster_ysize, buf_radius, gt, **kwargs):\n"
-        "    out_ar[:] = in_ar[0]\n"
-    )
-    df = _get_multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(
-            rx.rst_derivedband_agg("tile", f.lit(pyfunc), f.lit("fn")).alias("derived")
-        )
-        .first()
-    )
-    return result["derived"]
-
-
-rst_derivedband_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|derived                                                    |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -625,101 +561,11 @@ rst_derivedband_agg_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_frombands_agg_python_heavy_example(spark):
-    """Stack per-band tiles into one multi-band tile per group using the heavy rasterx tier.
-
-    Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif, each with
-    band_index=1/2/3.  Grouped by region, stacks ascending by band_index,
-    producing 1 three-band tile row.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-
-    df = _get_multi_band_tiles_df_heavy(spark)
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_frombands_agg("tile", "band_index").alias("stacked"))
-        .first()
-    )
-    return result["stacked"]
-
-
-rst_frombands_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|stacked                                                    |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_rasterize_agg -- burn geometry/value rows into one tile per group
 # Fixture: synthesized 3-row DataFrame of WKB polygon + value + extent constants
 # Output: tile struct (returns a raster tile)
 # ---------------------------------------------------------------------------
-
-
-def rst_rasterize_agg_python_heavy_example(spark):
-    """Burn geometry/value rows into one tile per group using the heavy rasterx tier.
-
-    Multi-row fixture: 3 rows of (geom_wkb, burn_value) over a shared 4x4 extent
-    in EPSG:4326.  Grouped by region, producing 1 rasterized tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from pyspark.sql.types import (
-        BinaryType,
-        DoubleType,  # noqa: PLC0415
-        StringType,
-        StructField,
-        StructType,
-    )
-
-    # WKB POLYGON((0 0, 4 0, 4 4, 0 4, 0 0)) in EPSG:4326
-    poly = bytes.fromhex(
-        "0103000000010000000500000000000000000000000000000000000000"
-        "0000000000001040000000000000000000000000000010400000000000001040"
-        "000000000000000000000000000010400000000000000000"
-        "0000000000000000"
-    )
-    rows = [(poly, 1.0, "R1"), (poly, 2.0, "R1"), (poly, 3.0, "R1")]
-    schema = StructType(
-        [
-            StructField("geom", BinaryType()),
-            StructField("value", DoubleType()),
-            StructField("region", StringType()),
-        ]
-    )
-    df = spark.createDataFrame(rows, schema)
-    result = (
-        df.groupBy("region")
-        .agg(
-            rx.rst_rasterize_agg(
-                "geom",
-                "value",
-                f.lit(0.0),
-                f.lit(0.0),
-                f.lit(4.0),
-                f.lit(4.0),
-                f.lit(8),
-                f.lit(8),
-                f.lit(4326),
-            ).alias("burned")
-        )
-        .first()
-    )
-    return result["burned"]
-
-
-rst_rasterize_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|burned                                                     |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -729,141 +575,11 @@ rst_rasterize_agg_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_gridfrompoints_agg_python_heavy_example(spark):
-    """IDW-interpolate point/value rows into one tile per group using the heavy rasterx tier.
-
-    Multi-row fixture: 4 rows of (WKB point, observation) over a shared [0,0,1,1]
-    EPSG:4326 extent.  Grouped by region, producing 1 Float64 IDW tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from pyspark.sql.types import (
-        BinaryType,
-        DoubleType,  # noqa: PLC0415
-        StringType,
-        StructField,
-        StructType,
-    )
-
-    def _wkb_point(x, y):
-        import struct  # noqa: PLC0415
-
-        return struct.pack("<bIdd", 1, 1, x, y)
-
-    rows = [
-        (_wkb_point(0.1, 0.1), 10.0, "R1"),
-        (_wkb_point(0.9, 0.1), 20.0, "R1"),
-        (_wkb_point(0.1, 0.9), 30.0, "R1"),
-        (_wkb_point(0.9, 0.9), 40.0, "R1"),
-    ]
-    schema = StructType(
-        [
-            StructField("pt", BinaryType()),
-            StructField("val", DoubleType()),
-            StructField("region", StringType()),
-        ]
-    )
-    df = spark.createDataFrame(rows, schema)
-    result = (
-        df.groupBy("region")
-        .agg(
-            rx.rst_gridfrompoints_agg(
-                "pt",
-                "val",
-                f.lit(0.0),
-                f.lit(0.0),
-                f.lit(1.0),
-                f.lit(1.0),
-                f.lit(8),
-                f.lit(8),
-                f.lit(4326),
-            ).alias("idw")
-        )
-        .first()
-    )
-    return result["idw"]
-
-
-rst_gridfrompoints_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|idw                                                        |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_dtmfromgeoms_agg -- Delaunay TIN DTM: one Z-point per row -> one tile
 # Fixture: synthesized 4 Z-valued WKB points, small EPSG:4326 extent
 # Output: tile struct (returns a raster tile)
 # ---------------------------------------------------------------------------
-
-
-def rst_dtmfromgeoms_agg_python_heavy_example(spark):
-    """Build a Delaunay TIN DTM from Z-valued points per group using the heavy rasterx tier.
-
-    Multi-row fixture: 4 rows of WKB POINT Z with elevation values, over a
-    [0,0,1,1] EPSG:4326 extent.  Grouped by region, producing 1 DTM tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from pyspark.sql.types import (
-        BinaryType,
-        StringType,  # noqa: PLC0415
-        StructField,
-        StructType,
-    )
-
-    def _wkb_point_z(x, y, z):
-        import struct  # noqa: PLC0415
-
-        return struct.pack("<bIddd", 1, 1001, x, y, z)
-
-    rows = [
-        (_wkb_point_z(0.1, 0.1, 100.0), "R1"),
-        (_wkb_point_z(0.9, 0.1, 200.0), "R1"),
-        (_wkb_point_z(0.1, 0.9, 150.0), "R1"),
-        (_wkb_point_z(0.9, 0.9, 250.0), "R1"),
-    ]
-    schema = StructType(
-        [
-            StructField("pt", BinaryType()),
-            StructField("region", StringType()),
-        ]
-    )
-    df = spark.createDataFrame(rows, schema)
-    result = (
-        df.groupBy("region")
-        .agg(
-            rx.rst_dtmfromgeoms_agg(
-                "pt",
-                f.lit(None).cast("array<binary>"),
-                f.lit(0.0),
-                f.lit(0.0),
-                f.lit(0.0),
-                f.lit(0.0),
-                f.lit(1.0),
-                f.lit(1.0),
-                f.lit(8),
-                f.lit(8),
-                f.lit(4326),
-            ).alias("dtm")
-        )
-        .first()
-    )
-    return result["dtm"]
-
-
-rst_dtmfromgeoms_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|dtm                                                        |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -873,112 +589,11 @@ rst_dtmfromgeoms_agg_python_heavy_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_h3_rasterize_agg_python_heavy_example(spark):
-    """Rasterize H3 cell/value rows into one tile per group using the heavy rasterx tier.
-
-    Multi-row fixture: 3 rows of (H3 cell id BIGINT, burn value) at resolution 9
-    near lon/lat (0.01, 0.01).  Grouped by region, producing 1 rasterized tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    import h3  # noqa: PLC0415
-
-    res = 9
-    cell_strs = [
-        h3.latlng_to_cell(0.01, 0.01, res),
-        h3.latlng_to_cell(0.02, 0.01, res),
-        h3.latlng_to_cell(0.01, 0.02, res),
-    ]
-    cells = [h3.str_to_int(c) for c in cell_strs]
-    rows = [
-        (int(cells[0]), 1.0, "R1"),
-        (int(cells[1]), 2.0, "R1"),
-        (int(cells[2]), 3.0, "R1"),
-    ]
-    from pyspark.sql.types import (
-        DoubleType,
-        LongType,  # noqa: PLC0415
-        StringType,
-        StructField,
-        StructType,
-    )
-
-    schema = StructType(
-        [
-            StructField("cellid", LongType()),
-            StructField("value", DoubleType()),
-            StructField("region", StringType()),
-        ]
-    )
-    df = spark.createDataFrame(rows, schema)
-    # cellid + value are the only required args; extent/size/mode/kring and the
-    # EPSG:4326 out_srid all take their defaults (same as the lightweight tier).
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_h3_rasterize_agg(df["cellid"], df["value"]).alias("tile"))
-        .first()
-    )
-    return result["tile"]
-
-
-rst_h3_rasterize_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|tile                                                       |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_quadbin_rasterize_agg -- burn quadbin cells into one tile per group
 # Fixture: synthesized 3 quadbin zoom-12 cell rows near central London
 # Output: tile struct (returns a raster tile)
 # ---------------------------------------------------------------------------
-
-
-def rst_quadbin_rasterize_agg_python_heavy_example(spark):
-    """Rasterize quadbin cell/value rows into one tile per group using the heavy rasterx tier.
-
-    Multi-row fixture: 3 rows of (quadbin cell id BIGINT, burn value) at zoom 12
-    near central London.  Grouped by region, producing 1 rasterized tile.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.quadbin import functions as qbx  # noqa: PLC0415
-
-    qbx.register(spark)
-
-    spark.sql("""
-        CREATE OR REPLACE TEMP VIEW _qb_cells_heavy AS
-        SELECT region,
-               gbx_quadbin_pointascell(cast(lon as double), cast(lat as double), 12) AS cellid,
-               cast(val as double) AS value
-        FROM (VALUES
-            ('R1', -0.10, 51.50, 1.0),
-            ('R1', -0.11, 51.51, 2.0),
-            ('R1', -0.09, 51.49, 3.0)
-        ) AS t(region, lon, lat, val)
-    """)
-    df = spark.table("_qb_cells_heavy")
-    # cellid + value are the only required args; extent/size/mode/kring and the
-    # EPSG:4326 out_srid all take their defaults (same as the lightweight tier).
-    result = (
-        df.groupBy("region")
-        .agg(rx.rst_quadbin_rasterize_agg(df["cellid"], df["value"]).alias("tile"))
-        .first()
-    )
-    spark.catalog.dropTempView("_qb_cells_heavy")
-    return result["tile"]
-
-
-rst_quadbin_rasterize_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|tile                                                       |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1167,134 +782,12 @@ def _custom_grid_col():
 # ---------------------------------------------------------------------------
 
 
-def rst_binpoints_agg_python_heavy_example(spark):
-    """Bin one scalar (x, y, z) point per row into a Float32 raster tile per group via the heavy rasterx tier.
-
-    Multi-row fixture: 3 rows of scalar BNG (EPSG:27700) x/y/z coordinates over
-    a 1 km extent [550000, 180000, 551000, 181000] at 10×10 pixels.
-    Grouped by region, producing 1 Float32 tile row where each pixel holds the
-    max z-value of points falling in that pixel; empty pixels carry NoData (-9999.0).
-    """
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from pyspark.sql.types import (
-        DoubleType,
-        StringType,
-        StructField,
-        StructType,
-    )  # noqa: PLC0415
-
-    rows = [
-        ("R1", 550100.0, 180100.0, 42.5),
-        ("R1", 550200.0, 180200.0, 45.1),
-        ("R1", 550300.0, 180500.0, 38.7),
-    ]
-    schema = StructType(
-        [
-            StructField("region", StringType()),
-            StructField("x", DoubleType()),
-            StructField("y", DoubleType()),
-            StructField("z", DoubleType()),
-        ]
-    )
-    df = spark.createDataFrame(rows, schema)
-    result = (
-        df.groupBy("region")
-        .agg(
-            rx.rst_binpoints_agg(
-                "x",
-                "y",
-                "z",
-                f.lit(550000.0),
-                f.lit(180000.0),
-                f.lit(551000.0),
-                f.lit(181000.0),
-                f.lit(10),
-                f.lit(10),
-                f.lit(27700),
-            ).alias("tile")
-        )
-        .first()
-    )
-    return result["tile"]
-
-
-rst_binpoints_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|tile                                                       |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
-"""
-
-
 # ---------------------------------------------------------------------------
 # rst_custom_rasterize_agg -- burn custom-grid cells into one tile per group
 # Fixture: 3 BNG custom-grid cell rows at resolution 1 (2km cells) in a 4km
 #          London extent; each row carries a burn value.
 # Output: tile struct (returns a raster tile)
 # ---------------------------------------------------------------------------
-
-
-def rst_custom_rasterize_agg_python_heavy_example(spark):
-    """Rasterize custom-grid cell/value rows into one tile per group via the heavy rasterx tier.
-
-    Multi-row fixture: 3 rows of (custom-grid cell id BIGINT, burn value) at
-    resolution 1 (2km cells) inside a 4km London BNG extent
-    [529000-533000 E, 179000-183000 N, EPSG:27700].  Grouped by region, producing
-    1 rasterized GTiff tile in EPSG:27700.  Cell IDs are computed via
-    gbx_custom_pointascell for centroids of 3 of the 4 resolution-1 cells.
-    """
-    if rx is None:
-        raise ImportError("rasterx not installed")
-    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
-    from pyspark.sql import functions as f  # noqa: PLC0415
-
-    rx.register(spark)
-    cx.register(spark)  # registers gbx_custom_pointascell and gbx_custom_grid
-
-    _GRID_SQL = (
-        "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
-    )
-    # Compute three resolution-1 cell IDs via SQL (three of the four 2km cells).
-    # Use SELECT-from-VALUES: UDFs cannot appear directly in VALUES clauses.
-    spark.sql(f"""
-        CREATE OR REPLACE TEMP VIEW _custom_rasterize_cells_heavy AS
-        SELECT region,
-               gbx_custom_pointascell(wkt, {_GRID_SQL}, 1) AS cellid,
-               val AS value
-        FROM (VALUES
-            ('R1', 'POINT(530000 180000)', cast(1.0 as double)),
-            ('R1', 'POINT(532000 180000)', cast(2.0 as double)),
-            ('R1', 'POINT(530000 182000)', cast(3.0 as double))
-        ) AS t(region, wkt, val)
-    """)
-    df = spark.table("_custom_rasterize_cells_heavy")
-
-    result = (
-        df.groupBy("region")
-        .agg(
-            rx.rst_custom_rasterize_agg(
-                "cellid", _custom_grid_col(), f.col("value"),
-                out_srid=f.lit(27700),  # heavy tier requires non-null out_srid
-                kring_pad=f.lit(0),     # no padding: avoid expanding outside grid bounds
-            ).alias("tile")
-        )
-        .first()
-    )
-    spark.catalog.dropTempView("_custom_rasterize_cells_heavy")
-    return result["tile"]
-
-
-rst_custom_rasterize_agg_python_heavy_example_output = """
-+------+-----------------------------------------------------------+
-|region|tile                                                       |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
-"""
 
 
 # ---------------------------------------------------------------------------

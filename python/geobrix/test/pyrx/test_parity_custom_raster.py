@@ -153,6 +153,11 @@ def spark_with_jar():
 # ---------------------------------------------------------------------------
 
 
+def _raster_of(tile):
+    """The GeoTIFF bytes of an aggregate's result: the BINARY itself, or the raster of a tile struct."""
+    return bytes(tile["raster"] if hasattr(tile, "asDict") else tile)
+
+
 def _gtiff_bytes(data, *, epsg, origin, px, nodata=_NODATA):
     """Single-band north-up GTiff from a 2-D array at the given CRS/origin/pixel_size."""
     from rasterio.io import MemoryFile
@@ -611,7 +616,7 @@ def test_custom_rasterize_agg_mask_parity(spark_with_jar):
     light_out = (
         df.groupBy("tx")
         .agg(
-            prx.rst_custom_rasterize_agg(
+            prx._light_rst_custom_rasterize_agg(
                 "cellid",
                 "grid",
                 pixel_size=f.lit(_PX_SIZE),
@@ -634,7 +639,7 @@ def test_custom_rasterize_agg_mask_parity(spark_with_jar):
             f.call_function(
                 "gbx_rst_custom_rasterize_agg",
                 f.col("cellid"),
-                f.lit(None).cast("double"),  # value → presence mask
+                f.lit(None),  # value left out (an untyped NULL) → presence mask
                 f.col("grid"),
                 f.lit(_GRID_SRID),  # out_srid
                 f.lit(_PX_SIZE),  # pixel_size = 5000m
@@ -652,15 +657,13 @@ def test_custom_rasterize_agg_mask_parity(spark_with_jar):
     )
     assert len(heavy_out) == 1
     heavy_tile = heavy_out[0]["tile"]
-    assert (
-        heavy_tile is not None and heavy_tile["raster"] is not None
-    ), "heavy rasterize_agg returned None tile"
+    assert heavy_tile is not None, "heavy rasterize_agg returned None tile"
 
     # Compare pixel masks.
     with _serde.open_tile(bytes(light_tile["raster"])) as lds:
         light_arr = lds.read(1)
         assert lds.nodata == _NODATA, f"light band NoData must be {_NODATA}"
-    with _serde.open_tile(bytes(heavy_tile["raster"])) as hds:
+    with _serde.open_tile(_raster_of(heavy_tile)) as hds:
         heavy_arr = hds.read(1)
         assert hds.nodata == _NODATA, f"heavy band NoData must be {_NODATA}"
 

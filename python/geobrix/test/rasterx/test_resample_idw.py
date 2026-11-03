@@ -109,6 +109,5 @@ def test_idw_roundtrip_non_agg_and_agg_match(spark):
     rows_a = df_agg.collect()
     assert len(rows_a) == 1
     out_a = rows_a[0]["out"]
-    assert out_a is not None, "rst_gridfrompoints_agg returned null tile"
-    assert out_a["raster"] is not None
-    assert len(out_a["raster"]) > 0
+    assert out_a is not None, "rst_gridfrompoints_agg returned null"
+    assert len(out_a) > 0  # the aggregate returns the GeoTIFF bytes

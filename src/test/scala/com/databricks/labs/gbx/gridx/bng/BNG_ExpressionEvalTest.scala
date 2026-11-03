@@ -96,8 +96,8 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
                 .repartition(10)
                 .groupBy("dummy")
                 .agg(
-                  bng_cellunion_agg(col("cell")).as("unionCore"),
-                  bng_cellintersection_agg(col("cell")).as("intersectCore")
+                  call_function("gbx_bng_cellunion_agg", col("cell")).as("unionCore"),
+                  call_function("gbx_bng_cellintersection_agg", col("cell")).as("intersectCore")
                 )
                 .write
                 .format("noop")

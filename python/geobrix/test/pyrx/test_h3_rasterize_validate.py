@@ -107,7 +107,7 @@ def test_partition_property_via_agg(spark):
     df = spark.createDataFrame([(int(c), "TX1") for c in cells], ["cellid", "tx"])
     tile = (
         df.groupBy("tx")
-        .agg(rx.rst_h3_rasterize_agg("cellid").alias("t"))
+        .agg(rx._light_rst_h3_rasterize_agg("cellid").alias("t"))
         .collect()[0]["t"]
     )
     assert tile is not None and tile["raster"] is not None

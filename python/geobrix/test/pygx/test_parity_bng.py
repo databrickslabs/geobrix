@@ -259,8 +259,8 @@ def test_bng_full_parity(spark_with_jar):
         out = (
             gdf.groupBy("cellid")
             .agg(
-                mod.bng_cellunion_agg(chip_struct).alias("u"),
-                mod.bng_cellintersection_agg(chip_struct).alias("i"),
+                f.call_function("gbx_bng_cellunion_agg", chip_struct).alias("u"),
+                f.call_function("gbx_bng_cellintersection_agg", chip_struct).alias("i"),
             )
             .collect()[0]
         )

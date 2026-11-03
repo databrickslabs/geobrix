@@ -56,7 +56,7 @@ def _asmvt_udf(geom: pd.Series, attrs: pd.Series, layer: pd.Series) -> bytes:
 
 
 @pandas_udf(BooleanType())
-def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series) -> bool:
+def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series = None) -> bool:
     """Grouped-agg: is this group's polygon set a valid coverage?"""
     from . import _coverage as _cov
 
@@ -67,7 +67,7 @@ def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series) -> bool:
 
 
 @pandas_udf(BinaryType())
-def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series) -> bytes:
+def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series = None) -> bytes:
     """Grouped-agg: union of this coverage's invalid edges (EWKB; empty when clean)."""
     from . import _coverage as _cov
 
@@ -498,7 +498,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     globals()["_gbx_registered"] = True
 
 
-def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
+def _light_st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """Aggregator: encode a group of features into an MVT protobuf blob (BINARY).
 
     geom: per-row geometry (WKB, EWKB, WKT, or EWKT) in tile-local coordinates.
@@ -510,12 +510,12 @@ def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     return _asmvt_udf(_col(geom), _col(attrs), _col(layer_name))
 
 
-def st_coverageisvalid(geom: ColLike, gap_width: float = 0.0) -> Column:
+def _light_st_coverageisvalid(geom: ColLike, gap_width: float = 0.0) -> Column:
     """Column (grouped-agg): valid-coverage boolean over the grouped polygon set."""
     return _coverageisvalid_udf(_col(geom), f.lit(gap_width))
 
 
-def st_coverageinvalidedges(geom: ColLike, gap_width: float = 0.0) -> Column:
+def _light_st_coverageinvalidedges(geom: ColLike, gap_width: float = 0.0) -> Column:
     """Column (grouped-agg): union of the coverage's invalid edges (BINARY)."""
     return _coverageinvalidedges_udf(_col(geom), f.lit(gap_width))
 

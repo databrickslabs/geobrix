@@ -1380,11 +1380,11 @@ object BenchDispatch {
                       ext: (Double, Double, Double, Double, Int, Int, Int),
                       a: Map[String, String]): Column = {
     import functions._
-    import org.apache.spark.sql.functions.{col, expr, lit}
+    import org.apache.spark.sql.functions.{call_function, col, expr, lit}
     val (xmin, ymin, xmax, ymax, w, h, srid) = ext
     fn match {
       case "rst_combineavg_agg" => rst_combineavg_agg(col("tile"))
-      case "rst_merge_agg"      => rst_merge_agg(col("tile"))
+      case "rst_merge_agg"      => call_function("gbx_rst_merge_agg", col("tile"))
       // No Scala wrapper for the 2-arg frombands_agg; call the registered UDAF.
       // band_index is the per-row ascending-sort key (0,1,... supplied by both tiers).
       case "rst_frombands_agg"  => expr("gbx_rst_frombands_agg(tile, band_index)")
@@ -1399,7 +1399,7 @@ object BenchDispatch {
       // radius) ignores max_points and uses ALL points, so the lightweight tier is
       // fed a large max_pts to also use all points (parity over the same point set).
       case "rst_gridfrompoints_agg" =>
-        rst_gridfrompoints_agg(col("geom_wkb"), col("value"),
+        call_function("gbx_rst_gridfrompoints_agg", col("geom_wkb"), col("value"),
           lit(xmin), lit(ymin), lit(xmax), lit(ymax), lit(w), lit(h), lit(srid),
           lit(argD(a, "power", 2.0)), lit(argI(a, "max_pts", 1000000)))
       // rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input

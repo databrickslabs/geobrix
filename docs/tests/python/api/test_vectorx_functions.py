@@ -56,17 +56,6 @@ def test_st_legacyaswkb_sql_example_constant():
 # ---------------------------------------------------------------------------
 
 
-def test_st_asmvt_python_heavy_example(vectorx_heavy_setup):
-    """st_asmvt returns non-empty MVT BINARY for the tile-local mvt_features fixture."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_asmvt_python_heavy_example(spark)
-    assert result is not None, "st_asmvt should return non-null MVT bytes"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (MVT BINARY), got {type(result)}"
-    assert len(result) > 0, "MVT bytes should be non-empty"
-
-
 # ---------------------------------------------------------------------------
 # T2: CRS family heavy-tier tests
 # Fixture: ``vector_geoms`` view via ``vectorx_heavy_setup``.

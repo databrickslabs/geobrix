@@ -318,10 +318,10 @@ def test_bng_tessellate_python_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_bng_cellintersection_agg_python_light_example(spark):
+def test_bng_cellintersection_agg_python_example(spark):
     """bng_cellintersection_agg (light) returns BINARY (dissolved chip WKB) for TQ3080."""
     assert light_examples is not None
-    result = light_examples.bng_cellintersection_agg_python_light_example(spark)
+    result = light_examples.bng_cellintersection_agg_python_example(spark)
     assert (
         result is not None
     ), "bng_cellintersection_agg (light) should return non-null BINARY for TQ3080"
@@ -331,10 +331,10 @@ def test_bng_cellintersection_agg_python_light_example(spark):
     assert len(result) > 0, "Dissolved chip WKB bytes should be non-empty"
 
 
-def test_bng_cellunion_agg_python_light_example(spark):
+def test_bng_cellunion_agg_python_example(spark):
     """bng_cellunion_agg (light) returns BINARY (dissolved chip WKB) for TQ3080."""
     assert light_examples is not None
-    result = light_examples.bng_cellunion_agg_python_light_example(spark)
+    result = light_examples.bng_cellunion_agg_python_example(spark)
     assert (
         result is not None
     ), "bng_cellunion_agg (light) should return non-null BINARY for TQ3080"
@@ -545,10 +545,10 @@ def test_quadbin_cellunion_python_light_example(spark):
     assert len(result) > 0, "EWKB bytes should be non-empty"
 
 
-def test_quadbin_cellunion_agg_python_light_example(spark):
+def test_quadbin_cellunion_agg_python_example(spark):
     """quadbin_cellunion_agg (light) returns non-empty BINARY EWKB bytes (both tiers = BINARY)."""
     assert light_examples is not None
-    result = light_examples.quadbin_cellunion_agg_python_light_example(spark)
+    result = light_examples.quadbin_cellunion_agg_python_example(spark)
     assert (
         result is not None
     ), "quadbin_cellunion_agg (light) should return non-null BINARY EWKB"
@@ -834,10 +834,10 @@ def test_h3_geomkloopexplode_python_light_example(spark):
 # ============================================================================
 
 
-def test_bng_cellfill_python_light_example(spark):
+def test_bng_cellfill_python_example(spark):
     """bng_cellfill (light) returns non-null BINARY after filling a NULL center cell."""
     assert light_examples is not None
-    result = light_examples.bng_cellfill_python_light_example(spark)
+    result = light_examples.bng_cellfill_python_example(spark)
     assert result is not None, "bng_cellfill should return non-null result"
     assert isinstance(
         result, (bytes, bytearray)
@@ -845,10 +845,10 @@ def test_bng_cellfill_python_light_example(spark):
     assert len(result) > 0, "bng_cellfill BINARY result should be non-empty"
 
 
-def test_quadbin_cellfill_python_light_example(spark):
+def test_quadbin_cellfill_python_example(spark):
     """quadbin_cellfill (light) returns non-null BINARY after filling a NULL center cell."""
     assert light_examples is not None
-    result = light_examples.quadbin_cellfill_python_light_example(spark)
+    result = light_examples.quadbin_cellfill_python_example(spark)
     assert result is not None, "quadbin_cellfill should return non-null result"
     assert isinstance(
         result, (bytes, bytearray)
@@ -856,10 +856,10 @@ def test_quadbin_cellfill_python_light_example(spark):
     assert len(result) > 0, "quadbin_cellfill BINARY result should be non-empty"
 
 
-def test_h3_cellfill_python_light_example(spark):
+def test_h3_cellfill_python_example(spark):
     """h3_cellfill (light) returns non-null BINARY after filling a NULL H3 center cell."""
     assert light_examples is not None
-    result = light_examples.h3_cellfill_python_light_example(spark)
+    result = light_examples.h3_cellfill_python_example(spark)
     assert result is not None, "h3_cellfill should return non-null result"
     assert isinstance(
         result, (bytes, bytearray)
@@ -867,10 +867,10 @@ def test_h3_cellfill_python_light_example(spark):
     assert len(result) > 0, "h3_cellfill BINARY result should be non-empty"
 
 
-def test_custom_cellfill_python_light_example(spark):
+def test_custom_cellfill_python_example(spark):
     """custom_cellfill (light) returns non-null BINARY after filling a NULL custom cell."""
     assert light_examples is not None
-    result = light_examples.custom_cellfill_python_light_example(spark)
+    result = light_examples.custom_cellfill_python_example(spark)
     assert result is not None, "custom_cellfill should return non-null result"
     assert isinstance(
         result, (bytes, bytearray)

@@ -81,13 +81,23 @@
     "gbx_rst_binpoints_agg": {
       "examples": "Examples:\n      > SELECT tile_id, gbx_rst_binpoints_agg(x, y, z, 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max') AS dsm FROM ( VALUES (1, 550100.0, 180100.0, 42.5), (1, 550200.0, 180200.0, 45.1), (1, 550300.0, 180500.0, 38.7) ) AS t(tile_id, x, y, z) GROUP BY tile_id;",
       "usage_args": "x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Bin a group's points into one single-band tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.2"
+    },
+    "gbx_rst_bng_rasterize": {
+      "examples": "Examples:\n      > SELECT gbx_rst_bng_rasterize(c0, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example;",
+      "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
+      "description": "Rasterize an array of BNG cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
     },
     "gbx_rst_bng_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
@@ -269,10 +279,10 @@
     "gbx_rst_combineavg_agg": {
       "examples": "Examples:\n      > SELECT region, gbx_rst_combineavg_agg(tile) as regional_average FROM rasters GROUP BY region;",
       "usage_args": "tile",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Per-pixel mean across a group's aligned tiles, ignoring NoData.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -376,13 +386,23 @@
       ],
       "since": "0.5.0"
     },
+    "gbx_rst_custom_rasterize": {
+      "examples": "Examples:\n      > SELECT gbx_rst_custom_rasterize(c0, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 27700, CAST(NULL AS DOUBLE), 529000.0D, 179000.0D, 533000.0D, 182000.0D, 8, 6, 'centroids', 0) AS out FROM gbx_example;",
+      "usage_args": "cells, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
+      "description": "Rasterize an array of custom cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_custom_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_custom_rasterize_agg( cellid, burn_value, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(1 as int) ) AS tile FROM custom_cell_values GROUP BY region_id;",
       "usage_args": "cellid, value, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Rasterize a group's custom-grid cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -492,10 +512,10 @@
     "gbx_rst_derivedband_agg": {
       "examples": "Examples:\n      > SELECT region, gbx_rst_derivedband_agg(tile, 'def f(a): return a', 'f') as result FROM rasters GROUP BY region;",
       "usage_args": "tile, python_func, func_name",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Apply a GDAL VRT pixel function across a group's tiles.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
@@ -512,12 +532,11 @@
     },
     "gbx_rst_dtmfromgeoms_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_dtmfromgeoms_agg( point_wkb, breaklines_wkb_array, 0.0, 0.01, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, 100, 100, 32633 ) AS dtm FROM survey_points GROUP BY region_id;",
-      "usage_args": "point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "usage_args": "point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs]",
+      "description": "Build a digital terrain model from a group of Z points (Delaunay TIN).",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -578,10 +597,10 @@
     "gbx_rst_frombands_agg": {
       "examples": "Examples:\n      > SELECT scene_id, gbx_rst_frombands_agg(tile, band_index) AS multi_band FROM band_tiles GROUP BY scene_id;",
       "usage_args": "tile, band_index",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Stack a group's single-band tiles into one multi-band tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -653,22 +672,31 @@
     },
     "gbx_rst_gridfrompoints_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_gridfrompoints_agg( station_wkb, observation, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, 256, 256, 32633 ) AS idw FROM observations GROUP BY region_id;",
-      "usage_args": "point, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power], [max_pts]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "usage_args": "point, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs]",
+      "description": "Interpolate a group's points to a grid by inverse-distance weighting.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
+    "gbx_rst_h3_rasterize": {
+      "examples": "Examples:\n      > SELECT gbx_rst_h3_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -122.43D, 37.76D, -122.405D, 37.785D, 10, 10, 'centroids', 0) AS out FROM gbx_example;",
+      "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
+      "description": "Rasterize an array of H3 cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_h3_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_h3_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(1 as int) ) AS tile FROM h3_cell_values GROUP BY region_id;",
-      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
+      "description": "Rasterize a group's H3 cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -920,8 +948,7 @@
       "description": "Merge a group's tile rasters into one mosaic tile.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1053,13 +1080,23 @@
       ],
       "since": "0.4.0"
     },
+    "gbx_rst_quadbin_rasterize": {
+      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rasterize(c0, 4326, CAST(NULL AS DOUBLE), -0.6D, 51.2D, 0.4D, 51.8D, 10, 6, 'centroids', 0) AS out FROM gbx_example;",
+      "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
+      "description": "Rasterize an array of quadbin cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_quadbin_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_quadbin_rasterize_agg( cellid, burn_value, 4326, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM quadbin_cell_values GROUP BY region_id;",
-      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",
+      "description": "Rasterize a group's quadbin cells into one tile (pixel-centroid burn).",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.3"
@@ -1168,10 +1205,10 @@
     "gbx_rst_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_rasterize_agg( geom_wkb, burn_value, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, 256, 256, 4326 ) AS tile FROM features GROUP BY region_id;",
       "usage_args": "geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Burn a group's `(geom, value)` features into one tile.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1638,10 +1675,10 @@
     "gbx_h3_cellfill": {
       "examples": "Examples:\n      > SELECT region, gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 612934495919669247L, CAST(NULL AS DOUBLE)), (1, 612934495863046143L, 5.0), (1, 612934495900794879L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Fill the NULL cells of a group of H3 cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -1723,10 +1760,10 @@
     "gbx_bng_cellfill": {
       "examples": "Examples:\n      > SELECT region, gbx_bng_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 'TQ300800', CAST(NULL AS DOUBLE)), (1, 'TQ299800', 5.0), (1, 'TQ301800', 5.0), (1, 'TQ300799', 5.0), (1, 'TQ300801', 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Fill the NULL cells of a group of BNG cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -1745,11 +1782,10 @@
     "gbx_bng_cellintersection_agg": {
       "examples": "Examples:\n      > SELECT t.chip.cellid, gbx_bng_cellintersection_agg(t.chip) AS common_chip FROM ( SELECT explode(gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 )) AS chip ) t WHERE t.chip.cellid = 'TQ3080' GROUP BY t.chip.cellid;",
       "usage_args": "input_chip",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Take the intersection of a group's chips of one cell.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1767,11 +1803,10 @@
     "gbx_bng_cellunion_agg": {
       "examples": "Examples:\n      > SELECT t.chip.cellid, gbx_bng_cellunion_agg(t.chip) AS union_chip FROM ( SELECT explode(gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 )) AS chip ) t WHERE t.chip.cellid = 'TQ3080' GROUP BY t.chip.cellid;",
       "usage_args": "input_chip",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "description": "Take the union of a group's chips of one cell.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -1980,10 +2015,10 @@
     "gbx_custom_cellfill": {
       "examples": "Examples:\n      > SELECT region, gbx_custom_cellfill(cellid, value, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 100000, 100000, 27700), 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 216172782113787048L, CAST(NULL AS DOUBLE)), (1, 216172782113786967L, 5.0), (1, 216172782113787127L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cellid, value, grid, [k], [method], [power]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Fill the NULL cells of a group of custom-grid cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2113,10 +2148,10 @@
     "gbx_st_asmvt": {
       "examples": "Examples:\n      > SELECT z, x, y, gbx_st_asmvt(geom_wkb, attrs, 'layer') AS mvt FROM mvt_features GROUP BY z, x, y;",
       "usage_args": "geom, attrs, layer_name",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Encode a group of features into one Mapbox Vector Tile layer.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -2133,17 +2168,21 @@
     },
     "gbx_st_coverageinvalidedges": {
       "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageinvalidedges(geom, 0.0) AS bad_edges FROM coverage_overlap GROUP BY cov_id;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, [gap_width]",
+      "description": "Give the invalid edges of a group of polygons that should form a coverage.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
     "gbx_st_coverageisvalid": {
       "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageisvalid(geom, 0.0) AS is_valid FROM coverage_parcels GROUP BY cov_id;",
-      "bindings": [
-        "sql",
-        "python-light"
+      "usage_args": "geom, [gap_width]",
+      "description": "Say whether a group of polygons is a valid coverage.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.5.0"
     },
@@ -2352,10 +2391,10 @@
     "gbx_quadbin_cellfill": {
       "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( SELECT 1 AS region, gbx_quadbin_pointascell(-0.1, 51.5, 10) AS cellid, CAST(NULL AS DOUBLE) AS value UNION ALL SELECT 1 AS region, cell AS cellid, 5.0 AS value FROM ( SELECT explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1)) AS cell ) ) t GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Fill the NULL cells of a group of quadbin cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.1"
@@ -2374,10 +2413,10 @@
     "gbx_quadbin_cellunion_agg": {
       "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellunion_agg(cell) AS coverage FROM ( SELECT 'R1' AS region, explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1)) AS cell ) t GROUP BY region;",
       "usage_args": "cellid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Union a group's quadbin cells into one geometry.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"

@@ -74,6 +74,7 @@ works for both tiers; the DataFrame Column form is SQL-only for these generators
 from databricks.labs.gbx.gridx.custom import functions as cx
 from databricks.labs.gbx.gridx.h3 import functions as hx
 from databricks.labs.gbx.gridx.quadbin import functions as qx
+from databricks.labs.gbx.gridx.bng import functions as bx
 
 try:
     from databricks.labs.gbx.pygx import functions as gx
@@ -690,7 +691,7 @@ bng_tessellate_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def bng_cellintersection_agg_python_light_example(spark):
+def bng_cellintersection_agg_python_example(spark):
     """Aggregate intersection of chip structs per BNG cell.
 
     Reads the ``bng_chips`` setup view (9 chips from tessellating the 3km × 3km
@@ -704,7 +705,6 @@ def bng_cellintersection_agg_python_light_example(spark):
     ``ClassCastException``.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_bng_chips_df(spark)
     df_keyed = df.select(
@@ -713,14 +713,14 @@ def bng_cellintersection_agg_python_light_example(spark):
     )
     result = (
         df_keyed.groupBy("cellid")
-        .agg(gx.bng_cellintersection_agg("chip").alias("common_chip"))
+        .agg(bx.bng_cellintersection_agg("chip").alias("common_chip"))
         .filter(f.col("cellid") == "TQ3080")
         .first()
     )
     return result["common_chip"]
 
 
-bng_cellintersection_agg_python_light_example_output = """
+bng_cellintersection_agg_python_example_output = """
 +-------+------------+
 |cellid |common_chip |
 +-------+------------+
@@ -730,7 +730,7 @@ bng_cellintersection_agg_python_light_example_output = """
 """
 
 
-def bng_cellunion_agg_python_light_example(spark):
+def bng_cellunion_agg_python_example(spark):
     """Aggregate union of chip structs per BNG cell.
 
     Reads the ``bng_chips`` setup view (9 chips from tessellating the 3km × 3km
@@ -744,7 +744,6 @@ def bng_cellunion_agg_python_light_example(spark):
     ``ClassCastException``.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = _get_bng_chips_df(spark)
     df_keyed = df.select(
@@ -753,14 +752,14 @@ def bng_cellunion_agg_python_light_example(spark):
     )
     result = (
         df_keyed.groupBy("cellid")
-        .agg(gx.bng_cellunion_agg("chip").alias("union_chip"))
+        .agg(bx.bng_cellunion_agg("chip").alias("union_chip"))
         .filter(f.col("cellid") == "TQ3080")
         .first()
     )
     return result["union_chip"]
 
 
-bng_cellunion_agg_python_light_example_output = """
+bng_cellunion_agg_python_example_output = """
 +-------+----------+
 |cellid |union_chip|
 +-------+----------+
@@ -1208,7 +1207,7 @@ quadbin_cellunion_python_example_output = """
 """
 
 
-def quadbin_cellunion_agg_python_light_example(spark):
+def quadbin_cellunion_agg_python_example(spark):
     """Aggregate quadbin cells per group into a single MultiPolygon EWKB (light pygx tier).
 
     Reads the ``quadbin_kring_cells`` setup view (9 rows: cells from the k=1
@@ -1220,19 +1219,18 @@ def quadbin_cellunion_agg_python_light_example(spark):
     Identical to the heavyweight output (AGREE).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df = spark.table("quadbin_kring_cells")
     df_keyed = df.withColumn("region", f.lit("R1"))
     result = (
         df_keyed.groupBy("region")
-        .agg(gx.quadbin_cellunion_agg("cell").alias("coverage"))
+        .agg(qx.quadbin_cellunion_agg("cell").alias("coverage"))
         .first()
     )
     return result["coverage"]
 
 
-quadbin_cellunion_agg_python_light_example_output = """
+quadbin_cellunion_agg_python_example_output = """
 +------+--------+
 |region|coverage|
 +------+--------+
@@ -1885,7 +1883,7 @@ h3_geomkloopexplode_python_example_output = """
 # -- BNG cellfill ------------------------------------------------------------
 
 
-def bng_cellfill_python_light_example(spark):
+def bng_cellfill_python_example(spark):
     """Grouped aggregate: fill a NULL BNG cell from ring-1 neighbours (light pygx tier).
 
     Inline data: London 100m cell ``TQ300800`` (NULL) surrounded by four ring-1
@@ -1913,7 +1911,7 @@ def bng_cellfill_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            gx.bng_cellfill(
+            bx.bng_cellfill(
                 f.col("cellid"), f.col("value"), f.lit(1), f.lit("mean"), f.lit(2.0)
             ).alias("filled")
         )
@@ -1922,7 +1920,7 @@ def bng_cellfill_python_light_example(spark):
     return result["filled"]
 
 
-bng_cellfill_python_light_example_output = """
+bng_cellfill_python_example_output = """
 +------+--------+
 |region|filled  |
 +------+--------+
@@ -1935,7 +1933,7 @@ bng_cellfill_python_light_example_output = """
 # -- Quadbin cellfill --------------------------------------------------------
 
 
-def quadbin_cellfill_python_light_example(spark):
+def quadbin_cellfill_python_example(spark):
     """Grouped aggregate: fill a NULL quadbin cell from ring-1 neighbours (light pygx tier).
 
     Inline data: London z=10 center cell ``5234261469560717311`` (NULL) plus
@@ -1961,7 +1959,7 @@ def quadbin_cellfill_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            gx.quadbin_cellfill(
+            qx.quadbin_cellfill(
                 f.col("cellid"), f.col("value"), f.lit(1), f.lit("mean"), f.lit(2.0)
             ).alias("filled")
         )
@@ -1970,7 +1968,7 @@ def quadbin_cellfill_python_light_example(spark):
     return result["filled"]
 
 
-quadbin_cellfill_python_light_example_output = """
+quadbin_cellfill_python_example_output = """
 +------+--------+
 |region|filled  |
 +------+--------+
@@ -1983,7 +1981,7 @@ quadbin_cellfill_python_light_example_output = """
 # -- H3 cellfill -------------------------------------------------------------
 
 
-def h3_cellfill_python_light_example(spark):
+def h3_cellfill_python_example(spark):
     """Grouped aggregate: fill a NULL H3 cell from ring-1 neighbours (light pygx tier).
 
     Inline data: London res-8 center H3 cell ``612934495919669247`` (NULL) plus two
@@ -2008,7 +2006,7 @@ def h3_cellfill_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            gx.h3_cellfill(
+            hx.h3_cellfill(
                 f.col("cellid"), f.col("value"), f.lit(1), f.lit("mean"), f.lit(2.0)
             ).alias("filled")
         )
@@ -2017,7 +2015,7 @@ def h3_cellfill_python_light_example(spark):
     return result["filled"]
 
 
-h3_cellfill_python_light_example_output = """
+h3_cellfill_python_example_output = """
 +------+--------+
 |region|filled  |
 +------+--------+
@@ -2030,7 +2028,7 @@ h3_cellfill_python_light_example_output = """
 # -- Custom cellfill ---------------------------------------------------------
 
 
-def custom_cellfill_python_light_example(spark):
+def custom_cellfill_python_example(spark):
     """Grouped aggregate: fill a NULL custom-grid cell from ring-1 neighbours (light pygx tier).
 
     Reads the ``custom_grids`` setup view for the grid spec and uses
@@ -2043,7 +2041,6 @@ def custom_cellfill_python_light_example(spark):
     The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
     df_grid = _get_custom_grid_df(spark)
     # Derive valid cell IDs from the fixture grid at resolution 0 (1000m cells)
@@ -2069,7 +2066,7 @@ def custom_cellfill_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            gx.custom_cellfill(
+            cx.custom_cellfill(
                 f.col("cellid"),
                 f.col("value"),
                 f.col("grid"),
@@ -2083,7 +2080,7 @@ def custom_cellfill_python_light_example(spark):
     return result["filled"]
 
 
-custom_cellfill_python_light_example_output = """
+custom_cellfill_python_example_output = """
 +------+--------+
 |region|filled  |
 +------+--------+

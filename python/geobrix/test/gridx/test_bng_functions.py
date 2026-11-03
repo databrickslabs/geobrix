@@ -143,48 +143,6 @@ def test_bng_tessellate_keep_core_geom_defaults_to_false(spark, bng_registered):
 # ====== Aggregator Functions ======
 
 
-def test_bng_cellintersection_agg(spark, bng_registered, test_data):
-    """Test cell intersection aggregator."""
-    # For aggregators, we need cells from tessellation/polyfill
-    # Use tessellate to get proper cell structures
-    polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
-    tessellated = spark.range(1).select(
-        bng_registered.bng_tessellate(
-            f.lit(polygon_wkt), f.lit(1), keep_core_geom=True
-        ).alias("cells")
-    )
-
-    # Explode the array of cells and aggregate
-    result = (
-        tessellated.selectExpr("explode(cells) as cell")
-        .groupBy()
-        .agg(
-            bng_registered.bng_cellintersection_agg(f.col("cell")).alias("intersection")
-        )
-    )
-    row = result.collect()[0]
-    assert row["intersection"] is not None
-
-
-def test_bng_cellunion_agg(spark, bng_registered, test_data):
-    """Test cell union aggregator."""
-    polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
-    tessellated = spark.range(1).select(
-        bng_registered.bng_tessellate(
-            f.lit(polygon_wkt), f.lit(1), keep_core_geom=True
-        ).alias("cells")
-    )
-
-    # Explode the array of cells and aggregate
-    result = (
-        tessellated.selectExpr("explode(cells) as cell")
-        .groupBy()
-        .agg(bng_registered.bng_cellunion_agg(f.col("cell")).alias("union"))
-    )
-    row = result.collect()[0]
-    assert row["union"] is not None
-
-
 # ====== Generator/Explode Functions ======
 # The Python explode wrappers return the generator itself; select it directly.
 

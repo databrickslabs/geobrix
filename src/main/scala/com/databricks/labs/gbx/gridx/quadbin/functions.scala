@@ -70,6 +70,10 @@ object functions extends Serializable {
     def quadbin_cellunion(cells: Column): Column =
         ColumnAdapter(Quadbin_CellUnion.name, Seq(cells))
 
+    /** Aggregator: union a group's cells into one geometry (EWKB, EPSG:4326). */
+    def quadbin_cellunion_agg(cellid: Column): Column =
+        ColumnAdapter(Quadbin_CellUnionAgg.name, Seq(cellid))
+
     def quadbin_distance(cellid1: Column, cellid2: Column): Column =
         ColumnAdapter(Quadbin_Distance.name, Seq(cellid1, cellid2))
 

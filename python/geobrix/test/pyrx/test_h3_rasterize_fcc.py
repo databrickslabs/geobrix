@@ -30,7 +30,7 @@ def test_fcc_rasterize_per_speed_tier(spark):
     # one raster per (provider, speed tier); res-8 cells, presence mask
     tiles = (
         df.groupBy("provider", "speed")
-        .agg(rx.rst_h3_rasterize_agg("cellid").alias("tile"))
+        .agg(rx._light_rst_h3_rasterize_agg("cellid").alias("tile"))
         .collect()
     )
     # multiple (provider, speed) groups → multiple coverage rasters

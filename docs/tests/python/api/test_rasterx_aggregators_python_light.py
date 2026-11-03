@@ -38,10 +38,11 @@ def _light_setup_views(spark):
 
 
 def _assert_tile(result, name):
-    """Assert a tile struct has non-None, non-empty raster bytes."""
+    """Assert an aggregate's BINARY result (or the tile an example made of it with rst_fromcontent) is a non-empty GeoTIFF."""
     assert result is not None, f"{name}: result is None"
-    assert result["raster"] is not None, f"{name}: raster bytes is None"
-    assert len(bytes(result["raster"])) > 0, f"{name}: raster bytes is empty"
+    raw = bytes(result["raster"] if hasattr(result, "asDict") else result)
+    assert len(raw) > 0, f"{name}: raster bytes is empty"
+    assert raw[:2] in (b"II", b"MM"), f"{name}: not a GeoTIFF"
 
 
 # ---------------------------------------------------------------------------
@@ -49,29 +50,29 @@ def _assert_tile(result, name):
 # ---------------------------------------------------------------------------
 
 
-def test_rst_combineavg_agg_python_light_example(spark):
-    """rst_combineavg_agg returns a non-null tile struct."""
+def test_rst_combineavg_agg_python_example(spark):
+    """rst_combineavg_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_combineavg_agg_python_light_example(spark)
+    result = agg_examples.rst_combineavg_agg_python_example(spark)
     _assert_tile(result, "rst_combineavg_agg")
 
 
-def test_rst_derivedband_agg_python_light_example(spark):
-    """rst_derivedband_agg returns a non-null tile struct."""
+def test_rst_derivedband_agg_python_example(spark):
+    """rst_derivedband_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_derivedband_agg_python_light_example(spark)
+    result = agg_examples.rst_derivedband_agg_python_example(spark)
     _assert_tile(result, "rst_derivedband_agg")
 
 
-def test_rst_frombands_agg_python_light_example(spark):
-    """rst_frombands_agg returns a non-null tile struct."""
+def test_rst_frombands_agg_python_example(spark):
+    """rst_frombands_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_frombands_agg_python_light_example(spark)
+    result = agg_examples.rst_frombands_agg_python_example(spark)
     _assert_tile(result, "rst_frombands_agg")
 
 
 def test_rst_merge_agg_python_example(spark):
-    """rst_merge_agg returns a non-null tile struct."""
+    """rst_merge_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
     result = agg_examples.rst_merge_agg_python_example(spark)
     _assert_tile(result, "rst_merge_agg")
@@ -82,57 +83,57 @@ def test_rst_merge_agg_python_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_rst_rasterize_agg_python_light_example(spark):
-    """rst_rasterize_agg returns a non-null tile struct."""
+def test_rst_rasterize_agg_python_example(spark):
+    """rst_rasterize_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_rasterize_agg_python_light_example(spark)
+    result = agg_examples.rst_rasterize_agg_python_example(spark)
     _assert_tile(result, "rst_rasterize_agg")
 
 
-def test_rst_gridfrompoints_agg_python_light_example(spark):
-    """rst_gridfrompoints_agg returns a non-null tile struct."""
+def test_rst_gridfrompoints_agg_python_example(spark):
+    """rst_gridfrompoints_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_gridfrompoints_agg_python_light_example(spark)
+    result = agg_examples.rst_gridfrompoints_agg_python_example(spark)
     _assert_tile(result, "rst_gridfrompoints_agg")
 
 
-def test_rst_dtmfromgeoms_agg_python_light_example(spark):
-    """rst_dtmfromgeoms_agg returns a non-null tile struct."""
+def test_rst_dtmfromgeoms_agg_python_example(spark):
+    """rst_dtmfromgeoms_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_dtmfromgeoms_agg_python_light_example(spark)
+    result = agg_examples.rst_dtmfromgeoms_agg_python_example(spark)
     _assert_tile(result, "rst_dtmfromgeoms_agg")
 
 
-def test_rst_h3_rasterize_agg_python_light_example(spark):
-    """rst_h3_rasterize_agg returns a non-null tile struct."""
+def test_rst_h3_rasterize_agg_python_example(spark):
+    """rst_h3_rasterize_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_h3_rasterize_agg_python_light_example(spark)
+    result = agg_examples.rst_h3_rasterize_agg_python_example(spark)
     _assert_tile(result, "rst_h3_rasterize_agg")
 
 
-def test_rst_quadbin_rasterize_agg_python_light_example(spark):
-    """rst_quadbin_rasterize_agg returns a non-null tile struct."""
+def test_rst_quadbin_rasterize_agg_python_example(spark):
+    """rst_quadbin_rasterize_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
-    result = agg_examples.rst_quadbin_rasterize_agg_python_light_example(spark)
+    result = agg_examples.rst_quadbin_rasterize_agg_python_example(spark)
     _assert_tile(result, "rst_quadbin_rasterize_agg")
 
 
 def test_rst_bng_rasterize_agg_python_example(spark):
-    """rst_bng_rasterize_agg returns a non-null tile struct."""
+    """rst_bng_rasterize_agg returns non-empty GeoTIFF bytes."""
     assert agg_examples is not None
     result = agg_examples.rst_bng_rasterize_agg_python_example(spark)
     _assert_tile(result, "rst_bng_rasterize_agg")
 
 
-def test_rst_binpoints_agg_python_light_example(spark):
-    """rst_binpoints_agg returns a non-null Float32 tile struct from scalar point rows."""
+def test_rst_binpoints_agg_python_example(spark):
+    """rst_binpoints_agg returns non-empty GeoTIFF bytes from scalar point rows."""
     assert agg_examples is not None
-    result = agg_examples.rst_binpoints_agg_python_light_example(spark)
+    result = agg_examples.rst_binpoints_agg_python_example(spark)
     _assert_tile(result, "rst_binpoints_agg")
 
 
-def test_rst_custom_rasterize_agg_python_light_example(spark):
-    """rst_custom_rasterize_agg returns a non-null tile struct from custom-grid cell rows."""
+def test_rst_custom_rasterize_agg_python_example(spark):
+    """rst_custom_rasterize_agg returns non-empty GeoTIFF bytes from custom-grid cell rows."""
     assert agg_examples is not None
-    result = agg_examples.rst_custom_rasterize_agg_python_light_example(spark)
+    result = agg_examples.rst_custom_rasterize_agg_python_example(spark)
     _assert_tile(result, "rst_custom_rasterize_agg")

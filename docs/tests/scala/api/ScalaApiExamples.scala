@@ -1446,32 +1446,6 @@ result.show()
 (one v2 Tile per group — raster bytes populated, path null)
 """.trim
 
-  val rst_merge_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-rx.register(spark)
-// Multi-tile fixture: load multiband tif and split to 3 per-band rows.
-val mb = spark.read.format("gdal").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif")
-val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
-val b2 = mb.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("region", lit("R1"))
-val b3 = mb.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("region", lit("R1"))
-val df = b1.union(b2).union(b3)
-val result = df.groupBy("region").agg(rx.rst_merge_agg(col("tile")).alias("mosaic"))
-result.show()
-""".trim
-
-  val rst_merge_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|mosaic                                                     |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
   val rst_rasterize_agg_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1491,70 +1465,6 @@ result.show()
     """
 +------+-----------------------------------------------------------+
 |region|burned                                                     |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
-  val rst_gridfrompoints_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-import java.nio.{ByteBuffer, ByteOrder}
-
-rx.register(spark)
-// Multi-row fixture: 4 WKB POINT rows with scalar observations, [0,0,1,1] EPSG:4326 extent.
-def mkPt(x: Double, y: Double): Array[Byte] = {
-  val buf = ByteBuffer.allocate(21).order(ByteOrder.LITTLE_ENDIAN)
-  buf.put(1.toByte); buf.putInt(1); buf.putDouble(x); buf.putDouble(y); buf.array()
-}
-val schema = StructType(Seq(StructField("pt", BinaryType()), StructField("val", DoubleType()), StructField("region", StringType())))
-val rows = Seq((mkPt(0.1,0.1),10.0,"R1"),(mkPt(0.9,0.1),20.0,"R1"),(mkPt(0.1,0.9),30.0,"R1"),(mkPt(0.9,0.9),40.0,"R1"))
-val df = spark.createDataFrame(spark.sparkContext.parallelize(rows.map { case (p,v,r) => org.apache.spark.sql.Row(p,v,r) }), schema)
-val result = df.groupBy("region").agg(
-  rx.rst_gridfrompoints_agg(col("pt"), col("val"), lit(0.0), lit(0.0), lit(1.0), lit(1.0), lit(8), lit(8), lit(4326)).alias("idw")
-)
-result.show()
-""".trim
-
-  val rst_gridfrompoints_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|idw                                                        |
-+------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
-""".trim
-
-  val rst_dtmfromgeoms_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-import org.apache.spark.sql.types._
-import java.nio.{ByteBuffer, ByteOrder}
-
-rx.register(spark)
-// Multi-row fixture: 4 WKB POINT Z rows over [0,0,1,1] EPSG:4326.
-def mkPtZ(x: Double, y: Double, z: Double): Array[Byte] = {
-  val buf = ByteBuffer.allocate(29).order(ByteOrder.LITTLE_ENDIAN)
-  buf.put(1.toByte); buf.putInt(1001); buf.putDouble(x); buf.putDouble(y); buf.putDouble(z); buf.array()
-}
-val schema = StructType(Seq(StructField("pt", BinaryType()), StructField("region", StringType())))
-val rows = Seq((mkPtZ(0.1,0.1,100.0),"R1"),(mkPtZ(0.9,0.1,200.0),"R1"),(mkPtZ(0.1,0.9,150.0),"R1"),(mkPtZ(0.9,0.9,250.0),"R1"))
-val df = spark.createDataFrame(spark.sparkContext.parallelize(rows.map { case (p,r) => org.apache.spark.sql.Row(p,r) }), schema)
-val result = df.groupBy("region").agg(
-  rx.rst_dtmfromgeoms_agg(col("pt"), lit(null).cast("array<binary>"), lit(0.0), lit(0.0), lit(0.0), lit(0.0), lit(1.0), lit(1.0), lit(8), lit(8), lit(4326)).alias("dtm")
-)
-result.show()
-""".trim
-
-  val rst_dtmfromgeoms_agg_scala_example_output: String =
-    """
-+------+-----------------------------------------------------------+
-|region|dtm                                                        |
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
@@ -3140,62 +3050,6 @@ result.show(truncate = false)
   // The 5 BNG *explode UDTFs have no Column form on any tier — Scala tab
   // is legitimately absent for those; only the 2 aggregators have Scala vals.
   // =========================================================================
-
-  val bng_cellintersection_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-import org.apache.spark.sql.functions._
-
-// Reads the bng_chips view (9 chip structs from tessellating the BNG polygon at res=3)
-// Groups by chip.cellid and intersects chips within each group.
-// Each group holds exactly one chip — the aggregate returns that chip unchanged.
-// Heavy tier returns STRUCT<cellid, core, chip>; light returns BINARY.
-val df = spark.table("bng_chips").select(
-  col("chip"),
-  col("chip.cellid").alias("cellid")
-)
-val result = df.groupBy("cellid")
-  .agg(bx.bng_cellintersection_agg(col("chip")).alias("common_chip"))
-  .filter(col("cellid") === "TQ3080")
-result.show(truncate = false)
-""".trim
-
-  val bng_cellintersection_agg_scala_example_output: String =
-    """
-+------+--------------------+
-|cellid|common_chip         |
-+------+--------------------+
-|TQ3080|{TQ3080, true, null}|
-+------+--------------------+
-... (STRUCT — TQ3080 core chip: cellid=TQ3080, core=true, chip=null)""".trim
-
-  val bng_cellunion_agg_scala_example: String =
-    """
-import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-import org.apache.spark.sql.functions._
-
-// Reads the bng_chips view (9 chip structs from tessellating the BNG polygon at res=3)
-// Groups by chip.cellid and dissolves chips within each group.
-// Each group holds exactly one chip — the aggregate returns that chip unchanged.
-// Heavy tier returns STRUCT<cellid, core, chip>; light returns BINARY.
-val df = spark.table("bng_chips").select(
-  col("chip"),
-  col("chip.cellid").alias("cellid")
-)
-val result = df.groupBy("cellid")
-  .agg(bx.bng_cellunion_agg(col("chip")).alias("union_chip"))
-  .filter(col("cellid") === "TQ3080")
-result.show(truncate = false)
-""".trim
-
-  val bng_cellunion_agg_scala_example_output: String =
-    """
-+------+--------------------+
-|cellid|union_chip          |
-+------+--------------------+
-|TQ3080|{TQ3080, true, null}|
-+------+--------------------+
-... (STRUCT — TQ3080 core chip: cellid=TQ3080, core=true, chip=null)""".trim
 
   // =========================================================================
   // GridX per-function examples — T6a: Quadbin codec + scalar

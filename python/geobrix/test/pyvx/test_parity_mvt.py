@@ -114,7 +114,7 @@ def test_light_vs_heavy_asmvt_decoded_parity(spark_with_jar):
 
     light_blob = bytes(
         df.agg(
-            vx.st_asmvt(f.col("geom"), f.struct("id", "h", "name"), "layer")
+            vx._light_st_asmvt(f.col("geom"), f.struct("id", "h", "name"), "layer")
         ).collect()[0][0]
     )
     heavy_blob = bytes(
@@ -183,7 +183,7 @@ def test_light_vs_heavy_asmvt_small_polygon_parity(spark_with_jar):
 
     light_blob = bytes(
         df.agg(
-            vx.st_asmvt(f.col("geom"), f.struct("id", "h", "name"), "layer")
+            vx._light_st_asmvt(f.col("geom"), f.struct("id", "h", "name"), "layer")
         ).collect()[0][0]
     )
     heavy_blob = bytes(

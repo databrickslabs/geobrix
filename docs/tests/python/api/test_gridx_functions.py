@@ -141,54 +141,10 @@ def bng_heavy_setup(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_bng_cellintersection_agg_python_heavy_example_exists():
-    assert hasattr(gridx_functions, "bng_cellintersection_agg_python_heavy_example")
-    assert callable(gridx_functions.bng_cellintersection_agg_python_heavy_example)
-    assert hasattr(
-        gridx_functions, "bng_cellintersection_agg_python_heavy_example_output"
-    )
-
-
-def test_bng_cellunion_agg_python_heavy_example_exists():
-    assert hasattr(gridx_functions, "bng_cellunion_agg_python_heavy_example")
-    assert callable(gridx_functions.bng_cellunion_agg_python_heavy_example)
-    assert hasattr(gridx_functions, "bng_cellunion_agg_python_heavy_example_output")
-
-
 # ---------------------------------------------------------------------------
 # T5: BNG aggregators — heavy-tier execution tests
 # Fixture: bng_heavy_setup registers bx + creates the ten GridX heavy views.
 # ---------------------------------------------------------------------------
-
-
-def test_bng_cellintersection_agg_python_heavy_example(bng_heavy_setup):
-    """bng_cellintersection_agg (heavy) returns STRUCT with cellid=TQ3080, core=True."""
-    spark = bng_heavy_setup
-    result = gridx_functions.bng_cellintersection_agg_python_heavy_example(spark)
-    assert (
-        result is not None
-    ), "bng_cellintersection_agg (heavy) should return non-null chip struct for TQ3080"
-    assert (
-        result["cellid"] == "TQ3080"
-    ), f"Expected cellid='TQ3080' in common_chip struct, got {result['cellid']!r}"
-    assert (
-        result["core"] is True
-    ), f"Expected core=True for TQ3080 core chip, got {result['core']!r}"
-
-
-def test_bng_cellunion_agg_python_heavy_example(bng_heavy_setup):
-    """bng_cellunion_agg (heavy) returns STRUCT with cellid=TQ3080, core=True."""
-    spark = bng_heavy_setup
-    result = gridx_functions.bng_cellunion_agg_python_heavy_example(spark)
-    assert (
-        result is not None
-    ), "bng_cellunion_agg (heavy) should return non-null chip struct for TQ3080"
-    assert (
-        result["cellid"] == "TQ3080"
-    ), f"Expected cellid='TQ3080' in union_chip struct, got {result['cellid']!r}"
-    assert (
-        result["core"] is True
-    ), f"Expected core=True for TQ3080 core chip, got {result['core']!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -198,12 +154,6 @@ def test_bng_cellunion_agg_python_heavy_example(bng_heavy_setup):
 # ---------------------------------------------------------------------------
 
 
-def test_quadbin_cellunion_agg_python_heavy_example_exists():
-    assert hasattr(gridx_functions, "quadbin_cellunion_agg_python_heavy_example")
-    assert callable(gridx_functions.quadbin_cellunion_agg_python_heavy_example)
-    assert hasattr(gridx_functions, "quadbin_cellunion_agg_python_heavy_example_output")
-
-
 # ---------------------------------------------------------------------------
 # T6b: Quadbin neighbourhood/union/agg — heavy-tier execution tests
 # Fixture: bng_heavy_setup registers bx + creates the ten GridX heavy views.
@@ -211,18 +161,3 @@ def test_quadbin_cellunion_agg_python_heavy_example_exists():
 # so we also register gridx.quadbin within each test.
 # ---------------------------------------------------------------------------
 
-
-def test_quadbin_cellunion_agg_python_heavy_example(bng_heavy_setup):
-    """quadbin_cellunion_agg (heavy) returns non-empty BINARY EWKB (both tiers = BINARY)."""
-    spark = bng_heavy_setup
-    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
-
-    qx.register(spark)
-    result = gridx_functions.quadbin_cellunion_agg_python_heavy_example(spark)
-    assert (
-        result is not None
-    ), "quadbin_cellunion_agg (heavy) should return non-null BINARY EWKB"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (BINARY EWKB), got {type(result)}"
-    assert len(result) > 0, "EWKB bytes should be non-empty"

@@ -158,6 +158,7 @@ def wc_surface_dsm():
 )
 @dp.expect("tile_present", "dtm IS NOT NULL")
 def wc_surface_dtm():
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
     c = cfg(spark)
@@ -184,7 +185,8 @@ def wc_surface_dtm():
     # One Delaunay-TIN DTM tile per (tx, ty) via the streaming rst_dtmfromgeoms_agg
     # aggregator -- a continuous, gap-free bare earth, the production DTM.
     return ground_s.groupBy("tx", "ty").agg(
-        rx.rst_dtmfromgeoms_agg(
+        rasterx_api.rst_fromcontent(
+            rasterx_api.rst_dtmfromgeoms_agg(
             "pt",
             F.lit(None),
             F.lit(0.0),
@@ -196,6 +198,8 @@ def wc_surface_dtm():
             F.lit(tpx),
             F.lit(tpx),
             F.lit(srid),
+            ),
+            "GTiff",
         ).alias("dtm")
     )
 

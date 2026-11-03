@@ -37,7 +37,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         )).toDF("cellId", "isCore", "wkb")
             .withColumn("chip", struct(col("cellId"), col("isCore"), col("wkb")))
         
-        val result = df.groupBy().agg(bng_cellintersection_agg(col("chip")).as("intersection")).collect()
+        val result = df.groupBy().agg(call_function("gbx_bng_cellintersection_agg", col("chip")).as("intersection")).collect()
         
         assert(result.length == 1)
         val intersection = result(0).getStruct(0)
@@ -61,7 +61,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
             (cellId, true, JTS.toWKB(cellGeom))
         )).toDF("cellId", "isCore", "wkb")
             .withColumn("chip", struct(col("cellId"), col("isCore"), col("wkb")))
-        val result = df.groupBy().agg(bng_cellintersection_agg(col("chip")).as("intersection")).collect()
+        val result = df.groupBy().agg(call_function("gbx_bng_cellintersection_agg", col("chip")).as("intersection")).collect()
         
         assert(result.length == 1)
         val intersection = result(0).getStruct(0)
@@ -85,7 +85,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         )).toDF("cellId", "isCore", "wkb")
           .withColumn("chip", struct(col("cellId"), col("isCore"), col("wkb")))
           .repartition(1)
-        val dfg = df.groupBy().agg(bng_cellunion_agg(col("chip")).as("union"))
+        val dfg = df.groupBy().agg(call_function("gbx_bng_cellunion_agg", col("chip")).as("union"))
         val result = dfg.collect()
 
         assert(result.length == 1)
@@ -111,7 +111,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         )).toDF("cellId", "isCore", "wkb")
             .withColumn("chip", struct(col("cellId"), col("isCore"), col("wkb")))
         
-        val result = df.groupBy().agg(bng_cellunion_agg(col("chip")).as("union")).collect()
+        val result = df.groupBy().agg(call_function("gbx_bng_cellunion_agg", col("chip")).as("union")).collect()
         
         assert(result.length == 1)
         val union = result(0).getStruct(0)
@@ -163,7 +163,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
           .repartition(1)
 
         // Must not throw; mixed-cell group dissolves to an empty polygon (not core).
-        val result = df.groupBy().agg(bng_cellunion_agg(col("chip")).as("union")).collect()
+        val result = df.groupBy().agg(call_function("gbx_bng_cellunion_agg", col("chip")).as("union")).collect()
         assert(result.length == 1)
         val union = result(0).getStruct(0)
         assert(!union.getBoolean(1), "mixed-cell union must not be core")

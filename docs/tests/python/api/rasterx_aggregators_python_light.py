@@ -7,9 +7,8 @@ build a small multi-row DataFrame and aggregate via groupBy(...).agg(...) —
 this is the correct DataFrame-native invocation (not raw SQL inside a Python tab).
 
 The shown code invokes the *_agg function directly — no accessor wrapper (rst_format,
-rst_numbands, etc.) hides the real return type.  All *_agg functions return a tile
-v2 Tile (see docs/docs/api/tile-structure); the output
-constants show representative tile-struct values.
+rst_numbands, etc.) hides the real return type.  All *_agg functions return the raster as BINARY (the GeoTIFF bytes); wrap
+the result with rst_fromcontent(col, "GTiff") to get a tile back.
 
 Fixture: MULTI-TILE (rgb_nir_small.tif split into 3 per-band rows, same grid).
   multi_band_tiles_df(spark)  -> 3 rows: tile (1-band), band_index (1/2/3), region
@@ -44,31 +43,31 @@ def _get_multi_band_tiles_df(spark):
 # ---------------------------------------------------------------------------
 
 
-def rst_combineavg_agg_python_light_example(spark):
+def rst_combineavg_agg_python_example(spark):
     """Average aligned raster tiles per group using the light pyrx tier.
 
     Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif split by rst_band.
     All 3 tiles share the same grid (extent/shape/CRS), satisfying combineavg_agg's
     alignment requirement. Grouped by region, producing 1 averaged tile row.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
 
     df = _get_multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_combineavg_agg("tile").alias("avg_tile"))
+        .agg(rasterx_api.rst_combineavg_agg("tile").alias("avg_tile"))
         .first()
     )
     return result["avg_tile"]
 
 
-rst_combineavg_agg_python_light_example_output = """
+rst_combineavg_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|avg_tile                                                   |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -80,14 +79,14 @@ rst_combineavg_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_derivedband_agg_python_light_example(spark):
+def rst_derivedband_agg_python_example(spark):
     """Apply a Python pixel function across a group's band tiles using the light pyrx tier.
 
     Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif.  Each tile
     contributes one band to the VRT; the pixel function selects the first band
     (identity). Grouped by region, producing 1 derived tile row.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
 
     pyfunc = (
         "def fn(in_ar, out_ar, xoff, yoff, xsize, ysize, "
@@ -97,19 +96,19 @@ def rst_derivedband_agg_python_light_example(spark):
     df = _get_multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_derivedband_agg("tile", pyfunc, "fn").alias("derived"))
+        .agg(rasterx_api.rst_derivedband_agg("tile", pyfunc, "fn").alias("derived"))
         .first()
     )
     return result["derived"]
 
 
-rst_derivedband_agg_python_light_example_output = """
+rst_derivedband_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|derived                                                    |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -121,31 +120,31 @@ rst_derivedband_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_frombands_agg_python_light_example(spark):
+def rst_frombands_agg_python_example(spark):
     """Stack per-band tiles into one multi-band tile per group using the light pyrx tier.
 
     Multi-tile fixture: 3 per-band rows from rgb_nir_small.tif, each with
     band_index=1/2/3.  Grouped by region, stacks ascending by band_index,
     producing 1 three-band tile row.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
 
     df = _get_multi_band_tiles_df(spark)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_frombands_agg("tile", "band_index").alias("stacked"))
+        .agg(rasterx_api.rst_frombands_agg("tile", "band_index").alias("stacked"))
         .first()
     )
     return result["stacked"]
 
 
-rst_frombands_agg_python_light_example_output = """
+rst_frombands_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|stacked                                                    |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -181,9 +180,9 @@ rst_merge_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|mosaic                                                     |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -195,13 +194,13 @@ rst_merge_agg_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_rasterize_agg_python_light_example(spark):
+def rst_rasterize_agg_python_example(spark):
     """Burn geometry/value rows into one tile per group using the light pyrx tier.
 
     Multi-row fixture: 3 rows of (geom_wkb, burn_value) over a shared 4x4 extent
     in EPSG:4326.  Grouped by region, producing 1 rasterized tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         BinaryType,
@@ -230,7 +229,7 @@ def rst_rasterize_agg_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            rx.rst_rasterize_agg(
+            rasterx_api.rst_rasterize_agg(
                 "geom",
                 "value",
                 f.lit(0.0),
@@ -247,13 +246,13 @@ def rst_rasterize_agg_python_light_example(spark):
     return result["burned"]
 
 
-rst_rasterize_agg_python_light_example_output = """
+rst_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|burned                                                     |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -264,13 +263,13 @@ rst_rasterize_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_gridfrompoints_agg_python_light_example(spark):
+def rst_gridfrompoints_agg_python_example(spark):
     """IDW-interpolate point/value rows into one tile per group using the light pyrx tier.
 
     Multi-row fixture: 4 rows of (WKB point, observation) over a shared extent
     [0,0,1,1] EPSG:4326.  Grouped by region, producing 1 Float64 IDW tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         BinaryType,
@@ -303,7 +302,7 @@ def rst_gridfrompoints_agg_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            rx.rst_gridfrompoints_agg(
+            rasterx_api.rst_gridfrompoints_agg(
                 "pt",
                 "val",
                 f.lit(0.0),
@@ -320,13 +319,13 @@ def rst_gridfrompoints_agg_python_light_example(spark):
     return result["idw"]
 
 
-rst_gridfrompoints_agg_python_light_example_output = """
+rst_gridfrompoints_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|idw                                                        |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -337,14 +336,14 @@ rst_gridfrompoints_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_dtmfromgeoms_agg_python_light_example(spark):
+def rst_dtmfromgeoms_agg_python_example(spark):
     """Build a Delaunay TIN DTM from Z-valued points per group using the light pyrx tier.
 
     Multi-row fixture: 4 rows of WKB POINT Z with elevation values, over a
     [0,0,1,1] EPSG:4326 extent.  Grouped by region, producing 1 DTM tile via
     barycentric interpolation over an unconstrained Delaunay triangulation.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         BinaryType,
@@ -375,7 +374,7 @@ def rst_dtmfromgeoms_agg_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            rx.rst_dtmfromgeoms_agg(
+            rasterx_api.rst_dtmfromgeoms_agg(
                 "pt",
                 f.lit(None).cast("array<binary>"),
                 f.lit(0.0),
@@ -394,13 +393,13 @@ def rst_dtmfromgeoms_agg_python_light_example(spark):
     return result["dtm"]
 
 
-rst_dtmfromgeoms_agg_python_light_example_output = """
+rst_dtmfromgeoms_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|dtm                                                        |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -411,15 +410,16 @@ rst_dtmfromgeoms_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_h3_rasterize_agg_python_light_example(spark):
+def rst_h3_rasterize_agg_python_example(spark):
     """Rasterize H3 cell/value rows into one tile per group using the light pyrx tier.
 
     Multi-row fixture: 3 rows of (H3 cell id BIGINT, burn value) at resolution 9
     near lon/lat (0.01, 0.01).  Grouped by region, producing 1 rasterized tile.
     The extent is auto-derived from the cell set; kring_pad=1 (default).
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     import h3  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
 
     res = 9
     cell_strs = [
@@ -451,19 +451,34 @@ def rst_h3_rasterize_agg_python_light_example(spark):
     df = spark.createDataFrame(rows, schema)
     result = (
         df.groupBy("region")
-        .agg(rx.rst_h3_rasterize_agg("cellid", "value").alias("tile"))
+        .agg(
+            rasterx_api.rst_h3_rasterize_agg(
+                "cellid",
+                "value",
+                f.lit(4326),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                "centroids",
+                f.lit(1),
+            ).alias("tile")
+        )
         .first()
     )
     return result["tile"]
 
 
-rst_h3_rasterize_agg_python_light_example_output = """
+rst_h3_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -474,14 +489,15 @@ rst_h3_rasterize_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_quadbin_rasterize_agg_python_light_example(spark):
+def rst_quadbin_rasterize_agg_python_example(spark):
     """Rasterize quadbin cell/value rows into one tile per group using the light pyrx tier.
 
     Multi-row fixture: 3 rows of (quadbin cell id BIGINT, burn value) at zoom 12
     near central London (lon/lat).  Grouped by region, producing 1 rasterized tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
 
     gbx_register(spark, only=["gbx_quadbin_pointascell"])
 
@@ -499,20 +515,35 @@ def rst_quadbin_rasterize_agg_python_light_example(spark):
     df = spark.table("_qb_cells")
     result = (
         df.groupBy("region")
-        .agg(rx.rst_quadbin_rasterize_agg("cellid", "value").alias("tile"))
+        .agg(
+            rasterx_api.rst_quadbin_rasterize_agg(
+                "cellid",
+                "value",
+                f.lit(4326),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                "centroids",
+                f.lit(1),
+            ).alias("tile")
+        )
         .first()
     )
     spark.catalog.dropTempView("_qb_cells")
     return result["tile"]
 
 
-rst_quadbin_rasterize_agg_python_light_example_output = """
+rst_quadbin_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -579,9 +610,9 @@ rst_bng_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
-(one v2 Tile per group — raster bytes populated, path null)
+(one GeoTIFF per group, returned as BINARY)
 """
 
 
@@ -592,7 +623,7 @@ rst_bng_rasterize_agg_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_binpoints_agg_python_light_example(spark):
+def rst_binpoints_agg_python_example(spark):
     """Bin one scalar (x, y, z) point per row into a Float32 raster tile per group using the light pyrx tier.
 
     Multi-row fixture: 3 rows of scalar BNG (EPSG:27700) x/y/z coordinates over
@@ -600,7 +631,7 @@ def rst_binpoints_agg_python_light_example(spark):
     Grouped by region, producing 1 Float32 tile row where each pixel holds the
     max z-value of points falling in that pixel; empty pixels carry NoData (-9999.0).
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     from pyspark.sql import functions as f  # noqa: PLC0415
     from pyspark.sql.types import (
         DoubleType,
@@ -626,7 +657,7 @@ def rst_binpoints_agg_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            rx.rst_binpoints_agg(
+            rasterx_api.rst_binpoints_agg(
                 "x",
                 "y",
                 "z",
@@ -644,11 +675,11 @@ def rst_binpoints_agg_python_light_example(spark):
     return result["tile"]
 
 
-rst_binpoints_agg_python_light_example_output = """
+rst_binpoints_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
 (Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
 """
@@ -662,7 +693,7 @@ rst_binpoints_agg_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_custom_rasterize_agg_python_light_example(spark):
+def rst_custom_rasterize_agg_python_example(spark):
     """Rasterize custom-grid cell/value rows into one tile per group (light pyrx tier).
 
     Multi-row fixture: 3 rows of (custom-grid cell id BIGINT, burn value) at
@@ -671,6 +702,7 @@ def rst_custom_rasterize_agg_python_light_example(spark):
     1 rasterized GTiff tile in EPSG:27700.  Cell IDs are derived via
     gbx_custom_pointascell for centroids of 3 of the 4 resolution-1 cells.
     """
+    from databricks.labs.gbx.rasterx import functions as rasterx_api
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
@@ -705,7 +737,21 @@ def rst_custom_rasterize_agg_python_light_example(spark):
     result = (
         df.groupBy("region")
         .agg(
-            rx.rst_custom_rasterize_agg("cellid", grid_col, f.col("value")).alias("tile")
+            rasterx_api.rst_custom_rasterize_agg(
+                "cellid",
+                "value",
+                grid_col,
+                f.lit(27700),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                f.lit(None),
+                "centroids",
+                f.lit(1),
+            ).alias("tile")
         )
         .first()
     )
@@ -713,11 +759,11 @@ def rst_custom_rasterize_agg_python_light_example(spark):
     return result["tile"]
 
 
-rst_custom_rasterize_agg_python_light_example_output = """
+rst_custom_rasterize_agg_python_example_output = """
 +------+-----------------------------------------------------------+
 |region|tile                                                       |
 +------+-----------------------------------------------------------+
-|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
+|R1    |<GeoTIFF bytes>|
 +------+-----------------------------------------------------------+
 (one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
 """

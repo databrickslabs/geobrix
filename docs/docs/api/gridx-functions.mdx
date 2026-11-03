@@ -517,7 +517,20 @@ Powered by **shapely** (`union_all` of the cell polygons). Dissolves an `ARRAY<L
 
 ### quadbin_cellunion_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_quadbin_cellunion_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_cellunion_agg(cellid)` | `BINARY` |
+| Python | `gridx.quadbin.functions.quadbin_cellunion_agg(cellid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The quadbin cell id. A NULL id is skipped; a repeated cell counts once. |
+{/* END GENERATED gbx_quadbin_cellunion_agg */}
+
+<Impl groupedAgg/>
 
 Aggregate-level union: dissolve a column of quadbin cell IDs (grouped per partition) into a single MultiPolygon EWKB. Use this instead of `gbx_quadbin_cellunion` when your cell IDs are spread across rows rather than already collected into an array.
 
@@ -525,16 +538,13 @@ Aggregate-level union: dissolve a column of quadbin cell IDs (grouped per partit
 Powered by **shapely**. Grouped aggregate — `groupBy(...).agg(gx.quadbin_cellunion_agg("cell"))` dissolves a group's cell ids into one EWKB MultiPolygon (SRID 4326).
 :::
 
-**Signature:** `quadbin_cellunion_agg(cell: Column): Column`
-
 **Returns:**
 - `BINARY` EWKB multipolygon (SRID-tagged 4326) representing the dissolved coverage
 
 <FunctionExamples
   name="quadbin_cellunion_agg"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -578,28 +588,36 @@ Powered by the **quadbin** package. Chebyshev distance on tile coordinates; mirr
 
 ### quadbin_cellfill
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_quadbin_cellfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_cellfill(cellid, value, [k], [method], [power])` | `BINARY` |
+| Python | `gridx.quadbin.functions.quadbin_cellfill(cellid, value, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The quadbin cell id. |
+| `value` | `DOUBLE` |  | The cell's value; NULL marks a covered cell with no value, which is filled. |
+| `k` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_quadbin_cellfill */}
+
+<Impl groupedAgg/>
 
 See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / assignment / fill model shared by all grids.
 
 Fill NULL quadbin cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_quadbin_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
+`gbx_quadbin_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python quadbin interpolation port**. Cell-set and value parity with the heavyweight tier for mean interpolation.
 :::
-
-**Signature:** `quadbin_cellfill(cellid, value, [k], [method], [power])`
-
-**Parameters:**
-- `cellid` — `BIGINT` quadbin cell ID column
-- `value` — `DOUBLE` value column (`NULL` for cells to fill)
-- `k` — neighbourhood radius in k-rings (default: `1`)
-- `method` — interpolation method: `'mean'` (default) or `'idw'` (inverse-distance-weighted)
-- `power` — IDW distance exponent (default: `2.0`; ignored for `method='mean'`)
 
 **Returns:**
 - Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
@@ -608,8 +626,7 @@ Powered by the **pure-Python quadbin interpolation port**. Cell-set and value pa
 <FunctionExamples
   name="quadbin_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1431,7 +1448,20 @@ Aggregate multiple cells into a single result.
 
 ### bng_cellintersection_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_bng_cellintersection_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellintersection_agg(input_chip)` | `BINARY` |
+| Python | `gridx.bng.functions.bng_cellintersection_agg(input_chip)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `input_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip of the cell: its id, whether it is a core chip, and its geometry (NULL for a core chip). |
+{/* END GENERATED gbx_bng_cellintersection_agg */}
+
+<Impl groupedAgg/>
 
 Aggregate intersection of multiple BNG cells.
 
@@ -1452,20 +1482,13 @@ GROUP BY group_key
 ```
 :::
 
-**Signature:** `bng_cellintersection_agg(cellId: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference column to aggregate
-
 **Returns:**
 - BNG cell ID representing common intersection
 
 <FunctionExamples
   name="bng_cellintersection_agg"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1473,7 +1496,20 @@ GROUP BY group_key
 
 ### bng_cellunion_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_bng_cellunion_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellunion_agg(input_chip)` | `BINARY` |
+| Python | `gridx.bng.functions.bng_cellunion_agg(input_chip)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `input_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip of the cell: its id, whether it is a core chip, and its geometry (NULL for a core chip). |
+{/* END GENERATED gbx_bng_cellunion_agg */}
+
+<Impl groupedAgg/>
 
 Aggregate union of multiple BNG cells.
 
@@ -1494,20 +1530,13 @@ GROUP BY group_key
 ```
 :::
 
-**Signature:** `bng_cellunion_agg(cellId: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference column to aggregate
-
 **Returns:**
 - BNG cell ID representing bounding union
 
 <FunctionExamples
   name="bng_cellunion_agg"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1515,28 +1544,36 @@ GROUP BY group_key
 
 ### bng_cellfill
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_bng_cellfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellfill(cellid, value, [k], [method], [power])` | `BINARY` |
+| Python | `gridx.bng.functions.bng_cellfill(cellid, value, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `value` | `DOUBLE` |  | The cell's value; NULL marks a covered cell with no value, which is filled. |
+| `k` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_bng_cellfill */}
+
+<Impl groupedAgg/>
 
 See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / assignment / fill model shared by all grids.
 
 Fill NULL BNG cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. BNG cell IDs are `STRING`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_bng_cellfill` returns `ARRAY<STRUCT<cellid STRING, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
+`gbx_bng_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 :::note Lightweight tier (pygx)
 Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity with the heavyweight tier for mean interpolation.
 :::
-
-**Signature:** `bng_cellfill(cellid, value, [k], [method], [power])`
-
-**Parameters:**
-- `cellid` — BNG `STRING` cell reference column
-- `value` — `DOUBLE` value column (`NULL` for cells to fill)
-- `k` — neighbourhood radius in k-rings (default: `1`)
-- `method` — interpolation method: `'mean'` (default) or `'idw'` (inverse-distance-weighted)
-- `power` — IDW distance exponent (default: `2.0`; ignored for `method='mean'`)
 
 **Returns:**
 - Heavyweight: `ARRAY<STRUCT<cellid STRING, value DOUBLE>>`
@@ -1545,8 +1582,7 @@ Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity wi
 <FunctionExamples
   name="bng_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -2232,25 +2268,33 @@ Chebyshev (king-move) distance in grid steps between two custom grid cells. Retu
 
 ### custom_cellfill
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_custom_cellfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_cellfill(cellid, value, grid, [k], [method], [power])` | `BINARY` |
+| Python | `gridx.custom.functions.custom_cellfill(cellid, value, grid, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The custom-grid cell id. |
+| `value` | `DOUBLE` |  | The cell's value; NULL marks a covered cell with no value, which is filled. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, from `gbx_custom_grid`. The same for every row of the group. |
+| `k` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_custom_cellfill */}
+
+<Impl groupedAgg/>
 
 See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / assignment / fill model shared by all grids.
 
 Fill NULL custom grid cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. The grid spec is passed as the third argument (unlike the BNG/quadbin/h3 variants where the grid identity is implicit). With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialized result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
+`gbx_custom_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
-
-**Signature:** `gbx_custom_cellfill(cellid, value, grid, [k], [method], [power])`
-
-**Parameters:**
-- `cellid` — `BIGINT` custom grid cell ID column
-- `value` — `DOUBLE` value column (`NULL` for cells to fill)
-- `grid` — custom grid descriptor returned by `gbx_custom_grid`
-- `k` — neighbourhood radius in k-rings (default: `1`)
-- `method` — interpolation method: `'mean'` (default) or `'idw'` (inverse-distance-weighted)
-- `power` — IDW distance exponent (default: `2.0`; ignored for `method='mean'`)
 
 **Returns:**
 - Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
@@ -2259,8 +2303,7 @@ Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOU
 <FunctionExamples
   name="custom_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -2274,23 +2317,29 @@ Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOU
 `gbx_h3_cellfill` is the grouped aggregator that interpolates missing H3 cell values from valid ring-neighbours, using the same fill algorithm as the BNG, quadbin, and custom-grid variants.
 
 :::warning Return-type divergence
-Heavyweight `gbx_h3_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialised result. The functional content (cell IDs and filled values) is equivalent. In the lightweight tier a cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in; the heavyweight tier keeps the row it receives last.
+`gbx_h3_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 ### h3_cellfill
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_h3_cellfill: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_cellfill(cellid, value, [k], [method], [power])` | `BINARY` |
+| Python | `gridx.h3.functions.h3_cellfill(cellid, value, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The H3 cell id. |
+| `value` | `DOUBLE` |  | The cell's value; NULL marks a covered cell with no value, which is filled. |
+| `k` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_h3_cellfill */}
 
 Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed to work with data produced by `h3_pointash3` (Databricks product built-in) or any other source of H3 cell IDs at a fixed resolution.
-
-**Signature:** `h3_cellfill(cellid, value, [k], [method], [power])`
-
-**Parameters:**
-- `cellid` — `BIGINT` column of H3 cell IDs
-- `value` — `DOUBLE` value column (`NULL` marks cells to fill)
-- `k` *(optional, default `1`)* — ring radius for neighbour search
-- `method` *(optional, default `'mean'`)* — `'mean'` or `'idw'` (inverse-distance weighting)
-- `power` *(optional, default `2.0`)* — IDW decay exponent; ignored when `method='mean'`
 
 **Returns:**
 - Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
@@ -2299,8 +2348,7 @@ Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed 
 <FunctionExamples
   name="h3_cellfill"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />

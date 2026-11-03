@@ -17,5 +17,5 @@ def test_cellunion_and_agg(spark):
     ).collect()[0]["u"]
     assert from_wkb(bytes(u)).geom_type in ("Polygon", "MultiPolygon")
     df = spark.createDataFrame([(c,) for c in cells], "cell long")
-    a = df.agg(gx.quadbin_cellunion_agg("cell").alias("u")).collect()[0]["u"]
+    a = df.agg(gx._light_quadbin_cellunion_agg("cell").alias("u")).collect()[0]["u"]
     assert from_wkb(bytes(a)).geom_type in ("Polygon", "MultiPolygon")

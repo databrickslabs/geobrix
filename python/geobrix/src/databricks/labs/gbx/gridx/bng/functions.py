@@ -56,67 +56,6 @@ def register(_spark: SparkSession) -> None:
 # Aggregators
 
 
-def bng_cellfill(
-    cellid: ColLike,
-    value: ColLike,
-    k: ColLike = 1,
-    method: ColLike = "mean",
-    power: ColLike = 2.0,
-) -> Column:
-    """Grouped aggregator: fill NULL BNG cells from valid neighbours (heavy bng tier).
-
-    Use with ``groupBy(...).agg(bx.bng_cellfill(...))`` to interpolate missing
-    values. Returns ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
-
-    Args:
-        cellid: Column of BNG cell-id STRINGs.
-        value: Column of DOUBLE values (NULL marks cells to be filled).
-        k: Neighbour ring radius (default ``1``).
-        method: Interpolation method — ``'mean'`` (default) or ``'idw'``.
-        power: IDW power parameter (default ``2.0``; ignored for ``'mean'``).
-
-    Returns:
-        Column of ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
-    """
-    _method = f.lit(method) if isinstance(method, str) else _col(method)
-    return f.call_function(
-        "gbx_bng_cellfill",
-        _col(cellid),
-        _col(value),
-        _col(k),
-        _method,
-        _col(power),
-    )
-
-
-def bng_cellintersection_agg(input_chip: ColLike) -> Column:
-    """Aggregate multiple BNG cell chips into their intersection chip.
-
-    Use with grouped aggregation (groupBy).
-
-    Args:
-        input_chip: Column of BNG chip structs.
-
-    Returns:
-        Column of chip struct (cellid, core, chip).
-    """
-    return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
-
-
-def bng_cellunion_agg(input_chip: ColLike) -> Column:
-    """Aggregate multiple BNG cell chips into their union chip.
-
-    Use with grouped aggregation (groupBy).
-
-    Args:
-        input_chip: Column of BNG chip structs.
-
-    Returns:
-        Column of chip struct (cellid, core, chip).
-    """
-    return f.call_function("gbx_bng_cellunion_agg", _col(input_chip))
-
-
 # Generators
 
 
@@ -181,6 +120,43 @@ def bng_cellarea(
     )
 
 
+def bng_cellfill(
+    cellid: ColLike,
+    value: ColLike,
+    k: ColLike = None,
+    method: ColLike = None,
+    power: ColLike = None,
+) -> Column:
+    """Fill the NULL cells of a group of BNG cells from their valid neighbours.
+
+    Args:
+        cellid: The BNG cell id, for example `'TQ3080'`.
+        value: The cell's value; NULL marks a covered cell with no value, which is
+            filled.
+        k: The neighbourhood radius in rings, at least 0; 0 fills nothing. SQL default:
+            ``1``.
+        method: `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring
+            distance). Any other word raises. SQL default: ``'mean'``.
+        power: The distance exponent of `'idw'`; unused by `'mean'`. SQL default:
+            ``2.0``.
+
+    Returns:
+        The payload of the filled cells: a 4-byte count, then per cell its id (8 bytes),
+        a present flag (1 byte) and the value (8 bytes, when present), all big-endian,
+        in ascending id order. A group with no cell gives NULL.
+
+    SQL: ``gbx_bng_cellfill(cellid, value, [k], [method], [power])``
+    """
+    return _api.call(
+        "gbx_bng_cellfill",
+        cellid,
+        value,
+        k,
+        method,
+        power,
+    )
+
+
 def bng_cellintersection(
     left_chip: ColLike,
     right_chip: ColLike,
@@ -205,6 +181,27 @@ def bng_cellintersection(
     )
 
 
+def bng_cellintersection_agg(
+    input_chip: ColLike,
+) -> Column:
+    """Take the intersection of a group's chips of one cell.
+
+    Args:
+        input_chip: A chip of the cell: its id, whether it is a core chip, and its
+            geometry (NULL for a core chip).
+
+    Returns:
+        The intersection as WKB (no SRID), or NULL when it is empty or the group has no
+        chip. A core chip stands for the whole cell.
+
+    SQL: ``gbx_bng_cellintersection_agg(input_chip)``
+    """
+    return _api.call(
+        "gbx_bng_cellintersection_agg",
+        input_chip,
+    )
+
+
 def bng_cellunion(
     left_chip: ColLike,
     right_chip: ColLike,
@@ -226,6 +223,27 @@ def bng_cellunion(
         "gbx_bng_cellunion",
         left_chip,
         right_chip,
+    )
+
+
+def bng_cellunion_agg(
+    input_chip: ColLike,
+) -> Column:
+    """Take the union of a group's chips of one cell.
+
+    Args:
+        input_chip: A chip of the cell: its id, whether it is a core chip, and its
+            geometry (NULL for a core chip).
+
+    Returns:
+        The union as WKB (no SRID), or NULL when it is empty or the group has no chip. A
+        core chip stands for the whole cell.
+
+    SQL: ``gbx_bng_cellunion_agg(input_chip)``
+    """
+    return _api.call(
+        "gbx_bng_cellunion_agg",
+        input_chip,
     )
 
 

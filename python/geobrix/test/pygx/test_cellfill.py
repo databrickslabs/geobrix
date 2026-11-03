@@ -433,7 +433,7 @@ def test_h3_cellfill_sql_idw_k2(spark):
 #   spark.sql("... gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) ...")
 #   The single-quoted 'mean' is a SQL string literal — it never passes
 #   through the Python ``_col()`` conversion.  Only the Python Column
-#   wrappers (df.groupBy().agg(gx.h3_cellfill(...))) hit the buggy path.
+#   wrappers (df.groupBy().agg(gx._light_h3_cellfill(...))) hit the buggy path.
 #
 # Each test below uses df.groupBy("grp").agg(gx.<grid>_cellfill(...)) —
 # the Column wrapper path — with an explicit keyword method= argument.
@@ -466,7 +466,7 @@ def test_h3_cellfill_wrapper_method_mean(spark):
     # Use the Python Column wrapper path — NOT a raw SQL string.
     result = (
         df.groupBy("grp")
-        .agg(gx.h3_cellfill("cellid", "value", k=1, method="mean").alias("v"))
+        .agg(gx._light_h3_cellfill("cellid", "value", k=1, method="mean").alias("v"))
         .collect()
     )
     assert len(result) == 1
@@ -498,7 +498,11 @@ def test_h3_cellfill_wrapper_method_idw(spark):
 
     result = (
         df.groupBy("grp")
-        .agg(gx.h3_cellfill("cellid", "value", k=2, method="idw", power=2.0).alias("v"))
+        .agg(
+            gx._light_h3_cellfill(
+                "cellid", "value", k=2, method="idw", power=2.0
+            ).alias("v")
+        )
         .collect()
     )
     assert len(result) == 1
@@ -522,7 +526,7 @@ def test_bng_cellfill_wrapper_method_mean(spark):
 
     result = (
         df.groupBy("grp")
-        .agg(gx.bng_cellfill("cellid", "value", k=1, method="mean").alias("v"))
+        .agg(gx._light_bng_cellfill("cellid", "value", k=1, method="mean").alias("v"))
         .collect()
     )
     assert len(result) == 1
@@ -556,7 +560,9 @@ def test_bng_cellfill_wrapper_method_idw(spark):
     result = (
         df.groupBy("grp")
         .agg(
-            gx.bng_cellfill("cellid", "value", k=2, method="idw", power=2.0).alias("v")
+            gx._light_bng_cellfill(
+                "cellid", "value", k=2, method="idw", power=2.0
+            ).alias("v")
         )
         .collect()
     )
@@ -580,7 +586,9 @@ def test_quadbin_cellfill_wrapper_method_mean(spark):
 
     result = (
         df.groupBy("grp")
-        .agg(gx.quadbin_cellfill("cellid", "value", k=1, method="mean").alias("v"))
+        .agg(
+            gx._light_quadbin_cellfill("cellid", "value", k=1, method="mean").alias("v")
+        )
         .collect()
     )
     assert len(result) == 1
@@ -615,7 +623,7 @@ def test_custom_cellfill_wrapper_method_mean(spark):
     result = (
         df.groupBy("grp")
         .agg(
-            gx.custom_cellfill(
+            gx._light_custom_cellfill(
                 "cellid", "value", grid=grid_col, k=1, method="mean"
             ).alias("v")
         )

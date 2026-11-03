@@ -190,7 +190,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val grid = call_function("gbx_custom_grid",
       lit(529000), lit(533000), lit(179000), lit(183000),
       lit(2), lit(4000), lit(4000), lit(27700))
-    val _: Column = rx.rst_custom_rasterize_agg(col("cellid"), grid)
     val _: Column = rx.rst_custom_rasterize_agg(col("cellid"), col("value"), grid)
     val _: Column = rx.rst_custom_rasterize_agg(
       col("cellid"), col("value"), grid,

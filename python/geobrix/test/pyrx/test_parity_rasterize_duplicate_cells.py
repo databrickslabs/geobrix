@@ -73,6 +73,11 @@ def spark_with_jar():
     )
 
 
+def _raster_of(tile):
+    """The GeoTIFF bytes of an aggregate's result: the BINARY itself, or the raster of a tile struct."""
+    return bytes(tile["raster"] if hasattr(tile, "asDict") else tile)
+
+
 def _frame(spark, grid, rows):
     """One group (``tx``) of ``(cellid, val)`` rows, in the order given, in ONE partition."""
     from pyspark.sql import functions as f
@@ -130,11 +135,7 @@ def _light(df, grid, canvas):
     # the light BNG form is private now (its public Python API is rasterx.functions.rst_bng_rasterize_agg)
     fn = getattr(
         prx,
-        (
-            "_light_rst_bng_rasterize_agg"
-            if grid == "bng"
-            else f"rst_{grid}_rasterize_agg"
-        ),
+        (f"_light_rst_{grid}_rasterize_agg"),
     )
     args = ("cellid", "grid") if grid == "custom" else ("cellid",)
     return (
@@ -195,8 +196,8 @@ def _read(out, label):
 
     assert len(out) == 1, f"{label}: expected one tile"
     tile = out[0]["tile"]
-    assert tile is not None and tile["raster"] is not None, f"{label}: no raster"
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
+    assert tile is not None, f"{label}: no raster"
+    with _serde.open_tile(_raster_of(tile)) as ds:
         assert ds.nodata == _NODATA, f"{label}: band NoData must be {_NODATA}"
         return ds.read(1)
 

@@ -135,25 +135,25 @@ VectorX (light) registered. You can now use gbx_st_* SQL functions via the pyvx 
 _WKB_POINT_0_0 = "010100000000000000000000000000000000000000"
 
 
-def st_asmvt_python_light_example(spark):
+def st_asmvt_python_example(spark):
     """Aggregate tile-local features into an MVT protobuf blob per tile (light pyvx tier).
 
     Reads the ``mvt_features`` setup view (2 tile-local WKB POINTs in z=0/x=0/y=0)
     and groups by ``(z, x, y)`` before aggregating.  The aggregator encodes all
     features in each group into one MVT blob.
     """
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
 
     df = spark.table("mvt_features")
     result = df.groupBy("z", "x", "y").agg(
-        vx.st_asmvt("geom_wkb", f.col("attrs"), "layer").alias("mvt")
+        vectorx_api.st_asmvt("geom_wkb", f.col("attrs"), "layer").alias("mvt")
     )
     row = result.first()
     return row["mvt"]
 
 
-st_asmvt_python_light_example_output = """
+st_asmvt_python_example_output = """
 +---+---+---+---------+
 |  z|  x|  y|      mvt|
 +---+---+---+---------+
@@ -721,17 +721,17 @@ st_snap_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def st_coverageisvalid_python_light_example(spark):
+def st_coverageisvalid_python_example(spark):
     """Check polygon-coverage validity via grouped-agg Column wrapper (light pyvx tier).
 
     Builds two adjacent unit squares sharing the edge x=5 in coverage group
     ``cov_id=1``.  Uses shapely ``box`` (alias for ``from_shapely_bounds``) to
     produce WKB bytes for each polygon, creates a two-row DataFrame, and calls
-    ``vx.st_coverageisvalid("geom", 0.0)`` inside ``groupBy().agg()``.
+    ``vectorx_api.st_coverageisvalid("geom", 0.0)`` inside ``groupBy().agg()``.
     The two squares do not overlap and share a clean edge → ``is_valid = True``.
     ``gap_width=0.0`` detects only overlaps (no gap tolerance).
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
@@ -745,12 +745,12 @@ def st_coverageisvalid_python_light_example(spark):
         ["cov_id", "geom"],
     )
     result = df.groupBy("cov_id").agg(
-        vx.st_coverageisvalid("geom", 0.0).alias("is_valid")
+        vectorx_api.st_coverageisvalid("geom", 0.0).alias("is_valid")
     )
     return result.first()["is_valid"]
 
 
-st_coverageisvalid_python_light_example_output = """
+st_coverageisvalid_python_example_output = """
 +------+--------+
 |cov_id|is_valid|
 +------+--------+
@@ -760,16 +760,16 @@ st_coverageisvalid_python_light_example_output = """
 """
 
 
-def st_coverageinvalidedges_python_light_example(spark):
+def st_coverageinvalidedges_python_example(spark):
     """Return invalid edge segments of an overlapping coverage (light pyvx tier).
 
     Builds two overlapping squares in coverage group ``cov_id=1``: polygon 1
     covers [0,6]×[0,6] and polygon 2 covers [4,10]×[4,10], overlapping in
-    [4,6]×[4,6].  ``vx.st_coverageinvalidedges("geom", 0.0)`` aggregates the
+    [4,6]×[4,6].  ``vectorx_api.st_coverageinvalidedges("geom", 0.0)`` aggregates the
     group and returns the BINARY union of the boundary segments that violate
     the coverage.  Returns non-empty BINARY (WKB/EWKB) because of the overlap.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx.vectorx import functions as vectorx_api
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
@@ -783,12 +783,12 @@ def st_coverageinvalidedges_python_light_example(spark):
         ["cov_id", "geom"],
     )
     result = df.groupBy("cov_id").agg(
-        vx.st_coverageinvalidedges("geom", 0.0).alias("bad_edges")
+        vectorx_api.st_coverageinvalidedges("geom", 0.0).alias("bad_edges")
     )
     return result.first()["bad_edges"]
 
 
-st_coverageinvalidedges_python_light_example_output = """
+st_coverageinvalidedges_python_example_output = """
 +------+---------+
 |cov_id|bad_edges|
 +------+---------+

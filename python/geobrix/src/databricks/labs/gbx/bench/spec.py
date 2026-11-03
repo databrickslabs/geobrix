@@ -3180,7 +3180,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn receives the tile struct column; the harness wires the groupBy.
-        col_fn=lambda t, a: prx.rst_combineavg_agg(t),
+        col_fn=lambda t, a: prx._light_rst_combineavg_agg(t),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="tile_aggregate",
         sources=_AGG_LIGHT
@@ -3217,7 +3217,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ("spark-path",),
         {},
         # col_fn takes (tile, band_index); the harness adds the band_index column.
-        col_fn=lambda t, a, bi: prx.rst_frombands_agg(t, bi),
+        col_fn=lambda t, a, bi: prx._light_rst_frombands_agg(t, bi),
         core_fn=lambda t, a: t,
         input_kind="tile_aggregate",
         sources=_AGG_LIGHT
@@ -3237,7 +3237,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # the fixed mean-bands pyfunc (same body the non-agg rst_derivedband rides),
         # hardcoded identically here and in the Scala dispatch.
         {"python_func": _DERIVEDBAND_PYFUNC, "func_name": _DERIVEDBAND_FUNC_NAME},
-        col_fn=lambda t, a: prx.rst_derivedband_agg(
+        col_fn=lambda t, a: prx._light_rst_derivedband_agg(
             t, a["python_func"], a["func_name"]
         ),
         core_fn=lambda t, a: t,
@@ -3259,7 +3259,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # col_fn takes (geom_wkb, value, xmin, ymin, xmax, ymax, w, h, srid); the
         # harness supplies the geometry columns + the per-group extent constants.
-        col_fn=lambda g, v, ext, a: prx.rst_rasterize_agg(
+        col_fn=lambda g, v, ext, a: prx._light_rst_rasterize_agg(
             g, v, ext[0], ext[1], ext[2], ext[3], ext[4], ext[5], ext[6]
         ),
         core_fn=lambda t, a: t,
@@ -3282,7 +3282,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"power": 2.0, "max_pts": 1000000},
-        col_fn=lambda g, v, ext, a: prx.rst_gridfrompoints_agg(
+        col_fn=lambda g, v, ext, a: prx._light_rst_gridfrompoints_agg(
             g,
             v,
             ext[0],
@@ -3313,7 +3313,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # breaklines NULL on both tiers; tolerances 0.0 (scipy Delaunay is
         # unconstrained, so tolerances have no analogue -- mirrored heavy as 0.0).
         {"merge_tolerance": 0.0, "snap_tolerance": 0.0, "no_data": -9999.0},
-        col_fn=lambda g, v, ext, a: prx.rst_dtmfromgeoms_agg(
+        col_fn=lambda g, v, ext, a: prx._light_rst_dtmfromgeoms_agg(
             g,
             F.lit(None).cast("array<binary>"),
             a["merge_tolerance"],
@@ -3366,7 +3366,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # (cellid, value) rows and the explicit grid rides in args. The value is
         # passed OMITTED (not `v`, a typed all-null column) -> presence mask (1.0).
         # Grid passed explicitly (NOT auto-derived per tier).
-        col_fn=lambda cid, v, a: prx.rst_h3_rasterize_agg(
+        col_fn=lambda cid, v, a: prx._light_rst_h3_rasterize_agg(
             cid,
             value=None,
             out_srid=F.lit(a["grid"][6]),
@@ -3412,7 +3412,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # col_fn takes (cellid_col, value_col, args); 2-arg overload auto-derives
         # the grid from the streamed cell set (NOT an explicit grid like H3). The
         # value is omitted (the presence mask), not the streamed all-null column.
-        col_fn=lambda cid, v, a: prx.rst_quadbin_rasterize_agg(cid, value=None),
+        col_fn=lambda cid, v, a: prx._light_rst_quadbin_rasterize_agg(cid, value=None),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         sources=_CELLRASTER_LIGHT
@@ -3639,7 +3639,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: prx.rst_custom_rasterize_agg(
+        col_fn=lambda cid, v, a: prx._light_rst_custom_rasterize_agg(
             cid, custom_grid_column(), value=None
         ),
         core_fn=lambda t, a: t,
@@ -3677,7 +3677,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.h3_cellfill(cid, v),
+        col_fn=lambda cid, v, a: pgx._light_h3_cellfill(cid, v),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         input_kind="grid_aggregate",
         fingerprint_kind="cellfill",
@@ -3695,7 +3695,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.quadbin_cellfill(cid, v),
+        col_fn=lambda cid, v, a: pgx._light_quadbin_cellfill(cid, v),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint_kind="cellfill",
@@ -3714,7 +3714,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.bng_cellfill(cid, v),
+        col_fn=lambda cid, v, a: pgx._light_bng_cellfill(cid, v),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint_kind="cellfill_str",
@@ -3740,7 +3740,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "dggs",
         ("spark-path",),
         {},
-        col_fn=lambda cid, v, a: pgx.custom_cellfill(cid, v, F.lit(None)),
+        col_fn=lambda cid, v, a: pgx._light_custom_cellfill(cid, v, F.lit(None)),
         core_fn=lambda t, a: t,
         input_kind="grid_aggregate",
         fingerprint=False,  # grid struct arg not yet streamable by grid_aggregate
@@ -3778,7 +3778,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"layer_name": "features"},
-        col_fn=lambda g, v, ext, a: pyvx.st_asmvt(
+        col_fn=lambda g, v, ext, a: pyvx._light_st_asmvt(
             g, F.lit(None), F.lit(a["layer_name"])
         ),
         core_fn=lambda ds, a: None,  # spark-path only
@@ -4081,7 +4081,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # col_fn receives (geom_col, value_col, extent_tuple, args) from the
         # geometry_aggregate harness; coverage uses only the geom column.
-        col_fn=lambda g, v, ext, a: pyvx.st_coverageisvalid(g),
+        col_fn=lambda g, v, ext, a: pyvx._light_st_coverageisvalid(g),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
         fingerprint=False,  # Timing-only; boolean result
@@ -4097,7 +4097,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         # col_fn receives (geom_col, value_col, extent_tuple, args) from the
         # geometry_aggregate harness; coverage uses only the geom column.
-        col_fn=lambda g, v, ext, a: pyvx.st_coverageinvalidedges(g),
+        col_fn=lambda g, v, ext, a: pyvx._light_st_coverageinvalidedges(g),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
         # Timing-only: it returns WKB geometry, not a raster tile, and it is
@@ -4154,7 +4154,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # args) and calls the real public rst_binpoints_agg -- the SAME function shape
         # the heavy tier runs (col("x"), col("y"), col("z"), ...), so the timed
         # groupBy times only the binning and the two tiers compare like-for-like.
-        col_fn=lambda x, y, z, ext, a: prx.rst_binpoints_agg(
+        col_fn=lambda x, y, z, ext, a: prx._light_rst_binpoints_agg(
             x,
             y,
             z,

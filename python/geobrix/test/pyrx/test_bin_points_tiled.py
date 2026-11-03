@@ -56,7 +56,7 @@ def test_bin_points_tiled_parity(spark):
         ref = _pixels(
             df.groupBy("tk")
             .agg(
-                rx.rst_binpoints_agg(
+                rx._light_rst_binpoints_agg(
                     "x",
                     "y",
                     "z",
@@ -155,7 +155,7 @@ def test_bin_points_tiled_median_delegates(spark):
     ref = _pixels(
         df.groupBy("tk")
         .agg(
-            rx.rst_binpoints_agg(
+            rx._light_rst_binpoints_agg(
                 "x",
                 "y",
                 "z",
@@ -215,7 +215,7 @@ def test_bin_points_tiled_null_z_parity(spark):
         ref = _pixels(
             df.groupBy("tk")
             .agg(
-                rx.rst_binpoints_agg(
+                rx._light_rst_binpoints_agg(
                     "x",
                     "y",
                     "z",

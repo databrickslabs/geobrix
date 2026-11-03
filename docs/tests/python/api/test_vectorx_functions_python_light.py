@@ -129,10 +129,10 @@ def test_st_interpolateelevationgeom_python_light_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_asmvt_python_light_example(spark):
+def test_st_asmvt_python_example(spark):
     """st_asmvt returns non-empty MVT BINARY for the tile-local mvt_features fixture."""
     assert light_examples is not None
-    result = light_examples.st_asmvt_python_light_example(spark)
+    result = light_examples.st_asmvt_python_example(spark)
     assert result is not None, "st_asmvt should return non-null MVT bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -411,21 +411,21 @@ def test_st_snap_python_example(spark):
 # ---------------------------------------------------------------------------
 
 
-def test_st_coverageisvalid_python_light_example(spark):
+def test_st_coverageisvalid_python_example(spark):
     """st_coverageisvalid returns True for two adjacent squares sharing a clean edge."""
     assert light_examples is not None
-    result = light_examples.st_coverageisvalid_python_light_example(spark)
+    result = light_examples.st_coverageisvalid_python_example(spark)
     assert result is True, (
         f"Adjacent squares sharing a clean edge should be a valid coverage, got {result!r}"
     )
 
 
-def test_st_coverageinvalidedges_python_light_example(spark):
+def test_st_coverageinvalidedges_python_example(spark):
     """st_coverageinvalidedges returns non-empty WKB bytes for overlapping squares."""
     from shapely.wkb import loads as wkb_loads  # noqa: PLC0415
 
     assert light_examples is not None
-    result = light_examples.st_coverageinvalidedges_python_light_example(spark)
+    result = light_examples.st_coverageinvalidedges_python_example(spark)
     assert result is not None, "Overlapping coverage should return non-null bad_edges"
     assert isinstance(result, (bytes, bytearray)), (
         f"Expected bytes (WKB/EWKB), got {type(result)}"

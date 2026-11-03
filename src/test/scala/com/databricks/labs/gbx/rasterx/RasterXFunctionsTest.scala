@@ -177,11 +177,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_merge_agg should create Column") {
-        val result = functions.rst_merge_agg(col("tile"))
-        result should not be null
-    }
-
     // ====== Constructor Functions ======
 
     test("rst_fromcontent should accept content and driver") {

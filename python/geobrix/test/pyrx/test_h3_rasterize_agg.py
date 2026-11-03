@@ -12,7 +12,9 @@ def test_rst_h3_rasterize_agg_presence_mask(spark):
     cells = [h3.str_to_int(c) for c in h3.polygon_to_cells(poly, res)]
     df = spark.createDataFrame([(int(c), "TX1") for c in cells], ["cellid", "tx"])
     out = (
-        df.groupBy("tx").agg(rx.rst_h3_rasterize_agg("cellid").alias("tile")).collect()
+        df.groupBy("tx")
+        .agg(rx._light_rst_h3_rasterize_agg("cellid").alias("tile"))
+        .collect()
     )
     tile = out[0]["tile"]
     assert tile is not None and tile["raster"] is not None
@@ -29,7 +31,7 @@ def test_rst_h3_rasterize_agg_burns_value(spark):
     df = spark.createDataFrame([(int(c), 42.0, "TX1")], ["cellid", "val", "tx"])
     out = (
         df.groupBy("tx")
-        .agg(rx.rst_h3_rasterize_agg("cellid", "val").alias("tile"))
+        .agg(rx._light_rst_h3_rasterize_agg("cellid", "val").alias("tile"))
         .collect()
     )
     with _serde.open_tile(bytes(out[0]["tile"]["raster"])) as ds:
@@ -139,9 +141,9 @@ def test_rst_h3_rasterize_agg_null_typed_value_column_burns_nan(spark):
             arr = ds.read(1)
             return arr[arr != ds.nodata]
 
-    typed = burned(rx.rst_h3_rasterize_agg("cellid", "val"))
+    typed = burned(rx._light_rst_h3_rasterize_agg("cellid", "val"))
     assert typed.size >= len(cells) and np.isnan(typed).all()
-    omitted = burned(rx.rst_h3_rasterize_agg("cellid"))
+    omitted = burned(rx._light_rst_h3_rasterize_agg("cellid"))
     assert omitted.size >= len(cells) and np.all(omitted == 1.0)
 
 
@@ -184,7 +186,7 @@ def test_rst_h3_rasterize_agg_null_cellid_no_precision_loss(spark):
     def _rasterize(df):
         return (
             df.groupBy("group")
-            .agg(rx.rst_h3_rasterize_agg("cellid", "val").alias("tile"))
+            .agg(rx._light_rst_h3_rasterize_agg("cellid", "val").alias("tile"))
             .collect()[0]["tile"]["raster"]
         )
 

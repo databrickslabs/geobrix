@@ -1153,7 +1153,7 @@ Combine or merge rasters in group-by (7 total).
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
 | `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
-| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
 | `out_srid` | `INT` |  | Not read: the output is always EPSG:27700. |
 | `pixel_size` | `DOUBLE` |  | The pixel size in metres. |
 | `xmin` | `DOUBLE` |  | The west edge of the canvas in EPSG:27700 metres. |
@@ -1169,7 +1169,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls. A `NaN` that is a real value, not a null, is ignored the same way on both tiers: beside a number in one cell the number is burned, and a cell whose values are all `NaN` burns `NaN`.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. A `NaN` that is a real value, not a null, is ignored the same way on both tiers: beside a number in one cell the number is burned, and a cell whose values are all `NaN` burns `NaN`.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
@@ -1211,112 +1211,156 @@ _Multi-row fixture: 3 BNG 1km STRING cell rows near central London (EPSG:27700) 
 
 ---
 
+
+### rst_bng_rasterize
+
+{/* BEGIN GENERATED gbx_rst_bng_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_bng_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_bng_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cells` | `array<struct<cellid:string,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a repeated cell burns its largest value, a NULL cell id is skipped. |
+| `out_srid` | `INT` |  | Not read: the output is always EPSG:27700. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in metres. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas in EPSG:27700 metres. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas in EPSG:27700 metres. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas in EPSG:27700 metres. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas in EPSG:27700 metres. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given, for example `'centroids'`. |
+| `kring_pad` | `INT` |  | Cells of padding around the derived canvas. |
+| `out_crs` | `STRING` | `NULL` | Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead. |
+{/* END GENERATED gbx_rst_bng_rasterize */}
+
+Rasterize an array of BNG cells into one tile, the scalar twin of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg). Collect the group's cells first, for example `gbx_rst_bng_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+
 ### rst_combineavg_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_combineavg_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_combineavg_agg(tile)` | `BINARY` |
+| Python | `rasterx.functions.rst_combineavg_agg(tile)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | The tile of one member. An error tile or a tile that cannot be read is skipped. |
+{/* END GENERATED gbx_rst_combineavg_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **NumPy**. Aggregate — `groupBy(...).agg(rx.rst_combineavg_agg("tile"))` returns the NoData-aware per-pixel mean as one tile per group; input tiles must share the same grid (shape/extent/CRS).
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_combineavg_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_combineavg_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(gbx_rst_combineavg_agg(tile), 'GTiff') AS tile
-FROM tiles
-GROUP BY group_key
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-**Signature:** `rst_combineavg_agg(tile: Column): Column` — Average tiles per group.
+Average tiles per group.
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` (same grid). All tabs use the same grouped-agg invocation on multiple `tile` rows._
 
 <FunctionExamples
   name="rst_combineavg_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
 ### rst_derivedband_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_derivedband_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_derivedband_agg(tile, python_func, func_name)` | `BINARY` |
+| Python | `rasterx.functions.rst_derivedband_agg(tile, python_func, func_name)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | One input band per tile. |
+| `python_func` | `STRING` |  | The source of a GDAL VRT pixel function. It runs in the process: pass only trusted code. |
+| `func_name` | `STRING` |  | The name of the function in `python_func`. |
+{/* END GENERATED gbx_rst_derivedband_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** with GDAL VRT Python pixel functions. Aggregate — `groupBy(...).agg(rx.rst_derivedband_agg("tile", pyfunc, funcName))` stacks the group's tiles as bands and applies your pixel function, returning one tile per group.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_derivedband_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_derivedband_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(gbx_rst_derivedband_agg(tile, 'def f(a,b): return a+b', 'f'), 'GTiff') AS tile
-FROM tiles
-GROUP BY group_key
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-**Signature:** `rst_derivedband_agg(tile: Column, pyfunc: String, funcName: String): Column` — Apply Python UDF to tiles per group.
+Apply Python UDF to tiles per group.
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg invocation; pixel function selects band 0 (identity)._
 
 <FunctionExamples
   name="rst_derivedband_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
 ### rst_dtmfromgeoms_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_dtmfromgeoms_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_dtmfromgeoms_agg(point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_dtmfromgeoms_agg(point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, no_data=None, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `point` | `BINARY` or `STRING` |  | A point with a Z coordinate: WKB, EWKB, WKT or EWKT. An empty one is skipped. |
+| `breaklines` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | Breaklines, the same for the whole group. Accepted but not enforced. |
+| `merge_tolerance` | `DOUBLE` |  | Accepted, not applied. |
+| `snap_tolerance` | `DOUBLE` |  | Accepted, not applied. |
+| `xmin` | `DOUBLE` |  | The west edge of the output. |
+| `ymin` | `DOUBLE` |  | The south edge. |
+| `xmax` | `DOUBLE` |  | The east edge. |
+| `ymax` | `DOUBLE` |  | The north edge. |
+| `width_px` | `INT` |  | The output width in pixels. |
+| `height_px` | `INT` |  | The output height in pixels. |
+| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS. |
+| `no_data` | `DOUBLE` | `-9999.0` | The NoData value. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`. |
+{/* END GENERATED gbx_rst_dtmfromgeoms_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — builds one TIN DTM tile per group from the group's Z-valued points via barycentric interpolation over an **unconstrained** Delaunay triangulation; `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted but not enforced (the heavyweight tier builds a constrained TIN). The lightweight Python binding also accepts an optional trailing `out_crs` (string CRS) argument that the SQL/heavyweight tiers do not — the heavyweight builder takes the int `out_srid` only. `out_crs` wins over `out_srid` when both are given. This is a lightweight superset, not a heavyweight regression.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_dtmfromgeoms_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_dtmfromgeoms_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(
-    gbx_rst_dtmfromgeoms_agg(point, null, 0.0, 0.0, 0,0,10,10, 8,8, 32633),
-    'GTiff'
-  ) AS tile
-FROM observations
-GROUP BY group_key
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming aggregator that accepts one Z-valued point WKB per row and produces a TIN/Delaunay DTM raster tile per group; breaklines are supplied as a per-group constant array to enforce hard terrain edges.
-
-**Signature:** `rst_dtmfromgeoms_agg(point: Column, breaklines: Column, mergeTolerance: Column, snapTolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column): Column`
-
-**Parameters:** `point` — WKB point geometry with Z coordinate (one per row); `breaklines` — constant WKB array of breakline geometries per group (pass `null` or empty array if unused); remaining parameters match `rst_dtmfromgeoms`
 
 _Multi-row fixture: 4 Z-valued WKB POINT rows (elevation 100–250 m) over a `[0,0,1,1]` EPSG:4326 extent. All tabs use the same grouped-agg invocation._
 
 <FunctionExamples
   name="rst_dtmfromgeoms_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
@@ -1337,146 +1381,181 @@ density. See the [LiDAR reader](../readers/lidar) and [Performance](./performanc
 
 ### rst_frombands_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_frombands_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_frombands_agg(tile, band_index)` | `BINARY` |
+| Python | `rasterx.functions.rst_frombands_agg(tile, band_index)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `tile` | `TILE` |  | A single-band tile. An error tile or a tile that cannot be read is skipped. |
+| `band_index` | `INT` |  | The band the tile becomes, counted up from 1. A NULL index skips the row. |
+{/* END GENERATED gbx_rst_frombands_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. Aggregate — `groupBy(...).agg(rx.rst_frombands_agg("tile", "band_index"))` stacks the group's tiles into one multi-band tile ordered by ascending `band_index`.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_frombands_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_frombands_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(gbx_rst_frombands_agg(tile, band_index), 'GTiff') AS tile
-FROM bands
-GROUP BY group_key
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming aggregator that collects ordered per-band tiles (one row per band) into a single multi-band raster tile per group; use when bands arrive as separate rows rather than a pre-built array.
-
-**Signature:** `rst_frombands_agg(tile: Column, bandIndex: Column): Column`
-
-**Parameters:** `tile` — Single-band raster tile; `bandIndex` — 1-based band position within the output raster
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 1/2/3. All tabs stack via the same grouped-agg invocation._
 
 <FunctionExamples
   name="rst_frombands_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
 ### rst_gridfrompoints_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_gridfrompoints_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_gridfrompoints_agg(point, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_gridfrompoints_agg(point, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, power=None, max_pts=None, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `point` | `BINARY` or `STRING` |  | The point: WKB, EWKB, WKT or EWKT. A row with a NULL value or an empty point is dropped. |
+| `value` | `DOUBLE` |  | The point's value. |
+| `xmin` | `DOUBLE` |  | The west edge of the output. |
+| `ymin` | `DOUBLE` |  | The south edge. |
+| `xmax` | `DOUBLE` |  | The east edge. |
+| `ymax` | `DOUBLE` |  | The north edge. |
+| `width_px` | `INT` |  | The output width in pixels. |
+| `height_px` | `INT` |  | The output height in pixels. |
+| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS. |
+| `power` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
+| `max_pts` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`. |
+{/* END GENERATED gbx_rst_gridfrompoints_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Aggregate — `groupBy(...).agg(rx.rst_gridfrompoints_agg(...))` inverse-distance-interpolates the group's points into one Float64 grid tile (NoData −9999). The lightweight Python binding also accepts an optional trailing `out_crs` (string CRS) argument that the SQL/heavyweight tiers do not — the heavyweight builder takes the int `out_srid` only. `out_crs` wins over `out_srid` when both are given. This is a lightweight superset, not a heavyweight regression.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_gridfrompoints_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_gridfrompoints_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(
-    gbx_rst_gridfrompoints_agg(point, value, 0,0,10,10, 8,8, 32633, 2.0, 12),
-    'GTiff'
-  ) AS tile
-FROM observations
-GROUP BY group_key
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming IDW-interpolation aggregator that accepts one point geometry and one scalar value per row and produces a Float64 GeoTIFF tile per group; use when observations arrive one per row rather than as pre-built arrays.
-
-**Signature:** `rst_gridfrompoints_agg(point: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, widthPx: Column, heightPx: Column, out_srid: Column, power: Column, maxPts: Column): Column`
-
-**Parameters:** `point` — WKB point geometry (one per row); `value` — scalar observation for the point; `xmin/ymin/xmax/ymax` — output extent in CRS units (constant per group); `widthPx/heightPx` — output dimensions in pixels; `srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is standard); `maxPts` — maximum nearest neighbours considered per output pixel
 
 _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]` EPSG:4326 extent. All tabs use the same grouped-agg IDW invocation._
 
 <FunctionExamples
   name="rst_gridfrompoints_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
 ### rst_h3_rasterize_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_h3_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_h3_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The H3 cell id. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+{/* END GENERATED gbx_rst_h3_rasterize_agg */}
+
+<Impl groupedAgg/>
+
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_h3_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_h3_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  region_id AS cellid,
-  gbx_rst_fromcontent(
-    gbx_rst_h3_rasterize_agg(cellid, burn_value, 4326, null, null,null,null,null, null,null, 'centroids', 1),
-    'GTiff'
-  ) AS tile
-FROM h3_cell_values
-GROUP BY region_id
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming aggregator that burns H3 cell centroid pixels (or spatial-envelope pixels) into one raster tile per group. This is the **inverse** of [`rst_h3_rastertogrid*`](#rst_h3_rastertogridavg): where those functions reduce raster pixels to per-cell statistics, `rst_h3_rasterize_agg` reconstructs a raster from per-cell values. Use [`rst_frombands_agg`](#rst_frombands_agg) to stack per-threshold rasters (each produced by one `rst_h3_rasterize_agg` call) into a single multi-band output.
 
 :::note Lightweight-only `out_crs` parameter
-The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the heavyweight/Scala tier does not. When supplied it overrides the integer `out_srid` for the output CRS; the heavyweight tier accepts only the integer `out_srid` (its `builder()` is strictly 12-argument). This is a lightweight superset, not a heavyweight regression.
+The aggregate accepts an optional trailing `out_crs` (string CRS) argument. When supplied it overrides the integer `out_srid` for the output CRS. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the lightweight level reads any CRS string.
 :::
 
 :::tip Worked example
 The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to end on a San Francisco Bay Area DEM: elevation isobands → H3 polyfill → a shared canvas from [`rst_h3_gridspec`](#h3-grid) → per-band `rst_h3_rasterize_agg` → multi-band stack via [`rst_frombands_agg`](#rst_frombands_agg), visualized with the [`gbx.vizx`](./vizx) helpers. The same pattern maps directly to a telco multi-threshold signal-coverage stack.
 :::
 
-**Signature:** `rst_h3_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
-
-**Parameters:**
-- `cellid` — H3 cell ID (BIGINT or STRING) to burn (one per row)
-- `value` — numeric burn value; omit it, or pass an untyped `NULL`, for a presence mask (all pixels → `1.0`)
-- `srid` — EPSG code for the output CRS; defaults to `4326` (WGS 84)
-- `pixel_size` — ground resolution in CRS units (derives from H3 resolution when `null`)
-- `xmin/ymin/xmax/ymax` — output canvas extent; auto-computed from cell bounds + `kring_pad` when `null`
-- `width/height` — output raster dimensions in pixels; auto-derived from extent + pixel_size when `null`
-- `mode` — `'centroids'` (default, burns the cell-centroid pixel only) or `'spatial_envelope'` (burns all pixels inside the hexagon envelope)
-- `kring_pad` — ring count by which to expand the auto-computed canvas (default `1`)
-
 _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
 <FunctionExamples
   name="rst_h3_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+
+### rst_h3_rasterize
+
+{/* BEGIN GENERATED gbx_rst_h3_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a repeated cell burns its largest value, a NULL cell id is skipped. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+{/* END GENERATED gbx_rst_h3_rasterize */}
+
+Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg). Collect the group's cells first, for example `gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+
 ### rst_merge_agg
 
 {/* BEGIN GENERATED gbx_rst_merge_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1516,15 +1595,39 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
   name="rst_merge_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
 ### rst_quadbin_rasterize_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_quadbin_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_quadbin_rasterize_agg(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The quadbin cell id. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+{/* END GENERATED gbx_rst_quadbin_rasterize_agg */}
+
+<Impl groupedAgg/>
+
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio` — it burns each quadbin cell's geometry/value into the output band via `rasterio.features.rasterize`, matching the heavyweight cell set and burn values exactly.
@@ -1534,124 +1637,174 @@ The lightweight implementation is backed by `pygx._quadbin` cell math and `raste
 Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-registered NoData). Filter or mask downstream via `gbx_rst_getnodata` or `IS NULL` on the extracted band value.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_quadbin_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_quadbin_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  cell_id AS cellid,
-  gbx_rst_fromcontent(gbx_rst_quadbin_rasterize_agg(cellid, burn_value), 'GTiff') AS tile
-FROM quadbin_cell_values
-GROUP BY cell_id
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat; their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Lightweight-only `out_crs` parameter
-The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the heavyweight/Scala tier does not. When supplied it overrides the integer `out_srid` for the output CRS; the heavyweight tier accepts only the integer `out_srid` (its `builder()` is strictly 12-argument). This is a lightweight superset, not a heavyweight regression.
+The aggregate accepts an optional trailing `out_crs` (string CRS) argument. When supplied it overrides the integer `out_srid` for the output CRS. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the lightweight level reads any CRS string.
 :::
-
-**Signature:** `rst_quadbin_rasterize_agg(cellid: Column, value: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
-
-**Parameters:** `cellid` — quadbin cell ID (BIGINT); `value` — numeric burn value; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in the target CRS; `xmin/ymin/xmax/ymax` — output extent in the target CRS; `width/height` — output raster dimensions in pixels; `mode` — aggregation mode for overlapping values (typically `"last"`); `kring_pad` — cell neighbourhood expansion (typically `0`)
 
 _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
 
 <FunctionExamples
   name="rst_quadbin_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+
+### rst_quadbin_rasterize
+
+{/* BEGIN GENERATED gbx_rst_quadbin_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_quadbin_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| Python | `rasterx.functions.rst_quadbin_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a repeated cell burns its largest value, a NULL cell id is skipped. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+{/* END GENERATED gbx_rst_quadbin_rasterize */}
+
+Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg). Collect the group's cells first, for example `gbx_rst_quadbin_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+
 ### rst_custom_rasterize_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_custom_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rasterize_agg(cellid, value, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)` | `BINARY` |
+| Python | `rasterx.functions.rst_custom_rasterize_agg(cellid, value, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `BIGINT` |  | The custom-grid cell id. |
+| `value` | `DOUBLE` |  | The value burned for the cell. A repeated cell burns its largest value; a NULL value in a typed column never wins against a number, and a cell of nothing but NULL burns NaN. An untyped NULL (the argument left out) is the presence mask and burns 1.0. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, from `gbx_custom_grid`. The same for every row of the group. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
+{/* END GENERATED gbx_rst_custom_rasterize_agg */}
+
+<Impl groupedAgg/>
+
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent auto-derives from the cell set when canvas parameters are null.
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_custom_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_custom_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  region_id AS cellid,
-  gbx_rst_fromcontent(
-    gbx_rst_custom_rasterize_agg(
-      cellid, burn_value,
-      gbx_custom_grid(...),
-      27700, cast(null as double),
-      cast(null as double), cast(null as double), cast(null as double), cast(null as double),
-      cast(null as int), cast(null as int), 'centroids', cast(1 as int)
-    ),
-    'GTiff'
-  ) AS tile
-FROM custom_cell_values
-GROUP BY region_id
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming aggregator that burns custom-grid cell values into one raster tile per group. Cell IDs are BIGINT encoded by the `gbx_custom_grid(...)` layout. This is the **inverse** of `rst_custom_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, `rst_custom_rasterize_agg` reconstructs a raster from per-cell values. Pass the custom-grid struct (from `gbx_custom_grid(...)`) as the third argument; the canvas extent auto-derives from the cell set when all spatial parameters are null.
 
-**Signature:** `rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column, out_srid: Column, pixel_size: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, mode: Column, kring_pad: Column): Column`
-
-**Parameters:** `cellid` — custom-grid cell ID (BIGINT); `value` — numeric burn value (omitted or an untyped `NULL` → `1.0` presence mask); `grid` — custom-grid struct from `gbx_custom_grid(...)`; `out_srid` — EPSG code for the output CRS; `pixel_size` — output raster cell size in target CRS units (null → auto-derived from cell dimensions); `xmin/ymin/xmax/ymax` — output extent (null → auto-derived from the cell set + `kring_pad`); `width/height` — output dimensions in pixels (null → auto-derived); `mode` — `"centroids"` (default) or `"spatial_envelope"`; `kring_pad` — neighbourhood expansion in rings for auto-extent (default 1)
-
 <FunctionExamples
   name="rst_custom_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+
+### rst_custom_rasterize
+
+{/* BEGIN GENERATED gbx_rst_custom_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_custom_rasterize(cells, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)` | `BINARY` |
+| Python | `rasterx.functions.rst_custom_rasterize(cells, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a repeated cell burns its largest value, a NULL cell id is skipped. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, from `gbx_custom_grid`. The same for every row of the group. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
+{/* END GENERATED gbx_rst_custom_rasterize */}
+
+Rasterize an array of custom-grid cells into one tile, the scalar twin of [`rst_custom_rasterize_agg`](#rst_custom_rasterize_agg). Collect the group's cells first, for example `gbx_rst_custom_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+
 ### rst_rasterize_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_rasterize_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_rasterize_agg(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid)` | `BINARY` |
+| Python | `rasterx.functions.rst_rasterize_agg(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` |  | The feature geometry as WKB. A NULL one is skipped. |
+| `value` | `DOUBLE` |  | The value burned where the geometry covers a pixel centre. A NULL value skips the row. |
+| `xmin` | `DOUBLE` |  | The west edge of the output. |
+| `ymin` | `DOUBLE` |  | The south edge. |
+| `xmax` | `DOUBLE` |  | The east edge. |
+| `ymax` | `DOUBLE` |  | The north edge. |
+| `width_px` | `INT` |  | The output width in pixels. |
+| `height_px` | `INT` |  | The output height in pixels. |
+| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
+{/* END GENERATED gbx_rst_rasterize_agg */}
+
+<Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.features`). Aggregate — burns the group's `(geom, value)` rows into one tile over the given extent/size/SRID (last-wins on overlap).
 :::
 
-:::warning Lightweight SQL returns BINARY (not the tile struct)
-Heavyweight `gbx_rst_rasterize_agg` returns a tile **`STRUCT<cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata>`** (the v2 8-field tile); the lightweight **SQL** function returns **`BINARY`** (the raster bytes). A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight SQL aggregate returns the raster payload as BINARY. The lightweight **Python** wrapper `rx.rst_rasterize_agg(...)` returns the full tile struct (it composes the aggregate with a tile-wrapping step), so only raw SQL differs. To rebuild the tile-struct equivalent in SQL, select the group key as `cellid` and wrap the BINARY with `gbx_rst_fromcontent`:
-
-```sql
--- Lightweight SQL: rebuild the (cellid, raster) the heavyweight struct would carry
-SELECT
-  group_key AS cellid,
-  gbx_rst_fromcontent(
-    gbx_rst_rasterize_agg(geom, value, 0,0,10,10, 8,8, 32633),
-    'GTiff'
-  ) AS tile
-FROM features
-GROUP BY group_key
-```
+:::note The aggregate returns BINARY
+In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
 Streaming aggregator that burns geometry/value pairs (one row per feature) into a single rasterized tile per group; use when features arrive as individual rows rather than as a pre-built collection.
-
-**Signature:** `rst_rasterize_agg(geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width: Column, height: Column, out_srid: Column): Column`
-
-**Parameters:** `geom` — WKB geometry to burn; `value` — numeric burn value; `xmin/ymin/xmax/ymax` — output extent (in the target CRS); `width/height` — output raster dimensions in pixels; `srid` — EPSG code for the output CRS
 
 _Multi-row fixture: 3 polygon rows burned at values 1.0/2.0/3.0 over a `[0,0,4,4]` EPSG:4326 extent. All tabs use the same grouped-agg burn invocation._
 
 <FunctionExamples
   name="rst_rasterize_agg"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
@@ -1942,9 +2095,32 @@ points into other surfaces.
 
 ---
 
-### rst_binpoints_agg {#rst_binpoints_agg}
+### rst_binpoints_agg
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_rst_binpoints_agg: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])` | `BINARY` |
+| Python | `rasterx.functions.rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, statistic=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `x` | `DOUBLE` |  | The point's x. |
+| `y` | `DOUBLE` |  | The point's y. |
+| `z` | `DOUBLE` |  | The point's value. |
+| `xmin` | `DOUBLE` |  | The west edge of the output. |
+| `ymin` | `DOUBLE` |  | The south edge. |
+| `xmax` | `DOUBLE` |  | The east edge. |
+| `ymax` | `DOUBLE` |  | The north edge. |
+| `width_px` | `INT` |  | The output width in pixels. |
+| `height_px` | `INT` |  | The output height in pixels. |
+| `srid` | `INT` |  | The EPSG code of the output CRS. |
+| `statistic` | `STRING` | `'max'` | `'max'`, `'min'`, `'mean'`, `'median'`, `'count'` or `'percentile:<p>'`. |
+{/* END GENERATED gbx_rst_binpoints_agg */}
+
+<Impl groupedAgg/>
 
 Aggregator variant of [`rst_binpoints`](#rst_binpoints): stream **one scalar (x, y, z) point
 per row** into a DSM tile via `groupBy(...).agg(rx.rst_binpoints_agg(...))`. The
@@ -1957,15 +2133,10 @@ The lightweight SQL aggregate returns **`BINARY`** (raster bytes). Wrap with
 `gbx_rst_fromcontent(<agg>, 'GTiff')` to rebuild a tile struct. The lightweight Python
 wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
 
-**Signature:** `rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
-
-**Parameters:** `x`, `y` — scalar `DOUBLE` columns of point coordinates; `z` — scalar `DOUBLE` z-value; remaining parameters match [`rst_binpoints`](#rst_binpoints).
-
 <FunctionExamples
   name="rst_binpoints_agg"
   sql={rasterxSqlCode}                     sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
-  pythonHeavy={rasterxCode}                pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxAggregatorsLightCode} pythonSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
   scala={scalaApiExamplesCode}             scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />

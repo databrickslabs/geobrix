@@ -239,16 +239,27 @@ This means downstream clients (MapLibre GL JS, Mapbox GL JS, deck.gl) receive nu
 
 ### st_asmvt
 
-<Tier both/> <Impl groupedAgg/>
+{/* BEGIN GENERATED gbx_st_asmvt: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_asmvt(geom, attrs, layer_name)` | `BINARY` |
+| Python | `vectorx.functions.st_asmvt(geom, attrs, layer_name)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The feature geometry in tile coordinates: WKB, EWKB, WKT or EWKT. A NULL or empty geometry is skipped. |
+| `attrs` | `STRUCT` |  | The feature's attributes, a struct of any fields. |
+| `layer_name` | `STRING` |  | The name of the layer. |
+{/* END GENERATED gbx_st_asmvt */}
+
+<Impl groupedAgg/>
 
 Aggregator that encodes a group of features into a single MVT protobuf blob for one
 `(z, x, y)` tile. Each `groupBy(z, x, y).agg(vx.st_asmvt(...))` call produces the
 MVT bytes for exactly one tile. Both tiers expose the same grouped-aggregate API and
 produce identical output bytes — a one-line swap between `pyvx` and `vectorx`.
-
-**Signature:** `st_asmvt(geom, attrs, layer_name) → BINARY`
-
-**Parameters:**
 
 - `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **tile-local coordinates** (pixel
   space, `0..extent`). Clip and project each feature to the tile coordinate system upstream
@@ -266,8 +277,7 @@ multiple `(z, x, y)` tiles into a single PMTiles file.
 <FunctionExamples
   name="st_asmvt"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
@@ -734,15 +744,23 @@ Distributed shapely helpers — grouped-aggregate SQL UDFs and a Python DataFram
 
 ### st_coverageisvalid
 
+{/* BEGIN GENERATED gbx_st_coverageisvalid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_coverageisvalid(geom, [gap_width])` | `BOOLEAN` |
+| Python | `vectorx.functions.st_coverageisvalid(geom, gap_width=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | A polygon of the coverage: WKB, EWKB, WKT or EWKT. A NULL or empty one is skipped. |
+| `gap_width` | `DOUBLE` | `0.0` | The widest gap between polygons that still counts as a gap, in the CRS units. |
+{/* END GENERATED gbx_st_coverageisvalid */}
+
 <Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
 
 Returns `true` when the polygon group forms a valid coverage — no overlaps; no gaps thinner than `gap_width`. Use with `GROUP BY` to identify which coverage groups pass.
-
-**Signature:** `gbx_st_coverageisvalid(geom, gap_width)`
-
-**Parameters:**
-- `geom` — Geometry column. Accepts WKB/EWKB/WKT/EWKT. All members must be polygon types.
-- `gap_width` (`DOUBLE`, **required**) — Gap tolerance. Overlaps always invalid; gaps narrower than this are also flagged. Pass `0.0` to detect only overlaps.
 
 **Returns:** `BOOLEAN`. `NULL` when the group is empty.
 
@@ -751,7 +769,7 @@ See [Coverage Validity](./coverage-validity).
 <FunctionExamples
   name="st_coverageisvalid"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
@@ -759,15 +777,23 @@ See [Coverage Validity](./coverage-validity).
 
 ### st_coverageinvalidedges
 
+{/* BEGIN GENERATED gbx_st_coverageinvalidedges: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_coverageinvalidedges(geom, [gap_width])` | `BINARY` |
+| Python | `vectorx.functions.st_coverageinvalidedges(geom, gap_width=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | A polygon of the coverage: WKB, EWKB, WKT or EWKT. A NULL or empty one is skipped. |
+| `gap_width` | `DOUBLE` | `0.0` | The widest gap between polygons that still counts as a gap, in the CRS units. |
+{/* END GENERATED gbx_st_coverageinvalidedges */}
+
 <Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
 
 Returns the union of the boundary segments that violate the coverage as `BINARY` (WKB/EWKB). Empty geometry when the coverage is clean; non-empty when overlaps or slivers exist. Use the output geometry to highlight problem zones on a map.
-
-**Signature:** `gbx_st_coverageinvalidedges(geom, gap_width)`
-
-**Parameters:**
-- `geom` — Geometry column. Accepts WKB/EWKB/WKT/EWKT. All members must be polygon types.
-- `gap_width` (`DOUBLE`, **required**) — Gap tolerance. Same semantics as `gbx_st_coverageisvalid`.
 
 **Returns:** `BINARY` — WKB/EWKB union of invalid edge segments. Empty geometry when clean. `NULL` when the group is empty.
 
@@ -776,7 +802,7 @@ See [Coverage Validity](./coverage-validity).
 <FunctionExamples
   name="st_coverageinvalidedges"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 

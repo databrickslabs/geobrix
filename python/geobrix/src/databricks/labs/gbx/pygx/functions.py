@@ -421,7 +421,7 @@ def _chip_records(struct_col):
     """
     if isinstance(struct_col, pd.DataFrame):
         return [tuple(rec) for rec in struct_col.itertuples(index=False, name=None)]
-    return [_to_positional(rec) for rec in struct_col]
+    return [None if rec is None else _to_positional(rec) for rec in struct_col]
 
 
 def _chip_to_row(result):
@@ -977,16 +977,22 @@ def _custom_distance_udf(cell1, grid, cell2):
 def _parse_k(s: "pd.Series") -> int:  # type: ignore[name-defined]
     # SQL NULL arrives as pd.NA (nullable Int64) or np.nan (float64), not Python None.
     # Extract the scalar first, then test for NA — pd.isna on a scalar is always safe.
+    if s is None:  # left out of the call
+        return 1
     v = s.iloc[0]
     return 1 if v is None or pd.isna(v) else int(v)
 
 
 def _parse_method(s: "pd.Series") -> str:  # type: ignore[name-defined]
+    if s is None:
+        return "mean"
     v = s.iloc[0]
     return "mean" if v is None or pd.isna(v) else str(v)
 
 
 def _parse_power(s: "pd.Series") -> float:  # type: ignore[name-defined]
+    if s is None:
+        return 2.0
     v = s.iloc[0]
     return 2.0 if v is None or pd.isna(v) else float(v)
 
@@ -1002,9 +1008,9 @@ def _h3_k_loop(cell_id: int, d: int) -> list:
 def _h3_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
     _check_exact_ids(cellid, "gbx_h3_cellfill")
     cells = _cellfill.collect(
@@ -1028,9 +1034,9 @@ def _h3_cellfill_agg_udf(
 def _quadbin_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
     _check_exact_ids(cellid, "gbx_quadbin_cellfill")
     cells = _cellfill.collect(
@@ -1054,9 +1060,9 @@ def _quadbin_cellfill_agg_udf(
 def _bng_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
     # BNG cell IDs arrive as strings (object dtype); None = SQL NULL.
     parsed = (
@@ -1084,9 +1090,9 @@ def _custom_cellfill_agg_udf(
     cellid: pd.Series,
     value: pd.Series,
     grid: pd.Series,  # struct arrives as Series of dicts in grouped-agg context
-    k: pd.Series,
-    method: pd.Series,
-    power: pd.Series,
+    k: pd.Series = None,
+    method: pd.Series = None,
+    power: pd.Series = None,
 ) -> Optional[bytes]:
     _check_exact_ids(cellid, "gbx_custom_cellfill")
     # Extract grid conf from first non-null row (all rows share the same grid spec).
@@ -1432,7 +1438,7 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_cellunion_agg(cellid: ColLike) -> Column:
+def _light_quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregator: union a group's cell boundaries into one EWKB (SRID 4326) BINARY."""
     return _cellunion_agg_udf(_col(cellid))
 
@@ -1440,7 +1446,7 @@ def quadbin_cellunion_agg(cellid: ColLike) -> Column:
 # --- BNG aggregate Column wrappers (the scalars are gridx.bng.functions) --------------------
 
 
-def bng_cellunion_agg(input_chip: ColLike) -> Column:
+def _light_bng_cellunion_agg(input_chip: ColLike) -> Column:
     """Aggregator: union a group's same-cell chips into one dissolved-chip WKB BINARY.
 
     (Light grouped-agg cannot return a STRUCT; emits the dissolved chip geometry,
@@ -1449,7 +1455,7 @@ def bng_cellunion_agg(input_chip: ColLike) -> Column:
     return f.call_function("gbx_bng_cellunion_agg", _col(input_chip))
 
 
-def bng_cellintersection_agg(input_chip: ColLike) -> Column:
+def _light_bng_cellintersection_agg(input_chip: ColLike) -> Column:
     """Aggregator: intersect a group's same-cell chips into one dissolved-chip WKB BINARY."""
     return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
 
@@ -1464,7 +1470,7 @@ def bng_cellintersection_agg(input_chip: ColLike) -> Column:
 # _cellfill.decode.  k default 1, method default 'mean', power default 2.0.
 
 
-def h3_cellfill(
+def _light_h3_cellfill(
     cellid: ColLike,
     value: ColLike,
     k: ColLike = 1,
@@ -1484,7 +1490,7 @@ def h3_cellfill(
     )
 
 
-def quadbin_cellfill(
+def _light_quadbin_cellfill(
     cellid: ColLike,
     value: ColLike,
     k: ColLike = 1,
@@ -1503,7 +1509,7 @@ def quadbin_cellfill(
     )
 
 
-def bng_cellfill(
+def _light_bng_cellfill(
     cellid: ColLike,
     value: ColLike,
     k: ColLike = 1,
@@ -1522,7 +1528,7 @@ def bng_cellfill(
     )
 
 
-def custom_cellfill(
+def _light_custom_cellfill(
     cellid: ColLike,
     value: ColLike,
     grid: ColLike,

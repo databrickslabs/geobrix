@@ -911,7 +911,9 @@ def test_merge_agg_no_try_to_file(spark):
 
 def test_combineavg_agg_no_try_to_file(spark):
     """rst_combineavg_agg must not inject try_to_file (same rationale as merge)."""
-    from databricks.labs.gbx.pyrx.functions import rst_combineavg_agg
+    from databricks.labs.gbx.pyrx.functions import (
+        _light_rst_combineavg_agg as rst_combineavg_agg,
+    )
 
     expr = rst_combineavg_agg("tile")._jc.toString()
     assert "try_to_file" not in expr.lower()
@@ -951,7 +953,7 @@ class TestAggPublicFunctionsParity:
         a = _ras(np.array([[2.0, 4.0], [6.0, 8.0]]))
         b = _ras(np.array([[4.0, 8.0], [10.0, 12.0]]))
         df = _spark_tile_df_raw(spark, [a, b])
-        result = df.groupBy("g").agg(prx.rst_combineavg_agg("tile").alias("avg"))
+        result = df.groupBy("g").agg(prx._light_rst_combineavg_agg("tile").alias("avg"))
         rows = result.collect()
         assert rows, "no rows returned"
         avg_tile = rows[0]["avg"]

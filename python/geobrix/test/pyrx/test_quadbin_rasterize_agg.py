@@ -24,7 +24,7 @@ def test_rst_quadbin_rasterize_agg_presence_mask(spark):
     df = spark.createDataFrame([(int(c), "TX1") for c in cells], ["cellid", "tx"])
     out = (
         df.groupBy("tx")
-        .agg(rx.rst_quadbin_rasterize_agg("cellid").alias("tile"))
+        .agg(rx._light_rst_quadbin_rasterize_agg("cellid").alias("tile"))
         .collect()
     )
     tile = out[0]["tile"]
@@ -154,7 +154,7 @@ def test_rst_quadbin_rasterize_agg_null_cellid_no_precision_loss(spark):
     def _rasterize(df):
         return (
             df.groupBy("group")
-            .agg(rx.rst_quadbin_rasterize_agg("cellid", "val").alias("tile"))
+            .agg(rx._light_rst_quadbin_rasterize_agg("cellid", "val").alias("tile"))
             .collect()[0]["tile"]["raster"]
         )
 

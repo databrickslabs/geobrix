@@ -255,9 +255,16 @@ object functions extends Serializable {
 
     // Aggregators
 def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.name, Seq(tile))
-    def rst_derivedband_agg(tile: Column, pyfunc: String, funcName: String): Column =
-      ColumnAdapter(RST_DerivedBandAgg.name, Seq(tile, lit(pyfunc), lit(funcName)))
-    def rst_merge_agg(tile: Column): Column = ColumnAdapter(RST_MergeAgg.name, Seq(tile))
+    def rst_derivedband_agg(tile: Column, pythonFunc: String, funcName: String): Column =
+      ColumnAdapter(RST_DerivedBandAgg.name, Seq(tile, lit(pythonFunc), lit(funcName)))
+    def rst_frombands_agg(tile: Column, bandIndex: Column): Column =
+        ColumnAdapter(RST_FromBandsAgg.name, Seq(tile, bandIndex))
+    /** Burn a group's `(geom, value)` features into one tile; the overlap rule is the tier-wide one (see the docs). */
+    def rst_rasterize_agg(
+        geom: Column, value: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        widthPx: Column, heightPx: Column, outSrid: Column
+    ): Column =
+        ColumnAdapter(RST_RasterizeAgg.name, Seq(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, outSrid))
 
     /** UDAF: rasterize a group's H3 cells into one tile (pixel-centroid burn).
      *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
@@ -286,6 +293,16 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
+    /** As above, with the trailing `out_crs` (`EPSG:<n>`; it wins over `out_srid`). */
+    def rst_h3_rasterize_agg(
+        cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        width: Column, height: Column, mode: Column, kringPad: Column, outCrs: Column
+    ): Column =
+        ColumnAdapter(RST_H3_RasterizeAgg.name, Seq(
+            cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad, outCrs
+        ))
+
     /** UDAF: rasterize a group's quadbin cells into one tile (pixel-centroid burn).
      *  Auto-derives the grid from the cell set; value omitted -> presence mask (1.0). */
     def rst_quadbin_rasterize_agg(cellid: Column): Column =
@@ -311,6 +328,16 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     ): Column =
         ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
             cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
+        ))
+
+    /** As above, with the trailing `out_crs` (`EPSG:<n>`; it wins over `out_srid`). */
+    def rst_quadbin_rasterize_agg(
+        cellid: Column, value: Column, out_srid: Column, pixelSize: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        width: Column, height: Column, mode: Column, kringPad: Column, outCrs: Column
+    ): Column =
+        ColumnAdapter(RST_Quadbin_RasterizeAgg.name, Seq(
+            cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad, outCrs
         ))
 
     /** UDAF: rasterize a group's BNG cells (STRING ids) into one 27700-native tile.
@@ -355,16 +382,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     /** UDAF: rasterize a group's custom-grid cells into one tile (pixel-centroid burn).
      *  Requires a `grid` struct column (produced by `gbx_custom_grid(...)`).
      *  Auto-derives the extent from the cell set; value omitted -> presence mask (1.0). */
-    def rst_custom_rasterize_agg(cellid: Column, grid: Column): Column =
-        ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
-            cellid, lit(null).cast("double"),
-            grid,
-            lit(null).cast("int"), lit(null).cast("double"),
-            lit(null).cast("double"), lit(null).cast("double"),
-            lit(null).cast("double"), lit(null).cast("double"),
-            lit(null).cast("int"), lit(null).cast("int"),
-            lit("centroids"), lit(1)
-        ))
     def rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column): Column =
         ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
             cellid, value, grid,
@@ -682,27 +699,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         statistic: Column
     ): Column =
         ColumnAdapter(RST_BinPointsAgg.name, Seq(x, y, z, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, statistic))
-
-    // IDW interpolation - aggregator (one point/value per row)
-    def rst_gridfrompoints_agg(
-        point: Column, value: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, out_srid: Column
-    ): Column =
-        ColumnAdapter(RST_GridFromPointsAgg.name, Seq(
-            point, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid,
-            lit(RST_GridFromPoints.DefaultPower),
-            lit(RST_GridFromPoints.DefaultMaxPoints)
-        ))
-    def rst_gridfrompoints_agg(
-        point: Column, value: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, out_srid: Column,
-        power: Column, maxPts: Column
-    ): Column =
-        ColumnAdapter(RST_GridFromPointsAgg.name, Seq(
-            point, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
-        ))
 
     // Pixel ops + extraction — Column form + scalar overloads
     def rst_fillnodata(tile: Column): Column =

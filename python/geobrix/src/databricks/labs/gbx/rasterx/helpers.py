@@ -21,10 +21,14 @@ are bounded by the canonical tile budget. Connect-safe: no ``.rdd``,
 Grouped merge and combine: ``merge_by_key`` and ``combine_by_key`` are the default on a dedicated
 cluster. Mind the memory: a fold holds a whole group in a task, and measured at 1000 groups its peak
 execution memory was 40.3 GB, where the aggregate ``gbx_rst_merge_agg`` streamed the same groups in
-7.4 GB. On Serverless the aggregate streams under the worker's read cap and a result over the cap
-stops with a ``Fix:`` that names ``merge_by_key(..., method="vrt")``, which reads paths only and
-streams the mosaic to a COG without decoding a member: that is the route for a large group there
-(1000 tiles completed in 28 minutes). ``combine_by_key`` folds under the same budget.
+7.4 GB. On Serverless the aggregate streams under the worker's read cap. A result over the cap stops
+with a ``Fix:`` that names the VRT-mosaic route: keep the tiles as files on a Volume and build the
+mosaic with ``databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...")`` (or the cog_gbx
+writer's mosaic mode), then read the VRT, because ``merge_by_key`` also returns BINARY bounded by
+the same cap. ``merge_by_key(..., method="vrt")`` is the route for a group whose result fits the
+cap but whose members do not fit in memory: it reads paths only and streams the mosaic to a COG
+without decoding a member (1000 tiles completed in 28 minutes). ``combine_by_key`` folds under the
+same budget.
 """
 
 # Before the pyspark imports: one clear error when PySpark is missing.
@@ -41,7 +45,7 @@ from pyspark.sql.types import BinaryType, DoubleType, StructField, StructType
 
 from databricks.labs.gbx._gdal_policy import open_data
 
-__all__ = [  # noqa: F822  (tile_range loads on first use)
+__all__ = [  # noqa: F822  (tile_range and prepare_cogs load on first use)
     "retile_virtual",
     "bng_tessellate_virtual",
     "merge_by_key",
@@ -63,6 +67,7 @@ __all__ = [  # noqa: F822  (tile_range loads on first use)
     "bin_points_tiled",
     "rst_h3_gridspec",
     "tile_range",
+    "prepare_cogs",
 ]
 
 _FIX_VIRTUAL = (
@@ -657,8 +662,9 @@ def _vrt_mosaic(members, cap_bytes: int):
         if materialize_decision(size, "ingest", cap_bytes=cap_bytes) == "error":
             raise ValueError(
                 f"the merged mosaic is {size / 2**20:.0f} MiB, over the {cap_bytes / 2**20:.0f} MiB "
-                f"cap for bytes in a row. Fix: write the mosaic to files instead (the cog_gbx writer "
-                f"with vrtMosaic=true), or split the groups"
+                f"cap for bytes in a row. Fix: keep the tiles as files on a Volume and build the mosaic over "
+                f'them with databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...") (or the cog_gbx '
+                f"writer with vrtMosaic=true), then read the VRT; or split the groups"
             )
         with open(out, "rb") as fh:
             return fh.read()
@@ -678,8 +684,10 @@ def merge_by_key(
     This is the default for a grouped merge on a dedicated cluster. Its memory follows the group: a
     fold holds the group in a task (measured at 1000 groups: 40.3 GB peak execution memory, against
     7.4 GB for the ``gbx_rst_merge_agg`` aggregate). On Serverless, ``method='vrt'`` is the route for
-    a large group: the aggregate streams under the worker's read cap, and a mosaic over that cap stops
-    with a ``Fix:`` that names this call.
+    a group whose result fits the worker's read cap but whose members do not fit in memory. The result
+    is BINARY, bounded by that same cap: a mosaic over the cap is kept as files instead (the cog_gbx
+    writer's mosaic mode, or ``databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...")``,
+    then read the VRT), and this call stops with a ``Fix:`` that says so.
 
     ``method='fold'`` shuffles the tiles by key and merges each group in a sorted Arrow stream with
     the merge ``gbx_rst_merge_agg`` runs (overlaps resolve the same way; a member that is NULL, an
@@ -1936,9 +1944,15 @@ def rst_h3_gridspec(
 
 
 def __getattr__(name: str):
-    """``tile_range`` loads on first use: its module needs rasterio, and importing the helpers must not."""
+    """``tile_range`` and ``prepare_cogs`` load on first use: their modules need rasterio, and importing the helpers
+    must not. ``prepare_cogs`` is the one public path of the driver-side COG preparer (same signature and docstring).
+    """
     if name == "tile_range":
         from databricks.labs.gbx.pyrx.core.tiling import tile_range
 
         return tile_range
+    if name == "prepare_cogs":
+        from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+
+        return prepare_cogs
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

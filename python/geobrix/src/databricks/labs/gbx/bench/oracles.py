@@ -253,7 +253,7 @@ HEAVY_PENDING.update(
 # The JVM companions of two Task 15 / 18b names that refuse a group the light level handles, and are not the default.
 # `gbx_rst_derivedband_agg` has a `session_returns: TILE` L1 block, so it is not selected: a member over the cap is an
 # error tile (a NULL raster, the reason and its Fix in the metadata), not a raise. `gbx_rst_merge` (the array form)
-# refuses a group over the memory budget the same way, with `merge_by_key` in the Fix, where light streams it.
+# refuses a group over the memory budget the same way, with the `mint_vrt` route in the Fix, where light streams it.
 _DERIVEDBAND_AGG_L1 = (
     "the non-selectable JVM tile aggregate returns an error tile; Task 21 deletes it"
 )

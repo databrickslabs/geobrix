@@ -4,8 +4,9 @@ The light packages (``pyrx``, ``pygx``, ``pyvx``) are the implementation behind 
 ``vectorx``. What they used to export moved there, and no alias keeps the old path working.
 """
 
+import functools
 import sys
-from typing import Callable, Dict
+from typing import Callable, Dict, Tuple
 
 # A Python-only function the light ``functions`` modules used to define -> the module that defines it now.
 HELPER_HOMES: Dict[str, str] = {
@@ -69,26 +70,40 @@ def install(package: str, moved: Dict[str, str]) -> Callable[[str], object]:
     return __getattr__
 
 
-def removed_name(module: str, name: str):
-    """Raise the AttributeError of a name a light ``functions`` module no longer defines.
-
-    A SQL function's Python entry is in the generated module; a helper is in ``helpers``.
-    """
+@functools.lru_cache(maxsize=1)
+def _removed_index() -> Tuple[Dict[str, str], Dict[str, str]]:
+    """The manifest's Python names, once: (SQL function's Python name -> its module, helper name -> its module)."""
     from databricks.labs.gbx import manifest
 
     man = manifest.load()
+    fns: Dict[str, str] = {}
     for fn in man.functions.values():
-        if fn.python is not None and fn.python.name == name:
-            raise AttributeError(
-                f"{module}.{name} was removed in 0.6.0; use databricks.labs.gbx.{fn.python.module}.functions.{name}. "
-                f"Fix: from databricks.labs.gbx.{fn.python.module} import functions"
-            )
+        if fn.python is not None:
+            fns.setdefault(fn.python.name, fn.python.module)
+    helpers: Dict[str, str] = {}
     for h in man.helpers:
-        if h.name == name:
-            raise AttributeError(
-                f"{module}.{name} moved to {h.module}.{name}. Fix: from {h.module} import {name}"
-            )
-    home = HELPER_HOMES.get(name)
+        helpers.setdefault(h.name, h.module)
+    return fns, helpers
+
+
+def removed_name(module: str, name: str):
+    """Raise the AttributeError of a name a light ``functions`` module no longer defines.
+
+    A SQL function's Python entry is in the generated module; a helper is in ``helpers``. Whatever goes wrong in the
+    lookup (the manifest does not load) ends as the plain AttributeError: ``hasattr``, ``getattr(..., default)`` and
+    pickle's ``whichmodule`` catch nothing else.
+    """
+    try:
+        fns, helpers = _removed_index()
+    except Exception:  # noqa: BLE001 - a lookup failure must read as "no such name"
+        fns, helpers = {}, {}
+    pkg = fns.get(name)
+    if pkg is not None:
+        raise AttributeError(
+            f"{module}.{name} was removed in 0.6.0; use databricks.labs.gbx.{pkg}.functions.{name}. "
+            f"Fix: from databricks.labs.gbx.{pkg} import functions"
+        )
+    home = helpers.get(name) or HELPER_HOMES.get(name)
     if home is not None:
         raise AttributeError(
             f"{module}.{name} moved to {home}.{name}. Fix: from {home} import {name}"

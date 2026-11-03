@@ -142,16 +142,16 @@ RASTER_AGGREGATE = (
         "combine_avg",
         ONLY,
     ),
-    # What streaming cannot cover raises with a Fix that names the vrt route: never an executor OOM, never a NULL (which
-    # reads as an empty group). Tiles 10^7 m apart make a mosaic past what a merge can stream; and a tile in another CRS
-    # over the read cap (READ_CAP_ROWS: 150 bytes, a member of aa_mixed_crs is 192) must be decoded whole to be
-    # reprojected.
+    # What streaming cannot cover raises with a Fix: never an executor OOM, never a NULL (which reads as an empty group).
+    # Tiles 10^7 m apart make a mosaic past what a merge can stream (the Fix names the VRT-mosaic route, mint_vrt); and a
+    # tile in another CRS over the read cap (READ_CAP_ROWS: 150 bytes, a member of aa_mixed_crs is 192) must be decoded
+    # whole to be reprojected (the Fix names merge_by_key(method="vrt"): the members need no RAM there).
     Case(
         "merge_agg_over_budget_refused",
         MA,
         (Build("ra_far_apart"),),
         "raises",
-        "merge_by_key",
+        "mint_vrt",
         ONLY,
     ),
     Case(
@@ -163,13 +163,14 @@ RASTER_AGGREGATE = (
         ONLY,
     ),
     # The encoded result of a bytes aggregate comes back whole in one row, so it is bounded by the same cap (READ_CAP_ROWS:
-    # 2000 bytes; the streamed COG of quad_tiles is about 2.4 KB): over it the aggregate raises with the vrt route.
+    # 2000 bytes; the streamed COG of quad_tiles is about 2.4 KB): over it the aggregate raises with the VRT-mosaic route,
+    # not merge_by_key, which returns BINARY bounded by the same cap.
     Case(
         "merge_agg_output_over_cap_refused",
         MA,
         (Build("quad_tiles"),),
         "raises",
-        "merge_by_key",
+        "mint_vrt",
         ONLY,
     ),
     # --- combineavg: the mean of the valid values at each pixel, against numpy
@@ -780,7 +781,7 @@ RASTER_AGGREGATE += (
         MT,
         (Build("ra_far_apart"),),
         "raises",
-        "merge_by_key",
+        "mint_vrt",
         ONLY,
     ),
     *(

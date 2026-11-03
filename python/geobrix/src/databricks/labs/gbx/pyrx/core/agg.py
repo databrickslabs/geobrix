@@ -339,13 +339,27 @@ def _merge_budget() -> int:
     return tile_read_cap()
 
 
+# A member too big to decode in RAM: merge_by_key(method="vrt") reads paths only, so the members need no RAM (its result
+# is still BINARY, bounded by the same cap as every row).
 _VRT_ROUTE = (
     "keep the tiles as files and mosaic them with "
     'databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method="vrt")'
 )
+# A mosaic whose result is over the cap: no route that returns it in a row can help, so keep it as files (the
+# documented VRT mosaic, docs/api/vrt-mosaic).
+_MOSAIC_ROUTE = (
+    "keep the tiles as files on a Volume and build the mosaic over them with "
+    'databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...") '
+    "(or the cog_gbx writer with vrtMosaic=true), then read the VRT"
+)
 _COMBINE_ROUTE = (
     "combine the tiles per key, outside the aggregate, with "
     "databricks.labs.gbx.rasterx.helpers.combine_by_key(...)"
+)
+# A combine whose result is over the cap: smaller results first, or combine_by_key where the result fits the cap.
+_COMBINE_OUT_ROUTE = (
+    "retile the tiles first (gbx_rst_retile) so each result is smaller, or combine them per key, outside the "
+    "aggregate, with databricks.labs.gbx.rasterx.helpers.combine_by_key(...) where the result fits"
 )
 
 
@@ -592,7 +606,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
         # Read the COG back as bytes and return (a bound on a BINARY aggregate's row is judged before the read).
         if max_out is not None and os.path.getsize(cog_path) > max_out:
             raise OutputOverBudget(
-                _output_refusal(os.path.getsize(cog_path), max_out, _VRT_ROUTE)
+                _output_refusal(os.path.getsize(cog_path), max_out, _MOSAIC_ROUTE)
             )
         with open(cog_path, "rb") as fh:
             return fh.read()
@@ -725,8 +739,8 @@ def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
                     f"the mosaic of these {len(rasters)} tiles would be {union / 2**30:.0f} GiB decoded, over the "
                     f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
                     f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "
-                    f"place and one CRS together (key the group by them), or retile first; the files of one "
-                    f'place can be mosaicked with databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method="vrt")'
+                    f"place and one CRS together (key the group by them), or retile first; to mosaic the files of "
+                    f"one place, {_MOSAIC_ROUTE}"
                 )
             if how == "stream" and _in_ram_bytes(hdrs, ref_crs, union) > budget:
                 how = "driver"
@@ -804,7 +818,7 @@ def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
                 if own_mask is not None:
                     dst.write_mask(own_mask)
             out = out_mf.read()
-        return _bounded(out, max_out, _VRT_ROUTE)
+        return _bounded(out, max_out, _MOSAIC_ROUTE)
     finally:
         for mf, rds in extra:
             if rds is not None:
@@ -971,7 +985,7 @@ def combineavg_tiles(rasters: List[bytes], max_out=None) -> bytes:
                     if np.issubdtype(np.dtype(out_dtype), np.integer):
                         means = np.rint(means)
                     dst.write(means.astype(out_dtype), window=window)
-            return _bounded(out_mf.read(), max_out, _COMBINE_ROUTE)
+            return _bounded(out_mf.read(), max_out, _COMBINE_OUT_ROUTE)
 
 
 def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
@@ -1377,7 +1391,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str, max_out=None) -> bytes:
                     if np.issubdtype(np.dtype(out_dtype), np.integer):
                         result = np.rint(result)
                     dst.write(result.astype(out_dtype), window=window)
-            return _bounded(out_mf.read(), max_out, _COMBINE_ROUTE)
+            return _bounded(out_mf.read(), max_out, _COMBINE_OUT_ROUTE)
 
 
 def combine_min_tiles(rasters: List[bytes]) -> bytes:

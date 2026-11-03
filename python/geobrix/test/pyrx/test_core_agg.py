@@ -665,23 +665,26 @@ def test_a_member_over_the_read_cap_falls_to_streaming_not_a_refusal(monkeypatch
 
 def test_the_encoded_result_of_a_bytes_aggregate_is_bounded():
     """The bytes of a merged or combined result come back whole in one row: over the cap `max_out`, both raise with the
-    Fix that names their own route (the merge: the vrt route; the combine: `combine_by_key`).
+    Fix that names their own route (the merge: the VRT-mosaic route, `mint_vrt`, since `merge_by_key` is bounded by the
+    same cap; the combine: retile first, or `combine_by_key`).
     """
     left = _ras(np.arange(64 * 64).reshape(64, 64) % 251, ulx=0.0, uly=64.0)
     right = _ras(np.arange(64 * 64).reshape(64, 64) % 241, ulx=64.0, uly=64.0)
     assert agg.merge_tiles([left, right], max_out=1 << 20)
     with pytest.raises(
-        agg.OutputOverBudget, match=r'merge_by_key\(\.\.\., method="vrt"\)'
-    ):
+        agg.OutputOverBudget, match=r"ds\._mosaic\.mint_vrt\(paths"
+    ) as err:
         agg.merge_tiles([left, right], max_out=100)
-    with pytest.raises(agg.OutputOverBudget, match="merge_by_key"):
+    assert "merge_by_key" not in str(err.value)
+    with pytest.raises(agg.OutputOverBudget, match="mint_vrt") as err:
         agg._merge_tiles_streaming(
             sorted([left, right]), max_out=100
         )  # checked before the COG is read
+    assert "merge_by_key" not in str(err.value)
     assert agg.combineavg_tiles([left, left], max_out=1 << 20)
     with pytest.raises(agg.OutputOverBudget, match="combine_by_key") as err:
         agg.combineavg_tiles([left, left], max_out=100)
-    assert "merge_by_key" not in str(err.value)
+    assert "merge_by_key" not in str(err.value) and "gbx_rst_retile" in str(err.value)
     with pytest.raises(agg.OutputOverBudget, match="combine_by_key"):
         agg._combine_stat_tiles([left, left], "max", max_out=100)
 

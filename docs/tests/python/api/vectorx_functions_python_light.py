@@ -43,8 +43,6 @@ This is identical in behavior to the SQL tab; the Column API form is
 heavyweight-only for these generators.
 """
 
-from databricks.labs.gbx.vectorx import helpers as vx_helpers
-
 try:
     from databricks.labs.gbx.pyvx import functions as vx
 except ImportError:
@@ -816,6 +814,7 @@ def coverage_simplify_python_light_example(spark):
     simplified polygons still meet at x=5.  Returns the list of simplified WKB bytes
     (2 rows in, 2 rows out).
     """
+    from databricks.labs.gbx.vectorx import helpers  # noqa: PLC0415
     from shapely import from_wkt, to_wkb  # noqa: PLC0415
 
     left = from_wkt("POLYGON((0 0, 2.5 0.001, 5 0, 5 5, 0 5, 0 0))")
@@ -827,7 +826,7 @@ def coverage_simplify_python_light_example(spark):
         ],
         ["cov_id", "geom"],
     )
-    result = vx_helpers.coverage_simplify(df, "cov_id", "geom", 0.1)
+    result = helpers.coverage_simplify(df, "cov_id", "geom", 0.1)
     rows = result.collect()
     return [row["geom_simplified"] for row in rows]
 

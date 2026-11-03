@@ -888,9 +888,10 @@ def test_a_merge_too_big_to_build_raises_with_the_fix_where_the_result_is_bytes(
     spark, tmp_path, surface
 ):
     """Bytes have no place for a reason, and a NULL or a missing row reads as an empty group: the query raises, and
-    the message names the route that can mosaic the files (`merge_by_key`)."""
+    the message names the route that can mosaic the files (`mint_vrt`: `merge_by_key` is bounded by the same cap).
+    """
     _, out = _surfaces(spark, _far_and_near(spark), tmp_path)[surface]
-    with pytest.raises(Exception, match="merge_by_key"):
+    with pytest.raises(Exception, match="mint_vrt"):
         out.collect()
 
 

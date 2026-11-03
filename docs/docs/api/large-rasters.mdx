@@ -92,7 +92,7 @@ files, resolves them to a flat de-duplicated set, and converts each one,
 printing per-file progress and returning a summary.
 
 ```python
-from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+from databricks.labs.gbx.rasterx.helpers import prepare_cogs
 
 # sources may be a dir, a single file, or a list mixing both
 summary = prepare_cogs(

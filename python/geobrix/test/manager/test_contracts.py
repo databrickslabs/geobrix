@@ -2803,11 +2803,41 @@ def test_light_modules_define_no_public_callable():
         assert public == [], (pkg, public)
 
 
-def test_removed_light_api_names_the_new_module():
+def test_removed_light_api_names_the_new_module(monkeypatch):
+    import importlib
+
+    from databricks.labs.gbx import _moved
+    from databricks.labs.gbx.pygx import functions as old_gx
     from databricks.labs.gbx.pyrx import functions as old
 
     with pytest.raises(AttributeError, match=r"rasterx\.functions\.rst_width.*Fix:"):
         old.rst_width
+    with pytest.raises(
+        AttributeError, match=r"gridx\.bng\.functions\.bng_cellfill.*Fix:"
+    ):
+        getattr(old_gx, "bng_cellfill")
+    # an unknown name is the plain AttributeError (no Fix), also when the manifest cannot be read
+    for pkg in _LIGHT:
+        mod = importlib.import_module(f"databricks.labs.gbx.{pkg}.functions")
+        with pytest.raises(
+            AttributeError, match="has no attribute 'no_such_name'"
+        ) as e:
+            getattr(mod, "no_such_name")
+        assert "Fix:" not in str(e.value) and not hasattr(mod, "no_such_name")
+    _moved._removed_index.cache_clear()
+
+    try:
+        for exc in (ValueError, ImportError, OSError):
+            _moved._removed_index.cache_clear()
+            monkeypatch.setattr(
+                "databricks.labs.gbx.manifest.load",
+                lambda exc=exc: (_ for _ in ()).throw(exc("boom")),
+            )
+            assert getattr(old, "rst_width", None) is None
+            assert not hasattr(old, "rst_width")
+    finally:
+        monkeypatch.undo()
+        _moved._removed_index.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -2831,6 +2861,14 @@ def test_a_removed_python_only_function_names_its_helpers_module(pkg, name, home
         getattr(old, name)
     new = importlib.import_module(f"databricks.labs.gbx.{home}")
     assert callable(getattr(new, name))
+
+
+def test_prepare_cogs_has_one_public_path_under_rasterx_helpers():
+    from databricks.labs.gbx.pyrx.core import preparer
+    from databricks.labs.gbx.rasterx import helpers
+
+    assert helpers.prepare_cogs is preparer.prepare_cogs
+    assert "prepare_cogs" in helpers.__all__
 
 
 def test_the_moved_modules_are_under_the_public_packages_and_gone_from_the_light_ones():

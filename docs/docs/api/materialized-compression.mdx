@@ -109,7 +109,7 @@ df.write.format("gtiff_gbx").option("compress", "none").save(...)
 For `prepare_cogs` (driver-based COG preparation), pass the same options as kwargs:
 
 ```python
-from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+from databricks.labs.gbx.rasterx.helpers import prepare_cogs
 
 prepare_cogs(
     input_dir,

@@ -3697,8 +3697,8 @@ def rst_merge(
     Returns:
         One tile over the union extent. A NULL or empty array gives NULL; an array of
         only error tiles gives the first one; a tile that cannot be read is skipped. An
-        array over the memory budget gives an error tile with a `Fix:` that names
-        `merge_by_key(..., method="vrt")`.
+        array over the memory budget gives an error tile with a `Fix:` that names the
+        VRT-mosaic route (`mint_vrt`).
 
     SQL: ``gbx_rst_merge(tiles)``
     """
@@ -3761,7 +3761,7 @@ def rst_merge_tvf(
     Returns:
         One row per partition: its `key` and the merged `raster` (GeoTIFF bytes over the
         union extent). A partition with no readable tile gives no row; one past what a
-        merge can build raises with a Fix that names `merge_by_key`.
+        merge can build raises with a Fix that names the VRT-mosaic route (`mint_vrt`).
 
     SQL: ``gbx_rst_merge_tvf(rows)``
     """

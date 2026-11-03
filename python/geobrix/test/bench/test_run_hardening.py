@@ -548,7 +548,12 @@ def test_a_jvm_form_gets_a_light_stand_in_only_when_the_stand_in_can_run_here():
         "S", B, "L2", "-", "bng_points", sql=ok.sql + " ", setup="m:register_jvm"
     )
     other_shape = lf.Form(
-        "G", "gbx_rst_maketiles", "L1", "tvf", "tiles_mat", sql="SELECT 1, 2, 3 FROM {src}"
+        "G",
+        "gbx_rst_maketiles",
+        "L1",
+        "tvf",
+        "tiles_mat",
+        sql="SELECT 1, 2, 3 FROM {src}",
     )
     got = preflight._jvm_sql_standins([ok, with_setup, other_shape])
     assert [(f.fn, f.sql) for f in got] == [(B, ok.sql)]

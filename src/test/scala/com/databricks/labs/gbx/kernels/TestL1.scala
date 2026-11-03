@@ -160,23 +160,6 @@ object TestL1 {
         "com.databricks.labs.gbx.gridx.custom.generators.Custom_GeometryKLoopExplode",
         // gridx/h3
         "com.databricks.labs.gbx.gridx.h3.H3_CellFill",
-        // gridx/quadbin
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_PointAsCell",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_AsWKB",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_Centroid",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_Resolution",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_Polyfill",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_KRing",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_KLoop",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_Tessellate",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_CellUnion",
-        "com.databricks.labs.gbx.gridx.quadbin.agg.Quadbin_CellUnionAgg",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_CellFill",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_Distance",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_GeometryKRing",
-        "com.databricks.labs.gbx.gridx.quadbin.Quadbin_GeometryKLoop",
-        "com.databricks.labs.gbx.gridx.quadbin.generators.Quadbin_GeometryKRingExplode",
-        "com.databricks.labs.gbx.gridx.quadbin.generators.Quadbin_GeometryKLoopExplode",
         // pmtiles
         "com.databricks.labs.gbx.pmtiles.PMTiles_Agg",
         // vectorx

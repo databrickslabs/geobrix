@@ -2400,8 +2400,7 @@
       "description": "Return the footprint of a quadbin cell as an EWKB polygon in EPSG:4326.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2411,8 +2410,7 @@
       "description": "Fill the NULL cells of a group of quadbin cells from their valid neighbours.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -2422,8 +2420,7 @@
       "description": "Return the union of an array of quadbin cells as an EWKB polygon in EPSG:4326.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2433,8 +2430,7 @@
       "description": "Union a group's quadbin cells into one geometry.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2444,8 +2440,7 @@
       "description": "Return the centre of a quadbin cell as an EWKB point in EPSG:4326.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2455,8 +2450,7 @@
       "description": "Return the distance in cells between two quadbin cells of the same zoom level.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2466,19 +2460,17 @@
       "description": "Return the quadbin cells at exactly k rings from a geometry.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
     "gbx_quadbin_geomkloopexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src LATERAL VIEW gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t AS cellid;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src, LATERAL gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
       "description": "Return the quadbin cells at exactly k rings from a geometry, one row per cell.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -2488,19 +2480,17 @@
       "description": "Return the quadbin cells of a geometry dilated by k rings.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
     "gbx_quadbin_geomkringexplode": {
-      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src LATERAL VIEW gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t AS cellid;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src, LATERAL gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
       "description": "Return the quadbin cells of a geometry dilated by k rings, one row per cell.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -2510,8 +2500,7 @@
       "description": "Return the quadbin cells at exactly ring distance k from a cell.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -2521,8 +2510,7 @@
       "description": "Return the quadbin cells within ring distance k of a cell, the cell included.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2532,8 +2520,7 @@
       "description": "Return the quadbin cell that holds a longitude and latitude.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2543,8 +2530,7 @@
       "description": "Return the quadbin cells that cover the bounding box of a geometry.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2554,8 +2540,7 @@
       "description": "Return the zoom level of a quadbin cell.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -2565,8 +2550,7 @@
       "description": "Cut a geometry into quadbin cells, one chip per cell it touches.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     }

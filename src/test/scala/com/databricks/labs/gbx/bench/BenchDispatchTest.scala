@@ -40,7 +40,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   variance,stddev})
     // + 3 CRS-string ops (rst_crs accessor, rst_setcrs relabel, rst_transformcrs
     //   warp) -- the string siblings of the benchmarked rst_srid/setsrid/transform.
-    // + 3 cellfill grouped aggregators heavy-dispatched here ({h3,quadbin,bng}_cellfill;
+    // + 3 cellfill grouped aggregators heavy-dispatched here ({h3,bng}_cellfill; quadbin_cellfill left with its companion;
     //   custom_cellfill needs a grid-struct arg the heavy dispatch can't stream, so it
     //   is a pyrx-tier timing-only fn, not counted here) -> 128 + 3 = 131
     // + 6 Stage-3 combine-stats fns (combinemin/max/median/sum/stddev/count) -> 131 + 6 = 137.
@@ -52,7 +52,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   centroid + complete assignment) -> 143 + 1 = 144.
     // The raster-to-grid reducers (24), rst_retile, rst_merge_agg, rst_rasterize, rst_dtmfromgeoms,
     // rst_gridfrompoints_agg and rst_dtmfromgeoms_agg left with their companions: 144 - 30 = 114.
-    assert(BenchDispatch.all.size == 111)
+    // gbx_quadbin_cellfill left with its companion: 111 - 1 = 110.
+    assert(BenchDispatch.all.size == 110)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -63,8 +64,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.h3RasterizeCells().size == BenchDispatch.h3RaggNCells)
     assert(BenchDispatch.h3RasterizeCells().toSet.size == BenchDispatch.h3RaggNCells)
     // cellfill grouped aggregators: grid_aggregate kind + dggs category (heavy-dispatched
-    // {h3,quadbin,bng}; custom is pyrx-tier timing-only, absent from cats/cellFill).
-    for (fn <- Seq("h3_cellfill", "quadbin_cellfill", "bng_cellfill")) {
+    // {h3,bng}; custom is pyrx-tier timing-only, absent from cats/cellFill).
+    for (fn <- Seq("h3_cellfill", "bng_cellfill")) {
       assert(BenchDispatch.inputKind(fn) == "grid_aggregate")
       assert(BenchDispatch.category(fn) == "dggs")
       assert(BenchDispatch.cellFill.contains(fn))
@@ -78,7 +79,6 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(cfv8(1) == java.lang.Double.valueOf(1.0) && cfv8(7) == java.lang.Double.valueOf(7.0))
     assert(cfv8.count(_ == null) == 2)
     assert(BenchDispatch.cellFillLongCells("h3_cellfill").size == BenchDispatch.h3RaggNCells)
-    assert(BenchDispatch.cellFillLongCells("quadbin_cellfill").size == BenchDispatch.quadbinRaggNCells)
     assert(BenchDispatch.aggSynthRecipe("rst_combineavg_agg") == "combineavg")
     assert(BenchDispatch.aggSynthRecipe("rst_frombands_agg") == "frombands")
     assert(BenchDispatch.aggSynthRecipe("rst_derivedband_agg") == "frombands")

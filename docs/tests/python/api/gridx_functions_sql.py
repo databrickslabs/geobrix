@@ -681,36 +681,30 @@ SELECT gbx_quadbin_geomkloop(
 
 
 def quadbin_geomkringexplode_sql_example():
-    """Explode geometry k-ring into one row per BIGINT cell (heavyweight SQL form).
+    """Explode geometry k-ring into one row per BIGINT cell.
 
-    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
-    the select list).  The lightweight tier registers a table function instead,
-    called as ``FROM t, LATERAL gbx_quadbin_geomkringexplode(...)`` -- see the
+    A table function, called as ``FROM t, LATERAL gbx_quadbin_geomkringexplode(...)`` -- see the
     Python (light) tab.  At zoom=12 with k=1, the covering polyfill of the NYC
     box expands outward by one ring; each row carries one ``cellid BIGINT``.
     """
     return """
--- heavyweight tier
 SELECT t.cellid
-FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src
-LATERAL VIEW gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t AS cellid;
+FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src,
+LATERAL gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t;
 """
 
 
 def quadbin_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (hollow ring) into one row per BIGINT cell (heavyweight SQL form).
+    """Explode geometry k-loop (hollow ring) into one row per BIGINT cell.
 
-    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
-    the select list).  The lightweight tier registers a table function instead,
-    called as ``FROM t, LATERAL gbx_quadbin_geomkloopexplode(...)`` -- see the
+    A table function, called as ``FROM t, LATERAL gbx_quadbin_geomkloopexplode(...)`` -- see the
     Python (light) tab.  At zoom=12 with k=1, returns the hollow outer ring
     cells of the NYC box polyfill, one ``cellid BIGINT`` per row.
     """
     return """
--- heavyweight tier
 SELECT t.cellid
-FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src
-LATERAL VIEW gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t AS cellid;
+FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src,
+LATERAL gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t;
 """
 
 

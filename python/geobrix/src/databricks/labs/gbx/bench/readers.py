@@ -3927,27 +3927,21 @@ def run_interp_geom(
 
 
 def _register_quadbin(spark, api: str) -> None:
-    """Register exactly one quadbin tier.
+    """Register the quadbin functions for a benchmark leg.
 
-    light  -> ``databricks.labs.gbx.pygx`` (gx.register: spark.udf only).
-    heavy  -> ``databricks.labs.gbx.gridx.quadbin`` (JVM Scala UDFs).
-
-    Both tiers expose the SAME ``gbx_quadbin_*`` SQL names, so registering one
-    overwrites the other in the session catalog.  Each ``run_quadbin_*`` call
-    therefore registers a single tier; the light-vs-heavy parity gate (which
-    must collect light BEFORE re-registering heavy) lives in the cluster cell,
-    not here.
+    Quadbin runs at the lightweight level only (``databricks.labs.gbx.pygx``, level L3): the heavyweight
+    form is gone, so a heavyweight leg is refused rather than timed against nothing.
     """
     from databricks.labs.gbx import manager as gbx_manager
 
-    if api == "lightweight":
-
-        gbx_manager.register_family(
-            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    if api != "lightweight":
+        raise ValueError(
+            f"quadbin has no {api} form: it runs at the lightweight level only. "
+            "Fix: pass api='lightweight'."
         )
-    else:
-
-        gbx_manager.register_family(spark, ("gbx_quadbin_",), level="L1")
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
 
 
 def run_quadbin_pointascell(
@@ -3963,9 +3957,8 @@ def run_quadbin_pointascell(
 ) -> "ResultRow":
     """Time gbx_quadbin_pointascell (scalar lon/lat -> cell) over ``n_rows`` points.
 
-    Light registers pygx (``gbx_quadbin_pointascell`` via spark.udf); heavy
-    registers gridx.quadbin (the SAME SQL name, JVM). Records ``rows`` = number
-    of cells produced. Returns one ResultRow (mode="spark-path", category="grid").
+    Light registers pygx (``gbx_quadbin_pointascell`` via spark.udf), the only level
+    quadbin has. Records ``rows`` = number of cells produced. Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_points
 
@@ -4062,7 +4055,7 @@ def run_quadbin_polyfill(
 ) -> "ResultRow":
     """Time gbx_quadbin_polyfill (geom -> ARRAY<cell>) over ``n_rows`` WKT polygons.
 
-    Light registers pygx; heavy registers gridx.quadbin (same SQL name). Records
+    Light registers pygx (the only level quadbin has). Records
     ``rows`` = number of input polygons (each producing a cell array). Returns one
     ResultRow (mode="spark-path", category="grid").
     """
@@ -4161,7 +4154,7 @@ def run_quadbin_tessellate(
 ) -> "ResultRow":
     """Time gbx_quadbin_tessellate (geom -> ARRAY<STRUCT<cell,geom>>) over polygons.
 
-    Light registers pygx; heavy registers gridx.quadbin (same SQL name). Records
+    Light registers pygx (the only level quadbin has). Records
     ``rows`` = number of input polygons. Returns one ResultRow (mode="spark-path",
     category="grid").
     """
@@ -4267,8 +4260,7 @@ def run_quadbin_cellunion_agg(
 
     Streams one cell id per row, grouped by a small key set, unioning each
     group's cell boundaries into one EWKB MultiPolygon.  Light registers pygx
-    (a GROUPED_AGG pandas UDF); heavy registers gridx.quadbin (the SAME SQL
-    name, a JVM TypedImperativeAggregate). Records ``rows`` = number of input
+    (a GROUPED_AGG pandas UDF), the only level quadbin has. Records ``rows`` = number of input
     cells. Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cellid_arrays
@@ -4367,9 +4359,9 @@ def run_quadbin_resolution(
 ) -> "ResultRow":
     """Time gbx_quadbin_resolution (scalar cell -> INT) over ``n_rows`` cell ids.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): exact INT equality.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4465,10 +4457,9 @@ def run_quadbin_kring(
 ) -> "ResultRow":
     """Time gbx_quadbin_kring (scalar cell -> ARRAY<LONG>) over ``n_rows`` cells.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): exact sorted
-    cell-set per row at a fixed ``k``.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4563,9 +4554,9 @@ def run_quadbin_distance(
 ) -> "ResultRow":
     """Time gbx_quadbin_distance (scalar (cell_a, cell_b) -> INT) over ``n_rows`` pairs.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input pairs. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): exact INT equality.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cell_pairs
 
@@ -4660,10 +4651,9 @@ def run_quadbin_aswkb(
 ) -> "ResultRow":
     """Time gbx_quadbin_aswkb (scalar cell -> EWKB polygon) over ``n_rows`` cells.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): decoded geometry
-    within 1e-6 + SRID 4326.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4756,10 +4746,9 @@ def run_quadbin_centroid(
 ) -> "ResultRow":
     """Time gbx_quadbin_centroid (scalar cell -> EWKB point) over ``n_rows`` cells.
 
-    Light registers pygx; heavy registers gridx.quadbin (the SAME SQL name).
+    Light registers pygx (the only level quadbin has).
     Records ``rows`` = number of input cells. Returns one ResultRow
-    (mode="spark-path", category="grid"). Parity (cluster cell): decoded point
-    within 1e-6.
+    (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cells
 
@@ -4854,11 +4843,9 @@ def run_quadbin_cellunion(
 
     Reuses the cellunion_agg corpus (``generate_quadbin_cellid_arrays``):
     collect each group's cells into an ARRAY<LONG>, then call the scalar
-    ``gbx_quadbin_cellunion`` on the array. Light registers pygx; heavy registers
-    gridx.quadbin (the SAME SQL name). Records ``rows`` = number of unioned arrays
-    (one per group). Returns one ResultRow (mode="spark-path", category="grid").
-    Parity (cluster cell): decoded union geometry via symmetric-difference-area
-    < 1e-6 (member-ordering-robust, like the cellunion_agg leg).
+    ``gbx_quadbin_cellunion`` on the array. Light registers pygx (the only level
+    quadbin has). Records ``rows`` = number of unioned arrays (one per group).
+    Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_quadbin_cellid_arrays
 

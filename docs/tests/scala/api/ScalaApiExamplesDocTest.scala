@@ -126,27 +126,22 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance snippet vals are non-empty") {
     assert(ScalaApiExamples.bng_cellfill_scala_example.nonEmpty)
-    assert(ScalaApiExamples.quadbin_cellfill_scala_example.nonEmpty)
     assert(ScalaApiExamples.h3_cellfill_scala_example.nonEmpty)
     assert(ScalaApiExamples.custom_cellfill_scala_example.nonEmpty)
-    assert(ScalaApiExamples.quadbin_kloop_scala_example.nonEmpty)
     assert(ScalaApiExamples.custom_kloop_scala_example.nonEmpty)
     assert(ScalaApiExamples.custom_distance_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance output vals are non-empty") {
     assert(ScalaApiExamples.bng_cellfill_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.quadbin_cellfill_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.h3_cellfill_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.custom_cellfill_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.quadbin_kloop_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.custom_kloop_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.custom_distance_scala_example_output.nonEmpty)
   }
 
   test("ScalaApiExamples Batch E cellfill + kloop + distance Scala signatures compile") {
     import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-    import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
     import com.databricks.labs.gbx.gridx.custom.{functions => cx}
     import com.databricks.labs.gbx.gridx.h3.{functions => hx}
     import org.apache.spark.sql.functions._
@@ -157,11 +152,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     val _: Column = bx.bng_cellfill(col("cellid"), col("value"), 1)
     val _: Column = bx.bng_cellfill(col("cellid"), col("value"), 1, "mean")
     val _: Column = bx.bng_cellfill(col("cellid"), col("value"), 1, "mean", 2.0)
-    val _: Column = qx.quadbin_cellfill(col("cellid"), col("value"))
-    val _: Column = qx.quadbin_cellfill(col("cellid"), col("value"), 1)
-    val _: Column = qx.quadbin_cellfill(col("cellid"), col("value"), 1, "mean", 2.0)
-    val _: Column = qx.quadbin_kloop(col("cell"), lit(1))
-    val _: Column = qx.quadbin_kloop(col("cell"), col("k"))
     val _: Column = hx.h3_cellfill(col("cellid"), col("value"))
     val _: Column = hx.h3_cellfill(col("cellid"), col("value"), 1)
     val _: Column = hx.h3_cellfill(col("cellid"), col("value"), 1, "mean", 2.0)

@@ -1053,7 +1053,7 @@ with `gbx:bench:cluster --grid-quadbin-only`.
 
 **The quadbin cell-math functions were benchmarked on a cluster** (DBR 17.3 LTS, x86, spark-path, 1,000
 tiles/iteration, 5 measured iterations, both tiers). **Exact cell-set parity holds across the suite**
-(test-enforced — in-cell and by the `test_parity_quadbin` cross-tier suite).
+(test-enforced in-cell).
 
 On *timing*, these are **sub-millisecond cell-math** operations, so the spark-path wall-clock is
 dominated by per-row JVM↔Python dispatch, not by the work itself. The 5-measured-iteration medians put

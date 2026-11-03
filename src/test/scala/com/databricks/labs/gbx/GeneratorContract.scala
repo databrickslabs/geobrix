@@ -31,8 +31,6 @@ object GeneratorContract {
       "gbx_bng_tessellateexplode"       -> GridSuite,
       "gbx_custom_geomkringexplode"     -> GridSuite,
       "gbx_custom_geomkloopexplode"     -> GridSuite,
-      "gbx_quadbin_geomkringexplode"    -> GridSuite,
-      "gbx_quadbin_geomkloopexplode"    -> GridSuite,
       "gbx_st_triangulate"              -> VectorSuite,
       "gbx_st_interpolateelevationbbox" -> VectorSuite,
       "gbx_st_interpolateelevationgeom" -> VectorSuite,

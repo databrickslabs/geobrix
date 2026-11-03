@@ -1,6 +1,6 @@
-"""Heavy-tier quadbin tests (the geometry-aware explode wrappers; the scalar and array functions are in the family oracle table).
+"""Quadbin explode wrapper tests (the scalar and array functions are in the family oracle table).
 
-Mirrors the Scala QuadbinFunctionsTest end-to-end: register the SQL
+Register the SQL
 functions, build small DataFrames, evaluate each Column wrapper, and
 assert on collected rows.
 """

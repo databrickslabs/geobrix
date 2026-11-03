@@ -1,7 +1,7 @@
 """Cross-tier parity: heavy (JAR) vs light (pygx) GridX error-handling contract.
 
 This is the spine of the GridX error-handling contract.  It asserts that the
-heavy Scala tier (registered ``gbx_bng_*`` / ``gbx_quadbin_*`` SQL, run against the
+heavy Scala tier (registered ``gbx_bng_*`` SQL, run against the
 staged JAR) and the light pygx tier (its Python UDFs) agree on EVERY degenerate
 input the plan defines:
 
@@ -11,15 +11,16 @@ input the plan defines:
 2. **Bad BNG resolution → RAISES on both tiers (parameter condition).**
    e.g. ``gbx_bng_pointascell(<valid geom>, 'bogus')`` raises.
 
-3. **Quadbin out-of-range latitude → CLAMPED (not NULL) on both tiers, same cell.**
-   e.g. ``gbx_quadbin_pointascell(10.0, 89.0, 10)`` is non-null and equal.
+3. **Quadbin out-of-range latitude → CLAMPED (not NULL), at the light level only.**
+   e.g. ``gbx_quadbin_pointascell(10.0, 89.0, 10)`` is non-null and equals the cell
+   of the bound (quadbin has no heavy form).
 
 4. **BNG kringexplode zero rows on both tiers.**
    e.g. ``SELECT cellid FROM gbx_bng_kringexplode('!!', 1)`` yields 0 rows.
 
 ## Session isolation
 
-Both tiers register the SAME ``gbx_bng_*`` / ``gbx_quadbin_*`` SQL names; the last
+Both tiers register the SAME ``gbx_bng_*`` SQL names; the last
 ``register`` call wins.  The pattern mirrors ``test_parity_bng.py``:
 
 - Collect ALL light-tier results first (light session registers the pygx UDFs).
@@ -186,47 +187,38 @@ def test_bng_bad_resolution_raises_both_tiers(spark_with_jar):
 
 
 # ---------------------------------------------------------------------------
-# Quadbin case 3: out-of-range latitude → CLAMPED (not NULL) on both tiers
+# Quadbin case 3: out-of-range latitude → CLAMPED (not NULL)
 # ---------------------------------------------------------------------------
 
 
 def test_quadbin_out_of_range_lat_clamped_not_null(spark_with_jar):
-    """Quadbin clamps out-of-range lat to web-mercator bounds on both tiers.
+    """Quadbin clamps out-of-range lat to the web-mercator bound.
 
-    Latitude 89.0 exceeds the quadbin max (85.05112878°) but is not invalid —
-    it is clamped to the nearest valid value by both tiers.  The result must
-    be non-null AND identical across tiers.  This is NOT a degrade path; it is
-    intentional web-mercator behavior documented in both tier implementations.
+    Latitude 89.0 exceeds the quadbin max (85.05112878°) but is not invalid:
+    the function clamps it to the nearest valid value. The result must be
+    non-null AND equal the cell of the bound itself. This is NOT a degrade
+    path; it is intentional web-mercator behavior.
     """
     from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    # SQL numeric literals are Decimal by default; heavy Quadbin_PointAsCell.execute
-    # expects (Double, Double, Int), so CAST is required to avoid a method-not-found
-    # error on the heavy side. Light's pandas_udf accepts any numeric type, but the
-    # CAST makes both tiers use the same type path.
     gbx_manager.register_family(
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
-    light_val = spark.sql(
+    clamped = spark.sql(
         "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(89.0 AS DOUBLE), 10) c"
     ).first()["c"]
-
-    heavy_register(spark, ("gbx_quadbin_",))
-    heavy_val = spark.sql(
-        "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(89.0 AS DOUBLE), 10) c"
+    bound = spark.sql(
+        "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(85.05112878 AS DOUBLE), 10) c"
     ).first()["c"]
 
     assert (
-        light_val is not None
-    ), "light gbx_quadbin_pointascell(10.0, 89.0, 10): expected clamped cell, got None"
+        clamped is not None
+    ), "gbx_quadbin_pointascell(10.0, 89.0, 10): expected clamped cell, got None"
     assert (
-        heavy_val is not None
-    ), "heavy gbx_quadbin_pointascell(10.0, 89.0, 10): expected clamped cell, got None"
-    assert (
-        light_val == heavy_val
-    ), f"quadbin clamped cell mismatch: light={light_val!r} heavy={heavy_val!r}"
+        clamped == bound
+    ), f"quadbin clamped cell is not the bound's cell: clamped={clamped!r} bound={bound!r}"
 
 
 # ---------------------------------------------------------------------------

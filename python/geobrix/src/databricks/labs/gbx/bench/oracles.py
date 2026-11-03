@@ -96,9 +96,6 @@ _L2_NO_REASON = (
     "the raster Java UDF returns NULL bytes for a refused tile, so its error tile carries no reason; "
     "raster functions lose this level"
 )
-# The quadbin Catalyst companions are not a default level (their cluster timings are at parity with light) and
-# are deleted in the decision sweep, so they keep the contract gaps below instead of being fixed.
-_QUADBIN_L1 = "the quadbin Catalyst companion is not conformed to the light contract; it is deleted in the decision sweep"
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
@@ -166,26 +163,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
     },
     **{
-        cid: {"L1": _QUADBIN_L1}
-        for cid in (
-            "quadbin_res_3_5_raises",
-            "quadbin_inf_point",
-            "qb_polyfill_bad_geom",
-            "quadbin_res_3_5_raises_array",
-            "quadbin_res_digit_string_array",
-            "qb_geomkring_bad_mode",
-            "qb_geomkloop_bad_mode",
-            "qb_geomkloop_res_3_5",
-            "quadbin_res_3_5_raises_geomk",
-            "quadbin_res_digit_string_geomk",
-            "quadbin_inf_point_geomk",
-            "qb_geomkringx_digit_res",
-            "qb_geomkringx_bad_mode",
-            "qb_geomkringx_res_3_5",
-            "qb_geomkloopx_bad_mode",
-        )
-    },
-    **{
         cid: {"L1": _L1_NO_VIRTUAL}
         for cid in (
             "width_virtual",
@@ -217,9 +194,7 @@ HEAVY_PENDING.update(
             cid: {"L1": _EXACT_IDS_L1}
             for cid in (
                 "h3_fill_null_beside_big_id",
-                "qb_fill_null_beside_big_id",
                 "cg_fill_null_beside_big_id",
-                "qu_agg_null_beside_big",
                 "h3r_null_beside_big_id",
                 "qbr_null_beside_big_id",
                 "cgr_null_beside_big_id",

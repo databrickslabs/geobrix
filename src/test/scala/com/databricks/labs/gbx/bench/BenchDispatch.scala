@@ -225,7 +225,7 @@ object BenchDispatch {
     // every custom-grid fn it needs a grid STRUCT arg the heavy dispatch can't yet
     // stream, so it is a pyrx-tier timing-only fn (fingerprint=False), not heavy-
     // dispatched -- exactly as rst_custom_rasterize_agg is absent from this map.
-    "h3_cellfill" -> DGGS, "quadbin_cellfill" -> DGGS, "bng_cellfill" -> DGGS
+    "h3_cellfill" -> DGGS, "bng_cellfill" -> DGGS
   )
 
   // input_kind adapter (mirrors FnSpec.input_kind): what the heavy dispatch is
@@ -276,7 +276,7 @@ object BenchDispatch {
   // custom_cellfill is excluded (grid-struct arg not yet streamable -> pyrx-tier
   // timing-only, no heavy dispatch), matching rst_custom_rasterize_agg.
   val cellFill: Set[String] =
-    Set("h3_cellfill", "quadbin_cellfill", "bng_cellfill")
+    Set("h3_cellfill", "bng_cellfill")
   private val gridAggregate: Set[String] =
     Set("rst_h3_rasterize_agg", "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg") ++ cellFill
   def inputKind(fn: String): String =
@@ -404,7 +404,7 @@ object BenchDispatch {
       if (i % cellFillNullStride == 0) null else java.lang.Double.valueOf(i.toDouble))
 
   /** Fixed cellfill cell-id list for a grid (the SAME sorted list the pyrx tier
-    * zips values onto). h3_cellfill uses the H3 set; quadbin/custom the quadbin set. */
+    * zips values onto). h3_cellfill uses the H3 set; the rest the quadbin set. */
   def cellFillLongCells(fn: String): Seq[Long] =
     if (fn == "h3_cellfill") h3RasterizeCells() else quadbinRasterizeCells()
 
@@ -1291,8 +1291,6 @@ object BenchDispatch {
       // a tile -- HeavyRunner fingerprints the array via ofCellFill/ofCellFillStr.
       case "h3_cellfill" =>
         expr("gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0)")
-      case "quadbin_cellfill" =>
-        expr("gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0)")
       case "bng_cellfill" =>
         expr("gbx_bng_cellfill(cellid, value, 1, 'mean', 2.0)")
       case other => throw new IllegalArgumentException(s"not an aggregator: $other")

@@ -5,7 +5,6 @@ import com.databricks.labs.gbx.gridx.bng.generators._
 import com.databricks.labs.gbx.gridx.custom.Custom_GridSpec
 import com.databricks.labs.gbx.gridx.custom.generators.{Custom_GeometryKLoopExplode, Custom_GeometryKRingExplode}
 import com.databricks.labs.gbx.gridx.grid.{BNG, GeomDilation}
-import com.databricks.labs.gbx.gridx.quadbin.generators.{Quadbin_GeometryKLoopExplode, Quadbin_GeometryKRingExplode}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expression, Literal}
@@ -23,8 +22,6 @@ class GridGeneratorContractTest extends AnyFunSuite {
 
     private val bngWkt = "POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"
     private val bngWkb = JTS.toWKB(JTS.fromWKT(bngWkt))
-    private val lonLatWkt = "POLYGON ((-0.2 51.4, 0.0 51.4, 0.0 51.6, -0.2 51.6, -0.2 51.4))"
-    private val lonLatWkb = JTS.toWKB(JTS.fromWKT(lonLatWkt))
 
     private def str(s: String): Expression = Literal.create(s, StringType)
     private def bin(b: Array[Byte]): Expression = Literal.create(b, BinaryType)
@@ -58,10 +55,6 @@ class GridGeneratorContractTest extends AnyFunSuite {
       ("gbx_bng_tessellateexplode", "bng_tessellateexplode(wkt, keep=false)", BNG_TessellateExplode(str(bngWkt), int(3), Literal(false))),
       ("gbx_custom_geomkringexplode", "custom_geomkringexplode", Custom_GeometryKRingExplode(customGeom, customGrid, int(2), int(1), mode, coverage)),
       ("gbx_custom_geomkloopexplode", "custom_geomkloopexplode", Custom_GeometryKLoopExplode(customGeom, customGrid, int(2), int(1), mode, coverage)),
-      ("gbx_quadbin_geomkringexplode", "quadbin_geomkringexplode(wkb)", Quadbin_GeometryKRingExplode(bin(lonLatWkb), int(8), int(1), mode, coverage)),
-      ("gbx_quadbin_geomkringexplode", "quadbin_geomkringexplode(wkt)", Quadbin_GeometryKRingExplode(str(lonLatWkt), int(8), int(1), mode, coverage)),
-      ("gbx_quadbin_geomkloopexplode", "quadbin_geomkloopexplode(wkb)", Quadbin_GeometryKLoopExplode(bin(lonLatWkb), int(8), int(1), mode, coverage)),
-      ("gbx_quadbin_geomkloopexplode", "quadbin_geomkloopexplode(wkt)", Quadbin_GeometryKLoopExplode(str(lonLatWkt), int(8), int(1), mode, coverage))
     )
 
     private def checkCase(sqlName: String, label: String, gen: CollectionGenerator): Unit = {
@@ -96,10 +89,6 @@ class GridGeneratorContractTest extends AnyFunSuite {
 
     test("Custom geometry k-ring / k-loop explode emit exactly the declared cellid column") {
         check("gbx_custom_")
-    }
-
-    test("Quadbin geometry k-ring / k-loop explode emit exactly the declared cellid column") {
-        check("gbx_quadbin_")
     }
 
     // Declarative on purpose: the generators this suite covers are the ones in `cases`, so the check does

@@ -6,24 +6,21 @@ import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 
 /**
-  * The SQL tab of each quadbin and custom-grid explode function shows the heavyweight form and runs
+  * The SQL tab of each custom-grid explode function shows the heavyweight form and runs
   * in a heavyweight-only session. Heavy explode functions are Catalyst generators, reached through
   * `LATERAL VIEW` or the select list; `FROM t, LATERAL f(...)` resolves table functions only, so it
   * reaches nothing here (and the lightweight table function where both tiers are registered).
   */
 class GridExplodeDocExamplesTest extends PlanTest with SilentSparkSession {
 
-    private val nycBox = "POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))"
     private val bngBox = "POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))"
     private val grid = "gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)"
 
-    test("The documented heavyweight SQL examples of the quadbin and custom explode generators run") {
+    test("The documented heavyweight SQL examples of the custom explode generators run") {
         spark.sparkContext.setLogLevel("ERROR")
         TestL1.installAll(spark)
         // Each explode must return one row per cell of the matching ARRAY function.
         Seq(
-          "quadbin_geomkringexplode" -> s"gbx_quadbin_geomkring('$nycBox', 12, 1, 'boundary-out')",
-          "quadbin_geomkloopexplode" -> s"gbx_quadbin_geomkloop('$nycBox', 12, 1, 'boundary-out')",
           "custom_geomkringexplode" -> s"gbx_custom_geomkring('$bngBox', $grid, 0, 1, 'boundary-out')",
           "custom_geomkloopexplode" -> s"gbx_custom_geomkloop('$bngBox', $grid, 0, 1, 'boundary-out')"
         ).foreach { case (fn, arrayCall) =>

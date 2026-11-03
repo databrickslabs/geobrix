@@ -452,8 +452,8 @@ _CHM_LIGHT = (_PYRX + "chm.py",)
 #             too; quadbin/bng/custom route through their per-grid k_loop libs).
 #   heavy  -> gridx/CellFill.scala (grid-generic fill + array<struct> builder) +
 #             gridx/grid/GridSystem.scala (the kLoop contract) + the per-grid
-#             {H3,Quadbin,BNG,Custom}_CellFill.scala expression + the per-grid
-#             GridSystem impl (grid/{H3,Quadbin,BNG,CustomGridSystem}.scala).
+#             {H3,BNG,Custom}_CellFill.scala expression (quadbin has none: light only) + the
+#             per-grid GridSystem impl (grid/{H3,Quadbin,BNG,CustomGridSystem}.scala).
 _GRIDX_ROOT = "src/main/scala/com/databricks/labs/gbx/gridx/"
 _PYGX_FUNCTIONS = _PYGX + "functions.py"
 _CELLFILL_CORE_LIGHT = (_PYGX + "_cellfill.py", _PYGX_FUNCTIONS)
@@ -3597,7 +3597,6 @@ REGISTRY: Dict[str, FnSpec] = {
         + _CELLFILL_CORE_HEAVY
         + (
             _QUADBIN_LIB,
-            _GRIDX_ROOT + "quadbin/Quadbin_CellFill.scala",
             _GRIDX + "Quadbin.scala",
         ),
         core=False,

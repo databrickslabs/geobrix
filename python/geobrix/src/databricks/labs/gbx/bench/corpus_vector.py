@@ -316,7 +316,7 @@ def generate_legacy_structs(n_rows: int):
 
 
 # ---------------------------------------------------------------------------------------------
-# Quadbin (light pygx vs heavy gridx.quadbin) corpus builders.  Plain-Python, deterministic.
+# Quadbin (lightweight pygx) corpus builders.  Plain-Python, deterministic.
 # Each returns (rows, schema) for ``spark.createDataFrame(rows, schema)``.  Shapes mirror the
 # benched quadbin functions:
 #   * points        -> quadbin_pointascell (scalar lon/lat -> cell)

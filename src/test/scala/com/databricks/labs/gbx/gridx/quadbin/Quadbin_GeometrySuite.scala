@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
-/** Unit tests for Quadbin_GeometryKRing, Quadbin_GeometryKLoop, and their Explode variants.
+/** Unit tests for the quadbin geometry-aware k-ring and k-loop (`Quadbin.geometryKRing`, `Quadbin.geometryKLoop`).
   *
   * Simple fixture: NYC box (-73.99, 40.71 → -73.95, 40.75) at resolution 12.
   *
@@ -30,57 +30,41 @@ class Quadbin_GeometrySuite extends AnyFunSuite {
     private val HOLED_WKB = JTS.toWKB(JTS.fromWKT(HOLED_WKT))
     private val HOLED_RES = 10  // cells ≈0.35°; 2°×3° hole spans ~6×9 tiles → hCore non-empty
 
-    test("Quadbin_GeometryKRing — boundary-out (coveras) k=0 is the full straddling band") {
+    test("Quadbin.geometryKRing — boundary-out (coveras) k=0 is the full straddling band") {
         // LOCKED: coveras boundary-out k0 = the full coveras band (sCover - sCore), with the
         // outer-perimeter fallback when the band is empty (grid-aligned geom).
         val geom   = JTS.fromWKB(NYC_WKB)
         val cls    = GeomDilation.classify(Quadbin, geom, RES)
         val band   = cls.sCover -- cls.sCore
         val expect = if (band.nonEmpty) band else GeomDilation.outerPerimeter(cls.sCover, Quadbin)
-        val k0Out  = Quadbin_GeometryKRing.execute(geom, RES, 0, GeomDilation.DEFAULT_MODE)
+        val k0Out  = Quadbin.geometryKRing(geom, RES, 0, GeomDilation.DEFAULT_MODE)
         k0Out.nonEmpty shouldBe true
         k0Out shouldBe expect
     }
 
-    test("Quadbin_GeometryKRing — boundary-out excludes the interior (sCore)") {
+    test("Quadbin.geometryKRing — boundary-out excludes the interior (sCore)") {
         // boundary-out = full band (k0) + outward band; the geom INTERIOR (fully-contained
         // sCore) is never returned.
         val geom = JTS.fromWKB(NYC_WKB)
-        val k1   = Quadbin_GeometryKRing.execute(geom, RES, 1, GeomDilation.DEFAULT_MODE)
+        val k1   = Quadbin.geometryKRing(geom, RES, 1, GeomDilation.DEFAULT_MODE)
         val cls  = GeomDilation.classify(Quadbin, geom, RES)
         k1.size should be > 0
         k1.intersect(cls.sCore).isEmpty shouldBe true
     }
 
-    test("Quadbin_GeometryKLoop — loop == ring diff") {
+    test("Quadbin.geometryKLoop — loop == ring diff") {
         val geom = JTS.fromWKB(NYC_WKB)
-        val r2   = Quadbin_GeometryKRing.execute(geom, RES, 2, GeomDilation.DEFAULT_MODE)
-        val r1   = Quadbin_GeometryKRing.execute(geom, RES, 1, GeomDilation.DEFAULT_MODE)
-        val loop = Quadbin_GeometryKLoop.execute(geom, RES, 2, GeomDilation.DEFAULT_MODE)
+        val r2   = Quadbin.geometryKRing(geom, RES, 2, GeomDilation.DEFAULT_MODE)
+        val r1   = Quadbin.geometryKRing(geom, RES, 1, GeomDilation.DEFAULT_MODE)
+        val loop = Quadbin.geometryKLoop(geom, RES, 2, GeomDilation.DEFAULT_MODE)
         loop shouldBe (r2 diff r1)
     }
 
-    test("Quadbin_GeometryKRing — returns LongType cell ids (all at correct resolution)") {
+    test("Quadbin.geometryKRing — returns LongType cell ids (all at correct resolution)") {
         val geom  = JTS.fromWKB(NYC_WKB)
-        val cells = Quadbin_GeometryKRing.execute(geom, RES, 1, GeomDilation.DEFAULT_MODE)
+        val cells = Quadbin.geometryKRing(geom, RES, 1, GeomDilation.DEFAULT_MODE)
         cells.size should be > 0
         cells.foreach(c => Quadbin.resolution(c) shouldBe RES)
-    }
-
-    test("Quadbin_GeometryKRing — eval(WKB) non-null and consistent with execute") {
-        val geom   = JTS.fromWKB(NYC_WKB)
-        val expect = Quadbin_GeometryKRing.execute(geom, RES, 1, GeomDilation.DEFAULT_MODE).toArray.sorted
-        val arr    = Quadbin_GeometryKRing.eval(NYC_WKB, RES, 1)
-        arr should not be null
-        arr.toObjectArray(org.apache.spark.sql.types.LongType).map(_.asInstanceOf[Long]).sorted shouldBe expect
-    }
-
-    test("Quadbin_GeometryKLoop — eval(WKB) non-null and consistent with execute") {
-        val geom   = JTS.fromWKB(NYC_WKB)
-        val expect = Quadbin_GeometryKLoop.execute(geom, RES, 1, GeomDilation.DEFAULT_MODE).toArray.sorted
-        val arr    = Quadbin_GeometryKLoop.eval(NYC_WKB, RES, 1)
-        arr should not be null
-        arr.toObjectArray(org.apache.spark.sql.types.LongType).map(_.asInstanceOf[Long]).sorted shouldBe expect
     }
 
     test("holed fixture — hCore is non-empty (fixture correctness gate)") {
@@ -92,18 +76,18 @@ class Quadbin_GeometrySuite extends AnyFunSuite {
         cls.hCore.size should be > 0
     }
 
-    test("Quadbin_GeometryKRing — all 6 modes produce correct-resolution cells (no exception)") {
+    test("Quadbin.geometryKRing — all 6 modes produce correct-resolution cells (no exception)") {
         val geom = JTS.fromWKT(HOLED_WKT)
         GeomDilation.MODES.foreach { mode =>
-            val cells = Quadbin_GeometryKRing.execute(geom, HOLED_RES, 1, mode)
+            val cells = Quadbin.geometryKRing(geom, HOLED_RES, 1, mode)
             cells.foreach(c => Quadbin.resolution(c) shouldBe HOLED_RES)
         }
     }
 
-    test("Quadbin_GeometryKLoop — all 6 modes on holed polygon: no exception") {
+    test("Quadbin.geometryKLoop — all 6 modes on holed polygon: no exception") {
         val geom = JTS.fromWKT(HOLED_WKT)
         GeomDilation.MODES.foreach { mode =>
-            val cells = Quadbin_GeometryKLoop.execute(geom, HOLED_RES, 1, mode)
+            val cells = Quadbin.geometryKLoop(geom, HOLED_RES, 1, mode)
             cells.foreach(c => Quadbin.resolution(c) shouldBe HOLED_RES)
         }
     }
@@ -127,28 +111,18 @@ class Quadbin_GeometrySuite extends AnyFunSuite {
         expanded.intersect(solidOnly) shouldBe empty
     }
 
-    test("Quadbin_GeometryKRing — unknown mode raises") {
+    test("Quadbin.geometryKRing — unknown mode raises") {
         val geom = JTS.fromWKB(NYC_WKB)
         assertThrows[IllegalArgumentException] {
-            Quadbin_GeometryKRing.execute(geom, RES, 1, "BOGUS")
+            Quadbin.geometryKRing(geom, RES, 1, "BOGUS")
         }
     }
 
-    test("Quadbin_GeometryKLoop — unknown mode raises") {
+    test("Quadbin.geometryKLoop — unknown mode raises") {
         val geom = JTS.fromWKB(NYC_WKB)
         assertThrows[IllegalArgumentException] {
-            Quadbin_GeometryKLoop.execute(geom, RES, 1, "BOGUS")
+            Quadbin.geometryKLoop(geom, RES, 1, "BOGUS")
         }
-    }
-
-    test("Quadbin_GeometryKRing — null geom eval returns null") {
-        val arr = Quadbin_GeometryKRing.eval(null.asInstanceOf[Array[Byte]], RES, 1)
-        arr shouldBe null
-    }
-
-    test("Quadbin_GeometryKLoop — null geom eval returns null") {
-        val arr = Quadbin_GeometryKLoop.eval(null.asInstanceOf[Array[Byte]], RES, 1)
-        arr shouldBe null
     }
 
 }

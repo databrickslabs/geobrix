@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.bench
 import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
-import com.databricks.labs.gbx.gridx.{h3 => h3fns, quadbin => qbfns, bng => bngfns}
+import com.databricks.labs.gbx.gridx.{h3 => h3fns, bng => bngfns}
 import org.apache.spark.sql.{Column, SparkSession}
 import org.apache.spark.sql.functions.{col, lit}
 import org.gdal.gdal.{Dataset, gdal}
@@ -446,7 +446,7 @@ object HeavyRunner {
             val rows = cells.zip(vals).map { case (c, v) => Row(c, v) }
             spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
           case _ =>
-            // rst_h3/quadbin_rasterize_agg + h3/quadbin_cellfill: LONG cell ids.
+            // rst_h3/quadbin_rasterize_agg + h3_cellfill: LONG cell ids.
             val schema = StructType(Seq(
               StructField("cellid", LongType, nullable = false),
               StructField("value", DoubleType, nullable = true)))

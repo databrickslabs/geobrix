@@ -4,7 +4,6 @@ import com.databricks.labs.gbx.gridx.bng.BNG_CellFill
 import com.databricks.labs.gbx.gridx.custom.{Custom_CellFill, Custom_GridSpec}
 import com.databricks.labs.gbx.gridx.grid.{BNG, CustomGridSystem, GridConf, GridSystem, H3, Quadbin}
 import com.databricks.labs.gbx.gridx.h3.H3_CellFill
-import com.databricks.labs.gbx.gridx.quadbin.Quadbin_CellFill
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
@@ -12,7 +11,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 /** Grid-generic cell-space fill: [[CellFill.fill]] semantics across all four grid systems,
- *  plus name/arity/round-trip checks for the four `gbx_<grid>_cellfill` aggregator wrappers.
+ *  plus name/arity/round-trip checks for the three `gbx_<grid>_cellfill` aggregator wrappers.
  *  Drives the core and `update`/`eval` directly (no Spark session).
  */
 class CellFillTest extends AnyFunSuite {
@@ -97,16 +96,14 @@ class CellFillTest extends AnyFunSuite {
 
     test("canonical names") {
         H3_CellFill.name shouldBe "gbx_h3_cellfill"
-        Quadbin_CellFill.name shouldBe "gbx_quadbin_cellfill"
         BNG_CellFill.name shouldBe "gbx_bng_cellfill"
         Custom_CellFill.name shouldBe "gbx_custom_cellfill"
     }
 
-    test("h3/quadbin/bng builder accepts arities 2..5 (cellid, value, [k], [method], [power])") {
+    test("h3/bng builder accepts arities 2..5 (cellid, value, [k], [method], [power])") {
         def args(n: Int): Seq[Expression] = (0 until n).map(_ => Literal(1L))
         for (n <- 2 to 5) {
             H3_CellFill.builder()(args(n)) shouldBe a[H3_CellFill]
-            Quadbin_CellFill.builder()(args(n)) shouldBe a[Quadbin_CellFill]
             BNG_CellFill.builder()(args(n)) shouldBe a[BNG_CellFill]
         }
         an[IllegalArgumentException] should be thrownBy H3_CellFill.builder()(args(1))

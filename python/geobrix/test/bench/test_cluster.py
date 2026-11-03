@@ -141,6 +141,13 @@ def test_build_bench_notebook_cells():
     assert nb["nbformat"] == 4
 
 
+def test_quadbin_grid_cell_has_no_heavyweight_leg():
+    """Quadbin has no heavyweight form: the grid cell times and registers the lightweight level only."""
+    assert 'api="heavyweight"' not in cl._CELL_GRID_QUADBIN
+    assert "HEAVYWEIGHT" not in cl._CELL_GRID_QUADBIN
+    assert 'level="L1"' not in cl._CELL_GRID_QUADBIN
+
+
 def test_build_bench_notebook_lightweight_only_omits_heavyweight():
     cfg = dict(
         wheel="w.whl",

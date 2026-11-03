@@ -1,61 +1,18 @@
 package com.databricks.labs.gbx.gridx.bng
 
-import com.databricks.labs.gbx.expressions.RegistryDelegate
 import com.databricks.labs.gbx.gridx.bng.agg.{BNG_CellIntersectionAgg, BNG_CellUnionAgg}
 import com.databricks.labs.gbx.gridx.bng.generators._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
-import org.apache.spark.sql.{Column, SparkSession}
+import org.apache.spark.sql.Column
 
 /**
-  * GridX BNG API entry point: register all BNG (British National Grid) SQL functions.
-  *
-  * Call `functions.register(spark)` once per session to make `gbx_bng_*` functions available
+  * GridX BNG API entry point: Column helpers for the `gbx_bng_*` (British National Grid) functions
   * (cell geometry, k-ring, polyfill, tessellate, aggregations, etc.).
+  *
+  * Registration belongs to the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
   */
 object functions extends Serializable {
-
-    val flag = "com.databricks.labs.gbx.gridx.bng.registered"
-
-    /** Register all BNG expressions with Spark; idempotent per session. */
-    def register(spark: SparkSession): Unit = {
-        val sc = spark.sparkContext
-        if (sc.getConf.get(flag, "false") == "true") return
-
-        val registry = spark.sessionState.functionRegistry
-        val rd = RegistryDelegate(registry)
-
-        rd.register(BNG_AsWKB)
-        rd.register(BNG_AsWKT)
-        rd.register(BNG_CellArea)
-        rd.register(BNG_CellIntersection)
-        rd.register(BNG_CellUnion)
-        rd.register(BNG_Centroid)
-        rd.register(BNG_Distance)
-        rd.register(BNG_EastNorthAsBNG)
-        rd.register(BNG_EuclideanDistance)
-        rd.register(BNG_GeometryKLoop)
-        rd.register(BNG_GeometryKRing)
-        rd.register(BNG_KLoop)
-        rd.register(BNG_KRing)
-        rd.register(BNG_PointAsCell)
-        rd.register(BNG_Polyfill)
-        rd.register(BNG_Tessellate)
-
-        // Aggregators
-        rd.register(BNG_CellIntersectionAgg)
-        rd.register(BNG_CellUnionAgg)
-        rd.register(BNG_CellFill)
-
-        // Generators
-        rd.register(BNG_GeometryKLoopExplode)
-        rd.register(BNG_GeometryKRingExplode)
-        rd.register(BNG_KLoopExplode)
-        rd.register(BNG_KRingExplode)
-        rd.register(BNG_TessellateExplode)
-
-        sc.getConf.set(flag, "true")
-    }
 
     def bng_aswkb(cellid: Column): Column = ColumnAdapter(BNG_AsWKB.name, Seq(cellid))
     def bng_aswkt(cellid: Column): Column = ColumnAdapter(BNG_AsWKT.name, Seq(cellid))

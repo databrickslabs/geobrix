@@ -14,17 +14,15 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
-from typing import List, Optional, Union
+from typing import Union
 
 import pandas as pd
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udtf
-from pyspark.sql.types import BinaryType, BooleanType, StringType
+from pyspark.sql.types import BinaryType, BooleanType
 
-from databricks.labs.gbx import _register
-
-from . import _env, _legacy, _mvt, _tin
+from . import _legacy, _mvt, _tin
 
 ColLike = Union[Column, str, bool, int, float, bytes]
 
@@ -308,194 +306,6 @@ class _InterpElevGeomUDTF:
             ),
             int(srid),
         )
-
-
-def _registrar_groups() -> List[_register.Group]:
-    mvt = {
-        "gbx_st_asmvt": lambda s: s.udf.register("gbx_st_asmvt", _asmvt_udf),
-        "gbx_st_asmvt_pyramid": lambda s: s.udtf.register(
-            "gbx_st_asmvt_pyramid", _AsMvtPyramidUDTF
-        ),
-    }
-    legacy = {
-        "gbx_st_legacyaswkb": lambda s: s.udf.register(
-            "gbx_st_legacyaswkb", _legacyaswkb_impl, BinaryType()
-        ),
-    }
-    tin = {
-        "gbx_st_triangulate": lambda s: s.udtf.register(
-            "gbx_st_triangulate", _TriangulateUDTF
-        ),
-        "gbx_st_interpolateelevationbbox": lambda s: s.udtf.register(
-            "gbx_st_interpolateelevationbbox", _InterpElevBBoxUDTF
-        ),
-        "gbx_st_interpolateelevationgeom": lambda s: s.udtf.register(
-            "gbx_st_interpolateelevationgeom", _InterpElevGeomUDTF
-        ),
-    }
-
-    def _reg_pmtiles(s):
-        from databricks.labs.gbx.pmtiles import register_pmtiles_agg
-
-        register_pmtiles_agg(s)
-
-    pmtiles = {"gbx_pmtiles_agg": _reg_pmtiles}
-
-    def _reg_gbx_st_crs(s):
-        from . import _crs as _c
-
-        s.udf.register("gbx_st_crs", _c.st_crs, StringType())
-
-    def _reg_gbx_st_setcrs(s):
-        from . import _crs as _c
-
-        s.udf.register("gbx_st_setcrs", _c._udf_st_setcrs, BinaryType())
-
-    def _reg_gbx_st_transformcrs(s):
-        from databricks.labs.gbx.core import proj_grids
-        from databricks.labs.gbx.pyrx import _env
-
-        from . import _crs as _c
-
-        _grid_dirs = tuple(
-            proj_grids.get_registered_dirs()
-        )  # captured at build → pickled
-
-        def _transformcrs_udf(geom, target_crs, source_crs=None):
-            _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
-            return _c._udf_st_transformcrs(geom, target_crs, source_crs)
-
-        s.udf.register("gbx_st_transformcrs", _transformcrs_udf, BinaryType())
-
-    crs = {
-        "gbx_st_crs": _reg_gbx_st_crs,
-        "gbx_st_setcrs": _reg_gbx_st_setcrs,
-        "gbx_st_transformcrs": _reg_gbx_st_transformcrs,
-    }
-
-    def _reg_gbx_st_shiftlongitude(s):
-        from . import _antimeridian as _am
-
-        s.udf.register(
-            "gbx_st_shiftlongitude", _am._udf_st_shiftlongitude, BinaryType()
-        )
-
-    def _reg_gbx_st_wrapx(s):
-        from . import _antimeridian as _am
-
-        s.udf.register("gbx_st_wrapx", _am._udf_st_wrapx, BinaryType())
-
-    def _reg_gbx_st_split(s):
-        from . import _antimeridian as _am
-
-        s.udf.register("gbx_st_split", _am._udf_st_split, BinaryType())
-
-    antimeridian = {
-        "gbx_st_shiftlongitude": _reg_gbx_st_shiftlongitude,
-        "gbx_st_wrapx": _reg_gbx_st_wrapx,
-        "gbx_st_split": _reg_gbx_st_split,
-    }
-
-    def _reg_gbx_st_makevalid(s):
-        from . import _validity as _v
-
-        def _makevalid_udf(geom, level=None):
-            return _v._udf_st_makevalid(geom, level)
-
-        s.udf.register("gbx_st_makevalid", _makevalid_udf, BinaryType())
-
-    def _reg_gbx_st_explainvalidity(s):
-        from . import _validity as _v
-
-        s.udf.register(
-            "gbx_st_explainvalidity", _v._udf_st_explainvalidity, StringType()
-        )
-
-    validity = {
-        "gbx_st_makevalid": _reg_gbx_st_makevalid,
-        "gbx_st_explainvalidity": _reg_gbx_st_explainvalidity,
-    }
-
-    def _reg_gbx_st_simplifypreservetopology(s):
-        from . import _cleaning as _cl
-
-        s.udf.register(
-            "gbx_st_simplifypreservetopology",
-            _cl._udf_st_simplifypreservetopology,
-            BinaryType(),
-        )
-
-    def _reg_gbx_st_removerepeatedpoints(s):
-        from . import _cleaning as _cl
-
-        def _rrp_udf(geom, tolerance=None):
-            return _cl._udf_st_removerepeatedpoints(geom, tolerance)
-
-        s.udf.register("gbx_st_removerepeatedpoints", _rrp_udf, BinaryType())
-
-    def _reg_gbx_st_reduceprecision(s):
-        from . import _cleaning as _cl
-
-        s.udf.register(
-            "gbx_st_reduceprecision", _cl._udf_st_reduceprecision, BinaryType()
-        )
-
-    def _reg_gbx_st_node(s):
-        from . import _cleaning as _cl
-
-        s.udf.register("gbx_st_node", _cl._udf_st_node, BinaryType())
-
-    def _reg_gbx_st_snap(s):
-        from . import _cleaning as _cl
-
-        s.udf.register("gbx_st_snap", _cl._udf_st_snap, BinaryType())
-
-    cleaning = {
-        "gbx_st_simplifypreservetopology": _reg_gbx_st_simplifypreservetopology,
-        "gbx_st_removerepeatedpoints": _reg_gbx_st_removerepeatedpoints,
-        "gbx_st_reduceprecision": _reg_gbx_st_reduceprecision,
-        "gbx_st_node": _reg_gbx_st_node,
-        "gbx_st_snap": _reg_gbx_st_snap,
-    }
-
-    def _reg_gbx_st_coverageisvalid(s):
-        s.udf.register("gbx_st_coverageisvalid", _coverageisvalid_udf)
-
-    def _reg_gbx_st_coverageinvalidedges(s):
-        s.udf.register("gbx_st_coverageinvalidedges", _coverageinvalidedges_udf)
-
-    coverage = {
-        "gbx_st_coverageisvalid": _reg_gbx_st_coverageisvalid,
-        "gbx_st_coverageinvalidedges": _reg_gbx_st_coverageinvalidedges,
-    }
-    return [
-        (lambda: _env.assert_mvt_available(), mvt),
-        (lambda: _env.assert_legacy_available(), legacy),
-        (lambda: _env.assert_tin_available(), tin),
-        (lambda: None, pmtiles),
-        (lambda: _env.assert_crs_available(), crs),
-        (lambda: True, antimeridian),
-        (lambda: True, validity),
-        (lambda: True, cleaning),
-        (lambda: True, coverage),
-    ]
-
-
-def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> None:
-    """Register the pyvx VectorX SQL functions (Serverless-safe: udf/udtf only).
-
-    Args:
-        spark: Spark session (uses the active session if not provided).
-        only: Optional list of function names to register (instead of all).
-            Accepts SQL names (``gbx_st_asmvt``) or short names (``st_asmvt``),
-            case-insensitively. ``None`` registers everything; ``[]`` registers
-            nothing. An unrecognized name raises ``ValueError``. A sub-module's
-            availability guard runs only when >=1 of its functions is selected.
-    """
-    if spark is None:
-        spark = SparkSession.builder.getOrCreate()
-    _register.run_groups(_registrar_groups(), spark, only)
-    globals()["_gbx_registered"] = True
 
 
 def _light_st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:

@@ -12,7 +12,7 @@ import org.apache.spark.sql.catalyst.expressions.ExpressionInfo
   * default empty strings here are used only as fallbacks.
   *
   * Convention: the companion object of each expression case class extends this trait
-  * and is registered via [[RegistryDelegate]] (e.g. from rasterx/gridx/vectorx functions).
+  * and the Python manager installs it through `L1Installer`; Scala registers no SQL itself.
   */
 trait WithExpressionInfo {
 

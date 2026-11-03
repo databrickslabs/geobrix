@@ -1,51 +1,18 @@
 package com.databricks.labs.gbx.gridx.quadbin
 
-import com.databricks.labs.gbx.expressions.RegistryDelegate
 import com.databricks.labs.gbx.gridx.quadbin.agg.Quadbin_CellUnionAgg
 import com.databricks.labs.gbx.gridx.quadbin.generators._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
-import org.apache.spark.sql.{Column, SparkSession}
+import org.apache.spark.sql.Column
 
 /**
-  * GridX Quadbin API entry point: register all CARTO quadbin v0 SQL functions.
+  * GridX Quadbin API entry point: Column helpers for the CARTO quadbin v0 `gbx_quadbin_*` functions
+  * (cell math, k-ring, polyfill, tessellate, cellunion, distance).
   *
-  * Call `functions.register(spark)` once per session to make `gbx_quadbin_*`
-  * functions available (cell math, k-ring, polyfill, tessellate, cellunion, distance).
+  * Registration belongs to the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
   */
 object functions extends Serializable {
-
-    val flag = "com.databricks.labs.gbx.gridx.quadbin.registered"
-
-    /** Register all Quadbin expressions with Spark; idempotent per session. */
-    def register(spark: SparkSession): Unit = {
-        val sc = spark.sparkContext
-        if (sc.getConf.get(flag, "false") == "true") return
-
-        val registry = spark.sessionState.functionRegistry
-        val rd = RegistryDelegate(registry)
-
-        rd.register(Quadbin_PointAsCell)
-        rd.register(Quadbin_AsWKB)
-        rd.register(Quadbin_Centroid)
-        rd.register(Quadbin_Resolution)
-        rd.register(Quadbin_Polyfill)
-        rd.register(Quadbin_KRing)
-        rd.register(Quadbin_KLoop)
-        rd.register(Quadbin_Tessellate)
-        rd.register(Quadbin_CellUnion)
-        rd.register(Quadbin_CellUnionAgg)
-        rd.register(Quadbin_CellFill)
-        rd.register(Quadbin_Distance)
-        rd.register(Quadbin_GeometryKRing)
-        rd.register(Quadbin_GeometryKLoop)
-
-        // Generators
-        rd.register(Quadbin_GeometryKRingExplode)
-        rd.register(Quadbin_GeometryKLoopExplode)
-
-        sc.getConf.set(flag, "true")
-    }
 
     // ---------- Column API ----------
 

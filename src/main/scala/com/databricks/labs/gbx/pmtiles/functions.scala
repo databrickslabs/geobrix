@@ -1,36 +1,18 @@
 package com.databricks.labs.gbx.pmtiles
 
-import com.databricks.labs.gbx.expressions.RegistryDelegate
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
-import org.apache.spark.sql.{Column, SparkSession}
+import org.apache.spark.sql.Column
 
 /**
-  * PMTiles API entry point: register the PMTiles SQL UDAF and expose Scala API helpers.
+  * PMTiles API entry point: Scala API helpers for the `gbx_pmtiles_agg` SQL UDAF.
   *
-  * Call `functions.register(spark)` once per session to make the `gbx_pmtiles_agg`
-  * SQL function available. The `.write.format("pmtiles")` DataSource writer is
-  * registered automatically via `META-INF/services/...DataSourceRegister`.
+  * Registration belongs to the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
   *
   * Naming: SQL `gbx_pmtiles_agg` → Scala `pmtiles_agg` → Python `pmtiles_agg`
   * (single canonical name; no aliases).
   */
 object functions extends Serializable {
-
-    val flag = "com.databricks.labs.gbx.pmtiles.registered"
-
-    /** Register PMTiles expressions with Spark; idempotent per session. */
-    def register(spark: SparkSession): Unit = {
-        val sc = spark.sparkContext
-        if (sc.getConf.get(flag, "false") == "true") return
-
-        val registry = spark.sessionState.functionRegistry
-        val rd = RegistryDelegate(registry)
-
-        rd.register(PMTiles_Agg)
-
-        sc.getConf.set(flag, "true")
-    }
 
     /**
       * Scala API: aggregate tile rows into a single PMTile v3 BINARY blob.

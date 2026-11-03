@@ -9,7 +9,7 @@ pygx tier returns ``BINARY`` (see :func:`h3_cellfill` for the divergence note).
 
     from databricks.labs.gbx.gridx.h3 import functions as hx
 
-    hx.register(spark)  # registers heavy H3_CellFill from the JAR
+    databricks.labs.gbx.register(spark)  # the manager registers H3_CellFill at the level this compute offers
     df.groupBy("region").agg(hx.h3_cellfill("cellid", "value"))
     df.withColumn("kring", hx.h3_geomkring("geom_col", 9, 1))
 """
@@ -29,21 +29,14 @@ from databricks.labs.gbx import _api  # noqa: F401
 ColLike = Union[Column, str, bool, int, float, bytes]
 
 
-def register(_spark: SparkSession) -> None:
-    """Register GeoBrix H3 functions (heavy tier) with the Spark session.
-
-    Loads ``gbx_h3_cellfill`` from the GeoBrix JAR. Call once per session
-    before using :func:`h3_cellfill` with the heavy tier.
-
-    Args:
-        _spark: Active Spark session.
-    """
-    _spark = SparkSession.builder.getOrCreate()
-    _spark.read.format("register_ds").option("functions", "gridx.h3").load().collect()
-    # the manager's choice for every name stays (the JAR's registration must not replace it)
-    from databricks.labs.gbx import manager
-
-    manager.reapply_manager_choice(_spark, "gbx_h3_")
+def __getattr__(name):
+    """``register`` was removed: SQL functions register through the manager."""
+    if name == "register":
+        raise AttributeError(
+            f"{__name__}.register was removed in 0.6.0: SQL functions register through the manager. "
+            "Fix: databricks.labs.gbx.register(spark)"
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _col(x: ColLike) -> Column:

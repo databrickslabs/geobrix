@@ -1,7 +1,7 @@
 """RasterX Python API.
 
 Thin wrappers around GeoBrix Scala functions (gbx_rst_*). Register with
-rx.register(spark) then use the functions on raster tile columns. For full
+``databricks.labs.gbx.register(spark)`` then use the functions on raster tile columns. For full
 descriptions and examples, see the API docs or SQL:
   DESCRIBE FUNCTION EXTENDED gbx_rst_<name>;
 
@@ -52,54 +52,14 @@ def _crs_col(x: ColLike) -> Column:
     return _col(x)
 
 
-def register(_spark: SparkSession) -> None:
-    """Register RasterX functions with the Spark session.
-
-    Call once (e.g. after creating the session) so that gbx_rst_* SQL
-    functions are available. Uses the active Spark session if needed.
-
-    Args:
-        _spark: Spark session (optional; uses active session if not provided).
-    """
-    _spark = SparkSession.builder.getOrCreate()
-    _spark.read.format("register_ds").option("functions", "rasterx").load().collect()
-    # The JAR registers a scalar under every Scala name, including names the manifest serves another way (a light
-    # table function or UDF, a BINARY aggregate, a light-preferred row): put the manager's choice back for every
-    # name, before the fromfile override below.
-    from databricks.labs.gbx import manager
-
-    manager.reapply_manager_choice(_spark, "gbx_rst_")
-
-    # gbx_rst_fromfile reads a file on the executor. On Databricks the JVM (Scala) cannot read a
-    # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held
-    # only by Spark's managed Python worker -- so the canonical implementation is the pyrx Python
-    # UDF, which DOES read /Volumes (and /Workspace, DBFS, local). Override the Scala registration
-    # with it when pyrx (the lightweight tier) is importable. If it is NOT present, skip gracefully and leave the
-    # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
-    try:
-        # Register the 2-arg (path, driver) SQL UDF, but the HEAVY variant that
-        # MATERIALIZES: heavy/JVM callers need bytes (a virtual path-only tile is
-        # useless to them). Same call text as the light registration
-        # (gbx_rst_fromfile(path, driver)); the tier decides virtual vs
-        # materialized, last register() wins. (_fromfile_udf is the 3-arg
-        # Python-binding variant and must NOT be registered here, or 2-arg SQL
-        # calls break on arity.)
-        from databricks.labs.gbx import _gdal_policy
-        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-        from databricks.labs.gbx.pyrx.functions import (
-            _build_fromfile_sql_materialized_udf,
+def __getattr__(name):
+    """``register`` was removed: SQL functions register through the manager."""
+    if name == "register":
+        raise AttributeError(
+            f"{__name__}.register was removed in 0.6.0: SQL functions register through the manager. "
+            "Fix: databricks.labs.gbx.register(spark)"
         )
-
-        # the light implementation it registers carries the driver's remote-path switch to the workers, and the
-        # driver's connect-aware materialize cap (a worker cannot measure it)
-        _gdal_policy.carrying_session(_spark).udf.register(
-            "gbx_rst_fromfile",
-            _build_fromfile_sql_materialized_udf(report_detected_cap(_spark)),
-        )
-    except (
-        Exception
-    ):  # noqa: BLE001 - pyrx/light-tier not installed: keep the Scala fallback
-        pass
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # Aggregators

@@ -104,6 +104,11 @@ def removed_name(module: str, name: str):
     lookup (the manifest does not load, see :func:`_removed_index`) ends as the plain AttributeError: ``hasattr``, ``getattr(..., default)`` and
     pickle's ``whichmodule`` catch nothing else.
     """
+    if name == "register":
+        raise AttributeError(
+            f"{module}.register was removed in 0.6.0: SQL functions register through the manager. "
+            "Fix: databricks.labs.gbx.register(spark)"
+        )
     fns, helpers = _removed_index()
     pkg = fns.get(name)
     if pkg is not None:

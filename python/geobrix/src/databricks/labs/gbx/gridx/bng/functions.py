@@ -1,7 +1,7 @@
 """British National Grid (BNG) Python API.
 
 Thin wrappers around GeoBrix Scala functions (gbx_bng_*). Register with
-bx.register(spark) then use the functions on Spark columns. For full
+``databricks.labs.gbx.register(spark)`` then use the functions on Spark columns. For full
 descriptions and examples, see the API docs or SQL:
   DESCRIBE FUNCTION EXTENDED gbx_bng_<name>;
 
@@ -40,21 +40,14 @@ def _col(x: ColLike) -> Union[Column, str]:
     return f.lit(x)
 
 
-def register(_spark: SparkSession) -> None:
-    """Register BNG functions with the Spark session.
-
-    Call once (e.g. after creating the session) so that gbx_bng_* SQL
-    functions are available. Uses the active Spark session if needed.
-
-    Args:
-        _spark: Spark session (optional; uses active session if not provided).
-    """
-    _spark = SparkSession.builder.getOrCreate()
-    _spark.read.format("register_ds").option("functions", "gridx.bng").load().collect()
-    # the manager's choice for every name stays (the JAR's registration must not replace it)
-    from databricks.labs.gbx import manager
-
-    manager.reapply_manager_choice(_spark, "gbx_bng_")
+def __getattr__(name):
+    """``register`` was removed: SQL functions register through the manager."""
+    if name == "register":
+        raise AttributeError(
+            f"{__name__}.register was removed in 0.6.0: SQL functions register through the manager. "
+            "Fix: databricks.labs.gbx.register(spark)"
+        )
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 # Aggregators

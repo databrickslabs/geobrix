@@ -1,19 +1,17 @@
 package com.databricks.labs.gbx.vectorx
 
-import com.databricks.labs.gbx.expressions.RegistryDelegate
 import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_AsMvtPyramid, ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
 import com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
-import org.apache.spark.sql.{Column, SparkSession}
+import org.apache.spark.sql.Column
 
 /**
-  * VectorX API entry point: register expression-level vector SQL functions and provide
-  * Column-based helpers.
+  * VectorX API entry point: Column-based helpers for the expression-level `gbx_st_*` functions.
   *
-  * Call `functions.register(spark)` once per session to make `gbx_st_*` expression
-  * functions available in SQL. (VectorX data sources are registered separately via
+  * Registration belongs to the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
+  * (VectorX data sources are registered separately via
   * `META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.)
   *
   * This package exposes the `gbx_st_asmvt` MVT aggregator (see [[ST_AsMvt]]), the
@@ -23,33 +21,6 @@ import org.apache.spark.sql.{Column, SparkSession}
   * generators (see [[ST_InterpolateElevationBBox]], [[ST_InterpolateElevationGeom]]).
   */
 object functions extends Serializable {
-
-    val flag = "com.databricks.labs.gbx.vectorx.registered"
-
-    /** Register all VectorX expressions with Spark; idempotent per session. */
-    def register(spark: SparkSession): Unit = {
-        val sc = spark.sparkContext
-        if (sc.getConf.get(flag, "false") == "true") return
-
-        val registry = spark.sessionState.functionRegistry
-        val rd = RegistryDelegate(registry)
-
-        // Aggregators
-        rd.register(ST_AsMvt)
-
-        // Generators
-        rd.register(ST_AsMvtPyramid)
-        rd.register(ST_Triangulate)
-        rd.register(ST_InterpolateElevationBBox)
-        rd.register(ST_InterpolateElevationGeom)
-
-        // CRS functions
-        rd.register(ST_Crs)
-        rd.register(ST_SetCrs)
-        rd.register(ST_TransformCrs)
-
-        sc.getConf.set(flag, "true")
-    }
 
     /**
       * Aggregator: encode a group of features into a Mapbox Vector Tile (MVT) protobuf blob.

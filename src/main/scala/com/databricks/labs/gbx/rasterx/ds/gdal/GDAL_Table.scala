@@ -63,5 +63,5 @@ object GDAL_Table {
     val WriteRetiredMsg: String =
         "The 'gdal' and 'gtiff_gdal' formats are read-only: the Scala raster writers were retired in 0.6.0. " +
             "Fix: write with a Python writer: 'raster_gbx', 'gtiff_gbx' or 'cog_gbx', after " +
-            "`from databricks.labs.gbx.ds.register import register; register(spark)`. See the Raster Writer docs page."
+            "`import databricks.labs.gbx; databricks.labs.gbx.register(spark)`. See the Raster Writer docs page."
 }

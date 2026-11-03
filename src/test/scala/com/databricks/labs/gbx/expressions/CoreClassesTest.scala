@@ -89,49 +89,6 @@ class CoreClassesTest extends PlanTest with SilentSparkSession {
         an[IllegalAccessException] should be thrownBy testExpr.builder()
     }
 
-    // ========== RegistryDelegate Tests ==========
-
-    test("RegistryDelegate should register function without prefix") {
-        val delegate = RegistryDelegate(spark.sessionState.functionRegistry, None)
-        
-        // Create a test expression to avoid conflicts with pre-registered functions
-        val testExpr = new WithExpressionInfo {
-            override def name: String = "test_no_prefix"
-            override def usageArgs: String = "arg"
-            override def description: String = "Test"
-            override def extendedUsageArgs: String = "arg: String"
-            override def examples: String = "example"
-            override def builder() = { _ => null }
-        }
-        
-        delegate.register(testExpr)
-        
-        val registered = spark.sessionState.functionRegistry.lookupFunction(
-            FunctionIdentifier("test_no_prefix")
-        )
-        registered should not be empty
-    }
-
-    test("RegistryDelegate should register function with prefix") {
-        val delegate = RegistryDelegate(spark.sessionState.functionRegistry, Some("gbx"))
-        
-        val testExpr = new WithExpressionInfo {
-            override def name: String = "test_prefixed"
-            override def usageArgs: String = "arg"
-            override def description: String = "Test"
-            override def extendedUsageArgs: String = "arg: String"
-            override def examples: String = "example"
-            override def builder() = { _ => null }
-        }
-        
-        delegate.register(testExpr)
-        
-        val registered = spark.sessionState.functionRegistry.lookupFunction(
-            FunctionIdentifier("gbx_test_prefixed")
-        )
-        registered should not be empty
-    }
-
     // ========== PrettyInvoke Tests ==========
 
     test("PrettyInvoke should format toString with short arguments") {

@@ -6,7 +6,6 @@ from a Unity Catalog Volume (the same reason ``rst_fromfile`` is lightweight-onl
 so on the heavyweight tier grids must live on a cluster-local path.
 """
 
-import importlib
 import logging
 import os
 import warnings
@@ -45,26 +44,22 @@ def _warn_if_unusable(d: str) -> None:
 
 
 def _reregister_active_light_tiers(spark) -> None:
-    """Re-run register() for whichever light tiers are already registered so live
-    SQL bindings get fresh closures embedding the current grid dirs."""
+    """Register again the functions this session already has whose light implementation embeds the grid dirs
+    (``factory_args: proj_grid_dirs``), so live SQL bindings get fresh closures with the current dirs.
+    """
     if spark is None:
         return
-    for modname in (
-        "databricks.labs.gbx.pyrx.functions",
-        "databricks.labs.gbx.pyvx.functions",
-        "databricks.labs.gbx.pygx.functions",
-    ):
-        try:
-            mod = importlib.import_module(modname)
-        except Exception:
-            continue
-        if getattr(mod, "_gbx_registered", False):  # set by the module's own register()
-            mod.register(spark)
-    # the names the manager registered through the light registrars (not the whole modules: that would overwrite the
-    # manager's wrappers under the same SQL names)
-    from databricks.labs.gbx.manager import _legacy
+    from databricks.labs.gbx import _api, manager, manifest
 
-    _legacy.reregister_bridged(spark)
+    functions = manifest.load().functions
+    names = sorted(
+        n
+        for n in _api._done(spark)
+        if n in functions
+        and functions[n].levels.get("L3", {}).get("factory_args") == "proj_grid_dirs"
+    )
+    if names:
+        manager.register(spark, only=names)
 
 
 def _warn_heavy_volume_grids(result) -> None:

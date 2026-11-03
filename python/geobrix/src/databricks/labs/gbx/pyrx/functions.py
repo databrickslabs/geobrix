@@ -16,10 +16,10 @@ import json
 import math
 import os
 import re
-from typing import List, Optional
+from typing import Optional
 
 import pandas as pd
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udtf
 from pyspark.sql.types import (
@@ -35,7 +35,7 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from databricks.labs.gbx import _gdal_policy, _register
+from databricks.labs.gbx import _gdal_policy
 from databricks.labs.gbx._gdal_policy import (
     DriverPolicyError,
     carrying_udf,
@@ -75,134 +75,6 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import (
     V2_TILE_SCHEMA,
     VirtualTile,
 )
-
-
-def _registrar_groups() -> List[_register.Group]:
-    """One group for pyrx (rasterio guard): scalar/agg UDFs (from SQL_REGISTRY),
-    UDTFs, and the format-agnostic pmtiles aggregate. Insertion order matches the
-    pre-only register() ordering so only=None is behavior-identical."""
-    entries = {}
-    for name, udf_obj in SQL_REGISTRY.items():
-        entries[name] = lambda s, n=name, u=udf_obj: s.udf.register(n, u)
-
-    udtfs = [
-        ("gbx_rst_polygonize", _RstPolygonizeUDTF),
-        ("gbx_rst_h3_rastertogridavg", _RstH3RasterToGridAvgUDTF),
-        ("gbx_rst_h3_rastertogridcount", _RstH3RasterToGridCountUDTF),
-        ("gbx_rst_h3_rastertogridmax", _RstH3RasterToGridMaxUDTF),
-        ("gbx_rst_h3_rastertogridmin", _RstH3RasterToGridMinUDTF),
-        ("gbx_rst_h3_rastertogridmedian", _RstH3RasterToGridMedianUDTF),
-        ("gbx_rst_h3_rastertogridsum", _RstH3RasterToGridSumUDTF),
-        ("gbx_rst_h3_rastertogridvariance", _RstH3RasterToGridVarianceUDTF),
-        ("gbx_rst_h3_rastertogridstddev", _RstH3RasterToGridStddevUDTF),
-        ("gbx_rst_quadbin_rastertogridavg", _RstQuadbinRasterToGridAvgUDTF),
-        ("gbx_rst_quadbin_rastertogridcount", _RstQuadbinRasterToGridCountUDTF),
-        ("gbx_rst_quadbin_rastertogridmax", _RstQuadbinRasterToGridMaxUDTF),
-        ("gbx_rst_quadbin_rastertogridmin", _RstQuadbinRasterToGridMinUDTF),
-        ("gbx_rst_quadbin_rastertogridmedian", _RstQuadbinRasterToGridMedianUDTF),
-        ("gbx_rst_quadbin_rastertogridsum", _RstQuadbinRasterToGridSumUDTF),
-        ("gbx_rst_quadbin_rastertogridvariance", _RstQuadbinRasterToGridVarianceUDTF),
-        ("gbx_rst_quadbin_rastertogridstddev", _RstQuadbinRasterToGridStddevUDTF),
-        ("gbx_rst_bng_rastertogridavg", _RstBngRasterToGridAvgUDTF),
-        ("gbx_rst_bng_rastertogridcount", _RstBngRasterToGridCountUDTF),
-        ("gbx_rst_bng_rastertogridmax", _RstBngRasterToGridMaxUDTF),
-        ("gbx_rst_bng_rastertogridmin", _RstBngRasterToGridMinUDTF),
-        ("gbx_rst_bng_rastertogridmedian", _RstBngRasterToGridMedianUDTF),
-        ("gbx_rst_bng_rastertogridsum", _RstBngRasterToGridSumUDTF),
-        ("gbx_rst_bng_rastertogridvariance", _RstBngRasterToGridVarianceUDTF),
-        ("gbx_rst_bng_rastertogridstddev", _RstBngRasterToGridStddevUDTF),
-        ("gbx_rst_custom_rastertogridavg", _RstCustomRasterToGridAvgUDTF),
-        ("gbx_rst_custom_rastertogridcount", _RstCustomRasterToGridCountUDTF),
-        ("gbx_rst_custom_rastertogridmax", _RstCustomRasterToGridMaxUDTF),
-        ("gbx_rst_custom_rastertogridmin", _RstCustomRasterToGridMinUDTF),
-        ("gbx_rst_custom_rastertogridmedian", _RstCustomRasterToGridMedianUDTF),
-        ("gbx_rst_custom_rastertogridsum", _RstCustomRasterToGridSumUDTF),
-        ("gbx_rst_custom_rastertogridvariance", _RstCustomRasterToGridVarianceUDTF),
-        ("gbx_rst_custom_rastertogridstddev", _RstCustomRasterToGridStddevUDTF),
-        ("gbx_rst_custom_tessellate", _RstCustomTessellateUDTF),
-        ("gbx_rst_separatebands", _RstSeparateBandsUDTF),
-        ("gbx_rst_retile", _RstRetileUDTF),
-        ("gbx_rst_tooverlappingtiles", _RstToOverlappingTilesUDTF),
-        ("gbx_rst_maketiles", _RstMakeTilesUDTF),
-        ("gbx_rst_h3_tessellate", _RstH3TessellateUDTF),
-        ("gbx_rst_quadbin_tessellate", _RstQuadbinTessellateUDTF),
-        ("gbx_rst_bng_tessellate", _RstBngTessellateUDTF),
-        ("gbx_rst_xyzpyramid", _RstXyzPyramidUDTF),
-    ]
-    for name, cls in udtfs:
-        entries[name] = lambda s, n=name, c=cls: s.udtf.register(n, c)
-
-    def _reg_pmtiles(s):
-        from databricks.labs.gbx.pmtiles import register_pmtiles_agg
-
-        register_pmtiles_agg(s)
-
-    entries["gbx_pmtiles_agg"] = _reg_pmtiles
-
-    # Override warp/clip SQL UDFs with fresh per-register factory builds so that
-    # registered PROJ grid dirs are captured at registration time rather than at
-    # module-import time (module-level singletons can't capture post-import dirs).
-    def _reg_transformcrs(s):
-        from databricks.labs.gbx.core import proj_grids
-
-        _grid_dirs = tuple(proj_grids.get_registered_dirs())
-        s.udf.register("gbx_rst_transformcrs", _build_transformcrs_sql_udf(_grid_dirs))
-
-    def _reg_transform(s):
-        from databricks.labs.gbx.core import proj_grids
-
-        _grid_dirs = tuple(proj_grids.get_registered_dirs())
-        s.udf.register("gbx_rst_transform", _build_transform_sql_udf(_grid_dirs))
-
-    def _reg_to_webmercator(s):
-        from databricks.labs.gbx.core import proj_grids
-
-        _grid_dirs = tuple(proj_grids.get_registered_dirs())
-        s.udf.register(
-            "gbx_rst_to_webmercator", _build_to_webmercator_sql_udf(_grid_dirs)
-        )
-
-    def _reg_clip(s):
-        from databricks.labs.gbx.core import proj_grids
-
-        _grid_dirs = tuple(proj_grids.get_registered_dirs())
-        s.udf.register("gbx_rst_clip", _build_clip_sql_udf(_grid_dirs))
-
-    entries["gbx_rst_transformcrs"] = _reg_transformcrs
-    entries["gbx_rst_transform"] = _reg_transform
-    entries["gbx_rst_to_webmercator"] = _reg_to_webmercator
-    entries["gbx_rst_clip"] = _reg_clip
-
-    def _guard():
-        from databricks.labs.gbx.pyrx import _env
-
-        _env.assert_rasterio_available()
-
-    return [(_guard, entries)]
-
-
-def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> None:
-    """Explicitly register the pyrx functions as Spark SQL functions.
-
-    Installs the same ``gbx_rst_*`` SQL names the heavyweight rasterx package
-    uses, but powered by the pyspark/rasterio implementation (no JAR). Call this
-    once when you want the functions from SQL. The Python Column API
-    (``prx.rst_to_webmercator(col)``) works WITHOUT this call.
-
-    You register the lightweight OR the heavyweight package in a given session;
-    they share the ``gbx_rst_*`` names, so the last registration wins.
-
-    Args:
-        spark: Spark session (uses the active session if not provided).
-        only: Optional list of function names to register (instead of all).
-            Accepts SQL names (``gbx_rst_slope``) or short names (``rst_slope``),
-            case-insensitively. ``None`` registers everything; ``[]`` registers
-            nothing. An unrecognized name raises ``ValueError``.
-    """
-    if spark is None:
-        spark = SparkSession.builder.getOrCreate()
-    _register.run_groups(_registrar_groups(), spark, only)
-    globals()["_gbx_registered"] = True
 
 
 # --- Virtual-aware tile helpers ---------------------------------------------
@@ -7048,161 +6920,6 @@ def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad, out_crs=None):
     xs, ys = _cr._reproject(lons, lats, 4326, _srid)
     return (float(xs.min()), float(ys.min()), float(xs.max()), float(ys.max()))
 
-
-# ---------------------------------------------------------------------------
-# SQL registration registry
-# ---------------------------------------------------------------------------
-# Struct-accepting scalar UDFs for SQL registration.  The Python Column API
-# still goes through the pandas_udf path above (tile_scalar_udf/2); these are
-# separate objects that accept the full tile struct (so SQL can pass the struct
-# column directly without callers needing to extract the raster subfield).
-
-_sql_accessors = {
-    # Virtual-aware (header/pixel front-door). Every accessor is now the same
-    # struct-accepting virtual-aware UDF the Python Column API uses (single-tile
-    # arity, so the registered signature is unchanged). Header-only accessors go
-    # through open_header (no pixel read); pixel accessors through _open.
-    "gbx_rst_width": _u_width,
-    "gbx_rst_height": _u_height,
-    "gbx_rst_numbands": _u_numbands,
-    "gbx_rst_srid": _u_srid,
-    "gbx_rst_crs": _u_crs,
-    "gbx_rst_pixelwidth": _u_pixelwidth,
-    "gbx_rst_pixelheight": _u_pixelheight,
-    "gbx_rst_upperleftx": _u_upperleftx,
-    "gbx_rst_upperlefty": _u_upperlefty,
-    "gbx_rst_scalex": _u_scalex,
-    "gbx_rst_scaley": _u_scaley,
-    "gbx_rst_isempty": _u_isempty,
-    "gbx_rst_boundingbox": _u_boundingbox,
-    "gbx_rst_metadata": _metadata_udf,
-    "gbx_rst_type": _u_type,
-    "gbx_rst_getnodata": _u_getnodata,
-    # Virtual-aware header-only coord transforms (same UDF the Column API uses;
-    # single-tile-struct + 2 scalar args, so the registered signature/arity is
-    # unchanged).
-    "gbx_rst_rastertoworldcoordx": _u_r2w_x,
-    "gbx_rst_rastertoworldcoordy": _u_r2w_y,
-    "gbx_rst_worldtorastercoordx": _u_w2r_x,
-    "gbx_rst_worldtorastercoordy": _u_w2r_y,
-    # Group 1 per-band statistics & scalar accessors (struct-accepting).
-    "gbx_rst_avg": _u_avg,
-    "gbx_rst_min": _u_min,
-    "gbx_rst_max": _u_max,
-    "gbx_rst_median": _u_median,
-    "gbx_rst_pixelcount": _u_pixelcount,
-    "gbx_rst_rotation": _u_rotation,
-    "gbx_rst_skewx": _u_skewx,
-    "gbx_rst_skewy": _u_skewy,
-    "gbx_rst_format": _u_format,
-    # memsize reads the raster byte length straight off the tile struct.
-    "gbx_rst_memsize": _memsize_struct_udf,
-    "gbx_rst_georeference": _georeference_udf,
-    "gbx_rst_bandmetadata": _bandmetadata_udf,
-    "gbx_rst_subdatasets": _subdatasets_udf,
-    "gbx_rst_getsubdataset": _getsubdataset_udf,
-    "gbx_rst_summary": _summary_udf,
-    "gbx_rst_histogram": _histogram_udf,
-    "gbx_rst_rastertoworldcoord": _rastertoworldcoord_udf,
-    "gbx_rst_worldtorastercoord": _worldtorastercoord_udf,
-    "gbx_h3_cell_bbox": _h3_cell_bbox_udf,
-}
-
-# Tile-returning / constructor / array UDFs already accept the tile struct
-# (or raw constructor inputs for fromcontent/rasterize); register the existing
-# objects directly — no wrapper needed.
-_sql_tile_ops = {
-    "gbx_rst_fromcontent": _fromcontent_udf,
-    "gbx_rst_fromfile": _fromfile_sql_udf,
-    "gbx_rst_merge": _merge_udf,
-    "gbx_rst_combineavg": _combineavg_udf,
-    "gbx_rst_combinemin": _combinemin_udf,
-    "gbx_rst_combinemax": _combinemax_udf,
-    "gbx_rst_combinesum": _combinesum_udf,
-    "gbx_rst_combinecount": _combinecount_udf,
-    "gbx_rst_combinemedian": _combinemedian_udf,
-    "gbx_rst_combinestddev": _combinestddev_udf,
-    "gbx_rst_align_to": _align_to_udf,
-    "gbx_rst_chm": _chm_udf,
-    "gbx_rst_frombands": _frombands_udf,
-    "gbx_rst_transform": _transform_udf,
-    "gbx_rst_to_webmercator": _to_webmercator_udf,
-    "gbx_rst_resample": _resample_udf,
-    "gbx_rst_resample_to_size": _resample_to_size_udf,
-    "gbx_rst_resample_to_res": _resample_to_res_udf,
-    "gbx_rst_clip": _clip_udf,
-    "gbx_rst_updatetype": _update_type_udf,
-    "gbx_rst_initnodata": _init_nodata_udf,
-    "gbx_rst_tryopen": _tryopen_udf,
-    "gbx_rst_setsrid": _setsrid_udf,
-    "gbx_rst_setcrs": _setcrs_udf,
-    "gbx_rst_transformcrs": _transformcrs_udf,
-    "gbx_rst_band": _band_udf,
-    "gbx_rst_asformat": _asformat_udf,
-    "gbx_rst_buildoverviews": _buildoverviews_udf,
-    "gbx_rst_sample": _sample_udf,
-    "gbx_rst_proximity": _proximity_udf,
-    "gbx_rst_contour": _contour_udf,
-    "gbx_rst_isoband": _isoband_udf,
-    "gbx_rst_viewshed": _viewshed_udf,
-    "gbx_rst_cog_convert": _cog_convert_udf,
-    "gbx_rst_fillnodata": _fillnodata_udf,
-    "gbx_rst_rasterize": _rasterize_udf,
-    "gbx_rst_gridfrompoints": _gridfrompoints_udf,
-    "gbx_rst_dtmfromgeoms": _dtmfromgeoms_udf,
-    "gbx_rst_binpoints": _binpoints_udf,
-    # gbx_rst_polygonize is a UDTF registered separately in register() via
-    # spark.udtf.register — UDTFs cannot go through spark.udf.register.
-    # gbx_rst_{h3,quadbin}_rastertogrid* are UDTFs registered separately in
-    # register() via spark.udtf.register — UDTFs cannot go through spark.udf.register.
-    "gbx_rst_ndvi": _ndvi_udf,
-    "gbx_rst_ndwi": _ndwi_udf,
-    "gbx_rst_nbr": _nbr_udf,
-    "gbx_rst_savi": _savi_udf,
-    "gbx_rst_evi": _evi_udf,
-    "gbx_rst_percentile_stretch": _percentile_stretch_udf,
-    # light-only classifier (rst_ pixel classification; no Scala/heavy equivalent)
-    "gbx_rst_land_cover": _land_cover_udf,
-    "gbx_rst_slope": _slope_udf,
-    "gbx_rst_aspect": _aspect_udf,
-    "gbx_rst_hillshade": _hillshade_udf,
-    "gbx_rst_tri": _tri_udf,
-    "gbx_rst_tpi": _tpi_udf,
-    "gbx_rst_roughness": _roughness_udf,
-    "gbx_rst_color_relief": _color_relief_udf,
-    "gbx_rst_threshold": _threshold_udf,
-    "gbx_rst_filter": _filter_udf,
-    "gbx_rst_convolve": _convolve_udf,
-    "gbx_rst_mapalgebra": _mapalgebra_udf,
-    "gbx_rst_index": _index_udf,
-    "gbx_rst_derivedband": _derivedband_udf,
-    # gbx_rst_separatebands / retile / tooverlappingtiles / maketiles /
-    # h3_tessellate / xyzpyramid are fan-out UDTFs registered separately in
-    # register() via spark.udtf.register — UDTFs cannot go through
-    # spark.udf.register.
-    "gbx_rst_tilexyz": _tilexyz_udf,
-}
-
-# Grouped aggregators register the BINARY grouped-agg pandas_udf directly; SQL
-# callers use them in GROUP BY and wrap the BINARY result with
-# gbx_rst_fromcontent(<agg>, 'GTiff') to recover a tile struct. The grouped-agg
-# UDFs accept the tile STRUCT column directly in SQL as well (verified).
-_sql_aggregators = {
-    "gbx_rst_merge_agg": _merge_agg_udf,
-    "gbx_rst_combineavg_agg": _combineavg_agg_sql_udf,
-    "gbx_rst_frombands_agg": _frombands_agg_udf,
-    "gbx_rst_rasterize_agg": _rasterize_agg_udf,
-    "gbx_rst_derivedband_agg": _derivedband_agg_udf,
-    "gbx_rst_gridfrompoints_agg": _gridfrompoints_agg_udf,
-    "gbx_rst_dtmfromgeoms_agg": _dtmfromgeoms_agg_udf,
-    "gbx_rst_binpoints_agg": _binpoints_agg_udf,
-    "gbx_rst_h3_rasterize_agg": _rst_h3_rasterize_agg_udf,
-    "gbx_rst_quadbin_rasterize_agg": _rst_quadbin_rasterize_agg_udf,
-    "gbx_rst_bng_rasterize_agg": _rst_bng_rasterize_agg_udf,
-    "gbx_rst_custom_rasterize_agg": _rst_custom_rasterize_agg_udf,
-}
-
-SQL_REGISTRY = {**_sql_accessors, **_sql_tile_ops, **_sql_aggregators}
 
 # A Column-API call on a module-level UDF / UDTF builds its column on the driver, where the session's read cap is known
 # (a standard-access worker cannot work it out itself): each call carries the cap to the workers, as a registration does.

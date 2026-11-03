@@ -41,8 +41,6 @@ def register(
     """
     if target not in ("session", "uc"):
         raise ValueError(f"target must be 'session' or 'uc' (got {target!r})")
-    from databricks.labs.gbx.manager import _legacy
-
     spark = spark if spark is not None else _active()
     messages.reminder(spark)
     man = manifest.load()
@@ -52,18 +50,13 @@ def register(
         return n if n.startswith("gbx_") else f"gbx_{n}"
 
     requested = None if only is None else [norm(n) for n in only]
-    legacy_all = _legacy.names()
     if requested is None:
         names = [n for n, f in man.functions.items() if f.status != "mvp"]
-        bridge = sorted(legacy_all - set(man.functions))
     else:
-        unknown = [
-            n for n in requested if n not in man.functions and n not in legacy_all
-        ]
+        unknown = [n for n in requested if n not in man.functions]
         if unknown:
             raise ValueError(f"register(only=...) got unknown name(s): {unknown}")
-        names = [n for n in requested if n in man.functions]
-        bridge = [n for n in requested if n not in man.functions]
+        names = requested
     if target == "uc":
         from databricks.labs.gbx import uc
 
@@ -93,22 +86,9 @@ def register(
             lines.append((n, f"geobrix: {n} not registered ({why})"))
             continue
         out[n] = _install(spark, fn, choice, caps, forced=n in overrides, lines=lines)
-    if bridge:
-        done, skipped = _legacy.register_unmigrated(spark, bridge)
-        lines += skipped
-        out.update({n: Choice("L3", "legacy", ()) for n in bridge if n in done})
-    if (
-        only is None
-    ):  # a light module that could not be imported: its names are not registered, the rest are
-        lines += [
-            (m, f"geobrix: {m} not loaded ({why})")
-            for m, why in _legacy.import_failures().items()
-        ]
     if only is None:
         try:
-            from databricks.labs.gbx.ds import register as _sources
-
-            _sources.register(spark)
+            register_sources(spark)
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the functions are registered; this failure is a line like any other
@@ -139,19 +119,44 @@ def manifest_names(prefix: str = "gbx_") -> List[str]:
     )
 
 
-def reapply_manager_choice(spark, prefix: str = "gbx_") -> Dict[str, Choice]:
-    """Register the manager's own choice again for every manifest name that starts with ``prefix``.
+def register_sources(spark=None, only: Optional[Iterable[str]] = None) -> List[str]:
+    """Register the light data sources (``raster_gbx``, ``gtiff_gbx`` and the others) and no functions.
 
-    The package ``register(spark)`` calls of the old heavy path load every Scala expression under its
-    ``gbx_*`` name, and the last registration wins. For a row the manager serves another way, that JAR
-    registration is wrong: a row with no L1 (a JAR scalar replaces the light table function that
-    ``FROM t, LATERAL gbx_rst_h3_rastertogridavg(...)`` needs), a row whose Catalyst block does not return the session
-    type (a tile-struct aggregate where the contract is BINARY), a row the table prefers light for. Called right
-    after the JVM registration, this puts the manager's choice back for the whole prefix, at the level it selects
-    here, and marks the names registered so the Python API's first-use check stays true.
+    ``register(spark)`` does this as its last step; call this when a session needs only the readers and writers.
+    ``only`` limits the formats (``raster_gbx`` or ``raster``); an unrecognized format raises ``ValueError``.
+    Returns the registered format names.
     """
-    names = manifest_names(prefix)
-    return register(spark, only=names) if names else {}
+    from databricks.labs.gbx.ds import register as _ds
+
+    return _ds._install(spark if spark is not None else _active(), only)
+
+
+def register_family(
+    spark,
+    prefixes: Iterable[str],
+    *,
+    only: Optional[Iterable[str]] = None,
+    level: Optional[str] = None,
+) -> Dict[str, Choice]:
+    """Register the names under ``prefixes`` (``('gbx_rst_',)``, ``('gbx_bng_', 'gbx_h3_')``), or ``only``, and
+    nothing else: the part of a session a test, a bench leg or a self-check needs. ``level`` ('L1', 'L2' or 'L3')
+    forces that level for them, so a test can compare two levels; without it the manager chooses, as in
+    ``register(spark)``. With ``level`` and no ``only``, the names that have no such level are left out.
+    """
+    man = manifest.load()
+    if only is None:
+        names = [
+            n
+            for n, f in man.functions.items()
+            if f.status != "mvp" and n.startswith(tuple(prefixes))
+        ]
+        if level is not None:
+            names = [n for n in names if level in man.functions[n].levels]
+    else:
+        names = [n if n.lower().startswith("gbx_") else f"gbx_{n}" for n in only]
+        names = [n.lower() for n in names]
+    forced = None if level is None else {n: (level, "-") for n in names}
+    return register(spark, only=names, _levels=forced) if names else {}
 
 
 def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:

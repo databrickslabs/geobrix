@@ -75,3 +75,40 @@ def test_a_mosaic_over_the_cap_is_refused_before_it_is_read(
             _frame(spark, tmp_path, "quad_paths"), ["key"], method="vrt"
         ).collect()
     assert "mint_vrt" in str(err.value)
+
+
+def test_towers_to_crs_adds_the_counts_of_the_reprojected_viewshed(spark, tmp_path):
+    """`to_crs` reprojects each tower's viewshed and counts it again: both counts are there and, on flat ground
+    at the equator, within a few percent of the counts before the reprojection."""
+    from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
+
+    manifest, towers, radius, height = (
+        oracles.resolve_arg(oracles.Build("dsm_tiles_edge"), str(tmp_path)),
+        (("t1", 100.0, 100.0),),
+        80.0,
+        20.0,
+    )
+    tiles = spark.createDataFrame(manifest, "tx int, ty int, path string")
+    sites = spark.createDataFrame(
+        list(towers), "tower_cellid string, x double, y double"
+    )
+    row = rst_viewshed_towers(
+        sites,
+        tiles,
+        radius,
+        height,
+        x0=0.0,
+        y0=0.0,
+        tile_m=oracles.DSM_TILE_M,
+        to_crs=4326,
+    ).collect()[0]
+    assert row["total_px_reproj"] > 0 and row["visible_px_reproj"] > 0
+    assert row["visible_px_reproj"] <= row["total_px_reproj"]
+    for after, before in (
+        ("total_px_reproj", "total_px"),
+        ("visible_px_reproj", "visible_px"),
+    ):
+        assert abs(row[after] - row[before]) <= 0.05 * row[before], (
+            after,
+            dict(row.asDict()),
+        )

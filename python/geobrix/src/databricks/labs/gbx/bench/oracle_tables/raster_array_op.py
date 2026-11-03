@@ -9,8 +9,8 @@ and (2, 2) is a valid 0 (a valid zero counts).
 
 The error contract, once for the family: a NULL or empty array is NULL; an array of nothing but error tiles is the first
 member's error tile; an error tile or a tile that cannot be read inside an array is skipped (the others combine); tiles
-of different shapes raise; an array whose decoded members are over the memory budget is the row's error tile with a
-`Fix:`."""
+of different shapes raise; a group over the memory budget is folded window by window; one whose single row of members
+does not fit the budget is the row's error tile with a `Fix:`."""
 
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
@@ -206,8 +206,8 @@ RASTER_ARRAY_OP = (
         )
         for s in ("avg", "sum")
     ),
-    # a member decoded over the read cap is the row's error tile with a Fix (READ_CAP_ROWS lowers the cap to 1 KiB; a
-    # member of pair_aligned is 4 KiB)
+    # a stack too wide to fold one row of it in the budget is the row's error tile with a Fix (READ_CAP_ROWS lowers the
+    # cap to 1 KiB; a row of the two 32-pixel-wide members of pair_aligned needs 1280 bytes of the 512 a window may use)
     Case(
         "array_decoded_over_cap",
         CB["avg"],
@@ -216,22 +216,27 @@ RASTER_ARRAY_OP = (
         None,
         ONLY,
     ),
-    # an array whose members each fit but whose decoded sum is over the memory budget is the row's error tile with a
-    # Fix that names the vrt route (READ_CAP_ROWS: a budget of 6000 bytes, two 4 KiB members)
+    # an array whose members add up to more than the memory budget is folded by streaming, window by window, and gives
+    # the result of an unconstrained call (READ_CAP_ROWS lowers the budget to 3000 bytes: the 4 KiB mosaic of quad_tiles,
+    # and a stack of three 8 x 6 tiles that is folded in windows of rows)
+    Case(
+        "merge_array_streams_under_budget",
+        MG,
+        (Build("quad_tiles"),),
+        "merged_equals",
+        Build("tile_32"),
+        ONLY,
+    ),
     *(
         Case(
-            cid,
-            fn,
-            (Build("pair_aligned"),),
-            "error_tile_has",
-            "merge_by_key",
+            f"combine{s}_array_streams_under_budget",
+            CB[s],
+            (STACK,),
+            "ref",
+            f"combine_{s}",
             ONLY,
         )
-        for cid, fn in (
-            ("merge_array_over_budget_refused", MG),
-            ("combineavg_array_over_budget_refused", CB["avg"]),
-            ("combinesum_array_over_budget_refused", CB["sum"]),
-        )
+        for s in ("avg", "sum")
     ),
     # --- merge: the four windows of tile_32 merge back into it
     Case(

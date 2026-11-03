@@ -2288,8 +2288,9 @@ def test_a_full_registration_probes_the_session_again(monkeypatch, spark):
 
 
 def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
-    """`merge_by_key` / `combine_by_key` fold each member through the same read gate as the aggregates, so their
-    closures carry the driver's cap, as `grouped_tile_map`'s does."""
+    """`merge_by_key` / `combine_by_key` fold under the same budget as the aggregates, so their closures carry the
+    driver's cap, as `grouped_tile_map`'s does: a cap too low for one row of the stack refuses the combine with a Fix,
+    and the merge of the same members streams under it instead of failing."""
     from pyspark.sql.types import IntegerType, StructField, StructType
 
     from databricks.labs.gbx.bench import oracles
@@ -2297,7 +2298,7 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
     from databricks.labs.gbx.pyrx import helpers
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
-    tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded
+    tile = oracles._build("tile_4326", str(tmp_path))  # 12 KiB decoded, 64 pixels wide
     df = spark.createDataFrame(
         [(1, tile), (1, tile)],  # two members: a lone member is returned as it is
         StructType(
@@ -2306,12 +2307,13 @@ def test_the_keyed_helpers_carry_the_sessions_read_cap(spark, tmp_path):
     )
     for fold in (helpers.merge_by_key, helpers.combine_by_key):
         assert fold(df, ["k"]).collect()[0]["raster"] is not None
-        spark.conf.set(READ_CAP_KEY, "4096")
-        try:
-            with pytest.raises(Exception, match="read cap"):
-                fold(df, ["k"]).collect()
-        finally:
-            spark.conf.unset(READ_CAP_KEY)
+    spark.conf.set(READ_CAP_KEY, "4096")
+    try:
+        assert helpers.merge_by_key(df, ["k"]).collect()[0]["raster"] is not None
+        with pytest.raises(Exception, match="memory budget"):
+            helpers.combine_by_key(df, ["k"]).collect()
+    finally:
+        spark.conf.unset(READ_CAP_KEY)
 
 
 def _fake_wheel(

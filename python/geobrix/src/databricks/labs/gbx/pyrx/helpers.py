@@ -782,7 +782,9 @@ def _aligned(reducer, check_grid: bool):
     def run(members):
         try:
             if check_grid and len(members) > 1:
-                memfiles, datasets = agg_core._open_all(members)
+                memfiles, datasets = agg_core._open_all(
+                    members, gate=False
+                )  # headers only
                 try:
                     agg_core._require_aligned(datasets, "combine_by_key")
                 finally:

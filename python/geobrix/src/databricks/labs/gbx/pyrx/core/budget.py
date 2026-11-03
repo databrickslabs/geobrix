@@ -135,7 +135,14 @@ def block_cache_bytes(
     s = resolve_strategy(strategy)
     if s == "none":
         s = runtime_kind()
-    return min(int(ceiling), decoded_budget_bytes(s) // _BLOCK_CACHE_SHARE)
+    return block_cache_for(decoded_budget_bytes(s), ceiling=ceiling)
+
+
+def block_cache_for(budget_bytes: int, *, ceiling: int = _BLOCK_CACHE_MAX) -> int:
+    """Size in bytes for GDAL's block cache in a fold that works within ``budget_bytes`` (the same share of it as
+    :func:`block_cache_bytes` takes of a tile budget): the many members a fold keeps open are read a window at a
+    time, and their blocks must not pile up to the machine's default cache."""
+    return max(1, min(int(ceiling), int(budget_bytes) // _BLOCK_CACHE_SHARE))
 
 
 @dataclass(frozen=True)

@@ -259,14 +259,17 @@ READ_CAP_ROWS: Dict[str, int] = {
     "tile_op_decoded_over_cap": 4096,
     "align_to_big_reference": 4096,
     "rt_over_cap_windows": 4096,
-    # the array functions: a member of pair_aligned is 4 KiB decoded. One over the cap on its own; two together over a
-    # budget that each fits (the group is refused whole, with the route that streams it)
+    # the array functions fold a group window by window: one whose row of the stack does not fit the budget is the
+    # row's error tile (the members of pair_aligned are 32 pixels wide), and a group over the budget that folds in
+    # windows gives the unconstrained result
     "array_decoded_over_cap": 1024,
-    "merge_array_over_budget_refused": 6000,
-    "combineavg_array_over_budget_refused": 6000,
-    "combinesum_array_over_budget_refused": 6000,
-    # the merge aggregate over two 4 KiB members and a cap of 1 KiB
-    "merge_agg_over_budget_refused": 1024,
+    "merge_array_streams_under_budget": 3000,
+    "combineavg_array_streams_under_budget": 3000,
+    "combinesum_array_streams_under_budget": 3000,
+    # the aggregates: the same streaming; and what it cannot cover raises (a tile in another CRS over a cap of 150 bytes)
+    "merge_agg_streams_under_budget": 3000,
+    "combineavg_agg_streams_under_budget": 3000,
+    "merge_agg_member_over_cap_refused": 150,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"

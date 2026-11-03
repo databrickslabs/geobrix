@@ -17,7 +17,8 @@ import logging
 import os
 import shutil
 import warnings
-from typing import List, Optional, Tuple
+from contextlib import contextmanager
+from typing import List, Tuple
 
 import numpy as np
 import rasterio
@@ -32,12 +33,13 @@ from rasterio.warp import Resampling, reproject
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+from databricks.labs.gbx.pyrx._env import capped_block_cache
 from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
 from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
-from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+from databricks.labs.gbx.pyrx.core.budget import block_cache_for, decoded_budget_bytes
 from databricks.labs.gbx.pyrx.core.cellraster import snap_bounds
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
@@ -45,10 +47,11 @@ _log = logging.getLogger(__name__)
 _NODATA = -9999.0
 
 
-def _open_all(rasters: List[bytes]):
+def _open_all(rasters: List[bytes], gate: bool = True):
     """Open a list of GTiff byte buffers as rasterio datasets.
 
-    Returns ``(memfiles, datasets)``; callers MUST close both (datasets first).
+    Returns ``(memfiles, datasets)``; callers MUST close both (datasets first). ``gate`` refuses a member decoded
+    over the read cap; the callers that read it window by window (:func:`_members`) do not need it.
 
     On a partial-open failure (e.g. a corrupt tile midway through the group) close
     the buffers opened so far before re-raising -- the caller's ``try/finally`` only
@@ -65,7 +68,7 @@ def _open_all(rasters: List[bytes]):
             memfiles.append(mf)
             datasets.append(open_bytes(mf))
             # the decode of a member's pixels follows: the gate applies here, where a validity probe only opened it
-            reason = over_read_cap(datasets[-1])
+            reason = over_read_cap(datasets[-1]) if gate else None
             if reason is not None:
                 raise ReadCapRefused(reason)
     except Exception:
@@ -319,6 +322,85 @@ def _union_decoded_bytes(datasets, ref_crs) -> int:
     return width * height * ref.count * np.dtype(ref.dtypes[0]).itemsize
 
 
+def _merge_budget() -> int:
+    """Bytes of memory one merge or combine may work in, on this worker: the read cap the driver carried into the call
+    (the connect-aware cap, ``ds.file_gbx.session_read_cap``, which ``budget_for`` cannot give a worker), else the
+    Serverless decoded budget. A group whose working set is over it is folded window by window or streamed through a
+    VRT, so the peak does not grow with the number of members.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else decoded_budget_bytes("serverless")
+
+
+_VRT_ROUTE = (
+    "keep the tiles as files and mosaic them with "
+    'databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method="vrt")'
+)
+
+
+class _Hdr:
+    """What a merge reads of a member's header: it stands in for an open dataset in the size gate and the choice of
+    the reference tile, so no member stays open (or decoded) while the group is sized.
+    """
+
+    __slots__ = (
+        "crs",
+        "bounds",
+        "transform",
+        "count",
+        "dtypes",
+        "width",
+        "height",
+        "decoded",
+        "own_mask",
+        "alpha",
+        "fill_as_data",
+    )
+
+
+def _scan_headers(rasters: List[bytes]) -> List[_Hdr]:
+    """The header of each member, opened one at a time (no pixel is read, and one copy of one member is in memory)."""
+    from databricks.labs.gbx.pyrx._serde import decoded_bytes
+
+    out = []
+    for b in rasters:
+        with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
+            h = _Hdr()
+            h.crs, h.bounds, h.transform = ds.crs, tuple(ds.bounds), ds.transform
+            h.count, h.dtypes = ds.count, tuple(ds.dtypes)
+            h.width, h.height, h.decoded = ds.width, ds.height, decoded_bytes(ds)
+            h.own_mask, h.alpha = _nodata.has_own_mask(ds), _nodata.has_alpha(ds)
+            h.fill_as_data = _fill_reads_as_data(ds)
+            out.append(h)
+    return out
+
+
+def _held_bytes(hdrs: List[_Hdr], ref_crs) -> int:
+    """What the in-RAM merge holds beside the mosaic: a decoded copy of each member in another CRS or with an alpha
+    band, and a one-byte mask of each member when the group has masks (own masks, or tiles reprojected).
+    """
+    other = [
+        ref_crs is not None and h.crs is not None and h.crs != ref_crs for h in hdrs
+    ]
+    masked = any(other) or any(h.own_mask for h in hdrs)
+    held = 0
+    for h, o in zip(hdrs, other):
+        if o or h.alpha:
+            held += h.decoded
+        if masked:
+            held += h.width * h.height
+    return held
+
+
+def _merge_refusal(decoded: int, cap: int) -> str:
+    """A member that must be decoded whole (reprojected, or rewritten with its mask) is over the read cap."""
+    from databricks.labs.gbx.ds.file_gbx import read_cap_refusal
+
+    return f"{read_cap_refusal(decoded, cap)}, or {_VRT_ROUTE}"
+
+
 def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     """Out-of-core merge path: stream tiles through a VRT to a COG file.
 
@@ -343,48 +425,56 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     own gets no mask band in the mosaic (the alpha band carries it).
 
     MEMORY: peak RSS ≈ one tile's encoded bytes (decoded too, for a tile written with a mask) +
-    GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated.
+    GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated, and no member is held open
+    while the next is written. A member over the read cap is never decoded whole unless it must be reprojected or
+    rewritten with its mask; that one is refused with a Fix (:class:`ReadCapRefused`).
     """
     scratch = new_local_temp_dir("gbx_merge")
     try:
-        # Pass 1: brief header-only open to determine ref_crs and per-tile CRS.
+        # Pass 1: header-only scan, one member open at a time, to determine ref_crs and per-tile CRS.
         # Also capture the reference tile's pixel size so CRS-mismatched tiles can
         # be reprojected onto the same pixel grid (fixing sub-pixel drift).
-        # MemoryFile wraps the compressed bytes only (no pixel decode), so peak
-        # memory here is O(sum of encoded bytes), NOT O(decoded mosaic).
-        memfiles, datasets = _open_all(sorted_rasters)
-        try:
-            ref_crs = _pick_ref_crs(datasets)
-            tile_crses = [ds.crs for ds in datasets]
-            ref_tile = _reference_tile(datasets, ref_crs)
-            ref_pixel_res = _pixel_size(ref_tile)
-            ref_corner = _grid_corner(ref_tile)
-            has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
-            has_alpha = [_nodata.has_alpha(ds) for ds in datasets]
-            # a tile reprojected below is written with the footprint of its warp as a mask
-            # band when its fill would read as data (see :func:`_reproject_dataset`)
-            has_mask = [
-                m
-                or (
-                    ref_crs is not None
-                    and ds.crs is not None
-                    and ds.crs != ref_crs
-                    and _fill_reads_as_data(ds)
-                )
-                for m, ds in zip(has_mask, datasets)
-            ]
-        finally:
-            _close_all(memfiles, datasets)
+        # No pixel is decoded and no member is held open, so this holds one member's
+        # encoded bytes, NOT the group's.
+        hdrs = _scan_headers(sorted_rasters)
+        ref_crs = _pick_ref_crs(hdrs)
+        tile_crses = [h.crs for h in hdrs]
+        ref_tile = _reference_tile(hdrs, ref_crs)
+        ref_pixel_res = _pixel_size(ref_tile)
+        ref_corner = _grid_corner(ref_tile)
+        has_mask = [h.own_mask for h in hdrs]
+        has_alpha = [h.alpha for h in hdrs]
+        # a tile reprojected below is written with the footprint of its warp as a mask
+        # band when its fill would read as data (see :func:`_reproject_dataset`)
+        has_mask = [
+            m
+            or (
+                ref_crs is not None
+                and h.crs is not None
+                and h.crs != ref_crs
+                and h.fill_as_data
+            )
+            for m, h in zip(has_mask, hdrs)
+        ]
 
         # Pass 2: write tiles one-at-a-time to the scratch dir. In a group with an own-masked tile
         # every tile without one is written with its validity as its mask band (see MASKS above).
         group_masked = any(has_mask)
         tile_paths = []
+        from databricks.labs.gbx.ds.file_gbx import tile_read_cap
+
+        read_cap = tile_read_cap()
         for i, (rb, tile_crs) in enumerate(zip(sorted_rasters, tile_crses)):
             tile_path = os.path.join(scratch, f"tile_{i}.tif")
             needs_reproject = (
                 ref_crs is not None and tile_crs is not None and tile_crs != ref_crs
             )
+            if (
+                needs_reproject or (group_masked and not has_mask[i]) or has_alpha[i]
+            ) and hdrs[i].decoded > read_cap:
+                # this member is decoded whole to be reprojected or rewritten with its mask; a member copied to
+                # the scratch dir as it is is only ever read a window at a time, whatever its size
+                raise ReadCapRefused(_merge_refusal(hdrs[i].decoded, read_cap))
             if needs_reproject:
                 # Reproject to ref_crs, snapping to the reference pixel grid via
                 # target_res so all tiles share the same pixel boundaries and the
@@ -444,44 +534,9 @@ class ReadCapRefused(ValueError):
 
 
 class ArrayOverBudget(ReadCapRefused):
-    """The members of an array are, decoded together, over the memory budget of one call (see :func:`check_array_budget`).
-    The scalar array functions answer it with that row's error tile and its Fix."""
-
-
-def check_array_budget(sizes: List[int], cap: Optional[int] = None) -> None:
-    """Refuse an array of tiles whose decoded size is over the memory budget, before any of it is decoded.
-
-    The scalar array functions (``gbx_rst_merge``, ``gbx_rst_combine*``) hold the whole array in one row and decode its
-    members in one task. A member over the read cap is refused with the retile Fix every level gives; members that each
-    fit but add up to more than ``cap`` (the read cap this task carries, the worker-side binary cap of
-    ``materialize_decision``) are refused together, with the route that streams them from files.
-
-    ``sizes`` are the members' decoded sizes (:func:`_serde.decoded_bytes`, each band at its own type), which the
-    caller has from the headers it opened to check the member: no pixel is read, and no member is opened here.
-    """
-    from databricks.labs.gbx.ds.file_gbx import (
-        materialize_decision,
-        read_cap_refusal,
-        tile_read_cap,
-    )
-
-    read_cap = tile_read_cap()
-    cap = read_cap if cap is None else cap
-    for n in sizes:
-        if n > read_cap:
-            raise ReadCapRefused(read_cap_refusal(n, read_cap))
-    total = sum(sizes)
-    if materialize_decision(total, "ingest", cap_bytes=cap) == "error":
-
-        def size(n: int) -> str:
-            return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
-
-        raise ArrayOverBudget(
-            f"the {len(sizes)} tiles are {size(total)} decoded together, over this compute's memory budget "
-            f"({size(cap)}) for one call. Fix: keep the tiles as files and mosaic them with "
-            'databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method="vrt"), or retile them first '
-            "(gbx_rst_retile) into fewer, smaller tiles"
-        )
+    """A stack of members is past what a per-pixel combine can fold in the memory budget of one call: one row of it,
+    all members at that row, is over the budget (see :func:`_fold_windows`). The scalar array functions answer it with
+    that row's error tile and its Fix."""
 
 
 class MosaicTooLarge(ValueError):
@@ -552,22 +607,26 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     # Sort by raw GTiff bytes so the last-wins overlap winner is deterministic
     # (and tier-agreeing) regardless of caller/row-arrival order.
     rasters = sorted((bytes(r) for r in rasters))
-    memfiles, datasets = _open_all(rasters)
+    memfiles, datasets = [], []
     extra = []  # (memfile, dataset) pairs for reprojected sources, closed in finally
     try:
-        ref_crs = _pick_ref_crs(datasets)
         # --- SIZE GATE ---
-        # The decoded size of the union-extent mosaic comes from the tile headers (no pixel read), and
-        # the canonical COG decision (`materialize_decision`, kind "cog_write") says what to do with it: within
-        # the per-task budget the merge is built in RAM ("stream"); beyond it the merge streams through a VRT
-        # and a COG ("driver": bounded GDAL cache, the mosaic is never decoded whole); beyond the COG
-        # ceiling it stops here ("error"). Tiles a continent apart (or in places far apart once put in one
-        # CRS) make an extent of terabytes that is nearly all NoData: streaming that takes hours and a COG
-        # of gigabytes, so it is refused with a Fix: before anything is opened for reading or written. A
-        # failure to compute the size falls back to the in-RAM path rather than crashing.
+        # The headers are read one member at a time (no pixel is read and no member stays open), and the canonical
+        # COG decision (`materialize_decision`, kind "cog_write") says what to do with the decoded size of the
+        # union-extent mosaic: within the memory budget of this call (`_merge_budget`: the read cap the driver
+        # carried) the merge is built in RAM ("stream"); beyond it the merge streams through a VRT and a COG
+        # ("driver": bounded GDAL cache, the mosaic is never decoded whole); beyond the COG ceiling it stops here
+        # ("error"). Tiles a continent apart (or in places far apart once put in one CRS) make an extent of
+        # terabytes that is nearly all NoData: streaming that takes hours and a COG of gigabytes, so it is refused
+        # with a Fix: before anything is opened for reading or written. In RAM the merge also holds a copy of
+        # each member it must reproject or rewrite, a mask per member, and the members open beside the mosaic,
+        # so a group that adds up to more than the budget streams too: the peak does not grow with the number of
+        # members. A failure to compute the size falls back to the in-RAM path rather than crashing.
+        hdrs = _scan_headers(rasters)
+        ref_crs = _pick_ref_crs(hdrs)
         union = None
         try:
-            union = _union_decoded_bytes(datasets, ref_crs)
+            union = _union_decoded_bytes(hdrs, ref_crs)
         except Exception:
             _log.debug(
                 "merge_tiles: size-gate computation failed; falling back to in-RAM path",
@@ -580,22 +639,25 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
                 materialize_decision,
             )
 
-            how = materialize_decision(
-                union, "cog_write", cap_bytes=decoded_budget_bytes("serverless")
-            )
+            budget = _merge_budget()
+            how = materialize_decision(union, "cog_write", cap_bytes=budget)
             if how == "error":
                 raise MosaicTooLarge(
                     f"the mosaic of these {len(rasters)} tiles would be {union / 2**30:.0f} GiB decoded, over the "
                     f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
                     f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "
-                    f"place and one CRS together (key the group by them), or retile first"
+                    f"place and one CRS together (key the group by them), or retile first; the files of one "
+                    f'place can be mosaicked with databricks.labs.gbx.rasterx.helpers.merge_by_key(..., method="vrt")'
                 )
+            if how == "stream" and (
+                union + _held_bytes(hdrs, ref_crs) + sum(len(r) for r in rasters)
+                > budget
+            ):
+                how = "driver"
         if how == "driver":
-            # Delegate to the streaming path; close local resources first so
-            # the streaming function opens fresh handles independently.
-            _close_all(memfiles, datasets)
-            memfiles, datasets = [], []
+            # Delegate to the streaming path: it reads the headers again, one member at a time.
             return _merge_tiles_streaming(rasters)
+        memfiles, datasets = _open_all(rasters)
         # Reconcile CRS before merging: real AOIs that straddle a UTM zone boundary
         # (e.g. Sentinel-2 over SE Alaska -> EPSG:32608 + 32609) yield groups whose
         # tiles span multiple CRSs, but rasterio.merge requires one. Reproject any
@@ -668,6 +730,72 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         _close_all(memfiles, datasets)
 
 
+# The working set of a per-pixel fold, in bytes per pixel of one band in the window (a multiplier on the window, not a
+# cap): the members read as float64 or float32 beside the running values, the validity masks and the temporaries of
+# the reduction. A stack of N members adds the member arrays held together.
+_FOLD_PX = {"avg": 40, "running": 32, "stack": 40}
+
+
+@contextmanager
+def _members(rasters: List[bytes], budget: int):
+    """The group's members open for windowed reads, yielded as a list of datasets.
+
+    A group whose encoded bytes fit a quarter of the budget is opened from memory; a larger one is spooled to local
+    scratch files first and opened by path, so a second copy of the whole group is never held in RAM (GDAL reads a
+    window of a file a block at a time). No member is decoded whole either way: that is the caller's windows.
+    """
+    cache = block_cache_for(
+        budget
+    )  # the members stay open: their blocks must not pile up in GDAL's cache
+    if sum(len(r) for r in rasters) <= budget // 4:
+        memfiles, datasets = _open_all(rasters, gate=False)
+        try:
+            with capped_block_cache(cache):
+                yield datasets
+        finally:
+            _close_all(memfiles, datasets)
+        return
+    scratch = new_local_temp_dir("gbx_combine")
+    datasets = []
+    try:
+        for i, b in enumerate(rasters):
+            path = os.path.join(scratch, f"member_{i}.tif")
+            with open(path, "wb") as fh:
+                fh.write(b)
+            datasets.append(open_data(path))
+        with capped_block_cache(cache):
+            yield datasets
+    finally:
+        for ds in datasets:
+            ds.close()
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _fold_windows(shape, kind: str, n: int, budget: int):
+    """The row windows a per-pixel fold of ``n`` members of ``shape`` (bands, rows, cols) runs in, sized so one window's
+    working set is within half the budget (the other half is the output, GDAL's cache and the group's own bytes). One
+    window when the whole canvas fits. A single row of the stack over the budget cannot be folded: refused with the Fix.
+    """
+    from rasterio.windows import Window
+
+    bands, rows, cols = shape
+    per_px = _FOLD_PX[kind] * (n + 1 if kind == "stack" else 1)
+    per_row = bands * cols * per_px
+    step = (budget // 2) // per_row
+    if step < 1:
+        size = (
+            f"{per_row >> 20} MiB" if per_row >= (1 << 20) else f"{per_row >> 10} KiB"
+        )
+        have = f"{budget >> 20} MiB" if budget >= (1 << 20) else f"{budget >> 10} KiB"
+        raise ArrayOverBudget(
+            f"the {n} tiles are too many to combine at {cols} pixels wide: one row of them needs {size}, over this "
+            f"compute's memory budget ({have}) for one call. Fix: {_VRT_ROUTE}, or retile them first "
+            "(gbx_rst_retile) into fewer, smaller tiles"
+        )
+    step = min(step, rows)
+    return [Window(0, r0, cols, min(step, rows - r0)) for r0 in range(0, rows, step)]
+
+
 def combineavg_tiles(rasters: List[bytes]) -> bytes:
     """Per-pixel mean across the group's aligned tiles, ignoring NoData (GTiff bytes).
 
@@ -682,82 +810,65 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
     ALREADY aligned (same shape/extent/CRS) and raises ``ValueError`` if their
     raster shapes differ, rather than silently resampling.
 
-    SCALE: the group's running sum + count are accumulated ONE tile at a time
-    (open, add, close) so peak memory is ~O(one tile + 2 float64/int64
-    accumulators), independent of the group size N. Stacking all N tiles as
-    float64 (the obvious form) peaks at ~4x the raw group bytes -- a 16-tile group
-    of 1024x1024x4 float32 hit ~1.2 GB and would OOM a Spark Python worker; the
-    streaming form holds ~170 MB for the same input and is byte-identical.
+    SCALE: the group is folded window by window (rows of the canvas), each window one member at a time into a
+    running sum + count, so the peak is ~O(one window of the canvas + 2 float64/int64 accumulators), independent of
+    the group size N and of how large a member is. A canvas that fits the budget (:func:`_merge_budget`) is one window,
+    which is the plain accumulate-then-write; stacking all N tiles as float64 (the obvious form) peaks at ~4x the raw
+    group bytes -- a 16-tile group of 1024x1024x4 float32 hit ~1.2 GB and would OOM a Spark Python worker.
+    A row of the canvas too wide for the budget is refused with a Fix (:class:`ArrayOverBudget`).
     """
     if not rasters:
         return None
     if len(rasters) == 1:
         return bytes(rasters[0])
-    sums = counts = None
-    shape = ref_profile = ref_labels = out_dtype = None
-    fallback = None
-    any_nodata = False
-    for b in rasters:
-        with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
-            from databricks.labs.gbx.pyrx._serde import over_read_cap
-
-            reason = over_read_cap(
-                ds
-            )  # the decode of this member follows: the read-cap gate applies
-            if reason is not None:
-                raise ReadCapRefused(reason)
-            if sums is None:
-                shape = (ds.count, ds.height, ds.width)
-                sums = np.zeros(shape, dtype="float64")
-                counts = np.zeros(shape, dtype="int64")
-                ref_profile = _comp.source_profile(ds.profile)
-                ref_labels = list(ds.colorinterp)
-                out_dtype = ds.dtypes[0]
-            elif (ds.count, ds.height, ds.width) != shape:
+    budget = _merge_budget()
+    with _members(rasters, budget) as datasets:
+        ref = datasets[0]
+        shape = (ref.count, ref.height, ref.width)
+        for ds in datasets[1:]:
+            if (ds.count, ds.height, ds.width) != shape:
                 raise ValueError(
                     "rst_combineavg_agg requires aligned tiles (same shape); got "
                     f"{(ds.count, ds.height, ds.width)} vs {shape}"
                 )
-            nd = ds.nodata
-            arr = ds.read().astype("float64")
-            if nd is not None:
-                any_nodata = True
-                if fallback is None:
-                    fallback = nd
-                valid = arr != nd
-            else:
-                valid = None
-        # tile closed; only the running accumulators + this one tile stay resident
-        if valid is None:
-            sums += arr
-            counts += 1
-        else:
-            sums += np.where(valid, arr, 0.0)
-            counts += valid
+        windows = _fold_windows(shape, "avg", len(datasets), budget)
+        ref_profile = _comp.source_profile(ref.profile)
+        ref_labels = list(ref.colorinterp)
+        out_dtype = ref.dtypes[0]
+        nodatas = [ds.nodata for ds in datasets]
+        any_nodata = any(nd is not None for nd in nodatas)
+        fallback = next((nd for nd in nodatas if nd is not None), 0.0)
 
-    if fallback is None:
-        fallback = 0.0
-    means = np.where(counts > 0, sums / np.maximum(counts, 1), fallback)
-    if np.issubdtype(np.dtype(out_dtype), np.integer):
-        out = np.rint(means)
-    else:
-        out = means
-    out = out.astype(out_dtype)
-
-    ref_profile.update(driver="GTiff")
-    if any_nodata:
-        ref_profile.update(nodata=fallback)
-    decoded_bytes = out.nbytes
-    ref_profile.update(
-        _comp.creation_opts(
-            str(out.dtype), decoded_bytes=decoded_bytes, compress="auto"
+        ref_profile.update(driver="GTiff")
+        if any_nodata:
+            ref_profile.update(nodata=fallback)
+        decoded_bytes = int(np.prod(shape)) * np.dtype(out_dtype).itemsize
+        ref_profile.update(
+            _comp.creation_opts(
+                str(np.dtype(out_dtype)), decoded_bytes=decoded_bytes, compress="auto"
+            )
         )
-    )
-    with MemoryFile() as out_mf:
-        with out_mf.open(**ref_profile) as dst:
-            _comp.match_alpha(dst, ref_labels)
-            dst.write(out)
-        return out_mf.read()
+        with MemoryFile() as out_mf:
+            with out_mf.open(**ref_profile) as dst:
+                _comp.match_alpha(dst, ref_labels)
+                for window in windows:
+                    h, w = window.height, window.width
+                    sums = np.zeros((shape[0], h, w), dtype="float64")
+                    counts = np.zeros((shape[0], h, w), dtype="int64")
+                    for ds, nd in zip(datasets, nodatas):
+                        arr = ds.read(window=window).astype("float64")
+                        if nd is None:
+                            sums += arr
+                            counts += 1
+                        else:
+                            valid = arr != nd
+                            sums += np.where(valid, arr, 0.0)
+                            counts += valid
+                    means = np.where(counts > 0, sums / np.maximum(counts, 1), fallback)
+                    if np.issubdtype(np.dtype(out_dtype), np.integer):
+                        means = np.rint(means)
+                    dst.write(means.astype(out_dtype), window=window)
+            return out_mf.read()
 
 
 def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
@@ -1045,15 +1156,15 @@ def _require_aligned(datasets, func_name: str) -> None:
 _RUNNING_STATS = {"min": (np.inf, np.minimum), "max": (-np.inf, np.maximum)}
 
 
-def _running_stat(datasets, nodatas, stat: str, fallback) -> np.ndarray:
-    """min or max over the tiles, one tile in memory at a time (plus the running value and count).
+def _running_stat(datasets, nodatas, stat: str, fallback, window=None) -> np.ndarray:
+    """min or max over the tiles (of ``window``, else whole), one tile in memory at a time (plus the running value and count).
 
     float32 like the stacked reduction, so the values are the same; NaN propagates as it does there.
     """
     init, op = _RUNNING_STATS[stat]
     acc = counts = None
     for ds, nd in zip(datasets, nodatas):
-        arr = ds.read().astype("float32")  # (bands, h, w)
+        arr = ds.read(window=window).astype("float32")  # (bands, h, w)
         valid = np.ones(arr.shape, dtype=bool) if nd is None else arr != nd
         if acc is None:
             acc = np.full(arr.shape, init, dtype="float32")
@@ -1063,13 +1174,15 @@ def _running_stat(datasets, nodatas, stat: str, fallback) -> np.ndarray:
     return np.where(counts > 0, acc.astype("float64"), fallback)
 
 
-def _stacked_stat(datasets, nodatas, stat: str, fallback) -> np.ndarray:
-    """sum, count, median or stddev over the whole stack of tiles (N, bands, h, w)."""
+def _stacked_stat(datasets, nodatas, stat: str, fallback, window=None) -> np.ndarray:
+    """sum, count, median or stddev over the stack of tiles (N, bands, h, w), of ``window`` when given."""
     # sum/stddev/median need float64 precision to avoid accumulation error; count is exact in float32.
     _ACCUM_STATS = {"sum", "stddev", "median"}
     stack_dtype = "float64" if stat in _ACCUM_STATS else "float32"
     # Stack: (N, bands, h, w) — mirrors in_ar layout in the VRT pixel function.
-    stacked = np.stack([ds.read().astype(stack_dtype) for ds in datasets], axis=0)
+    stacked = np.stack(
+        [ds.read(window=window).astype(stack_dtype) for ds in datasets], axis=0
+    )
 
     # Build per-tile validity mask: (N, bands, h, w).
     valid = np.ones(stacked.shape, dtype=bool)
@@ -1106,7 +1219,9 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
 
     Mirrors CombineStats.compute (Scala): the masked reduction per-pixel per-band. min and max fold
     one tile at a time into a running value (memory is about four tiles, however many there are);
-    sum, count, median and stddev stack all N tile arrays. Output dtype is preserved from the
+    sum, count, median and stddev stack all N tile arrays. Either way the canvas is folded in row windows sized to
+    the budget (:func:`_merge_budget`), one window when it fits: the peak is a window of the stack, not the canvas.
+    Output dtype is preserved from the
     first input tile; integer output is rounded via np.rint before the cast (same
     as the heavy VRT pixel function's `np.copyto(out_ar, np.rint(result), casting='unsafe')`).
 
@@ -1119,42 +1234,43 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
     if len(rasters) == 1:
         return bytes(rasters[0])
 
-    memfiles, datasets = _open_all(rasters)
-    try:
+    budget = _merge_budget()
+    with _members(rasters, budget) as datasets:
         _require_aligned(datasets, f"gbx_rst_combine{stat}")
 
         ref = datasets[0]
         out_dtype = ref.dtypes[0]
         ref_profile = _comp.source_profile(ref.profile)
+        shape = (ref.count, ref.height, ref.width)
+        running = stat in _RUNNING_STATS
+        windows = _fold_windows(
+            shape, "running" if running else "stack", len(datasets), budget
+        )
 
         nodatas = [ds.nodata for ds in datasets]  # header values, no pixel read
         any_nodata = any(nd is not None for nd in nodatas)
         fallback = next((nd for nd in nodatas if nd is not None), 0.0)
 
-        reduce = _running_stat if stat in _RUNNING_STATS else _stacked_stat
-        result = reduce(datasets, nodatas, stat, fallback)
-
-        # Dtype preservation + integer rounding (matches heavy tier exactly).
-        if np.issubdtype(np.dtype(out_dtype), np.integer):
-            result = np.rint(result)
-        out = result.astype(out_dtype)  # numpy default casting='unsafe'
-
+        reduce = _running_stat if running else _stacked_stat
         ref_profile.update(driver="GTiff")
         if any_nodata:
             ref_profile.update(nodata=fallback)
-        decoded_bytes = out.nbytes
+        decoded_bytes = int(np.prod(shape)) * np.dtype(out_dtype).itemsize
         ref_profile.update(
             _comp.creation_opts(
-                str(out.dtype), decoded_bytes=decoded_bytes, compress="auto"
+                str(np.dtype(out_dtype)), decoded_bytes=decoded_bytes, compress="auto"
             )
         )
         with MemoryFile() as out_mf:
             with out_mf.open(**ref_profile) as dst:
                 _comp.match_alpha(dst, ref.colorinterp)
-                dst.write(out)
+                for window in windows:
+                    result = reduce(datasets, nodatas, stat, fallback, window)
+                    # Dtype preservation + integer rounding (matches heavy tier exactly).
+                    if np.issubdtype(np.dtype(out_dtype), np.integer):
+                        result = np.rint(result)
+                    dst.write(result.astype(out_dtype), window=window)
             return out_mf.read()
-    finally:
-        _close_all(memfiles, datasets)
 
 
 def combine_min_tiles(rasters: List[bytes]) -> bytes:

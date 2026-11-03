@@ -1264,7 +1264,6 @@ def _merge_bytes(tiles):
     if not elems:
         return None
     rasters = []
-    sizes = []
     dropped = 0
     for t in elems:
         try:
@@ -1278,19 +1277,17 @@ def _merge_bytes(tiles):
             # Validate the bytes are openable before collecting them; a corrupt
             # member that passes the empty/None filter but cannot be opened by
             # rasterio must be skipped here, not inside agg_core.merge_tiles
-            # (which opens all bytes at once and re-raises on the first failure).
+            # (which opens every member and re-raises on the first failure).
             with _serde.open_tile(
                 candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                size = _serde.decoded_bytes(ds)
+            ):  # a validity probe: the merge streams a group past the budget
+                pass
             rasters.append(candidate)
-            sizes.append(size)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
     if not rasters:
         return None
-    agg_core.check_array_budget(sizes)
     return agg_core.merge_tiles(rasters), dropped
 
 
@@ -1358,7 +1355,6 @@ def _uf_merge(tiles, file_refs):
         frefs.append(None)
 
     rasters = []
-    sizes = []
     dropped = 0
     for t, fref in zip(tiles, frefs):
         if t is None or _tile_is_empty(t):
@@ -1372,10 +1368,9 @@ def _uf_merge(tiles, file_refs):
                 candidate = bytes(vt.raster)
             with _serde.open_tile(
                 candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                size = _serde.decoded_bytes(ds)
+            ):  # a validity probe: the merge streams a group past the budget
+                pass
             rasters.append(candidate)
-            sizes.append(size)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
@@ -1383,7 +1378,6 @@ def _uf_merge(tiles, file_refs):
     if not rasters:
         return _array_without_members(tiles)
     try:
-        agg_core.check_array_budget(sizes)
         new_bytes = agg_core.merge_tiles(rasters)
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _serde.build_error_tile(str(exc), 0)
@@ -1413,7 +1407,6 @@ def _combineavg_bytes(tiles):
     if not elems:
         return None
     rasters = []
-    sizes = []
     good_elems = []
     dropped = 0
     for t in elems:
@@ -1427,17 +1420,15 @@ def _combineavg_bytes(tiles):
             # dropped here, not inside agg_core which opens all at once.
             with _serde.open_tile(
                 candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                size = _serde.decoded_bytes(ds)
+            ):  # a validity probe: the combine folds a group past the budget window by window
+                pass
             rasters.append(candidate)
-            sizes.append(size)
             good_elems.append(t)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
     if not rasters:
         return None
-    agg_core.check_array_budget(sizes)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     return agg_core.combineavg_tiles(rasters), cellid, dropped
@@ -1493,7 +1484,6 @@ def _uf_combineavg(tiles, file_refs):
         frefs.append(None)
 
     rasters = []
-    sizes = []
     good_elems = []
     dropped = 0
     for t, fref in zip(tiles, frefs):
@@ -1508,10 +1498,9 @@ def _uf_combineavg(tiles, file_refs):
                 candidate = bytes(vt.raster)
             with _serde.open_tile(
                 candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                size = _serde.decoded_bytes(ds)
+            ):  # a validity probe: the combine folds a group past the budget window by window
+                pass
             rasters.append(candidate)
-            sizes.append(size)
             good_elems.append(t)
         except Exception:  # noqa: BLE001
             dropped += 1
@@ -1519,7 +1508,6 @@ def _uf_combineavg(tiles, file_refs):
 
     if not rasters:
         return _array_without_members(tiles)
-    agg_core.check_array_budget(sizes)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     new_bytes = agg_core.combineavg_tiles(rasters)
@@ -1556,7 +1544,6 @@ def _combine_stat_bytes(tiles, stat: str):
     if not elems:
         return None
     rasters = []
-    sizes = []
     good_elems = []
     dropped = 0
     for t in elems:
@@ -1568,17 +1555,15 @@ def _combine_stat_bytes(tiles, stat: str):
                 candidate = bytes(vt.raster)
             with _serde.open_tile(
                 candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                size = _serde.decoded_bytes(ds)
+            ):  # a validity probe: the combine folds a group past the budget window by window
+                pass
             rasters.append(candidate)
-            sizes.append(size)
             good_elems.append(t)
         except Exception:  # noqa: BLE001
             dropped += 1
             continue
     if not rasters:
         return None
-    agg_core.check_array_budget(sizes)
     cellids = {_tile_cellid(t) for t in good_elems}
     cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
     _reducer = {
@@ -5999,10 +5984,10 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
     try:
         return agg_core.merge_tiles(rasters)
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
-        # This group's answer, not the query's failure: its error tile where the result is a tile, NULL where it
-        # is bytes (they have no place for a reason).
+        # Where the result is a tile this group's answer is its error tile. Bytes have no place for a reason and a
+        # NULL reads as an empty group, so the aggregate raises with the Fix, never a silent NULL.
         if not error_channel:
-            return None
+            raise
         return _error_payload([_serde.build_error_tile(str(exc), 0)])
 
 
@@ -6098,7 +6083,6 @@ def _as_virtual_tile_from_path_udf(encoded):
 
 
 @pandas_udf(BinaryType())
-@_refusal_as_null
 def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
 
@@ -6127,7 +6111,13 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
     if not rasters:
         payload = _error_payload(_only_error_tiles(tile))
         return None if payload is None else (0).to_bytes(8, "big") + payload
-    out = agg_core.combineavg_tiles(rasters)
+    try:
+        out = agg_core.combineavg_tiles(rasters)
+    except (
+        agg_core.ReadCapRefused
+    ) as exc:  # this group's error tile, in the tile channel
+        refusal = _error_payload([_serde.build_error_tile(str(exc), 0)])
+        return (0).to_bytes(8, "big") + refusal
     if out is None:
         return None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
@@ -6137,7 +6127,6 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
 
 
 @pandas_udf(BinaryType())
-@_refusal_as_null
 def _combineavg_agg_sql_udf(tile: pd.Series) -> bytes:
     # SQL registration variant: returns raw GTiff bytes (no cellid envelope), so
     # SQL callers can wrap it directly with gbx_rst_fromcontent(<agg>, 'GTiff').

@@ -9,7 +9,8 @@ MVP_A, which the shape test also runs through every aggregate shape.
 
 An aggregate's first argument is its group's rows; the arguments after it are the group's constants. The aggregates
 return the GeoTIFF bytes, so a group with no usable member is NULL (bytes have no place for an error tile). A tile
-that cannot be read, and an error tile, are skipped; tiles of different shapes raise.
+that cannot be read, and an error tile, are skipped; tiles of different shapes raise. A group over the memory budget
+(the read cap) is folded by streaming; one streaming cannot cover raises with a Fix naming the vrt route.
 
 The cell rasterizers: a repeated cell burns its LARGEST value, whatever order the rows arrive in; a NULL value in a typed
 column never wins against a number, and a cell with nothing but NULL burns NaN; a NULL cell id is skipped, except that a
@@ -91,6 +92,18 @@ def _bands_null_index(tmpdir):
     return [*rows, (rows[0][0], None)]  # a NULL index skips the row
 
 
+@builder("ra_far_apart")
+def _far_apart(tmpdir):
+    """Two 4 x 4 tiles on a 10 m grid, 10^7 m apart: a mosaic of 10^12 pixels, nearly all NoData."""
+    import numpy as np
+
+    px = np.arange(16, dtype="float64").reshape(1, 4, 4)
+    return [
+        _tile(_gtiff(px, "EPSG:3857", origin=(0.0, 40.0))),
+        _tile(_gtiff(px, "EPSG:3857", origin=(1.0e7, 1.0e7))),
+    ]
+
+
 @builder("ra_stack_misshaped")
 def _misshaped(tmpdir):
     import numpy as np
@@ -109,16 +122,43 @@ SUM2 = (
 RASTER_AGGREGATE = (
     # --- the rows of the two aggregates that MVP_A also runs through every shape
     *(c for c in MVP_A if c.fn in (MA, BR)),
-    # An aggregate over a group whose mosaic is over the memory budget (READ_CAP_ROWS lowers the cap to 1 KiB; a member of
-    # pair_aligned is 4 KiB decoded): the group's answer is NULL, bytes having no place for the reason, and the other groups
-    # still merge. The reason (with the Fix naming `merge_by_key(..., method="vrt")`) is the error tile of the scalar
-    # `gbx_rst_merge` over the same tiles.
+    # A group whose members add up to more than the memory budget is folded by streaming, so the result is the
+    # unconstrained one (READ_CAP_ROWS lowers the cap to 3000 bytes; the mosaic of quad_tiles is 4 KiB, its members
+    # 1 KiB each, the stack's members 192 bytes each)
+    Case(
+        "merge_agg_streams_under_budget",
+        MA,
+        (Build("quad_tiles"),),
+        "merged_equals",
+        Build("tile_32"),
+        ONLY,
+    ),
+    Case(
+        "combineavg_agg_streams_under_budget",
+        CA,
+        (STACK,),
+        "ref",
+        "combine_avg",
+        ONLY,
+    ),
+    # What streaming cannot cover raises with a Fix that names the vrt route: never an executor OOM, never a NULL (which
+    # reads as an empty group). Tiles 10^7 m apart make a mosaic past what a merge can stream; and a tile in another CRS
+    # over the read cap (READ_CAP_ROWS: 150 bytes, a member of aa_mixed_crs is 192) must be decoded whole to be
+    # reprojected.
     Case(
         "merge_agg_over_budget_refused",
         MA,
-        (Build("pair_aligned"),),
-        "null",
-        None,
+        (Build("ra_far_apart"),),
+        "raises",
+        "merge_by_key",
+        ONLY,
+    ),
+    Case(
+        "merge_agg_member_over_cap_refused",
+        MA,
+        (Build("aa_mixed_crs"),),
+        "raises",
+        "merge_by_key",
         ONLY,
     ),
     # --- combineavg: the mean of the valid values at each pixel, against numpy

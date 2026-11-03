@@ -28,25 +28,8 @@ def spark():
 
 
 def test_legacy_functions_registration(spark):
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy_funcs
+    from databricks.labs.gbx import manager
 
-    legacy_funcs.register(spark)
+    manager.register_family(spark, ("gbx_st_legacy",))
     df = spark.sql("show functions like 'gbx_st_legacyaswkb'")
     assert df.count() is not None
-
-
-def test_register_honors_explicit_session():
-    # register() must use the session it is handed, not discard it for
-    # SparkSession.builder.getOrCreate(). Mock the passed session and assert the
-    # register_ds read fires on IT (and getOrCreate is never consulted).
-    from unittest.mock import MagicMock, patch
-
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy_funcs
-
-    fake = MagicMock()
-    with patch(
-        "databricks.labs.gbx.vectorx.jts.legacy.functions.SparkSession"
-    ) as ss_cls:
-        legacy_funcs.register(fake)
-        ss_cls.builder.getOrCreate.assert_not_called()
-    fake.read.format.assert_called_once_with("register_ds")

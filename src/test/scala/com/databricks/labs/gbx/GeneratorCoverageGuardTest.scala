@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx
 
+import com.databricks.labs.gbx.kernels.TestL1
 import org.apache.spark.sql.catalyst.expressions.CollectionGenerator
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
@@ -15,14 +16,7 @@ class GeneratorCoverageGuardTest extends PlanTest with SilentSparkSession {
 
     /** Registers every gbx package so the guard sees the complete set of heavyweight functions. */
     private def registerAll(): Unit = {
-        gridx.bng.functions.register(spark)
-        gridx.custom.functions.register(spark)
-        gridx.quadbin.functions.register(spark)
-        gridx.h3.functions.register(spark)
-        rasterx.functions.register(spark)
-        vectorx.functions.register(spark)
-        vectorx.jts.legacy.functions.register(spark)
-        pmtiles.functions.register(spark)
+        TestL1.installAll(spark)
     }
 
     /** (SQL name, expression class name) of every registered gbx_* function. */

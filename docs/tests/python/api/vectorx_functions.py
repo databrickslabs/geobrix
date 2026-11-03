@@ -15,7 +15,7 @@ except ImportError:
     SparkSession = None
 
 try:
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 except ImportError:
     vx = None
 
@@ -27,9 +27,9 @@ except ImportError:
 
 def vectorx_setup_example(spark):
     """Common setup: register VectorX (legacy geometry). Run once before examples."""
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     return None
 
 

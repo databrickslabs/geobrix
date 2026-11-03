@@ -43,8 +43,9 @@ def setup_rasterx(spark: SparkSession, sample_data_path: str = None):
         >>> rasters = setup_rasterx(spark, "/Volumes/main/default/geobrix_samples/geobrix-examples")
         >>> print(f"Loaded {rasters.count()} rasters")
     """
+    from databricks.labs.gbx import manager as gbx_manager
     # Register RasterX functions
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     if sample_data_path:
         # Load sample Sentinel-2 imagery

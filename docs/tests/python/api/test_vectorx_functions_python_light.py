@@ -26,10 +26,10 @@ def _vectorx_light_setup_views(spark):
 
     Mirrors the test/setup pattern from test_rasterx_*_python_light.py.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_vectorx_light  # noqa: PLC0415
 
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_',), level="L3")
     create_setup_views_vectorx_light(spark)
 
 

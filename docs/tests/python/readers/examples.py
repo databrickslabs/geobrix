@@ -897,9 +897,10 @@ def extract_raster_metadata(spark, path="/data/rasters"):
         metadata.show(truncate=False)
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         rasters = spark.read.format("gdal").load(path)
         rasters = _gdal_df_with_path(rasters)
@@ -951,10 +952,11 @@ def process_rasters_with_clip(spark, path="/data/input"):
         clipped.show()
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
         from pyspark.sql.functions import lit
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         rasters = spark.read.format("gdal").load(path)
         
@@ -1006,9 +1008,10 @@ def create_raster_catalog(spark, path="/data/satellite/"):
         catalog.write.mode("overwrite").saveAsTable("raster_catalog")
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         rasters = spark.read.format("gdal").load(path)
         rasters = _gdal_df_with_path(rasters)
@@ -1167,10 +1170,11 @@ def satellite_imagery_catalog_usecase(spark, path="/data/satellite/"):
         catalog.write.mode("overwrite").saveAsTable("satellite_catalog")
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
         from pyspark.sql.functions import col
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         imagery = spark.read.format("gdal") \
             .option("filterRegex", ".*\\.(tif|TIF)") \
@@ -1226,9 +1230,10 @@ def elevation_model_processing_usecase(spark, path="/data/dems/"):
         stats.show()
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         dems = spark.read.format("gdal").load(path)
         dems = _gdal_df_with_path(dems)
@@ -1285,10 +1290,11 @@ def multi_temporal_analysis_usecase(spark, path="/data/time_series/"):
         catalog.orderBy("date").show()
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
         from pyspark.sql.functions import regexp_extract
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         # Match .tif so sample data works; use ".*_NDVI_.*\\.tif" for NDVI-only time series
         time_series = spark.read.format("gdal") \
@@ -1398,9 +1404,10 @@ def troubleshoot_memory_issues(spark, path="/path/to/files"):
         ).cache()
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         df = spark.read.format("gdal") \
             .option("sizeInMB", "16") \
@@ -1456,9 +1463,10 @@ def rasterx_integration_pipeline(spark, path="/data/input"):
         result.write.mode("overwrite").saveAsTable("raster_metadata")
         ```
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         
         result = (
             spark.read.format("gdal")

@@ -258,9 +258,9 @@ def run_spark_path_reader(
     emitted ``ResultRow``. The total ``.count()`` iteration time is unchanged.
     This isolates the listing/header-open planning cost from the executor read cost.
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     def _job():
@@ -410,14 +410,14 @@ def run_virtual_tile_pixel_read(
     """
     import os
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     if disable_file:
         os.environ["GBX_DISABLE_FILE"] = "1"
     else:
         os.environ.pop("GBX_DISABLE_FILE", None)
 
-    from databricks.labs.gbx.ds.register import register
-
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     import pyspark.sql.functions as _F
@@ -541,23 +541,23 @@ def run_format_read(
     (plain .count()).
     Returns a single ResultRow (mode="spark-path", category="reader").
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     if fmt.endswith("_gbx"):
         # register() installs ALL light DataSources (raster_gbx, gtiff_gbx, pmtiles_gbx,
         # vector_gbx + the vector *_gbx). Registering only for fmt=="raster_gbx" left vector
         # formats (geojson_gbx, shapefile_gbx, ...) unregistered -> DATA_SOURCE_NOT_FOUND.
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
     elif fmt in ("gdal", "gtiff_gdal", "netcdf_gdal"):
         # Heavy raster readers need the GDAL drivers initialised (registered via the
         # synchronized GDALManager guard inside rasterx.register). netcdf_gdal is the
         # heavy leg of the NetCDF raster bench; gtiff_gdal/gdal are the GeoTIFF readers.
         try:
-            from databricks.labs.gbx.rasterx import functions as _rx
 
-            _rx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
         except Exception:  # noqa: BLE001
             pass  # best-effort GDAL init; failure surfaces in the timed call
 
@@ -710,6 +710,8 @@ def run_format_write(
     ``keepParts=true`` so the parts survive across warmup+measured iterations (a merge
     that deleted parts on iteration 1 would find an empty dir on iteration 2 and error).
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
     _note_suffix = f" [{label}]" if label else ""
     # Merge shape is inferred from the options dict (no new positional param, so all
@@ -718,17 +720,15 @@ def run_format_write(
     _merge_mode = bool(options) and str(options.get("merge", "")).lower() == "true"
 
     # Register light DS (always needed for raster_gbx reader/writer).
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
     # Best-effort heavy init when the input is read by a heavyweight GDAL format.
     _heavy_fmts = {"gdal", "gtiff_gdal"}
     if read_fmt in _heavy_fmts:
         try:
-            from databricks.labs.gbx.rasterx import functions as _rx
 
-            _rx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
         except Exception:  # noqa: BLE001
             pass
 
@@ -938,12 +938,13 @@ def run_pmtiles_write(
     repeated ``write.format(write_fmt)`` calls. Returns a single ResultRow
     (mode="spark-path", category="writer").
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     if write_fmt == "pmtiles_gbx":
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
 
     # Build n_tiles distinct (z, x, y) synthetic PNG tiles.
     # z is chosen so that side*side >= n_tiles (no duplicate addresses).
@@ -1065,9 +1066,9 @@ def run_vector_write(
     anonymous part.  On any error returns status="error"
     with the exception in ``note`` (does not raise).
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     # Read source once and count to establish the feature count for parity.
@@ -1304,6 +1305,8 @@ def run_mvt_agg(
         "lightweight"  → ``databricks.labs.gbx.pyvx.functions``
         "heavyweight"  → ``databricks.labs.gbx.vectorx.functions``
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     # Register the tier.
@@ -1311,12 +1314,12 @@ def run_mvt_agg(
         if api == "lightweight":
             from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
             asmvt_fn = vx._light_st_asmvt
         else:
             from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
             asmvt_fn = hx.st_asmvt
     except Exception as e:  # noqa: BLE001
         return ResultRow(
@@ -1574,6 +1577,8 @@ def run_pmtiles_agg(
         "lightweight"  -> ``register_pmtiles_agg`` (pure-Python grouped agg)
         "heavyweight"  -> ``functions.register`` (Scala UDAF via the JAR)
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     # Register the tier.
@@ -1583,9 +1588,8 @@ def run_pmtiles_agg(
 
             register_pmtiles_agg(spark)
         else:
-            from databricks.labs.gbx.pmtiles import functions as _pt_reg
 
-            _pt_reg.register(spark)
+            gbx_manager.register_family(spark, ("gbx_pmtiles_",), level="L1")
         from databricks.labs.gbx.pmtiles import functions as pt
 
         agg_fn = pt.pmtiles_agg
@@ -1843,10 +1847,10 @@ def run_gtiff_file_read(
 
     Returns a single ResultRow (mode="spark-path", category="reader").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.ds.file_gbx import gbx_file_read
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
     access = {"fuse": "auto", "external": "external", "managed": "managed"}[file_mode]
 
@@ -1973,10 +1977,10 @@ def run_gtiff_file_write(
 
     Returns a single ResultRow (mode="spark-path", category="writer").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx.file_table import write_file_table
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
     parts, slots = measure_parallelism(spark, tile_df)
     n = int(tile_df.count())
@@ -2152,9 +2156,9 @@ def run_gpkg_file_read(
 
     Returns a single ResultRow (mode="spark-path", category="reader").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     # --- build the input df and _job based on file_mode -------------------- #
@@ -2532,9 +2536,9 @@ def run_gpkg_file_write(
 
     Returns a single ResultRow (mode="spark-path", category="writer").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     if file_mode == "fuse":
@@ -3065,9 +3069,9 @@ def run_raster_decode_read_sweep(
     Returns:
         List of one or two ResultRow instances (mode="spark-path" / "spark-path-skip-order").
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     env = capture_env(where)
 
     import pyspark.sql.functions as _F
@@ -3418,14 +3422,15 @@ def run_legacy_aswkb(
 ) -> "ResultRow":
     """Time gbx_st_legacyaswkb decode over ``n_rows`` synthetic legacy structs.
 
-    Light (``api="lightweight"``) registers ``databricks.labs.gbx.pyvx`` and
+    Light (``api="lightweight"``) registers the legacy decode at L3 and
     times ``SELECT gbx_st_legacyaswkb(g) FROM v``. Heavy (``api="heavyweight"``)
-    registers ``databricks.labs.gbx.vectorx.jts.legacy`` -- the SAME SQL name --
+    registers it at the manager's choice (the JAR's decode) -- the SAME SQL name --
     and times the same query. (The shared name means a light+heavy parity cell
     must collect light BEFORE registering heavy; that ordering lives in the
     cluster cell, not here -- each call registers exactly one tier.)
     Returns a single ResultRow (mode="spark-path", category="legacy").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_legacy_structs
 
     env = capture_env(where)
@@ -3433,13 +3438,11 @@ def run_legacy_aswkb(
     cat = "legacy"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx.jts.legacy import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_legacy",), level="L1")
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3529,6 +3532,7 @@ def run_triangulate(
     occupy different catalog paths and coexist). Records ``rows`` = number of
     output triangles. Returns one ResultRow (mode="spark-path", category="tin").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
 
     env = capture_env(where)
@@ -3536,13 +3540,11 @@ def run_triangulate(
     cat = "tin"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3652,6 +3654,7 @@ def run_interp_bbox(
     ``rows`` = number of interpolated grid points. Returns one ResultRow
     (mode="spark-path", category="tin").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
 
     env = capture_env(where)
@@ -3659,13 +3662,11 @@ def run_interp_bbox(
     cat = "tin"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3784,6 +3785,7 @@ def run_interp_geom(
     Records ``rows`` = number of interpolated grid points. Returns one ResultRow
     (mode="spark-path", category="tin").
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_tin_points
 
     env = capture_env(where)
@@ -3791,13 +3793,11 @@ def run_interp_geom(
     cat = "tin"
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
 
-            vx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
-            from databricks.labs.gbx.vectorx import functions as hx
 
-            hx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3908,14 +3908,16 @@ def _register_quadbin(spark, api: str) -> None:
     must collect light BEFORE re-registering heavy) lives in the cluster cell,
     not here.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     if api == "lightweight":
-        from databricks.labs.gbx.pygx import functions as gx
 
-        gx.register(spark)
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
     else:
-        from databricks.labs.gbx.gridx.quadbin import functions as hx
 
-        hx.register(spark)
+        gbx_manager.register_family(spark, ("gbx_quadbin_",), level="L1")
 
 
 def run_quadbin_pointascell(
@@ -4930,14 +4932,16 @@ def _register_bng(spark, api: str) -> None:
     form picks the tier (see :func:`_bng_explode_sql`). The light-vs-heavy parity gate
     (which collects light BEFORE re-registering heavy) lives in the cluster cell.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     if api == "lightweight":
-        from databricks.labs.gbx.pygx import functions as gx
 
-        gx.register(spark)
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
     else:
-        from databricks.labs.gbx.gridx.bng import functions as hx
 
-        hx.register(spark)
+        gbx_manager.register_family(spark, ("gbx_bng_",), level="L1")
 
 
 def run_bng_pointascell(
@@ -7352,14 +7356,16 @@ def _register_custom(spark, api: str) -> None:
     therefore registers a single tier; the light-vs-heavy parity gate (which must
     collect light BEFORE re-registering heavy) lives in the cluster cell.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     if api == "lightweight":
-        from databricks.labs.gbx.pygx import functions as gx
 
-        gx.register(spark)
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
     else:
-        from databricks.labs.gbx.gridx.custom import functions as hx
 
-        hx.register(spark)
+        gbx_manager.register_family(spark, ("gbx_custom_",), level="L1")
 
 
 def run_custom_pointascell(
@@ -8122,6 +8128,8 @@ def run_fanout_udtf(
     ``fn`` is one of ``FANOUT_FUNCTIONS``.
     ``scale`` dials the synthetic fan-out up/down (default 1.0).
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     env = capture_env(where)
 
     # Resolve the per-function synthetic-input + invocation spec up front so a bad
@@ -8162,13 +8170,11 @@ def run_fanout_udtf(
     # Register the tier.
     try:
         if api == "lightweight":
-            from databricks.labs.gbx.pyrx import functions as prx
 
-            prx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
         else:
-            from databricks.labs.gbx.rasterx import functions as rx
 
-            rx.register(spark)
+            gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,
@@ -9043,9 +9049,9 @@ def _bench_large_raster_leg(
     it is stamped into the note so a 0-row fast read is visible. Throughput in
     MiB/s is computed from corpus_size_mib / iter_median_s (total file / one pass).
     """
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
     def _job():
         return (

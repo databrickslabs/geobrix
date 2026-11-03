@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx.bng
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.DocExampleSource
 import com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.gridx.bng.agg.UnionAcc
@@ -23,7 +24,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_CellIntersectionAgg should aggregate chips and return intersection") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val cellIdLong = BNG.parse(cellId)
@@ -49,7 +50,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_CellIntersectionAgg should handle all core chips") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val cellIdLong = BNG.parse(cellId)
@@ -72,7 +73,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_CellUnionAgg should aggregate chips and return union") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791" // 100m x 100m  East London
         val cellIdLong = BNG.parse(cellId)
@@ -98,7 +99,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_CellUnionAgg should handle any core chip") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val cellIdLong = BNG.parse(cellId)
@@ -124,7 +125,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         // Only the registered SQL path hits builder() with 2 args (the Column helper
         // always appends keepCoreGeom), so exercise it via spark.sql.
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
 
         val wkb = JTS.toWKB(JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"))
         val df = spark.createDataFrame(Seq(Tuple1(wkb))).toDF("geom")
@@ -148,7 +149,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         // empty polygon for mismatched cell ids; the aggregate must match (no throw).
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
 
         val cellA = "TQ388791"
         val cellB = "TQ398791"
@@ -174,7 +175,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_KLoopExplode should generate k-loop cells") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val centerLong = BNG.parse(cellId)
@@ -195,7 +196,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_KLoopExplode should return small set for k=0") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val k = 0
@@ -210,7 +211,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_KRingExplode should generate k-ring cells") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val centerLong = BNG.parse(cellId)
@@ -231,7 +232,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_KRingExplode should include center cell for k=0") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val cellId = "TQ388791"
         val k = 0
@@ -246,7 +247,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_GeometryKLoopExplode should generate k-loop cells from geometry") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val triangle = JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))")
         val wkb = JTS.toWKB(triangle)
@@ -262,7 +263,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_GeometryKLoopExplode should work with WKT input") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val wkt = "POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"
         val resolution = 3
@@ -277,7 +278,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_GeometryKRingExplode should generate k-ring cells from geometry") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val triangle = JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))")
         val wkb = JTS.toWKB(triangle)
@@ -295,7 +296,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_GeometryKRingExplode should work with WKT input") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         
         val wkt = "POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"
         val resolution = 3
@@ -324,7 +325,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("BNG_TessellateExplode returns cellid, core and chip columns (WKB input, BINARY chip)") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         val geometry = JTS.fromWKT(teWkt)
 
         spark.createDataFrame(Seq((JTS.toWKB(geometry), 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_wkb")
@@ -350,7 +351,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("BNG_TessellateExplode returns a BINARY (WKB) chip for WKT input too") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         val geometry = JTS.fromWKT(teWkt)
 
         spark.createDataFrame(Seq((teWkt, 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_wkt")
@@ -369,7 +370,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("BNG_TessellateExplode accepts (geom, resolution) and defaults keepCoreGeom to false") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         spark.createDataFrame(Seq((JTS.toWKB(JTS.fromWKT(teWkt)), 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_two")
 
         val twoArg = spark.sql(
@@ -383,7 +384,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("The documented SQL examples of the five BNG explode generators run and return the documented rows") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         // The examples are the table-function form (`FROM t, LATERAL f(...)`): the shape the manager installs a JVM
         // generator in, through the L1 installer.
         Seq(
@@ -417,7 +418,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("The bng_tessellate Scala wrapper defaults keepCoreGeom to false, as SQL's two-argument form does") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         // 3 km x 3 km polygon at 1 km: TQ3080 is the one core cell.
         val poly = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
         val df = spark.createDataFrame(Seq(Tuple1(poly))).toDF("geom")
@@ -438,7 +439,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("BNG_TessellateExplode keepCoreGeom=true gives core chips their cell geometry") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
         val geometry = JTS.fromWKT(teWkt)
 
         spark.createDataFrame(Seq((JTS.toWKB(geometry), 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_keep")
@@ -458,7 +459,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
 
     test("BNG_TessellateExplode with a string resolution still returns the three columns") {
         spark.sparkContext.setLogLevel("ERROR")
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
 
         spark.createDataFrame(Seq((JTS.toWKB(JTS.fromWKT(teWkt)), "500m"))).toDF("geom", "res")
             .createOrReplaceTempView("bng_te_strres")
@@ -469,7 +470,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_TessellateExplode Scala wrapper exposes cellid, core and chip, keepCoreGeom false by default") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
 
         val wkb = JTS.toWKB(JTS.fromWKT(teWkt))
         val df = spark.createDataFrame(Seq((wkb, 3))).toDF("geom", "res")
@@ -485,7 +486,7 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
     test("BNG_TessellateExplode Scala wrapper takes keepCoreGeom as a Column or a Boolean") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
+        TestL1.installAll(spark)
 
         val wkb = JTS.toWKB(JTS.fromWKT(teWkt))
         val df = spark.createDataFrame(Seq((wkb, 3))).toDF("geom", "res")

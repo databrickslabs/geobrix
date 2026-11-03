@@ -41,16 +41,28 @@ GDAL_STACK_LIB = re.compile(
 )
 
 
-def _light_register(spark):
-    from databricks.labs.gbx.pyrx import functions
+# the SQL functions the checks call
+_CHECKED = (
+    "gbx_rst_width",
+    "gbx_rst_height",
+    "gbx_rst_fromcontent",
+    "gbx_rst_mapalgebra",
+)
 
-    functions.register(spark)
+
+def _register_at(spark, level):
+    """The checked functions at one level (L3 light, L1 heavy), through the manager."""
+    from databricks.labs.gbx import register
+
+    register(spark, only=_CHECKED, _levels={n: (level, "-") for n in _CHECKED})
+
+
+def _light_register(spark):
+    _register_at(spark, "L3")
 
 
 def _heavy_register(spark):
-    from databricks.labs.gbx.rasterx import functions
-
-    functions.register(spark)
+    _register_at(spark, "L1")
 
 
 def _under(path, root):

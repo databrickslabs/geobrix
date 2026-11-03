@@ -259,7 +259,7 @@ class MyExpressionEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 

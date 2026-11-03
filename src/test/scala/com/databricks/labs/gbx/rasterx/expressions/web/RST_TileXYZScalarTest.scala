@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions.web
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
@@ -118,7 +119,7 @@ class RST_TileXYZScalarTest extends PlanTest with SilentSparkSession {
     }
 
     test("gbx_rst_tilexyz in SQL raises for a bad parameter and renders for a valid call") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val modis = getClass.getResource("/modis/").toString
         spark.read.format("gdal").option("sizeInMB", "1").load(modis).limit(1).createOrReplaceTempView("tilexyz_scalar_src")
         try {

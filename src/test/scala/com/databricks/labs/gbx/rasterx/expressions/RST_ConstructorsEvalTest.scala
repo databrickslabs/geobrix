@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.DataFrame
@@ -14,7 +15,7 @@ class RST_ConstructorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 

@@ -49,9 +49,9 @@ def _corrupt_tile_df(spark):
 
 def test_separatebands_corrupt_yields_one_error_row(spark):
     """A corrupt tile fed to rst_separatebands yields exactly one error-tile row."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _corrupt_tile_df(spark)
     df.createOrReplaceTempView("_udtf_err_sep")
     rows = spark.sql(
@@ -70,9 +70,9 @@ def test_separatebands_corrupt_yields_one_error_row(spark):
 
 def test_retile_corrupt_yields_one_error_row(spark):
     """A corrupt tile fed to rst_retile yields exactly one error-tile row."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _corrupt_tile_df(spark)
     df.createOrReplaceTempView("_udtf_err_retile")
     rows = spark.sql(
@@ -96,9 +96,9 @@ def test_tooverlappingtiles_corrupt_yields_one_error_row(spark):
     heavy-tier generator contract (also 1), confirmed by
     RST_ErrorHandlingParityTest.scala on the heavy side.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _corrupt_tile_df(spark)
     df.createOrReplaceTempView("_udtf_err_overlapping")
     rows = spark.sql(
@@ -131,11 +131,11 @@ TILE_GENERATORS = {
 
 @pytest.mark.parametrize("name", sorted(TILE_GENERATORS))
 def test_a_null_tile_gives_no_rows_and_an_error_tile_comes_out_as_itself(spark, name):
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench import oracles
     from databricks.labs.gbx.manifest import TILE_SQL
-    from databricks.labs.gbx.pyrx import functions as prx
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     upstream = oracles._build("tile_error", "")
     spark.createDataFrame(
         [(1, None), (2, upstream)], f"id int, tile {TILE_SQL}"

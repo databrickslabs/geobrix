@@ -313,8 +313,10 @@ def _shift_pixels(raster_bytes, delta):
 def test_rst_retile_virtual_yields_subtiles(spark, tmp_path):
     # rst_retile is a streaming UDTF — invoke via SQL LATERAL on a v2 DataFrame
     # whose single tile is virtual (bytes-free path+window).
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _v2_df(spark, tmp_path)  # 8x8 virtual tile
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_retile_virtual")
     parts = spark.sql(
         "SELECT t.cellid, t.raster, t.metadata FROM _ras_retile_virtual, "

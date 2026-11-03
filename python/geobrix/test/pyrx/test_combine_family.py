@@ -372,10 +372,11 @@ def test_rst_combinemin_column_wrapper(spark):
 
 def test_sql_registration_combine_family(spark):
     """All 6 gbx_rst_combine* SQL functions are registered and callable."""
-    import databricks.labs.gbx.pyrx.functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(
+    gbx_manager.register_family(
         spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
         only=[
             "gbx_rst_combinemin",
             "gbx_rst_combinemax",
@@ -384,6 +385,7 @@ def test_sql_registration_combine_family(spark):
             "gbx_rst_combinemedian",
             "gbx_rst_combinestddev",
         ],
+        level="L3",
     )
     # SQL name check: function should exist in catalog
     funcs = {

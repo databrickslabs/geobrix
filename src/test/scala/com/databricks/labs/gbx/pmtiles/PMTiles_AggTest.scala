@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.pmtiles
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import com.databricks.labs.gbx.vectorx.mvt.{MvtDecoder, MvtWriter}
 import org.apache.spark.sql.catalyst.plans.PlanTest
@@ -41,7 +42,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg encodes a 9-tile pyramid into a valid PMTile blob") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val tiles = (for {
@@ -67,7 +68,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg works with 4-arg signature (no metadata)") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val df = spark.createDataFrame(Seq((1, 0, 0, "AAA".getBytes("UTF-8"))))
@@ -82,7 +83,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg auto-detects tile_type from first non-null tile bytes (PNG / JPEG / MVT)") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val pngBytes = Array[Byte](0x89.toByte, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D)
@@ -105,7 +106,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg returns NULL for a group with no tile payload (as the light tier does)") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val df = spark.createDataFrame(Seq.empty[(Int, Int, Int, Array[Byte])])
@@ -117,7 +118,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg survives a multi-partition shuffle merge") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         // Generate enough tiles across multiple partitions to force a shuffle.
@@ -133,7 +134,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg merges two MVT blobs for the same (z,x,y) into one tile with 2 features") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val blobA = realMvtBlob(id = 1, x0 = 100, y0 = 100)
@@ -156,7 +157,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg preserves POLYGON geometry type in merged MVT tile") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val blobA = realMvtBlob(id = 1, x0 = 100, y0 = 100)
@@ -181,7 +182,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg raster first-wins unchanged after vector-merge change") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val pngA = Array[Byte](0x89.toByte, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x00)
@@ -197,7 +198,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg merged MVT tile preserves tile-local coordinates") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         // Two single-feature blobs at known tile-local positions.
@@ -254,7 +255,7 @@ class PMTiles_AggTest extends PlanTest with SilentSparkSession {
 
     test("pmtiles_agg raster duplicate tileid produces exactly one directory entry") {
         spark.sparkContext.setLogLevel("ERROR")
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val pngA = Array[Byte](0x89.toByte, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01, 0x00)

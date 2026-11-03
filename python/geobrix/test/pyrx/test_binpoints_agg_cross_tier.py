@@ -56,6 +56,7 @@ Run in geobrix-dev Docker::
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -195,9 +196,9 @@ def _run_light(spark, stat):
     Returns (float32 band array, nodata value).
     Light returns BINARY → read directly via _read_band_from_binary.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     df = spark.createDataFrame(
         _POINT_ROWS,
@@ -230,9 +231,8 @@ def _run_heavy(spark, stat):
     ``RST_BinPoints.execute``.  No scalar warm-up is needed; the aggregate
     self-initialises GDAL on first eval on any executor JVM.
     """
-    from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
 
     df = spark.createDataFrame(
         _POINT_ROWS,

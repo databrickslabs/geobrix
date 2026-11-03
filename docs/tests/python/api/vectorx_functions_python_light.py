@@ -90,9 +90,9 @@ def vectorx_light_setup_example(spark):
     After this call, all ``gbx_st_*`` SQL functions and the ``pyvx``
     Python Column API are available in the current Spark session.
     """
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_',), level="L3")
     return None
 
 

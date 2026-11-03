@@ -15,8 +15,8 @@ from . import gridx_functions_sql
 @pytest.fixture(scope="module")
 def locations_view(spark):
     """Create test locations view for SQL examples"""
-    from databricks.labs.gbx.gridx.bng import functions as bx
-    bx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     
     # Create test data with BNG cells
     test_data = [
@@ -33,8 +33,8 @@ def locations_view(spark):
 @pytest.fixture(scope="module")
 def regions_view(spark):
     """Create test regions view for SQL examples"""
-    from databricks.labs.gbx.gridx.bng import functions as bx
-    bx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     
     # Create simple test geometry (London area polygon)
     from pyspark.sql.functions import expr
@@ -51,8 +51,8 @@ def regions_view(spark):
 @pytest.fixture(scope="module")
 def observations_view(spark):
     """Create test observations view for SQL examples"""
-    from databricks.labs.gbx.gridx.bng import functions as bx
-    bx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     
     test_data = [
         (1, "TQ3080", "region1"),

@@ -174,9 +174,9 @@ def spark_with_jar():
 @pytest.fixture(scope="module")
 def heavy(spark_with_jar):
     """Spark session with the HEAVY (JAR) gbx_st_* CRS functions registered."""
-    from databricks.labs.gbx.vectorx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    hx.register(spark_with_jar)
+    gbx_manager.register_family(spark_with_jar, ("gbx_st_",))
     return spark_with_jar
 
 

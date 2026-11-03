@@ -233,9 +233,9 @@ def _run_light_isoband(spark, raster_bytes):
     MUST be called before _run_heavy_isoband so the light result is materialised
     before heavy registration overwrites the SQL name.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     df = spark.createDataFrame(
         [(bytearray(raster_bytes),)],
@@ -250,9 +250,9 @@ def _run_heavy_isoband(spark, raster_bytes):
 
     The SQL name gbx_rst_isoband is now bound to the GDAL Scala expression.
     """
-    from databricks.labs.gbx.rasterx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
 
     df = spark.createDataFrame(
         [(bytearray(raster_bytes),)],

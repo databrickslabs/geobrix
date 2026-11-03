@@ -59,9 +59,9 @@ WRITE_MERGE = """# Post-hoc: merge .laz/.las files ALREADY in a directory into o
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def _points_df(spark, n=20, with_rgb=True):

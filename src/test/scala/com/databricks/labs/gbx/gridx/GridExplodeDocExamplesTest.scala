@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.DocExampleSource
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
@@ -18,8 +19,7 @@ class GridExplodeDocExamplesTest extends PlanTest with SilentSparkSession {
 
     test("The documented heavyweight SQL examples of the quadbin and custom explode generators run") {
         spark.sparkContext.setLogLevel("ERROR")
-        quadbin.functions.register(spark)
-        custom.functions.register(spark)
+        TestL1.installAll(spark)
         // Each explode must return one row per cell of the matching ARRAY function.
         Seq(
           "quadbin_geomkringexplode" -> s"gbx_quadbin_geomkring('$nycBox', 12, 1, 'boundary-out')",

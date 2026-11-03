@@ -36,6 +36,8 @@ DEM = os.path.join(
 
 def test_roundtrip_rastertogrid_then_rasterize(spark):
     """DEM -> rastertogridavg (band 1) -> rasterize back; covered pixels match measures."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     res = 7
     if not os.path.exists(DEM):
         import pytest
@@ -45,7 +47,7 @@ def test_roundtrip_rastertogrid_then_rasterize(spark):
     with open(DEM, "rb") as fh:
         content = fh.read()
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     # Load raster tile via SQL UDF.
     df = spark.createDataFrame([(content,)], ["raster"]).selectExpr(

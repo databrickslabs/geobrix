@@ -47,9 +47,9 @@ WRITE_WITH_COMPRESS = """# Choose the GeoTIFF codec at write time: DEFLATE level
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def write_gtiff_gbx(spark, path=None):

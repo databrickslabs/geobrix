@@ -196,13 +196,13 @@ def test_exec_use_vectorx_snippet(spark):
 
 def test_use_vectorx_returns_one_row_with_wkb(spark):
     """Legacy point example produces one row with a wkb column (same struct as USE_VECTORX)."""
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import Row
     from pyspark.sql.types import ArrayType, DoubleType, IntegerType, StructField, StructType
 
     from databricks.labs.gbx.vectorx import functions as vx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy
 
-    legacy.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     legacy_schema = StructType([
         StructField("typeId", IntegerType()),
         StructField("srid", IntegerType()),

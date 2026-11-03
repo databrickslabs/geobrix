@@ -341,10 +341,10 @@ def test_vector_bare_load_returns_all_dsg_variables(spark, tmp_path):
 
 
 def test_register_exposes_netcdf_gbx(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
     f = tmp_path / "grid.nc"
     _write_regular_grid(str(f))
-    register(spark, only=["netcdf"])
+    gbx_manager.register_sources(spark, only=["netcdf"])
     df = spark.read.format("netcdf_gbx").option("variable", "ch4").load(str(f))
     assert df.count() == 1

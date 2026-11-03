@@ -412,11 +412,11 @@ def rst_fromfile_python_example(spark):
     tile column. We use the same committed single-band fixture the ``rasters``
     view is itself built from, passing its path in a column.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import single_band_path  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
     # Default: a VIRTUAL v2 tile — raster is null, path + window are populated.

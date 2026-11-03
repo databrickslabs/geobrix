@@ -119,6 +119,14 @@ _POLYFILL_RES = 12
 # --- risk-area edge cases (from the spec) -----------------------------------------------------
 
 
+def _register_tier(spark, mod, prefixes):
+    """The light tier (pygx) at L3, the heavy one (the gridx module) at L1: each leg of a parity test installs its own."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    level = "L3" if mod.__name__.startswith("databricks.labs.gbx.pygx") else "L1"
+    gbx_manager.register_family(spark, prefixes, level=level)
+
+
 def test_pointascell_edge_antimeridian_and_pole(spark_with_jar):
     """Risk area 1: pointascell at antimeridian / near-pole edges must be bit-equal.
 
@@ -127,8 +135,8 @@ def test_pointascell_edge_antimeridian_and_pole(spark_with_jar):
     """
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.gridx.quadbin import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
 
@@ -142,9 +150,11 @@ def test_pointascell_edge_antimeridian_and_pole(spark_with_jar):
     df = spark.createDataFrame(edge_pts, "lon double, lat double, res int")
     col = qx.quadbin_pointascell(f.col("lon"), f.col("lat"), f.col("res")).alias("c")
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = [r["c"] for r in df.select(col).collect()]
-    hx.register(spark)  # overwrites the SQL name
+    gbx_manager.register_family(spark, ("gbx_quadbin_",))  # overwrites the SQL name
     heavy = [
         r["c"]
         for r in df.select(
@@ -167,8 +177,8 @@ def test_polyfill_bbox_corner_tile_boundary(spark_with_jar):
     """
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.gridx.quadbin import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
 
@@ -178,9 +188,11 @@ def test_polyfill_bbox_corner_tile_boundary(spark_with_jar):
     df = spark.createDataFrame([(bytearray(_to_wkb(box_geom)),)], "geom binary")
     col = qx.quadbin_polyfill(f.col("geom"), f.lit(res)).alias("pf")
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = sorted(df.select(col).collect()[0]["pf"])
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_quadbin_",))
     heavy = sorted(
         df.select(hx.quadbin_polyfill(f.col("geom"), f.lit(res)).alias("pf")).collect()[
             0
@@ -213,7 +225,7 @@ def test_tessellate_touching_intersection(spark_with_jar):
     df = spark.createDataFrame([(bytearray(_to_wkb(sliver)),)], "geom binary")
 
     def tess(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_quadbin_",))
         exploded = df.select(
             f.explode(
                 f.call_function("gbx_quadbin_tessellate", f.col("geom"), f.lit(res))

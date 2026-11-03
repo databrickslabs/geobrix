@@ -62,8 +62,8 @@ def register_custom_grids_example(spark):
     After calling ``register_proj_grids`` once, every CRS-handling function on
     both the lightweight and heavyweight tiers finds the grid files automatically.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     import databricks.labs.gbx as gbx  # noqa: PLC0415
-    from databricks.labs.gbx.pyvx import functions as vx  # noqa: PLC0415
     from databricks.labs.gbx.vectorx import functions as vx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -72,7 +72,7 @@ def register_custom_grids_example(spark):
     gbx.register_proj_grids(spark, GRID_DIR)
 
     # Step 2 — Register pyvx functions (idempotent; picks up the grid dirs above).
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_',), level="L3")
 
     # Step 3 — Apply a CRS transform that requires the grid.
     # st_transformcrs(geom, target_crs [, source_crs]) reprojects to target_crs.

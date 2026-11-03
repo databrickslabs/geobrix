@@ -204,7 +204,7 @@ def _read(out, label):
 
 @pytest.mark.parametrize("grid", sorted(dc.GRIDS))
 def test_repeated_cells_burn_the_largest_value_in_both_tiers(spark_with_jar, grid):
-    from databricks.labs.gbx.rasterx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
     cells = dc.GRIDS[grid]()
@@ -218,7 +218,7 @@ def test_repeated_cells_burn_the_largest_value_in_both_tiers(spark_with_jar, gri
         name: _read(_light(_frame(spark, grid, order), grid, canvas), f"light ({name})")
         for name, order in orders.items()
     }
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     heavy = {
         name: _read(_heavy(_frame(spark, grid, order), grid, canvas), f"heavy ({name})")
         for name, order in orders.items()

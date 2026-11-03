@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.expressions.ExpressionConfigExpr
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.expressions.{ST_TransformCrs, ST_TransformCrs3}
@@ -27,7 +28,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
         super.beforeAll()
         GDALManager.loadSharedObjects(Iterable.empty[String])
         GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
-        functions.register(spark)
+        TestL1.installAll(spark)
     }
 
     private val gf = new GeometryFactory()

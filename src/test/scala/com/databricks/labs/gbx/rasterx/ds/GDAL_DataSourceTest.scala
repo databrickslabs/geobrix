@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.ds
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.functions
@@ -22,7 +23,7 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
 
     test("GDAL Data Source must read tif files") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val sp = spark
         import sp.implicits._
 
@@ -44,7 +45,7 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
     }
 
     test("GDAL reader keeps an all-NoData file as one row (parity with raster_gbx)") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         GDALManager.init(ExpressionConfig(spark))
         val dir = Files.createTempDirectory("gdal_all_nodata_")
         val tif = dir.resolve("all_nodata.tif").toString
@@ -69,7 +70,7 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
     }
 
     test("GDAL reader clipCrs option populates the v2 tile.clip_crs (parity with light)") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val tifPath = this.getClass.getResource("/modis/").toString
 
         // clipCrs given -> tile.clip_crs is the canonical CRS string (incl. ESRI).
@@ -125,7 +126,7 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
     // The reader's one hold on a staged source is released by the source Dataset (GetFileList gives the
     // local copy), so an outside holder of the same remote keeps its copy. A `file:` path is non-local.
     test("N2 a gdal read of a shared .nc releases only its own hold") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         withNetCDFCopy { (dir, nc) =>
             val hconf = ExpressionConfig(spark).hConf
             NodeFileManager.init(hconf)

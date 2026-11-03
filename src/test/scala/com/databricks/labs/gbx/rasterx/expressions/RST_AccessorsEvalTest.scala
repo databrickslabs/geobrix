@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.DataFrame
@@ -14,7 +15,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -86,7 +87,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
@@ -98,7 +99,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
         val res = df.select(rst_height(col("raster")).as("h")).collect()
@@ -109,7 +110,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
         val res = df.select(rst_memsize(col("raster")).as("m")).collect()
@@ -120,7 +121,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
         val res = df.select(rst_scalex(col("raster")).as("sx")).collect()
@@ -131,7 +132,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
@@ -143,7 +144,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         // chicago_sp27.tif has EPSG:26771 — a known non-zero SRID, proving execute()'s happy path is untouched.
         val tifPath = this.getClass.getResource("/binary/geotiff-small/chicago_sp27.tif").toString
         val df = spark.read

@@ -28,9 +28,9 @@ PAGE = "read-paths"
 
 
 def _expected_borough_rows(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     return spark.read.format("geojson_gbx").load(ex.SAMPLE_BOROUGHS_DIR).count()
 
 

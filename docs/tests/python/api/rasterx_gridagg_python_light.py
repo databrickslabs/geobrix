@@ -27,9 +27,9 @@ def _get_multiband_df(spark):
 
 def rst_h3_rastertogridavg_python_example(spark):
     """Aggregate raster values to H3 grid using average (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     # LATERAL UDTF returns [band, cellID, measure] columns directly
@@ -51,9 +51,9 @@ rst_h3_rastertogridavg_python_example_output = """
 
 def rst_h3_rastertogridcount_python_example(spark):
     """Count pixels per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -74,9 +74,9 @@ rst_h3_rastertogridcount_python_example_output = """
 
 def rst_h3_rastertogridmax_python_example(spark):
     """Get maximum values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -97,9 +97,9 @@ rst_h3_rastertogridmax_python_example_output = """
 
 def rst_h3_rastertogridmin_python_example(spark):
     """Get minimum values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -120,9 +120,9 @@ rst_h3_rastertogridmin_python_example_output = """
 
 def rst_h3_rastertogridmedian_python_example(spark):
     """Get median values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -143,9 +143,9 @@ rst_h3_rastertogridmedian_python_example_output = """
 
 def rst_h3_rastertogridsum_python_example(spark):
     """Sum pixel values per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -166,9 +166,9 @@ rst_h3_rastertogridsum_python_example_output = """
 
 def rst_h3_rastertogridvariance_python_example(spark):
     """Get variance per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -189,9 +189,9 @@ rst_h3_rastertogridvariance_python_example_output = """
 
 def rst_h3_rastertogridstddev_python_example(spark):
     """Get standard deviation per H3 cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -217,9 +217,9 @@ rst_h3_rastertogridstddev_python_example_output = """
 
 def rst_quadbin_rastertogridavg_python_example(spark):
     """Aggregate raster values to Quadbin grid using average (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -240,9 +240,9 @@ rst_quadbin_rastertogridavg_python_example_output = """
 
 def rst_quadbin_rastertogridcount_python_example(spark):
     """Count pixels per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -263,9 +263,9 @@ rst_quadbin_rastertogridcount_python_example_output = """
 
 def rst_quadbin_rastertogridmax_python_example(spark):
     """Get maximum values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -286,9 +286,9 @@ rst_quadbin_rastertogridmax_python_example_output = """
 
 def rst_quadbin_rastertogridmin_python_example(spark):
     """Get minimum values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -309,9 +309,9 @@ rst_quadbin_rastertogridmin_python_example_output = """
 
 def rst_quadbin_rastertogridmedian_python_example(spark):
     """Get median values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -332,9 +332,9 @@ rst_quadbin_rastertogridmedian_python_example_output = """
 
 def rst_quadbin_rastertogridsum_python_example(spark):
     """Sum pixel values per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -355,9 +355,9 @@ rst_quadbin_rastertogridsum_python_example_output = """
 
 def rst_quadbin_rastertogridvariance_python_example(spark):
     """Get variance per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -378,9 +378,9 @@ rst_quadbin_rastertogridvariance_python_example_output = """
 
 def rst_quadbin_rastertogridstddev_python_example(spark):
     """Get standard deviation per Quadbin cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     return spark.sql(
@@ -414,9 +414,9 @@ def rst_bng_rastertogridavg_python_example(spark):
     NOTE: BNG reprojects the raster to EPSG:27700 before binning. Use a
     raster whose extent lies over Britain for geographically meaningful cell ids.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -439,9 +439,9 @@ rst_bng_rastertogridavg_python_example_output = """
 
 def rst_bng_rastertogridcount_python_example(spark):
     """Count pixels per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -464,9 +464,9 @@ rst_bng_rastertogridcount_python_example_output = """
 
 def rst_bng_rastertogridmax_python_example(spark):
     """Get maximum values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -489,9 +489,9 @@ rst_bng_rastertogridmax_python_example_output = """
 
 def rst_bng_rastertogridmin_python_example(spark):
     """Get minimum values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -514,9 +514,9 @@ rst_bng_rastertogridmin_python_example_output = """
 
 def rst_bng_rastertogridmedian_python_example(spark):
     """Get median values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -539,9 +539,9 @@ rst_bng_rastertogridmedian_python_example_output = """
 
 def rst_bng_rastertogridsum_python_example(spark):
     """Sum pixel values per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -564,9 +564,9 @@ rst_bng_rastertogridsum_python_example_output = """
 
 def rst_bng_rastertogridvariance_python_example(spark):
     """Get variance per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -589,9 +589,9 @@ rst_bng_rastertogridvariance_python_example_output = """
 
 def rst_bng_rastertogridstddev_python_example(spark):
     """Get standard deviation per BNG cell (light tier UDTF)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = _get_multiband_df(spark)
     df.createOrReplaceTempView("multiband_rasters")
     result = spark.sql(
@@ -677,12 +677,11 @@ _LONDON_4KM_WKT = (
 
 def _setup_custom_raster_view(spark):
     """Register pyrx + pygx; create a synthetic BNG raster temp view for custom-grid tests."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     # Synthesize a small single-band raster over the 4km London BNG square.
     # rst_rasterize produces a raster in EPSG:27700 with integer metre coordinates
     # that exactly match the custom grid bounds below.

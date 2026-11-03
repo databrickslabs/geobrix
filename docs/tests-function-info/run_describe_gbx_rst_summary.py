@@ -21,6 +21,7 @@ GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.6.0-jar-with-dependencies.jar
 
 
 def main():
+    from databricks.labs.gbx import manager as gbx_manager
     if not GEOBRIX_JAR.exists():
         print(f"GeoBrix JAR not found at {GEOBRIX_JAR}", file=sys.stderr)
         print("Run 'mvn package' first (e.g. in Docker).", file=sys.stderr)
@@ -42,8 +43,7 @@ def main():
         .getOrCreate()
 
     # Register GeoBrix so gbx_rst_summary exists
-    from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
 
     name = "gbx_rst_summary"
     print("=" * 60)

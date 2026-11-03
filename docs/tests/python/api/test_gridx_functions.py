@@ -124,10 +124,10 @@ def bng_heavy_setup(spark):
     ``bng_polygons``, ``bng_chips``, ``quadbin_cells``, ``quadbin_cell_pairs``,
     ``quadbin_polygons``, ``quadbin_kring_cells``, ``custom_grids``.
     """
-    from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_gridx_heavy  # noqa: PLC0415
 
-    bx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     create_setup_views_gridx_heavy(spark)
     yield spark
 

@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx.bng
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
@@ -13,8 +14,7 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
     test("BNG_ expressions should run in spark sql without errors") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val df = spark
             .createDataFrame(
@@ -75,8 +75,7 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
     test("BNG_ aggregator expressions should run in spark sql without errors") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val df = spark
             .createDataFrame(
@@ -113,8 +112,7 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
     test("BNG_ generator expressions should run in spark sql without errors") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
-        bng.functions.register(spark)
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val df = spark
             .createDataFrame(

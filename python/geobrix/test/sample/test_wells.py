@@ -78,9 +78,9 @@ def test_download_pages_and_merges(spark, tmp_path):
 
 
 def test_read_uses_geojson_gbx(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     d = tmp_path / "wells2"
     dl = WellsDownloader(_get=_PagedGet(total=5, page_size=1000))
     dl.download(BBOX, str(d), spark=spark)

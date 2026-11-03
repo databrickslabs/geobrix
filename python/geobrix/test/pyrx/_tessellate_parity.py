@@ -71,9 +71,9 @@ def light_chips(spark, raster, sql_name, resolution, assignment, coverage, id_fn
     """Light tier rows via SQL LATERAL -> ``[(cid, raster_bytes|None, metadata)]``.
 
     A :class:`Staged` ``raster`` starts the light tier from a virtual tile."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = light_tile_df(spark, raster)
     df.createOrReplaceTempView("_ras_tess_chips_light")
     rows = spark.sql(
@@ -89,9 +89,10 @@ def heavy_chips(spark, raster, fn_name, resolution, assignment, coverage, id_fn)
     DataFrame-first now) -> same shape as light."""
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )

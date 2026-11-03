@@ -20,8 +20,6 @@ from shapely import Polygon as _Polygon
 from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
-from databricks.labs.gbx.ds.register import register
-
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
@@ -139,7 +137,9 @@ def _gdb_df(spark, n_rows=12, n_partitions=3):
 def test_gdb_multi_fragment_roundtrip_rows_geoms_crs(spark, tmp_path):
     """Write a multi-partition FileGDB then read it back; assert all rows,
     attribute values, geometry values, and the EPSG:4326 CRS survive intact."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
 
     n = 12
     out = str(tmp_path / "rt.gdb")

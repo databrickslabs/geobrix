@@ -22,7 +22,9 @@ from databricks.labs.gbx.zarr.functions import gbx_zarr_read  # noqa: E402
 
 @pytest.fixture(scope="module")
 def spark(spark_delta):
-    ds_register.register(spark_delta, only=["zarr"])
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark_delta, only=["zarr"])
     return spark_delta
 
 
@@ -395,7 +397,11 @@ def test_no_pushfilters_method():
 
 
 def test_register_lists_zarr_gbx(spark, era5_v3_sharded):
+    from databricks.labs.gbx import manager as gbx_manager
+
     assert ZarrGbxDataSource in ds_register._SOURCES
     assert ZarrGbxDataSource.name() == "zarr_gbx"
-    ds_register.register(spark, only=["zarr_gbx"])  # the bare name works too: "zarr"
+    gbx_manager.register_sources(
+        spark, only=["zarr_gbx"]
+    )  # the bare name works too: "zarr"
     assert _load(spark, era5_v3_sharded, variables="t2m", isel={"time": [0, 1]}).count()

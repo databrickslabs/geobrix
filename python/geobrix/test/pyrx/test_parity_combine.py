@@ -225,9 +225,9 @@ def _align_df(spark, src_bytes: bytes, ref_bytes: bytes):
 
 def _collect_combine_light(spark, stat: str, tiles) -> bytes:
     """Phase 1: register pyrx (light), run SQL, collect tile bytes."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _combine_df(spark, tiles)
     df.createOrReplaceTempView("_combine_parity_tbl")
     rows = spark.sql(
@@ -239,9 +239,9 @@ def _collect_combine_light(spark, stat: str, tiles) -> bytes:
 
 def _collect_combine_heavy(spark, stat: str) -> bytes:
     """Phase 2: register rasterx (heavy, OVERWRITES SQL names), run same SQL."""
-    from databricks.labs.gbx.rasterx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     rows = spark.sql(
         f"SELECT gbx_rst_combine{stat}(tiles) AS result FROM _combine_parity_tbl"
     ).collect()
@@ -251,9 +251,9 @@ def _collect_combine_heavy(spark, stat: str) -> bytes:
 
 def _collect_align_light(spark, src_bytes: bytes, ref_bytes: bytes) -> bytes:
     """Phase 1: register pyrx, run SQL rst_align_to, collect tile bytes."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _align_df(spark, src_bytes, ref_bytes)
     df.createOrReplaceTempView("_align_parity_tbl")
     rows = spark.sql(
@@ -265,9 +265,9 @@ def _collect_align_light(spark, src_bytes: bytes, ref_bytes: bytes) -> bytes:
 
 def _collect_align_heavy(spark) -> bytes:
     """Phase 2: register rasterx (heavy), run same SQL rst_align_to."""
-    from databricks.labs.gbx.rasterx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     rows = spark.sql(
         "SELECT gbx_rst_align_to(tile, ref) AS result FROM _align_parity_tbl"
     ).collect()

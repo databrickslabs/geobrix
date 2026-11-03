@@ -335,13 +335,14 @@ SQL_READ_GEOPACKAGE_output = """
 
 def register_functions_python(spark):
     """Register GeoBrix functions via Python for SQL use."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 
-    rx.register(spark)
-    bx.register(spark)
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx_manager.register_family(spark, ('gbx_bng_',))
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     return rx, bx, vx
 
 

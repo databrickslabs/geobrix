@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.ds
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.kernels.spec.{GdalSpecEngine, GdalSpecs}
 import com.databricks.labs.gbx.rasterx
@@ -49,7 +50,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
 
     test("netcdf_gdal bare load enumerates grid variables into (source, tile) rows") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val ncDir = this.getClass.getResource("/binary/netcdf-coral/").toString
         val df = spark.read.format("netcdf_gdal").option("sizeInMB", "1")
             .option("filterRegex", ".*20220101\\.nc$").load(ncDir)
@@ -59,7 +60,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     }
 
     test("netcdf_gdal reads a file whose path has a space and a hash like one whose path has neither") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         withNetCDFCopy { (dir, nc) =>
             val spaced = Files.copy(nc, Files.createDirectory(dir.resolve("my dir")).resolve("tas single#1.nc"))
             def sources(p: java.nio.file.Path): Seq[String] =
@@ -83,7 +84,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
 
     test("netcdf_gdal variable filter naming an absent variable yields no rows") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val ncDir = this.getClass.getResource("/binary/netcdf-coral/").toString
         val df = spark.read.format("netcdf_gdal")
             .option("filterRegex", ".*20220101\\.nc$")
@@ -93,7 +94,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
 
     test("netcdf_gdal enumerates only georeferenced grid variables (coral grid = 2)") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val ncDir = this.getClass.getResource("/binary/netcdf-coral/").toString
         val df = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
             .option("filterRegex", ".*20220101\\.nc$").load(ncDir)
@@ -108,7 +109,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     // netcdf_gbx read them fine.
     test("netcdf_gdal reads a single-variable grid with no SUBDATASETS domain") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val ncDir = this.getClass.getResource("/binary/netcdf-singlevar/").toString
         val df = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
             .option("filterRegex", ".*tas_singlevar\\.nc$").load(ncDir)
@@ -121,7 +122,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
 
     test("netcdf_gdal variables filter matches the recovered single-var name") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val ncDir = this.getClass.getResource("/binary/netcdf-singlevar/").toString
         // The recovered NETCDF_VARNAME ("tas") is filterable like any subdataset variable.
         val hit = spark.read.format("netcdf_gdal").option("sizeInMB", "-1")
@@ -140,7 +141,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     // still succeeds and produces a tile, so raster readers other than netcdf_gdal are unaffected.
     test("gtiff_gdal read is unaffected by applyScale default (raw values preserved)") {
         import com.databricks.labs.gbx.rasterx.functions._
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val tif = this.getClass.getResource("/modis/").toString
         val df = spark.read.format("gtiff_gdal").option("sizeInMB", "1").load(tif).limit(1)
         // Reading succeeds and produces a tile; no applyScale option is set anywhere.
@@ -151,7 +152,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     // and each partition's reader). Each of those releases its own hold once, so the holder's copy survives.
     // A `file:` path is non-local, so the readers stage it as they would a /Volumes path.
     test("N1 a netcdf_gdal read of a shared .nc releases only its own holds") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         withNetCDFCopy { (dir, nc) =>
             NodeFileManager.init(ExpressionConfig(spark).hConf)
             val path = s"file:${dir.toAbsolutePath}"
@@ -172,7 +173,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     }
 
     test("netcdf_gdal skips a granule GDAL cannot open, returns the valid file's rows, and frees both copies") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         withNetCDFCopy { (dir, _) =>
             NodeFileManager.init(ExpressionConfig(spark).hConf)
             val path = s"file:${dir.toAbsolutePath}"
@@ -213,7 +214,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     // the container's subdataset and cuts it to bytes under the same lock. The generic gdal reader over the same files
     // and a spec-engine function (gbx_rst_transformcrs) on the single-variable tiles share the pool.
     test("rst_* functions, the gdal reader and a spec-engine function over netCDF-4 on many threads at once all finish") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         val dir = Paths.get(this.getClass.getResource("/binary/netcdf-coral/").toURI)
         val files = Files.list(dir).iterator().asScala.map(_.toString).filter(_.endsWith(".nc")).toSeq.sorted
         val conf = UTF8String.fromString(ExpressionConfig(spark).toB64)
@@ -272,7 +273,7 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
     // NetCDF_Reader stages its .nc before opening the subdataset; Spark never closes a reader whose constructor
     // threw, so the constructor itself must release that copy when the open fails.
     test("a NetCDF_Reader whose subdataset cannot be opened releases the copy it staged") {
-        rasterx.functions.register(spark)
+        TestL1.installAll(spark)
         withNetCDFCopy { (_, nc) =>
             val remote = s"file:${nc.toAbsolutePath}"
             val before = entries()

@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.{ErrorTokenListener, functions}
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.DataFrame
@@ -15,7 +16,7 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
         import com.databricks.labs.gbx.rasterx.functions._
         import com.databricks.labs.gbx.udfs._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -33,7 +34,7 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               rst_avg(col("clipped")),
               rst_boundingbox(col("clipped")),
               rst_asformat(col("clipped"), lit("GTiff")),
-              rst_combineavg(array(col("raster"), col("clipped"))),
+              rst_combineavg(array(col("clipped"), col("clipped"))), // one grid: the raster and its clip differ
               rst_derivedband(col("clipped"), pyfunc, "myfunc"),
               rst_initnodata(col("clipped")), //lit(-28672.0)),
               rst_isempty(col("clipped")),

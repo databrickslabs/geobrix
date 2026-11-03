@@ -702,13 +702,12 @@ def rst_custom_rasterize_agg_python_example(spark):
     1 rasterized GTiff tile in EPSG:27700.  Cell IDs are derived via
     gbx_custom_pointascell for centroids of 3 of the 4 resolution-1 cells.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rasterx_api
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
 
     # Custom grid: 4km BNG London square, root cell 4000m, splits=2 -> res 1 = four 2km cells.
     _GRID_SQL = (

@@ -75,11 +75,11 @@ cat > "$TMPSCRIPT" << 'PYEOF'
 import sys
 from pyspark.sql import SparkSession
 from shapely import Point, to_wkb
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx.manager import register_sources
 
 fmt, n, out = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 spark = SparkSession.builder.getOrCreate()
-register(spark)
+register_sources(spark)
 rows = [
     (str(i), i,
      bytearray(to_wkb(Point(float(i % 360) - 180.0, float(i % 170) - 85.0))),

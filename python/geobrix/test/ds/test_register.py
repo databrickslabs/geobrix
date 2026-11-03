@@ -4,8 +4,6 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.ds import register as ds_register
-
 
 def _write_sample(path):
     data = np.arange(12, dtype="float32").reshape(3, 4)
@@ -23,8 +21,10 @@ def _write_sample(path):
 
 
 def test_register_makes_both_formats_loadable(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
+
     f = tmp_path / "s.tif"
     _write_sample(str(f))
-    ds_register.register(spark)
+    gbx_manager.register_sources(spark)
     assert spark.read.format("raster_gbx").load(str(f)).count() == 1
     assert spark.read.format("gtiff_gbx").load(str(f)).count() == 1

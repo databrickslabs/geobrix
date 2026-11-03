@@ -1,5 +1,6 @@
 package docs.tests.scala.packages
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
@@ -46,7 +47,7 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         import com.databricks.labs.gbx.rasterx.{functions => rx}
 
         // Register functions
-        rx.register(spark)
+        TestL1.installAll(spark)
 
         // The documentation shows this pattern:
         // val rasterDf = spark.read.format("gdal").load("/path/to/geotiffs")
@@ -77,7 +78,6 @@ class RasterxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         // Verify the import pattern from docs works
         noException should be thrownBy {
             import com.databricks.labs.gbx.rasterx.{functions => rx}
-            val _ = rx.register _
         }
     }
 }

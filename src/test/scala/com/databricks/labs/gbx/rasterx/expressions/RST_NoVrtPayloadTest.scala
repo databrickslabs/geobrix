@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.catalyst.plans.PlanTest
@@ -55,7 +56,7 @@ class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         val df = Seq(
@@ -81,7 +82,7 @@ class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         val df = Seq(1).toDF("id")
@@ -104,7 +105,7 @@ class RST_NoVrtPayloadTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         // No rst_clip warmup needed: PixelCombineRasters.combine now

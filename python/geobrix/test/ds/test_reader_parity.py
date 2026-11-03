@@ -75,6 +75,8 @@ def spark_with_jar():
     META-INF/services); the light ``raster_gbx`` DataSource is pure Python and
     is registered explicitly below.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     if not _JAR_CANDIDATES:
         pytest.skip(f"no geobrix JAR in {_LIBDIR} (build/stage it first)")
     if not os.path.exists(SAMPLE):
@@ -95,9 +97,8 @@ def spark_with_jar():
         .config("spark.jars", jar)
         .getOrCreate()
     )
-    from databricks.labs.gbx.ds.register import register
 
-    register(session)
+    gbx_manager.register_sources(session)
     yield session
 
 

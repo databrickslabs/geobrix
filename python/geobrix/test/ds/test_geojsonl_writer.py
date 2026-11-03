@@ -15,8 +15,6 @@ from shapely import Point
 from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
-from databricks.labs.gbx.ds.register import register
-
 
 def _wkb_df(spark, n=6):
     rows = [
@@ -99,7 +97,9 @@ def test_the_type_and_crs_come_from_the_first_non_null_geometry():
 def test_all_null_attr_column_writes_and_roundtrips(spark, tmp_path):
     # End-to-end regression for a TIGER-style column (e.g. PLUS4L) that is null
     # for every row: the geojsonl write must not raise the pyogrio FieldError.
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nullattr")
     rows = [
         (str(i), None, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -166,7 +166,9 @@ def test_writers_copy_to_volume_byte_only():
 
 
 def test_multi_file_one_shard_per_partition(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "shards")
     df = _wkb_df(spark, 6).repartition(3, F.col("geom_0"))
     nparts = df.rdd.getNumPartitions()
@@ -188,7 +190,9 @@ def test_multi_file_one_shard_per_partition(spark, tmp_path):
 
 
 def test_max_records_per_file_splits_partition(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "split")
     n, k = 10, 3  # ceil(10/3) == 4 shards
     _wkb_df(spark, n).repartition(1, F.col("geom_0")).write.format("geojsonl_gbx").mode(
@@ -204,7 +208,9 @@ def test_max_records_per_file_splits_partition(spark, tmp_path):
 
 
 def test_output_is_directory_not_single_file(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "dir")
     _wkb_df(spark, 4).repartition(2, F.col("geom_0")).write.format("geojsonl_gbx").mode(
         "overwrite"
@@ -217,7 +223,9 @@ def test_output_is_directory_not_single_file(spark, tmp_path):
 
 
 def test_wkt_input_roundtrips(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "wkt")
     rows = [
         ("a", "POINT (-73.9 40.7)", "4326", ""),
@@ -236,7 +244,9 @@ def test_wkt_input_roundtrips(spark, tmp_path):
 
 
 def test_overwrite_clears_previous_shards(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "ow")
     _wkb_df(spark, 8).repartition(4, F.col("geom_0")).write.format("geojsonl_gbx").mode(
         "overwrite"
@@ -253,7 +263,9 @@ def test_overwrite_clears_previous_shards(spark, tmp_path):
 
 
 def test_append_mode_rejected(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "exists")
     _wkb_df(spark, 4).repartition(2, F.col("geom_0")).write.format("geojsonl_gbx").mode(
         "overwrite"
@@ -277,7 +289,9 @@ def test_serverless_safe_no_jvm_or_conf():
 def test_geomcol_sridcol_options_avoid_renaming(spark, tmp_path):
     # A frame with non-convention column names writes via the geomCol/sridCol
     # options without the user renaming anything.
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "renamed")
     rows = [
         ("a", bytearray(to_wkb(Point(-73.9, 40.7))), "4326", ""),

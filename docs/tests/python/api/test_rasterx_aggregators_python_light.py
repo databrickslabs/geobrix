@@ -30,10 +30,10 @@ def _light_setup_views(spark):
     """Register pyrx + create the four light-tier Setup views once per test.
     Aggregator examples build their own multi-row input, but registration is now
     the fixture's job (examples no longer call rx.register)."""
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_light  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     create_setup_views_light(spark)
 
 

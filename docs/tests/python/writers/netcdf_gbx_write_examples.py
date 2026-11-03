@@ -76,9 +76,9 @@ WRITE_MERGE = """# Post-hoc: merge the .nc files ALREADY in a directory into one
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def _read_raster(spark, in_nc, variable="t2m"):

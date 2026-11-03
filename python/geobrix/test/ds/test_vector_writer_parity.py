@@ -31,15 +31,16 @@ def spark():
 
     from pyspark.sql import SparkSession
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     s = (
         SparkSession.builder.master("local[2]")
         .appName("gbx-ds-vector-writer-parity")
         .getOrCreate()
     )
-    from databricks.labs.gbx.ds.register import register
 
-    register(s)
+    gbx_manager.register_sources(s)
     yield s
 
 

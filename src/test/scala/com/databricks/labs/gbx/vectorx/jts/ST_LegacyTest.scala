@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx.jts
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.udfs
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.plans.PlanTest
@@ -20,7 +21,7 @@ class ST_LegacyTest extends PlanTest with SilentSparkSession {
         import com.databricks.labs.gbx.vectorx.jts.legacy.functions
         import com.databricks.labs.gbx.udfs._
         import sp.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         import functions._
 
         val schema = StructType(

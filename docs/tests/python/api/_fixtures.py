@@ -116,7 +116,6 @@ def single_band_tile_df(spark):
     most accessor and tile-ops examples).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(single_band_path())
@@ -947,10 +946,10 @@ def bng_chips_df(spark):
     Backs: ``bng_cellintersection``, ``bng_cellunion``,
     ``bng_cellintersection_agg``, ``bng_cellunion_agg``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     geom_df = spark.sql(f"SELECT '{_BNG_POLYGON_WKT}' AS geom")
     return geom_df.select(
         f.explode(bx.bng_tessellate(f.col("geom"), f.lit(_BNG_RESOLUTION))).alias(
@@ -1001,10 +1000,10 @@ def quadbin_cell_pairs_df(spark):
 
     Backs: ``quadbin_distance``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     base = spark.sql("SELECT 1 AS dummy")
     return base.select(
         qx.quadbin_pointascell(f.lit(0.0), f.lit(0.0), f.lit(10)).alias("cell1"),
@@ -1043,10 +1042,10 @@ def quadbin_kring_cells_df(spark):
 
     Backs: ``quadbin_cellunion_agg``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     cell_df = spark.sql(f"SELECT {_QUADBIN_CELL_SF_Z10}L AS cell")
     return cell_df.select(
         f.explode(qx.quadbin_kring(f.col("cell"), f.lit(1))).alias("cell")
@@ -1078,10 +1077,10 @@ def custom_grid_df(spark):
 
     Backs: all 7 ``custom_*`` functions.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     base_df = spark.sql("SELECT 1 AS dummy")
     grid_df = base_df.select(
         cx.custom_grid(

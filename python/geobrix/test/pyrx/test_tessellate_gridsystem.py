@@ -61,9 +61,9 @@ def test_h3_tessellate_tile_carries_gridsystem_h3(spark):
     """Each tile emitted by rst_h3_tessellate must have metadata['gridSystem']='h3'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
@@ -87,9 +87,9 @@ def test_h3_tessellate_centroid_tile_carries_gridsystem_h3(spark):
     """Centroid mode tiles must also carry gridSystem='h3'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
@@ -117,9 +117,9 @@ def test_quadbin_tessellate_tile_carries_gridsystem_quadbin(spark):
     """Each tile emitted by rst_quadbin_tessellate must have metadata['gridSystem']='quadbin'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
@@ -142,9 +142,9 @@ def test_quadbin_tessellate_centroid_tile_carries_gridsystem_quadbin(spark):
     """Centroid mode tiles must also carry gridSystem='quadbin'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
@@ -172,9 +172,9 @@ def test_bng_tessellate_tile_carries_gridsystem_bng(spark):
     """Each tile emitted by rst_bng_tessellate must have metadata['gridSystem']='bng'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _small_27700_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
@@ -197,9 +197,9 @@ def test_bng_tessellate_centroid_tile_carries_gridsystem_bng(spark):
     """Centroid mode BNG tiles must also carry gridSystem='bng'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _small_27700_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(

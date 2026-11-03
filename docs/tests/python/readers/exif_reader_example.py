@@ -103,9 +103,9 @@ def _make_exif_jpeg(tmp_dir: Path) -> Path:
 
 def demo_exif_metadata_mode(spark, image_dir: str):
     """Metadata mode: one row per file, header-only; GPS + camera fields populated."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
 
     df = (
         spark.read.format("exif_gbx")
@@ -128,9 +128,9 @@ def demo_exif_metadata_mode(spark, image_dir: str):
 
 def demo_exif_schema_fields(spark, image_dir: str):
     """All EXIF_META_SCHEMA fields are present in the collected row."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = spark.read.format("exif_gbx").load(image_dir)
     row = df.collect()[0].asDict()
     for field in (
@@ -145,10 +145,10 @@ def demo_exif_schema_fields(spark, image_dir: str):
 
 def demo_exif_geom_wkb_point(spark, image_dir: str):
     """geom_wkb decodes to a 2D WKB POINT with the expected coordinates."""
+    from databricks.labs.gbx import manager as gbx_manager
     import struct
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = spark.read.format("exif_gbx").load(image_dir)
     row = df.collect()[0]
     wkb = bytes(row.geom_wkb)

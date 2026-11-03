@@ -3726,13 +3726,13 @@ def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> Li
     """
     import functools
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-    from databricks.labs.gbx.ds.register import register as register_readers
     from databricks.labs.gbx.pyrx import _mvp_forms
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
     path = resolve_arg(case.args[0], tmpdir)["path"]
-    register_readers(spark)  # the light raster reader
+    gbx_manager.register_sources(spark)  # the light raster reader
     virt = (
         spark.read.format("raster_gbx")
         .option("virtualTiles", "true")

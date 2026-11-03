@@ -39,6 +39,8 @@ _CASES = [
 
 @pytest.fixture(scope="module")
 def spark_with_jar():
+    from databricks.labs.gbx import manager as gbx_manager
+
     if not _JARS:
         pytest.skip("no geobrix JAR staged")
     from pyspark.sql import SparkSession
@@ -55,9 +57,8 @@ def spark_with_jar():
         .config("spark.jars", str(_JARS[-1]))
         .getOrCreate()
     )
-    from databricks.labs.gbx.ds.register import register
 
-    register(s)
+    gbx_manager.register_sources(s)
     yield s
 
 

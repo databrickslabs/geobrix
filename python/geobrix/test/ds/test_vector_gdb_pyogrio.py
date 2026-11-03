@@ -46,7 +46,6 @@ from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
 from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs, to_pyproj_crs
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import VectorGbxWriter
 
 _META = [
@@ -135,7 +134,9 @@ def test_default_layer_name_and_layername_option(tmp_path):
 def test_multi_layer_gdb_reads_each_layer(spark, tmp_path):
     """The writer's .gdb is an ordinary multi-layer geodatabase: a second layer
     appended after the write is served beside the first, each by name."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = _write_gdb(
         tmp_path / "multi.gdb", _schema(_NAME), [_pts(2)], {"layerName": "roads"}
     )
@@ -338,7 +339,9 @@ def test_roundtrip_through_reader_and_pyogrio(spark, tmp_path):
     (the shared schema attrs..., <geometry>, <geometry>_srid, <geometry>_srid_proj;
     the geometry field of a FileGDB is SHAPE) and through pyogrio, with the same
     rows, geometries and CRS."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     schema = _schema(_NAME, StructField("pop", IntegerType()))
     rows = [
         (

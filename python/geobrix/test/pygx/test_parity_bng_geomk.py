@@ -155,13 +155,14 @@ def _collect_heavy(spark, geom, res, k, mode, fn_name, coverage="coveras"):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkring_simple_all_modes(spark_with_jar, coverage):
     """Light vs heavy geomkring over all 6 modes × 3 coverage bases, simple BNG polygon."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
     # Register light FIRST, collect all light results, then register heavy.
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light(
@@ -169,7 +170,7 @@ def test_parity_bng_geomkring_simple_all_modes(spark_with_jar, coverage):
         )
 
     # Now register heavy (overwrites light SQL names).
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _LONDON_BOX, _RES_SIMPLE, 1, mode, "gbx_bng_geomkring", coverage
@@ -185,19 +186,20 @@ def test_parity_bng_geomkring_simple_all_modes(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkloop_simple_all_modes(spark_with_jar, coverage):
     """Light vs heavy geomkloop over all 6 modes × 3 coverage bases, simple BNG polygon."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light_loop(
             _LONDON_BOX, _RES_SIMPLE, 1, mode, coverage
         )
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _LONDON_BOX, _RES_SIMPLE, 1, mode, "gbx_bng_geomkloop", coverage
@@ -213,17 +215,18 @@ def test_parity_bng_geomkloop_simple_all_modes(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkring_holed_all_modes(spark_with_jar, coverage):
     """Light vs heavy geomkring over all 6 modes × 3 coverage bases, holed BNG polygon."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light(_HOLED_POLY, _RES_HOLED, 1, mode, coverage)
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_bng_geomkring", coverage
@@ -239,19 +242,20 @@ def test_parity_bng_geomkring_holed_all_modes(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkloop_holed_all_modes(spark_with_jar, coverage):
     """Light vs heavy geomkloop over all 6 modes × 3 coverage bases, holed BNG polygon."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light_loop(
             _HOLED_POLY, _RES_HOLED, 1, mode, coverage
         )
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_bng_geomkloop", coverage
@@ -279,13 +283,14 @@ _RES_LARGE = 2  # 10 km cells
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkring_boundary_out_aligned(spark_with_jar, coverage):
     """Light vs heavy geomkring boundary-out × 3 coverages, aligned BNG polygon."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = _collect_light(_BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_ALIGNED_GEOM,
@@ -304,15 +309,16 @@ def test_parity_bng_geomkring_boundary_out_aligned(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkloop_boundary_out_aligned(spark_with_jar, coverage):
     """Light vs heavy geomkloop boundary-out × 3 coverages, aligned BNG polygon."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = _collect_light_loop(
         _BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
     )
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_ALIGNED_GEOM,
@@ -331,13 +337,14 @@ def test_parity_bng_geomkloop_boundary_out_aligned(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkring_boundary_out_large(spark_with_jar, coverage):
     """Light vs heavy geomkring boundary-out × 3 coverages, large BNG polygon (res 2)."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = _collect_light(_BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_LARGE_GEOM,
@@ -356,15 +363,16 @@ def test_parity_bng_geomkring_boundary_out_large(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkloop_boundary_out_large(spark_with_jar, coverage):
     """Light vs heavy geomkloop boundary-out × 3 coverages, large BNG polygon (res 2)."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = _collect_light_loop(
         _BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage
     )
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_LARGE_GEOM,
@@ -413,17 +421,18 @@ _RES_GC = 3  # Same resolution as existing BNG fixtures (1km cells).
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkring_gc_all_modes(spark_with_jar, coverage):
     """Light vs heavy geomkring over all 6 modes × 3 coverages, mixed GeometryCollection (BNG)."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light(_GC_MIXED, _RES_GC, 1, mode, coverage)
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_bng_geomkring", coverage
@@ -439,17 +448,18 @@ def test_parity_bng_geomkring_gc_all_modes(spark_with_jar, coverage):
 @pytest.mark.parametrize("coverage", _COVERAGES)
 def test_parity_bng_geomkloop_gc_all_modes(spark_with_jar, coverage):
     """Light vs heavy geomkloop over all 6 modes × 3 coverages, mixed GeometryCollection (BNG)."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light_loop(_GC_MIXED, _RES_GC, 1, mode, coverage)
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_bng_geomkloop", coverage

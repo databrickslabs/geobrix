@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.functions._
@@ -37,7 +38,7 @@ class RST_Tessellate_GridSystemMetadataTest extends PlanTest with SilentSparkSes
 
     override def beforeAll(): Unit = {
         super.beforeAll()
-        functions.register(spark)
+        TestL1.installAll(spark)
         // Initialize GDAL via the guarded GDALManager so we can write the fixture GTiff.
         // Idempotent: if already initialized from a prior suite, this is a no-op.
         GDALManager.init(ExpressionConfig(spark))

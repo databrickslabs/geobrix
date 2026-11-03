@@ -2,30 +2,38 @@
 
 import pytest
 
-from databricks.labs.gbx.pyvx import functions as pvx
-
 
 def _exists(spark, name):
     return spark.catalog.functionExists(name)
 
 
 def test_only_subset_mvt(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     for n in ("gbx_st_asmvt", "gbx_st_legacyaswkb"):
         spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {n}")
-    pvx.register(spark, only=["st_asmvt"])
+    gbx_manager.register_family(spark, ("gbx_st_",), only=["st_asmvt"], level="L3")
     assert _exists(spark, "gbx_st_asmvt")
     assert not _exists(spark, "gbx_st_legacyaswkb")
 
 
 def test_only_selects_udtf_and_pmtiles(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     for n in ("gbx_st_asmvt_pyramid", "gbx_pmtiles_agg"):
         spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {n}")
-    pvx.register(spark, only=["gbx_st_asmvt_pyramid", "gbx_pmtiles_agg"])
+    gbx_manager.register_family(
+        spark,
+        ("gbx_st_",),
+        only=["gbx_st_asmvt_pyramid", "gbx_pmtiles_agg"],
+        level="L3",
+    )
     assert _exists(spark, "gbx_st_asmvt_pyramid")
     assert _exists(spark, "gbx_pmtiles_agg")
 
 
 def test_only_does_not_trip_unselected_guard(spark, monkeypatch):
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pyvx import _env
 
     def _boom():
@@ -33,18 +41,24 @@ def test_only_does_not_trip_unselected_guard(spark, monkeypatch):
 
     monkeypatch.setattr(_env, "assert_tin_available", _boom)
     monkeypatch.setattr(_env, "assert_legacy_available", _boom)
-    pvx.register(spark, only=["gbx_st_asmvt"])  # must not raise
+    gbx_manager.register_family(
+        spark, ("gbx_st_",), only=["gbx_st_asmvt"], level="L3"
+    )  # must not raise
     assert _exists(spark, "gbx_st_asmvt")
 
 
 def test_only_unknown_raises(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     with pytest.raises(ValueError) as ei:
-        pvx.register(spark, only=["st_asmtv"])
+        gbx_manager.register_family(spark, ("gbx_st_",), only=["st_asmtv"], level="L3")
     assert "st_asmtv" in str(ei.value)
 
 
 def test_only_none_registers_all(spark):
-    pvx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     for n in (
         "gbx_st_asmvt",
         "gbx_st_legacyaswkb",

@@ -404,9 +404,9 @@ def test_rst_fromfile_materialize_keeps_the_mask(spark, tmp_path, nodata):
 
 
 def test_rst_initnodata_from_a_virtual_tile(spark, tmp_path):
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     p = write_masked(tmp_path / "m.tif")
     got = {}
     for start in (True, False):
@@ -489,9 +489,9 @@ def _valid_values(raster_bytes):
 def test_rastertogrid_from_a_virtual_tile(spark, tmp_path, agg):
     """BNG raster-to-grid of a 4326 source (warped to EPSG:27700): same cells and
     measures from a virtual tile as from its bytes, with no masked pixel aggregated."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     p = write_masked(tmp_path / "m.tif")
     out = {}
     for start in (True, False):

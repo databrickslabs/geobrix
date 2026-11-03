@@ -1,5 +1,6 @@
 package docs.tests.scala.packages
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.gridx.bng.{functions => bx}
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.functions._
@@ -47,7 +48,7 @@ class GridxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         import org.apache.spark.sql.functions._
 
         // Register functions
-        bx.register(spark)
+        TestL1.installAll(spark)
 
         // Calculate cell area (from docs example)
         val areaDf = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area")
@@ -73,7 +74,6 @@ class GridxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         // Verify the import pattern from docs works
         noException should be thrownBy {
             import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-            val _ = bx.register _
         }
     }
 }

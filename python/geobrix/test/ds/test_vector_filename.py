@@ -11,7 +11,6 @@ import os
 import pytest
 from shapely import Point, to_wkb
 
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import (
     _canonical_ext,
     _complete_ext,
@@ -117,7 +116,9 @@ def _make_df(spark):
 
 def test_gpkg_filename_case_a_stem(spark, tmp_path):
     """gpkg_gbx: save to stem path resolves to <stem>.gpkg."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_stem = str(tmp_path / "cities")
     _make_df(spark).write.format("gpkg_gbx").mode("overwrite").save(out_stem)
     expected = str(tmp_path / "cities.gpkg")
@@ -127,7 +128,9 @@ def test_gpkg_filename_case_a_stem(spark, tmp_path):
 
 def test_gpkg_filename_case_b_existing_dir(spark, tmp_path):
     """gpkg_gbx: save to existing dir names the output after the directory."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = tmp_path / "cities_dir"
     d.mkdir()
     _make_df(spark).write.format("gpkg_gbx").mode("overwrite").save(str(d))
@@ -138,7 +141,9 @@ def test_gpkg_filename_case_b_existing_dir(spark, tmp_path):
 
 def test_gpkg_filename_case_c_option(spark, tmp_path):
     """gpkg_gbx: .option('fileName', 'cities').save(dir) -> dir/cities.gpkg."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_dir = str(tmp_path / "outdir")
     (
         _make_df(spark)
@@ -157,7 +162,9 @@ def test_gpkg_filename_case_c_option(spark, tmp_path):
 
 def test_geojson_filename_case_a_stem(spark, tmp_path):
     """geojson_gbx: save to stem path resolves to <stem>.geojson."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_stem = str(tmp_path / "places")
     _make_df(spark).write.format("geojson_gbx").mode("overwrite").save(out_stem)
     expected = str(tmp_path / "places.geojson")
@@ -167,7 +174,9 @@ def test_geojson_filename_case_a_stem(spark, tmp_path):
 
 def test_geojson_filename_case_b_existing_dir(spark, tmp_path):
     """geojson_gbx: save to existing dir names the output after the directory."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = tmp_path / "places_dir"
     d.mkdir()
     _make_df(spark).write.format("geojson_gbx").mode("overwrite").save(str(d))
@@ -178,7 +187,9 @@ def test_geojson_filename_case_b_existing_dir(spark, tmp_path):
 
 def test_geojson_filename_case_c_option(spark, tmp_path):
     """geojson_gbx: .option('fileName', 'places').save(dir) -> dir/places.geojson."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_dir = str(tmp_path / "outdir")
     (
         _make_df(spark)
@@ -197,7 +208,9 @@ def test_geojson_filename_case_c_option(spark, tmp_path):
 
 def test_shapefile_zip_filename_case_a_stem(spark, tmp_path):
     """shapefile_gbx zip=true: save to stem path resolves to <stem>.shp.zip."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_stem = str(tmp_path / "roads")
     (
         _make_df(spark)
@@ -213,7 +226,9 @@ def test_shapefile_zip_filename_case_a_stem(spark, tmp_path):
 
 def test_shapefile_zip_filename_case_b_existing_dir(spark, tmp_path):
     """shapefile_gbx zip=true: save to existing dir names output after the directory."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = tmp_path / "roads_dir"
     d.mkdir()
     (
@@ -230,7 +245,9 @@ def test_shapefile_zip_filename_case_b_existing_dir(spark, tmp_path):
 
 def test_shapefile_zip_filename_case_c_option(spark, tmp_path):
     """shapefile_gbx zip=true: .option('fileName','roads').save(dir) -> dir/roads.shp.zip."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_dir = str(tmp_path / "outdir")
     (
         _make_df(spark)
@@ -250,7 +267,9 @@ def test_shapefile_zip_filename_case_c_option(spark, tmp_path):
 
 def test_filegdb_filename_case_a_stem(spark, tmp_path):
     """file_gdb_gbx: save to stem path resolves to <stem>.gdb."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_stem = str(tmp_path / "parcels")
     _make_df(spark).write.format("file_gdb_gbx").mode("overwrite").save(out_stem)
     expected = str(tmp_path / "parcels.gdb")
@@ -260,7 +279,9 @@ def test_filegdb_filename_case_a_stem(spark, tmp_path):
 
 def test_filegdb_filename_case_b_existing_dir(spark, tmp_path):
     """file_gdb_gbx: save to existing dir names the .gdb after the directory."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = tmp_path / "parcels_dir"
     d.mkdir()
     _make_df(spark).write.format("file_gdb_gbx").mode("overwrite").save(str(d))
@@ -271,7 +292,9 @@ def test_filegdb_filename_case_b_existing_dir(spark, tmp_path):
 
 def test_filegdb_filename_case_c_option(spark, tmp_path):
     """file_gdb_gbx: .option('fileName','parcels').save(dir) -> dir/parcels.gdb."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_dir = str(tmp_path / "outdir")
     (
         _make_df(spark)

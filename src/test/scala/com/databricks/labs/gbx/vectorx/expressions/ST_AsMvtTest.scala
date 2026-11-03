@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx
 import com.databricks.labs.gbx.vectorx.jts.JTS
@@ -102,7 +103,7 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt should encode a single point feature into a non-empty MVT blob") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val gf = new GeometryFactory()
@@ -123,7 +124,7 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt should aggregate multiple features into a single MVT blob") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val gf = new GeometryFactory()
@@ -144,7 +145,7 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt should drop null WKB rows in update") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val gf = new GeometryFactory()
@@ -162,7 +163,7 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt should produce a non-null MVT for an empty group") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val df = spark.createDataFrame(Seq.empty[(Array[Byte], String, Long)])
@@ -178,7 +179,7 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt encodes numeric attributes with native MVT value types") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val gf = new GeometryFactory()
@@ -205,7 +206,7 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt encodes a small tile-local polygon (40-unit box) without dropping it") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         // A 40-unit square centred at (2048, 2048) in tile-local [0, 4096] pixel space. Under the

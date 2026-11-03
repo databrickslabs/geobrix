@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.GeneratorContract
 import com.databricks.labs.gbx.vectorx
 import com.databricks.labs.gbx.vectorx.jts.JTS
@@ -57,7 +58,7 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
           )
       }),
       "gbx_st_asmvt_pyramid" -> (() => {
-          vectorx.functions.register(spark) // initialises the native readers the MVT writer needs
+          TestL1.installAll(spark)
           val poly = new GeometryFactory().createPolygon(
             Array(
               new Coordinate(-30.0, 10.0), new Coordinate(30.0, 10.0), new Coordinate(30.0, 20.0),
@@ -94,7 +95,7 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
     // The Column wrappers hand ColumnAdapter a positional Seq: a swapped argument would run, with another grid. Every
     // size and extent below is different, so a swap changes the points that come out.
     test("the TIN Column wrappers pass their arguments in the SQL order, with and without mode") {
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import org.apache.spark.sql.functions.{array, lit}
         val pts = array(corners.map(b => lit(b)): _*)
         val none = array().cast("array<binary>")

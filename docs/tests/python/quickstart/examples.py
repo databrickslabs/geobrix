@@ -15,35 +15,35 @@ Usage: CodeFromTest uses functionName="REGISTER_RASTERX" etc. to show snippet co
 # =============================================================================
 # Paths match Sample Data guide. See docs/docs/sample-data.mdx.
 
-REGISTER_RASTERX = """# Register RasterX functions (required for gbx_rst_* in SQL)
-from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)"""
+REGISTER_RASTERX = """# Register GeoBrix functions (required for gbx_rst_* in SQL)
+from databricks.labs.gbx import register
+register(spark)"""
 
-# Lightweight register variants (pure-Python wheel). The alias (rx/vx/gx) and the
-# gbx_* SQL names are identical to heavyweight — only the import path differs.
-REGISTER_RASTERX_LIGHT = """# Register RasterX (lightweight pyrx) — gbx_rst_* SQL names, pyspark-backed
-from databricks.labs.gbx.pyrx import functions as rx
-rx.register(spark)"""
+# One register call serves every compute: it picks the best level for each function and also
+# registers the lightweight readers. The names below stay so each page keeps its own snippet.
+REGISTER_RASTERX_LIGHT = """# Register RasterX — gbx_rst_* SQL names, at the best level this compute offers
+from databricks.labs.gbx import register
+register(spark)"""
 
-REGISTER_VECTORX_LIGHT = """# Register VectorX (lightweight pyvx) — gbx_st_* SQL names
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)"""
+REGISTER_VECTORX_LIGHT = """# Register VectorX — gbx_st_* SQL names
+from databricks.labs.gbx import register
+register(spark)"""
 
-REGISTER_QUADBIN_LIGHT = """# Register GridX quadbin (lightweight pygx) — gbx_quadbin_* SQL names
-from databricks.labs.gbx.pygx import functions as gx
-gx.register(spark)"""
+REGISTER_QUADBIN_LIGHT = """# Register GridX quadbin — gbx_quadbin_* SQL names
+from databricks.labs.gbx import register
+register(spark)"""
 
 REGISTER_LIGHT_READERS = """# Register the lightweight readers (raster + vector), then read by format string
-from databricks.labs.gbx.ds import register as gbx_readers
-gbx_readers.register(spark)   # gtiff_gbx / raster_gbx + shapefile_gbx / geojson_gbx / gpkg_gbx / file_gdb_gbx"""
+from databricks.labs.gbx import register
+register(spark)   # gtiff_gbx / raster_gbx + shapefile_gbx / geojson_gbx / gpkg_gbx / file_gdb_gbx"""
 
 REGISTER_GRIDX = """# Register GridX BNG functions (required for gbx_bng_* in SQL)
-from databricks.labs.gbx.gridx.bng import functions as bx
-bx.register(spark)"""
+from databricks.labs.gbx import register
+register(spark)"""
 
 REGISTER_VECTORX = """# Register VectorX functions (required for gbx_st_* in SQL)
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-vx.register(spark)"""
+from databricks.labs.gbx import register
+register(spark)"""
 
 # Scala snippet (quick-start § Scala); same content as Python register, in Scala.
 REGISTER_RASTERX_SCALA = """import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -64,23 +64,23 @@ geojson_df = spark.read.format("geojson_ogr").option("multi", "false").load(
 geojson_df.limit(3).show()"""
 
 READ_GEOTIFF_LIGHT = """# Read GeoTIFF rasters (lightweight gtiff_gbx reader — pure-Python, no GDAL install)
-from databricks.labs.gbx.ds import register as gbx_readers
-gbx_readers.register(spark)   # register the lightweight readers once per session
+from databricks.labs.gbx import register
+register(spark)   # register the lightweight readers once per session
 rasters = spark.read.format("gtiff_gbx").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
 rasters.limit(3).show()"""
 
 READ_SHAPEFILE_LIGHT = """# Read shapefile (lightweight shapefile_gbx reader — pyogrio-backed, no OGR install)
-from databricks.labs.gbx.ds import register as gbx_readers
-gbx_readers.register(spark)   # register the lightweight readers once per session
+from databricks.labs.gbx import register
+register(spark)   # register the lightweight readers once per session
 shapes = spark.read.format("shapefile_gbx").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
 shapes.limit(3).show()"""
 
-USE_QUADBIN = """# Register GridX quadbin (works on BOTH tiers), index a point, inspect the cell
-from databricks.labs.gbx.pygx import functions as gx
+USE_QUADBIN = """# Register GeoBrix, index a point with quadbin, inspect the cell
+from databricks.labs.gbx import register
 from databricks.labs.gbx.gridx.quadbin import functions as qx
 from pyspark.sql import Row
 from pyspark.sql.functions import lit
-gx.register(spark)
+register(spark)
 # A point in NYC (WGS84 lon/lat) -> a resolution-15 quadbin cell, then its resolution
 points = spark.createDataFrame([Row(lon=-73.985, lat=40.748)])
 points.select(
@@ -91,22 +91,23 @@ points.select(
 ).show()"""
 
 USE_RASTERX = """# Register, load raster, apply RasterX
+from databricks.labs.gbx import register
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
+register(spark)
 rasters = spark.read.format("gdal").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
 rasters.select(rx.rst_boundingbox("tile").alias("bbox"), rx.rst_width("tile"), rx.rst_height("tile")).limit(3).show()"""
 
-USE_BNG = """# Register GridX BNG, then use in SQL (gbx_bng_cellarea returns square kilometres)
-from databricks.labs.gbx.gridx.bng import functions as bx
-bx.register(spark)
+USE_BNG = """# Register GeoBrix, then use BNG in SQL (gbx_bng_cellarea returns square kilometres)
+from databricks.labs.gbx import register
+register(spark)
 spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2").show()"""
 
 USE_VECTORX = '''# Register VectorX, create legacy point struct, convert to WKB
-from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy
+from databricks.labs.gbx import register
 from databricks.labs.gbx.vectorx import functions as vx
 from pyspark.sql import Row
 from pyspark.sql.types import ArrayType, DoubleType, IntegerType, StructField, StructType
-legacy.register(spark)
+register(spark)
 legacy_schema = StructType([
     StructField("typeId", IntegerType()),
     StructField("srid", IntegerType()),
@@ -239,7 +240,7 @@ try:
     from pyspark.sql import SparkSession
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
     from pyspark.sql.functions import expr
 except ImportError:
     SparkSession = None
@@ -266,17 +267,19 @@ def register_functions(spark=None):
         >>> from databricks.labs.gbx.rasterx import functions as rx
         >>> 
         >>> # Register RasterX functions with Spark
-        >>> rx.register(spark)
+        >>> from databricks.labs.gbx import register
+        >>> register(spark)
     
     See Also:
         - register_gridx_functions: Register BNG grid functions
         - register_vectorx_functions: Register vector functions
     """
+    from databricks.labs.gbx import manager as gbx_manager
     if spark is None:
         spark = SparkSession.getActiveSession()
     
     if rx is not None:
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
 
 
 def register_gridx_functions(spark=None):
@@ -293,13 +296,15 @@ def register_gridx_functions(spark=None):
         >>> from databricks.labs.gbx.gridx.bng import functions as bx
         >>> 
         >>> # Register BNG functions
-        >>> bx.register(spark)
+        >>> from databricks.labs.gbx import register
+        >>> register(spark)
     """
+    from databricks.labs.gbx import manager as gbx_manager
     if spark is None:
         spark = SparkSession.getActiveSession()
     
     if bx is not None:
-        bx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_bng_',))
 
 
 def register_vectorx_functions(spark=None):
@@ -313,16 +318,18 @@ def register_vectorx_functions(spark=None):
         None - Functions are registered in the Spark session
     
     Example:
-        >>> from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+        >>> from databricks.labs.gbx.vectorx import functions as vx
         >>> 
         >>> # Register VectorX functions
-        >>> vx.register(spark)
+        >>> from databricks.labs.gbx import register
+        >>> register(spark)
     """
+    from databricks.labs.gbx import manager as gbx_manager
     if spark is None:
         spark = SparkSession.getActiveSession()
     
     if vx is not None:
-        vx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_st_legacy',))
 
 
 def read_geotiff_files(spark, path="/path/to/geotiff/files"):
@@ -463,8 +470,8 @@ def read_geotiff_files_light(spark, path="/path/to/geotiff/files"):
     Returns:
         DataFrame with raster tile data
     """
-    from databricks.labs.gbx.ds import register as gbx_readers
-    gbx_readers.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_sources(spark)
     return spark.read.format("gtiff_gbx").load(path)
 
 
@@ -483,8 +490,8 @@ def read_shapefiles_light(spark, path="/path/to/shapefiles"):
     Returns:
         DataFrame with geometry data
     """
-    from databricks.labs.gbx.ds import register as gbx_readers
-    gbx_readers.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_sources(spark)
     return spark.read.format("shapefile_gbx").load(path)
 
 
@@ -504,12 +511,12 @@ def use_quadbin_functions(spark, lon=-73.985, lat=40.748, res=15):
     Returns:
         DataFrame with the quadbin cell id and its resolution
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.gridx.quadbin import functions as qx
-    from databricks.labs.gbx.pygx import functions as gx
     from pyspark.sql import Row
     from pyspark.sql.functions import lit
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     points = spark.createDataFrame([Row(lon=float(lon), lat=float(lat))])
     return points.select(
         qx.quadbin_pointascell("lon", "lat", lit(res)).alias("cell")
@@ -537,7 +544,8 @@ def use_rasterx_functions(spark, path="/path/to/rasters"):
         >>> from databricks.labs.gbx.rasterx import functions as rx
         >>> 
         >>> # Register functions
-        >>> rx.register(spark)
+        >>> from databricks.labs.gbx import register
+        >>> register(spark)
         >>> 
         >>> # Read raster data
         >>> raster_df = spark.read.format("gdal").load("/path/to/rasters")
@@ -552,11 +560,12 @@ def use_rasterx_functions(spark, path="/path/to/rasters"):
     See Also:
         - pattern_batch_processing: Process multiple rasters in parallel
     """
+    from databricks.labs.gbx import manager as gbx_manager
     if rx is None:
         raise ImportError("GeoBrix rasterx module not available")
     
     # Register functions
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read raster data
     raster_df = spark.read.format("gdal").load(path)
@@ -650,8 +659,9 @@ def pattern_read_process_convert(spark, path="/data/shapes"):
         >>> df = spark.read.format("shapefile_ogr").load("/data/shapes")
         >>> 
         >>> # 2. Process with GeoBrix functions
-        >>> from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-        >>> vx.register(spark)
+        >>> from databricks.labs.gbx.vectorx import functions as vx
+        >>> from databricks.labs.gbx import register
+        >>> register(spark)
         >>> 
         >>> # 3. Convert to Databricks types for further analysis
         >>> result = df.select(
@@ -663,6 +673,7 @@ def pattern_read_process_convert(spark, path="/data/shapes"):
         - pattern_multi_format_reading: Read different formats
         - pattern_batch_processing: Process multiple files
     """
+    from databricks.labs.gbx import manager as gbx_manager
     if vx is None or expr is None:
         raise ImportError("GeoBrix or PySpark not available")
     
@@ -670,7 +681,7 @@ def pattern_read_process_convert(spark, path="/data/shapes"):
     df = spark.read.format("shapefile_ogr").load(path)
     
     # 2. Process with GeoBrix functions
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     
     # 3. Convert to Databricks types for further analysis
     result = df.select(
@@ -731,7 +742,8 @@ def pattern_batch_processing(spark, path="/data/many_rasters"):
     
     Example:
         >>> from databricks.labs.gbx.rasterx import functions as rx
-        >>> rx.register(spark)
+        >>> from databricks.labs.gbx import register
+        >>> register(spark)
         >>> 
         >>> # Process multiple rasters in parallel
         >>> rasters = spark.read.format("gdal").load("/data/many_rasters")
@@ -749,11 +761,12 @@ def pattern_batch_processing(spark, path="/data/many_rasters"):
     See Also:
         - use_rasterx_functions: Basic RasterX usage
     """
+    from databricks.labs.gbx import manager as gbx_manager
     if rx is None:
         raise ImportError("GeoBrix rasterx module not available")
     
     # Register functions
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Process multiple rasters in parallel (GDAL reader returns "source", not "path")
     rasters = spark.read.format("gdal").load(path)
@@ -857,8 +870,8 @@ if __name__ == "__main__":
 
 def use_gridx_functions(spark):
     """Demonstrate using GridX (BNG) functions."""
-    from databricks.labs.gbx.gridx.bng import functions as bx
-    bx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     
     # Calculate cell area (returns square kilometres)
     df = spark.sql("""
@@ -870,8 +883,8 @@ def use_gridx_functions(spark):
 
 def use_vectorx_functions(spark):
     """Demonstrate using VectorX functions."""
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     
     # Convert legacy Mosaic geometry to WKB
     # Note: This shows the function signature. In real use, provide actual legacy geometry data.

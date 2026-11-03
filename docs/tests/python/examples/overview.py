@@ -25,9 +25,10 @@ def example_read_catalog_rasters(spark):
     Demonstrates reading rasters with GDAL and building a catalog
     with metadata.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
     
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Read rasters
     rasters = spark.read.format("gdal").load("/data/satellite")
@@ -51,9 +52,9 @@ def example_spatial_aggregation_bng(spark):
     
     Aggregate point data by BNG grid cells.
     """
-    from databricks.labs.gbx.gridx.bng import functions as bx
+    from databricks.labs.gbx import manager as gbx_manager
     
-    bx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     
     # Aggregate points by BNG cell
     result = spark.sql("""
@@ -76,9 +77,9 @@ def example_migrate_from_mosaic(spark):
     
     Convert legacy Mosaic geometry columns to modern WKB/GEOMETRY format.
     """
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx import manager as gbx_manager
     
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     
     # Convert legacy geometries
     legacy = spark.table("legacy_mosaic_table")

@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VirtualTileException}
 import com.databricks.labs.gbx.udfs
@@ -42,7 +43,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -75,7 +76,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -114,7 +115,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
     test("heavy rst_* on a VIRTUAL tile raises the materialize-first error") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // Build a v2 virtual tile DataFrame: raster=null, path set, 9-field schema.
         // window is a nested struct; pass null for it and the other pedigree fields.
@@ -160,7 +161,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         // as an error-row and .collect() would NOT throw. Post-fix it re-throws.
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // Build a v2 virtual tile DataFrame: raster=null, path set, 9-field schema.
         val tileSchema = StructType(Seq(
@@ -234,7 +235,7 @@ class RST_V2RoundTripTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 

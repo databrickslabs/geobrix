@@ -16,7 +16,6 @@ import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.pyrx import functions as prx
 from databricks.labs.gbx.rasterx import functions as rx
 
 pytest.importorskip(
@@ -53,7 +52,9 @@ def _uint16_tile_view(spark, name="t"):
 
 def test_xyzpyramid_accepts_rescale_and_alters_output(spark):
     """7-arg SQL call is accepted; auto and none produce different PNG bytes."""
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _uint16_tile_view(spark)
 
     auto_rows = spark.sql(

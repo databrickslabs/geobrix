@@ -74,12 +74,12 @@ SCALA_NAME_RE = re.compile(r'override\s+def\s+name\s*:\s*String\s*=\s*"(gbx_[a-z
 PY_NAME_RE = re.compile(r"""["'](gbx_[a-z0-9_]+)["']""")
 
 # Map each gbx_ function prefix to its heavy (non-light-only) Python module.
-# Light-only modules (pyrx, pyvx, pygx, and vectorx/jts/legacy) are excluded —
+# Light-only modules (pyrx, pyvx, pygx) are excluded —
 # those functions may have no heavy equivalent and are listed in PYTHON_REGISTERED.
 PREFIX_TO_HEAVY_MODULE = {
     "gbx_rst_": PYTHON_ROOT / "databricks/labs/gbx/rasterx/functions.py",
-    # Legacy Mosaic migration ships in its own heavy module (documented import path).
-    "gbx_st_legacy": PYTHON_ROOT / "databricks/labs/gbx/vectorx/jts/legacy/functions.py",
+    # Legacy Mosaic migration is `st_legacyaswkb` in the vectorx module.
+    "gbx_st_legacy": PYTHON_ROOT / "databricks/labs/gbx/vectorx/functions.py",
     "gbx_st_": PYTHON_ROOT / "databricks/labs/gbx/vectorx/functions.py",
     "gbx_bng_": PYTHON_ROOT / "databricks/labs/gbx/gridx/bng/functions.py",
     "gbx_custom_": PYTHON_ROOT / "databricks/labs/gbx/gridx/custom/functions.py",

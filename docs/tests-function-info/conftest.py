@@ -18,30 +18,26 @@ GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.6.0-jar-with-dependencies.jar
 
 def _register_all(spark):
     """Register RasterX, GridX (BNG + Quadbin), and VectorX with the given Spark session."""
+    from databricks.labs.gbx import manager as gbx_manager
     try:
-        from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
     except Exception as e:
         raise RuntimeError("Failed to register RasterX") from e
     try:
-        from databricks.labs.gbx.gridx.bng import functions as bx
-        bx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_bng_',))
     except Exception as e:
         raise RuntimeError("Failed to register GridX BNG") from e
     try:
-        from databricks.labs.gbx.gridx.quadbin import functions as qx
-        qx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_quadbin_',))
     except Exception as e:
         raise RuntimeError("Failed to register GridX Quadbin") from e
     try:
-        from databricks.labs.gbx.vectorx.jts.legacy import functions as vx_legacy
-        vx_legacy.register(spark)
+        gbx_manager.register_family(spark, ('gbx_st_legacy',))
     except Exception as e:
         raise RuntimeError("Failed to register VectorX legacy") from e
     try:
         # Main VectorX module (gbx_st_asmvt + gbx_st_asmvt_pyramid).
-        from databricks.labs.gbx.vectorx import functions as vx
-        vx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_st_',))
     except Exception as e:
         raise RuntimeError("Failed to register VectorX expressions") from e
 

@@ -44,6 +44,7 @@ pytest.importorskip(
     "h3",
     reason="h3-py not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
+from test._heavy import heavy_register  # noqa: E402
 from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -131,9 +132,9 @@ def _light_cells(spark, raster: bytes, mode: str) -> set:
     """Light pyrx cell set: feed bytes through pyrx.rst_fromcontent, LATERAL tessellate."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
@@ -151,7 +152,7 @@ def _heavy_cells(spark, raster: bytes, mode: str) -> set:
 
     from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )

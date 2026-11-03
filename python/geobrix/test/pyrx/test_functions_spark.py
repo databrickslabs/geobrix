@@ -20,7 +20,9 @@ def test_no_jar_in_session(spark):
 
 def test_register_is_noop(spark):
     # swap-compat: rx.register(spark) -> prx.register(spark) must not error.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
 
 def test_rst_transform_to_3857(spark):
@@ -84,6 +86,8 @@ def test_rst_polygonize(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     data = np.full((4, 4), -9999.0, dtype="float32")
     data[1:3, 1:3] = 5.0
     profile = dict(
@@ -104,7 +108,7 @@ def test_rst_polygonize(spark):
     df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     # rst_polygonize is a streaming UDTF — invoke via SQL LATERAL.
     df.createOrReplaceTempView("ras")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = spark.sql(
         "SELECT t.geom_wkb AS g, t.value AS v FROM ras, LATERAL gbx_rst_polygonize(tile, 1, 4) t"
     ).collect()
@@ -183,8 +187,10 @@ def test_rst_mapalgebra(spark):
 
 
 def test_rst_separatebands(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=4, height=3, count=3)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_sepbands")
     # rst_separatebands is a streaming UDTF — invoke via SQL LATERAL.
     parts = spark.sql(
@@ -194,15 +200,17 @@ def test_rst_separatebands(spark):
     assert parts.count() == 3
     assert (
         parts.select(
-            rx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n")
+            rx.rst_numbands(rx.rst_fromcontent("raster", f.lit("GTiff"))).alias("n")
         ).first()["n"]
         == 1
     )
 
 
 def test_rst_retile(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=4, height=4)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_retile")
     parts = spark.sql(
         "SELECT t.* FROM _ras_retile, LATERAL gbx_rst_retile(tile, 2, 2) t"
@@ -216,8 +224,10 @@ def test_rst_retile(spark):
 
 
 def test_rst_tooverlappingtiles(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=4, height=4)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_overlap")
     parts = spark.sql(
         "SELECT t.cellid FROM _ras_overlap, "
@@ -230,6 +240,8 @@ def test_rst_maketiles(spark):
     import numpy as np
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
+
+    from databricks.labs.gbx import manager as gbx_manager
 
     # 1024x1024 single-band float32 ~= 4 MiB encoded. Heavy keys on the encoded
     # byte size and quad-splits power-of-4; at size_in_mb=1 that is k=2 -> 16
@@ -253,7 +265,7 @@ def test_rst_maketiles(spark):
     df = spark.createDataFrame([(src,)], ["raster"]).select(
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_maketiles")
     parts = spark.sql(
         "SELECT t.cellid, t.raster, t.metadata FROM _ras_maketiles, "
@@ -262,7 +274,7 @@ def test_rst_maketiles(spark):
     assert parts.count() == 16
     assert (
         parts.select(
-            rx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n")
+            rx.rst_numbands(rx.rst_fromcontent("raster", f.lit("GTiff"))).alias("n")
         ).first()["n"]
         == 1
     )
@@ -304,7 +316,9 @@ _RETILE_FAMILY = [
 def test_retile_family_stamps_parent_cellid(spark):
     # Every output of the retile family carries the PARENT tile's cellid (as heavy does),
     # not a light-only emitted ordinal.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _cellid_tile_view(spark, "_ras_cellid_parent", 7)
     for fn in _RETILE_FAMILY:
         rows = spark.sql(
@@ -316,7 +330,9 @@ def test_retile_family_stamps_parent_cellid(spark):
 
 def test_retile_family_null_parent_cellid_is_zero(spark):
     # A null parent cellid maps to 0, matching heavy's getLong.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _cellid_tile_view(spark, "_ras_cellid_null", None)
     for fn in _RETILE_FAMILY:
         rows = spark.sql(
@@ -342,9 +358,10 @@ def _window_rows(spark, view, fn):
 def test_retile_family_stamps_window_provenance(spark):
     # A tile cut from a parent records its pixel window within the parent, so a writer
     # (or any consumer) can tell sibling windows apart: they share the parent's cellid.
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pyrx.core import tiling
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _cellid_tile_view(spark, "_ras_window_prov", 7)
 
     # rst_retile: 4x4 parent in 2x2 windows -> the four quadrants, exactly.
@@ -373,7 +390,9 @@ def test_retile_family_stamps_window_provenance(spark):
 def test_retile_window_is_relative_to_the_input_tile(spark):
     # The window is the output's place within the INPUT tile, so retiling a retiled
     # tile records offsets inside the 2x2 child, not inside the original 4x4.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _cellid_tile_view(spark, "_ras_window_nested", 7)
     spark.sql(
         "SELECT struct(t.*) AS tile FROM _ras_window_nested, "
@@ -445,7 +464,9 @@ _WHOLE_INPUT_FNS = [
 
 
 def test_single_output_covering_the_input_keeps_its_provenance(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     # A whole-file reader tile: path plus the whole window.
     _v2_input_view(
         spark, "_ras_prov_whole", path="/data/scene.tif", window=(0, 0, 4, 4)
@@ -467,7 +488,9 @@ def test_single_output_covering_the_input_keeps_its_provenance(spark):
 def test_single_output_covering_a_band_tile_keeps_its_band(spark):
     # A no-op retile of a band tile must stay marked as that band, or the bands would
     # all look like whole tiles of the same source.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _cellid_tile_view(spark, "_ras_band_parent", 7)
     spark.sql(
         "SELECT struct(t.*) AS tile FROM _ras_band_parent, "
@@ -481,7 +504,9 @@ def test_single_output_covering_a_band_tile_keeps_its_band(spark):
 
 
 def test_several_outputs_stamp_windows_within_the_input_and_drop_its_path(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _v2_input_view(
         spark, "_ras_prov_multi", path="/data/scene.tif", window=(0, 0, 4, 4)
     )
@@ -498,7 +523,9 @@ def test_several_outputs_stamp_windows_within_the_input_and_drop_its_path(spark)
 def test_separatebands_stamps_band_marker(spark):
     # Each band tile is marked with its 1-based band number (metadata key "band"); the
     # bands share the parent's extent, so no window is stamped.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _cellid_tile_view(spark, "_ras_band_marker", 7)
     rows = spark.sql(
         "SELECT t.window AS w, t.metadata AS m "
@@ -565,8 +592,10 @@ def test_rst_tilexyz_null_tile_transparent(spark):
 
 
 def test_rst_xyzpyramid_array(spark):
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _rgb_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_pyramid")
     # rst_xyzpyramid is a streaming UDTF — invoke via SQL LATERAL.
     rows = spark.sql(
@@ -582,7 +611,9 @@ def test_rst_xyzpyramid_array(spark):
 def test_sql_rst_tilexyz_accepts_rescale(spark):
     # Regression: gbx_rst_tilexyz must accept the optional 8th arg (rescale).
     # Uses the SQL surface to verify arity after registration.
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _rgb_tile_df(spark)
     df.createOrReplaceTempView("_tilexyz_rescale")
     row = spark.sql(
@@ -1315,8 +1346,10 @@ def test_rst_dtmfromgeoms_breakline_encodings(spark):
 def test_rst_h3_tessellate(spark):
     import h3
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=8, height=8, epsg=4326)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_tessellate")
     # rst_h3_tessellate is a streaming UDTF — invoke via SQL LATERAL.
     parts = spark.sql(
@@ -1325,7 +1358,7 @@ def test_rst_h3_tessellate(spark):
     )
     assert parts.count() > 0
     rows = parts.select(
-        rx.rst_numbands(f.struct("cellid", "raster", "metadata")).alias("n"),
+        rx.rst_numbands(rx.rst_fromcontent("raster", f.lit("GTiff"))).alias("n"),
         f.col("cellid").alias("cid"),
     ).collect()
     for r in rows:
@@ -1336,8 +1369,10 @@ def test_rst_h3_tessellate(spark):
 def test_h3_tessellate_mode_sql(spark):
     import pytest
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=8, height=8, epsg=4326)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_ras_tessellate_mode")
     # 2-arg (default assignment=centroid) — must still work.
     n_default = spark.sql(
@@ -1488,11 +1523,13 @@ def test_light_rastertogrid_coverage_assignment_4arg_sql(spark):
     """
     from pyspark.sql.types import DoubleType
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     # 4x3 pixels at 0.5 deg each; at H3 res=7 (edge ~1.2 km) the covering set
     # has many more cells than the 12 pixel centroids -> NULL-measure rows appear.
     df = _tile_df(spark, width=4, height=3, count=1)
     df.createOrReplaceTempView("_ras_t8_cov")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = spark.sql(
         "SELECT t.* FROM _ras_t8_cov, "
         "LATERAL gbx_rst_h3_rastertogridavg(tile, 7, 'complete', 'centroid') t"
@@ -1516,9 +1553,11 @@ def test_light_rastertogrid_count_schema_is_double(spark):
     """The rastertogridcount measure column must be DoubleType (not Int/Long)."""
     from pyspark.sql.types import DoubleType
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=4, height=3, count=1)
     df.createOrReplaceTempView("_ras_t8_cnt_schema")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     for name, res in [
         ("gbx_rst_h3_rastertogridcount", 6),
         ("gbx_rst_quadbin_rastertogridcount", 10),
@@ -1538,9 +1577,11 @@ def test_light_tessellate_assignment_coverage_4arg_sql(spark):
 
     assignment=centroid, coverage=complete should return rows (non-zero).
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=8, height=8, epsg=4326)
     df.createOrReplaceTempView("_ras_t8_tess")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = spark.sql(
         "SELECT t.* FROM _ras_t8_tess, "
         "LATERAL gbx_rst_h3_tessellate(tile, 4, 'centroid', 'complete') t"
@@ -1550,9 +1591,11 @@ def test_light_tessellate_assignment_coverage_4arg_sql(spark):
 
 def test_light_tessellate_assignment_coverage_sparse(spark):
     """assignment=covering, coverage=sparse should return rows (non-zero)."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = _tile_df(spark, width=8, height=8, epsg=4326)
     df.createOrReplaceTempView("_ras_t8_tess_sparse")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = spark.sql(
         "SELECT t.* FROM _ras_t8_tess_sparse, "
         "LATERAL gbx_rst_h3_tessellate(tile, 4, 'covering', 'sparse') t"

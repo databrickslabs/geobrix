@@ -27,7 +27,6 @@ pytest.importorskip("quadbin")
 from databricks.labs.gbx.pygx import _bng, _custom  # noqa: E402
 from databricks.labs.gbx.pygx import _h3 as _h3mod  # noqa: E402
 from databricks.labs.gbx.pygx import _quadbin  # noqa: E402
-from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 from databricks.labs.gbx.pygx._custom import CustomGridConf  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -394,7 +393,11 @@ def test_quadbin_coverage_default_is_coveras_via_udf_impl():
 
 def test_sql_quadbin_geomkring_with_coverage(spark):
     """SQL gbx_quadbin_geomkring(..., mode, coverage) resolves without error."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     wkb_hex = _HOLED_WKB_QB.hex()
     rows = spark.sql(
         f"SELECT gbx_quadbin_geomkring("
@@ -406,7 +409,11 @@ def test_sql_quadbin_geomkring_with_coverage(spark):
 
 def test_sql_quadbin_geomkring_polyfill_differs_from_coveras(spark):
     """polyfill coverage returns a different result from coveras on a holed polygon."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     wkb_hex = _HOLED_WKB_QB.hex()
     r_coveras = spark.sql(
         f"SELECT gbx_quadbin_geomkring(X'{wkb_hex}', {_RES_QB}, 1, 'boundary-out', 'coveras') AS r"

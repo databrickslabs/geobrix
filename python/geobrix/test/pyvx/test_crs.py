@@ -830,9 +830,9 @@ def test_mixed_dim_wkt_setcrs_preserves_uniform_3d():
 
 def test_column_wrappers_accept_literal_crs_string(spark):
     """st_crs/st_setcrs/st_transformcrs Column wrappers must accept plain CRS strings."""
-    from databricks.labs.gbx.pyvx import functions as pvx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    pvx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
 
     ewkb_hex = _ewkb(4326).hex()
     df = spark.sql(f"SELECT unhex('{ewkb_hex}') AS geom")

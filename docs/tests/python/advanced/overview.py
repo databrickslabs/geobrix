@@ -32,9 +32,10 @@ def spark_expressions_standard_usage(spark):
     Standard GeoBrix usage with Spark expressions.
     Demonstrates the eval interface through registered functions.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     # Uses Spark's columnar expression engine
     rasters = spark.read.format("gdal").load(_RASTER_PATH)
     df = rasters.select(rx.rst_boundingbox("tile").alias("bbox"))
@@ -61,6 +62,7 @@ def end_to_end_advanced_pipeline(spark):
     Demonstrates combining GDAL CLI preprocessing, custom UDFs,
     standard GeoBrix operations, and library integration.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     # 1. Preprocess with GDAL CLI (via subprocess or notebook magic)
     # !gdalwarp -t_srs EPSG:4326 input.tif reprojected.tif
     
@@ -87,7 +89,7 @@ def end_to_end_advanced_pipeline(spark):
     
     # 4. Use standard GeoBrix for distributed operations
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     aoi_geometry = None  # Placeholder
     result = enriched.select(

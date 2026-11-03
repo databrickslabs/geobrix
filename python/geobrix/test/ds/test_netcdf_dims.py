@@ -557,11 +557,11 @@ def test_banddim_with_dimindex_pins_level(tmp_path):
 def test_dimindex_and_banddim_are_honored_through_spark_read(spark, tmp_path):
     """Spark hands a reader its options case-insensitively (as lowercase keys); the
     camel-case names dimIndex and bandDim were then never found and silently ignored."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
     p = str(tmp_path / "g.nc")
     _write_4d_grid(p)
-    register(spark, only=["netcdf"])
+    gbx_manager.register_sources(spark, only=["netcdf"])
     rows = (
         spark.read.format("netcdf_gbx")
         .option("bandDim", "time")

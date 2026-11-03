@@ -201,17 +201,18 @@ def test_h3_geomkring_boundary_out_expands_beyond_cover(spark):
       1. result >= covering set (no cells lost)
       2. result > covering set (expansion happened)
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     pytest.skip(
         "Integration test: requires a Databricks session with gbx_h3_geomkring "
         "registered via gx.register(spark). Run with --with-integration."
     )
 
-    from databricks.labs.gbx.pygx.functions import (  # noqa: PLC0415
-        _h3_geomkring,
-        register,
-    )
+    from databricks.labs.gbx.pygx.functions import _h3_geomkring
 
-    register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
 
     geom_wkb = bytes(_NYC_WKB)
     r0 = set(_h3mod.geom_expand("ring", geom_wkb, _RES, 0, "boundary-out"))

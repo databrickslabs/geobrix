@@ -33,11 +33,13 @@ def spark():
 def test_rasterx_functions_registration(spark):
     # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
     # heavyweight CI env does not have (test/conftest.py).
+    from databricks.labs.gbx import manager as gbx_manager
+
     pytest.importorskip("rasterio")
     pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     path = (
         HERE.parents[4]
         / "src/test/resources/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"

@@ -36,9 +36,9 @@ def _read_first_band(gtiff_bytes: bytes):
 
 def test_binpoints_agg_max(spark):
     """Grouped-agg via SQL expr: max of two points in one cell, one in another."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     rows = [(0.5, 1.5, 10.0), (0.5, 1.5, 25.0), (1.5, 0.5, 7.0)]
     df = spark.createDataFrame(rows, "x double, y double, z double")
@@ -68,9 +68,9 @@ def test_binpoints_agg_max(spark):
 
 def test_binpoints_agg_empty_group(spark):
     """An empty group (no rows) must return None, not raise."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     schema = "x double, y double, z double, g string"
     df = spark.createDataFrame([], schema)
@@ -90,9 +90,9 @@ def test_binpoints_agg_empty_group(spark):
 
 def test_binpoints_agg_mean(spark):
     """statistic='mean': average over two identical-cell points."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     # Two points in top-left cell: mean(4, 8) = 6.
     rows = [(0.25, 1.5, 4.0), (0.75, 1.5, 8.0)]

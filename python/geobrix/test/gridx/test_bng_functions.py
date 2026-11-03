@@ -40,9 +40,10 @@ def spark():
 @pytest.fixture(scope="session")
 def bng_registered(spark):
     """Register BNG functions once for all tests."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.gridx.bng import functions as bng_funcs
 
-    bng_funcs.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     return bng_funcs
 
 
@@ -221,8 +222,8 @@ def test_bng_tessellateexplode_keep_core_geom_defaults_to_false(spark, bng_regis
     # the two-argument SQL form (the lightweight tier's signature) is the same call
     df.createOrReplaceTempView("bng_te_two_arg")
     sql_rows = spark.sql(
-        "SELECT cellid, core, chip FROM bng_te_two_arg "
-        "LATERAL VIEW gbx_bng_tessellateexplode(geom, 3) t AS cellid, core, chip"
+        "SELECT t.cellid, t.core, t.chip FROM bng_te_two_arg, "
+        "LATERAL gbx_bng_tessellateexplode(geom, 3) t"
     ).collect()
     assert sorted(sql_rows) == sorted(default_rows)
 

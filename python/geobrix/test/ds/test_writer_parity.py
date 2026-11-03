@@ -34,6 +34,8 @@ _JARS = sorted((_HERE.parents[3] / "lib").glob("geobrix-*-jar-with-dependencies.
 
 @pytest.fixture(scope="module")
 def spark_with_jar():
+    from databricks.labs.gbx import manager as gbx_manager
+
     if not _JARS:
         pytest.skip("no geobrix JAR staged")
     if not os.path.exists(SAMPLE):
@@ -52,9 +54,8 @@ def spark_with_jar():
         .config("spark.jars", str(_JARS[-1]))
         .getOrCreate()
     )
-    from databricks.labs.gbx.ds.register import register
 
-    register(session)
+    gbx_manager.register_sources(session)
     yield session
 
 

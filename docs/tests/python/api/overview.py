@@ -22,7 +22,7 @@ except ImportError:
 try:
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
 except ImportError:
     rx = None
     bx = None
@@ -31,14 +31,15 @@ except ImportError:
 
 def register_packages_python(spark):
     """Register GeoBrix packages in Python."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+    from databricks.labs.gbx.vectorx import functions as vx
     
     # Register each package
-    rx.register(spark)
-    bx.register(spark)
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx_manager.register_family(spark, ('gbx_bng_',))
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     return rx, bx, vx
 
 
@@ -66,11 +67,12 @@ SQL_SHOW_FUNCTIONS_output = """
 
 def pattern_import_register(spark):
     """Pattern 1: Import and Register."""
+    from databricks.labs.gbx import manager as gbx_manager
     # Import functions with alias
     from databricks.labs.gbx.rasterx import functions as rx
     
     # Register with Spark
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Load rasters (sample data from mounted Volumes)
     rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
@@ -86,9 +88,10 @@ def pattern_import_register(spark):
 
 def pattern_mixed_language(spark):
     """Pattern 2: Mixed Language Usage."""
+    from databricks.labs.gbx import manager as gbx_manager
     # Register in Python
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Load rasters (sample data from mounted Volumes)
     rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
@@ -108,10 +111,11 @@ def pattern_mixed_language(spark):
 
 def pattern_chaining_operations(spark):
     """Pattern 3: Chaining Operations."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
     from pyspark.sql.functions import expr
     
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Load rasters (sample data from mounted Volumes)
     rasters = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
@@ -147,11 +151,12 @@ def error_check_function_availability(spark):
 
 def error_functions_not_registered(spark):
     """Solution for Functions Not Registered error."""
+    from databricks.labs.gbx import manager as gbx_manager
     # Error: Function 'gbx_rst_boundingbox' not found
     
     # Solution: Register functions first
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     return rx
 
 
@@ -168,9 +173,10 @@ def error_import_errors():
 
 def performance_register_once(spark):
     """Performance Tip 1: Register Once."""
+    from databricks.labs.gbx import manager as gbx_manager
     # Register functions once at the start of your notebook
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     # Then use throughout the notebook
     # Don't re-register in every cell
@@ -179,8 +185,9 @@ def performance_register_once(spark):
 
 def performance_use_dataframe_api(spark):
     """Performance Tip 2: Use DataFrame API."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
     
@@ -195,8 +202,9 @@ def performance_use_dataframe_api(spark):
 
 def performance_batch_operations(spark):
     """Performance Tip 3: Batch Operations."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     
     df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
     

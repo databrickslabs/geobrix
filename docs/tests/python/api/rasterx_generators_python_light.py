@@ -26,9 +26,9 @@ def rst_retile_python_example(spark):
     Generator function: invoke via SQL LATERAL, not df.select.
     Returns one row per sub-tile (each sub-tile is a v2-Tile struct).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # Explode raster into 64x64-pixel tiles (returns array of tiles)
     return spark.sql(
@@ -52,9 +52,9 @@ def rst_tooverlappingtiles_python_example(spark):
     Overlap percentage is applied to tile dimensions for seamless processing.
     Returns one row per overlapping tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # 64x64 tiles with 8% overlap
     return spark.sql(
@@ -79,9 +79,9 @@ def rst_separatebands_python_example(spark):
     Each band is returned as a separate v2-Tile struct.
     Uses the multiband fixture (3 bands: red, NIR, green).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     multiband_tile_df(spark).createOrReplaceTempView("multiband_rasters")
     # Explode multiband raster into individual band tiles
     return spark.sql(
@@ -105,9 +105,9 @@ def rst_polygonize_python_example(spark):
     One row per contiguous-value region: (geom_wkb, value). band and
     connectedness (4 or 8) are required arguments in the light tier.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # Polygonize band 1 with 4-connectivity.
     return spark.sql(
@@ -131,9 +131,9 @@ def rst_maketiles_python_example(spark):
     Size is in MB; the tile grid is derived from the MB budget.
     Returns one row per sub-tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # Subdivide raster into approximately 1.0 MB tiles
     return spark.sql(
@@ -157,10 +157,10 @@ def rst_rasterize_python_example(spark):
     This is NOT a generator — it returns a single tile struct from geometry.
     Takes a WKB/WKT geometry and a burn value; produces a rasterized tile.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import Row, functions as f
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     # Create a small synthetic geometry DataFrame with WKT polygon
     df = spark.createDataFrame([Row(geom="POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))")])
     # Rasterize a square polygon (value=1.0, extent=(0,0,10,10), 10x10 pixels, EPSG:4326)

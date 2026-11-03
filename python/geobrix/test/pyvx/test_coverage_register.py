@@ -1,36 +1,14 @@
-from databricks.labs.gbx.pyvx import functions as vx
 from databricks.labs.gbx.vectorx import helpers as vx_helpers
-
-
-def test_register_only_is_granular():
-    """Each coverage name maps to a distinct registrar so register(only=[...]) is granular.
-
-    Uses the same structural check as test_cleaning_registrars_are_granular: verifies
-    that the two coverage names are backed by DIFFERENT registrar objects in
-    _registrar_groups(), which guarantees register(only=["gbx_st_coverageisvalid"])
-    will not also register gbx_st_coverageinvalidedges.  Session-state-independent.
-    """
-    from databricks.labs.gbx.pyvx.functions import _registrar_groups
-
-    coverage_names = {"gbx_st_coverageisvalid", "gbx_st_coverageinvalidedges"}
-    groups = _registrar_groups()
-    coverage_dict = None
-    for _, group_dict in groups:
-        if coverage_names.issubset(set(group_dict.keys())):
-            coverage_dict = group_dict
-            break
-    assert coverage_dict is not None, "coverage group not found in _registrar_groups()"
-    registrars = [coverage_dict[n] for n in sorted(coverage_names)]
-    assert len(set(id(fn) for fn in registrars)) == len(coverage_names), (
-        "register(only=['gbx_st_coverageisvalid']) would register both — each name must "
-        "map to a distinct registrar (one-name→one-registrar contract violated)"
-    )
 
 
 def test_coverageisvalid_sql(spark):
     from shapely import box, to_wkb
 
-    vx.register(spark, only=["gbx_st_coverageisvalid"])
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_st_",), only=["gbx_st_coverageisvalid"], level="L3"
+    )
     rows = [("c", to_wkb(box(0, 0, 1, 1))), ("c", to_wkb(box(1, 0, 2, 1)))]
     spark.createDataFrame(rows, "cov_id string, geom binary").createOrReplaceTempView(
         "cov"

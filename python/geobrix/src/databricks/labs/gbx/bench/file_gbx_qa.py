@@ -234,11 +234,12 @@ def _check_raster_reader(
     spark, raster_dir: str, expected_pixel_bytes: bytes
 ) -> Dict[str, Any]:
     """Raster read via raster_gbx datasource: row count + pixel checksum."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     name = "raster_reader_gbx"
     try:
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
         df = (
             spark.read.format("raster_gbx")
             .option("driverName", "GTiff")
@@ -260,11 +261,12 @@ def _check_vector_reader(
     spark, geojson_path: str, expected_count: int
 ) -> Dict[str, Any]:
     """Vector read via shapefile_gbx/geojson_gbx datasource: row count."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     name = "vector_reader_gbx"
     try:
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)
+        gbx_manager.register_sources(spark)
         df = spark.read.format("geojson_gbx").load(geojson_path)
         count = df.count()
         note = f"count={count}  expected={expected_count}"
@@ -533,6 +535,8 @@ def _check_vector_write_modes(
     Arrow IPC scratch fragments are readable by the driver at commit time.
     Using /tmp causes per-executor local isolation that the driver can't read.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     results = []
     for mode in ("fuse", "managed", "external"):
         name = f"vector_write_{mode}"
@@ -546,9 +550,8 @@ def _check_vector_write_modes(
 
         try:
             from databricks.labs.gbx.ds.file_gbx import file_access_tier
-            from databricks.labs.gbx.ds.register import register
 
-            register(spark)
+            gbx_manager.register_sources(spark)
             tier = file_access_tier(spark)
 
             if mode in ("managed", "external") and tier == "fuse":

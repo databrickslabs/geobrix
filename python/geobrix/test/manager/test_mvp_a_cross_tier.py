@@ -66,12 +66,12 @@ def _udaf(spark):
 
 
 def _light(spark):
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pyrx import _mvp_forms
-    from databricks.labs.gbx.pyrx import functions as prx
 
     _mvp_forms.register_probe_forms(spark)
-    prx.register(
-        spark, only=["gbx_rst_merge"]
+    gbx_manager.register_family(
+        spark, ("gbx_rst_", "gbx_pmtiles_"), only=["gbx_rst_merge"], level="L3"
     )  # the light finalize (the heavy one has this name too)
 
 

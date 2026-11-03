@@ -7,9 +7,9 @@ import inspect
 
 
 def test_exif_gbx_metadata_mode(spark, exif_jpeg):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = (
         spark.read.format("exif_gbx")
         .option("mode", "metadata")
@@ -28,9 +28,9 @@ def test_exif_gbx_metadata_mode(spark, exif_jpeg):
 
 def test_exif_gbx_schema_completeness(spark, exif_jpeg):
     """All EXIF_META_SCHEMA fields are present in collected rows."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = spark.read.format("exif_gbx").load(str(exif_jpeg.parent))
     row = df.collect()[0]
     expected_fields = (
@@ -56,9 +56,9 @@ def test_exif_gbx_geom_wkb_is_point(spark, exif_jpeg):
     """geom_wkb decodes to a 2D POINT with the expected coordinates."""
     import struct
 
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = spark.read.format("exif_gbx").load(str(exif_jpeg.parent))
     row = df.collect()[0]
     wkb = bytes(row.geom_wkb)
@@ -73,9 +73,9 @@ def test_exif_gbx_geom_wkb_is_point(spark, exif_jpeg):
 
 def test_exif_gbx_default_mode_is_metadata(spark, exif_jpeg):
     """Omitting mode= defaults to metadata (no error)."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = spark.read.format("exif_gbx").load(str(exif_jpeg.parent))
     rows = df.collect()
     assert len(rows) == 1
@@ -122,9 +122,9 @@ def test_exif_arrow_schema_needs_no_session_timezone():
 
 def test_exif_gbx_qc_mode_adds_metrics(spark, exif_jpeg):
     """qc mode appends sharpness and brightness; brightness ~128 on solid-gray fixture."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark, only=["exif_gbx"])
+    gbx_manager.register_sources(spark, only=["exif_gbx"])
     df = spark.read.format("exif_gbx").option("mode", "qc").load(str(exif_jpeg.parent))
     r = df.collect()[0]
     assert r.sharpness is not None and r.brightness is not None

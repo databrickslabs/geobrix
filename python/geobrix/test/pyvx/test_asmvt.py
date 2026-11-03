@@ -11,7 +11,9 @@ from databricks.labs.gbx.pyvx import functions as vx  # noqa: E402
 
 
 def test_st_asmvt_aggregates_group_to_one_tile(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     rows = [
         (0, 0, 0, bytearray(to_wkb(Point(100.0, 200.0))), "a", 1),
         (0, 0, 0, bytearray(to_wkb(Point(300.0, 400.0))), "b", 2),
@@ -44,7 +46,9 @@ def test_st_asmvt_accepts_wkt(spark):
     # geom-accepting pyvx fn (WKB/EWKB/WKT/EWKT) via the shared _geom.parse_geom contract.
     # Heavy accepts WKB only; light is a strict superset. WKT (and EWKT) feature must
     # encode the same as the WKB path.
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     from pyspark.sql import functions as f
 
     rows = [

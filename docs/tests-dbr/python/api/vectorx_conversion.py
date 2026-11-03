@@ -96,9 +96,10 @@ def vectorx_conversion_example(spark, table_name="legacy_mosaic_table"):
     Run VectorX conversion workflow (requires DBR).
     Skips if table does not exist or st_geomfromwkb not available.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     legacy = spark.table(table_name)
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-    vx.register(spark)
+    from databricks.labs.gbx.vectorx import functions as vx
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     converted = legacy.select(
         col("feature_id"),
         vx.st_legacyaswkb(col("mosaic_geom")).alias("wkb_geom")
@@ -116,8 +117,8 @@ def vectorx_complete_example(spark, table_name="legacy_mosaic_geometries"):
     Run VectorX complete migration workflow (requires DBR).
     Skips if table does not exist or st_* not available.
     """
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     legacy_table = spark.table(table_name)
     migrated = legacy_table.select(
         col("*"),

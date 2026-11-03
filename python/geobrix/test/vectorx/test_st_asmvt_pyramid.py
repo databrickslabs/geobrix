@@ -21,6 +21,8 @@ JAR = candidates[-1].resolve()
 
 @pytest.fixture(scope="module")
 def spark():
+    from databricks.labs.gbx import manager as gbx_manager
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     s = (
         SparkSession.builder.appName("gbx-vectorx-pyramid-tests")
@@ -33,9 +35,8 @@ def spark():
         .getOrCreate()
     )
     s.sparkContext.setLogLevel("ERROR")
-    from databricks.labs.gbx.vectorx import functions as vx
 
-    vx.register(s)
+    gbx_manager.register_family(s, ("gbx_st_",))
     yield s
 
 

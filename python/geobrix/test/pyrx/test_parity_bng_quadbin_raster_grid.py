@@ -61,6 +61,7 @@ pytest.importorskip(
     "shapely",
     reason="shapely not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
+from test._heavy import heavy_register  # noqa: E402
 from test.pyrx import _alpha_layouts as al  # noqa: E402
 from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
@@ -240,7 +241,7 @@ def _heavy_reducer_rows(
 
     from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     fn = _heavy_rastertogrid(f"gbx_rst_bng_rastertogrid{agg}")
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
@@ -270,9 +271,9 @@ def _light_reducer_rows(
     ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call. A
     ``tp.Staged`` ``raster`` starts the light tier from a virtual tile.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = tp.light_tile_df(spark, raster)
     df.createOrReplaceTempView("_ras_light_bng")
     rows = spark.sql(
@@ -379,7 +380,7 @@ def _heavy_grid_rows(
 
     from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     fn = _heavy_rastertogrid(f"gbx_rst_{grid}_rastertogrid{agg}")
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
@@ -407,9 +408,9 @@ def _light_grid_rows(
 
     ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = tp.light_tile_df(spark, raster)
     df.createOrReplaceTempView("_ras_light_grid")
     rows = spark.sql(
@@ -569,9 +570,10 @@ def _light_tessellate_ids(
     """
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pyrx import functions as prx
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         prx._fromcontent_udf(f.col("raster"), f.lit("GTiff")).alias("tile")
     )
@@ -597,7 +599,7 @@ def _heavy_tessellate_ids(
 
     from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
@@ -721,7 +723,6 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
     from databricks.labs.gbx.pyrx import _serde
     from databricks.labs.gbx.pyrx import functions as prx
     from databricks.labs.gbx.pyrx.core import cellraster
-    from databricks.labs.gbx.rasterx import functions as hx
 
     assert len(cells) >= 2, f"{grid}: need a multi-cell set, got {len(cells)}"
 
@@ -764,7 +765,7 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
     assert light_tile is not None and light_tile["raster"] is not None
 
     # --- HEAVY tier (JAR, 12-arg call_function) ---
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     # the SQL name straight after hx.register: the Python API follows the manager's pick (the BNG form is light first)
     heavy_out = (
         df.groupBy("tx")
@@ -1662,6 +1663,8 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
     regression gate for that alignment: if either tier's default diverges, the
     cell sets produced by the 2-arg call will differ.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark = spark_with_jar
     raster = _quadbin_raster_4326()  # 16×16 4326 raster, valid for H3
     resolution = 5  # matches test_parity_h3_tessellate.py fixture
@@ -1671,7 +1674,7 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
 
     from databricks.labs.gbx.pyrx import functions as prx
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df2 = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         prx._fromcontent_udf(f.col("raster"), f.lit("GTiff")).alias("tile")
     )
@@ -1684,9 +1687,8 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
     light_2arg_n = len(light_2arg_rows)
 
     # Heavy: 2-arg Python wrapper (no explicit assignment/coverage) — register AFTER light.
-    from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     heavy_2arg_rows = (
         df2.select(
             f.call_function(
@@ -1943,12 +1945,12 @@ def _single_tile(spark, raster, tier, fn):
     if tier == "light":
         from databricks.labs.gbx.pyrx import functions as mod
 
-        mod.register(spark)
+        heavy_register(spark, ("gbx_rst_",))
         df = tp.light_tile_df(spark, raster)
     else:
         from databricks.labs.gbx.rasterx import functions as mod
 
-        mod.register(spark)
+        heavy_register(spark, ("gbx_rst_",))
         df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
             rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
         )

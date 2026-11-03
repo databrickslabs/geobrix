@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.gridx.grid.{BNG, Quadbin}
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_BNG_RasterizeAgg, RST_Quadbin_RasterizeAgg}
@@ -90,7 +91,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
     // ---- 1. registration ----------------------------------------------------
 
     test("all 9 grid functions are registered") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val fns = spark.sessionState.functionRegistry.listFunction().map(_.funcName).toSet
         theNine.foreach(n => assert(fns.contains(n), s"$n not registered"))
     }
@@ -101,7 +102,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tmp = java.nio.file.Files.createTempDirectory("gbx_grid_int_bng_").toFile
         try {
@@ -135,7 +136,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tmp = java.nio.file.Files.createTempDirectory("gbx_grid_int_qb_").toFile
         try {
@@ -159,7 +160,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tmp = java.nio.file.Files.createTempDirectory("gbx_grid_int_bngt_").toFile
         try {
@@ -183,7 +184,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // A handful of central-London points -> res-12 quadbin cells (Long ids).
         val z = 12
@@ -208,7 +209,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         def burnedValues(rasterBytes: Array[Byte]): Seq[Double] = {
             val mem = s"/vsimem/grid_int_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
@@ -243,7 +244,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // Central-London BNG cells at resolution 3 (1km); STRING ids fed to the UDAF.
         val res = 3
@@ -282,7 +283,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // z=18 (~0.00137deg / ~95m cells) so the three central-London points below fall in
         // three DISTINCT quadbin cells; at coarse zooms (e.g. z=12, ~9.5km) they collapse
@@ -315,7 +316,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val res = 3 // 1km cells
         // Three distinct 1km BNG cells in central London (EPSG:27700 eastings/northings).

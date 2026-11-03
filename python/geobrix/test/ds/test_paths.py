@@ -61,9 +61,9 @@ def _paths_df(spark, files):
 
 
 def _batch_read(spark, fmt, path, **opts):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     r = spark.read.format(fmt)
     for k, v in opts.items():
         r = r.option(k, v)

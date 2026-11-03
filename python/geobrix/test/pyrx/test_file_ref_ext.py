@@ -837,32 +837,22 @@ def test_rst_setcrs_file_ref_equals_fallback(gtiff_bytes):
             np.testing.assert_array_equal(exp_ds.read(), got_ds.read())
 
 
-def test_group3_sql_registry_unchanged():
-    """SQL registry must still point at single-arg UDFs for Group 3 ops."""
+def test_group3_sql_registration_points_at_single_arg_udfs():
+    """The manifest's L3 refs for Group 3 ops name the single-arg UDFs, not the FILE variants."""
     import databricks.labs.gbx.pyrx.functions as prx
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.manager.l3 import resolve_ref
 
-    registry = prx.SQL_REGISTRY
-    # Array ops: single-arg UDFs must be present in registry.
-    assert "gbx_rst_merge" in registry, "gbx_rst_merge must be in SQL_REGISTRY"
-    assert (
-        "gbx_rst_combineavg" in registry
-    ), "gbx_rst_combineavg must be in SQL_REGISTRY"
-    assert "gbx_rst_frombands" in registry, "gbx_rst_frombands must be in SQL_REGISTRY"
-    assert (
-        "gbx_rst_mapalgebra" in registry
-    ), "gbx_rst_mapalgebra must be in SQL_REGISTRY"
-    # Agg ops: single-arg UDFs must be present in registry.
-    assert "gbx_rst_merge_agg" in registry, "gbx_rst_merge_agg must be in SQL_REGISTRY"
-    assert (
-        "gbx_rst_combineavg_agg" in registry
-    ), "gbx_rst_combineavg_agg must be in SQL_REGISTRY"
-    assert (
-        "gbx_rst_frombands_agg" in registry
-    ), "gbx_rst_frombands_agg must be in SQL_REGISTRY"
-    # Confirm the registry entries are not the FILE variants.
-    assert registry["gbx_rst_merge"] is prx._merge_udf
-    assert registry["gbx_rst_combineavg"] is prx._combineavg_udf
-    assert registry["gbx_rst_frombands"] is prx._frombands_udf
-    assert registry["gbx_rst_mapalgebra"] is prx._mapalgebra_udf
-    assert registry["gbx_rst_combineavg_agg"] is prx._combineavg_agg_sql_udf
-    assert registry["gbx_rst_frombands_agg"] is prx._frombands_agg_udf
+    functions = manifest.load().functions
+    expected = {
+        "gbx_rst_merge": prx._merge_udf,
+        "gbx_rst_combineavg": prx._combineavg_udf,
+        "gbx_rst_frombands": prx._frombands_udf,
+        "gbx_rst_mapalgebra": prx._mapalgebra_udf,
+        "gbx_rst_merge_agg": prx._merge_agg_udf,
+        "gbx_rst_combineavg_agg": prx._combineavg_agg_sql_udf,
+        "gbx_rst_frombands_agg": prx._frombands_agg_udf,
+    }
+    for name, udf in expected.items():
+        ref = functions[name].levels["L3"]["variants"]["c0"]
+        assert resolve_ref(ref) is udf, name

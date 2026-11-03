@@ -20,10 +20,10 @@ def vectorx_heavy_setup(spark):
     The ``vector_geoms`` view (1 row: geom = 'SRID=4326;POINT (13 42)') is used
     by all three CRS heavy Python examples; this fixture creates it once per module.
     """
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_vectorx_heavy  # noqa: PLC0415
 
-    vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_',))
     create_setup_views_vectorx_heavy(spark)
     yield spark
 

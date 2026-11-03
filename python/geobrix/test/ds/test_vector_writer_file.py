@@ -31,7 +31,6 @@ import pytest
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 from shapely import Point, to_wkb
 
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import VectorGbxWriter
 
 # ---------------------------------------------------------------------------
@@ -186,7 +185,9 @@ def test_vector_writer_file_mode_managed_error_is_fuse_only():
 def test_full_write_fuse_mode_unchanged(spark, tmp_path):
     """FUSE mode (no fileMode option) writes file to disk unchanged (byte-identical
     to existing behavior; open_for_write is never called)."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "roads.gpkg")
     _wkb_df(spark).coalesce(1).write.format("gpkg_gbx").mode("overwrite").save(out)
     assert os.path.isfile(out), "FUSE write must produce a file at self.path"

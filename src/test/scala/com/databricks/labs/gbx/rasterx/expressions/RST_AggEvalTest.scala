@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_MergeAgg}
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes}
@@ -41,7 +42,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -89,7 +90,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         val df = Seq(
@@ -121,7 +122,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tmpDir = java.nio.file.Files.createTempDirectory("gbx_derivedband_agg_").toFile
 
@@ -183,7 +184,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tmpDir = java.nio.file.Files.createTempDirectory("gbx_merge_agg_det_").toFile
         val w = 8; val h = 8
@@ -244,7 +245,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val w = 8; val h = 8
         // Two byte rasters, IDENTICAL georef/origin, distinct constant fills -> they fully
@@ -349,7 +350,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         new GenericInternalRow(Array[Any](tileRow))
 
     test("RST_MergeAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         // BoundReference(0, v1TileType) binds child to field 0 of the input row,
         // so child.eval(inputRow(tileRow)) returns the v1 InternalRow directly.
         val agg = RST_MergeAgg(v1TileRef)
@@ -367,7 +368,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     }
 
     test("RST_MergeAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val agg = RST_MergeAgg(v1TileRef)
         val buf = agg.createAggregationBuffer()
         agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(10))))
@@ -385,7 +386,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     }
 
     test("RST_CombineAvgAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val agg = RST_CombineAvgAgg(v1TileRef)
         val buf = agg.createAggregationBuffer()
         agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
@@ -398,7 +399,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     }
 
     test("RST_CombineAvgAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val agg = RST_CombineAvgAgg(v1TileRef)
         val buf = agg.createAggregationBuffer()
         agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
@@ -412,7 +413,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     }
 
     test("RST_DerivedBandAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val pyfuncLit = Literal(UTF8String.fromString(
             "import numpy as np\ndef identity(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"))
         val funcNameLit = Literal(UTF8String.fromString("identity"))
@@ -438,7 +439,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -483,7 +484,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val valid = tinyGTiffBytes(42)
         val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
@@ -509,7 +510,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val valid = tinyGTiffBytes(42)
         val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
@@ -535,7 +536,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // The error tile is what a heavy function returns for a tile it cannot process: raster NULL, a reason.
         val good = Seq(tinyGTiffBytes(42)).toDF("content")
@@ -555,7 +556,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val good = Seq(tinyGTiffBytes(42)).toDF("content")
             .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
@@ -597,7 +598,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val valid = tinyGTiffBytes(42)
         val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
@@ -620,7 +621,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
     }
 
     test("every buffering aggregate answers an over-cap member as the group's error tile, never drops it") {
-        functions.register(spark)
+        TestL1.installAll(spark)
         val big = tinyGTiffBytes(42) // 4 x 4 bytes: 16 decoded
         val pyfunc = Literal(UTF8String.fromString("import numpy as np\ndef identity(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"))
         val funcName = Literal(UTF8String.fromString("identity"))
@@ -650,7 +651,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val valid  = tinyGTiffBytes(42)
         val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)

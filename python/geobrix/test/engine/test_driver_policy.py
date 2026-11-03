@@ -1067,13 +1067,13 @@ def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
     """The workers never read the switch: the SQL functions register() installs carry the driver's value. With the
     switch on in the driver at register() and NOT in the workers' environment, a worker opens a remote path; after
     register() with it off, the same query is refused."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     _rasterio_or_skip()
     import numpy as np
     import rasterio
     from pyspark.sql import functions as F
     from rasterio.transform import from_origin
-
-    from databricks.labs.gbx.pyrx import functions as prx
 
     spark = spark8
     tif = tmp_path / "a.tif"
@@ -1091,14 +1091,20 @@ def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
         w.write(np.ones((1, 6, 8), dtype="uint8"))
     server = _RangeHandler(tif.read_bytes())
     worker_env = F.udf(lambda _: os.environ.get(_gdal_policy.REMOTE_ENV), "string")
-    query = f"SELECT gbx_rst_width(gbx_rst_fromfile('{server.url}', 'GTiff')) AS w"
+    # the SQL name materializes, and the materializing reader reads local files only: with the switch carried the
+    # remote path passes the policy gate (the answer is NULL, not a refusal); without it the gate refuses
+    query = f"SELECT gbx_rst_fromfile('{server.url}', 'GTiff') AS t"
     try:
         monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
-        prx.register(spark, only=["gbx_rst_fromfile", "gbx_rst_width"])
+        gbx_manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_fromfile"], level="L3"
+        )
         assert spark.range(1).select(worker_env("id")).first()[0] is None
-        assert spark.sql(query).first()["w"] == 8
+        spark.sql(query).collect()  # no refusal
         monkeypatch.delenv(_gdal_policy.REMOTE_ENV)
-        prx.register(spark, only=["gbx_rst_fromfile", "gbx_rst_width"])
+        gbx_manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_fromfile"], level="L3"
+        )
         with pytest.raises(Exception, match="names a remote location"):
             spark.sql(query).collect()
     finally:
@@ -1133,10 +1139,10 @@ def test_a_reader_carries_the_switch_from_register_to_its_workers_planning(
     environment), the reader's planning on a worker lets a remote row through the gate (the lightweight reader then
     reads a row's file from a local or Volume path only, so this read ends with the reader's own error); after
     register() with it off, the row is refused by name."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     _rasterio_or_skip()
     import json
-
-    from databricks.labs.gbx.ds.register import register
 
     manifest_file = tmp_path / "rows.json"
     manifest_file.write_text(json.dumps([{"path": "http://127.0.0.1:9/a.tif"}]))
@@ -1149,11 +1155,11 @@ def test_a_reader_carries_the_switch_from_register_to_its_workers_planning(
         return str(raised.value)
 
     monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
-    register(spark8, only=["raster_gbx"])
+    gbx_manager.register_sources(spark8, only=["raster_gbx"])
     on = read()
     assert "names a remote location" not in on and "No such file" in on, on[-600:]
     monkeypatch.delenv(_gdal_policy.REMOTE_ENV)
-    register(spark8, only=["raster_gbx"])
+    gbx_manager.register_sources(spark8, only=["raster_gbx"])
     assert "names a remote location" in read()
 
 

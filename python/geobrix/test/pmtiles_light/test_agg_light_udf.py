@@ -78,18 +78,20 @@ def _drop_agg(spark):
 
 
 def test_pyrx_register_installs_pmtiles_agg(spark):
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
     _drop_agg(spark)
     assert not _agg_registered(spark)
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     assert _agg_registered(spark)
 
 
-def test_pyvx_register_installs_pmtiles_agg(spark):
-    from databricks.labs.gbx.pyvx import functions as vx
+def test_registering_the_name_alone_installs_pmtiles_agg(spark):
+    from databricks.labs.gbx import manager as gbx_manager
 
     _drop_agg(spark)
     assert not _agg_registered(spark)
-    vx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_pmtiles_",), only=["gbx_pmtiles_agg"], level="L3"
+    )
     assert _agg_registered(spark)

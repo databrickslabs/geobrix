@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.parity
 
-import com.databricks.labs.gbx.expressions.RegistryDelegate
+import com.databricks.labs.gbx.kernels.L1Installer
 import com.databricks.labs.gbx.rasterx.expressions.agg.{
   RST_BNG_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg
 }
@@ -18,8 +18,8 @@ import scala.util.Try
   * Guards the public SQL surface for grid-raster functions after Stage 1 refactoring.
   *
   * Enumerates the 27 grid-raster gbx_* names (24 rastertogrid + 3 rasterize_agg)
-  * and asserts that each registers in a fresh FunctionRegistry via RegistryDelegate —
-  * the same mechanism used by rasterx/functions.scala at session startup. Also verifies
+  * and asserts that each installs in the session's FunctionRegistry via L1Installer —
+  * the primitive the Python manager uses. Also verifies
   * that every builder accepts its documented arity:
   *   rastertogrid: 2 args (tile, resolution)
   *   rasterize_agg: 12 args
@@ -28,7 +28,7 @@ import scala.util.Try
   */
 class RegistrationInvarianceTest extends PlanTest with SilentSparkSession {
 
-  // All 24 rastertogrid companions in registration order (mirrors functions.scala).
+  // All 24 rastertogrid companions (the companions TestL1 installs).
   private val rastertogridCompanions = Seq(
     RST_H3_RasterToGridAvg,       RST_H3_RasterToGridCount,
     RST_H3_RasterToGridMax,       RST_H3_RasterToGridMin,
@@ -69,8 +69,9 @@ class RegistrationInvarianceTest extends PlanTest with SilentSparkSession {
     )
     expected.size shouldBe 27 // 24 rastertogrid + 3 rasterize_agg; tessellate generators counted separately
 
-    val rd = RegistryDelegate(spark.sessionState.functionRegistry)
-    (rastertogridCompanions ++ rasterizeAggCompanions).foreach(rd.register)
+    (rastertogridCompanions ++ rasterizeAggCompanions).foreach { c =>
+      L1Installer.install(spark, c.name, c.getClass.getName.stripSuffix("$")) shouldBe "ok"
+    }
 
     expected.foreach { name =>
       withClue(s"$name must resolve in registry") {

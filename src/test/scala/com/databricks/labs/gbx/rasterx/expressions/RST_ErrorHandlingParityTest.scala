@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
@@ -32,7 +33,7 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
         val res = df.select(rst_width(col("raster")).as("w")).collect()
@@ -49,7 +50,7 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
         val res = df.select(rst_srid(col("raster")).as("s")).collect()
@@ -66,7 +67,7 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
         val res = df.select(rst_scalex(col("raster")).as("sx")).collect()
@@ -93,7 +94,7 @@ class RST_ErrorHandlingParityTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         spark.conf.set("spark.databricks.labs.gbx.expressions.crash.on.error", "true")
         try {
             // DataFrame built AFTER conf.set so ExpressionConfigExpr snapshots crashExpressions=true.

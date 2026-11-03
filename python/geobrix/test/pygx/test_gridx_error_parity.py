@@ -108,20 +108,21 @@ def test_bng_malformed_cellid_null_both_tiers(spark_with_jar):
     Both tiers must degrade to NULL (data condition, not a parameter error).
     Checked via multiple scalar functions so the contract is exercised broadly.
     """
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
     # Collect light results FIRST, then register heavy (heavy register overwrites names).
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_aswkb = spark.sql("SELECT gbx_bng_aswkb('!!') g").first()["g"]
     light_aswkt = spark.sql("SELECT gbx_bng_aswkt('!!') g").first()["g"]
     light_cellarea = spark.sql("SELECT gbx_bng_cellarea('!!') a").first()["a"]
     light_centroid = spark.sql("SELECT gbx_bng_centroid('!!') g").first()["g"]
     light_kring = spark.sql("SELECT gbx_bng_kring('!!', 1) arr").first()["arr"]
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy_aswkb = spark.sql("SELECT gbx_bng_aswkb('!!') g").first()["g"]
     heavy_aswkt = spark.sql("SELECT gbx_bng_aswkt('!!') g").first()["g"]
     heavy_cellarea = spark.sql("SELECT gbx_bng_cellarea('!!') a").first()["a"]
@@ -165,19 +166,20 @@ def test_bng_bad_resolution_raises_both_tiers(spark_with_jar):
     valid integer index ±1..±6). Both tiers must raise because the caller explicitly
     supplied an unresolvable parameter — this is not a degrade path.
     """
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
     # London in BNG coords (EPSG:27700)
     valid_geom = "'POINT (530000 180000)'"
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     with pytest.raises(Exception):
         spark.sql(f"SELECT gbx_bng_pointascell({valid_geom}, 'bogus')").first()
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     with pytest.raises(Exception):
         spark.sql(f"SELECT gbx_bng_pointascell({valid_geom}, 'bogus')").first()
 
@@ -195,8 +197,7 @@ def test_quadbin_out_of_range_lat_clamped_not_null(spark_with_jar):
     be non-null AND identical across tiers.  This is NOT a degrade path; it is
     intentional web-mercator behavior documented in both tier implementations.
     """
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
@@ -204,12 +205,14 @@ def test_quadbin_out_of_range_lat_clamped_not_null(spark_with_jar):
     # expects (Double, Double, Int), so CAST is required to avoid a method-not-found
     # error on the heavy side. Light's pandas_udf accepts any numeric type, but the
     # CAST makes both tiers use the same type path.
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_val = spark.sql(
         "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(89.0 AS DOUBLE), 10) c"
     ).first()["c"]
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_quadbin_",))
     heavy_val = spark.sql(
         "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(89.0 AS DOUBLE), 10) c"
     ).first()["c"]
@@ -241,15 +244,16 @@ def test_bng_kringexplode_zero_rows_both_tiers(spark_with_jar):
     the JAR; the Spark-4.0 invocation is
     ``SELECT ... FROM gbx_bng_kringexplode(...)`` (NOT LATERAL VIEW).
     """
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_count = spark.sql("SELECT cellid FROM gbx_bng_kringexplode('!!', 1)").count()
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy_count = spark.sql("SELECT cellid FROM gbx_bng_kringexplode('!!', 1)").count()
 
     assert (
@@ -267,15 +271,16 @@ def test_bng_kringexplode_zero_rows_both_tiers(spark_with_jar):
 
 def test_bng_kloopexplode_zero_rows_both_tiers(spark_with_jar):
     """kloopexplode on a malformed BNG cell id yields 0 rows on both tiers."""
-    from databricks.labs.gbx.gridx.bng import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_count = spark.sql("SELECT cellid FROM gbx_bng_kloopexplode('!!', 1)").count()
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy_count = spark.sql("SELECT cellid FROM gbx_bng_kloopexplode('!!', 1)").count()
 
     assert (

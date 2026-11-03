@@ -16,7 +16,6 @@ import pytest
 from pmtiles.reader import MmapSource, Reader
 
 from databricks.labs.gbx.ds.pmtiles import PMTilesGbxWriter
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import _complete_ext, _resolve_single_file_output
 
 # ---------------------------------------------------------------------------
@@ -195,7 +194,9 @@ TILES = [(6, 32, 21), (6, 33, 21), (7, 64, 42)]
 
 def test_single_archive_stem_naming(spark, tmp_path):
     """Single-archive: stem path -> <stem>.pmtiles; tile reads back."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     stem = str(tmp_path / "world")
     expected = str(tmp_path / "world.pmtiles")
     _rows(spark, TILES).write.format("pmtiles_gbx").mode("overwrite").option(
@@ -207,7 +208,9 @@ def test_single_archive_stem_naming(spark, tmp_path):
 
 def test_single_archive_filename_option(spark, tmp_path):
     """Single-archive: fileName='tiles' -> <dir>/tiles.pmtiles; tile reads back."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_dir = str(tmp_path / "out")
     expected = str(tmp_path / "out" / "tiles.pmtiles")
     (
@@ -224,7 +227,9 @@ def test_single_archive_filename_option(spark, tmp_path):
 
 def test_single_archive_existing_dir_naming(spark, tmp_path):
     """Single-archive: existing dir -> <dir>/<dirname>.pmtiles; tile reads back."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = tmp_path / "world_dir"
     d.mkdir()
     expected = str(d / "world_dir.pmtiles")
@@ -237,7 +242,9 @@ def test_single_archive_existing_dir_naming(spark, tmp_path):
 
 def test_sharded_stem_naming(spark, tmp_path):
     """Sharded: stem path -> tileset under stem (no .pmtiles suffix on dir)."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     stem = str(tmp_path / "my_tileset")
     _rows(spark, TILES).write.format("pmtiles_gbx").mode("overwrite").save(stem)
     tileset = os.path.join(stem, "tileset")
@@ -247,7 +254,9 @@ def test_sharded_stem_naming(spark, tmp_path):
 
 def test_sharded_filename_option(spark, tmp_path):
     """Sharded: fileName='nation' -> <path>/nation/tileset/..."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out_dir = str(tmp_path / "out")
     expected_dir = str(tmp_path / "out" / "nation")
     (
@@ -265,7 +274,9 @@ def test_sharded_filename_option(spark, tmp_path):
 def test_sharded_existing_dir_naming(spark, tmp_path):
     """Sharded: existing dir -> <dir>/tileset/... (the save dir is the output root;
     no basename nesting)."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = tmp_path / "tileset_dir"
     d.mkdir()
     expected_dir = str(d)

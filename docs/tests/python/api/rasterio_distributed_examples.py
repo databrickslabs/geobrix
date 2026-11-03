@@ -61,10 +61,9 @@ df2 = df.withColumn("tile", rx.rst_ndvi("tile", 1, 2))"""
 
 def _register(spark):
     """Register the lightweight data sources and pyrx SQL functions."""
-    from databricks.labs.gbx.ds.register import register as ds_register
-    import databricks.labs.gbx.pyrx.functions as rx
-    ds_register(spark)
-    rx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+    gbx_manager.register_sources(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
 
 
 def _one_tile_df(spark, src_path):

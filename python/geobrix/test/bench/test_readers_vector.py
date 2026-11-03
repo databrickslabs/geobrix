@@ -31,9 +31,9 @@ def _tiny_geojson(path: str, n: int = 5) -> None:
 
 
 def test_run_format_read_ingests_to_table(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
     n_features = 5
     gj_path = str(tmp_path / "tiny.geojson")
@@ -70,10 +70,10 @@ def test_run_format_read_ingests_to_table(spark, tmp_path):
 
 
 def test_run_vector_write_from_table(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_polygon_seed
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
     n_rows = 8
     src_tbl = "t_vec_wsrc"
@@ -115,8 +115,8 @@ def test_run_vector_write_omits_the_worker_rss_when_nothing_was_sampled(
 ):
     """With no /proc to sample (peak 0) the note says nothing about worker memory, rather
     than 'peak RSS 0 MB', and peak_rss_mb falls back to this process's peak."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import generate_polygon_seed
-    from databricks.labs.gbx.ds.register import register
 
     class _Nothing:
         peak_mb = 0.0
@@ -129,7 +129,7 @@ def test_run_vector_write_omits_the_worker_rss_when_nothing_was_sampled(
             return None
 
     monkeypatch.setattr(readers, "WorkerRssSampler", _Nothing)
-    register(spark)
+    gbx_manager.register_sources(spark)
     src_tbl = "t_vec_wsrc_nosample"
     spark.sql(f"DROP TABLE IF EXISTS {src_tbl}")
     try:

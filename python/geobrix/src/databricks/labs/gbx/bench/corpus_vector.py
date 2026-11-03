@@ -730,9 +730,9 @@ def build_vector_corpus(
 ) -> dict:
     """Full pipeline: generate the polygon seed -> transcode to each format ->
     replicate ×copies. Returns {fmt: {"seed": path, "copies": [paths]}}."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     seed_df = generate_polygon_seed(spark, rows, srid=srid)
     seeds = transcode_vector_seed(spark, seed_df, formats, out_base)
     result: dict = {}

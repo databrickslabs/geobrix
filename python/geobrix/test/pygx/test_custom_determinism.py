@@ -139,9 +139,9 @@ def test_r1_same_struct_yields_same_cellids(spark):
     """
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     raster = _make_raster(27700, (530000.0, 183000.0), 100.0)
     df = (
@@ -336,7 +336,7 @@ def test_r3_oob_raster_heavy_raises_clear_error(spark_with_jar):
     """
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.rasterx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
@@ -358,7 +358,7 @@ def test_r3_oob_raster_heavy_raises_clear_error(spark_with_jar):
     valid_cell = _cmod.point_to_cell_id(conf_a, 531000.0, 181000.0, 1)
 
     # Register heavy.
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
 
     # Use an explicit HUGE pixel_size so the derived canvas extends past the grid bound.
     # With pixel_size=10000m and a cell centroid at (531000,181000) in a 4000m-wide grid,

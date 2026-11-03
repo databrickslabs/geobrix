@@ -25,10 +25,10 @@ def _gridx_light_setup_views(spark):
 
     Mirrors the test/setup pattern from test_vectorx_functions_python_light.py.
     """
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_gridx_light  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     create_setup_views_gridx_light(spark)
 
 

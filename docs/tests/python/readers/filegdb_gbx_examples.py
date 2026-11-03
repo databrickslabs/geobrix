@@ -12,9 +12,9 @@ df.show()"""
 
 
 def read_filegdb_gbx(spark, path=None):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     df = spark.read.format("file_gdb_gbx").load(path or SAMPLE)
     # FileGDB geometry column name matches the source layer column (e.g. SHAPE)
     srid_cols = [c for c in df.columns if c.endswith("_srid") and not c.endswith("_srid_proj")]

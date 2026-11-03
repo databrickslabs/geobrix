@@ -48,9 +48,14 @@ def _make_geotiff_bytes(
 
 def test_chm_subtract_and_clamp(spark):
     """CHM = max(DSM-DEM, 0) on aligned same-grid inputs."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+    gbx_manager.register_family(
+        spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
+        only=["gbx_rst_chm", "gbx_rst_fromcontent"],
+        level="L3",
+    )
 
     # DSM [[10,20],[5,8]] - DEM [[10,15],[7,8]] = [[0,5],[-2,0]] -> clamp [[0,5],[0,0]]
     dsm = _make_geotiff_bytes(np.array([[10.0, 20.0], [5.0, 8.0]], dtype="float32"))
@@ -77,9 +82,14 @@ def test_chm_subtract_and_clamp(spark):
 
 def test_chm_negative_surface_all_zeros(spark):
     """When DSM < DEM everywhere, CHM must be all zeros (no negatives)."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+    gbx_manager.register_family(
+        spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
+        only=["gbx_rst_chm", "gbx_rst_fromcontent"],
+        level="L3",
+    )
 
     # DSM is uniformly lower than DEM -> all differences negative -> clamp to 0
     dsm = _make_geotiff_bytes(np.full((3, 3), 5.0, dtype="float32"))
@@ -98,9 +108,14 @@ def test_chm_negative_surface_all_zeros(spark):
 
 def test_chm_misaligned_grid_output_shape_equals_dem(spark):
     """CHM aligns DSM to DEM grid; output shape must match the DEM."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+    gbx_manager.register_family(
+        spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
+        only=["gbx_rst_chm", "gbx_rst_fromcontent"],
+        level="L3",
+    )
 
     # DEM: 2x2 at 1.0-degree pixels
     dem = _make_geotiff_bytes(
@@ -148,9 +163,14 @@ def test_chm_padded_dsm_below_datum_no_spurious_canopy(spark):
     below datum (bathymetry, polders, Death Valley). Uncovered pixels must be
     NoData instead.
     """
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+    gbx_manager.register_family(
+        spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
+        only=["gbx_rst_chm", "gbx_rst_fromcontent"],
+        level="L3",
+    )
 
     # DEM: 4x4, entirely below datum (-20 m), fully valid.
     dem = _make_geotiff_bytes(
@@ -193,9 +213,14 @@ def test_chm_padded_dsm_below_datum_no_spurious_canopy(spark):
 
 def test_chm_nodata_propagation(spark):
     """NoData in either input must propagate to -9999 in output, not 0."""
-    from databricks.labs.gbx.pyrx import functions as fns
+    from databricks.labs.gbx import manager as gbx_manager
 
-    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+    gbx_manager.register_family(
+        spark,
+        ("gbx_rst_", "gbx_pmtiles_"),
+        only=["gbx_rst_chm", "gbx_rst_fromcontent"],
+        level="L3",
+    )
 
     # DSM has one NoData pixel at [0,1]; DEM is fully valid
     dsm_arr = np.array([[10.0, -9999.0], [5.0, 8.0]], dtype="float32")

@@ -186,11 +186,11 @@ rst_to_webmercator_python_example_output = """
 
 def rst_tilexyz_python_example(spark):
     """Render a single Web-Mercator XYZ tile (z, x, y) as PNG bytes."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = single_band_tile_df(spark)
     # Render z=12, x=1234, y=1523 as a 256x256 PNG. rescale="none" keeps the raw
     # dtype mapping (a slippy-map tile off the raster's footprint renders
@@ -226,9 +226,9 @@ def rst_xyzpyramid_python_example(spark):
     rst_xyzpyramid is a Python UDTF — invoke it as a SQL LATERAL table function
     (a plain df.select would raise NotImplementedError).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     # One row per (z, x, y) tile across zoom 0..1.
     return spark.sql(
@@ -259,9 +259,9 @@ def rst_h3_tessellate_python_example(spark):
     function (a plain df.select would raise NotImplementedError). One v2-Tile row
     per H3 cell overlapping the raster, each carrying the H3 cellid.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     return spark.sql(
         "SELECT t.* FROM rasters, LATERAL gbx_rst_h3_tessellate(tile, 3) t"
@@ -287,11 +287,11 @@ def rst_bng_tessellate_python_example(spark):
     over central London (a 2km square around 530000,180000 in EPSG:27700, burned
     directly in that CRS) so the tessellation produces real 1km BNG cells.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     # A 2km x 2km square over central London, in EPSG:27700 metres.
     london_wkt = (
         "POLYGON((529000 179000, 531000 179000, "
@@ -335,9 +335,9 @@ def rst_quadbin_tessellate_python_example(spark):
     rst_quadbin_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
     function. One v2-Tile row per quadbin cell overlapping the raster.
     """
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     single_band_tile_df(spark).createOrReplaceTempView("rasters")
     return spark.sql(
         "SELECT t.* FROM rasters, LATERAL gbx_rst_quadbin_tessellate(tile, 5) t"
@@ -363,13 +363,12 @@ def rst_custom_tessellate_python_example(spark):
     central London in EPSG:27700 (BNG), and use a matching custom grid with the
     same CRS and extent so tessellation produces real chip rows.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
-    rx.register(spark)
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     # A 2km x 2km square over central London, in EPSG:27700 metres.
     london_wkt = (
         "POLYGON((529000 179000, 531000 179000, "

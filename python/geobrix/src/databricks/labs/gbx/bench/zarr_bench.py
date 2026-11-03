@@ -213,10 +213,10 @@ def _cog_frame(spark, files: List[str], **options):
 
 
 def _register_light(spark) -> None:
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.spec import pin_light_level
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     pin_light_level(
         spark, ["gbx_rst_avg", "gbx_rst_sample"]
     )  # the light level, not a JVM companion

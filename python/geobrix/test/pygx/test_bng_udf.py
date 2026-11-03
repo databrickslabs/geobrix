@@ -5,7 +5,6 @@ from shapely import from_wkb, get_srid, to_wkb  # noqa: E402
 from shapely.geometry import Point, Polygon, box  # noqa: E402
 
 from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: E402
-from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 
 # quadbin cells at zoom 3 of (-122.4194, 37.7749) and (0, 0); custom-grid cells at resolution 3
 QUADBIN_A, QUADBIN_B = 5202501994543054847, 5205105638077628415
@@ -13,7 +12,11 @@ CUSTOM_A, CUSTOM_B = 216172782125308048, 216172782156858408
 
 
 def test_eastnorthasbng_and_cellarea(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     row = spark.sql(
         "SELECT gbx_bng_eastnorthasbng(530000.0, 180000.0, '1km') AS c"
     ).collect()[0]
@@ -23,7 +26,11 @@ def test_eastnorthasbng_and_cellarea(spark):
 
 
 def test_pointascell_wkt_uses_bng_coords(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     # EPSG:27700 eastings/northings (NOT WGS84). London at 1km.
     row = spark.sql(
         "SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') AS c"
@@ -57,7 +64,11 @@ def test_a_null_in_an_int_resolution_column_leaves_the_other_rows_alone(spark):
     easting / longitude) gives NULL, the rest are unchanged, a resolution given as text ('3',
     ' 3 ', '3.0') is that whole number, and one that is not a whole number is refused, not cut
     to one."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     grid = "gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700)"
     rows = [
         (1, "POINT(530000 180000)", 530000.0, 180000.0, -122.4194, 37.7749, 3, "3"),
@@ -98,14 +109,22 @@ def test_a_null_in_an_int_resolution_column_leaves_the_other_rows_alone(spark):
 
 
 def test_aswkb_no_srid_polygon(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     out = spark.sql("SELECT gbx_bng_aswkb('TQ3080') AS w").collect()[0]
     g = from_wkb(bytes(out["w"]))
     assert g.geom_type == "Polygon" and get_srid(g) == 0
 
 
 def test_aswkt_and_centroid(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     wkt = spark.sql("SELECT gbx_bng_aswkt('TQ3080') AS w").collect()[0]["w"]
     assert wkt.upper().startswith("POLYGON")
     c = spark.sql("SELECT gbx_bng_centroid('TQ3080') AS w").collect()[0]
@@ -115,7 +134,11 @@ def test_aswkt_and_centroid(spark):
 
 
 def test_distance_and_euclideandistance(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     a = spark.sql(
         "SELECT gbx_bng_eastnorthasbng(530000.0, 180000.0, '1km') AS c"
     ).collect()[0]["c"]
@@ -131,19 +154,31 @@ def test_distance_and_euclideandistance(spark):
 
 
 def test_kring_array_of_strings(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     rows = spark.sql("SELECT gbx_bng_kring('TQ3080', 1) AS r").collect()[0]
     assert "TQ3080" in rows["r"] and len(set(rows["r"])) == 9
 
 
 def test_kloop_array_excludes_center(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     rows = spark.sql("SELECT gbx_bng_kloop('TQ3080', 1) AS r").collect()[0]
     assert "TQ3080" not in rows["r"] and len(set(rows["r"])) == 8
 
 
 def test_polyfill_and_tessellate(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     df = spark.createDataFrame(
         [(bytearray(to_wkb(box(530000.0, 180000.0, 533000.0, 183000.0))),)], "g binary"
     )
@@ -159,7 +194,11 @@ def test_polyfill_and_tessellate(spark):
 
 def test_tessellate_keep_core_geom_defaults_to_false(spark):
     """The 2-arg SQL form and the Python wrapper leave core chips NULL, as heavy does."""
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     poly = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
     df = spark.createDataFrame([(poly,)], "g string")
     df.createOrReplaceTempView("bv_tess_default")
@@ -184,7 +223,11 @@ def test_tessellate_keep_core_geom_defaults_to_false(spark):
 
 
 def test_geomkring_and_geomkloop(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     df = spark.createDataFrame(
         [(bytearray(to_wkb(box(530000.0, 180000.0, 533000.0, 183000.0))),)], "g binary"
     )
@@ -196,19 +239,31 @@ def test_geomkring_and_geomkloop(spark):
 
 
 def test_kringexplode_udtf(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     rows = spark.sql("SELECT cellid FROM gbx_bng_kringexplode('TQ3080', 1)").collect()
     assert len(rows) == 9 and all(isinstance(r["cellid"], str) for r in rows)
 
 
 def test_kloopexplode_udtf(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     rows = spark.sql("SELECT cellid FROM gbx_bng_kloopexplode('TQ3080', 1)").collect()
     assert len(rows) == 8
 
 
 def test_tessellateexplode_udtf(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     df = spark.createDataFrame(
         [(bytearray(to_wkb(box(530000.0, 180000.0, 533000.0, 183000.0))),)], "g binary"
     )
@@ -221,7 +276,11 @@ def test_tessellateexplode_udtf(spark):
 
 
 def test_geomkringexplode_udtf(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     df = spark.createDataFrame(
         [(bytearray(to_wkb(box(530000.0, 180000.0, 533000.0, 183000.0))),)], "g binary"
     )
@@ -233,7 +292,11 @@ def test_geomkringexplode_udtf(spark):
 
 
 def test_cellunion_and_cellintersection_scalar(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     cid = "TQ3080"
     left_chip = to_wkb(box(530000.0, 180000.0, 530500.0, 181000.0))
     right_chip = to_wkb(box(530500.0, 180000.0, 531000.0, 181000.0))
@@ -257,7 +320,11 @@ def test_cellunion_and_cellintersection_scalar(spark):
 
 
 def test_cellunion_agg(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     df = spark.createDataFrame(
         [(bytearray(to_wkb(box(530000.0, 180000.0, 535000.0, 185000.0))),)], "g binary"
     )
@@ -276,7 +343,11 @@ def test_cellunion_agg(spark):
 
 
 def test_cellintersection_agg(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     df = spark.createDataFrame(
         [(bytearray(to_wkb(box(530000.0, 180000.0, 535000.0, 185000.0))),)], "g binary"
     )
@@ -293,7 +364,11 @@ def test_explode_wrappers_are_dataframe_functions_on_the_generated_api(spark):
     # The 4 BNG *explode functions are table functions on gridx.bng.functions: the DataFrame first, then
     # the arguments, and the result is that DataFrame joined with the generated rows. They no longer
     # live on pygx.functions, and none raises NotImplementedError.
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     for name in (
         "bng_kringexplode",
         "bng_kloopexplode",

@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.{ErrorTokenListener, ProjErrorFilter, functions}
 import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 import com.databricks.labs.gbx.udfs
@@ -20,7 +21,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -47,7 +48,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -73,7 +74,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         val geom = "POLYGON((-8900000 2220000, -8900000 2200000, -8880000 2200000, -8880000 2220000, -8900000 2220000))"
@@ -94,7 +95,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -123,7 +124,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -143,7 +144,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -164,7 +165,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -185,7 +186,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -210,7 +211,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -230,7 +231,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -252,7 +253,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -274,7 +275,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -295,7 +296,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -323,7 +324,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
     test("Transformations should work with binary content") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -344,7 +345,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         val ewkt = "SRID=4326;POLYGON((-80 14, -80 17, -77 17, -77 14, -80 14))"
@@ -369,7 +370,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
         import com.databricks.labs.gbx.vectorx.jts.JTS
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
         val geom = JTS.fromWKT("POLYGON((-80 14, -80 17, -77 17, -77 14, -80 14))")
@@ -396,7 +397,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         // of NPE-ing inside rowToTile/safeEval.
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         // A single row whose v2 tile struct is fully null (nullable outer field).
         val schema = StructType(Seq(
@@ -421,7 +422,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -445,7 +446,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -464,7 +465,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
     test("RST_Proximity on a NULL primary tile returns null (not an NPE)") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val schema = StructType(Seq(
             StructField("tile", RST_ExpressionUtil.v2TileType, nullable = true)))
@@ -485,7 +486,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 
@@ -504,7 +505,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
     test("RST_Histogram on a NULL primary tile returns null (not an NPE)") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val schema = StructType(Seq(
             StructField("tile", RST_ExpressionUtil.v2TileType, nullable = true)))
@@ -525,7 +526,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
 
         val tifPath = this.getClass.getResource("/modis/").toString
 

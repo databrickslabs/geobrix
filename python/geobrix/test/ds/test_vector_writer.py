@@ -14,7 +14,6 @@ from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
 from databricks.labs.gbx.ds import _scratch
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.ds.vector import (
     VectorGbxWriter,
     _geometry_type_of,
@@ -37,7 +36,9 @@ def test_gpkg_write_to_path_named_gpkg(spark, tmp_path):
     # Saving to a path whose stem is 'gpkg' must not fail with the GeoPackage
     # reserved-prefix error (the layer name falls back to 'layer').
     # The writer appends .gpkg so the resolved file is out + ".gpkg".
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "gpkg")  # stem == "gpkg"
     rows = [("a", bytearray(to_wkb(Point(1.0, 2.0))), "4326", "")]
     df = spark.createDataFrame(
@@ -57,12 +58,14 @@ def test_non_geojson_commit_streams_without_concat(spark, tmp_path, monkeypatch)
     # GPKG write must still succeed.
     import pyarrow as pa
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     monkeypatch.setattr(
         pa,
         "concat_tables",
         lambda *a, **k: pytest.fail("commit must not concat for GPKG"),
     )
-    register(spark)
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "streamed.gpkg")
     rows = [
         ("a", bytearray(to_wkb(Point(1.0, 2.0))), "4326", ""),
@@ -135,7 +138,9 @@ def test_stream_record_batches_chains_and_drops_meta(tmp_path):
 
 
 def _roundtrip_streamed(spark, tmp_path, driver, name):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / name)
     rows = [
         (str(i), None, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -253,7 +258,9 @@ def _wkb_df(spark):
 
 
 def test_geojson_roundtrip_single_partition(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "out.geojson")
     _wkb_df(spark).coalesce(1).write.format("vector_gbx").mode("overwrite").option(
         "driverName", "GeoJSON"
@@ -269,7 +276,9 @@ def test_geojson_roundtrip_single_partition(spark, tmp_path):
 
 
 def test_multi_partition_merge(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "multi.geojson")
     rows = [
         (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -290,7 +299,9 @@ def test_multi_partition_merge(spark, tmp_path):
 
 
 def test_crs_roundtrips(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "crs.geojson")
     _wkb_df(spark).coalesce(1).write.format("vector_gbx").mode("overwrite").option(
         "driverName", "GeoJSON"
@@ -301,7 +312,9 @@ def test_crs_roundtrips(spark, tmp_path):
 
 
 def test_geometry_type_override(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "poly.geojson")
     poly = to_wkb(Polygon([(0, 0), (0, 1), (1, 1), (0, 0)]))
     df = spark.createDataFrame(
@@ -318,7 +331,9 @@ def test_geometry_type_override(spark, tmp_path):
 
 
 def test_append_mode_rejected(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "exists.geojson")
     _wkb_df(spark).coalesce(1).write.format("vector_gbx").mode("overwrite").option(
         "driverName", "GeoJSON"
@@ -339,7 +354,9 @@ def test_append_mode_rejected(spark, tmp_path):
     ],
 )
 def test_named_writer_roundtrip(spark, tmp_path, fmt, target):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / target)
     _wkb_df(spark).coalesce(1).write.format(fmt).mode("overwrite").save(out)
     back = spark.read.format(fmt).load(out)
@@ -351,7 +368,9 @@ def test_named_writer_roundtrip(spark, tmp_path, fmt, target):
 
 
 def test_file_gdb_writer_roundtrip(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "out.gdb")
     _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(out)
     back = spark.read.format("file_gdb_gbx").load(out)
@@ -365,7 +384,9 @@ def test_gpkg_reads_from_readonly_dir(spark, tmp_path):
     import os
     import stat
 
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "ro.gpkg")
     _wkb_df(spark).coalesce(1).write.format("gpkg_gbx").mode("overwrite").save(out)
     # make the output file + its dir read-only
@@ -386,7 +407,9 @@ def test_file_gdb_multi_fragment_streaming(spark, tmp_path):
     """
     from shapely import from_wkb as _from_wkb
 
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     # Build a small dataset that is guaranteed to span multiple partitions. Use
     # Polygon geometry so we exercise the geometry survival path (not just Point).
     from shapely import Polygon as _Polygon
@@ -445,7 +468,9 @@ def test_file_gdb_multi_fragment_streaming(spark, tmp_path):
 def test_gpkg_output_uses_format_default_geom_name(spark, tmp_path):
     # GPKG output should use the format-default geometry column name `geom`,
     # not the input column name, so an arbitrary input name doesn't leak out.
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "out.gpkg")
     rows = [("a", bytearray(to_wkb(Point(1.0, 2.0))), "4326", "")]
     df = spark.createDataFrame(
@@ -468,7 +493,9 @@ def test_classic_write_path_roundtrip(spark, tmp_path):
     # Exercise the classic pyogrio.raw.write fallback path directly (write_arrow
     # works locally so the auto-fallback won't trigger here) to prove the
     # arrow-table -> (geometry, field_data, fields) conversion round-trips.
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     import os
     import tempfile
 
@@ -622,7 +649,9 @@ def test_zip_gdb_bundle_preserves_top_level_dir(tmp_path):
 
 def test_shapefile_zip_produces_single_file(spark, tmp_path):
     """zip=true writes a single .shp.zip file, not a directory or sidecar set."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "roads")
     _wkb_df(spark).coalesce(1).write.format("shapefile_gbx").mode("overwrite").option(
         "zip", "true"
@@ -639,7 +668,9 @@ def test_shapefile_zip_archive_contents(spark, tmp_path):
     """The .shp.zip archive contains .shp/.shx/.dbf at the archive root (no subdir)."""
     import zipfile
 
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "bundle")
     _wkb_df(spark).coalesce(1).write.format("shapefile_gbx").mode("overwrite").option(
         "zip", "true"
@@ -656,7 +687,9 @@ def test_shapefile_zip_archive_contents(spark, tmp_path):
 
 def test_shapefile_zip_roundtrip(spark, tmp_path):
     """zip=true multi-partition write round-trips via shapefile_gbx reader."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "roundtrip")
     rows = [
         (str(i), bytearray(to_wkb(Point(float(i), 40.0))), "4326", "")
@@ -682,7 +715,9 @@ def test_shapefile_zip_roundtrip(spark, tmp_path):
 
 def test_shapefile_no_zip_no_regression(spark, tmp_path):
     """zip=false (default) shapefile write still produces sidecar files, not a zip."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nozip_shp")
     _wkb_df(spark).coalesce(1).write.format("shapefile_gbx").mode("overwrite").save(out)
     # The shapefile sidecar files land either in the parent dir (e.g. nozip_shp.shp)
@@ -700,7 +735,9 @@ def test_non_streaming_fallback_writes_and_roundtrips(spark, tmp_path):
     """Non-streaming drivers (FlatGeobuf, etc.) produce correct output by writing
     fragments with bounded memory usage (generator-based, not list-based). This is
     a regression test to ensure the fix doesn't break output correctness."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nonstream.fgb")
     rows = [
         (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
@@ -731,7 +768,9 @@ def test_non_streaming_fallback_writes_and_roundtrips(spark, tmp_path):
 def test_non_streaming_fallback_roundtrip_output_equivalence(spark, tmp_path):
     """Non-streaming driver write (with lazy fragment reading) must round-trip
     all rows and geometries without loss."""
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     out = str(tmp_path / "nonstream_roundtrip.fgb")
     rows = [
         (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")

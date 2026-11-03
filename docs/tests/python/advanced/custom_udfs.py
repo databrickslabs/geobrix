@@ -25,9 +25,10 @@ def eval_method_standard_usage(spark):
     Standard GeoBrix usage with eval methods.
     Uses Spark expressions registered as functions.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     rasters = spark.read.format("gdal").load(
         _RASTER_PATH
     )
@@ -114,9 +115,10 @@ def conditional_processing_example(spark):
     Common pattern: conditional processing based on raster properties.
     Branch logic (e.g. multispectral vs RGB) using GeoBrix accessors.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     rasters = spark.read.format("gdal").load(_RASTER_PATH)
     # Branch by band count: different path for multiband vs single band
     with_band_count = rasters.select(
@@ -143,9 +145,10 @@ def chained_processing_example(spark):
     Common pattern: chain multiple operations (metadata -> validate -> process).
     Single dataset load, multiple execute-style steps via Spark expressions.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     rasters = spark.read.format("gdal").load(_RASTER_PATH)
     # Step 1: metadata; Step 2: dimensions; Step 3: optional clip/transform
     result = rasters.select(

@@ -104,7 +104,6 @@ _HEAVY_PACKAGES = ("rasterx", "gridx", "vectorx")
 _HEAVY_ENTRY_POINTS = (
     "rasterx.functions",
     "vectorx.functions",
-    "vectorx.jts.legacy.functions",
     "gridx.bng.functions",
     "gridx.custom.functions",
     "gridx.h3.functions",

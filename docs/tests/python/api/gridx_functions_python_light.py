@@ -160,9 +160,9 @@ def gridx_light_setup_example(spark):
     are available. Both sub-packages (bng + quadbin + custom) are registered
     in a single call.
     """
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
 
 
 gridx_light_setup_example_output = (
@@ -1526,9 +1526,9 @@ def quadbin_geomkringexplode_python_example(spark):
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
     no Python DataFrame Column form.
     """
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     _get_quadbin_polygons_df(spark).createOrReplaceTempView("_qb_geomk_src")
     result = spark.sql(
         "SELECT t.cellid FROM _qb_geomk_src src, "
@@ -1556,9 +1556,9 @@ def quadbin_geomkloopexplode_python_example(spark):
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
     no Python DataFrame Column form.
     """
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     _get_quadbin_polygons_df(spark).createOrReplaceTempView("_qb_geomk_src")
     result = spark.sql(
         "SELECT t.cellid FROM _qb_geomk_src src, "
@@ -1659,9 +1659,9 @@ def custom_geomkringexplode_python_example(spark):
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
     no Python DataFrame Column form.
     """
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     grid_col = _get_custom_grid_df(spark).select("grid").first()["grid"]
     df = spark.createDataFrame([(grid_col,)], ["grid"])
     df.createOrReplaceTempView("_cx_geomk_src")
@@ -1690,9 +1690,9 @@ def custom_geomkloopexplode_python_example(spark):
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
     no Python DataFrame Column form.
     """
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     grid_col = _get_custom_grid_df(spark).select("grid").first()["grid"]
     df = spark.createDataFrame([(grid_col,)], ["grid"])
     df.createOrReplaceTempView("_cx_geomk_src")
@@ -1803,12 +1803,12 @@ def h3_geomkringexplode_python_example(spark):
     no Python DataFrame Column form.  Self-contained: no Databricks product
     functions required.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     geom_wkb = to_wkb(box(-73.99, 40.71, -73.95, 40.75))
     df = spark.createDataFrame([(bytearray(geom_wkb),)], ["geom"])
     df.createOrReplaceTempView("_h3_geomk_src")
@@ -1837,12 +1837,12 @@ def h3_geomkloopexplode_python_example(spark):
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
     no Python DataFrame Column form.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from shapely import to_wkb  # noqa: PLC0415
     from shapely.geometry import box  # noqa: PLC0415
 
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     geom_wkb = to_wkb(box(-73.99, 40.71, -73.95, 40.75))
     df = spark.createDataFrame([(bytearray(geom_wkb),)], ["geom"])
     df.createOrReplaceTempView("_h3_geomk_src")
@@ -1894,10 +1894,10 @@ def bng_cellfill_python_example(spark):
     The **light** tier returns **BINARY** (serialised fill result).
     The heavy tier returns ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     df = spark.createDataFrame(
         [
             (1, "TQ300800", None),
@@ -1943,10 +1943,10 @@ def quadbin_cellfill_python_example(spark):
     The **light** tier returns **BINARY**.
     The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     # Hardcoded London z10 cell and two neighbours; tier-agnostic.
     df = spark.createDataFrame(
         [
@@ -1991,10 +1991,10 @@ def h3_cellfill_python_example(spark):
     The **light** tier returns **BINARY**.
     The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
 
-    gx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
     df = spark.createDataFrame(
         [
             (1, 612934495919669247, None),

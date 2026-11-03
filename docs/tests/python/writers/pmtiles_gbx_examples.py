@@ -37,9 +37,9 @@ def _pyramid_df(spark, tiles):
 
 def write_pmtiles_single(spark):
     """Verify WRITE_PMTILES_SINGLE: write one archive, read tiles back."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     df = _pyramid_df(spark, [(2, 1, 1), (2, 2, 1), (3, 4, 3)])
     with tempfile.TemporaryDirectory() as d:
         out = os.path.join(d, "world.pmtiles")
@@ -54,9 +54,9 @@ def write_pmtiles_single(spark):
 
 def write_pmtiles_sharded(spark):
     """Verify WRITE_PMTILES_SHARDED: sharded output + overview + STAC catalog."""
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     df = _pyramid_df(spark, [(6, 32, 21), (8, 130, 85), (3, 4, 2)])
     with tempfile.TemporaryDirectory() as d:
         df.write.format("pmtiles_gbx").mode("overwrite").option(

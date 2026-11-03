@@ -137,10 +137,10 @@ def test_rastertogrid_sql_example_executes(spark, example_attr, grid_type):
     Registers the light (pyrx) tier so the LATERAL UDTF form resolves, materializes
     the multiband fixture as `multiband_rasters`, then executes the documented SQL.
     """
+    from databricks.labs.gbx import manager as gbx_manager
     assert sql_examples is not None
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     light_examples._get_multiband_df(spark).createOrReplaceTempView("multiband_rasters")
 
     raw_sql = getattr(sql_examples, example_attr)()

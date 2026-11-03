@@ -19,10 +19,10 @@ def _heavy_setup_views(spark):
     """Create the four heavy-tier Setup views + register rasterx so every example
     can read `spark.table("rasters")` etc. — mirroring the page's Setup section.
     Autouse: each test in this module runs against the heavy-tier views."""
-    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from ._fixtures import create_setup_views_heavy  # noqa: PLC0415
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_',))
     create_setup_views_heavy(spark)
 
 

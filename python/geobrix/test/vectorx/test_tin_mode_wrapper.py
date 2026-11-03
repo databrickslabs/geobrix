@@ -22,6 +22,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 from pyspark.sql.functions import col, lit
@@ -36,6 +37,7 @@ _JARS = sorted((_HERE.parents[2] / "lib").glob("geobrix-*-jar-with-dependencies.
 
 @pytest.fixture(scope="module")
 def spark():
+
     if not _JARS:
         pytest.skip(
             "no geobrix JAR staged under python/geobrix/lib/ — run in geobrix-dev Docker"
@@ -70,9 +72,8 @@ def spark():
         .getOrCreate()
     )
     s.sparkContext.setLogLevel("ERROR")
-    from databricks.labs.gbx.vectorx import functions as vx
 
-    vx.register(s)
+    heavy_register(s, ("gbx_st_",))
     yield s
 
 

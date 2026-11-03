@@ -18,8 +18,8 @@ import org.scalatest.funsuite.AnyFunSuite
 class ScalaApiExamplesDocTest extends AnyFunSuite {
 
   // Compile-only: same imports as docs; reference API so compiler checks signatures
-  test("RasterX imports and register signature compile") {
-    val _: SparkSession => Unit = rx.register _
+  test("RasterX imports compile") {
+    val _: Column = rx.rst_boundingbox(col("tile"))
     succeed
   }
 
@@ -32,13 +32,12 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     succeed
   }
 
-  test("GridX register and cellarea compile") {
-    val _: SparkSession => Unit = bx.register _
+  test("GridX imports and cellarea compile") {
+    val _: Column = bx.bng_cellarea(col("cell"))
     succeed
   }
 
-  test("VectorX register and legacy API compile") {
-    val _: SparkSession => Unit = vx.register _
+  test("VectorX legacy API compiles") {
     val _: Column = vx.st_legacyaswkb(col("mosaic_geom"))
     succeed
   }

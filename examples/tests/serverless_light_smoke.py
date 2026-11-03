@@ -155,8 +155,8 @@ except Exception as e:
     r["mvt_error"] = repr(e)
 # 3) Import + register the lightweight raster API and run a tiny op
 try:
-    from databricks.labs.gbx.pyrx import functions as rx
-    rx.register(spark)
+    import databricks.labs.gbx
+    databricks.labs.gbx.register(spark)
     r["pyrx_import"] = "ok"
     # a trivially small light op end-to-end via SQL would need data; just
     # confirm a registered function resolves in the catalog.
@@ -213,7 +213,7 @@ def isolate_register_source() -> str:
 import json, traceback
 from pyspark.sql import SparkSession
 spark = SparkSession.builder.getOrCreate()
-from databricks.labs.gbx.pyrx import functions as F
+import databricks.labs.gbx
 log = []
 orig_udf = spark.udf.register
 orig_udtf = spark.udtf.register
@@ -235,7 +235,7 @@ except Exception as e:
     patched = False
 r = {"patched": patched}
 try:
-    F.register(spark)
+    databricks.labs.gbx.register(spark)
     r["register"] = "ok"
 except Exception as e:
     r["register"] = "ERROR"
@@ -273,8 +273,8 @@ except Exception as e:
     r["mvt_ok"] = False; r["mvt_error"] = repr(e)
 # pyrx: import + register (the SQL names)
 try:
-    from databricks.labs.gbx.pyrx import functions as rx
-    rx.register(spark)
+    import databricks.labs.gbx
+    databricks.labs.gbx.register(spark)
     r["pyrx_register"] = "ok"
 except Exception as e:
     r["pyrx_register"] = "ERROR"; r["pyrx_register_error"] = repr(e)[:400]
@@ -301,8 +301,8 @@ except Exception as e:
     r["pyrx_exec_ok"] = False; r["pyrx_exec_error"] = repr(e)[:400]
 # pyvx register
 try:
-    from databricks.labs.gbx.pyvx import functions as vx
-    vx.register(spark); r["pyvx_register"] = "ok"
+    import databricks.labs.gbx
+    databricks.labs.gbx.register(spark); r["pyvx_register"] = "ok"
 except Exception as e:
     r["pyvx_register"] = "ERROR"; r["pyvx_error"] = repr(e)[:400]
 # Characterize the catalog.listFunctions() SUM:DOUBLE separately (NOT a gbx
@@ -350,15 +350,15 @@ try:
 except Exception as e:
     r["mvt_ok"] = False; r["mvt_error"] = repr(e)
 try:
-    from databricks.labs.gbx.pyrx import functions as rx
-    rx.register(spark)
+    import databricks.labs.gbx
+    databricks.labs.gbx.register(spark)
     r["pyrx_import"] = "ok"
     r["gbx_rst_count"] = len([f.name for f in spark.catalog.listFunctions() if f.name.startswith("gbx_rst_")])
 except Exception as e:
     r["pyrx_import"] = "ERROR"; r["pyrx_error"] = repr(e); r["pyrx_trace"] = traceback.format_exc()[-1200:]
 try:
-    from databricks.labs.gbx.pyvx import functions as vx
-    vx.register(spark)
+    import databricks.labs.gbx
+    databricks.labs.gbx.register(spark)
     r["pyvx_register"] = "ok"
 except Exception as e:
     r["pyvx_register"] = "ERROR"; r["pyvx_error"] = repr(e)

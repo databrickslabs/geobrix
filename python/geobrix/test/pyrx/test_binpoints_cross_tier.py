@@ -169,9 +169,9 @@ def _run_light(spark, stat):
 
     Returns (float32 band array, nodata value).
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     spark.range(1).createOrReplaceTempView("_bp_parity_light")
     sql = _SQL_TEMPLATE.format(stat=stat, view="_bp_parity_light")
@@ -188,9 +188,9 @@ def _run_heavy(spark, stat):
     Returns (float32 band array, nodata value).  The non-null assertion is the
     primary regression guard for the Decimal→Double coercion path.
     """
-    from databricks.labs.gbx.rasterx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
 
     spark.range(1).createOrReplaceTempView("_bp_parity_heavy")
     sql = _SQL_TEMPLATE.format(stat=stat, view="_bp_parity_heavy")
@@ -427,6 +427,8 @@ def test_binpoints_half_open_edge_parity(spark_with_jar):
     right boundary (x=xmax=2.0, z=99) that must be dropped.  Neither tier
     should produce z=99 in any output cell.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark = spark_with_jar
 
     edge_sql = (
@@ -441,17 +443,13 @@ def test_binpoints_half_open_edge_parity(spark_with_jar):
         "FROM {view}"
     )
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     spark.range(1).createOrReplaceTempView("_bp_edge_light")
     light_row = spark.sql(edge_sql.format(view="_bp_edge_light")).collect()[0]["r"]
     assert light_row is not None, "light half-open edge test returned null"
     light_arr, light_nd = _read_band(light_row)
 
-    from databricks.labs.gbx.rasterx import functions as hx
-
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     spark.range(1).createOrReplaceTempView("_bp_edge_heavy")
     heavy_row = spark.sql(edge_sql.format(view="_bp_edge_heavy")).collect()[0]["r"]
     assert heavy_row is not None, "heavy half-open edge test returned null"

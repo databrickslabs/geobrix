@@ -39,9 +39,10 @@ def spark():
 @pytest.fixture(scope="session")
 def custom_registered(spark):
     """Register custom grid functions once for all tests."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.gridx.custom import functions as cx
 
-    cx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_custom_",))
     return cx
 
 
@@ -99,8 +100,8 @@ def _rows(df):
 
 @pytest.mark.parametrize("name", ["geomkringexplode", "geomkloopexplode"])
 def test_custom_geom_explode_wrappers_match_sql(spark, custom_registered, name):
-    """The heavy wrappers bind geom/grid/resolution/k[/mode/coverage] in the SQL
-    function's positional order: same rows as the SQL call, with defaults and
+    """The wrappers bind geom/grid/resolution/k[/mode/coverage] in the SQL
+    function's positional order: same rows as the LATERAL call, with defaults and
     with an explicit non-default mode + coverage (which change the result)."""
     cx = custom_registered
     wrapper = getattr(cx, f"custom_{name}")
@@ -108,14 +109,19 @@ def test_custom_geom_explode_wrappers_match_sql(spark, custom_registered, name):
     df = spark.createDataFrame(
         [(_polygon_wkb(0.0, 0.0, 30.0, 30.0), grid_val)], ["geom", "grid"]
     )
-    geom = f.col("geom").cast("binary")
-    got = _rows(df.select(wrapper(geom, f.col("grid"), 0, 1)))
-    want = _rows(df.selectExpr(f"gbx_custom_{name}(cast(geom as binary), grid, 0, 1)"))
-    assert got and got == want
-    got_in = _rows(df.select(wrapper(geom, f.col("grid"), 0, 1, "boundary-in", "core")))
-    want_in = _rows(
-        df.selectExpr(
-            f"gbx_custom_{name}(cast(geom as binary), grid, 0, 1, 'boundary-in', 'core')"
+    df.createOrReplaceTempView("custom_explode_in")
+
+    def lateral(args):
+        return spark.sql(
+            f"SELECT t.cellid FROM custom_explode_in, "
+            f"LATERAL gbx_custom_{name}(cast(geom as binary), grid, {args}) t"
         )
+
+    got = _rows(wrapper(df, "geom", "grid", 0, 1).select("cellid"))
+    want = _rows(lateral("0, 1"))
+    assert got and got == want
+    got_in = _rows(
+        wrapper(df, "geom", "grid", 0, 1, "boundary-in", "core").select("cellid")
     )
+    want_in = _rows(lateral("0, 1, 'boundary-in', 'core'"))
     assert got_in == want_in and want_in != want

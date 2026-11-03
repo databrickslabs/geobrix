@@ -221,10 +221,10 @@ def test_tessellate_reprojects_cell_for_non_4326_raster():
 
 def test_rst_h3_tessellate_file_unavailable_unchanged(spark):
     """H3 tessellate UDTF: file_ref=NULL → same non-zero chip count as before."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _h3_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_h3tess")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_h3tess, "
@@ -235,10 +235,10 @@ def test_rst_h3_tessellate_file_unavailable_unchanged(spark):
 
 def test_rst_quadbin_tessellate_file_unavailable_unchanged(spark):
     """Quadbin tessellate UDTF: file_ref=NULL → same non-zero chip count."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _h3_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_qbtess")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_qbtess, "
@@ -249,10 +249,10 @@ def test_rst_quadbin_tessellate_file_unavailable_unchanged(spark):
 
 def test_rst_bng_tessellate_file_unavailable_unchanged(spark):
     """BNG tessellate UDTF: file_ref=NULL → same non-zero chip count."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _bng_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_bngtess")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_bngtess, "

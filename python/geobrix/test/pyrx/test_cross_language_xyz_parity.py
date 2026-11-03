@@ -109,9 +109,9 @@ def spark_with_jar():
 @pytest.fixture(scope="module")
 def heavy_registered(spark_with_jar):
     """Register heavy rasterx functions and return the spark session."""
-    from databricks.labs.gbx.rasterx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark_with_jar)
+    gbx_manager.register_family(spark_with_jar, ("gbx_rst_",))
     return spark_with_jar
 
 

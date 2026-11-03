@@ -441,10 +441,10 @@ def test_spark_struct_no_rasterx_cell_id_in_metadata(spark):
     """
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pygx import _bng
-    from databricks.labs.gbx.pyrx import functions as prx
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
 
     tile_bytes = _tile_27700()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(

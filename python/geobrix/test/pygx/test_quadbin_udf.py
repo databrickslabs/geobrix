@@ -8,7 +8,11 @@ from databricks.labs.gbx.pygx import functions as gx  # noqa: E402
 
 
 def test_cellunion_and_agg(spark):
-    gx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     import quadbin
 
     cells = list(quadbin.k_ring(quadbin.point_to_cell(0.0, 0.0, 8), 1))

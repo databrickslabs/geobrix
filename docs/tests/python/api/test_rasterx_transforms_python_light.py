@@ -53,9 +53,9 @@ def test_rst_worldtorastercoordy_python_example(spark):
 
 def test_rst_to_webmercator_python_example(spark):
     """Test reprojection to Web Mercator."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = single_band_tile_df(spark)
     result = df.select(rx_api.rst_to_webmercator("tile").alias("tile")).first()
     tile = result["tile"]

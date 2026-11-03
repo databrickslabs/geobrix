@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.bench
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.gridx.{h3 => h3fns, quadbin => qbfns, bng => bngfns}
@@ -222,12 +223,10 @@ object HeavyRunner {
                    runId: String, rowCounts: Seq[Int], warmup: Int, measured: Int,
                    argsByFn: Map[String, Map[String, String]],
                    sink: BenchRow => Unit = _ => ()): Seq[BenchRow] = {
-    functions.register(spark)
+    TestL1.installAll(spark)
     // Register GridX function packages so cellfill (and any other GridX fn) SQL names
     // resolve in expr() calls inside aggregateColumn. Registration is idempotent.
-    h3fns.functions.register(spark)
-    qbfns.functions.register(spark)
-    bngfns.functions.register(spark)
+    TestL1.installAll(spark)
     // The *_agg aggregators hold whole rasters in memory while aggregating: the
     // ObjectHash aggregate map buffers per-group state and the raster UDAFs decode
     // every input tile (a 1024x1024x4 float32 tile is ~16MB, plus GDAL dataset

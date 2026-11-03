@@ -1235,6 +1235,8 @@ def _explain_spark_path(
 
     from pyspark.sql import functions as F
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     for _fs in fnspecs:
         if "spark-path" not in _fs.modes:
             continue
@@ -1265,9 +1267,10 @@ def _explain_spark_path(
                 # UDTF grid fn: the spark-path is a SQL LATERAL join, not a scalar
                 # column, so build + explain the LATERAL plan (the scalar col_fn
                 # would raise NotImplementedError). Register the light UDTF first.
-                from databricks.labs.gbx.pyrx import functions as _prx_reg
 
-                _prx_reg.register(spark, only=[_fs.sql_name])
+                gbx_manager.register_family(
+                    spark, ("gbx_rst_", "gbx_pmtiles_"), only=[_fs.sql_name], level="L3"
+                )
                 _ps = (
                     partition_size
                     if (partition_size and partition_size > 0)
@@ -1869,6 +1872,8 @@ def run_spark_path(  # noqa: C901
 
     from pyspark.sql import functions as F
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     root = Path(corpus_root)
     env = capture_env(where)
     pool = corpus.row_pool
@@ -2151,9 +2156,13 @@ def run_spark_path(  # noqa: C901
         and not getattr(f, "geometry_set", None)
     ]
     if _udtf_fns:
-        from databricks.labs.gbx.pyrx import functions as _prx_reg
 
-        _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
+        gbx_manager.register_family(
+            spark,
+            ("gbx_rst_", "gbx_pmtiles_"),
+            only=[f.sql_name for f in _udtf_fns],
+            level="L3",
+        )
 
     # geometry_scalar / geometry_aggregate fns AND geometry-input UDTFs call
     # registered gbx_ SQL UDFs/UDTFs; register them in this session or every
@@ -2176,13 +2185,18 @@ def run_spark_path(  # noqa: C901
     _geom_pyrx = [f for f in _geom_fns if f.sql_name.startswith("gbx_rst_")]
     _geom_pyvx = [f for f in _geom_fns if not f.sql_name.startswith("gbx_rst_")]
     if _geom_pyrx:
-        from databricks.labs.gbx.pyrx import functions as _prx_reg
 
-        _prx_reg.register(spark, only=[f.sql_name for f in _geom_pyrx])
+        gbx_manager.register_family(
+            spark,
+            ("gbx_rst_", "gbx_pmtiles_"),
+            only=[f.sql_name for f in _geom_pyrx],
+            level="L3",
+        )
     if _geom_pyvx:
-        from databricks.labs.gbx.pyvx import functions as _pyvx_reg
 
-        _pyvx_reg.register(spark, only=[f.sql_name for f in _geom_pyvx])
+        gbx_manager.register_family(
+            spark, ("gbx_st_",), only=[f.sql_name for f in _geom_pyvx], level="L3"
+        )
 
     # grid_aggregate cellfill fns (h3/quadbin/bng/custom_cellfill) call
     # call_function("gbx_<grid>_cellfill", ...) and require the pygx UDAFs to be
@@ -2197,9 +2211,13 @@ def run_spark_path(  # noqa: C901
         and not f.sql_name.startswith("gbx_rst_")
     ]
     if _cellfill_fns:
-        from databricks.labs.gbx.pygx import functions as _pygx_reg
 
-        _pygx_reg.register(spark, only=[f.sql_name for f in _cellfill_fns])
+        gbx_manager.register_family(
+            spark,
+            ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"),
+            only=[f.sql_name for f in _cellfill_fns],
+            level="L3",
+        )
 
     # Spark warm-up: one throwaway job so JVM/Spark spin-up isn't charged to the first
     # timed cell (delegated to _spark_path_warmup).

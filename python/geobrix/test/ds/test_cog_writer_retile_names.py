@@ -15,7 +15,6 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
-from databricks.labs.gbx.pyrx import functions as prx
 
 
 def _write_source(path, *, width, height, count):
@@ -37,9 +36,11 @@ def _write_chain(spark, src, out, fns, read_opts=None):
     """Read ``src`` (source, tile), cut it with each LATERAL function in ``fns`` in
     turn (the source column stays), and write the (source, tile) parts with cog_gbx
     and no nameCol. Returns ``(files, tiles)``."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark.dataSource.register(RasterGbxDataSource)
     spark.dataSource.register(CogGbxDataSource)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     reader = spark.read.format("raster_gbx")
     for key, value in (read_opts or {}).items():
         reader = reader.option(key, value)

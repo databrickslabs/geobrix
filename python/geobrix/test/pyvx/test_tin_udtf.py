@@ -5,15 +5,15 @@ shapely = pytest.importorskip("shapely")
 from shapely import to_wkb, wkb  # noqa: E402
 from shapely.geometry import Point  # noqa: E402
 
-from databricks.labs.gbx.pyvx import functions as vx  # noqa: E402
-
 
 def _pts_wkb(coords):
     return [bytearray(to_wkb(Point(*c))) for c in coords]
 
 
 def test_st_triangulate_emits_triangles(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     pts = _pts_wkb([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)])
     df = spark.createDataFrame(
         [(pts, [], 0.0, 0.0, "NONENCROACHING")],
@@ -47,7 +47,9 @@ def test_st_triangulate_multipoint_element(spark):
 
 
 def test_st_triangulate_two_arg_default_mode(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     pts = _pts_wkb([(0, 0, 0), (1, 0, 0), (1, 1, 0)])
     df = spark.createDataFrame(
         [(pts, [], 0.0, 0.0, "NONENCROACHING")],
@@ -61,7 +63,9 @@ def test_st_triangulate_two_arg_default_mode(spark):
 
 
 def test_st_triangulate_conforming_raises(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     pts = _pts_wkb([(0, 0, 0), (1, 0, 0), (1, 1, 0)])
     df = spark.createDataFrame(
         [(pts, [], 0.0, 0.0, "MIDPOINT")],
@@ -75,7 +79,9 @@ def test_st_triangulate_conforming_raises(spark):
 
 
 def test_interpolateelevationbbox_emits_points(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     pts = _pts_wkb([(0, 0, 0), (10, 0, 10), (10, 10, 20), (0, 10, 10)])
     df = spark.createDataFrame(
         [(pts, [], 0.0, 0.0, "NONENCROACHING", 0.0, 0.0, 10.0, 10.0, 5, 5, 0)],
@@ -94,7 +100,9 @@ def test_interpolateelevationbbox_emits_points(spark):
 
 
 def test_interpolateelevationgeom_emits_points(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     pts = _pts_wkb([(0, 0, 0), (10, 0, 10), (10, 10, 20), (0, 10, 10)])
     origin = bytearray(to_wkb(Point(0.0, 10.0)))
     df = spark.createDataFrame(
@@ -111,7 +119,9 @@ def test_interpolateelevationgeom_emits_points(spark):
 
 
 def test_interpolateelevation_default_mode_and_conforming_raises(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     pts = _pts_wkb([(0, 0, 0), (10, 0, 10), (10, 10, 20), (0, 10, 10)])
     df = spark.createDataFrame(
         [(pts, [], 0.0, 0.0, "NONENCROACHING", 0.0, 0.0, 10.0, 10.0, 3, 3, 0)],

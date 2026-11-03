@@ -72,9 +72,9 @@ with tempfile.TemporaryDirectory() as out:
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def read_large_raster_defaults(spark, path=None):

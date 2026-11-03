@@ -215,9 +215,9 @@ def test_download_marks_missing_invalid(spark, tmp_path):
 
 
 def test_read_enh_uses_raster_gbx(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     d = tmp_path / "emit3"
     d.mkdir()
     _write_cog(str(d / "EMIT_L2B_CH4ENH_002_a.tif"))
@@ -229,9 +229,9 @@ def test_read_enh_uses_raster_gbx(spark, tmp_path):
 
 
 def test_read_plumes_uses_geojson_gbx(spark, tmp_path):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     d = tmp_path / "emit4"
     d.mkdir()
     _write_plm_meta(str(d / "EMIT_L2B_CH4PLMMETA_002_p.json"))

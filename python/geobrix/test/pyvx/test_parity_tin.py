@@ -110,11 +110,10 @@ def _pts_wkb(coords):
 def _both_registered(spark):
     """Register light (Python UDTF) then heavy (JVM Generator). They occupy
     different resolution paths, so both surfaces are usable in this session."""
-    from databricks.labs.gbx.pyvx import functions as vx
-    from databricks.labs.gbx.vectorx import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    vx.register(spark)
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
+    gbx_manager.register_family(spark, ("gbx_st_",))
 
 
 def _light_triangles(spark, view, mode):

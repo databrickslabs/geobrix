@@ -1335,7 +1335,8 @@ if LIGHTWEIGHT:
                 _F_mvt.struct(_F_mvt.col("id"), _F_mvt.col("score"), _F_mvt.col("label")).alias("attrs"),
             ).cache(); _df2.count()
             from databricks.labs.gbx.pyvx import functions as _vx
-            _vx.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3")
             _lrows = (_df2.groupBy("z","x","y")
                 .agg(_vx._light_st_asmvt(_F_mvt.col("geom"), _F_mvt.col("attrs"), _F_mvt.lit("layer")).alias("mvt"))
                 .collect())
@@ -1378,7 +1379,8 @@ if HEAVYWEIGHT:
                 _F_mvth.struct(_F_mvth.col("id"), _F_mvth.col("score"), _F_mvth.col("label")).alias("attrs"),
             ).cache(); _dfh.count()
             from databricks.labs.gbx.vectorx import functions as _hx
-            _hx.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_st_',), level="L1")
             _hrows = (_dfh.groupBy("z","x","y")
                 .agg(_hx.st_asmvt(_F_mvth.col("geom"), _F_mvth.col("attrs"), _F_mvth.lit("layer")).alias("mvt"))
                 .collect())
@@ -1507,11 +1509,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _ldf = spark.createDataFrame(_ldata, schema=_lschema)
         _ldf.createOrReplaceTempView("_leg_parity_v")
         from databricks.labs.gbx.pyvx import functions as _vx_leg
-        _vx_leg.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3")
         _light_w = [bytes(r["w"]) for r in spark.sql(
             "SELECT gbx_st_legacyaswkb(g) AS w FROM _leg_parity_v").collect()]
-        from databricks.labs.gbx.vectorx.jts.legacy import functions as _hx_leg
-        _hx_leg.register(spark)
+        from databricks.labs.gbx.vectorx import functions as _hx_leg
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_st_legacy',), level="L1")
         _heavy_w = [bytes(r["w"]) for r in spark.sql(
             "SELECT gbx_st_legacyaswkb(g) AS w FROM _leg_parity_v").collect()]
         _leg_ok = len(_light_w) == len(_heavy_w) and len(_light_w) > 0
@@ -1529,7 +1533,8 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- TIN: register both tiers (different catalog paths -> coexist). ---
     from databricks.labs.gbx.pyvx import functions as _vx_tin
     from databricks.labs.gbx.vectorx import functions as _hx_tin
-    _vx_tin.register(spark); _hx_tin.register(spark)
+    from databricks.labs.gbx import manager as _gbx_mgr
+    _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3"); _gbx_mgr.register_family(spark, ('gbx_st_',), level="L1")
     _tdata, _tschema = _cv.generate_tin_points(_TIN_N_ROWS, n_points=_TIN_N_POINTS)
     _tdf = spark.createDataFrame(_tdata, schema=_tschema)
     _tdf.createOrReplaceTempView("_tin_parity_v")
@@ -1720,12 +1725,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _pdf = spark.createDataFrame(_pdata, schema=_pschema)
         _pdf.createOrReplaceTempView("_qb_pac_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pac
-        _gx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_quadbin_pointascell(lon, lat, %d) AS cell FROM _qb_pac_parity_v"
             % _QB_PAC_RES).collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_pac
-        _hx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_quadbin_pointascell(lon, lat, %d) AS cell FROM _qb_pac_parity_v"
             % _QB_PAC_RES).collect()]
@@ -1743,12 +1750,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _gdf = spark.createDataFrame(_gdata, schema=_gschema)
         _gdf.createOrReplaceTempView("_qb_geom_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pf
-        _gx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_quadbin_polyfill(geom, %d) AS cells FROM _qb_geom_parity_v"
             % _QB_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_pf
-        _hx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_quadbin_polyfill(geom, %d) AS cells FROM _qb_geom_parity_v"
             % _QB_GEOM_RES).collect()]
@@ -1764,14 +1773,16 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- tessellate: exact (cell, centroid) set per row; cells exact, centroid within 1e-6. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ts
-        _gx_ts.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         def _chip_set(_chips):
             return sorted((int(c["cell"]), _centroid_qb(c["geom"])) for c in _chips)
         _light_ts = [_chip_set(r["chips"]) for r in spark.sql(
             "SELECT gbx_quadbin_tessellate(geom, %d) AS chips FROM _qb_geom_parity_v"
             % _QB_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_ts
-        _hx_ts.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_ts = [_chip_set(r["chips"]) for r in spark.sql(
             "SELECT gbx_quadbin_tessellate(geom, %d) AS chips FROM _qb_geom_parity_v"
             % _QB_GEOM_RES).collect()]
@@ -1799,12 +1810,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _adf = spark.createDataFrame(_adata, schema=_aschema)
         _adf.createOrReplaceTempView("_qb_agg_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ag
-        _gx_ag.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ag = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_quadbin_cellunion_agg(cell) AS u "
             "FROM _qb_agg_parity_v GROUP BY group").collect()}
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_ag
-        _hx_ag.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_ag = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_quadbin_cellunion_agg(cell) AS u "
             "FROM _qb_agg_parity_v GROUP BY group").collect()}
@@ -1834,11 +1847,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- resolution: exact INT equality. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_rs
-        _gx_rs.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_rs = [r["r"] for r in spark.sql(
             "SELECT gbx_quadbin_resolution(cell) AS r FROM _qb_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_rs
-        _hx_rs.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_rs = [r["r"] for r in spark.sql(
             "SELECT gbx_quadbin_resolution(cell) AS r FROM _qb_cell_parity_v").collect()]
         _rs_ok = (len(_light_rs) == len(_heavy_rs) > 0 and _light_rs == _heavy_rs)
@@ -1851,12 +1866,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- kring: exact sorted cell-set per row (fixed k). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_kr
-        _gx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_quadbin_kring(cell, %d) AS ring FROM _qb_cell_parity_v"
             % _QB_KRING_K).collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_kr
-        _hx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_quadbin_kring(cell, %d) AS ring FROM _qb_cell_parity_v"
             % _QB_KRING_K).collect()]
@@ -1875,11 +1892,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _ddf = spark.createDataFrame(_ddata, schema=_dschema)
         _ddf.createOrReplaceTempView("_qb_pair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ds
-        _gx_ds.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ds = [r["d"] for r in spark.sql(
             "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _qb_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_ds
-        _hx_ds.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_ds = [r["d"] for r in spark.sql(
             "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _qb_pair_parity_v").collect()]
         _ds_ok = (len(_light_ds) == len(_heavy_ds) > 0 and _light_ds == _heavy_ds)
@@ -1893,11 +1912,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     try:
         from shapely import from_wkb as _shp_from_wkb, get_srid as _shp_get_srid
         from databricks.labs.gbx.pygx import functions as _gx_aw
-        _gx_aw.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_aw = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_quadbin_aswkb(cell) AS g FROM _qb_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_aw
-        _hx_aw.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_aw = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_quadbin_aswkb(cell) AS g FROM _qb_cell_parity_v").collect()]
         _aw_ok = (len(_light_aw) == len(_heavy_aw) > 0)
@@ -1916,11 +1937,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- centroid: decoded point within 1e-6. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ct
-        _gx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ct = [_centroid_qb(r["g"]) for r in spark.sql(
             "SELECT gbx_quadbin_centroid(cell) AS g FROM _qb_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_ct
-        _hx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_ct = [_centroid_qb(r["g"]) for r in spark.sql(
             "SELECT gbx_quadbin_centroid(cell) AS g FROM _qb_cell_parity_v").collect()]
         _ct_ok = (len(_light_ct) == len(_heavy_ct) > 0)
@@ -1943,11 +1966,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "SELECT group, collect_list(cell) AS cells FROM _qb_union_src_v GROUP BY group")
         _uarr.createOrReplaceTempView("_qb_union_arr_v")
         from databricks.labs.gbx.pygx import functions as _gx_cu
-        _gx_cu.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cu = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_quadbin_cellunion(cells) AS u FROM _qb_union_arr_v").collect()}
         from databricks.labs.gbx.gridx.quadbin import functions as _hx_cu
-        _hx_cu.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_quadbin_',), level="L1")
         _heavy_cu = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_quadbin_cellunion(cells) AS u FROM _qb_union_arr_v").collect()}
         _cu_ok = (_light_cu.keys() == _heavy_cu.keys() and len(_light_cu) > 0)
@@ -2070,12 +2095,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _pdf = spark.createDataFrame(_pdata, schema=_pschema)
         _pdf.createOrReplaceTempView("_bng_pac_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pac
-        _gx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_pointascell(geom, '%s') AS cell FROM _bng_pac_parity_v"
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_pac
-        _hx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_pointascell(geom, '%s') AS cell FROM _bng_pac_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2093,12 +2120,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _gdf = spark.createDataFrame(_gdata, schema=_gschema)
         _gdf.createOrReplaceTempView("_bng_geom_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pf
-        _gx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_bng_polyfill(geom, '%s') AS cells FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_pf
-        _hx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_bng_polyfill(geom, '%s') AS cells FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2114,14 +2143,16 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- tessellate: exact chip cellid-SET equality per row (the load-bearing field). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ts
-        _gx_ts.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         def _chip_cells(_chips):
             return sorted(c["cellid"] for c in _chips)
         _light_ts = [_chip_cells(r["chips"]) for r in spark.sql(
             "SELECT gbx_bng_tessellate(geom, '%s') AS chips FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ts
-        _hx_ts.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_ts = [_chip_cells(r["chips"]) for r in spark.sql(
             "SELECT gbx_bng_tessellate(geom, '%s') AS chips FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2140,12 +2171,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _cdf = spark.createDataFrame(_cdata, schema=_cschema)
         _cdf.createOrReplaceTempView("_bng_cell_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_kr
-        _gx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kring(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KRING_K).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_kr
-        _hx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kring(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KRING_K).collect()]
@@ -2166,12 +2199,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _adf = spark.createDataFrame(_adata, schema=_aschema)
         _adf.createOrReplaceTempView("_bng_agg_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ag
-        _gx_ag.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ag = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect() if r["u"] is not None}
         from databricks.labs.gbx.gridx.bng import functions as _hx_ag
-        _hx_ag.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         # Heavy returns STRUCT<cellid, core, chip>; the load-bearing field is .chip (BINARY).
         _heavy_ag = {r["group"]: bytes(r["u"]["chip"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
@@ -2199,11 +2234,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_cdata, schema=_cschema).createOrReplaceTempView(
             "_bng_cell_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_wb
-        _gx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_wb
-        _hx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_parity_v").collect()]
         _wb_ok = len(_light_wb) == len(_heavy_wb) > 0
@@ -2222,11 +2259,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     try:
         from shapely import wkt as _shp_wkt
         from databricks.labs.gbx.pygx import functions as _gx_wt
-        _gx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_wt
-        _hx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_parity_v").collect()]
         _wt_ok = len(_light_wt) == len(_heavy_wt) > 0
@@ -2244,11 +2283,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- centroid: decoded point distance < 1e-6. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ct
-        _gx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ct
-        _hx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_parity_v").collect()]
         _ct_ok = len(_light_ct) == len(_heavy_ct) > 0
@@ -2265,11 +2306,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- cellarea: exact scalar equality. ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ca
-        _gx_ca.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ca = [r["a"] for r in spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ca
-        _hx_ca.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_ca = [r["a"] for r in spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_parity_v").collect()]
         _ca_ok = (len(_light_ca) == len(_heavy_ca) > 0 and _light_ca == _heavy_ca)
@@ -2285,12 +2328,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_pdata, schema=_pschema).createOrReplaceTempView(
             "_bng_pair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_di
-        _gx_di.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_di = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_di
-        _hx_di.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_di = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
@@ -2303,12 +2348,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     assert _v.startswith("BNG DISTANCE PARITY: PASS"), _v
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ed
-        _gx_ed.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ed = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ed
-        _hx_ed.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_ed = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
@@ -2326,12 +2373,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_edata, schema=_eschema).createOrReplaceTempView(
             "_bng_eastnorth_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_en
-        _gx_en.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_en = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
             "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_en
-        _hx_en.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_en = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
             "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
@@ -2346,12 +2395,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- kloop: exact sorted cell-set per row (shared single-cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_kl
-        _gx_kl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kloop(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KLOOP_K).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_kl
-        _hx_kl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_kl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kloop(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KLOOP_K).collect()]
@@ -2366,12 +2417,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- geomkring / geomkloop: exact sorted cell-set per row (shared geom corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_gkr
-        _gx_gkr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_gkr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkring(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_gkr
-        _hx_gkr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_gkr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkring(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
@@ -2385,12 +2438,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     assert _v.startswith("BNG GEOMKRING PARITY: PASS"), _v
     try:
         from databricks.labs.gbx.pygx import functions as _gx_gkl
-        _gx_gkl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_gkl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkloop(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_gkl
-        _hx_gkl.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_gkl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkloop(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
@@ -2412,11 +2467,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
                    "struct(lid, lcore, lchip), struct(rid, rcore, rchip)).chip AS c "
                    "FROM _bng_chippair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ci
-        _gx_ci.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ci = [bytes(r["c"]) for r in spark.sql(_ci_sql).collect()
                      if r["c"] is not None]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ci
-        _hx_ci.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_ci = [bytes(r["c"]) for r in spark.sql(_ci_sql).collect()
                      if r["c"] is not None]
         _ci_ok = len(_light_ci) == len(_heavy_ci) > 0
@@ -2437,11 +2494,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
                    "struct(lid, lcore, lchip), struct(rid, rcore, rchip)).chip AS c "
                    "FROM _bng_chippair_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_cu
-        _gx_cu.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cu = [bytes(r["c"]) for r in spark.sql(_cu_sql).collect()
                      if r["c"] is not None]
         from databricks.labs.gbx.gridx.bng import functions as _hx_cu
-        _hx_cu.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_cu = [bytes(r["c"]) for r in spark.sql(_cu_sql).collect()
                      if r["c"] is not None]
         _cu_ok = len(_light_cu) == len(_heavy_cu) > 0
@@ -2464,12 +2523,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         spark.createDataFrame(_aidata, schema=_aischema).createOrReplaceTempView(
             "_bng_agg_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_ai
-        _gx_ai.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ai = {r["group"]: bytes(r["u"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect() if r["u"] is not None}
         from databricks.labs.gbx.gridx.bng import functions as _hx_ai
-        _hx_ai.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
         _heavy_ai = {r["group"]: bytes(r["u"]["chip"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect()
@@ -2494,10 +2555,12 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     def _bng_explode_gate(_name, _light_lateral, _heavy_array_sql):
         try:
             from databricks.labs.gbx.pygx import functions as _gx_ex
-            _gx_ex.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
             _lset = sorted(r["cellid"] for r in spark.sql(_light_lateral).collect())
             from databricks.labs.gbx.gridx.bng import functions as _hx_ex
-            _hx_ex.register(spark)
+            from databricks.labs.gbx import manager as _gbx_mgr
+            _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
             _hset = sorted(r["cellid"] for r in spark.sql(_heavy_array_sql).collect())
             _ok = (len(_lset) == len(_hset) > 0 and _lset == _hset)
             _vv = ("BNG %s PARITY: PASS (%d flat cells, global set equality)"
@@ -2621,12 +2684,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _pdf = spark.createDataFrame(_pdata, schema=_pschema)
         _pdf.createOrReplaceTempView("_custom_pac_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pac
-        _gx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_custom_pointascell(geom, %s, %d) AS cell FROM _custom_pac_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_pac
-        _hx_pac.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_custom_pointascell(geom, %s, %d) AS cell FROM _custom_pac_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
@@ -2644,12 +2709,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _gdf = spark.createDataFrame(_gdata, schema=_gschema)
         _gdf.createOrReplaceTempView("_custom_geom_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_pf
-        _gx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_custom_polyfill(geom, %s, %d) AS cells FROM _custom_geom_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_pf
-        _hx_pf.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_custom_polyfill(geom, %s, %d) AS cells FROM _custom_geom_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_RES)).collect()]
@@ -2668,12 +2735,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _cdf = spark.createDataFrame(_cdata, schema=_cschema)
         _cdf.createOrReplaceTempView("_custom_cell_parity_v")
         from databricks.labs.gbx.pygx import functions as _gx_kr
-        _gx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_custom_kring(cell, %s, %d) AS ring FROM _custom_cell_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_KRING_K)).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_kr
-        _hx_kr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_custom_kring(cell, %s, %d) AS ring FROM _custom_cell_parity_v"
             % (_CUSTOM_GRID_SQL, _CUSTOM_KRING_K)).collect()]
@@ -2689,12 +2758,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- cellaswkb: decoded polygon sym-diff area < 1e-6 (shared single-cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_wb
-        _gx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_cellaswkb(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_wb
-        _hx_wb.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_cellaswkb(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
@@ -2714,12 +2785,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     try:
         from shapely import wkt as _shp_wkt
         from databricks.labs.gbx.pygx import functions as _gx_wt
-        _gx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_custom_cellaswkt(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_wt
-        _hx_wt.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_custom_cellaswkt(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
@@ -2738,12 +2811,14 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     # --- centroid: decoded point distance < 1e-6 (shared cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_ct
-        _gx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_centroid(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
         from databricks.labs.gbx.gridx.custom import functions as _hx_ct
-        _hx_ct.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_custom_centroid(cell, %s) AS g FROM _custom_cell_parity_v"
             % _CUSTOM_GRID_SQL).collect()]
@@ -2766,11 +2841,13 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         def _grid_tuple(_g):
             return tuple(_g[_f] for _f in _GRID_FIELDS)
         from databricks.labs.gbx.pygx import functions as _gx_gr
-        _gx_gr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
         _light_gr = _grid_tuple(spark.sql(
             "SELECT %s AS grid" % _CUSTOM_GRID_SQL).head(1)[0]["grid"])
         from databricks.labs.gbx.gridx.custom import functions as _hx_gr
-        _hx_gr.register(spark)
+        from databricks.labs.gbx import manager as _gbx_mgr
+        _gbx_mgr.register_family(spark, ('gbx_custom_',), level="L1")
         _heavy_gr = _grid_tuple(spark.sql(
             "SELECT %s AS grid" % _CUSTOM_GRID_SQL).head(1)[0]["grid"])
         _gr_ok = _light_gr == _heavy_gr
@@ -3078,7 +3155,7 @@ _CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across w
 import os as _os
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
-from databricks.labs.gbx.ds.register import register as _ds_reg
+from databricks.labs.gbx import manager as _gbx_mgr
 print("=== FILE write layout sweep starting ===", flush=True)
 _ls_rows = []
 # Derive the catalog+schema prefix for FILE table targets from the results TABLE name.
@@ -3093,7 +3170,7 @@ _TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
 # needs -- point GBX_BENCH_CORPUS at a ~1k-tile pool (e.g. bench-corpus-1024-1k) -- and (2)
 # `.cache()` so the leg's actions share ONE metadata read. The write still materializes pixels per
 # tile (the real write cost); caching only removes the redundant re-opens.
-_ds_reg(spark)
+_gbx_mgr.register_sources(spark)
 _ls_gtiff_src = f"{CORPUS}/rows"
 _ls_tile_df = (
     spark.read.format("raster_gbx")

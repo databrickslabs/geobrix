@@ -13,18 +13,20 @@ from pyspark.sql.types import (
     StructType,
 )
 
-from databricks.labs.gbx.pygx import functions as gx
-
 
 @pytest.fixture(scope="module")
 def spark():
+    from databricks.labs.gbx import manager as gbx_manager
+
     s = (
         SparkSession.builder.master("local[2]")
         .appName("pygx-err")
         .config("spark.sql.shuffle.partitions", "2")
         .getOrCreate()
     )
-    gx.register(s)
+    gbx_manager.register_family(
+        s, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     yield s
 
 

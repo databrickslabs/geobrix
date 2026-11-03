@@ -43,15 +43,12 @@ def vectorx_registered(spark):
 
     Also creates the four canonical fixture views used by the SQL examples.
     """
-    from databricks.labs.gbx.vectorx import functions as vx  # noqa: PLC0415
-    from databricks.labs.gbx.vectorx.jts.legacy import (
-        functions as legacy_vx,
-    )  # noqa: PLC0415
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.manager import register as gbx_register  # noqa: PLC0415
     from ._fixtures import create_setup_views_vectorx_heavy  # noqa: PLC0415
 
-    vx.register(spark)
-    legacy_vx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_st_',))
+    gbx_manager.register_family(spark, ('gbx_st_legacy',))
     gbx_register(
         spark,
         only=[

@@ -28,6 +28,8 @@ MODIS_B03 = (
 
 @pytest.fixture(scope="module")
 def spark():
+    from databricks.labs.gbx import manager as gbx_manager
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark = (
         SparkSession.builder.config(
@@ -38,9 +40,8 @@ def spark():
         .config("spark.jars", str(JAR))
         .getOrCreate()
     )
-    from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     return spark
 
 
@@ -65,39 +66,28 @@ def test_rst_maketiles(spark):
     """Test making tiles based on size in MB."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    df = spark.range(1).select(
-        rx.rst_maketiles(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(1),  # size_in_mb
-        ).alias("tiles")
+    src = spark.range(1).select(
+        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile")
     )
 
-    result = df.collect()
-    assert result is not None
-    # rst_maketiles returns an array of tiles
-    assert result[0]["tiles"] is not None
-    assert isinstance(result[0]["tiles"], (list, tuple))
+    # a table function: one output row per tile, beside the input row's columns
+    result = rx.rst_maketiles(src, "tile", 1).collect()  # size_in_mb = 1
+    assert result
+    assert result[0]["raster"] is not None
 
 
 def test_rst_tooverlappingtiles(spark):
     """Test creating overlapping tiles."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    df = spark.range(1).select(
-        rx.rst_tooverlappingtiles(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(256),  # tile_width
-            f.lit(256),  # tile_height
-            f.lit(10),  # overlap in pixels
-        ).alias("tiles")
+    src = spark.range(1).select(
+        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile")
     )
 
-    result = df.collect()
-    assert result is not None
-    # rst_tooverlappingtiles returns an array of tiles
-    assert result[0]["tiles"] is not None
-    assert isinstance(result[0]["tiles"], (list, tuple))
-    assert len(result[0]["tiles"]) > 1
+    # tile_width 256, tile_height 256, overlap 10 pixels: one row per overlapping tile
+    result = rx.rst_tooverlappingtiles(src, "tile", 256, 256, 10).collect()
+    assert len(result) > 1
+    assert result[0]["raster"] is not None
 
 
 def test_rst_separatebands(spark):
@@ -120,37 +110,24 @@ def test_rst_separatebands(spark):
     # Merge them into a multi-band raster
     multiband_df = df.select(rx.rst_merge(f.collect_list("tile")).alias("multiband"))
 
-    # Now separate the bands
-    result_df = multiband_df.select(
-        rx.rst_separatebands(f.col("multiband")).alias("bands")
-    )
-
-    result = result_df.collect()
-    assert result is not None
-    # rst_separatebands returns an array of single-band rasters
-    assert result[0]["bands"] is not None
-    assert isinstance(result[0]["bands"], (list, tuple))
-    # Should separate into individual bands (3 in this case from merged multiband)
-    assert len(result[0]["bands"]) >= 1
+    # Now separate the bands: one row per band
+    result = rx.rst_separatebands(multiband_df, "multiband").collect()
+    assert len(result) >= 1
+    assert result[0]["raster"] is not None
 
 
 def test_rst_h3_tessellate(spark):
     """Test H3 tessellation of raster."""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    df = spark.range(1).select(
-        rx.rst_h3_tessellate(
-            tile_from_path(rx, f, str(MODIS_B01), "GTiff"),
-            f.lit(4),  # H3 resolution (reduced for performance)
-        ).alias("h3_tiles")
+    src = spark.range(1).select(
+        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile")
     )
 
-    result = df.collect()
-    assert result is not None
-    # rst_h3_tessellate returns an array of tiles
-    assert result[0]["h3_tiles"] is not None
-    assert isinstance(result[0]["h3_tiles"], (list, tuple))
-    assert len(result[0]["h3_tiles"]) > 0
+    # H3 resolution 1 (coarse, for memory): one row per cell
+    result = rx.rst_h3_tessellate(src, "tile", 1).collect()
+    assert len(result) > 0
+    assert result[0]["raster"] is not None
 
 
 def test_rst_from_local_path(spark):

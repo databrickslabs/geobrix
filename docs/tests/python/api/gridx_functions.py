@@ -19,9 +19,9 @@ Display convention for examples:
 
 def gridx_setup_example(spark):
     """Common setup: register GridX (BNG) functions. Run once before examples."""
-    from databricks.labs.gbx.gridx.bng import functions as bx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    bx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_',))
 
 
 gridx_setup_example_output = """
@@ -158,10 +158,11 @@ def bng_pointascell_example(spark):
 
 def bng_pointascell_python_api_example(spark):
     """Use Python API: point as WKT column. Do not use st_point()—GeoBrix expects WKT or WKB."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.gridx.bng import functions as bx
     from pyspark.sql.functions import lit
 
-    bx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_bng_',))
     df = spark.range(1).select(
         bx.bng_pointascell(lit("POINT(530000 180000)"), lit("1km")).alias("bng_cell")
     )

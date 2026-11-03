@@ -426,9 +426,9 @@ def test_no_partition_holds_more_than_the_cap_of_tiles(
 
 
 def _light_readers(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def _max_tasks_in_job(spark, group, action):

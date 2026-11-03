@@ -5,8 +5,6 @@ from unittest.mock import patch
 import pytest
 from shapely import from_wkb
 
-from databricks.labs.gbx.ds.register import register
-
 _GJ = {
     "type": "FeatureCollection",
     "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::4326"}},
@@ -33,7 +31,9 @@ def _gj_path(tmp):
 
 
 def test_vector_gbx_reads_wkb_schema(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = _gj_path(str(tmp_path))
     df = spark.read.format("vector_gbx").load(p)
     assert df.columns == ["name", "pop", "geom_0", "geom_0_srid", "geom_0_srid_proj"]
@@ -45,7 +45,9 @@ def test_vector_gbx_reads_wkb_schema(spark, tmp_path):
 
 
 def test_vector_gbx_wkt_option(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = _gj_path(str(tmp_path))
     df = spark.read.format("vector_gbx").option("asWKB", "false").load(p)
     g = df.orderBy("name").collect()[0]["geom_0"]
@@ -53,7 +55,9 @@ def test_vector_gbx_wkt_option(spark, tmp_path):
 
 
 def test_vector_gbx_chunksize_reads_all(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     p = _gj_path(str(tmp_path))
     df = spark.read.format("vector_gbx").option("chunkSize", "1").load(p)
     # One partition per FILE now (not per offset-chunk): splitting a single GeoJSON by
@@ -65,7 +69,9 @@ def test_vector_gbx_chunksize_reads_all(spark, tmp_path):
 
 
 def test_ogr_gbx_reads_directory(spark, tmp_path):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     d = os.path.join(str(tmp_path), "many")
     os.makedirs(d)
     for k in range(3):
@@ -125,12 +131,13 @@ def test_shapefile_gbx_reads_directory_of_shp_zip(spark, tmp_path):
     """A directory of copy_*.shp.zip files is enumerated and read by shapefile_gbx.
     Each .shp.zip contains a small shapefile written by the shapefile_gbx writer so
     the round-trip exercises the actual path the scaled bench uses."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import (
         generate_polygon_seed,
         transcode_vector_seed,
     )
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     n_features = 10
     seed_df = generate_polygon_seed(spark, n_features)
     seeds = transcode_vector_seed(
@@ -534,8 +541,10 @@ def test_vector_coded_domain_description_mode_returns_strings(coded_src):
 def test_vector_coded_domain_spark_read(spark, coded_src, mode):
     """End-to-end through Spark: the declared schema and the batches agree, so
     collect() returns the expected values (a mismatch fails the Arrow read)."""
+    from databricks.labs.gbx import manager as gbx_manager
+
     kind, path = coded_src
-    register(spark)
+    gbx_manager.register_sources(spark)
     df = spark.read.format(_CODED_FORMATS[kind]).option("codedDomains", mode).load(path)
     rows = df.select(*_CODES, "plain").collect()
     expected = _CODES if mode == "code" else _DESCRIPTIONS
@@ -763,6 +772,7 @@ def test_vector_ogr_time_fields_read_as_text(spark, tmp_path):
     declared schema agrees with the data (it used to fail with getLong)."""
     from pyspark.sql.types import StringType
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.ds import vector as vec
 
     p = tmp_path / "t.geojson"
@@ -783,7 +793,7 @@ def test_vector_ogr_time_fields_read_as_text(spark, tmp_path):
     )
     rdr = vec._GeoJSONReader({"path": str(p)})
     assert rdr.schema()["t"].dataType == StringType()
-    register(spark)
+    gbx_manager.register_sources(spark)
     rows = spark.read.format("geojson_gbx").load(str(p)).select("t").collect()
     assert [r["t"] for r in rows] == ["12:34:56", "07:08:09.250", None]
 

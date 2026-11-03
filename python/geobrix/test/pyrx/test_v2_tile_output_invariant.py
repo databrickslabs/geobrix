@@ -3,13 +3,10 @@ raster tile emits the 9-field ``V2_TILE_SCHEMA``.
 
 Two guards, both data-driven so they cannot go stale:
 
-1. ``test_registered_tile_op_emits_v2_schema`` — enumerates the LIVE registration
-   map (``functions._sql_tile_ops``) and asserts each tile-returning member's UDF
+1. ``test_registered_tile_op_emits_v2_schema`` — enumerates the manifest's light (L3)
+   UDF refs of every function that returns a TILE and asserts each UDF's
    ``returnType`` IS ``V2_TILE_SCHEMA``. New tile functions are covered
-   automatically; a regression to a legacy/other schema fails here. A small,
-   name-keyed exclusion set covers the registered members that legitimately return
-   something OTHER than a tile struct (boolean, array, contour struct, encoded
-   image bytes).
+   automatically; a regression to a legacy/other schema fails here.
 
 2. ``test_no_legacy_tile_schema_as_function_output`` — a static guard that greps
    the pyrx source for the legacy ``TILE_SCHEMA`` constant used as a function
@@ -29,27 +26,21 @@ from pathlib import Path
 
 import pytest
 
+from databricks.labs.gbx import manifest
+from databricks.labs.gbx.manager.l3 import resolve_ref
 from databricks.labs.gbx.pyrx import functions as fns
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
-# Registered light-tier functions in _sql_tile_ops that DO NOT return a tile
-# struct — excluded by name, each with the type it actually returns. Everything
-# else in _sql_tile_ops must emit V2_TILE_SCHEMA.
-_NON_TILE_REGISTERED = {
-    "gbx_rst_tryopen": "BooleanType (open-success flag)",
-    "gbx_rst_sample": "ArrayType(DoubleType) (per-band pixel values)",
-    "gbx_rst_contour": "contour result struct (vector output)",
-    "gbx_rst_isoband": "ArrayType of contour structs (vector output)",
-    "gbx_rst_tilexyz": "BinaryType (encoded PNG/JPEG/WEBP image tile)",
-}
-
 
 def _tile_returning_registered_udfs():
-    return [
-        (name, udf)
-        for name, udf in fns._sql_tile_ops.items()
-        if name not in _NON_TILE_REGISTERED
-    ]
+    out = []
+    for name, fn in manifest.load().functions.items():
+        spec = fn.levels.get("L3", {})
+        if fn.returns_session != "TILE" or "variants" not in spec:
+            continue
+        for variant, ref in spec["variants"].items():
+            out.append((f"{name}[{variant}]", resolve_ref(ref)))
+    return out
 
 
 @pytest.mark.parametrize(

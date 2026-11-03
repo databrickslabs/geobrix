@@ -8,7 +8,6 @@ the user registered the heavyweight (Scala) or lightweight (pyrx) package.
 
 from pyspark.sql import functions as f
 
-from databricks.labs.gbx.pyrx import functions as prx
 from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
@@ -22,7 +21,9 @@ def _tile_view(spark, name="t", **kw):
 
 
 def test_register_enables_polygonize_sql(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _tile_view(spark, epsg=4326)
     # polygonize is a LATERAL UDTF; count rows it yields.
     n = spark.sql(
@@ -58,7 +59,9 @@ def _rgb_tile_view(spark, name="t"):
 
 
 def test_register_enables_tilexyz_sql(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _rgb_tile_view(spark)
     # SQL callers must pass all args (no Python defaults in SQL UDFs).
     png = spark.sql(
@@ -68,7 +71,9 @@ def test_register_enables_tilexyz_sql(spark):
 
 
 def test_register_enables_xyzpyramid_sql(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _rgb_tile_view(spark)
     # xyzpyramid is a streaming UDTF; count the rows it yields.
     n = spark.sql(
@@ -84,7 +89,9 @@ def test_register_enables_xyzpyramid_minimal_args_sql(spark):
     # UDTF_EVAL_METHOD_ARGUMENTS_DO_NOT_MATCH_SIGNATURE.
     # Now format/size/resampling default to PNG/256/bilinear in eval(), matching
     # the documented signature: gbx_rst_xyzpyramid(tile, min_z, max_z [,...]).
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _rgb_tile_view(spark)
     n_minimal = spark.sql(
         "SELECT count(*) AS n FROM t, " "LATERAL gbx_rst_xyzpyramid(tile, 1, 2) p"
@@ -102,7 +109,9 @@ def test_register_enables_xyzpyramid_minimal_args_sql(spark):
 
 
 def test_register_enables_buildoverviews_sql(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _tile_view(spark, width=64, height=64)
     # SQL callers pass all args (no Python defaults in SQL UDFs).
     n = spark.sql(
@@ -144,7 +153,9 @@ def _agg_ras_bytes(data, ulx=0.0, uly=10.0, px=1.0, epsg=32633, nodata=-9999.0):
 def test_register_enables_merge_agg_sql(spark):
     import numpy as np
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     left = _agg_ras_bytes(np.array([[1, 2], [3, 4]]), ulx=0.0, uly=2.0)
     right = _agg_ras_bytes(np.array([[5, 6], [7, 8]]), ulx=2.0, uly=2.0)
     df = spark.createDataFrame([("g", left), ("g", right)], ["k", "raster"]).select(
@@ -167,7 +178,9 @@ def test_register_enables_merge_agg_sql(spark):
 def test_register_enables_combineavg_agg_sql(spark):
     import numpy as np
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     a = _agg_ras_bytes(np.array([[2.0, 4.0], [6.0, 8.0]]))
     b = _agg_ras_bytes(np.array([[4.0, 8.0], [10.0, 12.0]]))
     df = spark.createDataFrame([("g", a), ("g", b)], ["k", "raster"]).select(
@@ -185,7 +198,9 @@ def test_register_enables_combineavg_agg_sql(spark):
 def test_register_enables_frombands_agg_sql(spark):
     import numpy as np
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     b0 = _agg_ras_bytes(np.full((2, 2), 10.0))
     b1 = _agg_ras_bytes(np.full((2, 2), 20.0))
     df = spark.createDataFrame(
@@ -208,7 +223,9 @@ def test_register_enables_rasterize_agg_sql(spark):
     import shapely.wkb
     from shapely.geometry import box
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     g1 = shapely.wkb.dumps(box(0, 0, 2, 4))
     g2 = shapely.wkb.dumps(box(1, 0, 4, 4))
     spark.createDataFrame(
@@ -225,7 +242,9 @@ def test_register_enables_rasterize_agg_sql(spark):
 def test_register_enables_derivedband_agg_sql(spark):
     import numpy as np
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     pyfunc = (
         "def addbands(in_ar, out_ar, *args, **kwargs):\n"
         "    import numpy as np\n"
@@ -249,7 +268,9 @@ def test_register_enables_gridfrompoints_agg_sql(spark):
     import shapely.wkb
     from shapely.geometry import Point
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     p0 = shapely.wkb.dumps(Point(0.0, 0.0))
     p1 = shapely.wkb.dumps(Point(2.0, 2.0))
     spark.createDataFrame(
@@ -267,7 +288,9 @@ def test_register_enables_dtmfromgeoms_agg_sql(spark):
     import shapely.wkb
     from shapely.geometry import Point
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     corners = [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0), (10.0, 10.0), (5.0, 5.0)]
     rows = [
         ("g", shapely.wkb.dumps(Point(x, y, 2 * x + 3 * y + 1), output_dimension=3))
@@ -299,6 +322,8 @@ def test_register_enables_merge_sql(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     def _ras(arr, ulx, uly):
         arr = np.asarray(arr, dtype="float32")
         profile = dict(
@@ -316,7 +341,7 @@ def test_register_enables_merge_sql(spark):
                 dst.write(arr, 1)
             return mf.read()
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _two_tile_view(
         spark, _ras([[1, 2], [3, 4]], 0.0, 2.0), _ras([[5, 6], [7, 8]], 2.0, 2.0)
     )
@@ -330,6 +355,8 @@ def test_register_enables_combineavg_sql(spark):
     import numpy as np
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
+
+    from databricks.labs.gbx import manager as gbx_manager
 
     def _ras(arr):
         arr = np.asarray(arr, dtype="float32")
@@ -348,7 +375,7 @@ def test_register_enables_combineavg_sql(spark):
                 dst.write(arr, 1)
             return mf.read()
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _two_tile_view(
         spark, _ras([[2.0, 4.0], [6.0, 8.0]]), _ras([[4.0, 8.0], [10.0, 12.0]])
     )
@@ -363,6 +390,8 @@ def test_register_enables_frombands_sql(spark):
     import numpy as np
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
+
+    from databricks.labs.gbx import manager as gbx_manager
 
     def _ras(v):
         arr = np.full((2, 2), float(v), dtype="float32")
@@ -381,7 +410,7 @@ def test_register_enables_frombands_sql(spark):
                 dst.write(arr, 1)
             return mf.read()
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _two_tile_view(spark, _ras(10.0), _ras(20.0))
     n = spark.sql(
         "SELECT gbx_rst_numbands(gbx_rst_frombands(array(ta, tb))) AS n FROM ab"
@@ -390,7 +419,9 @@ def test_register_enables_frombands_sql(spark):
 
 
 def test_register_enables_h3_tessellate_sql(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _tile_view(spark, width=8, height=8, epsg=4326)
     # h3_tessellate is a streaming UDTF; count the cells it yields.
     n = spark.sql(
@@ -404,7 +435,9 @@ def test_register_enables_proximity_sql(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     data = np.zeros((5, 5), dtype="float32")
     data[0, 0] = 1.0
     profile = dict(
@@ -433,7 +466,9 @@ def test_register_enables_proximity_sql(spark):
 
 
 def test_register_enables_cog_convert_sql(spark):
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     _tile_view(spark, width=64, height=64, epsg=4326)
     n = spark.sql(
         "SELECT gbx_rst_numbands(gbx_rst_cog_convert(tile, 'DEFLATE', 512, 'AVERAGE')) AS n FROM t"
@@ -446,7 +481,9 @@ def test_register_enables_contour_sql(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     band = np.tile(np.arange(6, dtype="float64"), (5, 1))
     profile = dict(
         driver="GTiff",
@@ -484,7 +521,9 @@ def test_register_enables_viewshed_sql(spark):
     from rasterio.transform import from_origin
     from shapely.geometry import Point
 
-    prx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     dem = np.zeros((7, 7), dtype="float64")
     dem[:, 3] = 100.0
     profile = dict(

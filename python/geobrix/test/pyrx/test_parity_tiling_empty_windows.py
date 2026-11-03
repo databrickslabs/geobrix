@@ -137,6 +137,8 @@ def outputs(spark_with_jar):
         StructType,
     )
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark = spark_with_jar
     tile_t = StructType(
         [
@@ -162,9 +164,8 @@ def outputs(spark_with_jar):
     retile = CASES[0][0]
 
     # Light first, then heavy (heavy register overwrites the same gbx_* names).
-    from databricks.labs.gbx.pyrx import functions as prx
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     light = {
         f: [
             r.raster
@@ -177,9 +178,7 @@ def outputs(spark_with_jar):
         for r in spark.sql(f"SELECT t.cellid FROM rt, LATERAL {retile} t").collect()
     ]
 
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     heavy = {
         f: [
             r.raster

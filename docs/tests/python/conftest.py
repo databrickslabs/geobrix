@@ -30,6 +30,7 @@ def spark_with_geobrix():
     Returns:
         SparkSession with GeoBrix readers and functions available
     """
+    from databricks.labs.gbx import manager as gbx_manager
     try:
         from pyspark.sql import SparkSession
     except ImportError as e:
@@ -64,8 +65,7 @@ def spark_with_geobrix():
     
     # Try to register GeoBrix functions
     try:
-        from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         print(f"✅ GeoBrix rasterx functions registered")
     except ImportError:
         print("⚠️  GeoBrix rasterx not available (Python bindings may not be installed)")
@@ -73,8 +73,7 @@ def spark_with_geobrix():
         print(f"⚠️  Could not register rasterx functions: {e}")
     
     try:
-        from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-        vx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_st_legacy',))
         print(f"✅ GeoBrix vectorx functions registered")
     except ImportError:
         print("⚠️  GeoBrix vectorx not available")

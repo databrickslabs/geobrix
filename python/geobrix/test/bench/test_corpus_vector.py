@@ -25,13 +25,13 @@ def test_generate_polygon_seed(spark):
 
 
 def test_transcode_vector_seed(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import (
         generate_polygon_seed,
         transcode_vector_seed,
     )
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     seed = generate_polygon_seed(spark, 100)
     fmts = ["geojson_gbx", "shapefile_gbx", "gpkg_gbx", "file_gdb_gbx"]
     out = transcode_vector_seed(spark, seed, fmts, str(tmp_path / "vec"))
@@ -89,10 +89,10 @@ def test_replicate_vector_seed_shp_zip(spark, tmp_path):
 
 
 def test_build_vector_corpus(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.bench.corpus_vector import build_vector_corpus
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    gbx_manager.register_sources(spark)
     out = build_vector_corpus(
         spark,
         rows=50,

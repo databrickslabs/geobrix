@@ -139,12 +139,12 @@ rst_roughness_python_example_output = """
 
 def rst_color_relief_python_example(spark):
     """Apply a color relief mapping (elevation → RGBA) from a DEM tile."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
     from _fixtures import color_table_path
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = dem_tile_df(spark)
     clr_path = str(color_table_path())
     result = df.select(
@@ -211,11 +211,11 @@ rst_contour_python_example_output = """
 
 def rst_viewshed_python_example(spark):
     """Compute binary viewshed mask from a DEM and observer point."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api
     from pyspark.sql import functions as f
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
     df = dem_tile_df(spark)
     result = df.select(
         rx_api.rst_viewshed(
@@ -263,12 +263,12 @@ rst_sample_python_example_output = """
 
 def rst_gridfrompoints_python_example(spark):
     """IDW (Inverse Distance Weighting) interpolation from arrays of points and values."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
     from pyspark.sql.types import ArrayType, BinaryType, DoubleType
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
 
     # Create a synthetic point cloud DataFrame with WKB points and values
     # Using simple WKB POINT(2.0, 2.0) and POINT(4.0, 4.0)
@@ -317,12 +317,12 @@ rst_gridfrompoints_python_example_output = """
 
 def rst_dtmfromgeoms_python_example(spark):
     """TIN (Triangulated Irregular Network) from Z-valued points via Delaunay interpolation."""
-    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
     from pyspark.sql.types import StructType, StructField, ArrayType, BinaryType
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
 
     # Create a synthetic survey point DataFrame with 4 points inset from the grid
     # edges (Delaunay needs the hull to cover interior cells).

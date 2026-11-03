@@ -126,12 +126,13 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
     """The corpus tiles under `subdir` as a one-column `tile` table (`name` labels the cached table)."""
 
     def build(spark, n, corpus, schema):
+        from databricks.labs.gbx import manager as gbx_manager
+
         rows = corpus.rstrip("/") + "/" + subdir
         if not os.path.isdir(rows):
             return None
-        from databricks.labs.gbx.ds.register import register
 
-        register(spark)  # the light raster reader
+        gbx_manager.register_sources(spark)  # the light raster reader
         label = f"mvp_in_tiles_{name or ('virt' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
         first = (
             _corpus_rows(corpus) if subdir == "rows" and n <= SMALL_INPUT_ROWS else None
@@ -579,9 +580,11 @@ _COMBINE_SQL = (
 
 
 def _register_light(spark, *names):
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark, only=list(names))
+    gbx_manager.register_family(
+        spark, ("gbx_rst_", "gbx_pmtiles_"), only=list(names), level="L3"
+    )
 
 
 def register_h_downstream(spark):
@@ -606,9 +609,9 @@ def register_h_combine_l3(spark):
 
 def register_h_heavy(spark):
     """The JVM names (RST_MergeAgg, RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
-    from databricks.labs.gbx.rasterx import functions as rx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
 
 
 def _stats(df, tile_expr: Optional[str]):
@@ -1175,12 +1178,14 @@ def _br_shapes(canvas=_A_CANVAS):
 
 def setup_a_probes(spark):
     """The light probes (finalizes, tree step), the product's table functions and the light `gbx_rst_merge` finalize."""
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx import register
     from databricks.labs.gbx.pyrx import _mvp_forms
-    from databricks.labs.gbx.pyrx import functions as prx
 
     _mvp_forms.register_probe_forms(spark)
-    prx.register(spark, only=["gbx_rst_merge"])
+    gbx_manager.register_family(
+        spark, ("gbx_rst_", "gbx_pmtiles_"), only=["gbx_rst_merge"], level="L3"
+    )
     register(spark, only=["gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"])
 
 
@@ -1643,9 +1648,9 @@ def _io_spec(spark, n, corpus, schema):
     light raster reader and writer registered, outside the timed region. A scale that asks for more tiles than `rows`
     holds is an error (the corpus size found is printed).
     """
-    from databricks.labs.gbx.ds.register import register as register_readers
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register_readers(spark)
+    gbx_manager.register_sources(spark)
     rows = corpus.rstrip("/") + "/rows"
     if not os.path.isdir(rows):
         return None

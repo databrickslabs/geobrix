@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.vectorx
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.plans.PlanTest
@@ -19,7 +20,7 @@ class ST_AsMvtPyramidTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt_pyramid emits one row per intersecting tile for a single polygon feature") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val gf = new GeometryFactory()
@@ -54,7 +55,7 @@ class ST_AsMvtPyramidTest extends PlanTest with SilentSparkSession {
 
     test("st_asmvt_pyramid encodes numeric attributes with native MVT value types") {
         spark.sparkContext.setLogLevel("ERROR")
-        vectorx.functions.register(spark)
+        TestL1.installAll(spark)
         import vectorx.functions._
 
         val gf = new GeometryFactory()

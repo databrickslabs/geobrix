@@ -96,9 +96,9 @@ def test_sql_rasterx_usage_constant():
 
 def test_sql_rasterx_usage_executable(spark):
     """Run SQL RasterX example: register, create view from GDAL, then run metadata SELECT."""
+    from databricks.labs.gbx import manager as gbx_manager
     try:
-        from databricks.labs.gbx.rasterx import functions as rx
-        rx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_rst_',))
         path = getattr(examples, "SAMPLE_RASTER_PATH", None) or ""
         df = spark.read.format("gdal").load(path)
         df.createOrReplaceTempView("rasters")
@@ -195,9 +195,9 @@ def test_sql_gridx_usage_constant():
 
 def test_sql_gridx_usage_executable(spark):
     """Run GridX SQL example: register, then run pointascell with BNG coords and cellarea."""
+    from databricks.labs.gbx import manager as gbx_manager
     try:
-        from databricks.labs.gbx.gridx.bng import functions as bx
-        bx.register(spark)
+        gbx_manager.register_family(spark, ('gbx_bng_',))
         # BNG coordinates (eastings, northings); resolution 1000 m = 1 km
         cells = spark.sql(
             "SELECT gbx_bng_pointascell('POINT(530000 180000)', '1km') as bng_cell_1km, "

@@ -185,9 +185,6 @@ map_package_to_suite() {
             echo "com.databricks.labs.gbx.vectorx.ds.*"
             ;;
         # DS sub-packages
-        ds.register)
-            echo "com.databricks.labs.gbx.ds.register.*"
-            ;;
         ds.whitelist)
             echo "com.databricks.labs.gbx.ds.whitelist.*"
             ;;

@@ -173,15 +173,10 @@ def _assert_fill_parity(
 
 
 def _register_h3_heavy(spark) -> None:
-    """Register gbx_h3_* JVM expressions via the register_ds data source.
+    """Register gbx_h3_* at L1 (the JAR's expressions) through the manager."""
+    from databricks.labs.gbx import manager as gbx_manager
 
-    There is no Python heavy-wrapper module for H3 (the Scala ``gridx.h3.functions``
-    only exposes ``gbx_h3_cellfill``).  The ``register_ds`` DataSource is the
-    canonical registration path when no Python thin-wrapper module exists — the
-    same pattern used by ``gridx.custom.functions.register``, ``bng.functions.register``,
-    and ``quadbin.functions.register`` under the hood.
-    """
-    spark.read.format("register_ds").option("functions", "gridx.h3").load().collect()
+    gbx_manager.register_family(spark, ("gbx_h3_",), level="L1")
 
 
 def test_cellfill_parity_all_grids(spark_with_jar):
@@ -195,13 +190,9 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     agree on the neighbourhood structure — this is required for the parity to be
     meaningful (cell-set equality, not just value equality).
 
-    H3 note: there is no Python heavy-wrapper module for the H3 grid; heavy
-    registration uses ``_register_h3_heavy`` (``register_ds`` approach) directly.
+    H3 note: the heavy leg registers ``gbx_h3_*`` at L1 through ``_register_h3_heavy``.
     """
-    from databricks.labs.gbx.gridx.bng import functions as bnghx
-    from databricks.labs.gbx.gridx.custom import functions as custhx
-    from databricks.labs.gbx.gridx.quadbin import functions as qbhx
-    from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx import manager as gbx_manager
 
     spark = spark_with_jar
 
@@ -336,7 +327,9 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     # -----------------------------------------------------------------------
     # Phase 1: LIGHT — register Python UDFs, collect all results
     # -----------------------------------------------------------------------
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
 
     def _collect(view: str, fn_sql: str) -> Dict[int, Dict[int, Optional[float]]]:
         """Run grouped-fill SQL and return {grp: decoded_dict}."""
@@ -376,10 +369,10 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     # Phase 2: HEAVY — register JVM expressions (overwrite the SQL names),
     #          collect all results
     # -----------------------------------------------------------------------
-    _register_h3_heavy(spark)  # no Python module; use register_ds directly
-    qbhx.register(spark)
-    bnghx.register(spark)
-    custhx.register(spark)
+    _register_h3_heavy(spark)
+    gbx_manager.register_family(spark, ("gbx_quadbin_",), level="L1")
+    gbx_manager.register_family(spark, ("gbx_bng_",), level="L1")
+    gbx_manager.register_family(spark, ("gbx_custom_",), level="L1")
 
     def _collect_heavy(view: str, fn_sql: str) -> Dict[int, Dict[int, Optional[float]]]:
         rows = spark.sql(

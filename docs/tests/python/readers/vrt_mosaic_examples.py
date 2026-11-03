@@ -176,9 +176,9 @@ with rasterio.open(vrt_path) as vrt_ds:
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def _write_mosaic(spark, src, out_dir, tile_size=128, prune_empty=None):

@@ -7,11 +7,11 @@ mvt = pytest.importorskip(
 from shapely import to_wkb  # noqa: E402
 from shapely.geometry import Point  # noqa: E402
 
-from databricks.labs.gbx.pyvx import functions as vx  # noqa: E402
-
 
 def test_st_asmvt_pyramid_fans_out_per_tile(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     df = spark.createDataFrame(
         [(bytearray(to_wkb(Point(0.0, 0.0))), "a", 7)],
         "geom binary, name string, id int",
@@ -32,7 +32,9 @@ def test_pyramid_accepts_wkt(spark):
     # Geom-input consistency: st_asmvt_pyramid must accept the same encodings as every
     # other geom-accepting pyvx fn (WKB/EWKB/WKT/EWKT) via _geom.parse_geom. A WKT geom
     # must fan out and emit tiles just like the WKB path.
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     df = spark.createDataFrame(
         [("SRID=4326;POINT (0 0)", "a", 7)],
         "geom string, name string, id int",
@@ -50,7 +52,9 @@ def test_pyramid_accepts_wkt(spark):
 
 
 def test_pyramid_cap_raises(spark):
-    vx.register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     from shapely.geometry import box
 
     df = spark.createDataFrame(

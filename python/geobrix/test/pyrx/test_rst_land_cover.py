@@ -6,7 +6,6 @@ from pyspark.sql import functions as F
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.pyrx import functions as prx
 from databricks.labs.gbx.rasterx import functions as rx
 
 
@@ -43,11 +42,13 @@ def two_region_rgb_tile_df(spark):
 
 
 def test_rst_land_cover_then_polygonize(spark, two_region_rgb_tile_df):
+    from databricks.labs.gbx import manager as gbx_manager
+
     df = two_region_rgb_tile_df.select(
         rx.rst_land_cover(F.col("tile"), method="spectral", smooth=0).alias("lc")
     )
     df.createOrReplaceTempView("lc_tiles")
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     rows = spark.sql(
         "SELECT t.geom_wkb AS g, t.value AS v FROM lc_tiles, "
         "LATERAL gbx_rst_polygonize(lc, 1, 4) t"

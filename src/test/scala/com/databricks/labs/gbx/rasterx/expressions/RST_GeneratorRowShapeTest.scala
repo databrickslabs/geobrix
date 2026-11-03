@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.GeneratorContract
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.udfs
@@ -29,7 +30,7 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
     private def corruptTile(): DataFrame = {
         val sc = spark
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
             .withColumn("raster", functions.rst_fromcontent(col("content"), lit("GTiff")))
     }
@@ -37,7 +38,7 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
     private def validTile(): DataFrame = {
         val sc = spark
         import sc.implicits._
-        functions.register(spark)
+        TestL1.installAll(spark)
         Seq((1, s"$modisPath/$b01")).toDF("id", "path")
             .withColumn("raster", udfs.rasterFromPath(col("path")))
     }

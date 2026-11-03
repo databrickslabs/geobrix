@@ -269,10 +269,10 @@ def test_get_tile_size_positive_mb_still_splits():
 
 def test_rst_separatebands_file_unavailable_unchanged(spark):
     """Separatebands UDTF: file_ref=NULL → same band count as pre-change."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _materialized_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_sepbands")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_sepbands, "
@@ -284,10 +284,10 @@ def test_rst_separatebands_file_unavailable_unchanged(spark):
 
 def test_rst_retile_file_unavailable_unchanged(spark):
     """Retile UDTF: file_ref=NULL → same sub-tile count as pre-change."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _materialized_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_retile")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_retile, " "LATERAL gbx_rst_retile(tile, 4, 4) t"
@@ -298,10 +298,10 @@ def test_rst_retile_file_unavailable_unchanged(spark):
 
 def test_rst_tooverlappingtiles_file_unavailable_unchanged(spark):
     """ToOverlappingTiles UDTF: file_ref=NULL → non-zero output unchanged."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     df = _materialized_tile_df(spark)
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_overlap")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_overlap, "
@@ -317,7 +317,7 @@ def test_rst_maketiles_file_unavailable_unchanged(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
     # 512x512 float32 encoded ~2 MiB; at size_in_mb=1 → power-of-4 k=1 → 4 tiles
     side = 512
@@ -339,7 +339,7 @@ def test_rst_maketiles_file_unavailable_unchanged(spark):
     df = spark.createDataFrame([(raster,)], ["raster"]).select(
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df.createOrReplaceTempView("_t7_maketiles")
     n = spark.sql(
         "SELECT count(*) AS n FROM _t7_maketiles, "

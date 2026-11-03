@@ -156,6 +156,14 @@ def _wkb(geom):
 # --- the full BNG parity sweep ----------------------------------------------------------------
 
 
+def _register_tier(spark, mod, prefixes):
+    """The light tier (pygx) at L3, the heavy one (the gridx module) at L1: each leg of a parity test installs its own."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    level = "L3" if mod.__name__.startswith("databricks.labs.gbx.pygx") else "L1"
+    gbx_manager.register_family(spark, prefixes, level=level)
+
+
 def test_bng_full_parity(spark_with_jar):
     """All 23 BNG functions, light vs heavy, in one session (light first, then heavy)."""
     from pyspark.sql import functions as f
@@ -180,7 +188,7 @@ def test_bng_full_parity(spark_with_jar):
     )
 
     def scalar_row(mod, tess_keep_core):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         return df.select(
             f.call_function("gbx_bng_pointascell", f.col("pt"), f.col("res")).alias(
                 "pac"
@@ -213,7 +221,7 @@ def test_bng_full_parity(spark_with_jar):
 
     def chip_row(mod):
         """cellintersection / cellunion of two chip structs (same cellid -> union)."""
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         # Build two chip structs over the SAME cellid (seed): a core chip and a
         # full-cell chip, so cell_union/intersection produce the whole cell.
         chip_geom = _bng.cell_id_to_geometry(_bng.parse(seed))
@@ -233,7 +241,7 @@ def test_bng_full_parity(spark_with_jar):
     def tess_rows(mod, keep_core):
         """Tessellate chips. Both tiers called with keep_core_geom=False so core
         chips have no geometry on either side (parity comparison is clean)."""
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         tess_col = f.call_function(
             "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
         )
@@ -247,7 +255,7 @@ def test_bng_full_parity(spark_with_jar):
     def agg_chip_geom(mod):
         """Dissolve a group of identical-cell chips. Both tiers return BINARY: the
         dissolved geometry as WKB (no SRID). Compare the decoded geometry."""
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         chip_geom = _bng.cell_id_to_geometry(_bng.parse(seed))
         chip_wkb = _wkb(chip_geom)
         gdf = spark.createDataFrame(
@@ -268,7 +276,11 @@ def test_bng_full_parity(spark_with_jar):
     def explode_sets_light():
         """Light registers the five *explode as UDTFs (table functions) -> invoke
         via SQL LATERAL. Collect each as a sorted cellid set."""
-        gx.register(spark)
+        from databricks.labs.gbx import manager as gbx_manager
+
+        gbx_manager.register_family(
+            spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+        )
         df.createOrReplaceTempView("bng_src")
 
         def lateral(call):
@@ -296,7 +308,9 @@ def test_bng_full_parity(spark_with_jar):
         kloopexplode <-> gbx_bng_kloop, geomk*explode <-> gbx_bng_geomk*,
         tessellateexplode <-> gbx_bng_tessellate (chip cellids). The generator's own
         columns are compared in test_bng_tessellateexplode_columns_parity."""
-        hx.register(spark)
+        from databricks.labs.gbx import manager as gbx_manager
+
+        gbx_manager.register_family(spark, ("gbx_bng_",))
 
         def arr(call):
             row = df.select(call.alias("a")).collect()[0]["a"]
@@ -433,9 +447,8 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
     generator, reached through the select list or ``LATERAL VIEW``. Both take
     ``(geom, resolution)``; heavy also takes an optional ``keep_core_geom`` (default false).
     """
-    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pygx import _bng
-    from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
     box_wkb = _wkb(_GRID_ALIGNED_BIG_BOX)
@@ -457,7 +470,9 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
         return {r["cellid"]: (r["core"], r["chip"]) for r in df.collect()}
 
     # ---- LIGHT first ----
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_df = spark.sql(
         "SELECT t.cellid, t.core, t.chip FROM bng_te_parity, "
         "LATERAL gbx_bng_tessellateexplode(wkb, res) t"
@@ -466,7 +481,7 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
     light = by_cell(light_df)
 
     # ---- HEAVY ----
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     heavy_two_arg_df = spark.sql(
         "SELECT gbx_bng_tessellateexplode(wkb, res) FROM bng_te_parity"
     )
@@ -555,7 +570,7 @@ def test_bng_mosaic_434_100km_cells_are_res1(spark_with_jar):
     df = spark.createDataFrame([(c,) for c in cells], "cellid string")
 
     def rows(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         return df.select(
             f.col("cellid"),
             f.call_function("gbx_bng_cellarea", f.col("cellid")).alias("area"),
@@ -613,7 +628,7 @@ def test_bng_mosaic_423_no_degenerate_chips(spark_with_jar):
 
     def tess(mod, keep_core):
         """Both tiers called with explicit keep_core_geom for a clean parity comparison."""
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         tess_col = f.call_function(
             "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
         )
@@ -781,7 +796,7 @@ def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
 
     def tess(mod, keep_core):
         """name -> {cellid: (core, chip WKB | None)} for one tier and keep_core_geom."""
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         col = f.call_function(
             "gbx_bng_tessellate", f.col("geom"), f.col("res"), f.lit(keep_core)
         )
@@ -871,7 +886,7 @@ def test_bng_geomkring_geomkloop_grid_aligned(spark_with_jar, k):
     )
 
     def sets(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         row = df.select(
             f.call_function(
                 "gbx_bng_geomkring", f.col("geom"), f.col("res"), f.col("k")
@@ -924,7 +939,7 @@ def test_bng_pointascell_all_four_encodings(spark_with_jar):
     )
 
     def cells(mod):
-        mod.register(spark)
+        _register_tier(spark, mod, ("gbx_bng_",))
         return df.select(
             f.call_function("gbx_bng_pointascell", f.col("wkb"), f.col("res")).alias(
                 "a"
@@ -988,7 +1003,7 @@ def test_bng_geomkring_geomkloop_mode_parity(spark_with_jar, mode):
     from pyspark.sql import functions as f
     from shapely import from_wkt as _swkt
 
-    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pygx import _bng
 
     spark = spark_with_jar
@@ -1002,7 +1017,7 @@ def test_bng_geomkring_geomkloop_mode_parity(spark_with_jar, mode):
     light_loop = sorted(_bng.geometry_k_loop_str(holed_geom, _res_local, 1, mode))
 
     # --- HEAVY: register heavy and collect via SQL ---
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_bng_",))
     df_h = spark.createDataFrame([(holed_wkb, _res_local)], "geom binary, res int")
 
     def arr(col_expr):

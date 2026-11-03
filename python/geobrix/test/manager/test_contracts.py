@@ -552,13 +552,11 @@ def test_connect_session_never_touches_the_jvm(monkeypatch, capsys, runtime, rea
         monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
     else:
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", runtime)
-    from databricks.labs.gbx.manager import _legacy
-
     stub = ConnectStub()
     out = manager.register(stub)
     assert {c.level for c in out.values()} == {"L3"}
-    # every name, the ones not yet in the manifest too, and the light data sources
-    assert set(out) == (set(_legacy.names()) | set(MAN.functions)) - {
+    # every manifest name, and the light data sources
+    assert set(out) == set(MAN.functions) - {
         f.sql_name for f in FNS if f.status == "mvp"
     }
     assert "raster_gbx" in stub.sources
@@ -1418,7 +1416,7 @@ def test_since_gate_names_a_stable_row_without_a_release():
         assert gates.since_findings([dataclasses.replace(probe, since="")]) == []
 
 
-# register() serves every registered name: grouped fallback lines, names not yet in the manifest, the
+# register() serves every manifest name: grouped fallback lines, the
 # FILE-reference wrapper, and capabilities detected once per session.
 
 
@@ -1520,6 +1518,42 @@ def test_a_factory_row_with_a_file_ref_builds_its_file_udf_from_the_factory(
     l3.register_l3(spark, MAN.functions["gbx_rst_transform"], "-")
     assert spark.registered == [("gbx__l3f_rst_transform", made)]
     assert len(built) == 1 and isinstance(built[0][0], tuple)
+
+
+def test_the_managers_fromfile_is_the_materializing_udf_built_with_the_drivers_cap(
+    monkeypatch,
+):
+    """`databricks.labs.gbx.register(spark)` is the only thing that installs `gbx_rst_fromfile`: the 2-argument
+    materializing UDF, built by its manifest factory with the driver's connect-aware read cap (a worker has no
+    session to measure it). The deleted heavy `rasterx.register` shim used to re-register the same UDF.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.manager import l3
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    row = MAN.functions["gbx_rst_fromfile"]
+    spec = row.levels["L3"]
+    assert spec["factory"] == (
+        "databricks.labs.gbx.pyrx.functions:_build_fromfile_sql_materialized_udf"
+    )
+    assert spec["factory_args"] == "read_cap"
+    built, made = [], object()
+    monkeypatch.setattr(
+        prx,
+        "_build_fromfile_sql_materialized_udf",
+        lambda cap: built.append(cap) or made,
+    )
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda spark: 64 * 1024**2)
+    monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: False)
+
+    class Session(_Session):
+        def register(self, name, f, returnType=None):
+            self.registered.append((name, f))
+
+    spark = Session()
+    l3.register_l3(spark, row, "-")
+    assert built == [64 * 1024**2]
+    assert spark.registered == [("gbx_rst_fromfile", made)]
 
 
 def test_every_manifest_family_has_a_family_order():
@@ -1725,7 +1759,7 @@ def test_a_failing_data_source_registration_is_a_reported_line_not_a_failure(
     def boom(spark):
         raise RuntimeError("no data source support here")
 
-    monkeypatch.setattr(sources, "register", boom)
+    monkeypatch.setattr(sources, "_install", lambda spark, only=None: boom(spark))
     stub = ConnectStub()
     out = manager.register(stub)
     printed = capsys.readouterr().out.splitlines()
@@ -2652,85 +2686,19 @@ def test_an_arrow_l3_row_registers_an_arrow_udtf_and_another_row_does_not(
     assert "arrow" in manifest.LEVEL_KEYS["L3"]
 
 
-def test_the_heavy_register_puts_back_the_managers_choice_for_every_name(monkeypatch):
-    """The JAR registers a scalar under each Scala name, and the last registration wins: right after it the old
-    `register(spark)` calls must re-apply the manager for EVERY manifest row under their prefix: the rows with no L1
-    (the raster-to-grid table functions, clip, retile, ...), the rows whose Catalyst block is not selectable (a tile
-    struct where the contract is BINARY), and the rows the table prefers light for.
-    No JAR here: the JVM call is a fake session; the manager call is recorded."""
-    from pyspark.sql import SparkSession
-
-    from databricks.labs.gbx import manager
-    from databricks.labs.gbx.gridx.bng import functions as bngx
-    from databricks.labs.gbx.gridx.custom import functions as cgx
-    from databricks.labs.gbx.gridx.h3 import functions as h3x
-    from databricks.labs.gbx.gridx.quadbin import functions as qbx
-    from databricks.labs.gbx.pmtiles import functions as pmx
-    from databricks.labs.gbx.vectorx import functions as vx
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as legacy
-
-    class _Chain:
-        def __getattr__(self, _name):
-            return self
-
-        def __call__(self, *a, **k):
-            return self
-
-        def collect(self):
-            return []
-
-    class _Fake:
-        read = _Chain()
-        _jvm = _Chain()
-        _jsparkSession = None
-
-    calls = []
-    monkeypatch.setattr(SparkSession.Builder, "getOrCreate", lambda self: _Fake())
-    monkeypatch.setattr(
-        manager, "register", lambda spark, **kw: calls.append(kw["only"]) or {}
-    )
-    registers = (
-        (rx, "gbx_rst_"),
-        (h3x, "gbx_h3_"),
-        (vx, "gbx_st_"),
-        (bngx, "gbx_bng_"),
-        (qbx, "gbx_quadbin_"),
-        (cgx, "gbx_custom_"),
-        (pmx, "gbx_pmtiles_"),
-        (legacy, "gbx_st_legacy"),
-    )
-    for module, _prefix in registers:
-        module.register(None)
-    assert len(calls) == len(registers)
-    live = {n for n, f in MAN.functions.items() if f.status != "mvp"}
-    for names, (_module, prefix) in zip(calls, registers):
-        assert names and all(n.startswith(prefix) for n in names)
-        assert set(names) == {n for n in live if n.startswith(prefix)}, prefix
-    by_prefix = dict(zip((p for _m, p in registers), calls))
-    assert len([n for n in by_prefix["gbx_rst_"] if "rastertogrid" in n]) == 32
-    # not only the rows without an L1: a row with a Catalyst block the manager does not select, and one with L1
-    rst = set(by_prefix["gbx_rst_"])
-    assert (
-        "gbx_rst_combineavg_agg" in rst
-        and "L1" in MAN.functions["gbx_rst_combineavg_agg"].levels
-    )
-    assert "gbx_rst_width" in rst and "L1" in MAN.functions["gbx_rst_width"].levels
-    assert any("L1" not in MAN.functions[n].levels for n in rst)
-
-
 @pytest.mark.integration
-def test_the_heavy_register_leaves_the_managers_choice_in_place(jvm_spark):
-    """With the JAR loaded, `rasterx.register(spark)` registers the JVM scalar under each Scala name; the manager's
-    choice must still be what the session runs: a no-L1 name is the light table function (`LATERAL` resolves), a
-    tile-struct aggregate returns BINARY (its Catalyst block is not selectable), and a tile op the table prefers light
-    for is the light UDF. The Python API's per-session cache must still agree with the session.
+def test_the_managers_choice_stands_with_the_jar_loaded(jvm_spark):
+    """With the JAR loaded, the session runs the manager's choice for every name: a no-L1 name is the light table
+    function (`LATERAL` resolves), a tile-struct aggregate returns BINARY (its Catalyst block is not selectable),
+    and a tile op the table prefers light for is the light UDF. The Python API's per-session cache must agree with
+    the session.
     """
-    from databricks.labs.gbx import _api
+    from databricks.labs.gbx import _api, manager
 
     tile = (
         "CAST(NULL AS STRUCT<cellid:BIGINT,raster:BINARY,metadata:MAP<STRING,STRING>>)"
     )
-    rx.register(jvm_spark)
+    manager.register_family(jvm_spark, ("gbx_rst_",))
     got = jvm_spark.sql(
         f"SELECT t.* FROM (SELECT 1 AS x), LATERAL gbx_rst_h3_rastertogridavg({tile}, 5) t"
     ).collect()
@@ -2798,7 +2766,6 @@ def test_light_modules_define_no_public_callable():
             if not n.startswith("_")
             and inspect.isfunction(v)
             and v.__module__ == mod.__name__
-            and n != "register"
         ]
         assert public == [], (pkg, public)
 
@@ -2917,3 +2884,57 @@ def test_every_helper_lives_under_a_public_package(helper):
         )
     ), helper
     assert helper.status in manifest.STATUSES
+
+
+def test_removed_registrars_name_gbx_register():
+    from databricks.labs.gbx.gridx.bng import functions as bx
+    from databricks.labs.gbx.pyrx import functions as old
+
+    for mod in (old, bx):
+        with pytest.raises(
+            AttributeError, match=r"Fix: databricks\.labs\.gbx\.register\(spark\)"
+        ):
+            mod.register
+
+
+def test_register_family_registers_the_prefixes_alone_at_the_level_asked(monkeypatch):
+    """The test and bench entry: only the names under the prefixes, forced to one level where it exists."""
+    from databricks.labs.gbx import manager
+
+    seen = {}
+
+    def record(spark, **kw):
+        seen.update(kw)
+        return {}
+
+    monkeypatch.setattr(manager, "register", record)
+    manager.register_family(None, ("gbx_bng_",), level="L3")
+    names = seen["only"]
+    assert names and all(n.startswith("gbx_bng_") for n in names)
+    assert all("L3" in MAN.functions[n].levels for n in names)
+    assert seen["_levels"] == {n: ("L3", "-") for n in names}
+    manager.register_family(None, ("gbx_bng_",), only=["bng_aswkb"])
+    assert seen["only"] == ["gbx_bng_aswkb"] and seen["_levels"] is None
+
+
+def test_register_sources_registers_the_named_formats_and_refuses_an_unknown_one():
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.ds import register as ds_register
+
+    class _Spark:
+        class dataSource:
+            registered = []
+
+            @classmethod
+            def register(cls, source):
+                cls.registered.append(source.name())
+
+    assert manager.register_sources(_Spark, only=["raster", "GTIFF_GBX"]) == [
+        "raster_gbx",
+        "gtiff_gbx",
+    ]
+    assert _Spark.dataSource.registered == ["raster_gbx", "gtiff_gbx"]
+    with pytest.raises(ValueError, match="raster_gpx"):
+        manager.register_sources(_Spark, only=["raster_gpx"])
+    assert manager.register_sources(_Spark, only=[]) == []
+    assert {s.name() for s in ds_register._SOURCES} >= {"raster_gbx", "gtiff_gbx"}

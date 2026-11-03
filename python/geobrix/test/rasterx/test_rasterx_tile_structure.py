@@ -36,6 +36,8 @@ MODIS_DIR = (HERE.parents[4] / "src/test/resources/modis").resolve()
 @pytest.fixture(scope="module")
 def spark():
     """Create SparkSession with GeoBrix JAR loaded"""
+    from databricks.labs.gbx import manager as gbx_manager
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark_session = (
         SparkSession.builder.config(
@@ -46,9 +48,8 @@ def spark():
         .config("spark.jars", str(JAR))
         .getOrCreate()
     )
-    from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark_session)
+    gbx_manager.register_family(spark_session, ("gbx_rst_",))
     return spark_session
 
 

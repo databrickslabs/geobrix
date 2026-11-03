@@ -67,10 +67,10 @@ def spark_with_jar():
 
 
 def test_legacy_parity_polygon_with_hole_and_z(spark_with_jar):
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark = spark_with_jar
     from shapely import wkb
-
-    from databricks.labs.gbx.pyvx import functions as vx
 
     outer = [
         [0.0, 0.0, 1.0],
@@ -97,15 +97,14 @@ def test_legacy_parity_polygon_with_hole_and_z(spark_with_jar):
     df.createOrReplaceTempView("legv")
 
     # light first
-    vx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     light = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legv").collect()[0]["w"]
     )
 
     # heavy overwrites the same SQL name
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as hx
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_st_legacy",))
     heavy = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legv").collect()[0]["w"]
     )
@@ -117,11 +116,11 @@ def test_legacy_parity_polygon_with_hole_and_z(spark_with_jar):
 
 
 def test_legacy_parity_multipolygon_hole_on_second(spark_with_jar):
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark = spark_with_jar
     from shapely import wkb
     from shapely.geometry import MultiPolygon
-
-    from databricks.labs.gbx.pyvx import functions as vx
 
     def sq(o, s):
         return [[o, o], [o + s, o], [o + s, o + s], [o, o + s], [o, o]]
@@ -150,15 +149,14 @@ def test_legacy_parity_multipolygon_hole_on_second(spark_with_jar):
     df.createOrReplaceTempView("legmp")
 
     # light first
-    vx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
     light = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legmp").collect()[0]["w"]
     )
 
     # heavy overwrites the same SQL name
-    from databricks.labs.gbx.vectorx.jts.legacy import functions as hx
 
-    hx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_st_legacy",))
     heavy = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legmp").collect()[0]["w"]
     )

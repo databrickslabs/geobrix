@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.bench
 
+import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.apache.spark.sql.SparkSession
@@ -32,7 +33,7 @@ class GdalParallelSafetyTest extends AnyFunSuite {
       GDALManager.loadSharedObjects(Iterable.empty[String])
       GDALManager.configureGDAL("/tmp", "/tmp", logCPL = false)
       gdal.AllRegister()
-      functions.register(spark)
+      TestL1.installAll(spark)
 
       val tif = this.getClass
         .getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
@@ -76,7 +77,7 @@ class GdalParallelSafetyTest extends AnyFunSuite {
       GDALManager.loadSharedObjects(Iterable.empty[String])
       GDALManager.configureGDAL("/tmp", "/tmp", logCPL = false)
       gdal.AllRegister()
-      functions.register(spark)
+      TestL1.installAll(spark)
 
       val tif = this.getClass
         .getResource("/modis/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")

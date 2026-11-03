@@ -8,7 +8,6 @@ from pyspark.sql import SparkSession
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
-from databricks.labs.gbx.ds.register import register
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from databricks.labs.gbx.rasterx import functions as rx_api
@@ -116,7 +115,9 @@ def _spark():
 
 
 def _read_virtual_df(spark, tif):
-    register(spark)
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
     return (
         spark.read.format("gtiff_gbx")
         .option("driver", "GTiff")

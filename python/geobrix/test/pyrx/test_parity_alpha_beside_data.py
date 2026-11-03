@@ -28,6 +28,7 @@ pytest.importorskip(
     "shapely",
     reason="shapely not installed (the lightweight tier required: the env wheel, or pip install geobrix)",
 )
+from test._heavy import heavy_register  # noqa: E402
 from test.pyrx import _alpha_layouts as al  # noqa: E402
 from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
@@ -147,14 +148,16 @@ def _tile_df(spark, raster, tier):
     """A one-row DataFrame ``(tile)`` of ``raster`` made by one tier (its functions registered)."""
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
+
     if tier == "light":
         from databricks.labs.gbx.pyrx import functions as mod
 
-        mod.register(spark)
+        gbx_manager.register_family(spark, ("gbx_rst_",), level="L3")
         return mod, tp.light_tile_df(spark, raster)
     from databricks.labs.gbx.rasterx import functions as mod
 
-    mod.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     return mod, spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )

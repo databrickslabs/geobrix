@@ -28,6 +28,8 @@ SRTM_PATH = (
 
 @pytest.fixture(scope="module")
 def spark():
+    from databricks.labs.gbx import manager as gbx_manager
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark = (
         SparkSession.builder.config(
@@ -38,9 +40,8 @@ def spark():
         .config("spark.jars", str(JAR))
         .getOrCreate()
     )
-    from databricks.labs.gbx.rasterx import functions as rx
 
-    rx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_",))
     return spark
 
 

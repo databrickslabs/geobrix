@@ -52,6 +52,8 @@ pytest.importorskip(
     "shapely",
     reason="shapely not installed (the lightweight tier required)",
 )
+from test._heavy import heavy_register  # noqa: E402
+
 import numpy as np  # noqa: E402
 
 from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
@@ -283,9 +285,9 @@ def _light_reducer_rows(
 
     Registers pyrx (light), then collects via the registered gbx_rst_custom_* UDTF.
     """
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _tile_df(spark, raster)
     df.createOrReplaceTempView("_rst_cust_light")
     rows = spark.sql(
@@ -307,9 +309,7 @@ def _heavy_reducer_rows(
     """
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.rasterx import functions as hx
-
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     df = _tile_df(spark, raster)
     df.createOrReplaceTempView("_rst_cust_heavy")
     rows = (
@@ -486,9 +486,9 @@ def test_custom_rastertogrid_covering_smallpixel_parity(spark_with_jar, agg):
 
 def _light_tessellate_ids(spark, raster, mode, *, coverage="complete"):
     """Light tier: SQL LATERAL → (canonical id_set, chip_count)."""
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx import manager as gbx_manager
 
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     df = _tile_df(spark, raster)
     df.createOrReplaceTempView("_rst_cust_light_tess")
     rows = spark.sql(
@@ -503,9 +503,8 @@ def _light_tessellate_ids(spark, raster, mode, *, coverage="complete"):
 
 def _heavy_tessellate_ids(spark, raster, mode, *, coverage="complete"):
     """Heavy tier: generator SQL LATERAL → (canonical id_set, chip_count)."""
-    from databricks.labs.gbx.rasterx import functions as hx
 
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     df = _tile_df(spark, raster)
     df.createOrReplaceTempView("_rst_cust_heavy_tess")
     rows = spark.sql(
@@ -593,9 +592,9 @@ def test_custom_rasterize_agg_mask_parity(spark_with_jar):
     """
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pyrx import _serde
     from databricks.labs.gbx.pyrx import functions as prx
-    from databricks.labs.gbx.rasterx import functions as hx
 
     spark = spark_with_jar
 
@@ -612,7 +611,7 @@ def test_custom_rasterize_agg_mask_parity(spark_with_jar):
     _PX_SIZE = 5000.0
 
     # --- LIGHT tier (Python API, cell collected FIRST before heavy re-registers) ---
-    prx.register(spark)
+    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
     light_out = (
         df.groupBy("tx")
         .agg(
@@ -632,7 +631,7 @@ def test_custom_rasterize_agg_mask_parity(spark_with_jar):
     ), "light rasterize_agg returned None tile"
 
     # --- HEAVY tier (UDAF via call_function, after hx.register overwrites SQL names) ---
-    hx.register(spark)
+    heavy_register(spark, ("gbx_rst_",))
     heavy_out = (
         df.groupBy("tx")
         .agg(

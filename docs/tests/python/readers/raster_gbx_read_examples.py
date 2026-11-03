@@ -33,9 +33,9 @@ df = (spark.read.format("raster_gbx")
 
 
 def _register(spark):
-    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx import manager as gbx_manager
 
-    register(spark)
+    gbx_manager.register_sources(spark)
 
 
 def read_raster_gbx(spark, path=None):

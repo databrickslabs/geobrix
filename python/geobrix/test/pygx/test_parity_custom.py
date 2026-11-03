@@ -156,10 +156,9 @@ def _wkb(geom):
 def test_custom_pointascell_polyfill_all_four_encodings(spark_with_jar):
     """Geom-input consistency: WKB/EWKB/WKT/EWKT of the same
     geometry yield identical pointascell id AND polyfill cell-set, in BOTH tiers."""
-    spark = spark_with_jar
+    from databricks.labs.gbx import manager as gbx_manager
 
-    from databricks.labs.gbx.gridx.custom import functions as hx
-    from databricks.labs.gbx.pygx import functions as gx
+    spark = spark_with_jar
 
     # A point for pointascell and a box for polyfill, each in all four encodings.
     pt = _Point(_PX, _PY)
@@ -204,9 +203,13 @@ def test_custom_pointascell_polyfill_all_four_encodings(spark_with_jar):
         ).collect()[0]
         return pac, pf
 
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light_pac, light_pf = collect_enc()
-    hx.register(spark)  # overwrites the gbx_custom_* names
+    gbx_manager.register_family(
+        spark, ("gbx_custom_",)
+    )  # overwrites the gbx_custom_* names
     heavy_pac, heavy_pf = collect_enc()
 
     # All four encodings agree within each tier (pointascell).
@@ -245,11 +248,11 @@ def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
     bad coordinate degrades to NULL while parameter errors (resolution, grid spec)
     still raise. The light core is checked directly; the heavy core only through SQL.
     """
+    from databricks.labs.gbx import manager as gbx_manager
+
     spark = spark_with_jar
 
-    from databricks.labs.gbx.gridx.custom import functions as hx
     from databricks.labs.gbx.pygx import _custom
-    from databricks.labs.gbx.pygx import functions as gx
 
     conf = _custom.CustomGridConf(
         bound_x_min=0,
@@ -267,11 +270,17 @@ def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
         assert _custom.point_to_cell_id_or_none(conf, x, y, 0) is None
 
     sql = f"SELECT gbx_custom_pointascell('POINT(530000 NaN)', {_GRID_27700}, 0) AS c"
-    gx.register(spark)
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )
     light = spark.sql(sql).collect()[0]["c"]
-    hx.register(spark)  # overwrites the catalog with heavy expressions
+    gbx_manager.register_family(
+        spark, ("gbx_custom_",)
+    )  # overwrites the catalog with heavy expressions
     heavy = spark.sql(sql).collect()[0]["c"]
-    gx.register(spark)  # restore light names for later tests in this module
+    gbx_manager.register_family(
+        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
+    )  # restore light names for later tests in this module
     assert light is None and heavy is None
 
 

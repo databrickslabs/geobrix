@@ -3810,7 +3810,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_triangulate(col),
+        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only (UDTF)
         core=False,
         fingerprint=True,
@@ -3823,9 +3823,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_interpolateelevationgeom(
-            col, F.lit(None)
-        ),  # Placeholder points
+        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3838,9 +3836,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_interpolateelevationbbox(
-            col, F.lit(None)
-        ),  # Placeholder points
+        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,

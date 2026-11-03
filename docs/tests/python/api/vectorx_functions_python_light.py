@@ -163,7 +163,7 @@ st_asmvt_python_light_example_output = """
 """
 
 
-def st_asmvt_pyramid_python_light_example(spark):
+def st_asmvt_pyramid_python_example(spark):
     """Explode a WGS-84 feature into per-tile MVT rows via SQL LATERAL (light pyvx tier).
 
     The lightweight pyramid is a Python UDTF with no Python DataFrame Column form —
@@ -183,7 +183,7 @@ def st_asmvt_pyramid_python_light_example(spark):
     return rows[0]["mvt_bytes"] if rows else None
 
 
-st_asmvt_pyramid_python_light_example_output = """
+st_asmvt_pyramid_python_example_output = """
 +---+---+---+-----------+
 |  z|  x|  y|  mvt_bytes|
 +---+---+---+-----------+
@@ -215,7 +215,7 @@ st_asmvt_pyramid_python_light_example_output = """
 _WKB_POINT_0_10 = "010100000000000000000000000000000000002440"
 
 
-def st_triangulate_python_light_example(spark):
+def st_triangulate_python_example(spark):
     """Build a Delaunay TIN and emit one triangle polygon per row (light pyvx tier).
 
     The lightweight tier exposes ``gbx_st_triangulate`` as a registered SQL UDTF
@@ -232,7 +232,7 @@ def st_triangulate_python_light_example(spark):
     return rows[0]["triangle"] if rows else None
 
 
-st_triangulate_python_light_example_output = """
+st_triangulate_python_example_output = """
 +--------+
 |triangle|
 +--------+
@@ -243,7 +243,7 @@ st_triangulate_python_light_example_output = """
 """
 
 
-def st_interpolateelevationbbox_python_light_example(spark):
+def st_interpolateelevationbbox_python_example(spark):
     """Sample TIN elevation on a regular bounding-box grid (light pyvx tier).
 
     The lightweight tier exposes ``gbx_st_interpolateelevationbbox`` as a
@@ -261,7 +261,7 @@ def st_interpolateelevationbbox_python_light_example(spark):
     return rows[0]["elevation_point"] if rows else None
 
 
-st_interpolateelevationbbox_python_light_example_output = """
+st_interpolateelevationbbox_python_example_output = """
 +---------------+
 |elevation_point|
 +---------------+
@@ -273,7 +273,7 @@ st_interpolateelevationbbox_python_light_example_output = """
 """
 
 
-def st_interpolateelevationgeom_python_light_example(spark):
+def st_interpolateelevationgeom_python_example(spark):
     """Sample TIN elevation on a grid anchored to a geometry origin (light pyvx tier).
 
     The lightweight tier exposes ``gbx_st_interpolateelevationgeom`` as a
@@ -292,7 +292,7 @@ def st_interpolateelevationgeom_python_light_example(spark):
     return rows[0]["elevation_point"] if rows else None
 
 
-st_interpolateelevationgeom_python_light_example_output = """
+st_interpolateelevationgeom_python_example_output = """
 +---------------+
 |elevation_point|
 +---------------+

@@ -90,7 +90,7 @@ def test_vectorx_light_setup_views_created(spark):
 def test_st_triangulate_python_light_example(spark):
     """st_triangulate LATERAL emits 2 non-null WKB triangle bytes for the 4-corner fixture."""
     assert light_examples is not None
-    result = light_examples.st_triangulate_python_light_example(spark)
+    result = light_examples.st_triangulate_python_example(spark)
     assert result is not None, "st_triangulate should return non-null triangle bytes"
     assert isinstance(
         result, (bytes, bytearray)
@@ -101,7 +101,7 @@ def test_st_triangulate_python_light_example(spark):
 def test_st_interpolateelevationbbox_python_light_example(spark):
     """st_interpolateelevationbbox LATERAL emits non-null POINT Z bytes for the 3×3 grid."""
     assert light_examples is not None
-    result = light_examples.st_interpolateelevationbbox_python_light_example(spark)
+    result = light_examples.st_interpolateelevationbbox_python_example(spark)
     assert (
         result is not None
     ), "st_interpolateelevationbbox should return non-null elevation_point bytes"
@@ -114,7 +114,7 @@ def test_st_interpolateelevationbbox_python_light_example(spark):
 def test_st_interpolateelevationgeom_python_light_example(spark):
     """st_interpolateelevationgeom LATERAL emits non-null POINT Z bytes for the origin grid."""
     assert light_examples is not None
-    result = light_examples.st_interpolateelevationgeom_python_light_example(spark)
+    result = light_examples.st_interpolateelevationgeom_python_example(spark)
     assert (
         result is not None
     ), "st_interpolateelevationgeom should return non-null elevation_point bytes"
@@ -143,7 +143,7 @@ def test_st_asmvt_python_light_example(spark):
 def test_st_asmvt_pyramid_python_light_example(spark):
     """st_asmvt_pyramid LATERAL emits non-empty MVT bytes for WGS-84 POINT(0,0) zoom 0-2."""
     assert light_examples is not None
-    result = light_examples.st_asmvt_pyramid_python_light_example(spark)
+    result = light_examples.st_asmvt_pyramid_python_example(spark)
     assert (
         result is not None
     ), "st_asmvt_pyramid should emit at least one tile for POINT(0,0) zoom 0-2"

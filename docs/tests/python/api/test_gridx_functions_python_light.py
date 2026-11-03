@@ -347,7 +347,7 @@ def test_bng_cellunion_agg_python_light_example(spark):
 def test_bng_kringexplode_python_light_example(spark):
     """bng_kringexplode (light) LATERAL returns 9 rows for TQ3080 at k=1."""
     assert light_examples is not None
-    rows = light_examples.bng_kringexplode_python_light_example(spark)
+    rows = light_examples.bng_kringexplode_python_example(spark)
     assert rows is not None, "bng_kringexplode should return non-null rows"
     assert isinstance(rows, list), f"Expected list of Row, got {type(rows)}"
     assert (
@@ -360,7 +360,7 @@ def test_bng_kringexplode_python_light_example(spark):
 def test_bng_kloopexplode_python_light_example(spark):
     """bng_kloopexplode (light) LATERAL returns 8 rows for TQ3080 at k=1 (center excluded)."""
     assert light_examples is not None
-    rows = light_examples.bng_kloopexplode_python_light_example(spark)
+    rows = light_examples.bng_kloopexplode_python_example(spark)
     assert rows is not None, "bng_kloopexplode should return non-null rows"
     assert isinstance(rows, list), f"Expected list of Row, got {type(rows)}"
     assert (
@@ -373,7 +373,7 @@ def test_bng_kloopexplode_python_light_example(spark):
 def test_bng_geomkringexplode_python_light_example(spark):
     """bng_geomkringexplode (light) LATERAL returns 24 rows for BNG polygon at res=3, k=1."""
     assert light_examples is not None
-    rows = light_examples.bng_geomkringexplode_python_light_example(spark)
+    rows = light_examples.bng_geomkringexplode_python_example(spark)
     assert rows is not None, "bng_geomkringexplode should return non-null rows"
     assert isinstance(rows, list), f"Expected list of Row, got {type(rows)}"
     assert (
@@ -387,7 +387,7 @@ def test_bng_geomkringexplode_python_light_example(spark):
 def test_bng_geomkloopexplode_python_light_example(spark):
     """bng_geomkloopexplode (light) LATERAL returns 16 rows for BNG polygon at res=3, k=1."""
     assert light_examples is not None
-    rows = light_examples.bng_geomkloopexplode_python_light_example(spark)
+    rows = light_examples.bng_geomkloopexplode_python_example(spark)
     assert rows is not None, "bng_geomkloopexplode should return non-null rows"
     assert isinstance(rows, list), f"Expected list of Row, got {type(rows)}"
     assert (
@@ -737,7 +737,7 @@ def test_quadbin_geomkloop_python_light_example(spark):
 def test_quadbin_geomkringexplode_python_light_example(spark):
     """quadbin_geomkringexplode (light) returns non-empty row list via SQL LATERAL."""
     assert light_examples is not None
-    result = light_examples.quadbin_geomkringexplode_python_light_example(spark)
+    result = light_examples.quadbin_geomkringexplode_python_example(spark)
     assert result is not None, "quadbin_geomkringexplode should return non-null rows"
     assert len(result) > 0, "quadbin_geomkringexplode must return at least one row"
 
@@ -745,7 +745,7 @@ def test_quadbin_geomkringexplode_python_light_example(spark):
 def test_quadbin_geomkloopexplode_python_light_example(spark):
     """quadbin_geomkloopexplode (light) returns non-empty row list via SQL LATERAL."""
     assert light_examples is not None
-    result = light_examples.quadbin_geomkloopexplode_python_light_example(spark)
+    result = light_examples.quadbin_geomkloopexplode_python_example(spark)
     assert result is not None, "quadbin_geomkloopexplode should return non-null rows"
     assert len(result) > 0, "quadbin_geomkloopexplode must return at least one row"
 
@@ -776,7 +776,7 @@ def test_custom_geomkloop_python_light_example(spark):
 def test_custom_geomkringexplode_python_light_example(spark):
     """custom_geomkringexplode (light) returns 56 rows via SQL LATERAL."""
     assert light_examples is not None
-    result = light_examples.custom_geomkringexplode_python_light_example(spark)
+    result = light_examples.custom_geomkringexplode_python_example(spark)
     assert result is not None, "custom_geomkringexplode should return non-null rows"
     assert len(result) == 56, f"Expected 56 rows for geomkringexplode(offset poly, res=1, k=1), got {len(result)}"
 
@@ -784,7 +784,7 @@ def test_custom_geomkringexplode_python_light_example(spark):
 def test_custom_geomkloopexplode_python_light_example(spark):
     """custom_geomkloopexplode (light) returns 32 rows via SQL LATERAL."""
     assert light_examples is not None
-    result = light_examples.custom_geomkloopexplode_python_light_example(spark)
+    result = light_examples.custom_geomkloopexplode_python_example(spark)
     assert result is not None, "custom_geomkloopexplode should return non-null rows"
     assert len(result) == 32, f"Expected 32 rows for geomkloopexplode(offset poly, res=1, k=1), got {len(result)}"
 
@@ -816,7 +816,7 @@ def test_h3_geomkloop_python_light_example(spark):
 def test_h3_geomkringexplode_python_light_example(spark):
     """h3_geomkringexplode (light) returns non-empty rows via SQL LATERAL from a geometry column."""
     assert light_examples is not None
-    result = light_examples.h3_geomkringexplode_python_light_example(spark)
+    result = light_examples.h3_geomkringexplode_python_example(spark)
     assert result is not None, "h3_geomkringexplode should return non-null rows"
     assert len(result) > 0, "h3_geomkringexplode must return at least one row"
 
@@ -824,7 +824,7 @@ def test_h3_geomkringexplode_python_light_example(spark):
 def test_h3_geomkloopexplode_python_light_example(spark):
     """h3_geomkloopexplode (light) returns non-empty rows via SQL LATERAL from a geometry column."""
     assert light_examples is not None
-    result = light_examples.h3_geomkloopexplode_python_light_example(spark)
+    result = light_examples.h3_geomkloopexplode_python_example(spark)
     assert result is not None, "h3_geomkloopexplode should return non-null rows"
     assert len(result) > 0, "h3_geomkloopexplode must return at least one row"
 

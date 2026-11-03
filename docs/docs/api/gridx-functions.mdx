@@ -165,11 +165,9 @@ The following rules apply to **all BNG functions** (`gbx_bng_*`):
 - **`bng_cellarea` returns square kilometres** — not square metres. A 1km cell returns `1.0`.
 - **Cell-id format** — standard BNG grid references (e.g. `'TQ3080'`). At resolution 3 (1km), the format is two letters + four digits; the resolution level is encoded in the string length.
 
-### BNG `*explode` generators — SQL only, one form per tier
+### Explode generators
 
-The five BNG explode generators (`bng_kringexplode`, `bng_kloopexplode`, `bng_geomkringexplode`, `bng_geomkloopexplode`, `bng_tessellateexplode`) are Python UDTFs in the lightweight tier — they have **no Python DataFrame Column form**. Calling them as Column expressions raises `NotImplementedError`. Call them from SQL; the form depends on the tier.
-
-The lightweight tier registers **table functions**, called in the `FROM` clause with `LATERAL`:
+The explode functions return one row per cell. They are table functions: call them in the `FROM` clause with `LATERAL`, at every implementation level.
 
 ```sql
 SELECT t.*
@@ -177,15 +175,15 @@ FROM (SELECT 'TQ3080' AS cell, 1 AS k) src,
 LATERAL gbx_bng_kringexplode(src.cell, src.k) t
 ```
 
-The heavyweight tier registers **generators**, called with `LATERAL VIEW` (or in the select list). A generator is not a table function, so the `FROM ..., LATERAL f(...)` form above does not resolve to it:
+The Python entry takes the input DataFrame first and returns it joined with the generated rows:
 
-```sql
-SELECT t.cellid
-FROM (SELECT 'TQ3080' AS cell, 1 AS k) src
-LATERAL VIEW gbx_bng_kringexplode(src.cell, src.k) t AS cellid
+```python
+from databricks.labs.gbx.gridx.bng import functions as bx
+
+bx.bng_kringexplode(df, "cell", 1)  # one row per cell, beside the input columns
 ```
 
-The Python (light) tab of each function shows the same `spark.sql("... LATERAL ...")` invocation.
+The cell ids stay `BIGINT` (quadbin, custom grid, H3) or `STRING` (BNG) end to end. A NULL argument and a geometry that cannot be read give no rows. A resolution the grid does not define, or an unknown `mode`, raises and names the value.
 
 ---
 
@@ -717,13 +715,28 @@ Polyfill a geometry at a given quadbin zoom level then return only the hollow ou
 
 ### quadbin_geomkringexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_quadbin_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-Streaming version of `quadbin_geomkring` — one row per cell. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_quadbin_geomkringexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.quadbin.functions.quadbin_geomkringexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
-**Signature:** `quadbin_geomkringexplode(geom, resolution, k, [mode], [coverage])`
+Rows: `cellid` `BIGINT`.
 
-**Parameters:** Same as `quadbin_geomkring`.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_quadbin_geomkringexplode */}
+
+<Impl udtf/>
+
+Streaming version of `quadbin_geomkring` — one row per cell. Call it with `FROM t, LATERAL gbx_...(...)`, at every implementation level.
 
 **Returns:**
 - One row per `BIGINT` cell ID in the k-ring
@@ -731,8 +744,7 @@ Streaming version of `quadbin_geomkring` — one row per cell. The form depends 
 <FunctionExamples
   name="quadbin_geomkringexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -741,13 +753,28 @@ Streaming version of `quadbin_geomkring` — one row per cell. The form depends 
 
 ### quadbin_geomkloopexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_quadbin_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-Streaming version of `quadbin_geomkloop` — one row per cell at exactly `k` steps. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_quadbin_geomkloopexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.quadbin.functions.quadbin_geomkloopexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
-**Signature:** `quadbin_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
+Rows: `cellid` `BIGINT`.
 
-**Parameters:** Same as `quadbin_geomkloop`.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_quadbin_geomkloopexplode */}
+
+<Impl udtf/>
+
+Streaming version of `quadbin_geomkloop` — one row per cell at exactly `k` steps. Call it with `FROM t, LATERAL gbx_...(...)`, at every implementation level.
 
 **Returns:**
 - One row per `BIGINT` cell ID at exactly distance k
@@ -755,8 +782,7 @@ Streaming version of `quadbin_geomkloop` — one row per cell at exactly `k` ste
 <FunctionExamples
   name="quadbin_geomkloopexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -1533,7 +1559,23 @@ Explode array results into individual rows.
 
 ### bng_kringexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_bng_kringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_kringexplode(cellid, k)` | rows |
+| Python | `gridx.bng.functions.bng_kringexplode(df, cellid, k)` | DataFrame |
+
+Rows: `cellid` `STRING`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+{/* END GENERATED gbx_bng_kringexplode */}
+
+<Impl udtf/>
 
 Explode k-ring cells into separate rows.
 
@@ -1541,19 +1583,13 @@ Explode k-ring cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one output row per k-ring cell. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_kringexplode(cellId: Column, k: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference for center
-- `k` - Integer ring distance
-
 **Returns:**
 - Exploded rows, one per cell in k-ring
 
 <FunctionExamples
   name="bng_kringexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1561,7 +1597,23 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 
 ### bng_kloopexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_bng_kloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_kloopexplode(cellid, k)` | rows |
+| Python | `gridx.bng.functions.bng_kloopexplode(df, cellid, k)` | DataFrame |
+
+Rows: `cellid` `STRING`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` |  | The ring distance: 1 is the eight neighbours of the cell. |
+{/* END GENERATED gbx_bng_kloopexplode */}
+
+<Impl udtf/>
 
 Explode k-loop cells into separate rows.
 
@@ -1569,19 +1621,13 @@ Explode k-loop cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one output row per k-loop cell. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_kloopexplode(cellId: Column, k: Column): Column`
-
-**Parameters:**
-- `cellId` - BNG cell reference for center
-- `k` - Integer ring distance
-
 **Returns:**
 - Exploded rows, one per cell in k-loop
 
 <FunctionExamples
   name="bng_kloopexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1589,7 +1635,26 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 
 ### bng_geomkringexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_bng_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.bng.functions.bng_geomkringexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
+
+Rows: `cellid` `STRING`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_bng_geomkringexplode */}
+
+<Impl udtf/>
 
 Explode geometry k-ring cells into separate rows.
 
@@ -1597,23 +1662,13 @@ Explode geometry k-ring cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-ring cell. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkringexplode(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
-- `k` - Integer ring distance
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
-- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
-
 **Returns:**
 - Exploded rows, one per cell (`STRING` BNG cell reference)
 
 <FunctionExamples
   name="bng_geomkringexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -1621,7 +1676,26 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 
 ### bng_geomkloopexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_bng_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.bng.functions.bng_geomkloopexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
+
+Rows: `cellid` `STRING`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_bng_geomkloopexplode */}
+
+<Impl udtf/>
 
 Explode geometry k-loop cells into separate rows.
 
@@ -1629,23 +1703,13 @@ Explode geometry k-loop cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-loop cell. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
-
-**Parameters:**
-- `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
-- `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
-- `k` - Integer ring distance
-- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
-- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
-- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
-
 **Returns:**
 - Exploded rows, one per cell at distance k (`STRING` BNG cell reference)
 
 <FunctionExamples
   name="bng_geomkloopexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2058,13 +2122,29 @@ Polyfill a geometry at a given custom grid resolution then return only the hollo
 
 ### custom_geomkringexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_custom_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-Streaming version of `custom_geomkring` — one row per cell. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_custom_geomkringexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_geomkringexplode(geom, grid, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.custom.functions.custom_geomkringexplode(df, geom, grid, resolution, k, mode=None, coverage=None)` | DataFrame |
 
-**Signature:** `custom_geomkringexplode(geom, grid, resolution, k, [mode], [coverage])`
+Rows: `cellid` `BIGINT`.
 
-**Parameters:** Same as `custom_geomkring`.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_custom_geomkringexplode */}
+
+<Impl udtf/>
+
+Streaming version of `custom_geomkring` — one row per cell. Call it with `FROM t, LATERAL gbx_...(...)`, at every implementation level.
 
 **Returns:**
 - One row per `BIGINT` cell ID in the k-ring
@@ -2072,8 +2152,7 @@ Streaming version of `custom_geomkring` — one row per cell. The form depends o
 <FunctionExamples
   name="custom_geomkringexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -2082,13 +2161,29 @@ Streaming version of `custom_geomkring` — one row per cell. The form depends o
 
 ### custom_geomkloopexplode
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_custom_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
 
-Streaming version of `custom_geomkloop` — one row per cell at exactly `k` steps. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_custom_geomkloopexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_geomkloopexplode(geom, grid, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.custom.functions.custom_geomkloopexplode(df, geom, grid, resolution, k, mode=None, coverage=None)` | DataFrame |
 
-**Signature:** `custom_geomkloopexplode(geom, grid, resolution, k, [mode], [coverage])`
+Rows: `cellid` `BIGINT`.
 
-**Parameters:** Same as `custom_geomkloop`.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_custom_geomkloopexplode */}
+
+<Impl udtf/>
+
+Streaming version of `custom_geomkloop` — one row per cell at exactly `k` steps. Call it with `FROM t, LATERAL gbx_...(...)`, at every implementation level.
 
 **Returns:**
 - One row per `BIGINT` cell ID at exactly distance k
@@ -2096,8 +2191,7 @@ Streaming version of `custom_geomkloop` — one row per cell at exactly `k` step
 <FunctionExamples
   name="custom_geomkloopexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
-  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
@@ -2297,13 +2391,28 @@ Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
 
 ### h3_geomkringexplode
 
-<Tier light/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_h3_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-Streaming version of `h3_geomkring` — one row per cell. Lightweight tier only: a table function, called with `FROM t, LATERAL gbx_h3_geomkringexplode(...)`; there is no Python DataFrame Column form.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.h3.functions.h3_geomkringexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
-**Signature:** `h3_geomkringexplode(geom, resolution, k, [mode], [coverage])`
+Rows: `cellid` `BIGINT`.
 
-**Parameters:** Same as `h3_geomkring`.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_h3_geomkringexplode */}
+
+<Impl udtf/>
+
+Streaming version of `h3_geomkring` — one row per cell. Call it with `FROM t, LATERAL gbx_h3_geomkringexplode(...)`.
 
 **Returns:**
 - One row per `BIGINT` H3 cell ID
@@ -2311,7 +2420,7 @@ Streaming version of `h3_geomkring` — one row per cell. Lightweight tier only:
 <FunctionExamples
   name="h3_geomkringexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
@@ -2319,13 +2428,28 @@ Streaming version of `h3_geomkring` — one row per cell. Lightweight tier only:
 
 ### h3_geomkloopexplode
 
-<Tier light/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_h3_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-Streaming version of `h3_geomkloop` — one row per cell at exactly `k` steps. Lightweight tier only: a table function, called with `FROM t, LATERAL gbx_h3_geomkloopexplode(...)`; there is no Python DataFrame Column form.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| Python | `gridx.h3.functions.h3_geomkloopexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
-**Signature:** `h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
+Rows: `cellid` `BIGINT`.
 
-**Parameters:** Same as `h3_geomkloop`.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+{/* END GENERATED gbx_h3_geomkloopexplode */}
+
+<Impl udtf/>
+
+Streaming version of `h3_geomkloop` — one row per cell at exactly `k` steps. Call it with `FROM t, LATERAL gbx_h3_geomkloopexplode(...)`.
 
 **Returns:**
 - One row per `BIGINT` H3 cell ID at exactly distance k
@@ -2333,7 +2457,7 @@ Streaming version of `h3_geomkloop` — one row per cell at exactly `k` steps. L
 <FunctionExamples
   name="h3_geomkloopexplode"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
-  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 

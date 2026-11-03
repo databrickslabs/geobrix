@@ -110,21 +110,6 @@ def test_bng_cellunion_agg_example():
     assert callable(gridx_functions.bng_cellunion_agg_example)
 
 
-# Generator Functions
-def test_bng_kringexplode_example():
-    assert hasattr(gridx_functions, "bng_kringexplode_example")
-    assert callable(gridx_functions.bng_kringexplode_example)
-
-
-def test_bng_kloopexplode_example():
-    assert hasattr(gridx_functions, "bng_kloopexplode_example")
-    assert callable(gridx_functions.bng_kloopexplode_example)
-
-
-# Note: bng_geomkringexplode_example, bng_geomkloopexplode_example,
-# bng_tessellateexplode_example: requires DBR for st_geomfromtext; tested here when available.
-
-
 # ---------------------------------------------------------------------------
 # BNG aggregators — the heavy-tier fixture
 # Fixture: bng_heavy_setup registers bx + creates the ten GridX heavy views.

@@ -49,43 +49,6 @@ def test_st_legacyaswkb_sql_example_constant():
 # ---------------------------------------------------------------------------
 
 
-def test_st_triangulate_python_heavy_example(vectorx_heavy_setup):
-    """st_triangulate Generator Column emits 2 triangle WKBs for the 4-corner fixture."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_triangulate_python_heavy_example(spark)
-    assert result is not None, "st_triangulate should return non-null triangle bytes"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (WKB polygon), got {type(result)}"
-    assert len(result) > 0, "triangle WKB bytes should be non-empty"
-
-
-def test_st_interpolateelevationbbox_python_heavy_example(vectorx_heavy_setup):
-    """st_interpolateelevationbbox emits 9 POINT Z rows for the 3×3 grid fixture."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_interpolateelevationbbox_python_heavy_example(spark)
-    assert (
-        result is not None
-    ), "st_interpolateelevationbbox should return non-null bytes"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (WKB POINT Z), got {type(result)}"
-    assert len(result) > 0, "elevation_point WKB bytes should be non-empty"
-
-
-def test_st_interpolateelevationgeom_python_heavy_example(vectorx_heavy_setup):
-    """st_interpolateelevationgeom emits 9 POINT Z rows for the 3×3 origin-anchored grid."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_interpolateelevationgeom_python_heavy_example(spark)
-    assert (
-        result is not None
-    ), "st_interpolateelevationgeom should return non-null bytes"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (WKB POINT Z), got {type(result)}"
-    assert len(result) > 0, "elevation_point WKB bytes should be non-empty"
-
-
 # ---------------------------------------------------------------------------
 # T3: Vector-tile family heavy-tier tests
 # Fixtures: ``mvt_features`` view (for st_asmvt) and inline WGS-84 data
@@ -98,19 +61,6 @@ def test_st_asmvt_python_heavy_example(vectorx_heavy_setup):
     spark = vectorx_heavy_setup
     result = vectorx_functions.st_asmvt_python_heavy_example(spark)
     assert result is not None, "st_asmvt should return non-null MVT bytes"
-    assert isinstance(
-        result, (bytes, bytearray)
-    ), f"Expected bytes (MVT BINARY), got {type(result)}"
-    assert len(result) > 0, "MVT bytes should be non-empty"
-
-
-def test_st_asmvt_pyramid_python_heavy_example(vectorx_heavy_setup):
-    """st_asmvt_pyramid Generator Column emits non-empty MVT bytes for WGS-84 POINT(0,0)."""
-    spark = vectorx_heavy_setup
-    result = vectorx_functions.st_asmvt_pyramid_python_heavy_example(spark)
-    assert (
-        result is not None
-    ), "st_asmvt_pyramid should emit at least one tile for POINT(0,0) zoom 0-2"
     assert isinstance(
         result, (bytes, bytearray)
     ), f"Expected bytes (MVT BINARY), got {type(result)}"

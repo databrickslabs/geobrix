@@ -174,15 +174,15 @@ PROJCS["British National Grid", ...] (CRS)
 
 `gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB or EWKB) in **all input encodings and both tiers** — a STRING (WKT/EWKT) input still yields BINARY output. Only `gbx_st_crs` returns `STRING`. The clickable pointer to the CRS contract: [Coordinate Reference Systems](./coordinate-reference-systems).
 
-### Light tab for light-only UDTF generators
+### Generators are table functions
 
-`gbx_st_asmvt_pyramid`, `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` are Python UDTFs in the lightweight tier — they have **no Python DataFrame Column form**. The Python (light) tab for these functions shows:
+`gbx_st_asmvt_pyramid`, `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox` and `gbx_st_interpolateelevationgeom` return many rows per input. Call them in the `FROM` clause with `LATERAL`, at every implementation level:
 
 ```python
 spark.sql("SELECT t.* FROM <view>, LATERAL gbx_<fn>(...) t")
 ```
 
-This is the same invocation as the SQL tab, driven via Python. SQL `LATERAL` works for **both** tiers; the Python DataFrame Column form (`.select(vx.fn(...))`) is heavyweight-only for these generators.
+The Python entry takes the input DataFrame first and returns it joined with the generated rows, for example `vectorx.functions.st_triangulate(df, "pts", "bl", 0.0, 0.0, "NONENCROACHING")`.
 
 ---
 
@@ -190,7 +190,7 @@ This is the same invocation as the SQL tab, driven via Python. SQL `LATERAL` wor
 
 Encode features into [Mapbox Vector Tile (MVT)](https://github.com/mapbox/vector-tile-spec) protobufs. Pair the per-tile MVT bytes with [`gbx_pmtiles_agg`](./pmtiles-functions#pmtiles_agg) or the [PMTiles writer](../writers/pmtiles) to publish a vector pyramid as a single `.pmtiles` archive targeting MapLibre, deck.gl, Mapbox GL JS, or Felt.
 
-Both tiers expose identical `st_asmvt` / `st_asmvt_pyramid` names and identical output schemas. `st_asmvt` is swap-compatible across both the SQL and Python DataFrame APIs. `st_asmvt_pyramid` is interchangeable at the **SQL** level (invoked via `LATERAL`); its Python DataFrame Column form is heavy-only, because the lightweight pyramid is a Python UDTF, which SQL `LATERAL` calls but the DataFrame API does not expose. The one-line swap:
+`st_asmvt` and `st_asmvt_pyramid` have the same names and output columns in both tiers. The one-line swap for `st_asmvt`:
 
 ```python
 # Lightweight (pyvx) — Serverless-safe, no JAR
@@ -276,7 +276,27 @@ multiple `(z, x, y)` tiles into a single PMTiles file.
 
 ### st_asmvt_pyramid
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_st_asmvt_pyramid: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, [layer_name], [extent])` | rows |
+| Python | `vectorx.functions.st_asmvt_pyramid(df, geom, attrs, min_z, max_z, layer_name=None, extent=None)` | DataFrame |
+
+Rows: `z` `INT`, `x` `INT`, `y` `INT`, `mvt_bytes` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The feature geometry in EPSG:4326: WKB, EWKB, WKT or EWKT. |
+| `attrs` | `STRUCT` |  | The feature's attributes, as a struct; each field becomes an MVT property. |
+| `min_z` | `INT` |  | The first zoom level, from 0. |
+| `max_z` | `INT` |  | The last zoom level, at least `min_z` and at most 20. |
+| `layer_name` | `STRING` | `'layer'` | The layer name written into each tile. |
+| `extent` | `INT` | `4096` | The tile coordinate extent. |
+{/* END GENERATED gbx_st_asmvt_pyramid */}
+
+<Impl udtf/>
 
 Generator that explodes one input feature into one row per intersecting `(z, x, y)` tile
 across a zoom range, with MVT bytes already encoded in each row. The per-tile clip and
@@ -285,29 +305,14 @@ coordinate transform happen inside the function — no upstream `ST_Intersection
 Input geometry must be in **EPSG:4326 lon/lat**. The function handles per-tile projection
 internally. `max_z ≤ 20`; total tile count across the zoom range capped at 10⁶.
 
-**Signature:** `gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, [layer_name], [extent])`
+Call it with `LATERAL`:
 
-**Parameters:**
-
-- `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **EPSG:4326 lon/lat**.
-- `attrs` (`STRUCT<...>`) — Per-feature attributes. Same native-typed encoding as `st_asmvt`.
-- `min_z`, `max_z` (`INT`) — Inclusive zoom range (`0..20`).
-- `layer_name` (`STRING`, optional) — MVT layer name; defaults to `"layer"`.
-- `extent` (`INT`, optional) — MVT tile extent in pixels; defaults to `4096`.
-
-:::note SQL invocation form differs between tiers
-The **lightweight** tier is a Python UDTF registered via `spark.udtf.register` — invoke it with `LATERAL` (SQL standard table-function syntax):
 ```sql
 FROM features, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 12, 'layer', 4096) t
--- Output columns: t.z, t.x, t.y, t.mvt_bytes (direct)
+-- Output columns: t.z, t.x, t.y, t.mvt_bytes
 ```
-The **heavyweight** tier is a JVM generator expression — invoke it with `LATERAL VIEW` (Hive-style):
-```sql
-FROM features LATERAL VIEW gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 12, 'layer', 4096) t AS tile
--- Output column: t.tile.z, t.tile.x, t.tile.y, t.tile.mvt_bytes (struct wrapper)
-```
-The Python DataFrame Column form (`vx.st_asmvt_pyramid(col(...), ...)`) is **heavyweight-only**; the lightweight UDTF has no Column API.
-:::
+
+The function runs on the lightweight level.
 
 **Full pipeline — vector pyramid to PMTiles (lightweight):**
 
@@ -347,9 +352,7 @@ For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](.
 <FunctionExamples
   name="st_asmvt_pyramid"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -357,7 +360,7 @@ For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](.
 
 ## Triangulation and elevation
 
-These generators build a Delaunay triangulated irregular network (TIN) from Z-valued mass points and optional breaklines, then either expose the triangles directly or sample the surface on a regular grid to produce elevation points. Useful for surface modeling, DTM/DEM derivation, and elevation sampling from survey point clouds. All three are available in **both** tiers; breaklines are honored in both.
+These generators build a Delaunay triangulated irregular network (TIN) from Z-valued mass points and optional breaklines, then either expose the triangles directly or sample the surface on a regular grid to produce elevation points. Useful for surface modeling, DTM/DEM derivation, and elevation sampling from survey point clouds. All three run in both tiers; both honor break lines.
 
 ### Triangulation modes: `constrained` vs `conforming`
 
@@ -371,35 +374,48 @@ Each TIN function takes a trailing `mode` argument (default `'constrained'`):
 The lightweight tier raises `NotImplementedError` on `mode='conforming'` — it has no Steiner-point refinement. This is a **documented, intentional divergence**, analogous to the [H3 covering note](./gridx-functions) elsewhere in these docs: the two tiers agree exactly in the default (`constrained`) mode, and the heavyweight tier offers `conforming` as a deliberate opt-in superset. If you need a result that is byte-identical across tiers, stay on `constrained` (the default).
 
 :::note Invocation surface
-In the **lightweight** tier these TIN generators are PySpark UDTFs with **no Python DataFrame Column form** — invoke them via SQL `LATERAL` (e.g. `... , LATERAL gbx_st_triangulate(...) t`), the same pattern as `gbx_st_asmvt_pyramid`. In the **heavyweight** tier they are exposed as generator Columns (usable in `select(...)`) and via SQL `LATERAL VIEW`. SQL `LATERAL` works for **both** tiers; the Python DataFrame Column form is heavyweight-only for these generators.
+Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t`), or through the Python entry, which takes the DataFrame first. `mode='conforming'` runs on the JVM level only; see the note under `st_triangulate`.
 :::
 
 ### st_interpolateelevationbbox
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_st_interpolateelevationbbox: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_interpolateelevationbbox(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode])` | rows |
+| Python | `vectorx.functions.st_interpolateelevationbbox(df, points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, mode=None)` | DataFrame |
+
+Rows: `elevation_point` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
+| `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
+| `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `xmin` | `DOUBLE` |  | The west edge of the grid. |
+| `ymin` | `DOUBLE` |  | The south edge of the grid. |
+| `xmax` | `DOUBLE` |  | The east edge of the grid, above `xmin`. |
+| `ymax` | `DOUBLE` |  | The north edge of the grid, above `ymin`. |
+| `width_px` | `INT` |  | The number of grid columns, above 0. |
+| `height_px` | `INT` |  | The number of grid rows, above 0. |
+| `srid` | `INT` |  | The SRID of the output points; 0 for none. |
+| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the lightweight level raises for it. Any other word raises. |
+{/* END GENERATED gbx_st_interpolateelevationbbox */}
+
+<Impl udtf/>
 
 Builds a TIN from mass points and breaklines, then samples elevation on a regular pixel grid covering an **explicit bounding box**. Use this when you already know the output extent in absolute coordinates — for example, when snapping to a fixed tile extent or aligning with a raster grid.
-
-**Signature:** `gbx_st_interpolateelevationbbox(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode])`
-
-**Parameters:**
-- `points_array` — Mass-point geometries with Z values. Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines_array` — Breakline geometries (or an empty array).
-- `merge_tolerance` (`DOUBLE`) — Merge distance for coincident points.
-- `snap_tolerance` (`DOUBLE`) — Snap distance to breakline vertices.
-- `split_point_finder` (`STRING`) — Conforming-mesh strategy (e.g. `'NONENCROACHING'`).
-- `xmin`, `ymin`, `xmax`, `ymax` (`DOUBLE`) — Bounding box corners in the coordinate reference system given by `srid`.
-- `width_px`, `height_px` (`INT`) — Number of grid columns and rows. Together with the bbox dimensions these determine the cell size.
-- `srid` (`INT`) — EPSG code of the bounding box coordinates (e.g. `27700` for British National Grid).
-- `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only).
 
 **Generator:** Emits one row per in-hull grid cell (cells whose centers fall outside the TIN convex hull are dropped). The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
 <FunctionExamples
   name="st_interpolateelevationbbox"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
@@ -408,31 +424,41 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 
 ### st_interpolateelevationgeom
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_st_interpolateelevationgeom: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_interpolateelevationgeom(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode])` | rows |
+| Python | `vectorx.functions.st_interpolateelevationgeom(df, points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, mode=None)` | DataFrame |
+
+Rows: `elevation_point` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
+| `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
+| `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `grid_origin` | `BINARY` or `STRING` |  | The origin of the grid: a POINT in WKB, EWKB, WKT or EWKT. Its SRID is the SRID of the output. |
+| `grid_cols` | `INT` |  | The number of grid columns. |
+| `grid_rows` | `INT` |  | The number of grid rows. |
+| `cell_size_x` | `DOUBLE` |  | The cell width in the geometry's units; a positive value steps east. |
+| `cell_size_y` | `DOUBLE` |  | The cell height in the geometry's units; a negative value steps south. |
+| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the lightweight level raises for it. Any other word raises. |
+{/* END GENERATED gbx_st_interpolateelevationgeom */}
+
+<Impl udtf/>
 
 Builds a TIN from mass points and breaklines, then samples elevation on a regular grid **anchored to a geometry origin** with explicit cell sizes. Use this when the grid must be defined relative to a known point — for example, when the grid origin comes from data (a survey control point) or when different rows need different grid placements.
-
-**Signature:** `gbx_st_interpolateelevationgeom(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode])`
-
-**Parameters:**
-- `points_array` — Mass-point geometries with Z values. Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines_array` — Breakline geometries (or an empty array).
-- `merge_tolerance` (`DOUBLE`) — Merge distance for coincident points.
-- `snap_tolerance` (`DOUBLE`) — Snap distance to breakline vertices.
-- `split_point_finder` (`STRING`) — Conforming-mesh strategy (e.g. `'NONENCROACHING'`).
-- `grid_origin` — POINT geometry anchoring the top-left corner of the output grid. The output SRID is inherited from this geometry (encode as EWKB/EWKT to carry a non-zero SRID) — no separate `srid` argument.
-- `grid_cols`, `grid_rows` (`INT`) — Number of grid columns and rows.
-- `cell_size_x` (`DOUBLE`) — Horizontal cell size in the geometry's units (positive steps right).
-- `cell_size_y` (`DOUBLE`) — Vertical cell size in the geometry's units. Pass a **negative** value to step downward (standard raster convention, e.g. `-10.0` for 10-unit cells stepping south).
-- `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only).
 
 **Generator:** Emits one row per in-hull grid cell. The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
 <FunctionExamples
   name="st_interpolateelevationgeom"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
@@ -441,27 +467,36 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 
 ### st_triangulate
 
-<Tier both/> <Impl udtf/>
+{/* BEGIN GENERATED gbx_st_triangulate: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])` | rows |
+| Python | `vectorx.functions.st_triangulate(df, points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, mode=None)` | DataFrame |
+
+Rows: `triangle` `BINARY`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
+| `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
+| `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the lightweight level raises for it. Any other word raises. |
+{/* END GENERATED gbx_st_triangulate */}
+
+<Impl udtf/>
 
 Builds a Delaunay TIN from mass-point geometries (with Z values) and optional breakline geometries, emitting one triangle polygon per row. Use this when you need the raw triangulation — e.g., to inspect mesh quality, clip triangles to an area of interest, or feed a custom sampler.
-
-**Signature:** `gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])`
-
-**Parameters:**
-- `points_array` — Array column of point geometries with Z values (the mass points that define the surface). Accepts WKB/EWKB/WKT/EWKT.
-- `breaklines_array` — Array column of linestring geometries that the mesh must honor as edges (e.g., ridge lines, drainage channels). Pass an empty array if no breaklines are needed.
-- `merge_tolerance` (`DOUBLE`) — Distance below which coincident points are merged before triangulation.
-- `snap_tolerance` (`DOUBLE`) — Distance within which points are snapped to breakline vertices.
-- `split_point_finder` (`STRING`) — Conforming-mesh refinement strategy. Use `'NONENCROACHING'` for a mesh that avoids encroaching on breakline segments; `'MIDPOINT'` is also valid (heavyweight `conforming` mode).
-- `mode` (`STRING`, optional) — `'constrained'` (default, both tiers) or `'conforming'` (heavyweight only). See [Triangulation modes](#triangulation-modes-constrained-vs-conforming) above.
 
 **Generator:** Emits one row per output triangle. Use with SQL `LATERAL` to materialize the triangles; the output schema column is `triangle` (`BINARY` WKB polygon).
 
 <FunctionExamples
   name="st_triangulate"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
-  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
   scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />

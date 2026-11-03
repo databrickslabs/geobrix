@@ -240,30 +240,6 @@ def bng_cellunion_agg_example(spark):
 # ============================================================================
 
 
-def bng_kringexplode_example(spark):
-    """Explode k-ring cells into separate rows. Requires gridx_setup_example first."""
-    # Explode k-ring into individual rows
-    df = spark.sql("""
-        SELECT 
-            'TQ3080' as center_cell,
-            explode(gbx_bng_kring('TQ3080', 2)) as nearby_cell
-    """)
-    df.show()
-    return df
-
-
-def bng_kloopexplode_example(spark):
-    """Explode k-loop cells into separate rows"""
-    # Explode k-loop into individual rows
-    df = spark.sql("""
-        SELECT 
-            'TQ3080' as center_cell,
-            explode(gbx_bng_kloop('TQ3080', 2)) as ring_cell
-    """)
-    df.show()
-    return df
-
-
 # ============================================================================
 # GEOMETRY-BASED GRID OPERATIONS (st_geomfromtext / geometry column examples)
 # ============================================================================
@@ -314,28 +290,6 @@ def bng_tessellate_example(spark):
         ) as tessellation
     """)
     df.show(truncate=False)
-    return df
-
-
-def bng_geomkringexplode_example(spark):
-    """Explode geometry k-ring cells into separate rows"""
-    df = spark.sql("""
-        SELECT explode(gbx_bng_geomkring(
-            st_geomfromtext('POINT(-0.1278 51.5074)'), 3, 1
-        )) as cell
-    """)
-    df.show()
-    return df
-
-
-def bng_geomkloopexplode_example(spark):
-    """Explode geometry k-loop cells into separate rows"""
-    df = spark.sql("""
-        SELECT explode(gbx_bng_geomkloop(
-            st_geomfromtext('POINT(-0.1278 51.5074)'), 3, 1
-        )) as cell
-    """)
-    df.show()
     return df
 
 
@@ -577,60 +531,6 @@ _CUSTOM_BNG_POLY_WKT = (
 # ---------------------------------------------------------------------------
 
 
-def quadbin_geomkringexplode_python_heavy_example(spark):
-    """Geometry-aware quadbin k-ring explode: one row per cell (heavy gridx.quadbin tier).
-
-    Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
-    The heavyweight function is a generator: select it directly and it expands
-    to one ``cellid`` row per cell.
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
-
-    df = spark.table("quadbin_polygons")
-    return df.select(
-        qx.quadbin_geomkringexplode(f.col("geom"), f.lit(12), f.lit(1))
-    ).collect()
-
-
-quadbin_geomkringexplode_python_heavy_example_output = """
-+------------------+
-|cellid            |
-+------------------+
-|5211790602025803775|
-|...               |
-+------------------+
-... (one BIGINT row per cell in the k=1 ring around the WGS84 polygon polyfill at z12)
-"""
-
-
-def quadbin_geomkloopexplode_python_heavy_example(spark):
-    """Geometry-aware quadbin k-loop explode: one row per outer-ring cell (heavy gridx.quadbin tier).
-
-    Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
-    The heavyweight function is a generator: select it directly and it expands
-    to one ``cellid`` row per cell.
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
-
-    df = spark.table("quadbin_polygons")
-    return df.select(
-        qx.quadbin_geomkloopexplode(f.col("geom"), f.lit(12), f.lit(1))
-    ).collect()
-
-
-quadbin_geomkloopexplode_python_heavy_example_output = """
-+------------------+
-|cellid            |
-+------------------+
-|5211790602025803775|
-|...               |
-+------------------+
-... (one BIGINT row per cell in the hollow outer ring at k=1 around the WGS84 polygon polyfill at z12)
-"""
-
-
 # ---------------------------------------------------------------------------
 # Custom-grid geometry-aware kring/kloop (heavy gridx.custom tier)
 # ---------------------------------------------------------------------------
@@ -641,64 +541,6 @@ quadbin_geomkloopexplode_python_heavy_example_output = """
 _CUSTOM_GEOMK_WKT = (
     "POLYGON((529100 179100,529100 182100,532100 182100,532100 179100,529100 179100))"
 )
-
-
-def custom_geomkringexplode_python_heavy_example(spark):
-    """Geometry-aware custom-grid k-ring explode: one row per cell (heavy gridx.custom tier).
-
-    Reads the ``custom_grids`` setup view (grid struct).  The heavyweight
-    function is a generator: select it directly and it expands to one
-    ``cellid`` row per cell.
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
-
-    df = spark.table("custom_grids")
-    return df.select(
-        cx.custom_geomkringexplode(
-            f.lit(_CUSTOM_GEOMK_WKT), f.col("grid"), f.lit(1), f.lit(1)
-        )
-    ).collect()
-
-
-custom_geomkringexplode_python_heavy_example_output = """
-+------------------+
-|cellid            |
-+------------------+
-|72057594038779906 |
-|...               |
-+------------------+
-... (one BIGINT row per cell in the k=1 ring around the offset 3km polygon at res=1 (500m))
-"""
-
-
-def custom_geomkloopexplode_python_heavy_example(spark):
-    """Geometry-aware custom-grid k-loop explode: one row per outer-ring cell (heavy gridx.custom tier).
-
-    Reads the ``custom_grids`` setup view (grid struct).  The heavyweight
-    function is a generator: select it directly and it expands to one
-    ``cellid`` row per cell.
-    """
-    from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
-
-    df = spark.table("custom_grids")
-    return df.select(
-        cx.custom_geomkloopexplode(
-            f.lit(_CUSTOM_GEOMK_WKT), f.col("grid"), f.lit(1), f.lit(1)
-        )
-    ).collect()
-
-
-custom_geomkloopexplode_python_heavy_example_output = """
-+------------------+
-|cellid            |
-+------------------+
-|72057594038779906 |
-|...               |
-+------------------+
-... (one BIGINT row per cell in the hollow outer ring at k=1 around the offset 3km polygon at res=1 (500m))
-"""
 
 
 # ---------------------------------------------------------------------------

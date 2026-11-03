@@ -158,6 +158,46 @@ def h3_geomkloop(
     )
 
 
+def h3_geomkloopexplode(
+    df: DataFrame,
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Return the H3 cells at exactly k rings from a geometry, one row per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees.
+        resolution: H3 resolution, a whole number from 0 to 15.
+        k: The loop distance: only the cells at exactly this ring distance from the
+            covering cells are returned.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        One row per cell: `cellid`. A NULL argument, a geometry that cannot be read and
+        a geometry with a non-finite coordinate give no rows.
+
+    SQL: ``gbx_h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_h3_geomkloopexplode",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
 def h3_geomkring(
     geom: ColLike,
     resolution: ColLike,
@@ -186,6 +226,46 @@ def h3_geomkring(
     """
     return _api.call(
         "gbx_h3_geomkring",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+    )
+
+
+def h3_geomkringexplode(
+    df: DataFrame,
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = None,
+    coverage: ColLike = None,
+) -> DataFrame:
+    """Return the H3 cells of a geometry dilated by k rings, one row per cell.
+
+    Args:
+        df: The input DataFrame; each row is joined with the rows generated from it.
+        geom: The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees.
+        resolution: H3 resolution, a whole number from 0 to 15.
+        k: The ring distance: 0 is the covering cells alone, 1 adds the cells around
+            them.
+        mode: The dilation mode: `'boundary-out'`, `'boundary-in'`,
+            `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or
+            `'hole-out-ignore-geom'`. SQL default: ``'boundary-out'``.
+        coverage: How a cell belongs to the geometry: `'coveras'` (it overlaps),
+            `'polyfill'` (its centre is inside) or `'core'` (it is inside). SQL default:
+            ``'coveras'``.
+
+    Returns:
+        One row per cell: `cellid`. A NULL argument, a geometry that cannot be read and
+        a geometry with a non-finite coordinate give no rows.
+
+    SQL: ``gbx_h3_geomkringexplode(geom, resolution, k, [mode], [coverage])``
+    """
+    return _api.table(
+        df,
+        "gbx_h3_geomkringexplode",
         geom,
         resolution,
         k,

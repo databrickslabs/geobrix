@@ -3091,11 +3091,9 @@ result.show(truncate = false)
 (one v2-Tile Row per custom-grid cell; cellid is BIGINT encoding the custom cell)"""
 
   // =========================================================================
-  // VectorX vector-tile family — st_asmvt, st_asmvt_pyramid
+  // VectorX vector-tile family — st_asmvt
   //
   // st_asmvt: Fixture ``mvt_features`` view — 2 tile-local WKB POINTs in (z=0,x=0,y=0)
-  // st_asmvt_pyramid: Inline WGS-84 POINT(0,0) — the pyramid UDTF expects lon/lat input;
-  //   tile-local pixel coordinates (used by st_asmvt) exceed Web-Mercator latitude bounds.
   // =========================================================================
 
   val st_asmvt_scala_example: String =
@@ -3120,33 +3118,6 @@ result.first().getAs[Array[Byte]]("mvt")
 +---+---+---+---------+
 ... (MVT binary)""".trim
 
-  val st_asmvt_pyramid_scala_example: String =
-    """
-import com.databricks.labs.gbx.vectorx.{functions => vx}
-import org.apache.spark.sql.functions._
-
-vx.register(spark)
-val df = spark.sql(
-  "SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, " +
-  "named_struct('name', 'origin', 'id', 1L) AS attrs"
-)
-val result = df.select(
-  vx.st_asmvt_pyramid(col("geom_wkb"), col("attrs"), lit(0), lit(2), lit("layer")).alias("t")
-).selectExpr("t.z AS z", "t.x AS x", "t.y AS y", "t.mvt_bytes AS mvt_bytes")
-result.show()
-""".trim
-
-  val st_asmvt_pyramid_scala_example_output: String =
-    """
-+---+---+---+-----------+
-|  z|  x|  y|  mvt_bytes|
-+---+---+---+-----------+
-|  0|  0|  0|  [binary] |
-|  1|  1|  1|  [binary] |
-|  2|  2|  2|  [binary] |
-+---+---+---+-----------+
-... (MVT binary — one row per intersecting tile across zoom levels 0–2)""".trim
-
   // =========================================================================
   // VectorX TIN family — st_triangulate, st_interpolateelevationbbox,
   //                       st_interpolateelevationgeom
@@ -3168,7 +3139,7 @@ import org.apache.spark.sql.functions._
 vx.register(spark)
 val df = spark.table("tin_survey")
 val result = df.select(
-  vx.st_triangulate(col("pts"), col("bl"), lit(0), lit(0), lit("NONENCROACHING"), "constrained").alias("triangle")
+  vx.st_triangulate(col("pts"), col("bl"), lit(0), lit(0), lit("NONENCROACHING"), lit("constrained")).alias("triangle")
 )
 result.show()
 """.trim
@@ -3196,7 +3167,7 @@ val result = df.select(
     lit(0), lit(0), lit("NONENCROACHING"),
     lit(0), lit(0), lit(10), lit(10),
     lit(3), lit(3), lit(0),
-    "constrained"
+    lit("constrained")
   ).alias("elevation_point")
 )
 result.show()
@@ -3226,7 +3197,7 @@ val result = df.select(
     col("pts"), col("bl"),
     lit(0), lit(0), lit("NONENCROACHING"),
     origin, lit(3), lit(3), lit(3), lit(-3),
-    "constrained"
+    lit("constrained")
   ).alias("elevation_point")
 )
 result.show()

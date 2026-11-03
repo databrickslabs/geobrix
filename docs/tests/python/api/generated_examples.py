@@ -54,20 +54,40 @@ EXAMPLES = {
         "geomkloop_point_k1",
         "SELECT gbx_bng_geomkloop('POINT(530500 180500)', 3, 1) AS out",
     ),
+    "gbx_bng_geomkloopexplode": (
+        "GRID_GENERATOR",
+        "geomkloopx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_bng_geomkloopexplode('POINT(530500 180500)', 3, 1) AS gbx_out",
+    ),
     "gbx_bng_geomkring": (
         "GRID_ARRAY",
         "geomkring_point_k1",
         "SELECT gbx_bng_geomkring('POINT(530500 180500)', 3, 1) AS out",
+    ),
+    "gbx_bng_geomkringexplode": (
+        "GRID_GENERATOR",
+        "geomkringx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_bng_geomkringexplode('POINT(530500 180500)', 3, 1) AS gbx_out",
     ),
     "gbx_bng_kloop": (
         "GRID_ARRAY",
         "kloop_k1",
         "SELECT gbx_bng_kloop('TQ3080', 1) AS out",
     ),
+    "gbx_bng_kloopexplode": (
+        "GRID_GENERATOR",
+        "kloopx_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_bng_kloopexplode('TQ3080', 1) AS gbx_out",
+    ),
     "gbx_bng_kring": (
         "GRID_ARRAY",
         "kring_k1",
         "SELECT gbx_bng_kring('TQ3080', 1) AS out",
+    ),
+    "gbx_bng_kringexplode": (
+        "GRID_GENERATOR",
+        "kringx_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_bng_kringexplode('TQ3080', 1) AS gbx_out",
     ),
     "gbx_bng_pointascell": (
         "GRID_SCALAR",
@@ -114,10 +134,20 @@ EXAMPLES = {
         "cg_geomkloop_point_k1",
         "SELECT gbx_custom_geomkloop('POINT(530500 180500)', c1, 0, 1) AS out FROM gbx_example",
     ),
+    "gbx_custom_geomkloopexplode": (
+        "GRID_GENERATOR",
+        "cg_geomkloopx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_custom_geomkloopexplode('POINT(530500 180500)', c1, 0, 1) AS gbx_out",
+    ),
     "gbx_custom_geomkring": (
         "GRID_ARRAY",
         "cg_geomkring_point_k1",
         "SELECT gbx_custom_geomkring('POINT(530500 180500)', c1, 0, 1) AS out FROM gbx_example",
+    ),
+    "gbx_custom_geomkringexplode": (
+        "GRID_GENERATOR",
+        "cg_geomkringx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_custom_geomkringexplode('POINT(530500 180500)', c1, 0, 1) AS gbx_out",
     ),
     "gbx_custom_grid": (
         "GRID_SCALAR",
@@ -154,10 +184,20 @@ EXAMPLES = {
         "h3_geomkloop_point_k1",
         "SELECT gbx_h3_geomkloop('POINT(-122.4194 37.7749)', 8, 1) AS out",
     ),
+    "gbx_h3_geomkloopexplode": (
+        "GRID_GENERATOR",
+        "h3_geomkloopx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_h3_geomkloopexplode('POINT(-122.4194 37.7749)', 8, 1) AS gbx_out",
+    ),
     "gbx_h3_geomkring": (
         "GRID_ARRAY",
         "h3_geomkring_point_k1",
         "SELECT gbx_h3_geomkring('POINT(-122.4194 37.7749)', 8, 1) AS out",
+    ),
+    "gbx_h3_geomkringexplode": (
+        "GRID_GENERATOR",
+        "h3_geomkringx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_h3_geomkringexplode('POINT(-122.4194 37.7749)', 8, 1) AS gbx_out",
     ),
     "gbx_pmtiles_agg": (
         "WEB_TILES",
@@ -189,10 +229,20 @@ EXAMPLES = {
         "qb_geomkloop_point_k1",
         "SELECT gbx_quadbin_geomkloop('POINT(-122.4194 37.7749)', 10, 1) AS out",
     ),
+    "gbx_quadbin_geomkloopexplode": (
+        "GRID_GENERATOR",
+        "qb_geomkloopx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_quadbin_geomkloopexplode('POINT(-122.4194 37.7749)', 10, 1) AS gbx_out",
+    ),
     "gbx_quadbin_geomkring": (
         "GRID_ARRAY",
         "qb_geomkring_point_k1",
         "SELECT gbx_quadbin_geomkring('POINT(-122.4194 37.7749)', 10, 1) AS out",
+    ),
+    "gbx_quadbin_geomkringexplode": (
+        "GRID_GENERATOR",
+        "qb_geomkringx_point_k1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_quadbin_geomkringexplode('POINT(-122.4194 37.7749)', 10, 1) AS gbx_out",
     ),
     "gbx_quadbin_kloop": (
         "GRID_ARRAY",
@@ -724,6 +774,11 @@ EXAMPLES = {
         "xyzpyramid_z8_9",
         "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_xyzpyramid(c0, 8, 9) AS gbx_out",
     ),
+    "gbx_st_asmvt_pyramid": (
+        "VECTOR_GENERATOR",
+        "pyramid_point_z0_1",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_st_asmvt_pyramid('POINT (100 45)', c1, 0, 1) AS gbx_out",
+    ),
     "gbx_st_crs": (
         "VECTOR_SCALAR",
         "crs_ewkt",
@@ -733,6 +788,16 @@ EXAMPLES = {
         "VECTOR_SCALAR",
         "ev_bowtie",
         "SELECT gbx_st_explainvalidity('POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))') AS out",
+    ),
+    "gbx_st_interpolateelevationbbox": (
+        "VECTOR_GENERATOR",
+        "elevbbox_plane",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_st_interpolateelevationbbox(c0, c1, 0.0D, 0.0D, 'NONENCROACHING', 0.0D, 0.0D, 10.0D, 10.0D, 2, 2, 0) AS gbx_out",
+    ),
+    "gbx_st_interpolateelevationgeom": (
+        "VECTOR_GENERATOR",
+        "elevgeom_plane",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_st_interpolateelevationgeom(c0, c1, 0.0D, 0.0D, 'NONENCROACHING', 'POINT (0 10)', 2, 2, 5.0D, -5.0D) AS gbx_out",
     ),
     "gbx_st_legacyaswkb": (
         "VECTOR_SCALAR",
@@ -788,6 +853,11 @@ EXAMPLES = {
         "VECTOR_SCALAR",
         "tcrs_utm",
         "SELECT gbx_st_transformcrs('SRID=4326;POINT(15 50)', 'EPSG:32633') AS out",
+    ),
+    "gbx_st_triangulate": (
+        "VECTOR_GENERATOR",
+        "tri_square_centre",
+        "SELECT gbx_out.* FROM gbx_example, LATERAL gbx_st_triangulate(c0, c1, 0.0D, 0.0D, 'NONENCROACHING') AS gbx_out",
     ),
     "gbx_st_wrapx": (
         "VECTOR_SCALAR",

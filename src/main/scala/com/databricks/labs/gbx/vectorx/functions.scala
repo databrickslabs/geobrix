@@ -65,44 +65,60 @@ object functions extends Serializable {
     def st_asmvt(geom: Column, attrs: Column, layerName: String): Column =
         st_asmvt(geom, attrs, lit(layerName))
 
-    /**
-      * Generator: explode one `(geom, attrs)` row into one row per intersecting
-      * `(z, x, y)` tile in `[min_z, max_z]`, encoded as MVT bytes. Geometry assumed
-      * EPSG:4326. Output column is a single struct `tile: STRUCT<z, x, y, mvt_bytes>`.
-      *
-      * @param geom      per-feature geometry in WKB (BINARY); EPSG:4326 lon/lat
-      * @param attrs     per-feature attribute struct (all fields stringified in v0.4.0)
-      * @param minZ      inclusive minimum zoom level
-      * @param maxZ      inclusive maximum zoom level (<= 20)
-      * @param layerName constant Column holding the MVT layer name
-      * @param extent    MVT tile extent in pixels (default 4096)
-      */
-    def st_asmvt_pyramid(
-        geom: Column, attrs: Column, minZ: Column, maxZ: Column,
-        layerName: Column, extent: Column
+    /** TIN generator: one constrained Delaunay triangle (`triangle`, 2D WKB) per row. `mode` defaults to `constrained`. */
+    def st_triangulate(
+        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
+        splitPointFinder: Column
     ): Column =
-        ColumnAdapter(ST_AsMvtPyramid.name, Seq(geom, attrs, minZ, maxZ, layerName, extent))
+        ColumnAdapter(ST_Triangulate.name, Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder))
 
-    /** Convenience overload - extent defaults to the MVT v2 standard (4096). */
-    def st_asmvt_pyramid(
-        geom: Column, attrs: Column, minZ: Column, maxZ: Column, layerName: Column
+    def st_triangulate(
+        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
+        splitPointFinder: Column, mode: Column
+    ): Column =
+        ColumnAdapter(ST_Triangulate.name, Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, mode))
+
+    /** TIN generator: the interpolated Z (`elevation_point`, WKB point with Z) at each cell centre of a bounding-box grid. */
+    def st_interpolateelevationbbox(
+        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
+        splitPointFinder: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        widthPx: Column, heightPx: Column, srid: Column
     ): Column =
         ColumnAdapter(
-            ST_AsMvtPyramid.name,
-            Seq(geom, attrs, minZ, maxZ, layerName, lit(MvtWriter.DefaultExtent))
+            ST_InterpolateElevationBBox.name,
+            Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, xmin, ymin, xmax, ymax, widthPx, heightPx, srid)
         )
 
-    /** Convenience overload - Int zooms, String layer name (auto-lit-wrapped). */
-    def st_asmvt_pyramid(
-        geom: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String
+    def st_interpolateelevationbbox(
+        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
+        splitPointFinder: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        widthPx: Column, heightPx: Column, srid: Column, mode: Column
     ): Column =
-        st_asmvt_pyramid(geom, attrs, lit(minZ), lit(maxZ), lit(layerName))
+        ColumnAdapter(
+            ST_InterpolateElevationBBox.name,
+            Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, mode)
+        )
 
-    /** Convenience overload - Int zooms + extent, String layer name (auto-lit-wrapped). */
-    def st_asmvt_pyramid(
-        geom: Column, attrs: Column, minZ: Int, maxZ: Int, layerName: String, extent: Int
+    /** TIN generator: the interpolated Z at each cell centre of a grid anchored at a point. */
+    def st_interpolateelevationgeom(
+        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
+        splitPointFinder: Column, gridOrigin: Column, gridCols: Column, gridRows: Column,
+        cellSizeX: Column, cellSizeY: Column
     ): Column =
-        st_asmvt_pyramid(geom, attrs, lit(minZ), lit(maxZ), lit(layerName), lit(extent))
+        ColumnAdapter(
+            ST_InterpolateElevationGeom.name,
+            Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, gridOrigin, gridCols, gridRows, cellSizeX, cellSizeY)
+        )
+
+    def st_interpolateelevationgeom(
+        pointsArray: Column, breaklinesArray: Column, mergeTolerance: Column, snapTolerance: Column,
+        splitPointFinder: Column, gridOrigin: Column, gridCols: Column, gridRows: Column,
+        cellSizeX: Column, cellSizeY: Column, mode: Column
+    ): Column =
+        ColumnAdapter(
+            ST_InterpolateElevationGeom.name,
+            Seq(pointsArray, breaklinesArray, mergeTolerance, snapTolerance, splitPointFinder, gridOrigin, gridCols, gridRows, cellSizeX, cellSizeY, mode)
+        )
 
     /** Decodes a legacy Mosaic geometry struct (`typeId`, `srid`, `boundaries`, `holes`) to ISO WKB, Z and holes kept. */
     def st_legacyaswkb(geom: Column): Column = ColumnAdapter(ST_LegacyAsWKB.name, Seq(geom))

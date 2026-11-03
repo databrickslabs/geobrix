@@ -113,53 +113,8 @@ def test_bng_tessellate_string_resolution(spark, bng_registered):
 # ====== K-Ring Functions ======
 
 
-def test_bng_geomkringexplode_mode_column_builds(spark, bng_registered):
-    """bng_geomkringexplode with a mode string builds a Column without raising."""
-    polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
-    col = bng_registered.bng_geomkringexplode(
-        f.lit(polygon_wkt), f.lit(1), f.lit(1), "boundary-out"
-    )
-    assert hasattr(col, "_jc"), "bng_geomkringexplode(mode=...) did not return a Column"
-
-
-def test_bng_geomkloopexplode_mode_column_builds(spark, bng_registered):
-    """bng_geomkloopexplode with a mode string builds a Column without raising."""
-    polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
-    col = bng_registered.bng_geomkloopexplode(
-        f.lit(polygon_wkt), f.lit(1), f.lit(1), "boundary-out"
-    )
-    assert hasattr(col, "_jc"), "bng_geomkloopexplode(mode=...) did not return a Column"
-
-
 # The documented 3 km x 3 km polygon (EPSG:27700) and its centre cell at 1 km.
 _DOC_POLY = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
-
-
-@pytest.mark.parametrize(
-    "wrapper,args,expected",
-    [
-        ("bng_kringexplode", ("TQ3080", 1), 9),
-        ("bng_kloopexplode", ("TQ3080", 1), 8),
-        ("bng_geomkringexplode", (_DOC_POLY, 3, 1), 24),
-        ("bng_geomkloopexplode", (_DOC_POLY, 3, 1), 16),
-        ("bng_geomkringexplode", (_DOC_POLY, 3, 1, "boundary-out"), 24),
-        ("bng_geomkloopexplode", (_DOC_POLY, 3, 1, "boundary-out"), 16),
-    ],
-)
-def test_bng_explode_wrappers_evaluate_to_one_row_per_cell(
-    spark, bng_registered, wrapper, args, expected
-):
-    """The Python explode wrappers evaluate in a select, one ``cellid`` row per cell.
-
-    The first argument is a column of the input DataFrame; the rest are scalars.
-    """
-    first, *rest = args
-    df = spark.createDataFrame([(first,)], "src string")
-    result = df.select(getattr(bng_registered, wrapper)(f.col("src"), *rest))
-    assert result.columns == ["cellid"]
-    cells = [r["cellid"] for r in result.collect()]
-    assert len(cells) == expected
-    assert len(set(cells)) == expected and all(isinstance(c, str) for c in cells)
 
 
 def test_bng_tessellate_keep_core_geom_defaults_to_false(spark, bng_registered):
@@ -232,57 +187,6 @@ def test_bng_cellunion_agg(spark, bng_registered, test_data):
 
 # ====== Generator/Explode Functions ======
 # The Python explode wrappers return the generator itself; select it directly.
-
-
-def test_bng_kloopexplode(spark, bng_registered, test_data):
-    """Test k-loop explode operation using SQL expression."""
-    # Register a temp view to use SQL expression (generators work in SQL)
-    test_data.limit(1).createOrReplaceTempView("bng_test_cells")
-    result = spark.sql(
-        "SELECT gbx_bng_kloopexplode(cellId, 1) as cell FROM bng_test_cells"
-    )
-    rows = result.collect()
-    assert len(rows) > 0  # Should explode cell into multiple neighbors
-    for row in rows:
-        assert row["cell"] is not None
-        assert isinstance(row["cell"], str)
-
-
-def test_bng_kringexplode(spark, bng_registered, test_data):
-    """Test k-ring explode operation using SQL expression."""
-    test_data.limit(1).createOrReplaceTempView("bng_test_cells2")
-    result = spark.sql(
-        "SELECT gbx_bng_kringexplode(cellId, 1) as cell FROM bng_test_cells2"
-    )
-    rows = result.collect()
-    assert len(rows) > 0  # Should explode cell into multiple neighbors
-    for row in rows:
-        assert row["cell"] is not None
-        assert isinstance(row["cell"], str)
-
-
-def test_bng_geomkloopexplode_wkt(spark, bng_registered):
-    """Test geometry k-loop explode with WKT using SQL."""
-    polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
-    result = spark.sql(
-        f"SELECT gbx_bng_geomkloopexplode('{polygon_wkt}', 1, 1) as cell"
-    )
-    rows = result.collect()
-    assert len(rows) > 0
-    for row in rows:
-        assert row["cell"] is not None
-
-
-def test_bng_geomkringexplode_wkt(spark, bng_registered):
-    """Test geometry k-ring explode with WKT using SQL."""
-    polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
-    result = spark.sql(
-        f"SELECT gbx_bng_geomkringexplode('{polygon_wkt}', 1, 1) as cell"
-    )
-    rows = result.collect()
-    assert len(rows) > 0
-    for row in rows:
-        assert row["cell"] is not None
 
 
 def test_bng_tessellateexplode_wkt(spark, bng_registered):

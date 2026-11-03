@@ -107,8 +107,8 @@ object functions extends Serializable {
         ColumnAdapter(BNG_GeometryKRingExplode.name, Seq(geom, resolution, k, mode))
     def bng_geomkringexplode(geom: Column, resolution: Column, k: Column, mode: Column, coverage: Column): Column =
         ColumnAdapter(BNG_GeometryKRingExplode.name, Seq(geom, resolution, k, mode, coverage))
-    def bng_kloopexplode(cellId: Column, k: Column): Column = ColumnAdapter(BNG_KLoopExplode.name, Seq(cellId, k))
-    def bng_kringexplode(cellId: Column, k: Column): Column = ColumnAdapter(BNG_KRingExplode.name, Seq(cellId, k))
+    def bng_kloopexplode(cellid: Column, k: Column): Column = ColumnAdapter(BNG_KLoopExplode.name, Seq(cellid, k))
+    def bng_kringexplode(cellid: Column, k: Column): Column = ColumnAdapter(BNG_KRingExplode.name, Seq(cellid, k))
     /** `keepCoreGeom` defaults to false: a core cell's chip is NULL, as in the lightweight tier. */
     def bng_tessellateexplode(geom: Column, resolution: Column): Column = bng_tessellateexplode(geom, resolution, lit(false))
     def bng_tessellateexplode(geom: Column, resolution: Column, keepCoreGeom: Column): Column =
@@ -156,8 +156,8 @@ object functions extends Serializable {
     def bng_geomkringexplode(geom: Column, resolution: String, k: Int, mode: String): Column = bng_geomkringexplode(geom, lit(resolution), lit(k), lit(mode))
     def bng_geomkringexplode(geom: Column, resolution: Int, k: Int, mode: String, coverage: String): Column = bng_geomkringexplode(geom, lit(resolution), lit(k), lit(mode), lit(coverage))
     def bng_geomkringexplode(geom: Column, resolution: String, k: Int, mode: String, coverage: String): Column = bng_geomkringexplode(geom, lit(resolution), lit(k), lit(mode), lit(coverage))
-    def bng_kloopexplode(cellId: Column, k: Int): Column = bng_kloopexplode(cellId, lit(k))
-    def bng_kringexplode(cellId: Column, k: Int): Column = bng_kringexplode(cellId, lit(k))
+    def bng_kloopexplode(cellid: Column, k: Int): Column = bng_kloopexplode(cellid, lit(k))
+    def bng_kringexplode(cellid: Column, k: Int): Column = bng_kringexplode(cellid, lit(k))
     def bng_tessellateexplode(geom: Column, resolution: Int): Column = bng_tessellateexplode(geom, lit(resolution))
     def bng_tessellateexplode(geom: Column, resolution: String): Column = bng_tessellateexplode(geom, lit(resolution))
     def bng_tessellateexplode(geom: Column, resolution: Int, keepCoreGeom: Boolean): Column =

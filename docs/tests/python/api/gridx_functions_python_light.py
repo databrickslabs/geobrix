@@ -770,7 +770,7 @@ bng_cellunion_agg_python_light_example_output = """
 """
 
 
-def bng_kringexplode_python_light_example(spark):
+def bng_kringexplode_python_example(spark):
     """Explode k-ring into one row per cell via SQL LATERAL (light pygx tier).
 
     The light UDTF (``gbx_bng_kringexplode``) has **no Python Column form** —
@@ -787,7 +787,7 @@ def bng_kringexplode_python_light_example(spark):
     return result.collect()
 
 
-bng_kringexplode_python_light_example_output = """
+bng_kringexplode_python_example_output = """
 +------+
 |cellid|
 +------+
@@ -805,7 +805,7 @@ bng_kringexplode_python_light_example_output = """
 """
 
 
-def bng_kloopexplode_python_light_example(spark):
+def bng_kloopexplode_python_example(spark):
     """Explode k-loop (hollow ring) into one row per cell via SQL LATERAL (light pygx tier).
 
     The light UDTF (``gbx_bng_kloopexplode``) has **no Python Column form** —
@@ -822,7 +822,7 @@ def bng_kloopexplode_python_light_example(spark):
     return result.collect()
 
 
-bng_kloopexplode_python_light_example_output = """
+bng_kloopexplode_python_example_output = """
 +------+
 |cellid|
 +------+
@@ -839,7 +839,7 @@ bng_kloopexplode_python_light_example_output = """
 """
 
 
-def bng_geomkringexplode_python_light_example(spark):
+def bng_geomkringexplode_python_example(spark):
     """Explode geometry k-ring into one row per cell via SQL LATERAL (light pygx tier).
 
     The light UDTF (``gbx_bng_geomkringexplode``) has **no Python Column form** —
@@ -859,7 +859,7 @@ def bng_geomkringexplode_python_light_example(spark):
     return result.collect()
 
 
-bng_geomkringexplode_python_light_example_output = """
+bng_geomkringexplode_python_example_output = """
 +------+
 |cellid|
 +------+
@@ -872,7 +872,7 @@ bng_geomkringexplode_python_light_example_output = """
 """
 
 
-def bng_geomkloopexplode_python_light_example(spark):
+def bng_geomkloopexplode_python_example(spark):
     """Explode geometry k-loop (hollow ring) into one row per cell via SQL LATERAL (light pygx tier).
 
     The light UDTF (``gbx_bng_geomkloopexplode``) has **no Python Column form** —
@@ -892,7 +892,7 @@ def bng_geomkloopexplode_python_light_example(spark):
     return result.collect()
 
 
-bng_geomkloopexplode_python_light_example_output = """
+bng_geomkloopexplode_python_example_output = """
 +------+
 |cellid|
 +------+
@@ -1521,7 +1521,7 @@ quadbin_geomkloop_python_example_output = """
 """
 
 
-def quadbin_geomkringexplode_python_light_example(spark):
+def quadbin_geomkringexplode_python_example(spark):
     """Geometry-aware quadbin k-ring explode: one row per cell via SQL LATERAL (light pygx tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
@@ -1540,7 +1540,7 @@ def quadbin_geomkringexplode_python_light_example(spark):
     return result
 
 
-quadbin_geomkringexplode_python_light_example_output = """
+quadbin_geomkringexplode_python_example_output = """
 +------------------+
 |cellid            |
 +------------------+
@@ -1551,7 +1551,7 @@ quadbin_geomkringexplode_python_light_example_output = """
 """
 
 
-def quadbin_geomkloopexplode_python_light_example(spark):
+def quadbin_geomkloopexplode_python_example(spark):
     """Geometry-aware quadbin k-loop explode: one row per outer-ring cell via SQL LATERAL (light pygx tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
@@ -1570,7 +1570,7 @@ def quadbin_geomkloopexplode_python_light_example(spark):
     return result
 
 
-quadbin_geomkloopexplode_python_light_example_output = """
+quadbin_geomkloopexplode_python_example_output = """
 +------------------+
 |cellid            |
 +------------------+
@@ -1655,7 +1655,7 @@ custom_geomkloop_python_example_output = """
 """
 
 
-def custom_geomkringexplode_python_light_example(spark):
+def custom_geomkringexplode_python_example(spark):
     """Geometry-aware custom-grid k-ring explode: one row per cell via SQL LATERAL (light pygx tier).
 
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
@@ -1675,7 +1675,7 @@ def custom_geomkringexplode_python_light_example(spark):
     return result
 
 
-custom_geomkringexplode_python_light_example_output = """
+custom_geomkringexplode_python_example_output = """
 +------------------+
 |cellid            |
 +------------------+
@@ -1686,7 +1686,7 @@ custom_geomkringexplode_python_light_example_output = """
 """
 
 
-def custom_geomkloopexplode_python_light_example(spark):
+def custom_geomkloopexplode_python_example(spark):
     """Geometry-aware custom-grid k-loop explode: one row per outer-ring cell via SQL LATERAL (light pygx tier).
 
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
@@ -1706,7 +1706,7 @@ def custom_geomkloopexplode_python_light_example(spark):
     return result
 
 
-custom_geomkloopexplode_python_light_example_output = """
+custom_geomkloopexplode_python_example_output = """
 +------------------+
 |cellid            |
 +------------------+
@@ -1798,7 +1798,7 @@ h3_geomkloop_python_example_output = """
 """
 
 
-def h3_geomkringexplode_python_light_example(spark):
+def h3_geomkringexplode_python_example(spark):
     """Geometry-aware H3 k-ring explode: one row per cell via SQL LATERAL (light pygx tier).
 
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
@@ -1822,7 +1822,7 @@ def h3_geomkringexplode_python_light_example(spark):
     return result
 
 
-h3_geomkringexplode_python_light_example_output = """
+h3_geomkringexplode_python_example_output = """
 +------------------+
 |cellid            |
 +------------------+
@@ -1833,7 +1833,7 @@ h3_geomkringexplode_python_light_example_output = """
 """
 
 
-def h3_geomkloopexplode_python_light_example(spark):
+def h3_geomkloopexplode_python_example(spark):
     """Geometry-aware H3 k-loop explode: one row per outer-ring cell via SQL LATERAL (light pygx tier).
 
     SQL LATERAL is the canonical invocation for this streaming UDTF — there is
@@ -1856,7 +1856,7 @@ def h3_geomkloopexplode_python_light_example(spark):
     return result
 
 
-h3_geomkloopexplode_python_light_example_output = """
+h3_geomkloopexplode_python_example_output = """
 +------------------+
 |cellid            |
 +------------------+

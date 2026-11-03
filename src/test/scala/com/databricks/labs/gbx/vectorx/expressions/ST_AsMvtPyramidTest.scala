@@ -37,7 +37,7 @@ class ST_AsMvtPyramidTest extends PlanTest with SilentSparkSession {
 
         // Generator returns a single struct column "tile" wrapping (z, x, y, mvt_bytes).
         val out = df.select(
-            st_asmvt_pyramid(col("geom_wkb"), struct(col("name"), col("id")), 2, 2, "regions").alias("t")
+            call_function("gbx_st_asmvt_pyramid", col("geom_wkb"), struct(col("name"), col("id")), lit(2), lit(2), lit("regions")).alias("t")
         ).collect()
 
         assert(out.length == 2, s"expected 2 rows (z=2 spans 2 longitudinal tiles), got ${out.length}")
@@ -71,7 +71,7 @@ class ST_AsMvtPyramidTest extends PlanTest with SilentSparkSession {
         )).toDF("geom_wkb", "pop", "h")
 
         val out = df.select(
-            st_asmvt_pyramid(col("geom_wkb"), struct(col("pop"), col("h")), 2, 2, "regions").alias("t")
+            call_function("gbx_st_asmvt_pyramid", col("geom_wkb"), struct(col("pop"), col("h")), lit(2), lit(2), lit("regions")).alias("t")
         ).collect()
         assert(out.nonEmpty)
 

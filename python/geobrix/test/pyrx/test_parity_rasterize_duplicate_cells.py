@@ -127,7 +127,15 @@ def _canvas(grid, cells):
 def _light(df, grid, canvas):
     from databricks.labs.gbx.pyrx import functions as prx
 
-    fn = getattr(prx, f"rst_{grid}_rasterize_agg")
+    # the light BNG form is private now (its public Python API is rasterx.functions.rst_bng_rasterize_agg)
+    fn = getattr(
+        prx,
+        (
+            "_light_rst_bng_rasterize_agg"
+            if grid == "bng"
+            else f"rst_{grid}_rasterize_agg"
+        ),
+    )
     args = ("cellid", "grid") if grid == "custom" else ("cellid",)
     return (
         df.groupBy("tx").agg(fn(*args, value="val", **canvas).alias("tile")).collect()
@@ -158,9 +166,9 @@ def _heavy(df, grid, canvas):
             canvas["kring_pad"],
         )
     else:
-        from databricks.labs.gbx.rasterx import functions as hx
-
-        agg = getattr(hx, f"rst_{grid}_rasterize_agg")(
+        # the SQL name, not the Python API: the API follows the manager's pick (the BNG form is light first)
+        agg = f.call_function(
+            f"gbx_rst_{grid}_rasterize_agg",
             f.col("cellid"),
             f.col("val"),
             *[

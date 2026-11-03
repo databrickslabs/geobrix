@@ -593,12 +593,19 @@ def _heavy_tessellate_ids(
     from databricks.labs.gbx.rasterx import functions as hx
 
     hx.register(spark)
-    fn = getattr(hx, fn_name)
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     rows = (
-        df.select(fn(f.col("tile"), f.lit(resolution), mode, coverage).alias("tt"))
+        df.select(
+            f.call_function(
+                f"gbx_{fn_name}",
+                f.col("tile"),
+                f.lit(resolution),
+                f.lit(mode),
+                f.lit(coverage),
+            ).alias("tt")
+        )
         .select(f.col("tt.cellid").alias("cid"))
         .collect()
     )
@@ -722,7 +729,15 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
     df = spark.createDataFrame([(c, "TX1") for c in cells], [heavy_cellid_col, "tx"])
 
     # --- LIGHT tier (Python UDF, resolved inline — no SQL-name collision) ---
-    light_fn = getattr(prx, f"rst_{grid}_rasterize_agg")
+    # the light BNG form is private now (its public Python API is rasterx.functions.rst_bng_rasterize_agg)
+    light_fn = getattr(
+        prx,
+        (
+            "_light_rst_bng_rasterize_agg"
+            if grid == "bng"
+            else f"rst_{grid}_rasterize_agg"
+        ),
+    )
     light_out = (
         df.groupBy("tx")
         .agg(
@@ -749,11 +764,12 @@ def _compare_rasterize(spark, cells, *, grid, srid, resolution, heavy_cellid_col
 
     # --- HEAVY tier (JAR, 12-arg call_function) ---
     hx.register(spark)
-    heavy_fn = getattr(hx, f"rst_{grid}_rasterize_agg")
+    # the SQL name straight after hx.register: the Python API follows the manager's pick (the BNG form is light first)
     heavy_out = (
         df.groupBy("tx")
         .agg(
-            heavy_fn(
+            f.call_function(
+                f"gbx_rst_{grid}_rasterize_agg",
                 f.col(heavy_cellid_col),
                 f.lit(None).cast("double"),
                 f.lit(out_srid),
@@ -1671,7 +1687,11 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
 
     hx.register(spark)
     heavy_2arg_rows = (
-        df2.select(hx.rst_h3_tessellate(f.col("tile"), f.lit(resolution)).alias("tt"))
+        df2.select(
+            f.call_function(
+                "gbx_rst_h3_tessellate", f.col("tile"), f.lit(resolution)
+            ).alias("tt")
+        )
         .select(f.col("tt.cellid").alias("cid"))
         .collect()
     )

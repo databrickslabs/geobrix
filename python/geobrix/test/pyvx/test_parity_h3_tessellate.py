@@ -157,7 +157,9 @@ def _heavy_cells(spark, raster: bytes, mode: str) -> set:
     )
     rows = (
         df.select(
-            hx.rst_h3_tessellate(f.col("tile"), f.lit(_TESS_RES), mode).alias("tt")
+            f.call_function(
+                "gbx_rst_h3_tessellate", f.col("tile"), f.lit(_TESS_RES), f.lit(mode)
+            ).alias("tt")
         )
         .select(f.col("tt.cellid").alias("cellid"))
         .collect()

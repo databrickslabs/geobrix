@@ -85,7 +85,8 @@ def light_chips(spark, raster, sql_name, resolution, assignment, coverage, id_fn
 
 
 def heavy_chips(spark, raster, fn_name, resolution, assignment, coverage, id_fn):
-    """Heavy tier rows via the Python generator wrapper -> same shape as light."""
+    """Heavy tier rows via the generator in the select list (the Catalyst form; the Python wrapper is
+    DataFrame-first now) -> same shape as light."""
     from pyspark.sql import functions as f
 
     from databricks.labs.gbx.rasterx import functions as hx
@@ -96,8 +97,12 @@ def heavy_chips(spark, raster, fn_name, resolution, assignment, coverage, id_fn)
     )
     rows = (
         df.select(
-            getattr(hx, fn_name)(
-                f.col("tile"), f.lit(resolution), assignment, coverage
+            f.call_function(
+                f"gbx_{fn_name}",
+                f.col("tile"),
+                f.lit(resolution),
+                f.lit(assignment),
+                f.lit(coverage),
             ).alias("tt")
         )
         .select(

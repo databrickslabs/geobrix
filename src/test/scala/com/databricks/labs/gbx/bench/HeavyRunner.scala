@@ -510,23 +510,27 @@ object HeavyRunner {
         if (collected.isEmpty || collected(0).isNullAt(collected(0).fieldIndex("out")))
           BenchFingerprint.empty
         else if (isCellFill) {
-          // cellfill returns ARRAY<STRUCT<cellid, value>> (the NULL-filled cell set),
-          // NOT a tile. Fingerprint the cell set the SAME way the light tier does
-          // (decode -> dggs): cell COUNT over ALL ids, agg over PRESENT (non-null)
-          // values only. BNG cell ids are STRINGS; h3/quadbin are LONGs.
-          val arr = collected(0).getSeq[org.apache.spark.sql.Row](collected(0).fieldIndex("out"))
+          // cellfill returns the BINARY fill payload (the NULL-filled cell set), NOT a tile.
+          // Fingerprint the cell set the SAME way the light tier does (decode -> dggs): cell
+          // COUNT over ALL ids, agg over PRESENT (non-null) values only. BNG cell ids are
+          // rendered as strings; h3/quadbin are LONGs.
+          val cells = com.databricks.labs.gbx.gridx.CellFillAcc
+              .deserialize(collected(0).getAs[Array[Byte]]("out")).cells
           if (fn == "bng_cellfill") {
-            val ids  = arr.map(_.getString(0))
-            val vals = arr.filter(r => !r.isNullAt(1)).map(_.getDouble(1))
+            val ids  = cells.map(c => com.databricks.labs.gbx.gridx.grid.BNG.format(c._1)).toSeq
+            val vals = cells.flatMap(_._2).toSeq
             BenchFingerprint.ofCellFillStr(ids, vals)
           } else {
-            val ids  = arr.map(_.getLong(0))
-            val vals = arr.filter(r => !r.isNullAt(1)).map(_.getDouble(1))
+            val ids  = cells.map(_._1).toSeq
+            val vals = cells.flatMap(_._2).toSeq
             BenchFingerprint.ofCellFill(ids, vals)
           }
         } else {
-          val tile = collected(0).getStruct(collected(0).fieldIndex("out"))
-          val rasterBytes = tile.getAs[Array[Byte]]("raster")
+          // a rasterize aggregate returns the GeoTIFF bytes; the other tile aggregates a tile struct
+          val rasterBytes = collected(0).get(collected(0).fieldIndex("out")) match {
+            case b: Array[Byte] => b
+            case r: org.apache.spark.sql.Row => r.getAs[Array[Byte]]("raster")
+          }
           if (rasterBytes == null || rasterBytes.isEmpty) BenchFingerprint.empty
           else {
             val ds = RasterDriver.readFromBytes(rasterBytes, Map.empty)

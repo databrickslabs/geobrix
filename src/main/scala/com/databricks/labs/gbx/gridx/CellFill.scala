@@ -176,6 +176,22 @@ object CellFill {
         ArrayData.toArrayData(rows)
     }
 
+    /** One value per distinct cell: a cell id that repeats keeps its LARGEST non-null value, whatever order the rows
+     *  arrive in (the lightweight rule); `None` (covered but missing) survives only for a cell whose every value is `None`. */
+    def largestPerCell(pairs: scala.collection.Seq[(Long, Option[Double])]): Map[Long, Option[Double]] =
+        pairs.foldLeft(Map.empty[Long, Option[Double]]) { case (acc, (id, v)) =>
+            acc.get(id) match {
+                case None                                  => acc.updated(id, v)
+                case Some(cur) if v.isDefined && (cur.isEmpty || v.get > cur.get) => acc.updated(id, v)
+                case _                                     => acc
+            }
+        }
+
+    /** The fill as the BINARY payload of the session contract: `[count:Int]( cellId:Long, present:Boolean,
+     *  [value:Double] )*N`, big-endian, cell ids as the grid's internal Long (the lightweight tier's `encode`). */
+    def toBinary(filled: Seq[(Long, Option[Double])]): Array[Byte] =
+        new CellFillAcc(ArrayBuffer(filled: _*)).serialize
+
     /** Parse a numeric cell id (H3/Quadbin/Custom) to Long; null -> null (row skipped). */
     def parseCellIdLong(raw: Any, fnName: String): java.lang.Long = raw match {
         case null    => null

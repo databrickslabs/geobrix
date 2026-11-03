@@ -13,7 +13,7 @@ import org.apache.spark.sql.types._
  *
  *  Grouped aggregator over an H3 `(cellid, value)` grid result: collects the group's cells,
  *  fills each NULL (covered-but-missing) cell from valid neighbours within `k` rings via
- *  [[CellFill.fill]], and returns `array<struct<cellid, value>>`. `k` default 1;
+ *  [[CellFill.fill]], and returns the fill as BINARY (see [[CellFill.toBinary]]). `k` default 1;
  *  `method in {mean, idw}` default `mean`; `power` default 2.0 (IDW only).
  */
 case class H3_CellFill(
@@ -28,7 +28,7 @@ case class H3_CellFill(
 
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = true
-    override lazy val dataType: DataType = CellFill.arrayType(LongType)
+    override lazy val dataType: DataType = BinaryType  // the fill payload: the one contract of this name
     override def prettyName: String = H3_CellFill.name
 
     override def children: Seq[Expression] = Seq(cellidExpr, valueExpr, kExpr, methodExpr, powerExpr)
@@ -57,7 +57,7 @@ case class H3_CellFill(
         val k      = CellFill.parseK(kExpr, row)
         val method = CellFill.parseMethod(methodExpr, row)
         val power  = CellFill.parsePower(powerExpr, row)
-        CellFill.toArrayData(H3, CellFill.fill(H3, buffer.cells.toSeq.toMap, k, method, power))
+        CellFill.toBinary(CellFill.fill(H3, CellFill.largestPerCell(buffer.cells), k, method, power))
     }
 
     override def serialize(obj: CellFillAcc): Array[Byte] = obj.serialize

@@ -3,13 +3,12 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometry
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
-import com.databricks.labs.gbx.util.SerializationUtil
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
 import org.gdal.gdal.gdal
 import org.gdal.osr.SpatialReference
@@ -94,11 +93,11 @@ object H3RasterizeAcc {
  *
  *  When an explicit extent (xmin..height) is absent, the snapped, lattice-aligned grid
  *  is derived from the cell set + `kring_pad` (port of `cellraster.compute_gridspec`).
- *  NoData = -9999.0. A null/omitted `value` burns 1.0 (presence mask).
+ *  NoData = -9999.0. An omitted `value` (an untyped NULL) is the presence mask and burns 1.0; a NULL in a typed column burns NaN.
  *
  *  A cell id that repeats keeps its LARGEST value, whatever order the rows arrive in: the
  *  accumulated cells are sorted by `(cellId, value)` before the value lookup is built, so the
- *  last write for a cell is its maximum. A null `value` counts as 1.0 in that comparison.
+ *  last write for a cell is its maximum. A NaN never wins against a number (see [[RasterizeBurn.canonicalLut]]); a cell of nothing but NaN burns NaN.
  *  The lightweight tier follows the same rule.
  */
 case class RST_H3_RasterizeAgg(
@@ -114,27 +113,28 @@ case class RST_H3_RasterizeAgg(
     heightExpr:    Expression,
     modeExpr:      Expression,
     kringPadExpr:  Expression,
+    outCrsExpr:    Expression = Literal.create(null, StringType),
     exprConfExpr:  Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
 ) extends TypedImperativeAggregate[H3RasterizeAcc] {
 
-    import RST_H3_RasterizeAgg.{evalDoubleOpt, evalInt, evalIntOpt, evalString, NoData}
+    import RST_H3_RasterizeAgg.{evalDoubleOpt, evalIntOpt, evalString, evalStringOpt, NoData}
 
     override lazy val deterministic: Boolean = true  // canonical fold order (see eval)
     override val nullable: Boolean = true
-    override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(BinaryType)
+    override lazy val dataType: DataType = BinaryType  // the GeoTIFF bytes: the one contract of this name
     override def prettyName: String = RST_H3_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
         cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
-        exprConfExpr
+        outCrsExpr, exprConfExpr
     )
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): RST_H3_RasterizeAgg =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11), nc(12))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11), nc(12), nc(13))
 
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate =
         copy(mutableAggBufferOffset = n)
@@ -156,7 +156,7 @@ case class RST_H3_RasterizeAgg(
         }
         val vRaw = valueExpr.eval(input)
         val v = vRaw match {
-            case null      => 1.0  // presence mask
+            case null      => RasterizeBurn.nullBurn(valueExpr)  // 1.0 for an omitted value, NaN for a missing one
             case d: Double => d
             case f: Float  => f.toDouble
             case i: Int    => i.toDouble
@@ -182,7 +182,8 @@ case class RST_H3_RasterizeAgg(
         if (buffer.cells.isEmpty) return null
 
         val empty = InternalRow.empty
-        val srid     = evalInt(outSridExpr,   empty, "out_srid")
+        val srid     = RasterizeBurn.outSrid(
+            RST_H3_RasterizeAgg.name, evalStringOpt(outCrsExpr, empty), evalIntOpt(outSridExpr, empty), 4326)
         val pixelOpt = evalDoubleOpt(pixelSizeExpr, empty)
         val xminOpt  = evalDoubleOpt(xminExpr,  empty)
         val yminOpt  = evalDoubleOpt(yminExpr,  empty)
@@ -197,13 +198,9 @@ case class RST_H3_RasterizeAgg(
         val resolution = RST_H3_RasterizeAgg.resolutionOf(buffer.cells.iterator.map(_._1))
 
         // Canonical fold order: sort by (cellId, value) and build the lookup in that order,
-        // so the last write for a repeated cell is its largest value (a null value was
-        // already turned into 1.0), regardless of row-arrival order.
-        val ordered = buffer.cells.toSeq.sortWith { (a, b) =>
-            if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0 else a._2 < b._2
-        }
-        val lut = scala.collection.mutable.LongMap.empty[Double]
-        ordered.foreach { case (cellId, v) => lut.update(cellId, v) }
+        // so the last write for a repeated cell is its largest value (a NaN sorts
+        // first, so any number in its cell wins), regardless of row-arrival order.
+        val lut = RasterizeBurn.canonicalLut(buffer.cells.toSeq)
 
         // Resolve grid spec: explicit extent if fully supplied, else snapped grid.
         val explicit = xminOpt.isDefined && yminOpt.isDefined && xmaxOpt.isDefined &&
@@ -221,15 +218,7 @@ case class RST_H3_RasterizeAgg(
             RasterizeBurn.burn(H3, lut, srid, resolution, rasterDs, width, height)
             rasterDs.FlushCache()
             val bytes = VectorRasterBridge.toGTiffBytes(rasterDs)
-            val mtd = Map(
-                "driver"      -> "GTiff",
-                "extension"   -> "tif",
-                "size"        -> bytes.length.toString,
-                "parentPath"  -> "",
-                "all_parents" -> ""
-            )
-            val mapData = SerializationUtil.toMapData[String, String](mtd)
-            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
+            bytes
         } finally {
             rasterDs.delete()
         }
@@ -247,13 +236,25 @@ object RST_H3_RasterizeAgg extends WithExpressionInfo {
     /** NoData fill value, matching the lightweight tier (`cellraster._NODATA`). */
     val NoData: Double = -9999.0
 
+    /** 12 arguments, or 13 with the trailing `out_crs` (`EPSG:<n>`, or NULL for `out_srid`). */
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
         case 12 => RST_H3_RasterizeAgg(
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
+        case 13 => RST_H3_RasterizeAgg(
+            c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11), c(12))
         case n => throw new IllegalArgumentException(
-            s"$name expects 12 arguments " +
-            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
+            s"$name expects 12 or 13 arguments " +
+            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad[, out_crs]); got $n")
     }
+
+    private[agg] def evalStringOpt(e: Expression, row: InternalRow): Option[String] =
+        e.eval(row) match {
+            case null => None
+            case s: org.apache.spark.unsafe.types.UTF8String => Some(s.toString)
+            case s: String => Some(s)
+            case o => throw new IllegalArgumentException(
+                s"$name: out_crs must be STRING; got ${o.getClass.getName}")
+        }
 
     /** Resolution of a cell set; throws on a mixed-resolution set. */
     private[agg] def resolutionOf(cellIds: Iterator[Long]): Int = {

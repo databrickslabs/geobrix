@@ -176,7 +176,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
      *  WITHOUT needing a SparkSession / UnsafeProjection.
      *
      *  For RST_RasterizeAgg we supply real geometry so eval() can actually rasterize.
-     *  For the three grid aggregators (BNG/H3/Quadbin) we verify dataType size only
+     *  For the three grid aggregators (BNG/H3/Quadbin) we verify the BINARY dataType only
      *  (their eval() requires large geometry inputs and GDAL state not available here).
      */
     test("rasterize aggregator eval row numFields matches dataType field count") {
@@ -185,6 +185,10 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
             val n = dt.asInstanceOf[StructType].size
             assert(n == 9, s"$name.dataType has $n fields, expected 9")
         }
+
+        // The grid rasterizers return the GeoTIFF bytes (BINARY), the one contract of their SQL name.
+        def assertBinary(name: String, dt: org.apache.spark.sql.types.DataType): Unit =
+            assert(dt == BinaryType, s"$name.dataType is $dt, expected BinaryType")
 
         assertDataType9("RST_RasterizeAgg",
             RST_RasterizeAgg(
@@ -201,7 +205,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
 
         // Grid aggregator signature: cellId, value, srid, pixelSize, xmin, ymin, xmax, ymax,
         //                              width, height, mode, kringPad  (12 positional args)
-        assertDataType9("RST_BNG_RasterizeAgg",
+        assertBinary("RST_BNG_RasterizeAgg",
             RST_BNG_RasterizeAgg(
                 cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
@@ -217,7 +221,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
                 kringPadExpr  = Literal(0)
             ).dataType)
 
-        assertDataType9("RST_H3_RasterizeAgg",
+        assertBinary("RST_H3_RasterizeAgg",
             RST_H3_RasterizeAgg(
                 cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),
@@ -233,7 +237,7 @@ class RasterSerializationV2Test extends AnyFunSuite with BeforeAndAfterAll {
                 kringPadExpr  = Literal(0)
             ).dataType)
 
-        assertDataType9("RST_Quadbin_RasterizeAgg",
+        assertBinary("RST_Quadbin_RasterizeAgg",
             RST_Quadbin_RasterizeAgg(
                 cellidExpr    = Literal.create(null, StringType),
                 valueExpr     = Literal(0.0),

@@ -655,20 +655,24 @@ def register_l2_probes(spark) -> None:
     )
 
 
-def register_l1_udafs(spark) -> None:
-    """The Catalyst aggregates under their product names; needs the staged JAR (a classic session).
+# The aggregates' Catalyst companions. `gbx_rst_merge_agg` has no L1 level in the manifest any more (a deletion
+# candidate, the sweep removes it), so the shape probe names its class here.
+_L1_COMPANIONS = {
+    "gbx_rst_merge_agg": "com.databricks.labs.gbx.rasterx.expressions.agg.RST_MergeAgg",
+}
 
-    The manager installs a function whose arities match the manifest's, and the heavy rasterize takes the 12
-    arguments of the signature, not its 13th (`out_crs`), so it never installs this one by default. The
-    shape is timed and judged with the 12 arguments, so the companion goes in directly.
-    """
+
+def register_l1_udafs(spark) -> None:
+    """The Catalyst aggregates under their product names; needs the staged JAR (a classic session)."""
     from databricks.labs.gbx import manifest
     from databricks.labs.gbx.manager import (
         jvm,  # the JVM bridge is the manager's, not the light product's
     )
 
     for name in _L1_AGGREGATES:
-        companion = manifest.load().functions[name].levels["L1"]["companion"]
+        companion = _L1_COMPANIONS.get(name) or (
+            manifest.load().functions[name].levels["L1"]["companion"]
+        )
         why = jvm.install_companion(spark, companion, name)
         if why:
             raise RuntimeError(f"{name}: L1 install gave {why}")

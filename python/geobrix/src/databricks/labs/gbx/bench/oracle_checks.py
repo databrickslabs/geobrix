@@ -333,3 +333,75 @@ def check_grid_stats(case, rows, args) -> Optional[str]:
         if not off
         else f"{case.cid}: (got, want) differ: {dict(list(off.items())[:3])}"
     )
+
+
+def check_cellfill(case, out, args) -> Optional[str]:
+    """`cellfill`: the BINARY payload of a cellfill aggregate holds `case.expect` ({cell id: value or None}, a BNG id as
+    its string). The payload is decoded here from its documented layout (a big-endian Int32 count, then per cell an
+    Int64 id, a present byte and, when present, a Float64), so the check does not call the function under test.
+    Cells come out in ascending unsigned id order.
+    """
+    import math
+    import struct
+
+    if out is None:
+        return f"{case.cid}: got NULL, want {len(case.expect)} cells"
+    data = bytes(out)
+    (count,) = struct.unpack_from(">i", data, 0)
+    pos, got = 4, []
+    for _ in range(count):
+        (cid,) = struct.unpack_from(">q", data, pos)
+        (present,) = struct.unpack_from(">?", data, pos + 8)
+        pos += 9
+        if present:
+            (v,) = struct.unpack_from(">d", data, pos)
+            pos += 8
+        else:
+            v = None
+        got.append((cid, v))
+    if pos != len(data):
+        return f"{case.cid}: {len(data) - pos} bytes left after {count} cells"
+    want = {}
+    for k, v in case.expect.items():
+        if isinstance(k, str):  # a BNG reference: its id is the grid's own number
+            from databricks.labs.gbx.pygx import _bng
+
+            k = _bng.parse(k)
+        want[k] = v
+    order = sorted(want, key=lambda x: x & 0xFFFF_FFFF_FFFF_FFFF)
+    if [c for c, _ in got] != order:
+        return f"{case.cid}: cells {[c for c, _ in got]}, want {order}"
+    for c, v in got:
+        w = want[c]
+        if (v is None) != (w is None) or (
+            v is not None and not math.isclose(v, w, rel_tol=1e-9, abs_tol=1e-9)
+        ):
+            return f"{case.cid}: cell {c} is {v}, want {w}"
+    return None
+
+
+def check_mvt_layer(case, out, args) -> Optional[str]:
+    """`mvt_layer`: `out` is one MVT layer named `expect["layer"]` holding exactly `expect["features"]`, a list of
+    (WKT in tile coordinates, properties), in any order. Decoded with mapbox_vector_tile, not the encoder under test.
+    """
+    import mapbox_vector_tile
+    import shapely
+    from shapely.geometry import shape
+
+    if out is None:
+        return f"{case.cid}: got NULL, want a layer"
+    layers = mapbox_vector_tile.decode(
+        bytes(out), default_options={"y_coord_down": True}
+    )
+    e = case.expect
+    if list(layers) != [e["layer"]]:
+        return f"{case.cid}: layers {list(layers)}, want {[e['layer']]}"
+    got = sorted(
+        (shapely.normalize(shape(f["geometry"])).wkt, sorted(f["properties"].items()))
+        for f in layers[e["layer"]]["features"]
+    )
+    want = sorted(
+        (shapely.normalize(shapely.from_wkt(g)).wkt, sorted(p.items()))
+        for g, p in e["features"]
+    )
+    return None if got == want else f"{case.cid}: features {got}, want {want}"

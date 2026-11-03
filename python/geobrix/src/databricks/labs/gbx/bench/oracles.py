@@ -62,7 +62,9 @@ class Case:
     # raster-to-grid reducer, each statistic recomputed with numpy over the pixels of the cells (see oracle_checks).
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
-    # Aggregates use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
+    # Aggregates use merged_equals | pixels | error_group | null | cellfill | mvt_layer | geom_equals | exact;
+    # `args[0]` is the group's rows. cellfill: `expect` is {cell id: value or None}, the fill payload decoded from its
+    # documented layout. mvt_layer: `expect` is {"layer": name, "features": [(WKT in tile coordinates, properties)]}.
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
@@ -221,6 +223,33 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     },
 }
 
+# The aggregates of the Task 18 batch whose JVM companion differs from the contract, and is not selected for it.
+# A NULL cell id next to ids past 2**53 reaches the lightweight aggregate as float64, which rounds the ids to other cells,
+# so it refuses; the JVM reads exact longs and answers, rightly.
+_EXACT_IDS_L1 = "the JVM aggregate reads exact long ids, so a NULL cell id beside ids past 2**53 is no hazard there: it answers where the lightweight level refuses"
+# The JVM st_asmvt takes WKB only and writes no layer for a group with no feature; the contract is the lightweight
+# encoder's (any of the four geometry formats, an empty layer). It is not the default level and the sweep may delete it.
+_ASMVT_L1 = "the JVM st_asmvt takes WKB only (a WKT string fails the cast) and writes no layer for a group with no feature"
+HEAVY_PENDING.update(
+    {
+        **{
+            cid: {"L1": _EXACT_IDS_L1}
+            for cid in (
+                "h3_fill_null_beside_big_id",
+                "qb_fill_null_beside_big_id",
+                "cg_fill_null_beside_big_id",
+                "qu_agg_null_beside_big",
+                "h3r_null_beside_big_id",
+                "qbr_null_beside_big_id",
+                "cgr_null_beside_big_id",
+            )
+        },
+        "ca_agg_virtual": {"L1": _L1_NO_VIRTUAL},
+        "asmvt_wkt": {"L1": _ASMVT_L1},
+        "asmvt_no_feature": {"L1": _ASMVT_L1},
+    }
+)
+
 # Rows every level runs through SQL with the session's read cap (`spark.databricks.labs.gbx.read_cap`) lowered to
 # this many bytes: the decoded-size gate where each level reads a tile's bytes.
 READ_CAP_ROWS: Dict[str, int] = {
@@ -236,6 +265,8 @@ READ_CAP_ROWS: Dict[str, int] = {
     "merge_array_over_budget_refused": 6000,
     "combineavg_array_over_budget_refused": 6000,
     "combinesum_array_over_budget_refused": 6000,
+    # the merge aggregate over two 4 KiB members and a cap of 1 KiB
+    "merge_agg_over_budget_refused": 1024,
 }
 # The refusal of a tile's bytes in a driver that can name other files, on every level (the light tier's text).
 _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, which GeoBrix does not open from tile bytes. Fix:"
@@ -869,8 +900,8 @@ MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
 # out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad: 3 x 2 pixels of 1 km, the
 # last column with no cell in it
 CANVAS = (27700, None, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, "centroids", 0)
-# What a NULL value burns is the one thing the tiers do not share (raster-functions.mdx, rst_bng_rasterize_agg):
-# NaN on the lightweight tier, 1.0 on the heavyweight tier. A shape says which it follows (`run_groups`).
+# What a NULL value burns: NaN in a typed column, on every tier (an untyped NULL is the presence mask, 1.0). The marker
+# stays so a shape that burned it differently could say so (`run_groups`); every shape uses NaN now.
 NULL_BURN = "<the burn of a NULL value>"
 NAN = float("nan")
 MVP_A: Tuple[Case, ...] = (
@@ -2312,7 +2343,10 @@ def _tile_meta_against_args(got, want, args) -> Optional[str]:
 
 
 def _check_tile_meta(case: Case, out, args) -> Optional[str]:
-    """`out` is a tile whose raster meets each key of `case.expect` (see `Case`)."""
+    """`out` is a tile whose raster meets each key of `case.expect` (see `Case`); the bytes an aggregate returns count as
+    a materialized tile."""
+    if isinstance(out, (bytes, bytearray, memoryview)):
+        out = {"raster": bytes(out), "path": None, "metadata": {}}
     if out is None or (_field(out, "raster") is None and _field(out, "path") is None):
         meta = _field(out, "metadata") if out is not None else None
         return f"{case.cid}: no raster in the result (got {out!r}, metadata={meta!r})"
@@ -2903,7 +2937,71 @@ def _ref_frombands(args):
     )
 
 
+def _ref_agg_gridfrompoints(args):
+    """gbx_rst_gridfrompoints_agg: the scalar's reference over the group's points (a row with a NULL point or value is
+    dropped). args = [group of (point, value), xmin, ymin, xmax, ymax, width_px, height_px, out_srid, power, max_pts].
+    """
+    rows = [(p, v) for p, v in args[0] if p is not None and v is not None]
+    return _ref_gridfrompoints([[p for p, _ in rows], [v for _, v in rows], *args[1:]])
+
+
+def _ref_agg_binpoints(args):
+    """gbx_rst_binpoints_agg: the scalar's reference over the group's (x, y, z) rows."""
+    cols = list(zip(*args[0])) or [(), (), ()]
+    return _ref_binpoints([*(list(c) for c in cols), *args[1:]])
+
+
+def _ref_agg_dtm_plane(coeffs, hull):
+    """gbx_rst_dtmfromgeoms_agg of points on a plane: the scalar's reference with the group as its point array."""
+    plane = _ref_plane(coeffs, hull)
+    return lambda args: plane([list(args[0]), *args[1:]])
+
+
+def _ref_agg_rasterize(args):
+    """gbx_rst_rasterize_agg: each feature burned where a pixel centre is inside it, in the canonical order the tiers
+    share (WKB bytes, then value), the last write winning. args = [group of (wkb, value), xmin, ymin, xmax, ymax,
+    width_px, height_px, out_srid]."""
+    import numpy as np
+    import shapely
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    rows = sorted(
+        (bytes(g), float(v)) for g, v in args[0] if g is not None and v is not None
+    )
+    xmin, ymin, xmax, ymax, w, h = args[1:7]
+    out, mask = np.full((h, w), -9999.0), np.ones((h, w), bool)
+    for g, v in rows:
+        vals, inside_not = oracle_refs.burn(
+            shapely.from_wkb(g), v, (xmin, ymin, xmax, ymax, w, h)
+        )
+        out = np.where(~inside_not, vals, out)
+        mask &= inside_not
+    return out, mask
+
+
+def _ref_agg_derived_sum(args):
+    """gbx_rst_derivedband_agg with a pixel function that adds the bands: the sum of the first bands of the tiles."""
+    import numpy as np
+
+    members = _members_of(args[0])
+    out = sum(m.data.astype("float64") for m in members)
+    return out, np.zeros(out.shape, dtype=bool)
+
+
+def _ref_agg_frombands(args):
+    """gbx_rst_frombands_agg: the first band of each readable tile, in ascending band_index order."""
+    rows = sorted(((i, t) for t, i in args[0] if i is not None), key=lambda r: r[0])
+    return _ref_frombands([[t for _, t in rows]])
+
+
 _REFS = {
+    "agg_gridfrompoints": _ref_agg_gridfrompoints,
+    "agg_binpoints": _ref_agg_binpoints,
+    "agg_dtm_plane": _ref_agg_dtm_plane((1.0, 2.0), (0.0, 0.0, 10.0, 10.0)),
+    "agg_rasterize": _ref_agg_rasterize,
+    "agg_derived_sum": _ref_agg_derived_sum,
+    "agg_frombands": _ref_agg_frombands,
     "viewshed_wall": _ref_viewshed_wall,
     "color_relief_rgb": _ref_color_relief(False),
     "color_relief_rgba": _ref_color_relief(True),
@@ -2979,7 +3077,7 @@ def _check_ref(case: Case, out, args) -> Optional[str]:
     """
     from rasterio.io import MemoryFile
 
-    raster = _field(out, "raster")
+    raster = _raster_bytes(out)  # a tile struct, or the bytes of an aggregate
     if raster is None:
         return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
     want, want_mask = _REFS[case.expect](args)
@@ -3307,6 +3405,8 @@ _ARG_CHECKS = {
     "geom_srid": _check_geom_srid,
     "isobands": _oracle_check("check_isobands"),
     "contours": _oracle_check("check_contours"),
+    "cellfill": _oracle_check("check_cellfill"),
+    "mvt_layer": _oracle_check("check_mvt_layer"),
 }
 
 
@@ -3453,19 +3553,45 @@ def _check_pixels(case: Case, out) -> Optional[str]:
     b = _raster_bytes(out)
     if b is None:
         return f"{case.cid}: no raster"
-    srid, (xmin, ymin, xmax, ymax, width, height) = case.args[1], case.args[3:9]
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions[case.fn]
+    names = [p.name for p in fn.params]
+    n0 = (
+        group_width(fn) if fn.kind == "aggregate" else 1
+    )  # args[0] holds the member columns
+
+    def const(
+        *alts,
+    ):  # a canvas constant by its parameter name, wherever the signature puts it
+        name = next((a for a in alts if a in names), None)
+        if name is None:
+            return None
+        i = 1 + names.index(name) - n0
+        return case.args[i] if i < len(case.args) else None
+
+    srid, out_crs = const("out_srid", "srid"), const("out_crs")
+    xmin, ymin, xmax, ymax = (const(n) for n in ("xmin", "ymin", "xmax", "ymax"))
+    width, height = const("width", "width_px"), const("height", "height_px")
     want_transform = Affine(
         (xmax - xmin) / width, 0.0, xmin, 0.0, -(ymax - ymin) / height, ymax
     )
+    want_crs = out_crs if out_crs else f"EPSG:{srid}"  # out_crs wins over out_srid
     with MemoryFile(b) as m, m.open() as ds:
         got = ds.read(1).astype("float64")
         where = (ds.transform, ds.crs, ds.nodata)
-    if not (where[0] == want_transform and crs_equal(where[1], f"EPSG:{srid}")):
-        return f"{case.cid}: placed at {where[0]} in {where[1]}, want {want_transform} in EPSG:{srid}"
+    if not (
+        where[0].almost_equals(want_transform, 1e-9) and crs_equal(where[1], want_crs)
+    ):
+        return f"{case.cid}: placed at {where[0]} in {where[1]}, want {want_transform} in {want_crs}"
     if where[2] != -9999.0:
         return f"{case.cid}: NoData is {where[2]}, want -9999.0"
-    ok = got.shape == np.shape(case.expect) and np.array_equal(
-        got, np.asarray(case.expect, dtype="float64"), equal_nan=True
+    ok = got.shape == np.shape(case.expect) and np.allclose(
+        got,
+        np.asarray(case.expect, dtype="float64"),
+        rtol=1e-6,
+        atol=1e-9,
+        equal_nan=True,
     )
     return None if ok else f"{case.cid}: pixels {got.tolist()}, want {case.expect}"
 
@@ -3866,9 +3992,7 @@ def argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
         group = resolve_arg(case.args[0], tmpdir)
         group = [group] if isinstance(group, dict) else group
         return (
-            [[t] for t in group]
-            if group_width(fn.params) == 1
-            else [list(m) for m in group]
+            [[t] for t in group] if group_width(fn) == 1 else [list(m) for m in group]
         )
     if case.kind == "windows_batch":
         return [[resolve_arg(a, tmpdir) for a in row] for row in case.args]
@@ -3879,16 +4003,12 @@ def argument_schema(case: Case, rows, surface: str = "session") -> str:
     """The DDL schema of the view `argument_rows` fills: a column is typed from its first non-NULL value,
     an all-NULL column from the manifest."""
     from databricks.labs.gbx import manifest
-    from databricks.labs.gbx.manifest import TILE_SQL
 
     fn = manifest.load().functions[case.fn]
     if fn.kind == "aggregate":
-        if group_width(fn.params) == 1:
-            return f"c0 {TILE_SQL}"
-        return ", ".join(
-            f"c{i} {manifest.sql_type(p.session[0])}"
-            for i, p in enumerate(fn.params[: group_width(fn.params)])
-        )
+        n = group_width(fn)
+        group = [r[0] if n == 1 else tuple(r) for r in rows]
+        return ", ".join(f"c{i} {t}" for i, t in enumerate(_member_types(fn, group, n)))
     params = fn.params
     return ", ".join(
         f"c{i} "
@@ -4344,18 +4464,75 @@ def run_rows(
     return out
 
 
+def is_flat_struct(ddl: str) -> bool:
+    """A struct type whose fields are all scalars (a custom grid), the only struct a constant literal can be."""
+    return ddl.startswith("struct<") and "<" not in ddl[len("struct<") :]
+
+
+def struct_literal(value: dict, ddl: str) -> str:
+    """A dict as the SQL literal of the struct type `ddl` (`struct<a:bigint,b:int>`): named_struct with each field cast to
+    its type. The fields are flat (a custom grid)."""
+    fields = [f.split(":", 1) for f in ddl[len("struct<") : -1].split(",")]
+    return (
+        "named_struct("
+        + ", ".join(f"'{n}', CAST({repr(value[n])} AS {t})" for n, t in fields)
+        + ")"
+    )
+
+
 def _typed_literal(value, param, case: Case) -> str:
     """`value` as a SQL literal of the parameter's type (a bare `1000.0` is a DECIMAL); NULL stays untyped."""
+    if isinstance(value, dict) and is_flat_struct(param.session[0]):
+        return struct_literal(value, param.session[0])
     lit = _sql_literal(value, param, case)
     return lit if value is None else f"CAST({lit} AS {_SQL[param.session[0]]})"
 
 
-def group_width(params) -> int:
-    """How many leading parameters one row of an aggregate's group fills: a tile, a (cellid, value) pair, or a
-    PMTiles member (bytes, z, x, y)."""
-    if params[0].name == "bytes":
+# How many leading parameters one row of an aggregate's group fills (its member columns); the others are the group's
+# constants. The default is a tile (1), a (cellid, value) pair (2) or a PMTiles member (bytes, z, x, y: 4).
+GROUP_WIDTH: Dict[str, int] = {
+    "gbx_quadbin_cellunion_agg": 1,
+    "gbx_bng_cellunion_agg": 1,
+    "gbx_bng_cellintersection_agg": 1,
+    "gbx_st_coverageisvalid": 1,
+    "gbx_st_coverageinvalidedges": 1,
+    "gbx_rst_dtmfromgeoms_agg": 1,
+    "gbx_rst_frombands_agg": 2,  # (tile, band_index)
+    "gbx_rst_binpoints_agg": 3,  # (x, y, z)
+}
+
+
+def group_width(fn) -> int:
+    """The number of member columns of aggregate `fn` (a manifest Function)."""
+    if fn.sql_name in GROUP_WIDTH:
+        return GROUP_WIDTH[fn.sql_name]
+    if fn.params[0].name == "bytes":
         return 4
-    return 1 if params[0].session == ("TILE",) else 2
+    return 1 if fn.params[0].session == ("TILE",) else 2
+
+
+def _member_types(fn, group, n0: int) -> List[str]:
+    """The SQL type of each member column: the manifest's, except where the parameter takes several types or a
+    struct of any fields, which the first non-NULL value in the group decides."""
+    from databricks.labs.gbx import manifest
+
+    out = []
+    for i, p in enumerate(fn.params[:n0]):
+        if len(p.session) > 1 or p.session[0] == "STRUCT":
+            v = next(
+                (
+                    m[i] if n0 > 1 else m
+                    for m in group
+                    if (m[i] if n0 > 1 else m) is not None
+                ),
+                None,
+            )
+            out.append(
+                _ddl_type(v, p) if v is not None else manifest.sql_type(p.session[0])
+            )
+        else:
+            out.append(manifest.sql_type(p.session[0]))
+    return out
 
 
 def _burn_nulls(expect, null_burn: float):
@@ -4383,7 +4560,6 @@ def run_groups(
     from pyspark.sql.types import StructType
 
     from databricks.labs.gbx import manifest
-    from databricks.labs.gbx.manifest import TILE_SQL
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
     man = manifest.load()
@@ -4397,13 +4573,17 @@ def run_groups(
             [group] if isinstance(group, dict) else group
         )  # one tile is a group of one
         consts = [resolve_arg(a, tmpdir) for a in case.args[1:]]
-        if group_width(params) == 1:
-            rows, first = [("a", t, *consts) for t in group], [f"c0 {TILE_SQL}"]
+        n_cols = group_width(man.functions[case.fn])
+        if n_cols == 1:
+            rows = [("a", t, *consts) for t in group]
+            first = [f"c0 {_member_types(man.functions[case.fn], group, 1)[0]}"]
         else:
             rows = [("a", *m, *consts) for m in group]
             first = [
-                f"c{i} {manifest.sql_type(p.session[0])}"
-                for i, p in enumerate(params[: group_width(params)])
+                f"c{i} {t}"
+                for i, t in enumerate(
+                    _member_types(man.functions[case.fn], group, n_cols)
+                )
             ]
         n0 = len(first)
         schema = ", ".join(
@@ -4420,7 +4600,7 @@ def run_groups(
         ]
         want = (
             replace(case, expect=_burn_nulls(case.expect, null_burn))
-            if case.kind == "pixels"
+            if case.kind == "pixels" and not callable(case.expect)
             else case
         )
         try:

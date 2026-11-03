@@ -81,13 +81,13 @@ def _l2(spark):
     _mvp_forms.register_l2_probes(spark)
 
 
-# Shape: its setup, the SQL per aggregate, and what a NULL value burns on its tier (NaN on the lightweight
-# tier, 1.0 on the heavyweight tier: the one thing the tiers do not share, see `oracles.NULL_BURN`).
+# Shape: its setup, the SQL per aggregate, and what a NULL value burns on its tier (NaN in a typed column on every
+# tier, see `oracles.NULL_BURN`).
 Shape = namedtuple("Shape", "setup sql null_burn")
 SHAPES = {
     # the aggregate itself: an Arrow UDF (L3 c0) and the Catalyst aggregate (L1)
     "grouped": Shape(_grouped, {MA: GROUPED, BR: GROUPED}, oracles.NAN),
-    "udaf": Shape(_udaf, {MA: GROUPED, BR: GROUPED}, 1.0),
+    "udaf": Shape(_udaf, {MA: GROUPED, BR: GROUPED}, oracles.NAN),
     # collect_list into a finalize scalar: light (gbx_rst_merge is the product's), and the Java UDFs on bytes
     "collect_finalize": Shape(
         _light,

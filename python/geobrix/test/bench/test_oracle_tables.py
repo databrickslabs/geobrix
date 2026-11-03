@@ -542,3 +542,56 @@ def test_the_bng_oracle_names_the_100km_square_and_refuses_quadrants():
     assert oracle_checks._grid_keys("bng", 1, [530000.0], [180000.0]) == ["TQ"]
     with pytest.raises(ValueError, match="unsupported in the oracle"):
         oracle_checks._grid_keys("bng", -3, [530000.0], [180000.0])
+
+
+def test_the_cellfill_and_mvt_layer_kinds_can_fail():
+    import shapely
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench.oracle_tables.vector_aggregate import POINT, POLY
+    from databricks.labs.gbx.pyvx import _mvt
+
+    # a fill payload: two cells, the first valid (2.5), the second empty
+    payload = (
+        (2).to_bytes(4, "big")
+        + (10).to_bytes(8, "big", signed=True)
+        + b"\x01"
+        + __import__("struct").pack(">d", 2.5)
+        + (11).to_bytes(8, "big", signed=True)
+        + b"\x00"
+    )
+
+    def fill(expect):
+        return oracles.check(
+            oracles.Case("probe", "f", (), "cellfill", expect), payload, ()
+        )
+
+    assert fill({10: 2.5, 11: None}) is None
+    assert fill({10: 2.6, 11: None}) is not None  # a value
+    assert fill({10: 2.5, 11: 1.0}) is not None  # a cell that must be empty
+    assert fill({10: 2.5}) is not None  # a cell too many
+    assert (
+        fill({11: None, 10: 2.5, 12: 0.0}) is not None
+    )  # a cell missing from the payload
+
+    blob = _mvt.encode_layer(
+        [{"geometry": POLY, "properties": {"n": 3}}], layer_name="lyr"
+    )
+
+    def layer(expect):
+        return oracles.check(
+            oracles.Case("probe", "f", (), "mvt_layer", expect), blob, ()
+        )
+
+    assert layer({"layer": "lyr", "features": [(POLY, {"n": 3})]}) is None
+    assert (
+        layer({"layer": "other", "features": [(POLY, {"n": 3})]}) is not None
+    )  # the layer name
+    assert (
+        layer({"layer": "lyr", "features": [(POLY, {"n": 4})]}) is not None
+    )  # an attribute
+    assert (
+        layer({"layer": "lyr", "features": [(POINT, {"n": 3})]}) is not None
+    )  # the geometry
+    assert layer({"layer": "lyr", "features": []}) is not None  # a feature too many
+    assert shapely  # the module imports with the fixtures it names

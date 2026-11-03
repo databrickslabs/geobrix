@@ -42,8 +42,7 @@ class RST_Custom_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
     private case class RasterRead(gt: Array[Double], width: Int, height: Int, data: Array[Double])
 
     private def readRaster(tileRow: Any): RasterRead = {
-        val ir    = tileRow.asInstanceOf[InternalRow]
-        val bytes = ir.getBinary(1)
+        val bytes = tileRow.asInstanceOf[Array[Byte]]  // the aggregate returns the GeoTIFF bytes
         bytes should not be null
         val tmp = s"/vsimem/custom_ragg_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
         gdal.FileFromMemBuffer(tmp, bytes)

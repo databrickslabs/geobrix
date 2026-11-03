@@ -194,7 +194,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             .toDF("cellid", "value")
             .groupBy(lit(1).alias("g"))
             .agg(rst_quadbin_rasterize_agg(col("cellid"), col("value")).alias("out"))
-            .select(col("out.raster").alias("raster"))
+            .select(col("out").alias("raster"))
             .collect().head.getAs[Array[Byte]]("raster")
 
         assert(rasterBytes != null, "quadbin rasterize_agg must produce raster bytes")
@@ -220,7 +220,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             .toDF("cellid", "value")
             .groupBy(lit(1).alias("g"))
             .agg(rst_bng_rasterize_agg(col("cellid"), col("value")).alias("out"))
-            .select(col("out.raster").alias("raster"))
+            .select(col("out").alias("raster"))
             .collect().head.getAs[Array[Byte]]("raster")
 
         assert(rasterBytes != null, "bng rasterize_agg must produce raster bytes")
@@ -264,7 +264,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             .agg(rst_quadbin_rasterize_agg(col("cellid"), col("value")).alias("out"))
 
         val bands = gridDf
-            .select(call_function("gbx_rst_quadbin_rastertogridavg", col("out"), lit(z), lit("sparse"), lit("centroid")).alias("grid"))
+            .select(call_function("gbx_rst_quadbin_rastertogridavg", call_function("gbx_rst_fromcontent", col("out"), lit("GTiff")), lit(z), lit("sparse"), lit("centroid")).alias("grid"))
             .collect().head.getSeq[Seq[Row]](0)
         val recovered = bands.flatten.map(r => (r.getLong(0), r.getDouble(1))).toMap
 
@@ -295,7 +295,7 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             .agg(rst_bng_rasterize_agg(col("cellid"), col("value")).alias("out"))
 
         val bands = gridDf
-            .select(call_function("gbx_rst_bng_rastertogridavg", col("out"), lit(res), lit("sparse"), lit("centroid")).alias("grid"))
+            .select(call_function("gbx_rst_bng_rastertogridavg", call_function("gbx_rst_fromcontent", col("out"), lit("GTiff")), lit(res), lit("sparse"), lit("centroid")).alias("grid"))
             .collect().head.getSeq[Seq[Row]](0)
         val recovered = bands.flatten.map(r => (r.getString(0), r.getDouble(1))).toMap
 

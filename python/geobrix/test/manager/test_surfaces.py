@@ -290,7 +290,7 @@ def test_an_aggregate_example_needs_literal_per_group_arguments():
 
     surfaces = _tool("surfaces")
     fn = manifest.load().functions["gbx_rst_bng_rasterize_agg"]
-    row = next(c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name)
+    row = next(c for c in oracles.TABLES[fn.oracle] if c.fn == fn.sql_name)
     bad = dataclasses.replace(
         row, args=(row.args[0], oracles.Build("x"), *row.args[2:])
     )

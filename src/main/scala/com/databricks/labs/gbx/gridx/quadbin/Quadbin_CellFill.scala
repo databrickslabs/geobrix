@@ -27,7 +27,7 @@ case class Quadbin_CellFill(
 
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = true
-    override lazy val dataType: DataType = CellFill.arrayType(LongType)
+    override lazy val dataType: DataType = BinaryType  // the fill payload: the one contract of this name
     override def prettyName: String = Quadbin_CellFill.name
 
     override def children: Seq[Expression] = Seq(cellidExpr, valueExpr, kExpr, methodExpr, powerExpr)
@@ -56,7 +56,7 @@ case class Quadbin_CellFill(
         val k      = CellFill.parseK(kExpr, row)
         val method = CellFill.parseMethod(methodExpr, row)
         val power  = CellFill.parsePower(powerExpr, row)
-        CellFill.toArrayData(Quadbin, CellFill.fill(Quadbin, buffer.cells.toSeq.toMap, k, method, power))
+        CellFill.toBinary(CellFill.fill(Quadbin, CellFill.largestPerCell(buffer.cells), k, method, power))
     }
 
     override def serialize(obj: CellFillAcc): Array[Byte] = obj.serialize

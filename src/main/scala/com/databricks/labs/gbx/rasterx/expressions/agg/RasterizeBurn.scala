@@ -3,6 +3,8 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 import com.databricks.labs.gbx.gridx.grid.{BNG, GridSystem}
 import com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometry
 import com.databricks.labs.gbx.vectorx.jts.JTS
+import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.types.NullType
 import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 
@@ -26,6 +28,27 @@ object RasterizeBurn {
 
     /** NoData sentinel, matching `cellraster._NODATA` in the lightweight tier. */
     val NoData: Double = -9999.0
+
+    /** What a NULL `value` burns, by the type of the value argument (the lightweight rule, the one contract): an
+     *  untyped NULL (the argument was omitted) is the presence mask, 1.0; a NULL in a typed column is a missing value,
+     *  NaN, which never wins against a number in its cell (see [[canonicalLut]]). */
+    def nullBurn(valueExpr: Expression): Double =
+        if (valueExpr.dataType == NullType) 1.0 else Double.NaN
+
+    /** The output SRID of a cell rasterizer: `out_crs` wins over `out_srid` (the lightweight rule), a missing one is
+     *  `default`. `out_crs` is `EPSG:<n>` or a bare integer; any other CRS text is refused with a `Fix:` (this level
+     *  reads integer codes only), so a value never burns into the wrong CRS. */
+    def outSrid(fn: String, outCrs: Option[String], outSrid: Option[Int], default: => Int): Int =
+        outCrs.map(_.trim).filter(_.nonEmpty) match {
+            case Some(crs) =>
+                val m = """(?i)^(?:EPSG:)?(\d+)$""".r
+                crs match {
+                    case m(code) => code.toInt
+                    case other => throw new IllegalArgumentException(
+                        s"$fn: out_crs '$other' is not an EPSG code. Fix: pass EPSG:<n> (or the integer out_srid).")
+                }
+            case None => outSrid.getOrElse(default)
+        }
 
     /** Resolution of a BNG cell set (read from each cell's Long id); raises on a mixed-resolution set.
      *

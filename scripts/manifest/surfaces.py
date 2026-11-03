@@ -348,6 +348,14 @@ def _literal(value, param) -> Optional[str]:
 
     if value is None or isinstance(value, (bool, int, float, str, bytes, bytearray)):
         return _api._sql_literal(value, param)
+    if isinstance(value, dict):
+        from databricks.labs.gbx.bench import oracles
+
+        if not oracles.is_flat_struct(param.session[0]):
+            return None
+        return oracles.struct_literal(
+            value, param.session[0]
+        )  # a flat struct constant (a custom grid)
     return None  # a fixture (Build) or a structured value: a column of the example view
 
 
@@ -358,7 +366,7 @@ def example_sql(fn, case) -> str:
     if fn.kind == "aggregate":
         from databricks.labs.gbx.bench import oracles
 
-        n0 = oracles.group_width(fn.params)
+        n0 = oracles.group_width(fn)
         consts = [_literal(a, fn.params[i + n0]) for i, a in enumerate(case.args[1:])]
         if None in consts:
             raise ValueError(

@@ -2,8 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.BNG
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
-import com.databricks.labs.gbx.util.SerializationUtil
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
@@ -107,7 +106,7 @@ object BNGRasterizeAcc {
  *
  *  A cell id that repeats keeps its LARGEST value, whatever order the rows arrive in: the
  *  accumulated cells are sorted by `(cellId, value)` before the value lookup is built, so the
- *  last write for a cell is its maximum. A null `value` counts as 1.0 in that comparison.
+ *  last write for a cell is its maximum. A NaN never wins against a number (see [[RasterizeBurn.canonicalLut]]); a cell of nothing but NaN burns NaN.
  *  The lightweight tier follows the same rule.
  */
 case class RST_BNG_RasterizeAgg(
@@ -133,7 +132,7 @@ case class RST_BNG_RasterizeAgg(
 
     override lazy val deterministic: Boolean = true  // canonical fold order (see eval)
     override val nullable: Boolean = true
-    override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(BinaryType)
+    override lazy val dataType: DataType = BinaryType  // the GeoTIFF bytes: the one contract of this name
     override def prettyName: String = RST_BNG_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
@@ -173,7 +172,7 @@ case class RST_BNG_RasterizeAgg(
         }
         val vRaw = valueExpr.eval(input)
         val v = vRaw match {
-            case null      => 1.0  // presence mask
+            case null      => RasterizeBurn.nullBurn(valueExpr)  // 1.0 for an omitted value, NaN for a missing one
             case d: Double => d
             case f: Float  => f.toDouble
             case i: Int    => i.toDouble
@@ -218,7 +217,7 @@ case class RST_BNG_RasterizeAgg(
         val resolution = RST_BNG_RasterizeAgg.resolutionOf(buffer.cells.iterator.map(_._1))
 
         // Canonical fold order (see RasterizeBurn.canonicalLut): the last write for a repeated cell is its largest
-        // value (a null value was already turned into 1.0), regardless of row-arrival order.
+        // value (a NaN sorts first, so any number in its cell wins), regardless of row-arrival order.
         val lut = RasterizeBurn.canonicalLut(buffer.cells.toSeq)
 
         // Resolve grid spec: explicit extent if fully supplied, else snapped grid.
@@ -238,15 +237,7 @@ case class RST_BNG_RasterizeAgg(
             RasterizeBurn.burn(BNG, lut, srid, resolution, rasterDs, width, height)
             rasterDs.FlushCache()
             val bytes = VectorRasterBridge.toGTiffBytes(rasterDs)
-            val mtd = Map(
-                "driver"      -> "GTiff",
-                "extension"   -> "tif",
-                "size"        -> bytes.length.toString,
-                "parentPath"  -> "",
-                "all_parents" -> ""
-            )
-            val mapData = SerializationUtil.toMapData[String, String](mtd)
-            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
+            bytes
         } finally {
             rasterDs.delete()
         }

@@ -3762,7 +3762,12 @@ _SQL = {
     "ARRAY<BINARY>": "array<binary>",
     "ARRAY<STRING>": "array<string>",
     "ARRAY<ARRAY<DOUBLE>>": "array<array<double>>",
+    "STRUCT": "struct<>",  # a NULL struct argument (a feature's attributes); a dict value is typed field by field
 }
+
+
+class Big(int):
+    """An integer argument that a session row types as BIGINT, whatever its size (a PySpark int column)."""
 
 
 def _ddl_type(value, param) -> str:
@@ -3790,7 +3795,11 @@ def _ddl_type(value, param) -> str:
     if isinstance(value, list):  # an array parameter (quadbin cells)
         return _array_ddl_type(param, value)
     if isinstance(value, int):
-        wide = param.session[0] == "BIGINT" or not -(2**31) <= value < 2**31
+        wide = (
+            param.session[0] == "BIGINT"
+            or isinstance(value, Big)
+            or not -(2**31) <= value < 2**31
+        )
         return "bigint" if wide else "int"
     if isinstance(value, float):
         return "double"
@@ -3805,6 +3814,7 @@ class _Scalar:
     """A stand-in parameter for the type of one field of a struct argument."""
 
     session = ("",)
+    name = "a struct field"
 
 
 def _unmapped(param):
@@ -4033,7 +4043,7 @@ def _check_cell_rows(case: Case, rows: list) -> Optional[str]:
     """The rows' `cellid` values are exactly `case.expect`, each once, as the type the expectation has."""
     got = [_field(r, "cellid") for r in rows]
     want = sorted(case.expect)
-    if any(type(c) is not type(want[0]) for c in got):
+    if want and any(type(c) is not type(want[0]) for c in got):
         return f"{case.cid}: cell ids are {sorted({type(c).__name__ for c in got})}, want {type(want[0]).__name__}"
     return (
         None
@@ -4221,6 +4231,35 @@ def _check_xyz_tiles(case: Case, rows: list) -> Optional[str]:
     return None
 
 
+def python_leg_unexpressible(case: Case, fn) -> Optional[str]:
+    """Why a generator row's inputs cannot be given to the DataFrame-first entry (`_api.table`), else None. The row
+    then runs through SQL only. A NULL for an optional argument is the one such case: the Python API reads None as
+    "unset" and sends the argument's default, where SQL sends the NULL.
+    """
+    for i, v in enumerate(case.args):
+        if v is None and i >= fn.min_args:
+            return f"a NULL for the optional argument {fn.params[i].name!r}: the Python API sends its default"
+    return None
+
+
+def _python_leg_args(args, fn) -> list:
+    """The arguments of the DataFrame-first call over the frame `c0..`: a literal argument is its value, a NULL
+    required argument is None (the API's own typed `CAST(NULL AS <type>)`, so that cast is exercised), any other
+    argument is its column name."""
+    return [
+        (
+            None
+            if v is None
+            else (
+                (int(v) if isinstance(v, Big) else v)
+                if fn.params[i].py == "lit"
+                else f"c{i}"
+            )
+        )
+        for i, v in enumerate(args)
+    ]
+
+
 def run_rows(
     spark,
     cases,
@@ -4229,10 +4268,16 @@ def run_rows(
     tmpdir: Optional[str] = None,
     surface: str = "session",
     pad: bool = False,
+    table_of: Optional[Callable[[str], Callable]] = None,
 ):
     """Generators: `shape_sql` (with {fn} and {args}) yields the rows a case checks; one shape per form.
 
     `pad` fills the optional arguments a case leaves out with their defaults, for a function of fixed arity.
+
+    With `table_of` (SQL name -> the generated DataFrame-first function) the case runs through the Python API
+    instead of SQL, over the same frame: `table_of(fn)(df, <the column name of each argument, its value for a
+    literal one>)`, so both APIs are held to the same rows. A row whose inputs that cannot express is skipped
+    (`python_leg_unexpressible`).
     """
     from databricks.labs.gbx import manifest
 
@@ -4262,11 +4307,28 @@ def run_rows(
         )
         if pad:
             cols = ", ".join([cols] + [p.default for p in params[len(args) :]])
+        if table_of is not None and python_leg_unexpressible(
+            case, man.functions[case.fn]
+        ):
+            continue
         try:
-            df = spark.createDataFrame([tuple(r) for r in arg_rows], schema)
+            df = spark.createDataFrame(
+                [
+                    tuple(int(v) if isinstance(v, Big) else v for v in r)
+                    for r in arg_rows
+                ],
+                schema,
+            )
             # one partition: the rows of a batch case go through ONE task, one after the other
-            (df.coalesce(1) if batch else df).createOrReplaceTempView("_gbx_oracle")
-            rows = spark.sql(shape_sql.format(fn=name_of(case.fn), args=cols)).collect()
+            df = df.coalesce(1) if batch else df
+            if table_of is None:
+                df.createOrReplaceTempView("_gbx_oracle")
+                rows = spark.sql(
+                    shape_sql.format(fn=name_of(case.fn), args=cols)
+                ).collect()
+            else:
+                py_args = _python_leg_args(args, man.functions[case.fn])
+                rows = table_of(case.fn)(df, *py_args).collect()
             out.append((case, _check_rows(case, rows, arg_rows if batch else args)))
         except (
             Exception

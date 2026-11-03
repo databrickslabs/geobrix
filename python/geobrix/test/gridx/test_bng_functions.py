@@ -272,10 +272,10 @@ def test_bng_tessellateexplode_keep_core_geom_defaults_to_false(spark, bng_regis
 def test_bng_tessellateexplode_string_resolution(spark, bng_registered):
     """Test tessellate explode with string resolution."""
     polygon_wkt = "POLYGON ((530000 180000, 530500 180000, 530500 180500, 530000 180500, 530000 180000))"
-    # a str names a column in the DataFrame API, so the "500m" size sits in a column
-    df = spark.createDataFrame([(polygon_wkt, "500m")], "geom string, res string")
+    # the resolution is a literal: a str such as "500m" is the size, not a column name
+    df = spark.createDataFrame([(polygon_wkt,)], "geom string")
     result = bng_registered.bng_tessellateexplode(
-        df, "geom", "res", keep_core_geom=True
+        df, "geom", "500m", keep_core_geom=True
     ).select("cellid", "core", "chip")
     assert result.columns == ["cellid", "core", "chip"]
     rows = result.collect()

@@ -38,12 +38,9 @@ def _rows():
             continue
         for variant in _l3_forms(fn.levels.get("L3", {})):
             engine = variant.startswith("engine")
-            # the Python API leg needs a Python entry, and a generator is a DataFrame call (not a Column)
-            apis = (
-                ("sql",)
-                if fn.kind == "generator" or fn.python is None
-                else ("sql", "python")
-            )
+            # the Python API leg needs a Python entry: a Column function, or for a generator the DataFrame-first
+            # function (`_api.table`), run over the same frame as the SQL leg
+            apis = ("sql",) if fn.python is None else ("sql", "python")
             for api in apis:
                 marks = [pytest.mark.integration] if engine else []
                 yield pytest.param(
@@ -79,7 +76,7 @@ def _rows():
 
 def _run(spark, fn, cases, tmpdir, column_of=None):
     if fn.kind == "generator":
-        return oracles.run_rows(spark, cases, tmpdir=tmpdir)
+        return oracles.run_rows(spark, cases, tmpdir=tmpdir, table_of=column_of)
     if fn.kind == "aggregate":
         return oracles.run_groups(spark, cases, tmpdir=tmpdir, column_of=column_of)
     return oracles.run_session(spark, cases, tmpdir=tmpdir, column_of=column_of)

@@ -22,7 +22,7 @@ from databricks.labs.gbx.bench.oracle_tables.grid_array import (
     _tq,
 )
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import QB_PT, G
-from databricks.labs.gbx.bench.oracles import Case
+from databricks.labs.gbx.bench.oracles import Big, Case
 
 BKR, BKL = "gbx_bng_kringexplode", "gbx_bng_kloopexplode"
 BGKR, BGKL = "gbx_bng_geomkringexplode", "gbx_bng_geomkloopexplode"
@@ -71,7 +71,22 @@ GRID_GENERATOR = (
         "cell_rows",
         _square(530, 180, 1, False),
     ),
+    # A PySpark integer column is a BIGINT: the JVM level reads k as a whole number of any width.
+    Case(
+        "geomkringx_bigint_k",
+        BGKR,
+        (POINT, 3, Big(1)),
+        "cell_rows",
+        _square(530, 180, 1, False),
+    ),
     Case("geomkringx_bad_mode", BGKR, (POINT, 3, 1, "sideways"), "raises", "sideways"),
+    Case(
+        "geomkringx_bad_coverage",
+        BGKR,
+        (POINT, 3, 1, "boundary-out", "sideways"),
+        "raises",
+        "sideways",
+    ),
     Case("geomkringx_res_3_5", BGKR, (POINT, 3.5, 1), "raises", "3.5"),
     Case("geomkringx_null", BGKR, (None, 3, 1), "no_rows"),
     Case("geomkringx_null_res", BGKR, (POINT, None, 1), "no_rows"),
@@ -140,6 +155,13 @@ GRID_GENERATOR = (
         "cg_geomkringx_bad_mode",
         CGKR,
         (CG0_PT, G, 0, 1, "sideways"),
+        "raises",
+        "sideways",
+    ),
+    Case(
+        "cg_geomkringx_bad_coverage",
+        CGKR,
+        (CG0_PT, G, 0, 1, "boundary-out", "sideways"),
         "raises",
         "sideways",
     ),

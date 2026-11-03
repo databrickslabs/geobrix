@@ -91,6 +91,56 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
         checkCase("gbx_st_asmvt_pyramid")
     }
 
+    // The Column wrappers hand ColumnAdapter a positional Seq: a swapped argument would run, with another grid. Every
+    // size and extent below is different, so a swap changes the points that come out.
+    test("the TIN Column wrappers pass their arguments in the SQL order, with and without mode") {
+        vectorx.functions.register(spark)
+        import org.apache.spark.sql.functions.{array, lit}
+        val pts = array(corners.map(b => lit(b)): _*)
+        val none = array().cast("array<binary>")
+        val finderCol = lit("NONENCROACHING")
+        val mode = lit("constrained")
+        val one = spark.range(1)
+        def points(df: org.apache.spark.sql.DataFrame): Set[(Double, Double)] =
+            df.collect().map { r => val c = JTS.fromWKB(r.getAs[Array[Byte]]("elevation_point")).getCoordinate; (c.x, c.y) }.toSet
+
+        val tri = Seq(
+          vectorx.functions.st_triangulate(pts, none, lit(0.01), lit(0.01), finderCol),
+          vectorx.functions.st_triangulate(pts, none, lit(0.01), lit(0.01), finderCol, mode)
+        )
+        tri.foreach(c => assert(one.select(c).count() == 2))
+
+        // a 100 x 50 extent as 4 columns by 2 rows: cell centres x = 12.5, 37.5, 62.5, 87.5 and two distinct y
+        val bbox = Seq(
+          vectorx.functions.st_interpolateelevationbbox(
+            pts, none, lit(0.0), lit(0.01), finderCol, lit(0.0), lit(0.0), lit(100.0), lit(50.0), lit(4), lit(2), lit(32633)
+          ),
+          vectorx.functions.st_interpolateelevationbbox(
+            pts, none, lit(0.0), lit(0.01), finderCol, lit(0.0), lit(0.0), lit(100.0), lit(50.0), lit(4), lit(2), lit(32633), mode
+          )
+        )
+        bbox.foreach { c =>
+            val got = points(one.select(c))
+            assert(got.size == 8 && got.map(_._1) == Set(12.5, 37.5, 62.5, 87.5) && got.map(_._2).size == 2)
+        }
+
+        // an origin at (0, 0) with 4 columns, 3 rows, cells 10 wide and 20 high: x = 5, 15, 25, 35 and y = 10, 30, 50
+        val origin = JTS.point(new Coordinate(0.0, 0.0))
+        origin.setSRID(32633)
+        val geom = Seq(
+          vectorx.functions.st_interpolateelevationgeom(
+            pts, none, lit(0.0), lit(0.01), finderCol, lit(JTS.toEWKB(origin)), lit(4), lit(3), lit(10.0), lit(20.0)
+          ),
+          vectorx.functions.st_interpolateelevationgeom(
+            pts, none, lit(0.0), lit(0.01), finderCol, lit(JTS.toEWKB(origin)), lit(4), lit(3), lit(10.0), lit(20.0), mode
+          )
+        )
+        geom.foreach { c =>
+            val got = points(one.select(c))
+            assert(got == (for (x <- Seq(5.0, 15.0, 25.0, 35.0); y <- Seq(10.0, 30.0, 50.0)) yield (x, y)).toSet)
+        }
+    }
+
     // Declarative on purpose: the generators this suite covers are the ones in `cases`, so the check does
     // not depend on test order or on a `-z` filter.
     test("this suite covers every generator the contract assigns to it") {

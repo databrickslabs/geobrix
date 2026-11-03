@@ -381,9 +381,22 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         assert(twoArg.exists(r => r._2 && r._3.isEmpty), "the default drops the core geometry")
     }
 
-    test("The documented heavyweight SQL examples of the five BNG explode generators run and return the documented rows") {
+    test("The documented SQL examples of the five BNG explode generators run and return the documented rows") {
         spark.sparkContext.setLogLevel("ERROR")
         bng.functions.register(spark)
+        // The examples are the table-function form (`FROM t, LATERAL f(...)`): the shape the manager installs a JVM
+        // generator in, through the L1 installer.
+        Seq(
+          "bng_kringexplode" -> "BNG_KRingExplode",
+          "bng_kloopexplode" -> "BNG_KLoopExplode",
+          "bng_geomkringexplode" -> "BNG_GeometryKRingExplode",
+          "bng_geomkloopexplode" -> "BNG_GeometryKLoopExplode",
+          "bng_tessellateexplode" -> "BNG_TessellateExplode"
+        ).foreach { case (fn, cls) =>
+            val r = com.databricks.labs.gbx.kernels.L1Installer
+                .installGenerator(spark, s"gbx_$fn", s"com.databricks.labs.gbx.gridx.bng.generators.$cls")
+            assert(r == "ok", s"$fn: $r")
+        }
         // Row counts as stated in the examples' docstrings (3 km x 3 km polygon at 1 km, k = 1).
         Seq(
           "bng_kringexplode" -> 9L,
@@ -395,8 +408,8 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
             val example = DocExampleSource.example("gridx_functions_sql.py", fn)
             val sql = DocExampleSource.sqlOf(example)
             withClue(s"$fn: $sql\n") {
-                assert(example.contains("-- heavyweight tier"), "the SQL tab says it is the heavyweight form")
-                assert(sql.contains("LATERAL VIEW"), "the heavyweight example uses LATERAL VIEW")
+                assert(sql.replaceAll("\\s+", " ").contains(s", LATERAL gbx_$fn("), "the example is the table-function form")
+                assert(!sql.contains("LATERAL VIEW"), "the example does not use LATERAL VIEW")
                 assert(spark.sql(sql).count() == rows)
             }
         }

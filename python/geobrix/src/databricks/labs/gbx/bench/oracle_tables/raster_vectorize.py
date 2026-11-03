@@ -7,10 +7,13 @@ raster of 10 m pixels in EPSG:3857 whose value is its column number, 0 to 5, so 
 columns and its area is the number of pixels times 100 square metres.
 """
 
+import os
+
 from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
 ISO = "gbx_rst_isoband"
 COLUMNS, ERR, CORRUPT = Build("vz_columns"), Build("tile_error"), Build("tile_corrupt")
+MISSING = Build("vz_missing")
 ONLY = ("session",)
 
 
@@ -20,6 +23,12 @@ def _vz_columns(tmpdir):
 
     z = np.tile(np.arange(6, dtype="float64"), (6, 1))
     return _tile(_gtiff(z[np.newaxis], "EPSG:3857", nodata=None))
+
+
+@builder("vz_missing")
+def _vz_missing(tmpdir):
+    """A virtual tile whose file is not there (a UC Volume path that has not caught up): not corrupt bytes."""
+    return _tile(None, os.path.join(tmpdir, "gbx_missing_tile.tif"))
 
 
 RASTER_VECTORIZE = (
@@ -52,6 +61,23 @@ RASTER_VECTORIZE = (
         "ascending",
         ONLY,
     ),
+    Case(
+        "isoband_null_element_break",
+        ISO,
+        (COLUMNS, [0.0, None, 2.0]),
+        "raises",
+        "NULL",
+        ONLY,
+    ),
     Case("isoband_error_tile", ISO, (ERR, [0.0, 1.0]), "null", None, ONLY),
     Case("isoband_corrupt", ISO, (CORRUPT, [0.0, 1.0]), "null", None, ONLY),
+    # A file that is not reachable fails the task so that Spark retries; only bytes GDAL cannot read give NULL.
+    Case(
+        "isoband_missing_path",
+        ISO,
+        (MISSING, [0.0, 1.0]),
+        "raises",
+        "gbx_missing_tile",
+        ONLY,
+    ),
 )

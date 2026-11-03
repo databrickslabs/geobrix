@@ -201,4 +201,12 @@ SPEC_DEM += (
     Case("contour_null_tile", CT, (None, [1.5]), "null", None, ONLY),
     Case("contour_error_tile", CT, (ERR, [1.5]), "null", None, ONLY),
     Case("contour_corrupt", CT, (CORRUPT, [1.5]), "null", None, ONLY),
+    Case(
+        "contour_missing_path",
+        CT,
+        (Build("vz_missing"), [1.5]),
+        "raises",
+        "gbx_missing_tile",
+        ONLY,
+    ),
 )

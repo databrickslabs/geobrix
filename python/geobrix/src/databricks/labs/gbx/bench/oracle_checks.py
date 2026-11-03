@@ -99,8 +99,15 @@ def check_tessellation(case, tiles, args) -> Optional[str]:
         band = _masked_band(raster)
         got.append((_field(t, "cellid"), float(band.sum()) if band.count() else 0.0))
     if e["grid"] == "bng":
-        if sorted(s for _, s in got) != sorted(want.values()):
-            return f"{case.cid}: {len(got)} tiles with sums {sorted(s for _, s in got)}, want {sorted(want.values())}"
+        have, need = sorted(s for _, s in got), sorted(want.values())
+        if e.get(
+            "complete"
+        ):  # a cell with no pixel centre is emitted empty (sum 0.0): extra zeros are allowed
+            wanted_zeros = need.count(0.0)
+            if have.count(0.0) >= wanted_zeros:
+                have = sorted([s for s in have if s != 0.0] + [0.0] * wanted_zeros)
+        if have != need:
+            return f"{case.cid}: {len(got)} tiles with sums {sorted(s for _, s in got)}, want {need}"
         return None
     ids = [c for c, _ in got]
     if len(set(ids)) != len(ids) or any(isinstance(c, float) for c in ids):

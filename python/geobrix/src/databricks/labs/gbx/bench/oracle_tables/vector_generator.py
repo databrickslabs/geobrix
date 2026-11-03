@@ -184,6 +184,14 @@ VECTOR_GENERATOR = (
         "mvt_tiles",
         {"tiles": PYR_TILES, "layer": "layer", "props": {"name": "a", "id": 7}},
     ),
+    # NULL attributes are a feature with no properties; in Python the NULL is the STRUCT cast, CAST(NULL AS struct<>).
+    Case(
+        "pyramid_null_attrs",
+        PYR,
+        (PYR_POINT, None, 0, 1),
+        "mvt_tiles",
+        {"tiles": PYR_TILES, "layer": "layer", "props": {}},
+    ),
     Case("pyramid_null_geom", PYR, (None, ATTRS, 0, 1), "no_rows"),
     Case("pyramid_null_zoom", PYR, (PYR_POINT, ATTRS, None, 1), "no_rows"),
     Case("pyramid_zoom_order", PYR, (PYR_POINT, ATTRS, 2, 1), "raises", "max_z"),

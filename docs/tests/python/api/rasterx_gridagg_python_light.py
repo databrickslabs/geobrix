@@ -7,6 +7,7 @@ Each function returns [band (INT), cellID, measure] columns directly.
 """
 
 from pathlib import Path
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 
 def _get_multiband_df(spark):
@@ -686,7 +687,7 @@ def _setup_custom_raster_view(spark):
     # rst_rasterize produces a raster in EPSG:27700 with integer metre coordinates
     # that exactly match the custom grid bounds below.
     df = spark.range(1).select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.lit(_LONDON_4KM_WKT),
             f.lit(1.0),
             f.lit(529000.0),

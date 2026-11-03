@@ -70,10 +70,10 @@
     "gbx_rst_binpoints": {
       "examples": "Examples:\n      > SELECT gbx_rst_binpoints( array(550100.0, 550200.0, 550300.0), array(180100.0, 180200.0, 180500.0), array(42.5, 45.1, 38.7), 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max' ) AS dsm;",
       "usage_args": "x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Bin scattered points into a raster by a statistic of their values.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.5.2"
@@ -518,12 +518,11 @@
     },
     "gbx_rst_dtmfromgeoms": {
       "examples": "Examples:\n      > SELECT gbx_rst_dtmfromgeoms( points_wkb_array, breaklines_wkb_array, 0.0, 0.01, 0.0, 0.0, 1000.0, 1000.0, 100, 100, 32633 ) AS dtm FROM survey_points;",
-      "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "usage_args": "points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs]",
+      "description": "Build a terrain model from Z-valued points by Delaunay triangulation.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -606,20 +605,21 @@
     "gbx_rst_fromcontent": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_fromcontent(content, 'GTiff') as tile FROM binary_raster_table;",
       "usage_args": "content, driver",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "description": "Build a tile from the bytes of a raster file.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.2.0"
     },
     "gbx_rst_fromfile": {
       "examples": "Examples:\n      > SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/nyc/sentinel2.tif', 'GTiff') AS tile;",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy"
+      "usage_args": "path, [driver]",
+      "description": "Read the raster file at a path into a tile.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.2.0"
     },
@@ -658,11 +658,11 @@
     },
     "gbx_rst_gridfrompoints": {
       "examples": "Examples:\n      > SELECT gbx_rst_gridfrompoints( points_wkb_array, values_array, 0.0, 0.0, 1000.0, 1000.0, 256, 256, 32633 ) AS idw FROM point_clouds;",
-      "usage_args": "points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power], [max_pts]",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
+      "usage_args": "points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs]",
+      "description": "Interpolate scattered point values to a grid by inverse-distance weighting.",
+      "surfaces": [
+        "session",
+        "python",
         "scala"
       ],
       "since": "0.4.0"
@@ -1191,12 +1191,11 @@
     },
     "gbx_rst_rasterize": {
       "examples": "Examples:\n      > SELECT gbx_rst_rasterize( unhex('010300000001000000050000000000000000000000000000000000000000000000000024400000000000000000000000000000244000000000000024400000000000000000000000000000244000000000000000000000000000000000'), 42.0, 0.0, 0.0, 10.0, 10.0, 100, 100, 4326 ) AS tile;",
-      "usage_args": "geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid",
-      "bindings": [
-        "sql",
-        "python-light",
-        "python-heavy",
-        "scala"
+      "usage_args": "geom, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [out_crs]",
+      "description": "Burn a geometry into a new raster tile.",
+      "surfaces": [
+        "session",
+        "python"
       ],
       "since": "0.4.0"
     },

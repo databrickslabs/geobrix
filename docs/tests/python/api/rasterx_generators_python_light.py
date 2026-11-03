@@ -13,6 +13,7 @@ rst_fromcontent (no JAR required).
 """
 
 from _fixtures import single_band_tile_df, multiband_tile_df
+from databricks.labs.gbx.rasterx import functions as rx_api
 
 # ============================================================================
 # Generator Functions (UDTFs via LATERAL)
@@ -150,7 +151,7 @@ rst_maketiles_python_light_example_output = """
 """
 
 
-def rst_rasterize_python_light_example(spark):
+def rst_rasterize_python_example(spark):
     """Burn geometry into a raster tile (column-returning, not UDTF).
 
     This is NOT a generator — it returns a single tile struct from geometry.
@@ -164,7 +165,7 @@ def rst_rasterize_python_light_example(spark):
     df = spark.createDataFrame([Row(geom="POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))")])
     # Rasterize a square polygon (value=1.0, extent=(0,0,10,10), 10x10 pixels, EPSG:4326)
     result = df.select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.col("geom"),
             f.lit(1.0),
             f.lit(0.0),
@@ -179,7 +180,7 @@ def rst_rasterize_python_light_example(spark):
     return result[0]["tile"]
 
 
-rst_rasterize_python_light_example_output = """
+rst_rasterize_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

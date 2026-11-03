@@ -1842,7 +1842,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"driver": "GTiff"},
         core_fn=lambda b, a: bytes(b),
         # F.lit the STRING driver arg (else prx _col reads "GTiff" as a column name).
-        col_fn=lambda t, a: prx.rst_fromcontent(t["raster"], F.lit(a["driver"])),
+        col_fn=lambda t, a: rx.rst_fromcontent(t["raster"], F.lit(a["driver"])),
         sources=(_PYRX_SERDE, _HEAVY + "constructor/RST_FromContent.scala"),
         core=False,
         input_kind="bytes",
@@ -1861,7 +1861,7 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda p, a: Path(p).read_bytes(),
         # pure-core only: the spark-path runner filters this out by modes, so the
         # column form is unused at runtime and kept only for a callable col_fn.
-        col_fn=lambda t, a: prx.rst_fromfile(F.lit("__unused__"), a["driver"]),
+        col_fn=lambda t, a: rx.rst_fromfile(F.lit("__unused__"), a["driver"]),
         # rst_fromfile is LIGHTWEIGHT-ONLY (issue #34): the heavy JVM tier cannot
         # read a FUSE/UC path from an executor, so there is NO heavy RST_FromFile
         # expression (the old constructor/RST_FromFile.scala was removed in
@@ -3055,7 +3055,7 @@ REGISTRY: Dict[str, FnSpec] = {
         # spark-path is mode-filtered out (geometry-in, pure-core only); the col_fn
         # is here only for the FnSpec contract (callable). The static box / value
         # are unused at runtime.
-        col_fn=lambda t, a: prx.rst_rasterize(
+        col_fn=lambda t, a: rx.rst_rasterize(
             F.lit(b""),
             F.lit(0.0),
             F.lit(0.0),
@@ -3094,7 +3094,7 @@ REGISTRY: Dict[str, FnSpec] = {
             power=a["power"],
             max_pts=a["max_pts"],
         ),
-        col_fn=lambda t, a: prx.rst_gridfrompoints(
+        col_fn=lambda t, a: rx.rst_gridfrompoints(
             F.array(),
             F.array(),
             F.lit(0.0),
@@ -3125,7 +3125,7 @@ REGISTRY: Dict[str, FnSpec] = {
             *_tile_extent_size_srid(ds),
             no_data=a["no_data"],
         ),
-        col_fn=lambda t, a: prx.rst_dtmfromgeoms(
+        col_fn=lambda t, a: rx.rst_dtmfromgeoms(
             F.array(),
             F.array(),
             F.lit(0.0),
@@ -4128,7 +4128,7 @@ REGISTRY: Dict[str, FnSpec] = {
             if g.zpoints
             else None
         ),
-        col_fn=lambda t, a: prx.rst_binpoints(
+        col_fn=lambda t, a: rx.rst_binpoints(
             F.array(),
             F.array(),
             F.array(),

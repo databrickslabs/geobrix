@@ -39,26 +39,6 @@ def test_rasterx_setup_example():
 # ---------------------------------------------------------------------------
 
 
-def test_rst_fromfile_python_heavy_example(spark):
-    """rst_fromfile (heavy) returns a MATERIALIZED tile (raster bytes present)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_fromfile_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_fromfile")
-    assert result["path"] is None, "materialized tile must have path=None"
-
-
-def test_heavy_output_constants_exist():
-    """All heavy-tier *_output constants are present and non-empty strings."""
-    assert rasterx_functions is not None
-    output_names = [
-        "rst_fromfile_python_heavy_example_output",
-    ]
-    for name in output_names:
-        assert hasattr(rasterx_functions, name), f"Missing output constant: {name}"
-        val = getattr(rasterx_functions, name)
-        assert isinstance(val, str) and val.strip(), f"Output constant is empty: {name}"
-
-
 # ---------------------------------------------------------------------------
 # Aggregator heavy-Python tests
 # ---------------------------------------------------------------------------
@@ -151,13 +131,6 @@ def test_rst_quadbin_rasterize_agg_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_quadbin_rasterize_agg_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_quadbin_rasterize_agg")
-
-
-def test_rst_binpoints_python_heavy_example(spark):
-    """rst_binpoints returns a non-null Float32 tile struct from inline point arrays."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_binpoints_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_binpoints")
 
 
 def test_rst_binpoints_agg_python_heavy_example(spark):
@@ -283,20 +256,6 @@ def test_rst_viewshed_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_viewshed")
 
 
-def test_rst_gridfrompoints_python_heavy_example(spark):
-    """rst_gridfrompoints returns a non-null tile struct (IDW interpolated)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_gridfrompoints_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_gridfrompoints")
-
-
-def test_rst_dtmfromgeoms_python_heavy_example(spark):
-    """rst_dtmfromgeoms returns a non-null tile struct (TIN interpolated)."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_dtmfromgeoms_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_dtmfromgeoms")
-
-
 # ============================================================================
 # Coordinate Transforms & Tiling (Heavy)
 # ============================================================================
@@ -410,13 +369,6 @@ def test_rst_custom_tessellate_python_heavy_example(spark):
     assert isinstance(result, list) and len(result) > 0
     assert list(result[0].asDict()) == ["tile"]
     assert result[0]["tile"]["cellid"] is not None
-
-
-def test_rst_rasterize_python_heavy_example(spark):
-    """rst_rasterize returns a materialized tile struct."""
-    assert rasterx_functions is not None
-    result = rasterx_functions.rst_rasterize_python_heavy_example(spark)
-    _assert_heavy_tile(result, "rst_rasterize")
 
 
 # ============================================================================

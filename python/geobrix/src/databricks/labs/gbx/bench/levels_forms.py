@@ -189,11 +189,14 @@ def _tile_column(spark, pairs, virtual: bool, keyed: bool):
             spark, rows, f"key string, tile {TILE_SQL}", what="virtual tile rows"
         )
     else:
-        from databricks.labs.gbx.pyrx import functions as prx
+        from databricks.labs.gbx.rasterx import functions as rx
 
         df = client_dataframe(
             spark, pairs, "key string, path string", what="tile path rows"
-        ).select("key", prx.rst_fromfile(F.col("path"), "GTiff", True).alias("tile"))
+        ).select(
+            "key",
+            rx.rst_fromfile(F.col("path"), "GTiff", materialize=True).alias("tile"),
+        )
     return df if keyed else df.select("tile")
 
 

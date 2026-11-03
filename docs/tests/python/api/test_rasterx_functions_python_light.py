@@ -18,7 +18,7 @@ except (ModuleNotFoundError, ImportError):
 def test_rst_fromfile_python_light_example(spark):
     """rst_fromfile returns a valid tile; width is 4 for the synthetic raster."""
     assert light_examples is not None
-    result = light_examples.rst_fromfile_python_light_example(spark)
+    result = light_examples.rst_fromfile_python_example(spark)
     assert result == 4, f"Expected width 4, got {result}"
 
 
@@ -26,7 +26,7 @@ def test_output_constants_exist():
     """All *_output constants are present and non-empty strings."""
     assert light_examples is not None
     output_names = [
-        "rst_fromfile_python_light_example_output",
+        "rst_fromfile_python_example_output",
     ]
     for name in output_names:
         assert hasattr(light_examples, name), f"Missing output constant: {name}"

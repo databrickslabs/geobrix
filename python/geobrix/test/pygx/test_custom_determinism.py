@@ -51,6 +51,8 @@ import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx.rasterx import functions as rx
+
 _HERE = Path(__file__).resolve()
 # parents[2] == python/geobrix
 _JARS = sorted((_HERE.parents[2] / "lib").glob("geobrix-*-jar-with-dependencies.jar"))
@@ -144,7 +146,7 @@ def test_r1_same_struct_yields_same_cellids(spark):
     raster = _make_raster(27700, (530000.0, 183000.0), 100.0)
     df = (
         spark.createDataFrame([(bytearray(raster),)], ["raster"])
-        .select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+        .select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
         .withColumn("grid", _grid_struct_col(spark, _GRID_A, "grid"))
     )
     df.createOrReplaceTempView("_det_r1_view")

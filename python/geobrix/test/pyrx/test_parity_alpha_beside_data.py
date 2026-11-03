@@ -34,6 +34,8 @@ from test.pyrx import _tessellate_parity as tp  # noqa: E402
 import numpy as np  # noqa: E402
 from pyspark.sql import functions as f  # noqa: E402
 
+from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
+
 from .test_parity_bng_quadbin_raster_grid import (  # noqa: E402
     _TESS_CONFIG,
     _decoded,
@@ -154,7 +156,7 @@ def _tile_df(spark, raster, tier):
 
     mod.register(spark)
     return mod, spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
 
 

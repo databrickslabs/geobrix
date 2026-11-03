@@ -67,9 +67,11 @@ def _tile_df(spark, **kw):
     """One-row DataFrame with a tile struct column named 'tile'."""
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx.rasterx import functions as rx_api
+
     raster = _make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 # ---------------------------------------------------------------------------
@@ -209,6 +211,7 @@ def pyrx_polygonize_example(spark):
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     # Build a 4 x 4 raster with a 2 x 2 block of value 5.0 in the centre;
     # all other pixels are NoData so polygonize traces only the filled region.
@@ -230,7 +233,7 @@ def pyrx_polygonize_example(spark):
         raster_bytes = mf.read()
 
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
     # rst_polygonize is a streaming Python UDTF; invoke via SQL LATERAL.
     rx.register(spark)
@@ -297,7 +300,7 @@ def pyrx_land_cover_example(spark):
         raster_bytes = mf.read()
 
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     lc_df = tile_df.select(
         rx_api.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
     )
@@ -364,7 +367,7 @@ def rst_land_cover_python_example(spark):
             ds.write(a)
         raster_bytes = mf.read()
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     lc = tile_df.select(
         rx_api.rst_land_cover("tile", "spectral", 6, 0).alias("tile")
     ).first()["tile"]
@@ -387,12 +390,13 @@ def pyrx_sql_example(spark):
     """Register pyrx SQL functions and query them from Spark SQL."""
     from pyspark.sql import functions as f
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     rx.register(spark)
 
     raster_bytes = _make_geotiff_bytes(width=4, height=3, count=2, epsg=4326)
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])
-    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     tile_df.createOrReplaceTempView("rasters_sql")
 
     result = spark.sql(

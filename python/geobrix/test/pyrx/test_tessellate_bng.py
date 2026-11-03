@@ -25,6 +25,7 @@ from shapely.geometry import box
 
 from databricks.labs.gbx.pygx import _bng
 from databricks.labs.gbx.pyrx.core import tessellate as T
+from databricks.labs.gbx.rasterx import functions as rx
 
 _BNG_ID_RE = re.compile(r"^[A-Z]{2}\d*(SW|NW|NE|SE)?$")
 
@@ -447,7 +448,7 @@ def test_spark_struct_no_rasterx_cell_id_in_metadata(spark):
 
     tile_bytes = _tile_27700()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_bng_tess_le2")
     # SELECT t.* expands the UDTF struct fields directly: cellid, raster, metadata.

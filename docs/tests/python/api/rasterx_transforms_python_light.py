@@ -287,6 +287,7 @@ def rst_bng_tessellate_python_light_example(spark):
     directly in that CRS) so the tessellation produces real 1km BNG cells.
     """
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
 
     rx.register(spark)
@@ -296,7 +297,7 @@ def rst_bng_tessellate_python_light_example(spark):
         "531000 181000, 529000 181000, 529000 179000))"
     )
     london = spark.range(1).select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.lit(london_wkt),
             f.lit(1.0),
             f.lit(529000.0),
@@ -362,6 +363,7 @@ def rst_custom_tessellate_python_light_example(spark):
     same CRS and extent so tessellation produces real chip rows.
     """
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -373,7 +375,7 @@ def rst_custom_tessellate_python_light_example(spark):
         "531000 181000, 529000 181000, 529000 179000))"
     )
     london = spark.range(1).select(
-        rx.rst_rasterize(
+        rx_api.rst_rasterize(
             f.lit(london_wkt),
             f.lit(1.0),
             f.lit(529000.0),

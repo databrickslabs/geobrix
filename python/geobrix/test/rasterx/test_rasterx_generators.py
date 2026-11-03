@@ -179,23 +179,6 @@ def test_rst_frombands(spark):
     assert result[0]["multiband_raster"] is not None
 
 
-def test_rst_fromcontent(spark):
-    """Test creating raster from binary content."""
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    # Read raster as binary content
-    df = spark.read.format("binaryFile").load(str(MODIS_B01))
-
-    result_df = df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("raster")
-    )
-
-    result = result_df.collect()
-    assert result is not None
-    assert len(result) == 1
-    assert result[0]["raster"] is not None
-
-
 def test_rst_from_local_path(spark):
     """Test creating a raster tile from a local file path (heavy-native bytes path).
 

@@ -54,6 +54,8 @@ pytest.importorskip(
 )
 import numpy as np  # noqa: E402
 
+from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
+
 pytestmark = pytest.mark.integration
 
 _HERE = Path(__file__).resolve()
@@ -263,10 +265,8 @@ def _tile_df(spark, raster):
     """Build a one-row DataFrame with tile + grid columns."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     raw = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     return _add_grid_col(raw)
 

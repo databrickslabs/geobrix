@@ -267,56 +267,6 @@ def rst_h3_rasterize_agg(
 # Constructors
 
 
-def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
-    """Build a raster tile from binary content and GDAL driver name.
-
-    Args:
-        content: Column of binary content (e.g. from binaryFile reader).
-        driver: GDAL driver name (e.g. GTiff, COG).
-
-    Returns:
-        Column of raster tile.
-    """
-    return f.call_function("gbx_rst_fromcontent", _col(content), _col(driver))
-
-
-def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
-    """Build a raster tile from a file path and GDAL driver name.
-
-    Args:
-        path: Column of SOURCE FILE path (string) — a filesystem or Volume path read to
-            produce a materialized bytes-tile.  This is a raster-constructor argument,
-            not a "path-tile" field; the returned tile always carries raster bytes.
-        driver: GDAL driver name (e.g. GTiff).
-
-    Returns:
-        Column of raster tile (materialized — raster bytes present).
-
-    Note:
-        ``gbx_rst_fromfile`` is **lightweight-only**: it is implemented by the ``pyrx`` Python loader
-        (a ``pandas_udf``) and has no JVM/Scala implementation. On Databricks the executor JVM cannot
-        read a UC Volume (``/Volumes/...``) FUSE path — the UC credential is held only by Spark's
-        managed Python worker — so this delegates to ``pyrx.rst_fromfile`` and **requires
-        the lightweight tier (the env wheel for the runtime, or the plain wheel off Databricks)**. Without
-        it, this raises with guidance. The portable alternative (works on every tier) is
-        ``spark.read.format("binaryFile").load(path)`` + ``gbx_rst_fromcontent(content, driver)``.
-    """
-    try:
-        from databricks.labs.gbx.pyrx import functions as _pyrx
-    except ImportError as e:  # pragma: no cover
-        raise ImportError(
-            "gbx_rst_fromfile is lightweight-only and requires the lightweight tier "
-            "(implemented by the pyrx Python reader; the JVM cannot read UC Volumes). "
-            "Install the env wheel for the runtime (or pip install geobrix off Databricks), or use "
-            "spark.read.format('binaryFile').load(path) + gbx_rst_fromcontent(content, driver)."
-        ) from e
-    # The heavyweight surface always yields a MATERIALIZED tile (raster bytes
-    # present): a virtual tile carries only a path, which JVM expressions cannot
-    # read. pyrx.rst_fromfile now defaults to a virtual tile, so force
-    # materialize=True here to preserve this shim's bytes-present contract.
-    return _pyrx.rst_fromfile(path, driver, materialize=True)
-
-
 def rst_frombands(bands: ColLike) -> Column:
     """Build a raster tile from a list of band tiles (same dimensions).
 
@@ -1866,52 +1816,6 @@ def rst_xyzpyramid(
     )
 
 
-def rst_rasterize(
-    geom: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-) -> Column:
-    """Burn a vector geometry into a raster tile at the given extent and resolution.
-
-    Returns a GTiff-backed tile of shape ``width_px x height_px`` covering the
-    bounding box ``(xmin, ymin) -> (xmax, ymax)`` in the given SRID. Pixels
-    inside the geometry receive ``value``; pixels outside receive NoData
-    (-9999.0, Float64).
-
-    Args:
-        geom: Geometry (WKB, EWKB, WKT, or EWKT) column.
-        value: Burn value (``float``).
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-
-    Returns:
-        Raster tile column.
-    """
-    return f.call_function(
-        "gbx_rst_rasterize",
-        _col(geom),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-    )
-
-
 def rst_polygonize(
     tile: ColLike,
     band: ColLike = None,
@@ -1978,64 +1882,9 @@ def rst_color_relief(
 # ---------------------------------------------------------------------------
 # Resample family and IDW interpolation
 #
-# Three resample wrappers delegate to gdal.Warp with -tr / -ts; IDW pair
-# (`rst_gridfrompoints` non-aggregator + `rst_gridfrompoints_agg` aggregator)
-# delegates to gdal.Grid with the invdist algorithm.
+# Three resample wrappers delegate to gdal.Warp with -tr / -ts; the IDW aggregator
+# (`rst_gridfrompoints_agg`) delegates to gdal.Grid with the invdist algorithm.
 # ---------------------------------------------------------------------------
-
-
-def rst_gridfrompoints(
-    points_array: ColLike,
-    values_array: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-    power: ColLike = None,
-    max_pts: ColLike = None,
-) -> Column:
-    """Inverse-Distance-Weighted (IDW) interpolation - non-aggregator form.
-
-    Points (``ARRAY<BINARY>`` WKB or ``ARRAY<STRING>`` WKT) and ``values_array``
-    (``ARRAY<DOUBLE>``) are passed in a single row. The output is a Float64
-    GTiff tile of shape ``width_px x height_px`` covering
-    ``(xmin, ymin) -> (xmax, ymax)`` in the given SRID.
-
-    Args:
-        points_array: Column of array of point geometries (WKB or WKT).
-        values_array: Column of array of double values (same length as ``points_array``).
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        out_srid: EPSG SRID of the output raster.
-        power: IDW exponent (default 2.0).
-        max_pts: Maximum neighbour points per cell (default 12).
-
-    Returns:
-        Raster tile column.
-    """
-    power_col = f.lit(2.0) if power is None else _col(power)
-    max_pts_col = f.lit(12) if max_pts is None else _col(max_pts)
-    return f.call_function(
-        "gbx_rst_gridfrompoints",
-        _col(points_array),
-        _col(values_array),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        power_col,
-        max_pts_col,
-    )
 
 
 def rst_gridfrompoints_agg(
@@ -2088,63 +1937,6 @@ def rst_gridfrompoints_agg(
         _col(out_srid),
         power_col,
         max_pts_col,
-    )
-
-
-def rst_binpoints(
-    x_array: ColLike,
-    y_array: ColLike,
-    z_array: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    srid: ColLike,
-    statistic: ColLike = "max",
-) -> Column:
-    """Bin parallel x/y/z ``ARRAY<DOUBLE>`` columns into a Float32 raster tile.
-
-    Non-aggregator (scalar) form — all three arrays live in a single row.
-    For the grouped-agg form use :func:`rst_binpoints_agg`.
-
-    Output is a single-band Float32 GTiff tile of shape
-    ``width_px x height_px`` covering ``(xmin, ymin) -> (xmax, ymax)`` in the
-    given SRID. Empty cells (no points) carry NoData (``-9999.0``).
-
-    Args:
-        x_array: Column of ``ARRAY<DOUBLE>`` x-coordinates.
-        y_array: Column of ``ARRAY<DOUBLE>`` y-coordinates.
-        z_array: Column of ``ARRAY<DOUBLE>`` z-values to reduce per cell.
-        xmin: Minimum X of the output raster extent.
-        ymin: Minimum Y of the output raster extent.
-        xmax: Maximum X of the output raster extent.
-        ymax: Maximum Y of the output raster extent.
-        width_px: Output raster width in pixels.
-        height_px: Output raster height in pixels.
-        srid: EPSG SRID of the output raster.
-        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
-            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
-            (e.g. ``"percentile:90"``).
-
-    Returns:
-        Raster tile column (single-band Float32 GTiff).
-    """
-    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
-    return f.call_function(
-        "gbx_rst_binpoints",
-        _col(x_array),
-        _col(y_array),
-        _col(z_array),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(srid),
-        stat_col,
     )
 
 
@@ -2269,61 +2061,9 @@ def rst_custom_rasterize_agg(
 # ---------------------------------------------------------------------------
 # Delaunay-TIN Digital Terrain Model (DTM) interpolation
 #
-# Two wrappers: `rst_dtmfromgeoms` (non-aggregator, Z-valued points as an
-# array column) + `rst_dtmfromgeoms_agg` (aggregator, one Z-valued point
-# per row). Both delegate to gbx_rst_dtmfromgeoms / gbx_rst_dtmfromgeoms_agg.
+# `rst_dtmfromgeoms_agg` (aggregator, one Z-valued point per row) delegates to
+# gbx_rst_dtmfromgeoms_agg. The non-aggregator form is generated from the manifest.
 # ---------------------------------------------------------------------------
-
-
-def rst_dtmfromgeoms(
-    points_array: ColLike,
-    breaklines_array: ColLike,
-    merge_tolerance: ColLike,
-    snap_tolerance: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike,
-    no_data: ColLike = None,
-) -> Column:
-    """DTM from Z-valued points + optional breaklines via Delaunay-TIN interpolation.
-
-    Output is a single-band Float64 GTiff of ``width_px x height_px`` over the bbox.
-    For N-unit cells set ``width_px = round((xmax-xmin)/N)``,
-    ``height_px = round((ymax-ymin)/N)`` (e.g. a 1000 m extent at 10 m cells -> 100 px).
-
-    Args:
-        points_array: Array column of Z-valued point geometries (WKB binary or WKT string).
-        breaklines_array: Array column of breakline LineString geometries; pass an empty array for none.
-        merge_tolerance: Delaunay segment-merge tolerance.
-        snap_tolerance: Vertex-to-breakline snap tolerance.
-        xmin, ymin, xmax, ymax: Output raster extent.
-        width_px, height_px: Output raster size in pixels.
-        out_srid: EPSG SRID of the output raster.
-        no_data: No-data sentinel (default -9999.0).
-
-    Returns:
-        Raster tile column.
-    """
-    nd = f.lit(-9999.0) if no_data is None else _col(no_data)
-    return f.call_function(
-        "gbx_rst_dtmfromgeoms",
-        _col(points_array),
-        _col(breaklines_array),
-        _col(merge_tolerance),
-        _col(snap_tolerance),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid),
-        nd,
-    )
 
 
 def rst_dtmfromgeoms_agg(
@@ -2748,6 +2488,58 @@ def rst_bandmetadata(
     )
 
 
+def rst_binpoints(
+    x_array: ColLike,
+    y_array: ColLike,
+    z_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = None,
+) -> Column:
+    """Bin scattered points into a raster by a statistic of their values.
+
+    Args:
+        x_array: The x coordinate of each point.
+        y_array: The y coordinate of each point, in the same order.
+        z_array: The value of each point, in the same order.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        srid: The EPSG or ESRI code of the output CRS.
+        statistic: How the points in a pixel combine: `max`, `min`, `mean`, `median`,
+            `count` or `percentile:<p>` (for example `percentile:90`), in any case. Another
+            word raises. SQL default: ``'max'``.
+
+    Returns:
+        A single-band Float32 tile over the extent; a point on the east or south edge is
+        left out, and a pixel with no point is NoData (-9999).
+
+    SQL: ``gbx_rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])``
+    """
+    return _api.call(
+        "gbx_rst_binpoints",
+        x_array,
+        y_array,
+        z_array,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        srid,
+        statistic,
+    )
+
+
 def rst_bng_rasterize_agg(
     cellid: ColLike,
     value: ColLike,
@@ -3000,6 +2792,68 @@ def rst_derivedband(
     )
 
 
+def rst_dtmfromgeoms(
+    points_array: ColLike,
+    breaklines_array: ColLike,
+    merge_tolerance: ColLike,
+    snap_tolerance: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    no_data: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Build a terrain model from Z-valued points by Delaunay triangulation.
+
+    Args:
+        points_array: The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an
+            array.
+        breaklines_array: Break lines, as an array; NULL or empty for none. The light
+            level uses their vertices as extra points and does not enforce them as edges.
+        merge_tolerance: Accepted for compatibility with the JVM level; not applied.
+        snap_tolerance: Accepted for compatibility with the JVM level; not applied.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
+            default: ``NULL``.
+        no_data: The value of a pixel outside the points' hull. SQL default:
+            ``-9999.0``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
+            `out_srid`; setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        A single-band Float64 tile over the extent; each pixel holds the height
+        interpolated in its triangle, and `no_data` outside the hull of the points.
+
+    SQL: ``gbx_rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_dtmfromgeoms",
+        points_array,
+        breaklines_array,
+        merge_tolerance,
+        snap_tolerance,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        no_data,
+        out_crs,
+    )
+
+
 def rst_evi(
     tile: ColLike,
     red_idx: ColLike,
@@ -3169,6 +3023,68 @@ def rst_format(
     )
 
 
+def rst_fromcontent(
+    content: ColLike,
+    driver: ColLike,
+) -> Column:
+    """Build a tile from the bytes of a raster file.
+
+    Args:
+        content: The raster file's bytes, for example the `content` column of the
+            `binaryFile` reader.
+        driver: The GDAL driver short name the bytes are in, for example `'GTiff'`, in
+            any case. It goes into the tile's `driver` metadata; a name no driver has
+            raises.
+
+    Returns:
+        A tile that holds the bytes, with the driver, width, height and band count in
+        its metadata. Bytes GDAL cannot open give an error tile; a NULL content or
+        driver gives NULL.
+
+    SQL: ``gbx_rst_fromcontent(content, driver)``
+    """
+    return _api.call(
+        "gbx_rst_fromcontent",
+        content,
+        driver,
+    )
+
+
+def rst_fromfile(
+    path: ColLike,
+    driver: ColLike = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Read the raster file at a path into a tile.
+
+    Args:
+        path: The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A
+            remote URL is refused unless the driver's remote-read switch is on.
+        driver: The GDAL driver short name hint, in any case. It goes into the tile's
+            `driver` metadata; a name no driver has raises. SQL default: ``'GTiff'``.
+        materialize: Python only: ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.
+
+    Returns:
+        A tile that holds the file's bytes, re-encoded as a GeoTIFF. NULL for a NULL
+        path or a file that cannot be opened; an error tile with a `Fix:` for a format
+        GeoBrix refuses, or a file whose decoded size is over the materialize cap.
+
+    SQL: ``gbx_rst_fromfile(path, [driver])``
+    """
+    if _api.given(materialize):
+        return _api.extra_call(
+            "gbx_rst_fromfile",
+            (materialize,),
+            path,
+            driver,
+        )
+    return _api.call(
+        "gbx_rst_fromfile",
+        path,
+        driver,
+    )
+
+
 def rst_georeference(
     tile: ColLike,
 ) -> Column:
@@ -3229,6 +3145,65 @@ def rst_getsubdataset(
         "gbx_rst_getsubdataset",
         tile,
         subset_name,
+    )
+
+
+def rst_gridfrompoints(
+    points_array: ColLike,
+    values_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    power: ColLike = None,
+    max_pts: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Interpolate scattered point values to a grid by inverse-distance weighting.
+
+    Args:
+        points_array: The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL
+            element is dropped with its value.
+        values_array: The value of each point, in the same order.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
+            default: ``NULL``.
+        power: The inverse-distance exponent, above 0. SQL default: ``2.0``.
+        max_pts: The number of nearest points used per pixel, above 0. SQL default:
+            ``12``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
+            `out_srid`; setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        A single-band Float64 tile over the extent; each pixel holds the
+        inverse-distance-weighted mean of its nearest points, NoData (-9999) where there
+        are none. The points are taken to be in the output CRS.
+
+    SQL: ``gbx_rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_gridfrompoints",
+        points_array,
+        values_array,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        power,
+        max_pts,
+        out_crs,
     )
 
 
@@ -3951,6 +3926,57 @@ def rst_proximity(
         target_values,
         dist_units,
         max_distance,
+    )
+
+
+def rst_rasterize(
+    geom: ColLike,
+    value: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    out_srid: ColLike = None,
+    out_crs: ColLike = None,
+) -> Column:
+    """Burn a geometry into a new raster tile.
+
+    Args:
+        geom: The geometry: WKB, EWKB, WKT or EWKT. A geometry with an SRID is
+            reprojected into the output CRS first.
+        value: The value burned into the pixels the geometry covers.
+        xmin: The west edge of the output in the output CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
+            without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
+            default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
+            `out_srid`; setting both raises. SQL default: ``NULL``.
+
+    Returns:
+        A single-band Float64 tile over the extent; the pixels whose centre the geometry
+        covers hold `value`, the others NoData (-9999).
+
+    SQL: ``gbx_rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [out_crs])``
+    """
+    return _api.call(
+        "gbx_rst_rasterize",
+        geom,
+        value,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        out_srid,
+        out_crs,
     )
 
 

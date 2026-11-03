@@ -2181,33 +2181,6 @@ result.show(truncate = false)
 (IDW-interpolated tile over specified extent)
 """.trim
 
-  val rst_dtmfromgeoms_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-rx.register(spark)
-// Create synthetic survey points with Z-valued WKB geometries
-val survey = spark.createDataFrame(Seq(
-  (Array[Array[Byte]](/* WKB point 1 */, /* WKB point 2 */), Array[Array[Byte]]())
-)).toDF("points_wkb", "breaklines_wkb")
-val result = survey.select(
-  rx.rst_dtmfromgeoms(col("points_wkb"), col("breaklines_wkb"), lit(0.0), lit(0.01),
-    lit(0.0), lit(0.0), lit(1000.0), lit(1000.0), lit(100), lit(100), lit(32633)).alias("tin")
-)
-result.show(truncate = false)
-""".trim
-
-  val rst_dtmfromgeoms_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tin                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(TIN-interpolated DTM over specified extent and pixel count)
-""".trim
-
   // ========================================================================
   // Coordinate Transforms & Tiling
   // ========================================================================
@@ -2577,50 +2550,6 @@ result.show(truncate = false)
 (array of tile structs per MB subdivision)
 """
 
-  val rst_rasterize_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-rx.register(spark)
-val wkt = "POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))"
-val result = spark.createDataFrame(Seq(
-  (wkt,)
-)).toDF("geom")
-  .select(rx.rst_rasterize(
-    col("geom"),
-    lit(1.0),
-    lit(0.0), lit(0.0), lit(10.0), lit(10.0),
-    lit(10), lit(10),
-    lit(4326)
-  ).alias("tile"))
-result.show(truncate = false)
-""".trim
-
-  val rst_rasterize_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(rasterized tile: pixels inside the polygon carry the burn value; outside = NoData)
-"""
-
-  // ============================================================================
-  // H3 Rastertogrid Functions — Scala
-  // ============================================================================
-
-  val rst_h3_rastertogridavg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("multiband_rasters")
-val result = raster.select(rx.rst_h3_rastertogridavg(col("tile"), lit(4)).alias("h3_grid")).first()
-result.getAs[Seq[Seq[Row]]]("h3_grid")
-""".trim
-
   val rst_h3_rastertogridavg_scala_example_output: String =
     """Vector(Vector(Row(cellID: 599686042433355775, measure: 123.45), ...), ...)
 (Seq[Seq[Row]]: outer seq = bands, inner seq = cells per band)"""
@@ -2973,7 +2902,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 // Custom grid with INTEGER BNG metre coordinates covering the same 4km extent.
@@ -2994,7 +2923,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3014,7 +2943,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3034,7 +2963,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3054,7 +2983,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3074,7 +3003,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3094,7 +3023,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3114,7 +3043,7 @@ import org.apache.spark.sql.functions._
 
 val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
     lit(40), lit(40), lit(27700)).alias("tile"))
 val grid = call_function("gbx_custom_grid",
@@ -3190,7 +3119,7 @@ rx.register(spark)
 // Synthetic 2km London raster (EPSG:27700); custom grid with the same CRS and extent.
 val londonWkt = "POLYGON((529000 179000, 531000 179000, 531000 181000, 529000 181000, 529000 179000))"
 val raster = spark.range(1).select(
-  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+  call_function("gbx_rst_rasterize", lit(londonWkt), lit(1.0),
     lit(529000.0), lit(179000.0), lit(531000.0), lit(181000.0),
     lit(200), lit(200), lit(27700)).alias("tile"))
 // Custom grid covering the same EPSG:27700 extent as the raster.

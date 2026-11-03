@@ -946,11 +946,6 @@ _RASTER_SUFFIXES = (
 )
 
 
-def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
-    """Build a tile struct from raster BINARY content and GDAL driver name."""
-    return _fromcontent_udf(_col(content), _col(driver))
-
-
 def _names_a_vrt(local) -> bool:
     """Whether the file at ``local`` is a VRT: by its name, or because it starts with the VRT root element (after
     optional whitespace and an XML declaration). A file named for a known raster format is not opened to look.
@@ -1200,58 +1195,6 @@ def _fromfile_sql_materialized_udf(path, driver):
 
 
 # rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.
-def rst_fromfile(
-    path: ColLike, driver: ColLike = "GTiff", materialize: Optional[bool] = None
-) -> Column:
-    """Reference the raster at ``path`` as a tile — a **virtual** tile by default.
-
-    ``path`` is a filesystem path (FUSE ``/Volumes/...`` paths work on Databricks)
-    and ``driver`` is a GDAL driver short-name hint carried into the tile metadata
-    (rasterio auto-detects the actual format on open).
-
-    Light-tier default is a **virtual tile**: bytes-free, pointing at ``path`` over
-    its whole-file window — no pixels are read until a downstream op needs them.
-    This is the lazy entry point for loading rasters by path. Pass
-    ``materialize=True`` to read the pixels now and return a materialized (bytes)
-    tile instead. There is no ``virtualize_dir``/``virtualize_prefix`` here: the
-    source file already is the durable backing store, so nothing needs writing.
-
-    A path that cannot be opened returns NULL (matching the heavyweight's
-    null-on-error behaviour), whether virtual (header open fails) or materialized.
-    A file the driver policy refuses is an error tile carrying the reason and its Fix, never NULL.
-
-    A **VRT** with ``materialize=True`` is rendered into a self-contained GTiff tile (the VRT's pixels, no path
-    back to the VRT). A VRT that renders over the materialize cap, or whose sources cannot be read, is an
-    error tile with the reason; the virtual default reads the VRT in windows and has no such cap.
-
-    Args:
-        path:        Raster file path (string column).
-        driver:      GDAL driver short name hint. Defaults to "GTiff".
-        materialize: ``True`` reads pixels now and returns a materialized tile;
-                     default (``None``/``False``) returns a virtual tile.
-
-    Returns:
-        Tile struct (virtual by default, materialized when ``materialize=True``),
-        or NULL if the path cannot be opened.
-    """
-    drv = f.lit(driver) if isinstance(driver, str) else _col(driver)
-    # Driver-capture the connect-aware materialize cap HERE (Column-build runs on
-    # the driver, where a session is present) and bake it as an f.lit so the correct
-    # 64 MiB Serverless cap travels to the worker-side UDF. _fromfile_impl runs inside
-    # the UDF on a session-less worker; resolving the cap there would wrongly use the
-    # 256 MiB classic cap → a 64-256 MiB source with materialize=True would slip past
-    # the guard and OOM. Mirrors file_ref_arg's driver-side cap capture.
-    from databricks.labs.gbx.ds.file_gbx import (
-        _connect_aware_lru_sizing,
-        _resolve_session_for_cap,
-    )
-
-    _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
-    # the driver's remote-path switch goes to the workers with the UDF (they never read it themselves)
-    udf = carrying_udf(_fromfile_udf, driver_switch())
-    return udf(_col(path), drv, f.lit(bool(materialize)), f.lit(_cap))
-
-
 def _refusal_as_error_tile(func):
     """A tile-returning UDF body whose group has a member decoded over the read cap answers that group's error tile with
     the refusal (reason and Fix), never a result built from the other members."""
@@ -3807,7 +3750,9 @@ def rst_viewshed_towers(
             "_vrt", _mint_window_vrt("tower_id", "observer_x", "observer_y")
         )
         .where(f.col("_vrt").isNotNull())
-        .withColumn("_dem", rst_fromfile("_vrt", materialize=heavy))
+        .withColumn(
+            "_dem", _fromfile_extra(f.col("_vrt"), f.lit("GTiff"), f.lit(bool(heavy)))
+        )
     )
     if heavy:
         # The light read gives NULL for a tile it cannot read, and a heavyweight step gives an error tile for a
@@ -4449,40 +4394,6 @@ def _rasterize_udf(
     return _serde.build_tile(new_bytes, "GTiff", 0)
 
 
-def rst_rasterize(
-    geom: ColLike,
-    value: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike = None,
-    out_crs: ColLike = None,
-) -> Column:
-    """Burn a geometry (WKB, EWKB, WKT, or EWKT) into a new raster tile at the given extent/size.
-
-    Output CRS: ``out_crs`` (string — ``EPSG:x`` / ``ESRI:x`` / WKT) wins over the
-    int ``out_srid``; both set -> error; neither -> the geometry's own source CRS
-    is carried through. The geometry is reprojected from its source CRS (EWKB
-    embedded SRID) into the output CRS before burning.
-    """
-    out_crs_col = f.lit(out_crs) if out_crs is not None else f.lit(None)
-    return _rasterize_udf(
-        _col(geom),
-        _col(value),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid) if out_srid is not None else f.lit(None),
-        out_crs_col,
-    )
-
-
 def _fillnodata_bytes(tile, max_search_dist, smoothing_iter):
     from databricks.labs.gbx.pyrx import _env
 
@@ -4574,64 +4485,6 @@ def _gridfrompoints_udf(
 
 
 # --- Tier 1e4: point-cloud binning (array -> tile) ---------------------------
-def rst_gridfrompoints(
-    points_array: ColLike,
-    values_array: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike = None,
-    power: ColLike = 2.0,
-    max_pts: ColLike = 12,
-    out_crs: ColLike = None,
-) -> Column:
-    """Inverse-distance-weighted (IDW) grid from an ARRAY of POINT WKB + values.
-
-    ``points_array`` is ARRAY<BINARY> (WKB points), ``values_array`` is the parallel
-    ARRAY<DOUBLE>. For each output cell center the value is the inverse-distance
-    weighted mean of the nearest ``max_pts`` points (weight = 1/distance**power);
-    a point coincident with a cell center returns that value. Output is a
-    single-band Float64 tile over ``[xmin,ymin,xmax,ymax]`` at
-    ``width_px x height_px``; NoData = -9999.0.
-
-    Output CRS: ``out_crs`` (string) wins over the int ``out_srid``; both set ->
-    error; neither -> CRS-less. The input points are assumed to be in the output
-    CRS (this is a label, not a reprojection).
-
-    Args:
-        points_array:    ARRAY<BINARY> of WKB POINT geometries.
-        values_array:    ARRAY<DOUBLE> parallel to ``points_array``.
-        xmin..ymax: Output extent in CRS units.
-        width_px, height_px: Output raster size in pixels.
-        out_srid:  EPSG or ESRI code for the output CRS.
-        out_crs:   CRS string for the output (``EPSG:x`` / ``ESRI:x`` / WKT).
-        power:     IDW exponent (default 2.0).
-        max_pts:   Max neighbours per cell (default 12).
-
-    Returns:
-        Single-band Float64 tile struct.
-    """
-    p = f.lit(power) if isinstance(power, (int, float)) else _col(power)
-    m = f.lit(max_pts) if isinstance(max_pts, (int, float)) else _col(max_pts)
-    return _gridfrompoints_udf(
-        _col(points_array),
-        _col(values_array),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid) if out_srid is not None else f.lit(None),
-        p,
-        m,
-        f.lit(out_crs) if out_crs is not None else f.lit(None),
-    )
-
-
 @f.udf(V2_TILE_SCHEMA)
 def _binpoints_udf(
     x_arr, y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid, statistic=None
@@ -4665,60 +4518,6 @@ def _binpoints_udf(
         str(statistic) if statistic is not None else "max",
     )
     return _serde.build_tile(b, "GTiff", 0)
-
-
-def rst_binpoints(
-    x_array: ColLike,
-    y_array: ColLike,
-    z_array: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    srid: ColLike,
-    statistic: ColLike = "max",
-) -> Column:
-    """Bin a per-row ARRAY of (x, y, z) points into a single-band raster tile.
-
-    ``x_array``, ``y_array``, ``z_array`` are parallel ``ARRAY<DOUBLE>`` columns.
-    Each output pixel carries the ``statistic`` reduction of all points whose
-    centre falls in that pixel's cell. Empty cells carry NoData (-9999.0).
-
-    Half-open interval: a point exactly on ``xmax`` (or ``ymin``) is dropped to
-    prevent cross-tile double-counting when DSMs are assembled from adjacent tiles.
-
-    Args:
-        x_array:          ARRAY<DOUBLE> of point x-coordinates (in CRS of srid).
-        y_array:          ARRAY<DOUBLE> of point y-coordinates, parallel to x.
-        z_array:          ARRAY<DOUBLE> of point z-values, parallel to x.
-        xmin, ymin,
-        xmax, ymax:       Spatial extent of the output raster in CRS units.
-        width_px,
-        height_px:        Output raster dimensions in pixels.
-        srid:             EPSG code for the output CRS.
-        statistic:        One of ``"max"`` (default), ``"min"``, ``"mean"``,
-                          ``"median"``, ``"count"``, or ``"percentile:<p>"``
-                          (e.g. ``"percentile:90"``).
-
-    Returns:
-        Single-band Float32 tile struct (cellid 0).
-    """
-    stat = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
-    return _binpoints_udf(
-        _col(x_array),
-        _col(y_array),
-        _col(z_array),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(srid),
-        stat,
-    )
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -4782,72 +4581,6 @@ _POLYGONIZE_ROW_SCHEMA = StructType(
         StructField("value", DoubleType(), nullable=False),
     ]
 )
-
-
-def rst_dtmfromgeoms(
-    points_array: ColLike,
-    breaklines_array: ColLike,
-    merge_tolerance: ColLike,
-    snap_tolerance: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width_px: ColLike,
-    height_px: ColLike,
-    out_srid: ColLike = None,
-    no_data: ColLike = -9999.0,
-    out_crs: ColLike = None,
-) -> Column:
-    """Delaunay-TIN DTM from Z-valued POINT WKB (+ optional breaklines).
-
-    ``points_array`` is ARRAY<BINARY> of WKB POINTs WITH Z; ``breaklines_array`` is
-    ARRAY<BINARY> of WKB linestrings (may be null/empty). A Delaunay
-    triangulation of the points' (x, y) is built and Z is barycentrically
-    interpolated at each output cell center. Cells outside the convex hull
-    become ``no_data``. Output is a single-band Float64 tile over the extent at
-    ``width_px x height_px``.
-
-    Output CRS: ``out_crs`` (string) wins over the int ``out_srid``; both set ->
-    error; neither -> CRS-less. Input points are assumed already in the output
-    CRS (label, not a reprojection).
-
-    PARITY DIVERGENCE: the lightweight tier performs an UNCONSTRAINED Delaunay
-    interpolation. ``breaklines_array`` are accepted but NOT enforced as hard edges
-    (their vertices are folded in as extra triangulation points only), and
-    ``merge_tolerance`` / ``snap_tolerance`` are accepted for signature parity
-    but have no effect.
-
-    Args:
-        points_array:    ARRAY<BINARY> of WKB POINT-with-Z geometries.
-        breaklines_array: ARRAY<BINARY> of WKB linestrings (accepted, not enforced).
-        merge_tolerance: Accepted for parity; not applied.
-        snap_tolerance:  Accepted for parity; not applied.
-        xmin..ymax:      Output extent in CRS units.
-        width_px, height_px: Output raster size in pixels.
-        out_srid:        EPSG or ESRI code for the output CRS.
-        out_crs:         CRS string for the output (``EPSG:x`` / ``ESRI:x`` / WKT).
-        no_data:         NoData sentinel (default -9999.0).
-
-    Returns:
-        Single-band Float64 tile struct.
-    """
-    nd = f.lit(no_data) if isinstance(no_data, (int, float)) else _col(no_data)
-    return _dtmfromgeoms_udf(
-        _col(points_array),
-        _col(breaklines_array),
-        _col(merge_tolerance),
-        _col(snap_tolerance),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width_px),
-        _col(height_px),
-        _col(out_srid) if out_srid is not None else f.lit(None),
-        nd,
-        f.lit(out_crs) if out_crs is not None else f.lit(None),
-    )
 
 
 @udtf(returnType=_POLYGONIZE_ROW_SCHEMA)

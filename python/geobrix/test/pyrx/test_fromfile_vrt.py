@@ -12,6 +12,7 @@ from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 pytestmark = pytest.mark.filterwarnings("ignore")
 
@@ -168,14 +169,14 @@ def test_column_api_materialized_vrt_through_spark(spark, tmp_path):
     gone_tif.unlink()
     df = spark.createDataFrame([(str(vrt),)], ["path"])
     tile = df.select(
-        prx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
+        rx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
     ).first()["t"]
     assert tile is not None and tile["raster"] is not None
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.driver == "GTiff" and np.array_equal(ds.read(), data)
     gone = spark.createDataFrame([(str(miss),)], ["path"])
     err = gone.select(
-        prx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
+        rx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
     ).first()["t"]
     assert err is not None and err["raster"] is None
     assert err["metadata"]["last_error"]

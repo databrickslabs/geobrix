@@ -117,11 +117,12 @@ def single_band_tile_df(spark):
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(single_band_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
 
@@ -133,12 +134,12 @@ def multiband_tile_df(spark):
     Used by band-math, rst_numbands, and rst_bandmetadata examples.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(multiband_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
 
@@ -150,12 +151,12 @@ def dem_tile_df(spark):
     Used by terrain function examples (slope, aspect, hillshade, …).
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(dem_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
 
@@ -167,12 +168,12 @@ def netcdf_tile_df(spark):
     Used only by rst_subdatasets and rst_getsubdataset examples.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(netcdf_path())
     binary_df = spark.read.format("binaryFile").load(path)
     return binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("netCDF")).alias("tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("netCDF")).alias("tile")
     )
 
 
@@ -493,13 +494,12 @@ def multi_band_tiles_df(spark):
     The returned DataFrame has columns: tile, band_index (1/2/3), region (='R1').
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     path = str(multiband_path())
     binary_df = spark.read.format("binaryFile").load(path)
     mb_df = binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("mb_tile")
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("mb_tile")
     )
     # Produce 3 rows: one per band extracted from the multi-band tile
     b1 = mb_df.select(rx_api.rst_band("mb_tile", f.lit(1)).alias("tile")).withColumn(

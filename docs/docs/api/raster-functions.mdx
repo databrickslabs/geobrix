@@ -1662,7 +1662,30 @@ Create or load rasters from path, binary content, or bands (4 total).
 
 ### rst_dtmfromgeoms
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_dtmfromgeoms: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])` | `TILE` |
+| Python | `rasterx.functions.rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, no_data=None, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an array. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | Break lines, as an array; NULL or empty for none. The light level uses their vertices as extra points and does not enforce them as edges. |
+| `merge_tolerance` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
+| `snap_tolerance` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
+| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` |  | The output height in pixels, above 0. |
+| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
+| `no_data` | `DOUBLE` | `-9999.0` | The value of a pixel outside the points' hull. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+{/* END GENERATED gbx_rst_dtmfromgeoms */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric interpolation over an **unconstrained** Delaunay TIN; cells outside the convex hull are NoData. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted for signature parity but not enforced — the heavyweight tier builds a constrained TIN that honors them.
@@ -1674,16 +1697,12 @@ Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-value
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL and heavyweight/Scala tiers do not — the heavyweight `RST_DTMFromGeoms` builder is strictly ≤12-argument (`…, out_srid, [no_data]`) and rejects a 13th argument. In lightweight Python, `out_crs` (string) wins over the int `out_srid`. This is a lightweight superset, not a heavyweight regression.
 :::
 
-**Signature:** `rst_dtmfromgeoms(points_array: Column, breaklines_array: Column, merge_tolerance: Column, snap_tolerance: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width_px: Column, height_px: Column, out_srid: Column, [no_data: Column = null]): Column` — output CRS via `out_srid` (int); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
-
-**Parameters:** `points_array` — Array of WKB point geometries with Z coordinates; `breaklines_array` — Array of WKB line/polygon geometries enforcing hard edges (pass `null` or empty array if unused); `merge_tolerance`/`snap_tolerance` — Delaunay triangulation tolerances (vertex-merge distance and snapping distance; small values such as `0.0` and `0.01` are typical); `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output raster dimensions in pixels (for N-metre cells set `width_px = round((xmax-xmin)/N)`); `out_srid` — EPSG code for the output CRS. An optional trailing `no_data` argument overrides the default fill for cells outside the triangulated hull.
+Output CRS via `out_srid` (int); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <FunctionExamples
   name="rst_dtmfromgeoms"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 
@@ -1720,17 +1739,25 @@ _Constructor — stacks per-band tiles into a multi-band tile. Example splits th
 
 ### rst_fromcontent
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_fromcontent: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_fromcontent(content, driver)` | `TILE` |
+| Python | `rasterx.functions.rst_fromcontent(content, driver)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `content` | `BINARY` |  | The raster file's bytes, for example the `content` column of the `binaryFile` reader. |
+| `driver` | `STRING` |  | The GDAL driver short name the bytes are in, for example `'GTiff'`, in any case. It goes into the tile's `driver` metadata; a name no driver has raises. |
+{/* END GENERATED gbx_rst_fromcontent */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio**. The driver defaults to GTiff when unspecified and outputs are re-encoded as GeoTIFF; readable input formats are limited to the GDAL build bundled with rasterio.
 :::
 
 Create a raster from binary content.
-
-**Signature:** `rst_fromcontent(content: Column, driver: Column): Column`
-
-**Parameters:** `content` — Binary column; `driver` — GDAL driver name
 
 **Returns:** Binary raster tile data
 
@@ -1743,8 +1770,7 @@ _Constructor — builds a tile from binary content. Example uses Spark's `binary
 <FunctionExamples
   name="rst_fromcontent"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -1753,32 +1779,38 @@ _Constructor — builds a tile from binary content. Example uses Spark's `binary
 
 ### rst_fromfile
 
-<Tier light/>
+{/* BEGIN GENERATED gbx_rst_fromfile: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
 
-Reference a raster on disk as a tile, by path.
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_fromfile(path, [driver])` | `TILE` |
+| Python | `rasterx.functions.rst_fromfile(path, driver=None, materialize=None)` | Column |
 
-**The lightweight tier returns a _virtual_ tile by default** — bytes-free, pointing at `path` over its whole-file window, with `width`/`height`/CRS read from the header. No pixels are read until a downstream op needs them, so this is the lazy way to load rasters by path. There is no `virtualize_dir`/`virtualize_prefix` argument here: the source file already **is** the durable backing store, so nothing needs writing. A path that cannot be opened returns null.
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `path` | `STRING` |  | The path of the raster file: local, `/Volumes/...` or `/Workspace/...`. A remote URL is refused unless the driver's remote-read switch is on. |
+| `driver` | `STRING` | `'GTiff'` | The GDAL driver short name hint, in any case. It goes into the tile's `driver` metadata; a name no driver has raises. |
+{/* END GENERATED gbx_rst_fromfile */}
 
-**Signature:** `rst_fromfile(path: Column, driver: Column = 'GTiff'[, materialize: bool = False])` — `materialize` is a lightweight-**Python** argument; from Python, `materialize=True` reads the pixels now and returns a materialized tile.
+Read a raster file by path into a tile.
 
-**Parameters:** `path` — raster file path; `driver` — GDAL driver-name hint carried into metadata (rasterio auto-detects the real format on open); `materialize` (light Python only) — `True` reads pixels now and returns a materialized tile, default `False` returns a virtual tile.
+`gbx_rst_fromfile` reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function: it needs the lightweight tier (the env wheel, or the plain wheel off Databricks) and has no Scala form. The JVM cannot read a UC Volume `/Volumes/...` path, because the credential lives in the Spark Python worker. A path that cannot be opened gives null.
 
-:::note Tier differences — virtual vs materialized
-A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here: `rst_fromfile` refuses it at its first evaluation, with the location and a `Fix:`, unless `GBX_ALLOW_REMOTE_PATHS=true` is set in the driver's environment before `register()` and before the column is built (see [Security § 7](../security#7-raster-data-other-principals-can-write)).
+`materialize` is a Python argument. `materialize=False` returns a _virtual_ tile instead: it holds no bytes, points at `path` over the whole-file window and reads `width`, `height` and the CRS from the header. No pixel is read until a later function needs it. Use it to load large rasters lazily. There is no `virtualize_dir` or `virtualize_prefix` argument, because the source file is the durable store.
 
-`gbx_rst_fromfile` is a Python UDF (requires the lightweight tier, e.g. the env6 wheel; **no Scala/JVM form** — the executor JVM cannot read a UC Volume `/Volumes/...` FUSE path, whose credential is held only by Spark's managed Python worker). The **SQL call is the same 2-argument form in both tiers**, but the tier that registered decides the result: the **lightweight** registration (`pyrx`) returns a **virtual** tile, the **heavyweight** registration (`rasterx`) returns a **materialized** tile (JVM/heavy callers cannot use a virtual path-only tile). Whichever `register()` ran last wins. From **Python**, pass `materialize=True` to force bytes regardless of tier. Without the lightweight tier (the env wheel, or `pip install geobrix` off Databricks) the function is not registered and the Python binding raises with guidance.
+:::note Remote paths
+A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here. `rst_fromfile` refuses it at its first evaluation, with the location and a `Fix:`. Set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's environment before `register()` and before the column is built to allow it (see [Security § 7](../security#7-raster-data-other-principals-can-write)).
 :::
 
-:::caution `materialize=True` errors over the Serverless cap
-Calling `rst_fromfile(..., materialize=True)` on a file larger than the connect-aware stream cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic) raises a `ValueError`. The error is intentional — silently materializing an oversized tile would OOM the executor. The virtual default (`materialize=False`, which is the lightweight default) is Serverless-safe: pixels are read lazily, size-gated, at each downstream operation. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
+:::caution A materialized tile errors over the Serverless cap
+`rst_fromfile` on a file larger than the connect-aware stream cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic) raises a `ValueError`. The error is intentional, because reading an oversized tile would run the executor out of memory. `materialize=False` is Serverless-safe: pixels are read lazily and size-gated at each later function. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
 :::
 
 <FunctionExamples
   name="rst_fromfile"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -1802,7 +1834,29 @@ df = (
 
 ### rst_gridfrompoints
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_gridfrompoints: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])` | `TILE` |
+| Python | `rasterx.functions.rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, power=None, max_pts=None, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL element is dropped with its value. |
+| `values_array` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
+| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` |  | The output height in pixels, above 0. |
+| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
+| `power` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
+| `max_pts` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+{/* END GENERATED gbx_rst_gridfrompoints */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
@@ -1816,15 +1870,12 @@ IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile 
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL and heavyweight/Scala tiers do not — the heavyweight `RST_GridFromPoints` builder is strictly ≤11-argument (`…, out_srid, [power, [max_pts]]`) and rejects a 12th argument. In lightweight Python, `out_crs` (string) wins over the int `out_srid`. This is a lightweight superset, not a heavyweight regression.
 :::
 
-**Signature:** `rst_gridfrompoints(points_array: Column, values_array: Column, xmin: Column, ymin: Column, xmax: Column, ymax: Column, width_px: Column, height_px: Column, out_srid: Column, [power: Column, [max_pts: Column]]): Column` — output CRS via `out_srid` (int); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
-
-**Parameters:** `points_array` — `ARRAY<BINARY>` of WKB point geometries; `values_array` — `ARRAY<DOUBLE>` of scalar observations, one per point; `xmin`/`ymin`/`xmax`/`ymax` — output extent in CRS units; `width_px`/`height_px` — output dimensions in pixels; `out_srid` — EPSG code; `power` — IDW distance-decay exponent (2.0 is the standard); `max_pts` — maximum nearest neighbours considered per output pixel
+Output CRS via `out_srid` (int); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <FunctionExamples
   name="rst_gridfrompoints"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTerrainLightCode} pythonLightSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
@@ -1835,9 +1886,30 @@ The lightweight **Python** binding accepts an optional trailing `out_crs` (strin
 
 Four functions for building raster products from LiDAR point clouds. Available on **both tiers** (`pyrx` lightweight and `rasterx` heavyweight). Load point clouds with the [`lidar_gbx` reader](../readers/lidar). For an end-to-end walkthrough — `.laz` → DSM/DTM binning → Canopy Height Model — see the [Wireless Coverage example](../notebooks/wireless-coverage).
 
-### rst_binpoints {#rst_binpoints}
+### rst_binpoints
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_binpoints: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python scala />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])` | `TILE` |
+| Python | `rasterx.functions.rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, statistic=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `x_array` | `ARRAY<DOUBLE>` |  | The x coordinate of each point. |
+| `y_array` | `ARRAY<DOUBLE>` |  | The y coordinate of each point, in the same order. |
+| `z_array` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
+| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` |  | The output height in pixels, above 0. |
+| `srid` | `INT` |  | The EPSG or ESRI code of the output CRS. |
+| `statistic` | `STRING` | `'max'` | How the points in a pixel combine: `max`, `min`, `mean`, `median`, `count` or `percentile:<p>` (for example `percentile:90`), in any case. Another word raises. |
+{/* END GENERATED gbx_rst_binpoints */}
 
 Bin a **per-row `ARRAY<DOUBLE>`** of (x, y, z) coordinate triples into a single-band
 Float32 raster tile. Each pixel carries the reduction of all points whose centroid falls
@@ -1852,15 +1924,10 @@ return per cell — a surface model (DSM), exactly the input [`rst_chm`](#rst_ch
 against a DEM; `"min"`/`"mean"`/`"median"`/`"count"`/`"percentile:<p>"` reduce the same
 points into other surfaces.
 
-**Signature:** `rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
-
-**Parameters:** `x_array`, `y_array`, `z_array` — parallel `ARRAY<DOUBLE>` columns of point coordinates and z-values; `xmin`/`ymin`/`xmax`/`ymax` — extent in CRS units; `width_px`/`height_px` — output pixel dimensions; `srid` — EPSG code; `statistic` — one of `"max"` (default, highest return for DSMs), `"min"`, `"mean"`, `"median"`, `"count"`, or `"percentile:<p>"` (e.g. `"percentile:90"`).
-
 <FunctionExamples
   name="rst_binpoints"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
@@ -4241,7 +4308,27 @@ Both forms appear in the SQL tab below.
 
 ### rst_rasterize
 
-<Tier both/>
+{/* BEGIN GENERATED gbx_rst_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [out_crs])` | `TILE` |
+| Python | `rasterx.functions.rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, out_crs=None)` | Column |
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. A geometry with an SRID is reprojected into the output CRS first. |
+| `value` | `DOUBLE` |  | The value burned into the pixels the geometry covers. |
+| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` |  | The output height in pixels, above 0. |
+| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+{/* END GENERATED gbx_rst_rasterize */}
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** (`rasterio.features`).
@@ -4251,16 +4338,14 @@ Powered by **rasterio** (`rasterio.features`).
 The lightweight **Python** binding accepts an optional trailing `out_crs` (string CRS) argument that the SQL and heavyweight/Scala tiers do not — the heavyweight `RST_Rasterize` builder is strictly 9-argument (`out_srid` only) and rejects a 10th argument. In lightweight Python, `out_crs` (string) wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS. This is a lightweight superset, not a heavyweight regression.
 :::
 
-**Signature:** `rst_rasterize(geom: Column, burnValue: Column, xMin: Column, yMin: Column, xMax: Column, yMax: Column, width: Column, height: Column, [out_srid: Column = null]): Column` — Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. The output CRS is `out_srid` (integer EPSG code); the geometry is reprojected from its source CRS into the output CRS before burning. When `out_srid` is omitted the geometry's carried source CRS is used. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. The output CRS is `out_srid` (integer EPSG code); the geometry is reprojected from its source CRS into the output CRS before burning. When `out_srid` is omitted the geometry's carried source CRS is used. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **SQL:**
 
 <FunctionExamples
   name="rst_rasterize"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
-  pythonLight={rasterxGeneratorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_generators_python_light.py"
-  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  python={rasterxGeneratorsLightCode} pythonSource="docs/tests/python/api/rasterx_generators_python_light.py"
   testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
 />
 

@@ -260,9 +260,10 @@ rst_sample_python_example_output = """
 """
 
 
-def rst_gridfrompoints_python_light_example(spark):
+def rst_gridfrompoints_python_example(spark):
     """IDW (Inverse Distance Weighting) interpolation from arrays of points and values."""
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
     from pyspark.sql.types import ArrayType, BinaryType, DoubleType
 
@@ -288,7 +289,7 @@ def rst_gridfrompoints_python_light_example(spark):
     )
 
     result = df.select(
-        rx.rst_gridfrompoints(
+        rx_api.rst_gridfrompoints(
             f.col("points_wkb_array"),
             f.col("values_array"),
             f.lit(0.0),
@@ -303,7 +304,7 @@ def rst_gridfrompoints_python_light_example(spark):
     return result["tile"]
 
 
-rst_gridfrompoints_python_light_example_output = """
+rst_gridfrompoints_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -313,9 +314,10 @@ rst_gridfrompoints_python_light_example_output = """
 """
 
 
-def rst_dtmfromgeoms_python_light_example(spark):
+def rst_dtmfromgeoms_python_example(spark):
     """TIN (Triangulated Irregular Network) from Z-valued points via Delaunay interpolation."""
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f
     from pyspark.sql.types import StructType, StructField, ArrayType, BinaryType
 
@@ -353,7 +355,7 @@ def rst_dtmfromgeoms_python_light_example(spark):
     df = spark.createDataFrame(survey_data, schema=schema)
 
     result = df.select(
-        rx.rst_dtmfromgeoms(
+        rx_api.rst_dtmfromgeoms(
             f.col("points_wkb_array"),
             f.col("breaklines_wkb_array"),
             f.lit(0.0),
@@ -370,7 +372,7 @@ def rst_dtmfromgeoms_python_light_example(spark):
     return result["tile"]
 
 
-rst_dtmfromgeoms_python_light_example_output = """
+rst_dtmfromgeoms_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+

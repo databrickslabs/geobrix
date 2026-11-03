@@ -123,12 +123,12 @@ def test_rst_sample_python_example(spark):
 def test_rst_gridfrompoints_python_light_example(spark):
     """rst_gridfrompoints returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_gridfrompoints_python_light_example(spark)
+    result = terrain_examples.rst_gridfrompoints_python_example(spark)
     _assert_materialized_tile(result, "rst_gridfrompoints")
 
 
 def test_rst_dtmfromgeoms_python_light_example(spark):
     """rst_dtmfromgeoms returns a materialized tile with populated raster bytes."""
     assert terrain_examples is not None
-    result = terrain_examples.rst_dtmfromgeoms_python_light_example(spark)
+    result = terrain_examples.rst_dtmfromgeoms_python_example(spark)
     _assert_materialized_tile(result, "rst_dtmfromgeoms")

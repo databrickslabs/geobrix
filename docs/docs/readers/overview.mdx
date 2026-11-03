@@ -102,8 +102,8 @@ When you want the limit (or a filter) honored **during planning**, use the funct
 - **`gbx_file_read(spark, dir).limit(N)`** — on a FILE-capable runtime this reads through the native
   `read_files` table function, which pushes `.limit()` and predicate/column filters, so only the needed
   files are enumerated.
-- **`rst_fromfile("path")`** — a per-row function returning virtual tiles, so
-  `gbx_file_read(dir).limit(N).select(..., rst_fromfile("path"))` decodes only the N selected rows and
+- **`rst_fromfile("path", materialize=False)`** — a per-row function returning virtual tiles, so
+  `gbx_file_read(dir).limit(N).select(..., rst_fromfile("path", materialize=False))` decodes only the N selected rows and
   reads no pixels until a downstream op forces it.
 
 See **[GBX Common Functions](../common-functions)**.

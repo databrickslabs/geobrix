@@ -47,9 +47,11 @@ def _tile_df(spark, **kw):
     """One-row DataFrame with a tile struct column named 'tile'."""
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx.rasterx import functions as rx_api
+
     raster = _make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +79,7 @@ def _tile_df(spark, **kw):
 # ---------------------------------------------------------------------------
 
 
-def rst_fromfile_python_light_example(spark):
+def rst_fromfile_python_example(spark):
     """Load a raster tile from a file path using the light pyrx tier.
 
     rst_fromfile is available in the light (pyrx) and heavy (rasterx) Python tiers only.
@@ -104,7 +106,7 @@ def rst_fromfile_python_light_example(spark):
         os.unlink(tmp_path)
 
 
-rst_fromfile_python_light_example_output = """
+rst_fromfile_python_example_output = """
 +-----+
 |width|
 +-----+

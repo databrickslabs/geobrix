@@ -1,6 +1,7 @@
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -13,11 +14,9 @@ def _materialized_tile_df(spark):
     """One-row DataFrame with a materialized tile struct column named 'tile'."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     raster = make_geotiff_bytes(width=8, height=8, count=2, epsg=4326)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def test_plan_grid_windows_no_overlap_exact_grid():
@@ -338,7 +337,7 @@ def test_rst_maketiles_file_unavailable_unchanged(spark):
             dst.write(data, 1)
         raster = mf.read()
     df = spark.createDataFrame([(raster,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     prx.register(spark)
     df.createOrReplaceTempView("_t7_maketiles")

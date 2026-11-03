@@ -644,8 +644,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
     def rst_derivedband(tile: Column, pythonFunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
-//    def rst_dtmfromgeoms(geometries: Column, pixelSize: Column, extent: Column): Column =
-//        ColumnAdapter(RST_DTMFromGeoms.name, Seq(geometries, pixelSize, extent))
     def rst_filter(tile: Column, kernelSize: Column, operation: Column): Column =
         ColumnAdapter(RST_Filter.name, Seq(tile, kernelSize, operation))
     def rst_initnodata(tile: Column): Column = ColumnAdapter(RST_InitNoData.name, Seq(tile))
@@ -810,13 +808,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_xyzpyramid(tile, lit(minZ), lit(maxZ), lit(format), lit(size), lit(resampling))
 
     // Vector<->raster bridge (Column form)
-    def rst_rasterize(
-        geom: Column, value: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, out_srid: Column
-    ): Column =
-        ColumnAdapter(RST_Rasterize.name, Seq(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid))
-
     def rst_polygonize(tile: Column): Column =
         ColumnAdapter(RST_Polygonize.name, Seq(tile, lit(1), lit(4)))
     def rst_polygonize(tile: Column, band: Column): Column =
@@ -887,23 +878,23 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // IDW interpolation - non-aggregator (arrays in a single row)
     def rst_gridfrompoints(
-        points: Column, values: Column,
+        pointsArray: Column, valuesArray: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
         widthPx: Column, heightPx: Column, out_srid: Column
     ): Column =
         ColumnAdapter(RST_GridFromPoints.name, Seq(
-            points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid,
+            pointsArray, valuesArray, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid,
             lit(RST_GridFromPoints.DefaultPower),
             lit(RST_GridFromPoints.DefaultMaxPoints)
         ))
     def rst_gridfrompoints(
-        points: Column, values: Column,
+        pointsArray: Column, valuesArray: Column,
         xmin: Column, ymin: Column, xmax: Column, ymax: Column,
         widthPx: Column, heightPx: Column, out_srid: Column,
         power: Column, maxPts: Column
     ): Column =
         ColumnAdapter(RST_GridFromPoints.name, Seq(
-            points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
+            pointsArray, valuesArray, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
         ))
 
     // Bin parallel x/y/z arrays into a Float32 raster — non-aggregator form

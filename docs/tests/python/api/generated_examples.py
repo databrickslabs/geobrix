@@ -249,6 +249,11 @@ EXAMPLES = {
         "bandmetadata",
         "SELECT gbx_rst_bandmetadata(c0, 1) AS out FROM gbx_example",
     ),
+    "gbx_rst_binpoints": (
+        "RASTER_RASTERIZE",
+        "binpoints_max",
+        "SELECT gbx_rst_binpoints(c0, c1, c2, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10, 3857, 'max') AS out FROM gbx_example",
+    ),
     "gbx_rst_bng_rasterize_agg": (
         "MVP_A",
         "br_nan_beside_numbers",
@@ -284,6 +289,11 @@ EXAMPLES = {
         "derivedband_double_plus_one",
         "SELECT gbx_rst_derivedband(c0, 'def double_plus_one(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_ysize, buf_radius, gt, **kwargs): out_ar[:] = in_ar[0] * 2 + 1', 'double_plus_one') AS out FROM gbx_example",
     ),
+    "gbx_rst_dtmfromgeoms": (
+        "RASTER_RASTERIZE",
+        "dtmfromgeoms_wkb",
+        "SELECT gbx_rst_dtmfromgeoms(c0, c1, 0.0D, 0.0D, 0.0D, 0.0D, 10.0D, 10.0D, 5, 5, 3857) AS out FROM gbx_example",
+    ),
     "gbx_rst_evi": (
         "SPEC_CALC",
         "evi",
@@ -304,6 +314,16 @@ EXAMPLES = {
         "format",
         "SELECT gbx_rst_format(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_fromcontent": (
+        "RASTER_CONSTRUCTOR",
+        "fromcontent_gtiff",
+        "SELECT gbx_rst_fromcontent(c0, 'GTiff') AS out FROM gbx_example",
+    ),
+    "gbx_rst_fromfile": (
+        "RASTER_CONSTRUCTOR",
+        "fromfile_gtiff",
+        "SELECT gbx_rst_fromfile(c0, 'GTiff') AS out FROM gbx_example",
+    ),
     "gbx_rst_georeference": (
         "RASTER_ACCESSOR",
         "georeference",
@@ -318,6 +338,11 @@ EXAMPLES = {
         "RASTER_TILE_OP",
         "getsubdataset_band2",
         "SELECT gbx_rst_getsubdataset(c0, 'Band2') AS out FROM gbx_example",
+    ),
+    "gbx_rst_gridfrompoints": (
+        "RASTER_RASTERIZE",
+        "gridfrompoints_wkb",
+        "SELECT gbx_rst_gridfrompoints(c0, c1, 0.0D, 0.0D, 10.0D, 10.0D, 4, 4, 3857) AS out FROM gbx_example",
     ),
     "gbx_rst_height": (
         "RASTER_ACCESSOR",
@@ -433,6 +458,11 @@ EXAMPLES = {
         "SPEC_ANALYSIS",
         "proximity_targets",
         "SELECT gbx_rst_proximity(c0, '1,2') AS out FROM gbx_example",
+    ),
+    "gbx_rst_rasterize": (
+        "RASTER_RASTERIZE",
+        "rasterize_wkt",
+        "SELECT gbx_rst_rasterize('POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))', 5.0D, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10, 3857) AS out",
     ),
     "gbx_rst_rastertoworldcoord": (
         "RASTER_ACCESSOR",

@@ -319,7 +319,7 @@ rst_percentile_stretch_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_fromcontent_python_light_example(spark):
+def rst_fromcontent_python_example(spark):
     """Build a tile from binary raster bytes using the light pyrx tier.
 
     Constructor: reads bytes via Spark's binaryFile reader and constructs a tile
@@ -340,7 +340,7 @@ def rst_fromcontent_python_light_example(spark):
     return result["format"]
 
 
-rst_fromcontent_python_light_example_output = """
+rst_fromcontent_python_example_output = """
 +------+
 |format|
 +------+
@@ -399,7 +399,7 @@ rst_frombands_python_light_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_fromfile_python_light_example(spark):
+def rst_fromfile_python_example(spark):
     """Reference a raster by path — a VIRTUAL tile by default (light pyrx tier).
 
     The default tile is bytes-free: ``raster`` is null and it points at the file
@@ -415,16 +415,17 @@ def rst_fromfile_python_light_example(spark):
     """
     from ._fixtures import single_band_path  # noqa: PLC0415
     from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
     rx.register(spark)
     path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
-    # Default: a VIRTUAL v2 tile — raster is null, path + window are populated.
-    return path_df.select(rx.rst_fromfile("path").alias("tile")).first()["tile"]
+    # materialize=False: a VIRTUAL v2 tile — raster is null, path + window are populated.
+    return path_df.select(rx_api.rst_fromfile("path", materialize=False).alias("tile")).first()["tile"]
 
 
-rst_fromfile_python_light_example_output = """
-# Default — a VIRTUAL v2 tile (same struct as always, just bytes-free):
+rst_fromfile_python_example_output = """
+# materialize=False — a VIRTUAL v2 tile (same struct as always, just bytes-free):
 +------------------------------------------------------------+
 |tile                                                        |
 +------------------------------------------------------------+
@@ -432,7 +433,7 @@ rst_fromfile_python_light_example_output = """
 +------------------------------------------------------------+
 (raster is null → bytes-free; path + whole-file window carry the reference)
 
-# rst_fromfile("path", materialize=True) instead returns a MATERIALIZED v2 tile:
+# rst_fromfile("path") (materialize unset, or True) instead returns a MATERIALIZED v2 tile:
 #   {0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}  (raster set)
 """
 
@@ -738,14 +739,14 @@ rst_updatetype_python_example_output = """
 # ---------------------------------------------------------------------------
 
 
-def rst_binpoints_python_light_example(spark):
+def rst_binpoints_python_example(spark):
     """Bin per-row ARRAY<DOUBLE> x/y/z columns into a Float32 raster tile using the light pyrx tier.
 
     Uses a tiny 3-point inline BNG (EPSG:27700) set covering a 1 km extent at 10×10 pixels
     (100 m ground resolution). Each output pixel carries the max z-value of points whose centre
     falls in that pixel; empty pixels carry NoData (-9999.0). No external raster file needed.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
     df = spark.range(1).select(
@@ -754,7 +755,7 @@ def rst_binpoints_python_light_example(spark):
         f.array(f.lit(42.5), f.lit(45.1), f.lit(38.7)).alias("z"),
     )
     result = df.select(
-        rx.rst_binpoints(
+        rx_api.rst_binpoints(
             "x", "y", "z",
             f.lit(550000.0), f.lit(180000.0),
             f.lit(551000.0), f.lit(181000.0),
@@ -765,7 +766,7 @@ def rst_binpoints_python_light_example(spark):
     return result["tile"]
 
 
-rst_binpoints_python_light_example_output = """
+rst_binpoints_python_example_output = """
 +-----------------------------------------------------------+
 |tile                                                       |
 +-----------------------------------------------------------+
@@ -790,15 +791,14 @@ def rst_align_to_python_example(spark):
     In production, pass two tiles on different grids; the output will have the
     reference tile's exact CRS, extent, and pixel dimensions.
     """
-    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
     from ._fixtures import dem_path  # noqa: PLC0415
 
     dem = str(dem_path())
     df = spark.read.format("binaryFile").load(dem).select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
+        rx_api.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
     )
     result = df.select(rx_api.rst_align_to("tile", "reference_tile").alias("tile")).first()
     return result["tile"]

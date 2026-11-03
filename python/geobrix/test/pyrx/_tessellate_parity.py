@@ -12,6 +12,8 @@ import math
 
 import numpy as np
 
+from databricks.labs.gbx.rasterx import functions as rx
+
 # Relative tolerance for geotransform terms (the parity bar of these suites).
 GT_TOL = 1e-9
 
@@ -20,7 +22,7 @@ class Staged(bytes):
     """Raster bytes that also live in a file at ``path``.
 
     The heavy tier reads the bytes (``rst_fromcontent``). The light tier reads the file as
-    a VIRTUAL tile (``rst_fromfile`` without ``materialize``, its default), the way a
+    a VIRTUAL tile (``rst_fromfile`` with ``materialize=False``), the way a
     lazily read source reaches every light operation. Anywhere else it is plain bytes.
     """
 
@@ -49,18 +51,16 @@ def light_tile_df(spark, raster):
     the file of a :class:`Staged` source, else a materialized tile of the bytes."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     path = getattr(raster, "path", None)
     if path is not None:
         df = spark.createDataFrame([(path,)], ["path"]).select(
-            prx.rst_fromfile("path").alias("tile")
+            rx.rst_fromfile("path", materialize=False).alias("tile")
         )
         # a "virtual" case that quietly started from bytes would test nothing
         assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"
         return df
     return spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
 
 

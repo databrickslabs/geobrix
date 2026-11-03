@@ -10,7 +10,7 @@ def _tile_df(spark, **kw):
     """One-row DataFrame with a tile struct column named 'tile'."""
     raster = make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def test_no_jar_in_session(spark):
@@ -31,23 +31,6 @@ def test_rst_transform_to_3857(spark):
     ).first()
     assert row["s"] == 3857
     assert row["n"] == 2
-
-
-def test_rst_rasterize(spark):
-    import shapely.wkb
-    from shapely.geometry import box
-
-    geom = shapely.wkb.dumps(box(1.0, 1.0, 3.0, 3.0))
-    df = spark.createDataFrame([(geom,)], ["g"])
-    out = df.select(
-        prx.rst_rasterize("g", 5.0, 0.0, 0.0, 4.0, 4.0, 4, 4, 4326).alias("t")
-    )
-    row = out.select(
-        rx.rst_width("t").alias("w"),
-        rx.rst_height("t").alias("h"),
-        rx.rst_srid("t").alias("s"),
-    ).first()
-    assert (row["w"], row["h"], row["s"]) == (4, 4, 4326)
 
 
 def test_rst_slope_aspect_hillshade(spark):
@@ -71,7 +54,7 @@ def test_rst_slope_aspect_hillshade(spark):
             dst.write(ramp, 1)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     # Auto-scale path (no scale args): must run and produce Float32.
     assert (
@@ -118,7 +101,7 @@ def test_rst_polygonize(spark):
             dst.write(data, 1)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     # rst_polygonize is a streaming UDTF — invoke via SQL LATERAL.
     df.createOrReplaceTempView("ras")
     prx.register(spark)
@@ -159,7 +142,7 @@ def test_rst_color_relief(spark):
             dst.write(dem, 1)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     out = df.select(prx.rst_color_relief("tile", f.lit(color_table_path)).alias("t"))
     assert out.select(rx.rst_numbands("t").alias("n")).first()["n"] == 3
@@ -189,8 +172,8 @@ def test_rst_mapalgebra(spark):
 
     df = spark.createDataFrame([(_ras(1.0), _ras(2.0))], ["a", "b"])
     df = df.select(
-        prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
-        prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
+        rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
+        rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     out = df.select(rx.rst_mapalgebra(f.array("ta", "tb"), f.lit("A + B")).alias("t"))
     row = out.select(
@@ -222,13 +205,12 @@ def test_rst_retile(spark):
     prx.register(spark)
     df.createOrReplaceTempView("_ras_retile")
     parts = spark.sql(
-        "SELECT t.cellid, t.raster, t.metadata FROM _ras_retile, "
-        "LATERAL gbx_rst_retile(tile, 2, 2) t"
+        "SELECT t.* FROM _ras_retile, LATERAL gbx_rst_retile(tile, 2, 2) t"
     )
     assert parts.count() == 4
     row = parts.select(
-        rx.rst_width(f.struct("cellid", "raster", "metadata")).alias("w"),
-        rx.rst_height(f.struct("cellid", "raster", "metadata")).alias("h"),
+        rx.rst_width(f.struct(*parts.columns)).alias("w"),
+        rx.rst_height(f.struct(*parts.columns)).alias("h"),
     ).first()
     assert (row["w"], row["h"]) == (2, 2)
 
@@ -269,7 +251,7 @@ def test_rst_maketiles(spark):
             dst.write(data, 1)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     prx.register(spark)
     df.createOrReplaceTempView("_ras_maketiles")
@@ -549,7 +531,7 @@ def _rgb_tile_df(spark):
                 dst.write(data, b)
         src = mf.read()
     return spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
 
 
@@ -765,7 +747,7 @@ def _ras_bytes(data, ulx=0.0, uly=10.0, px=1.0, epsg=32633, nodata=-9999.0):
 def _tiles_df(spark, rows):
     """rows: list of (key, raster_bytes). Builds a (k, tile struct) df."""
     df = spark.createDataFrame(rows, ["k", "raster"])
-    return df.select("k", prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select("k", rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def test_rst_merge_agg(spark):
@@ -798,7 +780,7 @@ def test_rst_frombands_agg_ascending_order(spark):
     rows = [("g", b2, 2), ("g", b0, 0), ("g", b1, 1)]
     df = spark.createDataFrame(rows, ["k", "raster", "band_index"]).select(
         "k",
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"),
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"),
         "band_index",
     )
     tile = (
@@ -998,8 +980,8 @@ def test_rst_merge_array(spark):
     left = _ras_bytes(np.array([[1, 2], [3, 4]]), ulx=0.0, uly=2.0)
     right = _ras_bytes(np.array([[5, 6], [7, 8]]), ulx=2.0, uly=2.0)
     df = spark.createDataFrame([(left, right)], ["a", "b"]).select(
-        prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
-        prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
+        rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
+        rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     tile = df.select(prx.rst_merge(f.array("ta", "tb")).alias("t")).first()["t"]
     assert tile is not None
@@ -1015,8 +997,8 @@ def test_rst_combineavg_array(spark):
     a = _ras_bytes(np.array([[2.0, 4.0], [6.0, 8.0]]))
     b = _ras_bytes(np.array([[4.0, 8.0], [10.0, 12.0]]))
     df = spark.createDataFrame([(a, b)], ["a", "b"]).select(
-        prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
-        prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
+        rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
+        rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     tile = df.select(prx.rst_combineavg(f.array("ta", "tb")).alias("t")).first()["t"]
     # cellid shared across elements (fromcontent -> 0) -> carried as 0.
@@ -1031,8 +1013,8 @@ def test_rst_combineavg_array_shape_mismatch_raises(spark):
     a = _ras_bytes(np.array([[1.0, 2.0], [3.0, 4.0]]))
     b = _ras_bytes(np.array([[1.0, 2.0, 3.0]]))
     df = spark.createDataFrame([(a, b)], ["a", "b"]).select(
-        prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
-        prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
+        rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
+        rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     with pytest.raises(PythonException, match="aligned tiles"):
         df.select(prx.rst_combineavg(f.array("ta", "tb")).alias("t")).first()
@@ -1043,35 +1025,14 @@ def test_rst_frombands_array_order(spark):
     b0 = _ras_bytes(np.full((2, 2), 10.0))
     b1 = _ras_bytes(np.full((2, 2), 20.0))
     df = spark.createDataFrame([(b0, b1)], ["a", "b"]).select(
-        prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
-        prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
+        rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
+        rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     tile = df.select(prx.rst_frombands(f.array("ta", "tb")).alias("t")).first()["t"]
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.count == 2
         assert np.allclose(ds.read(1), 10.0)
         assert np.allclose(ds.read(2), 20.0)
-
-
-def test_rst_fromfile_roundtrip(spark, tmp_path):
-    import rasterio
-
-    p = str(tmp_path / "scene.tif")
-    with _serde.open_tile(make_geotiff_bytes(width=4, height=3, epsg=4326)) as src:
-        profile = src.profile.copy()
-        data = src.read()
-    with rasterio.open(p, "w", **profile) as dst:
-        dst.write(data)
-    df = spark.createDataFrame([(p,)], ["path"])
-    # materialize=True -> a bytes tile whose raster round-trips.
-    tile = df.select(
-        prx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
-    ).first()["t"]
-    assert tile is not None
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        assert ds.width == 4
-        assert ds.height == 3
-        assert ds.crs.to_epsg() == 4326
 
 
 def test_rst_fromfile_virtual_by_default(spark, tmp_path):
@@ -1086,7 +1047,9 @@ def test_rst_fromfile_virtual_by_default(spark, tmp_path):
     with rasterio.open(p, "w", **profile) as dst:
         dst.write(data)
     df = spark.createDataFrame([(p,)], ["path"])
-    tile = df.select(prx.rst_fromfile("path", f.lit("GTiff")).alias("t")).first()["t"]
+    tile = df.select(
+        rx.rst_fromfile("path", f.lit("GTiff"), materialize=False).alias("t")
+    ).first()["t"]
     assert tile is not None
     assert tile["raster"] is None  # bytes-free
     assert tile["path"] == p  # BARE path stored (no dbfs:/file: scheme)
@@ -1110,65 +1073,11 @@ def test_rst_fromfile_strips_scheme_before_open(spark, tmp_path):
         dst.write(data)
     df = spark.createDataFrame([("file:" + p,)], ["path"])
     tile = df.select(
-        prx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
+        rx.rst_fromfile("path", f.lit("GTiff"), materialize=True).alias("t")
     ).first()["t"]
     assert tile is not None  # scheme stripped -> open succeeded
     with _serde.open_tile(bytes(tile["raster"])) as ds:
         assert ds.width == 4 and ds.height == 3
-
-
-def test_rst_fromfile_bad_path_returns_none(spark):
-    # Heavyweight returns NULL on read failure; pyrx matches.
-    df = spark.createDataFrame([("/no/such/raster.tif",)], ["path"])
-    tile = df.select(prx.rst_fromfile("path", f.lit("GTiff")).alias("t")).first()["t"]
-    assert tile is None
-
-
-# ---------------------------------------------------------------------------
-# TIN / IDW constructors + aggregators
-# ---------------------------------------------------------------------------
-def test_rst_gridfrompoints_constructor(spark):
-    import shapely.wkb
-    from shapely.geometry import Point
-
-    # 1x1 grid center (1,1); p0=(0,0) v=10, p1=(2,2) v=30 -> IDW (power 2) = 20.
-    p0 = shapely.wkb.dumps(Point(0.0, 0.0))
-    p1 = shapely.wkb.dumps(Point(2.0, 2.0))
-    df = spark.createDataFrame([([p0, p1], [10.0, 30.0])], ["pts", "vals"])
-    tile = df.select(
-        prx.rst_gridfrompoints(
-            "pts", "vals", 0.0, 0.0, 2.0, 2.0, 1, 1, 32633, 2.0, 2
-        ).alias("t")
-    ).first()["t"]
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        assert ds.dtypes[0] == "float64"
-        assert ds.nodata == -9999.0
-        assert np.isclose(ds.read(1)[0, 0], 20.0)
-
-
-def test_rst_dtmfromgeoms_constructor(spark):
-    import shapely.wkb
-    from shapely.geometry import Point
-
-    # z = 2x + 3y + 1 plane; barycentric interpolation is exact in-hull.
-    corners = [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0), (10.0, 10.0), (5.0, 5.0)]
-    pts = [
-        shapely.wkb.dumps(Point(x, y, 2 * x + 3 * y + 1), output_dimension=3)
-        for x, y in corners
-    ]
-    df = spark.createDataFrame([(pts,)], ["pts"])
-    tile = df.select(
-        prx.rst_dtmfromgeoms(
-            "pts", f.lit(None), 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10, 10, 32633
-        ).alias("t")
-    ).first()["t"]
-    with _serde.open_tile(bytes(tile["raster"])) as ds:
-        arr = ds.read(1)
-        transform = ds.transform
-        assert ds.nodata == -9999.0
-    # interior cell matches the plane
-    wx, wy = transform * (5 + 0.5, 5 + 0.5)
-    assert np.isclose(arr[5, 5], 2 * wx + 3 * wy + 1, atol=1e-6)
 
 
 def test_rst_gridfrompoints_agg_equals_constructor(spark):
@@ -1244,7 +1153,7 @@ def test_rst_rasterize_geom_encodings(spark):
     for name, geom in _encode_geom(box(1.0, 1.0, 3.0, 3.0)).items():
         df = spark.createDataFrame([(geom,)], ["g"])
         tile = df.select(
-            prx.rst_rasterize("g", 5.0, 0.0, 0.0, 4.0, 4.0, 4, 4, 4326).alias("t")
+            rx.rst_rasterize("g", 5.0, 0.0, 0.0, 4.0, 4.0, 4, 4, 4326).alias("t")
         ).first()["t"]
         assert tile is not None and tile["raster"] is not None, f"{name} null tile"
         with _serde.open_tile(bytes(tile["raster"])) as ds:
@@ -1278,7 +1187,7 @@ def test_rst_viewshed_geom_encodings(spark):
     results = {}
     for name, geom in _encode_geom(Point(0.5, 3.5), srid=32633).items():
         df = spark.createDataFrame([(src, geom)], ["raster", "g"]).select(
-            prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"),
+            rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"),
             f.col("g"),
         )
         tile = df.select(
@@ -1300,7 +1209,7 @@ def test_rst_gridfrompoints_geom_encodings(spark):
         p1 = _encode_geom(Point(2.0, 2.0), srid=32633)[name]
         df = spark.createDataFrame([([p0, p1], [10.0, 30.0])], ["pts", "vals"])
         tile = df.select(
-            prx.rst_gridfrompoints(
+            rx.rst_gridfrompoints(
                 "pts", "vals", 0.0, 0.0, 2.0, 2.0, 1, 1, 32633, 2.0, 2
             ).alias("t")
         ).first()["t"]
@@ -1353,7 +1262,7 @@ def test_rst_dtmfromgeoms_geom_encodings(spark):
         pts = [_z_point_encodings(x, y, 2 * x + 3 * y + 1)[name] for x, y in corners]
         df = spark.createDataFrame([(pts,)], ["pts"])
         tile = df.select(
-            prx.rst_dtmfromgeoms(
+            rx.rst_dtmfromgeoms(
                 "pts", f.lit(None), 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10, 10, 32633
             ).alias("t")
         ).first()["t"]
@@ -1411,7 +1320,7 @@ def test_rst_dtmfromgeoms_breakline_encodings(spark):
     for name, bl in bl_encodings.items():
         df = spark.createDataFrame([(pts, [bl])], ["pts", "bls"])
         tile = df.select(
-            prx.rst_dtmfromgeoms(
+            rx.rst_dtmfromgeoms(
                 "pts", "bls", 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10, 10, 32633
             ).alias("t")
         ).first()["t"]
@@ -1495,7 +1404,7 @@ def test_rst_proximity_column_api(spark):
             dst.write(data, 1)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     out = df.select(rx.rst_proximity("tile", None, "PIXEL", None).alias("t"))
     # Float32 output, nodata -1.
@@ -1534,7 +1443,7 @@ def test_rst_contour_column_api(spark):
             dst.write(band, 1)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     rows = (
         df.select(f.explode(prx.rst_contour("tile", f.array(f.lit(2.5)))).alias("c"))
@@ -1575,7 +1484,7 @@ def test_rst_viewshed_column_api(spark):
     # Observer at pixel (row=3, col=0) center -> world (0.5, 3.5).
     obs = shapely.wkb.dumps(Point(0.5, 3.5))
     df = spark.createDataFrame([(src, obs)], ["raster", "g"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("g")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("g")
     )
     out = df.select(prx.rst_viewshed("tile", f.col("g"), 1.0, 0.0, None).alias("t"))
     # Byte output, single band.

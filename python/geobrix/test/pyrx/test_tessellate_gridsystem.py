@@ -9,6 +9,8 @@ import numpy as np
 import rasterio
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.rasterx import functions as rx
+
 
 def _small_4326_bytes(size=32, origin=(-0.12, 51.52), res_deg=0.01):
     """Return GTiff bytes: small EPSG:4326 raster over London."""
@@ -65,7 +67,7 @@ def test_h3_tessellate_tile_carries_gridsystem_h3(spark):
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_gs_h3")
     rows = spark.sql(
@@ -91,7 +93,7 @@ def test_h3_tessellate_centroid_tile_carries_gridsystem_h3(spark):
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_gs_h3_centroid")
     rows = spark.sql(
@@ -121,7 +123,7 @@ def test_quadbin_tessellate_tile_carries_gridsystem_quadbin(spark):
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_gs_qb")
     rows = spark.sql(
@@ -146,7 +148,7 @@ def test_quadbin_tessellate_centroid_tile_carries_gridsystem_quadbin(spark):
 
     tile_bytes = _small_4326_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_gs_qb_centroid")
     rows = spark.sql(
@@ -176,7 +178,7 @@ def test_bng_tessellate_tile_carries_gridsystem_bng(spark):
 
     tile_bytes = _small_27700_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_gs_bng")
     rows = spark.sql(
@@ -201,7 +203,7 @@ def test_bng_tessellate_centroid_tile_carries_gridsystem_bng(spark):
 
     tile_bytes = _small_27700_bytes()
     df = spark.createDataFrame([(bytearray(tile_bytes),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_gs_bng_centroid")
     rows = spark.sql(

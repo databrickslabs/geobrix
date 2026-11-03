@@ -13,7 +13,7 @@ from rasterx_generators_python_light import (
     rst_separatebands_python_light_example,
     rst_polygonize_python_light_example,
     rst_maketiles_python_light_example,
-    rst_rasterize_python_light_example,
+    rst_rasterize_python_example,
 )
 
 
@@ -56,7 +56,7 @@ def test_rst_maketiles_python_light_example(spark):
 
 def test_rst_rasterize_python_light_example(spark):
     """Light-tier rasterize returns a materialized tile struct."""
-    result = rst_rasterize_python_light_example(spark)
+    result = rst_rasterize_python_example(spark)
     assert result is not None
     # Should be a struct with tile fields
     assert hasattr(result, "asDict") or isinstance(result, dict)

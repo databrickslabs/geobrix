@@ -1634,7 +1634,7 @@ def _run_sp_creation(
     """Time rst_fromfile virtual-tile CREATION over the binaryFile `path` column.
 
     The binaryFile DataFrame ``raw`` carries a ``path`` URI column; this leg times
-    ``prx.rst_fromfile(F.col("path"), "GTiff")`` at each row-count ladder point and
+    ``rx.rst_fromfile(F.col("path"), "GTiff", materialize=False)`` at each row-count ladder point and
     emits rows with ``input_tile="virtual"``, ``output_disposition="deferred"``.
     Runs only when ``input_tile == "virtual"`` and ``rst_fromfile`` is among the
     selected fn names (gated in ``run_spark_path``).
@@ -1642,7 +1642,7 @@ def _run_sp_creation(
     import math as _math
 
     from databricks.labs.gbx.bench.spec import REGISTRY
-    from databricks.labs.gbx.pyrx import functions as prx
+    from databricks.labs.gbx.rasterx import functions as rx
 
     fs = REGISTRY["rst_fromfile"]
     path_df = raw.select(F.col("path"))
@@ -1658,7 +1658,7 @@ def _run_sp_creation(
         try:
 
             def job(_df=df):
-                c = prx.rst_fromfile(F.col("path"), "GTiff")
+                c = rx.rst_fromfile(F.col("path"), "GTiff", materialize=False)
                 _df.select(c.alias("out")).write.format("noop").mode("overwrite").save()
 
             stats = time_iters(job, warmup, measured)

@@ -213,7 +213,7 @@ def test_rst_band_python_example(spark):
 def test_rst_fromcontent_python_light_example(spark):
     """rst_fromcontent builds a GTiff tile from binary content via binaryFile reader."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_fromcontent_python_light_example(spark)
+    result = tileops_examples.rst_fromcontent_python_example(spark)
     assert result == "GTiff", f"Expected 'GTiff', got {result!r}"
 
 
@@ -227,7 +227,7 @@ def test_rst_frombands_python_light_example(spark):
 def test_rst_fromfile_python_light_example(spark):
     """rst_fromfile defaults to a VIRTUAL v2 tile: raster null, path + window set."""
     assert tileops_examples is not None
-    tile = tileops_examples.rst_fromfile_python_light_example(spark)
+    tile = tileops_examples.rst_fromfile_python_example(spark)
     assert tile is not None, "rst_fromfile returned null for a readable path"
     assert tile["raster"] is None, "virtual tile must have raster=None (bytes-free)"
     assert tile["path"] is not None, "virtual tile must carry the source path"
@@ -237,7 +237,7 @@ def test_rst_fromfile_python_light_example(spark):
 def test_rst_binpoints_python_light_example(spark):
     """rst_binpoints returns a materialized Float32 tile from inline point arrays."""
     assert tileops_examples is not None
-    result = tileops_examples.rst_binpoints_python_light_example(spark)
+    result = tileops_examples.rst_binpoints_python_example(spark)
     _assert_materialized_tile(result, "rst_binpoints")
 
 

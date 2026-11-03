@@ -39,7 +39,7 @@ def _two_region_rgb_bytes(h=32, w=32):
 def two_region_rgb_tile_df(spark):
     raster = _two_region_rgb_bytes()
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
+    return df.select(rx.rst_fromcontent("raster", F.lit("GTiff")).alias("tile"))
 
 
 def test_rst_land_cover_then_polygonize(spark, two_region_rgb_tile_df):

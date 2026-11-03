@@ -6,6 +6,7 @@ import pytest
 from databricks.labs.gbx.bench import datagen as dg
 from databricks.labs.gbx.bench import runner as rn
 from databricks.labs.gbx.bench import spec as s
+from databricks.labs.gbx.rasterx import functions as rx
 
 
 def test_time_iters_returns_distribution():
@@ -1033,9 +1034,7 @@ def test_creation_microleg_defined():
 def test_rst_fromfile_column_builds():
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    c = prx.rst_fromfile(F.col("path"), "GTiff")
+    c = rx.rst_fromfile(F.col("path"), "GTiff")
     assert c is not None
 
 

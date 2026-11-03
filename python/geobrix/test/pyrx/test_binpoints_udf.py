@@ -16,6 +16,8 @@ import pytest
 from pyspark.sql import functions as F
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.rasterx import functions as rx
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -114,7 +116,6 @@ def test_binpoints_agg_mean(spark):
 
 def test_binpoints_scalar_python_api(spark):
     """Scalar form (rst_binpoints): collect-array columns -> one tile per row."""
-    from databricks.labs.gbx.pyrx import functions as fns
 
     # One row: three-point array in the same cell layout as test_binpoints_agg_max.
     rows = [([0.5, 0.5, 1.5], [1.5, 1.5, 0.5], [10.0, 25.0, 7.0])]
@@ -123,7 +124,7 @@ def test_binpoints_scalar_python_api(spark):
         "x array<double>, y array<double>, z array<double>",
     )
     result_df = df.select(
-        fns.rst_binpoints(
+        rx.rst_binpoints(
             "x",
             "y",
             "z",
@@ -147,7 +148,6 @@ def test_binpoints_scalar_python_api(spark):
 
 def test_binpoints_scalar_empty_array(spark):
     """Scalar UDF with empty arrays must return None (no crash)."""
-    from databricks.labs.gbx.pyrx import functions as fns
 
     rows = [([], [], [])]
     df = spark.createDataFrame(
@@ -155,7 +155,7 @@ def test_binpoints_scalar_empty_array(spark):
         "x array<double>, y array<double>, z array<double>",
     )
     result_df = df.select(
-        fns.rst_binpoints(
+        rx.rst_binpoints(
             "x",
             "y",
             "z",

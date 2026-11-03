@@ -17,6 +17,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 pytest.importorskip(
     "rasterio",
@@ -45,7 +46,7 @@ def _uint16_tile_view(spark, name="t"):
     from pyspark.sql import functions as f
 
     df = spark.createDataFrame([(raw,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView(name)
 

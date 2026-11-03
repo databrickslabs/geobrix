@@ -415,11 +415,9 @@ def test_rst_setcrs_spark_esri(spark):
     """rst_setcrs('ESRI:54008') Spark UDF relabels CRS; rst_crs reads back."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
         rx.rst_crs(rx.rst_setcrs("tile", f.lit("ESRI:54008"))).alias("c")
     ).first()
@@ -432,11 +430,9 @@ def test_rst_setcrs_intcast_spark(spark):
     """rst_setcrs('4326') same result as rst_setsrid(4326) via int-cast rule."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = make_geotiff_bytes(epsg=32633)
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
         rx.rst_crs(rx.rst_setcrs("tile", f.lit("4326"))).alias("setcrs_crs"),
         rx.rst_crs(rx.rst_setsrid("tile", f.lit(4326))).alias("setsrid_crs"),
@@ -456,11 +452,9 @@ def test_rst_setcrs_bare_string_crs_is_a_literal(spark):
     """
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
         rx.rst_crs(rx.rst_setcrs("tile", "ESRI:54008")).alias("set_bare"),
         rx.rst_crs(rx.rst_transformcrs("tile", "EPSG:3857")).alias("xform_bare"),
@@ -474,12 +468,10 @@ def test_rst_setcrs_column_crs_still_works(spark):
     """A real Column CRS argument is read per row (the escape hatch must survive)."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b, "ESRI:54008")], ["raster", "crs_col"])
     df = df.select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("crs_col")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("crs_col")
     )
     row = df.select(
         rx.rst_crs(rx.rst_setcrs("tile", f.col("crs_col"))).alias("c")
@@ -492,11 +484,9 @@ def test_rst_transformcrs_spark_epsg(spark):
     """rst_transformcrs('EPSG:3857') reprojects; crs reflects new target."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
         rx.rst_crs(rx.rst_transformcrs("tile", f.lit("EPSG:3857"))).alias("c")
     ).first()
@@ -507,11 +497,9 @@ def test_rst_transformcrs_non_epsg_spark(spark):
     """rst_transformcrs('ESRI:54008') works for non-EPSG target via Spark UDF."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     b = _epsg4326_tif()
     df = spark.createDataFrame([(b,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     row = df.select(
         rx.rst_crs(rx.rst_transformcrs("tile", f.lit("ESRI:54008"))).alias("c")
     ).first()

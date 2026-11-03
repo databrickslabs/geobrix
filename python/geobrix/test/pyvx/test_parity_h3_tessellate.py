@@ -48,6 +48,8 @@ from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
+
 pytestmark = pytest.mark.integration
 
 _HERE = Path(__file__).resolve()
@@ -133,7 +135,7 @@ def _light_cells(spark, raster: bytes, mode: str) -> set:
 
     prx.register(spark)
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_ras_light")
     rows = spark.sql(

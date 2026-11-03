@@ -224,46 +224,6 @@ def _heavy_tile_df(spark, **kw):
 
 
 # ---------------------------------------------------------------------------
-# rst_fromfile — load raster from a file path (heavy Python tier; no Scala Column form)
-# ---------------------------------------------------------------------------
-
-
-def rst_fromfile_python_heavy_example(spark):
-    """Load a raster tile from a file path via the heavy (rasterx) Python tier.
-
-    rst_fromfile has no Scala/JVM Column form (the JVM executor cannot read UC
-    Volume FUSE paths), so the heavy `rasterx` binding delegates to the pyrx
-    loader — but forces `materialize=True`, because the heavyweight surface
-    always returns a MATERIALIZED v2 tile (raster bytes present): a virtual tile
-    carries only a path, which JVM expressions cannot read. Uses the same
-    committed single-band fixture the Setup `rasters` view is built from
-    (rst_fromfile takes a path, not a tile column, so it reads the fixture file
-    directly rather than the Setup view).
-    """
-    from ._fixtures import single_band_path  # noqa: PLC0415
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    path = str(single_band_path())
-    path_df = spark.createDataFrame([(path,)], ["path"])
-    # Heavy rst_fromfile delegates to pyrx with materialize=True → bytes present.
-    return path_df.select(
-        rx.rst_fromfile("path", f.lit("GTiff")).alias("tile")
-    ).first()["tile"]
-
-
-rst_fromfile_python_heavy_example_output = """
-+------------------------------------------------------------+
-|tile                                                        |
-+------------------------------------------------------------+
-|{0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}|
-+------------------------------------------------------------+
-(a MATERIALIZED v2 tile: raster bytes present, path/window null)
-"""
-
-
-# ---------------------------------------------------------------------------
 # rst_bandmetadata — per-band metadata map (heavy tier)
 # Fixture: MULTIBAND (rgb_nir_small.tif — has per-band GDAL metadata tags)
 # ---------------------------------------------------------------------------
@@ -531,43 +491,6 @@ rst_cog_convert_python_heavy_example_output = """
 # rst_filter — spatial filter (heavy tier)
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif)
 # ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
-# rst_fromcontent — create a tile from binary content (heavy tier, constructor)
-# Fuller example: read bytes via binaryFile reader, construct tile, verify format.
-# ---------------------------------------------------------------------------
-
-
-def rst_fromcontent_python_heavy_example(spark):
-    """Build a tile from binary raster bytes via the heavy rasterx tier.
-
-    Constructor: reads bytes via Spark's binaryFile reader and constructs a tile
-    column via rst_fromcontent. This is the canonical tier-agnostic pattern.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-    from path_config import SAMPLE_DATA_BASE  # noqa: PLC0415
-
-    path = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
-    binary_df = spark.read.format("binaryFile").load(path)
-    tile_df = binary_df.select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
-    )
-    result = tile_df.select(rx.rst_format("tile").alias("format")).first()
-    return result["format"]
-
-
-rst_fromcontent_python_heavy_example_output = """
-+------+
-|format|
-+------+
-|GTiff |
-+------+
-(format of the tile loaded from binary content via binaryFile reader)
-"""
 
 
 # ---------------------------------------------------------------------------
@@ -1524,122 +1447,6 @@ rst_viewshed_python_heavy_example_output = """
 """
 
 
-def rst_gridfrompoints_python_heavy_example(spark):
-    """IDW (Inverse Distance Weighting) interpolation from arrays of points and values."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    rx.register(spark)
-
-    # Create synthetic point cloud: 2 points with WKB and values
-    point_data = [
-        (
-            [
-                bytes.fromhex("010100000000000000000004400000000000000040"),
-                bytes.fromhex("010100000000000000000008400000000000000040"),
-            ],
-            [100.0, 110.0],
-        )
-    ]
-    df = spark.createDataFrame(point_data, ["points_wkb_array", "values_array"])
-
-    result = df.select(
-        rx.rst_gridfrompoints(
-            f.col("points_wkb_array"),
-            f.col("values_array"),
-            f.lit(0.0),
-            f.lit(0.0),
-            f.lit(1000.0),
-            f.lit(1000.0),
-            f.lit(256),
-            f.lit(256),
-            f.lit(32633),
-        ).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_gridfrompoints_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(IDW-interpolated tile over specified extent)
-"""
-
-
-def rst_dtmfromgeoms_python_heavy_example(spark):
-    """TIN (Triangulated Irregular Network) from Z-valued points via Delaunay interpolation."""
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-    from pyspark.sql.types import (
-        StructType,
-        StructField,
-        ArrayType,
-        BinaryType,
-    )  # noqa: PLC0415
-
-    rx.register(spark)
-
-    # Create synthetic survey point data with 4 points inset from the grid edges
-    # POINT Z geometries: (100,100,50), (900,100,80), (900,900,120), (100,900,60)
-    # Using explicit schema to avoid type inference errors
-    survey_data = [
-        (
-            [
-                bytes.fromhex(
-                    "0101000080000000000000594000000000000059400000000000004940"
-                ),
-                bytes.fromhex(
-                    "01010000800000000000208c4000000000000059400000000000005440"
-                ),
-                bytes.fromhex(
-                    "01010000800000000000208c400000000000208c400000000000005e40"
-                ),
-                bytes.fromhex(
-                    "010100008000000000000059400000000000208c400000000000004e40"
-                ),
-            ],
-            [],
-        )
-    ]
-    schema = StructType(
-        [
-            StructField("points_wkb_array", ArrayType(BinaryType()), True),
-            StructField("breaklines_wkb_array", ArrayType(BinaryType()), True),
-        ]
-    )
-    df = spark.createDataFrame(survey_data, schema=schema)
-
-    result = df.select(
-        rx.rst_dtmfromgeoms(
-            f.col("points_wkb_array"),
-            f.col("breaklines_wkb_array"),
-            f.lit(0.0),
-            f.lit(0.0),
-            f.lit(0.0),
-            f.lit(0.0),
-            f.lit(1000.0),
-            f.lit(1000.0),
-            f.lit(100),
-            f.lit(100),
-            f.lit(32618),
-        ).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_dtmfromgeoms_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(TIN-interpolated DTM over specified extent and pixel count)
-"""
-
-
 # ============================================================================
 # Coordinate Transforms & Tiling (Heavy Tier)
 # ============================================================================
@@ -1943,43 +1750,6 @@ rst_maketiles_python_heavy_example_output = """
 |{0, <raster bytes>, ..., {driver -> GTiff, ...}} |
 +-------------------------------------------------+
 (one row per sub-tile; the generator's one column is the tile struct)
-"""
-
-
-def rst_rasterize_python_heavy_example(spark):
-    """Burn geometry into a raster tile (column-returning, not a generator)."""
-    from pyspark.sql import Row, functions as f
-
-    if rx is None:
-        raise ImportError("rasterx not installed")
-
-    rx.register(spark)
-    # Create a synthetic geometry DataFrame with WKT polygon
-    df = spark.createDataFrame([Row(geom="POLYGON((2 2, 8 2, 8 8, 2 8, 2 2))")])
-    # Rasterize a square polygon (value=1.0, extent=(0,0,10,10), 10x10 pixels, EPSG:4326)
-    result = df.select(
-        rx.rst_rasterize(
-            f.col("geom"),
-            f.lit(1.0),
-            f.lit(0.0),
-            f.lit(0.0),
-            f.lit(10.0),
-            f.lit(10.0),
-            f.lit(10),
-            f.lit(10),
-            f.lit(4326),
-        ).alias("tile")
-    ).collect()
-    return result[0]["tile"]
-
-
-rst_rasterize_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(rasterized tile: pixels inside the polygon carry the burn value; outside = NoData)
 """
 
 
@@ -2682,50 +2452,6 @@ def rst_custom_rastertogridstddev_python_heavy_example(spark):
 rst_custom_rastertogridstddev_python_heavy_example_output = """
 [[Row(cellID=<bigint>, measure=0.0), ...]]
 (population standard deviation per band × custom-grid cell; 0.0 when all pixels equal)
-"""
-
-
-# ---------------------------------------------------------------------------
-# rst_binpoints — bin parallel x/y/z arrays into a Float32 raster tile (heavy tier)
-# Fixture: inline 3-point BNG (EPSG:27700) set, 10×10 pixel grid over 1 km extent
-# Output: tile struct (returns a Float32 raster tile)
-# ---------------------------------------------------------------------------
-
-
-def rst_binpoints_python_heavy_example(spark):
-    """Bin per-row ARRAY<DOUBLE> x/y/z columns into a Float32 raster tile via the heavy rasterx tier.
-
-    Uses a tiny 3-point inline BNG (EPSG:27700) set covering a 1 km extent at 10×10 pixels
-    (100 m ground resolution). Each output pixel carries the max z-value of points whose centre
-    falls in that pixel; empty pixels carry NoData (-9999.0). No external raster file needed.
-    """
-    from databricks.labs.gbx.rasterx import functions as rx
-    from pyspark.sql import functions as f
-
-    df = spark.range(1).select(
-        f.array(f.lit(550100.0), f.lit(550200.0), f.lit(550300.0)).alias("x"),
-        f.array(f.lit(180100.0), f.lit(180200.0), f.lit(180500.0)).alias("y"),
-        f.array(f.lit(42.5), f.lit(45.1), f.lit(38.7)).alias("z"),
-    )
-    result = df.select(
-        rx.rst_binpoints(
-            "x", "y", "z",
-            f.lit(550000.0), f.lit(180000.0),
-            f.lit(551000.0), f.lit(181000.0),
-            f.lit(10), f.lit(10),
-            f.lit(27700),
-        ).alias("tile")
-    ).first()
-    return result["tile"]
-
-
-rst_binpoints_python_heavy_example_output = """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
 """
 
 

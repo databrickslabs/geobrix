@@ -66,6 +66,8 @@ from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
 import numpy as np  # noqa: E402
 
+from databricks.labs.gbx.rasterx import functions as rx  # noqa: E402
+
 pytestmark = pytest.mark.integration
 
 _HERE = Path(__file__).resolve()
@@ -555,7 +557,7 @@ def _light_tessellate_ids(
 
     prx.register(spark)
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("_ras_light_tess")
     rows = spark.sql(
@@ -1643,7 +1645,7 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
 
     prx.register(spark)
     df2 = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df2.createOrReplaceTempView("_ras_default_h3")
     light_2arg_rows = spark.sql(
@@ -1916,7 +1918,7 @@ def _single_tile(spark, raster, tier, fn):
 
         mod.register(spark)
         df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-            mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+            rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
         )
     row = df.select(fn(mod, f.col("tile")).alias("t")).collect()[0]
     assert row["t"] is not None and row["t"]["raster"] is not None, f"{tier}: null tile"

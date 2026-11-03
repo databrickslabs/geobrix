@@ -20,11 +20,11 @@ def gbx_file_read_then_decode(spark, path=None):
     rst_fromfile to decode the raster at each path into a tile struct.
     """
     from databricks.labs.gbx.ds.file_gbx import gbx_file_read
-    from databricks.labs.gbx.pyrx.functions import rst_fromfile
+    from databricks.labs.gbx.rasterx.functions import rst_fromfile
 
     files = gbx_file_read(spark, path or SAMPLE_RASTER_DIR, extensions=(".tif",))
     # files has columns: path (STRING), size (BIGINT), file (FILE ref or null)
-    tiles = files.select("path", rst_fromfile(files["path"]).alias("tile"))
+    tiles = files.select("path", rst_fromfile(files["path"], materialize=False).alias("tile"))
     n = tiles.count()
     assert n > 0, "expected at least one decoded tile"
     return n

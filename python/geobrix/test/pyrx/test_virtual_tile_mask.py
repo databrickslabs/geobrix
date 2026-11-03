@@ -371,18 +371,16 @@ def test_streamed_materialization_equals_the_in_memory_one(tmp_path):
 def _tile_df(spark, path, *, virtual_start):
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     if virtual_start:
         df = spark.createDataFrame([(str(path),)], ["path"]).select(
-            prx.rst_fromfile("path").alias("tile")
+            rx.rst_fromfile("path", materialize=False).alias("tile")
         )
         # the "virtual" case must start from a tile without bytes
         assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"
         return df
     raw = Path(path).read_bytes()
     return spark.createDataFrame([(bytearray(raw),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
 
 
@@ -390,12 +388,11 @@ def _tile_df(spark, path, *, virtual_start):
 def test_rst_fromfile_materialize_keeps_the_mask(spark, tmp_path, nodata):
     """``rst_fromfile(path, materialize=True)`` reads the file now; its bytes hold the
     mask, so the tile equals the virtual read of the same file."""
-    from databricks.labs.gbx.pyrx import functions as prx
 
     p = write_masked(tmp_path / "m.tif", nodata=nodata)
     row = (
         spark.createDataFrame([(p,)], ["path"])
-        .select(prx.rst_fromfile("path", materialize=True).alias("tile"))
+        .select(rx.rst_fromfile("path", materialize=True).alias("tile"))
         .first()["tile"]
     )
     assert row["raster"] is not None, "materialize=True gave a virtual tile"

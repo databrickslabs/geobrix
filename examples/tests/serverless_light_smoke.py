@@ -293,7 +293,7 @@ try:
     df = spark.createDataFrame([(content,)], "content binary")
     # rst_fromcontent(content, driver) — the GDAL driver name is required.
     w_ = df.select(
-        rx_api.rst_width(rx.rst_fromcontent("content", lit("GTiff"))).alias("w")
+        rx_api.rst_width(rx_api.rst_fromcontent("content", lit("GTiff"))).alias("w")
     ).collect()
     r["pyrx_exec_width"] = int(w_[0]["w"]) if w_ else None
     r["pyrx_exec_ok"] = (r.get("pyrx_exec_width") == 4)

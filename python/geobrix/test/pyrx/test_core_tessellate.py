@@ -12,6 +12,7 @@ from shapely.geometry import Polygon
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import tessellate
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -24,11 +25,9 @@ def _h3_tile_df(spark):
     """One-row DataFrame with an 8×8 EPSG:4326 materialized tile."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx.pyrx import functions as prx
-
     raster = make_geotiff_bytes(width=8, height=8, epsg=4326)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def _bng_tile_df(spark):
@@ -37,8 +36,6 @@ def _bng_tile_df(spark):
     from pyspark.sql import functions as f
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
-
-    from databricks.labs.gbx.pyrx import functions as prx
 
     data = np.arange(16 * 16, dtype="float32").reshape(16, 16)
     profile = dict(
@@ -56,7 +53,7 @@ def _bng_tile_df(spark):
             dst.write(data, 1)
         raster = mf.read()
     df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def _src_bounds():

@@ -9,6 +9,7 @@ the user registered the heavyweight (Scala) or lightweight (pyrx) package.
 from pyspark.sql import functions as f
 
 from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.rasterx import functions as rx
 
 from .conftest import make_geotiff_bytes
 
@@ -16,7 +17,7 @@ from .conftest import make_geotiff_bytes
 def _tile_view(spark, name="t", **kw):
     raster = make_geotiff_bytes(**kw)
     df = spark.createDataFrame([(raster,)], ["raster"])
-    df = df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
     df.createOrReplaceTempView(name)
 
 
@@ -51,7 +52,7 @@ def _rgb_tile_view(spark, name="t"):
                 dst.write(data, b)
         src = mf.read()
     df = spark.createDataFrame([(src,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView(name)
 
@@ -169,7 +170,7 @@ def test_register_enables_merge_agg_sql(spark):
     left = _agg_ras_bytes(np.array([[1, 2], [3, 4]]), ulx=0.0, uly=2.0)
     right = _agg_ras_bytes(np.array([[5, 6], [7, 8]]), ulx=2.0, uly=2.0)
     df = spark.createDataFrame([("g", left), ("g", right)], ["k", "raster"]).select(
-        "k", prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        "k", rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("v")
     # Grouped-agg returns BINARY in SQL; accepts the tile STRUCT column directly.
@@ -192,7 +193,7 @@ def test_register_enables_combineavg_agg_sql(spark):
     a = _agg_ras_bytes(np.array([[2.0, 4.0], [6.0, 8.0]]))
     b = _agg_ras_bytes(np.array([[4.0, 8.0], [10.0, 12.0]]))
     df = spark.createDataFrame([("g", a), ("g", b)], ["k", "raster"]).select(
-        "k", prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        "k", rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("v")
     avg = spark.sql(
@@ -213,7 +214,7 @@ def test_register_enables_frombands_agg_sql(spark):
         [("g", b1, 1), ("g", b0, 0)], ["k", "raster", "band_index"]
     ).select(
         "k",
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"),
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"),
         "band_index",
     )
     df.createOrReplaceTempView("v")
@@ -255,7 +256,7 @@ def test_register_enables_derivedband_agg_sql(spark):
     a = _agg_ras_bytes(np.full((2, 2), 3.0))
     b = _agg_ras_bytes(np.full((2, 2), 4.0))
     df = spark.createDataFrame([("g", a), ("g", b)], ["k", "raster"]).select(
-        "k", prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        "k", rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("v")
     mx = spark.sql(
@@ -264,42 +265,6 @@ def test_register_enables_derivedband_agg_sql(spark):
         "AS m FROM v GROUP BY k"
     ).first()["m"]
     assert mx[0] == 7.0
-
-
-# --- TIN / IDW constructors + aggregators via SQL ---------------------------
-def test_register_enables_gridfrompoints_sql(spark):
-    import shapely.wkb
-    from shapely.geometry import Point
-
-    prx.register(spark)
-    p0 = shapely.wkb.dumps(Point(0.0, 0.0))
-    p1 = shapely.wkb.dumps(Point(2.0, 2.0))
-    spark.createDataFrame(
-        [([p0, p1], [10.0, 30.0])], ["pts", "vals"]
-    ).createOrReplaceTempView("g")
-    val = spark.sql(
-        "SELECT gbx_rst_avg(gbx_rst_gridfrompoints("
-        "pts, vals, 0.0, 0.0, 2.0, 2.0, 1, 1, 32633, 2.0, 2)) AS a FROM g"
-    ).first()["a"]
-    assert val[0] == 20.0
-
-
-def test_register_enables_dtmfromgeoms_sql(spark):
-    import shapely.wkb
-    from shapely.geometry import Point
-
-    prx.register(spark)
-    corners = [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0), (10.0, 10.0), (5.0, 5.0)]
-    pts = [
-        shapely.wkb.dumps(Point(x, y, 2 * x + 3 * y + 1), output_dimension=3)
-        for x, y in corners
-    ]
-    spark.createDataFrame([(pts,)], ["pts"]).createOrReplaceTempView("g")
-    w = spark.sql(
-        "SELECT gbx_rst_width(gbx_rst_dtmfromgeoms("
-        "pts, NULL, 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 10, 10, 32633)) AS w FROM g"
-    ).first()["w"]
-    assert w == 10
 
 
 def test_register_enables_gridfrompoints_agg_sql(spark):
@@ -345,8 +310,8 @@ def test_register_enables_dtmfromgeoms_agg_sql(spark):
 # ---------------------------------------------------------------------------
 def _two_tile_view(spark, raster_a, raster_b, name="ab"):
     df = spark.createDataFrame([(raster_a, raster_b)], ["a", "b"]).select(
-        prx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
-        prx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
+        rx.rst_fromcontent("a", f.lit("GTiff")).alias("ta"),
+        rx.rst_fromcontent("b", f.lit("GTiff")).alias("tb"),
     )
     df.createOrReplaceTempView(name)
 
@@ -446,26 +411,6 @@ def test_register_enables_frombands_sql(spark):
     assert n == 2
 
 
-def test_register_enables_fromfile_sql(spark, tmp_path):
-    import rasterio
-
-    from databricks.labs.gbx.pyrx import _serde
-
-    p = str(tmp_path / "scene_sql.tif")
-    with _serde.open_tile(make_geotiff_bytes(width=4, height=3, epsg=4326)) as src:
-        profile = src.profile.copy()
-        data = src.read()
-    with rasterio.open(p, "w", **profile) as dst:
-        dst.write(data)
-
-    prx.register(spark)
-    spark.createDataFrame([(p,)], ["path"]).createOrReplaceTempView("fp")
-    w = spark.sql(
-        "SELECT gbx_rst_width(gbx_rst_fromfile(path, 'GTiff')) AS w FROM fp"
-    ).first()["w"]
-    assert w == 4
-
-
 def test_register_enables_h3_tessellate_sql(spark):
     prx.register(spark)
     _tile_view(spark, width=8, height=8, epsg=4326)
@@ -499,7 +444,7 @@ def test_register_enables_proximity_sql(spark):
             dst.write(data, 1)
         raster = mf.read()
     df = spark.createDataFrame([(raster,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("p")
     # Compose: proximity then read its type in SQL.
@@ -540,7 +485,7 @@ def test_register_enables_contour_sql(spark):
             dst.write(band, 1)
         raster = mf.read()
     df = spark.createDataFrame([(raster,)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
     df.createOrReplaceTempView("c")
     # Explode the ARRAY<struct(geom_wkb, value)> and count contours at level 2.5.
@@ -580,7 +525,7 @@ def test_register_enables_viewshed_sql(spark):
         raster = mf.read()
     obs = shapely.wkb.dumps(Point(0.5, 3.5))
     df = spark.createDataFrame([(raster, obs)], ["raster", "g"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("g")
+        rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"), f.col("g")
     )
     df.createOrReplaceTempView("v")
     ty = spark.sql(

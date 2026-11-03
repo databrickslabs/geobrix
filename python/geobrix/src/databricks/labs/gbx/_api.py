@@ -134,6 +134,25 @@ def force_output(
     )
 
 
+def given(*extras) -> bool:
+    """A Python-only keyword is set (``None`` is unset; ``False`` is a value)."""
+    return any(e is not None for e in extras)
+
+
+def extra_call(sql_name: str, extras, *values):
+    """The Python-only keyword path of a row whose keywords are not the force-output trio: the row's ``extra_impl``
+    (a function of the SQL arguments, defaults filled, then one literal Column per keyword).
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx import manifest
+
+    fn = _fn(sql_name)
+    impl = manifest.resolve_ref(fn.python.extra_impl)
+    cols = _columns(fn, values, fill_all=True)
+    return impl(*cols, *[F.lit(e) for e in extras])
+
+
 def _sql_literal(value: Any, param) -> str:
     from databricks.labs.gbx.manifest import sql_type
 

@@ -67,6 +67,14 @@ object VectorRasterBridge {
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
         widthPx: Int, heightPx: Int, srid: Int,
         noDataValue: Double = -9999.0
+    ): Dataset = buildEmptyRasterCrs(xmin, ymin, xmax, ymax, widthPx, heightPx, srid.toString, noDataValue)
+
+    /** As [[buildEmptyRaster]], with the CRS as text (`EPSG:x`, `ESRI:x`, WKT or a bare code); null leaves the raster
+     *  without a CRS. */
+    def buildEmptyRasterCrs(
+        xmin: Double, ymin: Double, xmax: Double, ymax: Double,
+        widthPx: Int, heightPx: Int, crs: String,
+        noDataValue: Double
     ): Dataset = {
         require(widthPx > 0, s"rst_rasterize: width_px must be positive; got $widthPx")
         require(heightPx > 0, s"rst_rasterize: height_px must be positive; got $heightPx")
@@ -77,10 +85,12 @@ object VectorRasterBridge {
         val xRes = (xmax - xmin) / widthPx
         val yRes = (ymax - ymin) / heightPx
         ds.SetGeoTransform(Array(xmin, xRes, 0.0, ymax, 0.0, -yRes))
-        // Resolve via the shared rule so ESRI codes classify correctly (not just EPSG).
-        val sr = SpatialRefOps.resolveCrs(srid.toString)
-        ds.SetProjection(sr.ExportToWkt())
-        sr.delete()
+        if (crs != null) {
+            // Resolve via the shared rule so ESRI codes classify correctly (not just EPSG).
+            val sr = SpatialRefOps.resolveCrs(crs)
+            ds.SetProjection(sr.ExportToWkt())
+            sr.delete()
+        }
         val band = ds.GetRasterBand(1)
         band.SetNoDataValue(noDataValue)
         band.Fill(noDataValue)

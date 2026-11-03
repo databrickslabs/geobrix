@@ -61,7 +61,8 @@ class Case:
     # height, count, dtype, nodata (a value, or None for none declared), driver (the raster's format), meta_driver (the
     # tile metadata's driver), layout (the GeoTIFF IMAGE_STRUCTURE layout), pixels_of_arg0 (the pixels of the first
     # argument unchanged), transform_of_arg0 (its geotransform) and grid_of_arg1 (the width, height, CRS and geotransform
-    # of the second argument). A result that is still a virtual tile is read as its next reader reads it.
+    # of the second argument), and materialized (True: the raster bytes are in the tile and it has no path; False: a
+    # path and no bytes). A result that is still a virtual tile is read as its next reader reads it.
     expect: Any = None
     surfaces: Tuple[str, ...] = ("session", "uc")
     geom_srid: int = (
@@ -2011,6 +2012,10 @@ def _field(row, name):
 
 
 def _raster_of(tile) -> Optional[bytes]:
+    if isinstance(tile, (bytes, bytearray)):  # a constructor's content argument
+        return bytes(tile)
+    if isinstance(tile, str):  # a constructor's path argument
+        return open(tile, "rb").read()
     if _field(tile, "raster") is not None:
         return bytes(_field(tile, "raster"))
     p = _field(tile, "path")
@@ -2168,6 +2173,14 @@ def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
         md = (_field(out, "metadata") or {}).get("driver")
         if md != want["meta_driver"]:
             return f"metadata driver {md!r} is not {want['meta_driver']!r}"
+    if "materialized" in want:
+        has_bytes = _field(out, "raster") is not None
+        has_path = _field(out, "path") is not None
+        if want["materialized"] != (has_bytes and not has_path):
+            return (
+                f"the tile {'has' if has_bytes else 'has no'} raster bytes and {'a' if has_path else 'no'} path, "
+                f"want {'bytes and no path' if want['materialized'] else 'a path and no bytes'}"
+            )
     if "layout" in want:
         layout = got.tags(ns="IMAGE_STRUCTURE").get("LAYOUT")
         if layout != want["layout"]:
@@ -2651,7 +2664,99 @@ def _ref_subdataset(args):
     return band.data.astype("float64"), np.ma.getmaskarray(band)
 
 
+def _shapely_of(raw):
+    """A geometry argument (WKB, EWKB, WKT or EWKT) as a shapely geometry and its SRID (0 for none), read with
+    shapely directly."""
+    import re
+
+    import shapely
+
+    if isinstance(raw, (bytes, bytearray)):
+        g = shapely.from_wkb(bytes(raw))
+        return g, int(shapely.get_srid(g))
+    m = re.match(r"\s*SRID=(\d+);(.*)", raw, re.S)
+    return (
+        (shapely.from_wkt(m.group(2)), int(m.group(1)))
+        if m
+        else (shapely.from_wkt(raw), 0)
+    )
+
+
+def _web_mercator(g):
+    """The geometry's longitude/latitude vertices in Web Mercator by the closed-form sphere projection (radius
+    6378137 m), edges straight between them: no CRS library."""
+    import math
+
+    import shapely
+
+    r = 6378137.0
+    import numpy as np
+
+    return shapely.transform(
+        g,
+        lambda c: np.array(
+            [
+                [
+                    r * math.radians(x),
+                    r * math.log(math.tan(math.pi / 4 + math.radians(y) / 2)),
+                ]
+                for x, y in c
+            ]
+        ),
+    )
+
+
+def _ref_rasterize(args):
+    """rst_rasterize: the geometry (reprojected from longitude/latitude to Web Mercator when it says SRID=4326 and the
+    output is 3857) burned where the pixel centre is inside it (oracle_refs.burn)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    g, srid = _shapely_of(args[0])
+    if srid == 4326 and len(args) > 8 and args[8] == 3857:
+        g = _web_mercator(g)
+    return oracle_refs.burn(g, args[1], (*args[2:6], args[6], args[7]))
+
+
+def _ref_gridfrompoints(args):
+    """rst_gridfrompoints: inverse-distance weighting written out (oracle_refs.idw)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    pts = [_shapely_of(p)[0] for p in args[0]]
+    xy = [(p.x, p.y) for p in pts]
+    power = args[9] if len(args) > 9 and args[9] is not None else 2.0
+    max_pts = args[10] if len(args) > 10 and args[10] is not None else 12
+    return oracle_refs.idw(xy, args[1], (*args[2:6], args[6], args[7]), power, max_pts)
+
+
+def _ref_binpoints(args):
+    """rst_binpoints: the points binned into the grid by the statistic (oracle_refs.bin_statistic)."""
+    from databricks.labs.gbx.bench import oracle_refs
+
+    stat = args[10] if len(args) > 10 else "max"
+    return oracle_refs.bin_statistic(
+        args[0], args[1], args[2], (*args[3:7], args[7], args[8]), stat
+    )
+
+
+def _ref_plane(coeffs, hull):
+    """rst_dtmfromgeoms of points on the plane z = a x + b y that fill the rectangle `hull`: every triangle of any
+    triangulation of them holds the plane, so the height is the plane's (oracle_refs.plane).
+    """
+
+    def ref(args):
+        from databricks.labs.gbx.bench import oracle_refs
+
+        nodata = args[11] if len(args) > 11 and args[11] is not None else -9999.0
+        return oracle_refs.plane(coeffs, hull, (*args[4:8], args[8], args[9]), nodata)
+
+    return ref
+
+
 _REFS = {
+    "rasterize": _ref_rasterize,
+    "gridfrompoints": _ref_gridfrompoints,
+    "binpoints": _ref_binpoints,
+    "dtm_plane": _ref_plane((1.0, 2.0), (0.0, 0.0, 10.0, 10.0)),
     "band": _ref_band_arg,
     "filter": _ref_filter,
     "convolve": _ref_convolve,
@@ -3368,6 +3473,9 @@ _SQL = {
     "BINARY": "binary",
     "BOOLEAN": "boolean",
     "ARRAY<BIGINT>": "array<bigint>",
+    "ARRAY<DOUBLE>": "array<double>",
+    "ARRAY<BINARY>": "array<binary>",
+    "ARRAY<STRING>": "array<string>",
     "ARRAY<ARRAY<DOUBLE>>": "array<array<double>>",
 }
 
@@ -3388,7 +3496,7 @@ def _ddl_type(value, param) -> str:
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, list):  # an array parameter (quadbin cells)
-        return _array_ddl_type(param)
+        return _array_ddl_type(param, value)
     if isinstance(value, int):
         wide = param.session[0] == "BIGINT" or not -(2**31) <= value < 2**31
         return "bigint" if wide else "int"
@@ -3407,9 +3515,13 @@ def _unmapped(param):
     )
 
 
-def _array_ddl_type(param) -> str:
+def _array_ddl_type(param, value=None) -> str:
     """The DDL type of an array argument: ARRAY<...> parameter types map as they are written."""
     t = param.session[0]
+    if (
+        value and isinstance(value[0], str) and "ARRAY<STRING>" in param.session
+    ):  # geometries as text (WKT or EWKT) in an array that also takes WKB
+        return "array<string>"
     if t.upper().startswith("ARRAY<") and t.endswith(">"):
         return t.lower()
     raise ValueError(

@@ -886,14 +886,36 @@ def _worldtorastercoord_udf(tile, x, y):
 # --- Constructor ------------------------------------------------------------
 @f.udf(V2_TILE_SCHEMA)
 def _fromcontent_udf(raster, drv):
-    if raster is None:
+    if raster is None or drv is None:
         return None
-    return _serde.build_tile(bytes(raster), drv or "GTiff")
+    drv = ops_core.known_driver(drv, "rst_fromcontent")
+    try:
+        return _serde.build_tile(bytes(raster), drv)
+    except (MemoryError, RecursionError):
+        raise
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - what GDAL or the policy says is the content's reason
+        return _serde.build_error_tile(
+            f"rst_fromcontent: the content cannot be opened as a raster: {exc}. "
+            "Fix: pass the bytes of a whole raster file in a format GDAL reads, such as the content column of "
+            "spark.read.format('binaryFile').",
+            0,
+        )
 
 
-def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
-    """Build a tile struct from raster BINARY content and GDAL driver name."""
-    return _fromcontent_udf(_col(content), _col(driver))
+def _fromfile_extra(path, driver, materialize):
+    """The Python-only ``materialize`` keyword of the generated ``rst_fromfile``: columns in, a tile Column out.
+    ``materialize=False`` is a virtual tile of the file (no pixel is read); ``True`` reads the pixels now, with the
+    driver's materialize cap carried in (a worker cannot measure it)."""
+    from databricks.labs.gbx.ds.file_gbx import (
+        _connect_aware_lru_sizing,
+        _resolve_session_for_cap,
+    )
+
+    _cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+    udf = carrying_udf(_fromfile_udf, driver_switch())
+    return udf(path, driver, materialize, f.lit(_cap))
 
 
 # rst_fromfile: reference a raster on disk as a tile. LIGHT-TIER DEFAULT is a
@@ -922,6 +944,11 @@ _RASTER_SUFFIXES = (
     ".bil",
     ".dem",
 )
+
+
+def rst_fromcontent(content: ColLike, driver: ColLike) -> Column:
+    """Build a tile struct from raster BINARY content and GDAL driver name."""
+    return _fromcontent_udf(_col(content), _col(driver))
 
 
 def _names_a_vrt(local) -> bool:
@@ -1022,7 +1049,7 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     # a column's path is data: a remote URL is refused here, at once, unless the driver's switch was carried in
     data_path(str(path), "rst_fromfile")
     _env.configure_gdal_env()
-    drv = "GTiff" if driver is None else str(driver)
+    drv = ops_core.known_driver("GTiff" if driver is None else driver, "rst_fromfile")
     local = to_local_path(str(path))
 
     if materialize and _names_a_vrt(local):
@@ -1172,6 +1199,7 @@ def _fromfile_sql_materialized_udf(path, driver):
     return _fromfile_impl(path, driver, True)
 
 
+# rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.
 def rst_fromfile(
     path: ColLike, driver: ColLike = "GTiff", materialize: Optional[bool] = None
 ) -> Column:
@@ -1224,7 +1252,6 @@ def rst_fromfile(
     return udf(_col(path), drv, f.lit(bool(materialize)), f.lit(_cap))
 
 
-# rst_merge: single ARRAY<tile struct> arg in one row -> mosaic tile.
 def _refusal_as_error_tile(func):
     """A tile-returning UDF body whose group has a member decoded over the read cap answers that group's error tile with
     the refusal (reason and Fix), never a result built from the other members."""
@@ -4362,18 +4389,53 @@ def _percentile_stretch_v2_udf(
 
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
+def _check_grid(fn, xmin, ymin, xmax, ymax, width_px, height_px):
+    """The extent and size of an output grid: a size above 0 and an extent with its far edge above its near one.
+    ValueError naming the value."""
+    if int(width_px) <= 0 or int(height_px) <= 0:
+        raise ValueError(
+            f"{fn}: width_px and height_px must be above 0 (got {width_px} x {height_px})"
+        )
+    if not float(xmax) > float(xmin) or not float(ymax) > float(ymin):
+        raise ValueError(
+            f"{fn}: the extent must have xmax above xmin and ymax above ymin (got x {xmin}..{xmax}, y {ymin}..{ymax})"
+        )
+
+
 @f.udf(V2_TILE_SCHEMA)
 def _rasterize_udf(
-    geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, out_crs=None
+    geom_wkb,
+    value,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    out_srid=None,
+    out_crs=None,
 ):
-    if geom_wkb is None:
+    if any(
+        a is None
+        for a in (geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px)
+    ):
         return None
-    from databricks.labs.gbx._geom import geom_to_wkb
+    import shapely
+
+    from databricks.labs.gbx._geom import parse_geom
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
+    _check_grid("rst_rasterize", xmin, ymin, xmax, ymax, width_px, height_px)
+    try:
+        geom = parse_geom(geom_wkb)
+    except Exception as exc:  # noqa: BLE001 - shapely's text does not name the value
+        raise ValueError(
+            f"rst_rasterize: the geometry {str(geom_wkb)[:80]!r} is not WKB, EWKB, WKT or EWKT ({exc})"
+        ) from exc
     new_bytes = features.rasterize_geom(
-        geom_to_wkb(geom_wkb),
+        # EWKB, so the SRID an EWKT or EWKB carries reaches the reprojection
+        shapely.to_wkb(geom, include_srid=True),
         value,
         xmin,
         ymin,
@@ -4463,17 +4525,24 @@ def _gridfrompoints_udf(
     ymax,
     width_px,
     height_px,
-    srid,
+    srid=None,
     power=None,
     max_pts=None,
     out_crs=None,
 ):
-    if points is None or values is None:
+    if any(
+        a is None for a in (points, values, xmin, ymin, xmax, ymax, width_px, height_px)
+    ):
         return None
     from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core.tin import _parse_geom_elem
 
     _env.configure_gdal_env()
+    _check_grid("rst_gridfrompoints", xmin, ymin, xmax, ymax, width_px, height_px)
+    if len(points) != len(values):
+        raise ValueError(
+            f"rst_gridfrompoints: points ({len(points)}) and values ({len(values)}) length mismatch"
+        )
     # Decode points and values together so a null/empty point drops its paired
     # value too, keeping the two arrays parallel for the IDW solver. Each point
     # may be WKB/EWKB/WKT/EWKT (routed through the shared decoder).
@@ -4504,6 +4573,7 @@ def _gridfrompoints_udf(
     return _serde.build_tile(new_bytes, "GTiff", 0)
 
 
+# --- Tier 1e4: point-cloud binning (array -> tile) ---------------------------
 def rst_gridfrompoints(
     points_array: ColLike,
     values_array: ColLike,
@@ -4562,16 +4632,25 @@ def rst_gridfrompoints(
     )
 
 
-# --- Tier 1e4: point-cloud binning (array -> tile) ---------------------------
 @f.udf(V2_TILE_SCHEMA)
-def _binpoints_udf(x_arr, y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid, statistic):
+def _binpoints_udf(
+    x_arr, y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid, statistic=None
+):
     """Scalar: bin parallel ARRAY<DOUBLE> columns into a single-band GTiff tile.
 
     Produces one tile per row. Extent/size/srid/statistic are scalar args.
-    Empty or null input arrays return None.
+    NULL or empty input arrays return None.
     """
+    if any(a is None for a in (y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid)):
+        return None
     if not x_arr:
         return None
+    _check_grid("rst_binpoints", xmin, ymin, xmax, ymax, w, h)
+    if not len(x_arr) == len(y_arr) == len(z_arr):
+        raise ValueError(
+            "rst_binpoints: x_array, y_array and z_array must have the same length "
+            f"(got {len(x_arr)}, {len(y_arr)}, {len(z_arr)})"
+        )
     b = binning.bin_points(
         x_arr,
         y_arr,
@@ -4654,15 +4733,29 @@ def _dtmfromgeoms_udf(
     ymax,
     width_px,
     height_px,
-    srid,
+    srid=None,
     no_data=None,
     out_crs=None,
 ):
-    if points is None:
+    if any(
+        a is None
+        for a in (
+            points,
+            merge_tolerance,
+            snap_tolerance,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width_px,
+            height_px,
+        )
+    ):
         return None
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
+    _check_grid("rst_dtmfromgeoms", xmin, ymin, xmax, ymax, width_px, height_px)
     pts_xyz = tin_core.points_xyz_from_wkb(points)
     # breaklines may be WKB/EWKB/WKT/EWKT; pass through untouched so
     # delaunay_dtm decodes each element via the shared geom parser.
@@ -4681,6 +4774,14 @@ def _dtmfromgeoms_udf(
         out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
+
+
+_POLYGONIZE_ROW_SCHEMA = StructType(
+    [
+        StructField("geom_wkb", BinaryType(), nullable=False),
+        StructField("value", DoubleType(), nullable=False),
+    ]
+)
 
 
 def rst_dtmfromgeoms(
@@ -4747,14 +4848,6 @@ def rst_dtmfromgeoms(
         nd,
         f.lit(out_crs) if out_crs is not None else f.lit(None),
     )
-
-
-_POLYGONIZE_ROW_SCHEMA = StructType(
-    [
-        StructField("geom_wkb", BinaryType(), nullable=False),
-        StructField("value", DoubleType(), nullable=False),
-    ]
-)
 
 
 @udtf(returnType=_POLYGONIZE_ROW_SCHEMA)

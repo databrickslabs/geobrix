@@ -117,7 +117,12 @@ PACKAGE_OF_PREFIX = {
 # How the Python API reads a bare str for a parameter: a column name, or a literal (a CRS, a unit, a mode).
 PY_MODES = frozenset({"col", "lit"})
 # Python-only keyword groups a generated entry may carry (per-surface signatures may differ).
-PY_EXTRAS = {"force_output": ("virtualize_dir", "virtualize_prefix", "materialize")}
+# `materialize` alone is the constructor's keyword: set, it runs the row's `extra_impl` with the value (`False` asks
+# for a virtual tile of the file where the SQL name reads the pixels now).
+PY_EXTRAS = {
+    "force_output": ("virtualize_dir", "virtualize_prefix", "materialize"),
+    "materialize": ("materialize",),
+}
 # "mvp" marks a probe: installed when named (`register(only=[...])`), never by a plain `register()`.
 STATUSES = frozenset({"stable", "mvp"})
 DATASOURCE_KINDS = frozenset({"reader", "writer", "reader_writer"})

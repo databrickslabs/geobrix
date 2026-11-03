@@ -161,6 +161,15 @@ _META_ARGS = {
         ("tile_meta", {"grid_of_arg1": True}, _sized(32, 24), _sized(31, 24)),
         ("tile_meta", {"nodata": None}, _sized(32, 24), _sized(32, 24, nodata=-9999.0)),
         (
+            "tile_meta",
+            {"materialized": True},
+            _sized(32, 24),
+            {
+                **_sized(32, 24),
+                "path": "/tmp/x.tif",
+            },  # bytes and a path: not a materialized tile
+        ),
+        (
             "json_subset",
             {"size": [4, 3], "bands": [{"min": 2.0}]},
             '{"size": [4, 3], "extra": 1, "bands": [{"min": 2.0, "max": 12.0}]}',

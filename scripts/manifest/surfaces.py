@@ -37,6 +37,13 @@ EXTRA_DOCS = {
     "virtualize_prefix": "Python only: the file-name prefix used with ``virtualize_dir``.",
     "materialize": "Python only: ``True`` returns the raster bytes in the tile.",
 }
+# The text of a keyword that a group of extras documents differently from the force-output trio.
+GROUP_EXTRA_DOCS = {
+    (
+        "materialize",
+        "materialize",
+    ): "Python only: ``False`` returns a virtual tile that points at the file and reads no pixel; ``True`` reads the pixels now, as SQL does.",
+}
 SECTION_OF_PREFIX = {
     "rst": "rasterx",
     "bng": "gridx",
@@ -87,7 +94,7 @@ def _call(callee: str, args: List[str], indent: int) -> List[str]:
     return [f"{pad}return {callee}(", *[f"{pad}    {a}," for a in args], f"{pad})"]
 
 
-def _docstring(fn, extras) -> List[str]:
+def _docstring(fn, extras, group=None) -> List[str]:
     from databricks.labs.gbx.manifest import usage_args
 
     out = ['    """' + fn.doc.summary.strip(), ""]
@@ -101,7 +108,10 @@ def _docstring(fn, extras) -> List[str]:
             tail = "" if i < fn.min_args else f" SQL default: ``{p.default}``."
             lines = _wrap(f"{p.name}: {p.doc or p.name}{tail}", 8)
             out += ["        " + lines[0]] + ["            " + x for x in lines[1:]]
-        out += [f"        {e}: {EXTRA_DOCS[e]}" for e in extras]
+        out += [
+            f"        {e}: {GROUP_EXTRA_DOCS.get((group, e), EXTRA_DOCS[e])}"
+            for e in extras
+        ]
         out.append("")
     if fn.doc.returns:
         out += (
@@ -128,11 +138,18 @@ def render_python_entry(fn) -> str:
         f"def {py.name}(",
         *[f"    {s}," for s in sig],
         f") -> {ret}:",
-    ] + _docstring(fn, extras)
+    ] + _docstring(fn, extras, py.extras)
     if fn.kind == "generator":
         lines += _call("_api.table", ["df", f'"{fn.sql_name}"', *names], 4)
     else:
-        if extras:
+        if py.extras == "materialize":
+            lines.append(f"    if _api.given({', '.join(extras)}):")
+            lines += _call(
+                "_api.extra_call",
+                [f'"{fn.sql_name}"', f"({', '.join(extras)},)", *names],
+                8,
+            )
+        elif extras:
             lines.append(f"    if _api.forced({', '.join(extras)}):")
             lines += _call(
                 "_api.force_output", [f'"{fn.sql_name}"', *extras, *names], 8
@@ -262,7 +279,8 @@ def _strip_comments(stmt: str) -> str:
 
 def first_statement(sql: str) -> Optional[str]:
     """The first statement naming a gbx_ function, comments stripped (what DESCRIBE shows). Statements split
-    on a ``;`` outside quotes and comments, so a ``;`` or ``--`` inside a string literal stays."""
+    on a ``;`` outside quotes and comments, so a ``;`` or ``--`` inside a string literal stays.
+    """
     for stmt in _info_script()._split_sql_statements(sql):
         flat = " ".join(_strip_comments(stmt).split())
         if "gbx_" in flat:

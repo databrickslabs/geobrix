@@ -99,6 +99,21 @@ def driver_name(new_format: str) -> str:
     return name
 
 
+def known_driver(name, fn: str) -> str:
+    """GDAL's spelling of the driver short name ``name`` (any case) for a constructor's driver hint; ValueError
+    naming the value when this GDAL build has no such driver."""
+    with rasterio.Env() as env:
+        registered = env.drivers()
+    by_lower = {d.lower(): d for d in registered}
+    hit = by_lower.get(str(name).lower())
+    if hit is None:
+        raise ValueError(
+            f"{fn}: driver '{name}' is not a GDAL driver in this build. "
+            "Fix: use a GDAL raster driver short name such as 'GTiff', 'PNG' or 'netCDF'."
+        )
+    return hit
+
+
 def written_driver(new_format: str) -> str:
     """The driver the bytes of ``as_format(ds, new_format)`` open as, for the tile metadata:
     the driver itself, except COG, which is a layout of a GeoTIFF and opens as ``GTiff`` (the

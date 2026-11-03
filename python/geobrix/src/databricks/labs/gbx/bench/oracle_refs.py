@@ -168,3 +168,83 @@ def percentile_scale(z, valid, lo_pct, hi_pct):
     out = np.clip((z.astype("float64") - lo) / (hi - lo) * 255.0, 0.0, 255.0)
     out[~valid] = 0.0
     return out
+
+
+# --- the constructors that build a raster from vectors or points (what each is defined to compute) ---------------
+
+
+def pixel_centres(xmin, ymin, xmax, ymax, width, height):
+    """The world coordinates of every pixel centre of a north-up grid: two (height, width) arrays (x, y)."""
+    xs = xmin + (np.arange(width) + 0.5) * (xmax - xmin) / width
+    ys = ymax - (np.arange(height) + 0.5) * (ymax - ymin) / height
+    return np.meshgrid(xs, ys)
+
+
+def burn(geom, value, grid, nodata=-9999.0):
+    """A geometry burned in: ``value`` where the pixel centre is inside it, else ``nodata`` (values, mask)."""
+    import shapely
+
+    gx, gy = pixel_centres(*grid)
+    inside = shapely.contains_xy(geom, gx, gy)
+    return np.where(inside, float(value), nodata), ~inside
+
+
+def idw(points, values, grid, power=2.0, max_pts=12, nodata=-9999.0):
+    """Inverse-distance weighting: each pixel centre takes the weighted mean (weight 1 / distance ** power) of its
+    ``max_pts`` nearest points; a point on the centre gives its value. No points: every pixel NoData.
+    """
+    gx, gy = pixel_centres(*grid)
+    h, w = gx.shape
+    if len(points) == 0:
+        return np.full((h, w), nodata), np.ones((h, w), bool)
+    pts = np.asarray(points, "float64")
+    vals = np.asarray(values, "float64")
+    dist = np.hypot(gx[..., None] - pts[:, 0], gy[..., None] - pts[:, 1])
+    near = np.argsort(dist, axis=-1, kind="stable")[..., : min(int(max_pts), len(pts))]
+    d = np.take_along_axis(dist, near, axis=-1)
+    v = vals[near]
+    out = np.empty((h, w), "float64")
+    hit = d[..., 0] == 0.0
+    with np.errstate(divide="ignore"):
+        wt = 1.0 / d**power
+    out[~hit] = ((wt * v).sum(-1) / wt.sum(-1))[~hit]
+    out[hit] = v[..., 0][hit]
+    return out, np.zeros((h, w), bool)
+
+
+def bin_statistic(x, y, z, grid, statistic):
+    """Points binned into the grid's pixels by a statistic of their z values. A point on the east or south edge, or
+    outside, is left out; an empty pixel is NoData (values, mask)."""
+    xmin, ymin, xmax, ymax, w, h = grid
+    cells = {}
+    for xi, yi, zi in zip(x, y, z):
+        col = int(np.floor((xi - xmin) / (xmax - xmin) * w))
+        row = int(np.floor((ymax - yi) / (ymax - ymin) * h))
+        if 0 <= col < w and 0 <= row < h:
+            cells.setdefault((row, col), []).append(zi)
+    word = statistic.lower()
+    out = np.full((h, w), -9999.0)
+    mask = np.ones((h, w), bool)
+    for (row, col), vals in cells.items():
+        if word == "count":
+            r = float(len(vals))
+        elif word == "mean":
+            r = float(np.mean(vals))
+        elif word == "median":
+            r = float(np.median(vals))
+        elif word.startswith("percentile:"):
+            r = float(np.percentile(vals, float(word.split(":")[1])))
+        else:
+            r = float({"max": np.max, "min": np.min}[word](vals))
+        out[row, col] = r
+        mask[row, col] = False
+    return out, mask
+
+
+def plane(coeffs, hull, grid, nodata=-9999.0):
+    """A plane ``z = a x + b y`` over the pixel centres inside the rectangle ``hull`` = (x0, y0, x1, y1): the height
+    where a triangulation of points on that plane interpolates exactly; NoData outside the hull.
+    """
+    gx, gy = pixel_centres(*grid)
+    inside = (gx >= hull[0]) & (gx <= hull[2]) & (gy >= hull[1]) & (gy <= hull[3])
+    return np.where(inside, coeffs[0] * gx + coeffs[1] * gy, nodata), ~inside

@@ -155,3 +155,14 @@ def test_table_gives_a_skipped_optional_its_default_before_a_later_one(
     df2 = _Df([])
     _api.table(df2, base.sql_name, "g", 1000, None, None)
     assert "(gbx_in.`g`, 1000)" in df2.sparkSession.calls[0][0]
+
+
+def test_a_table_call_with_the_first_optional_left_out_sends_its_default_not_a_shifted_value(
+    registered,
+):
+    """`mode` is left None and `coverage` is set: SQL binds by position, so `mode` must carry its manifest default
+    and `coverage` must stay in its own place."""
+    df = _Df([])
+    _api.table(df, "gbx_bng_geomkringexplode", "g", 3, 1, None, "polyfill")
+    ((text, _),) = df.sparkSession.calls
+    assert "CAST('boundary-out' AS STRING), 'polyfill'" in text, text

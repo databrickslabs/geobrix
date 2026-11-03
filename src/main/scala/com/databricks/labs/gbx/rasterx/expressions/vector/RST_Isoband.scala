@@ -64,7 +64,12 @@ case class RST_Isoband(
 /** Companion: SQL name, builder, and dispatch entry points. */
 object RST_Isoband extends WithExpressionInfo {
 
-    def eval(tileRow: InternalRow, breaksData: ArrayData, conf: UTF8String): ArrayData =
+    def eval(tileRow: InternalRow, breaksData: ArrayData, conf: UTF8String): ArrayData = {
+        // PARAMETER: breaks that do not rise raise, naming the rule; they are never an error tile or a NULL
+        if (breaksData != null && breaksData.numElements() > 1) {
+            val b = breaksData.toDoubleArray()
+            require((0 until b.length - 1).forall(i => b(i) < b(i + 1)), "breaks must be strictly ascending")
+        }
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -81,6 +86,7 @@ object RST_Isoband extends WithExpressionInfo {
             conf
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
+    }
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
      *

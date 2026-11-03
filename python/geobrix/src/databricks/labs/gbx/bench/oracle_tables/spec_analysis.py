@@ -211,3 +211,79 @@ SPEC_ANALYSIS = (
     ),
     Case("viewshed_corrupt", VS, (CORRUPT, OBSERVER, 2.0), "error_tile", None, ONLY),
 )
+
+# polygonize: `pg_halves` is a 6 x 6 raster of 10 m pixels, 1 in the left three columns and 2 in the right three;
+# `pg_checker` a 2 x 2 raster [[1, 2], [2, 1]]; `pg_hole` a 3 x 3 raster of 1 with a NoData pixel in the middle.
+PG = "gbx_rst_polygonize"
+
+
+def _pg_tile(z, nodata=None):
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    return _tile(
+        _gtiff(np.array(z, dtype="float64")[np.newaxis], "EPSG:3857", nodata=nodata)
+    )
+
+
+@builder("pg_halves")
+def _pg_halves(tmpdir):
+    return _pg_tile([[1, 1, 1, 2, 2, 2]] * 6)
+
+
+@builder("pg_checker")
+def _pg_checker(tmpdir):
+    return _pg_tile([[1, 2], [2, 1]])
+
+
+@builder("pg_hole")
+def _pg_hole(tmpdir):
+    return _pg_tile([[1, 1, 1], [1, -9999, 1], [1, 1, 1]], nodata=-9999.0)
+
+
+HALVES, CHECKER, HOLE = Build("pg_halves"), Build("pg_checker"), Build("pg_hole")
+
+SPEC_ANALYSIS += (
+    # 18 pixels of 100 m2 each side.
+    Case(
+        "polygonize_two_values",
+        PG,
+        (HALVES,),
+        "polygons",
+        [(1.0, 1800.0), (2.0, 1800.0)],
+        ONLY,
+    ),
+    Case(
+        "polygonize_band_arg",
+        PG,
+        (HALVES, 1, 4),
+        "polygons",
+        [(1.0, 1800.0), (2.0, 1800.0)],
+        ONLY,
+    ),
+    # Pixels that touch at a corner are one region with 8-connectedness and four regions with 4.
+    Case(
+        "polygonize_checker_4",
+        PG,
+        (CHECKER, 1, 4),
+        "polygons",
+        [(1.0, 100.0), (1.0, 100.0), (2.0, 100.0), (2.0, 100.0)],
+        ONLY,
+    ),
+    Case(
+        "polygonize_checker_8",
+        PG,
+        (CHECKER, 1, 8),
+        "polygons",
+        [(1.0, 200.0), (2.0, 200.0)],
+        ONLY,
+    ),
+    # The NoData pixel is no polygon and no part of the ring around it: 8 pixels.
+    Case("polygonize_nodata_hole", PG, (HOLE,), "polygons", [(1.0, 800.0)], ONLY),
+    Case("polygonize_bad_connectedness", PG, (HALVES, 1, 5), "raises", "5", ONLY),
+    Case("polygonize_bad_band", PG, (HALVES, 2), "raises", "2", ONLY),
+    Case("polygonize_null", PG, (None,), "no_rows", None, ONLY),
+    Case("polygonize_error_tile", PG, (ERR,), "no_rows", None, ONLY),
+    Case("polygonize_corrupt", PG, (CORRUPT,), "no_rows", None, ONLY),
+)

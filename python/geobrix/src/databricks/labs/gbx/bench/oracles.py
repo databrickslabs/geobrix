@@ -56,6 +56,9 @@ class Case:
     # each) the `triangle` column's polygons must be, vertex order aside. elev_points: `expect` is the (x, y, z) of each
     # `elevation_point` row (a dict may add "srid"). mvt_tiles: `expect` is {"tiles": [(z, x, y)], "layer": name,
     # "props": {..}}; every row's `mvt_bytes` decodes to that layer with one feature of those properties.
+    # The raster generators and vectorizers (see bench/oracle_checks.py): tile_rows (the first band of each row, in
+    # order), tessellation (the cells and the pixel sum of each), polygons (value and area per row), isobands and
+    # contours (the structs of the array a scalar returns).
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
     # Aggregates use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
@@ -113,7 +116,28 @@ _DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the
 # where it differs from the contract, and the companions go in the decision sweep (Task 21) if no restore comes.
 _BUILDOVERVIEWS_L1 = "the JVM builds the overviews in a sidecar the tile bytes do not carry, and turns a bad resampling or level into an error tile, not a raised error; the companion is deleted in the decision sweep"
 _XYZ_ERROR_L1 = "the JVM answers a tile that is an error tile or cannot be read with one row whose bytes are NULL (a deliberate, auditable row); the contract is no rows; the companion is deleted in the decision sweep"
+# The JVM tile generators check their arguments inside safeEval: a bad word, window or overlap is an error tile, and
+# a NULL size or resolution carries on with the unsplit tile or every cell. Their output is one `tile` column, so the
+# manager does not select them; the companions go in the decision sweep (Task 21).
+_GEN_L1 = "the JVM tile generator checks its arguments inside safeEval (an error tile for a bad word, window or overlap; a NULL size goes on); it returns one tile column, is not selected, and is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
+    **{
+        cid: {"L1": _GEN_L1}
+        for cid in (
+            "bng_tess_bad_res",
+            "bng_tess_bad_assignment",
+            "cg_tess_bad_assignment",
+            "cg_tess_null_res",
+            "h3_tess_null_res",
+            "qb_tess_null_res",
+            "h3_tess_bad_assignment",
+            "h3_tess_bad_coverage",
+            "qb_tess_bad_assignment",
+            "maketiles_null_size",
+            "overlap_all",
+            "overlap_zero_window",
+        )
+    },
     **{
         cid: {"L1": _DERIVEDBAND_L1}
         for cid in (
@@ -3246,6 +3270,17 @@ def _check_pmtiles_archive(case: Case, out) -> Optional[str]:
     return None
 
 
+def _oracle_check(name: str):
+    """A check of `oracle_checks`, imported when a row of its kind runs."""
+
+    def run(*a):
+        from databricks.labs.gbx.bench import oracle_checks
+
+        return getattr(oracle_checks, name)(*a)
+
+    return run
+
+
 _VALUE_CHECKS = {
     "image_meta": _check_image_meta,
     "pmtiles_archive": _check_pmtiles_archive,
@@ -3264,6 +3299,8 @@ _ARG_CHECKS = {
     "materialized_equals_file": _check_materialized,
     "ref": _check_ref,
     "geom_srid": _check_geom_srid,
+    "isobands": _oracle_check("check_isobands"),
+    "contours": _oracle_check("check_contours"),
 }
 
 
@@ -4055,7 +4092,7 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     if case.kind == "windows":
         return _check_windows(case, tiles, args)
     if case.kind in _ROW_CHECKS:
-        return _ROW_CHECKS[case.kind](case, rows)
+        return _ROW_CHECKS[case.kind](case, tiles, args)
     if case.kind == "cells":
         e = case.expect
         got = {
@@ -4148,11 +4185,15 @@ def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
     return None
 
 
+# generator kinds: (case, the rows with a `tile` column unwrapped, the case's arguments)
 _ROW_CHECKS = {
-    "cell_rows": _check_cell_rows,
-    "triangles": lambda case, rows: _check_vector_rows(case, rows),
-    "elev_points": lambda case, rows: _check_vector_rows(case, rows),
-    "mvt_tiles": lambda case, rows: _check_vector_rows(case, rows),
+    "cell_rows": lambda case, rows, args: _check_cell_rows(case, rows),
+    "triangles": lambda case, rows, args: _check_vector_rows(case, rows),
+    "elev_points": lambda case, rows, args: _check_vector_rows(case, rows),
+    "mvt_tiles": lambda case, rows, args: _check_vector_rows(case, rows),
+    "tile_rows": _oracle_check("check_tile_rows"),
+    "tessellation": _oracle_check("check_tessellation"),
+    "polygons": _oracle_check("check_polygons"),
 }
 
 

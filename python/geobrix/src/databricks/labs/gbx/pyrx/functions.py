@@ -2854,11 +2854,30 @@ def _proximity_v2_udf(
 _CONTOUR_SCHEMA = ArrayType(
     StructType(
         [
-            StructField("geom_wkb", BinaryType(), nullable=False),
-            StructField("value", DoubleType(), nullable=False),
+            StructField("geom_wkb", BinaryType(), nullable=True),
+            StructField("value", DoubleType(), nullable=True),
         ]
     )
 )
+
+
+@contextlib.contextmanager
+def _open_or_none(tile):
+    """The tile's dataset, or None when its bytes are not a raster GDAL can read (a function that returns an array
+    gives NULL for it). A refusal by the read cap or the driver policy is no such case and raises.
+    """
+    from rasterio.errors import RasterioIOError
+
+    cm = ot._open(tile)
+    try:
+        ds = cm.__enter__()
+    except RasterioIOError:
+        yield None
+        return
+    try:
+        yield ds
+    finally:
+        cm.__exit__(None, None, None)
 
 
 @f.udf(_CONTOUR_SCHEMA)
@@ -2872,8 +2891,8 @@ def _contour_udf(tile, levels, interval, base, attr_field):
     iv = 0.0 if interval is None else float(interval)
     bs = 0.0 if base is None else float(base)
     attr = "elev" if attr_field is None else str(attr_field)
-    with ot._open(tile) as ds:
-        return analysis_core.contour(ds, lvls, iv, bs, attr)
+    with _open_or_none(tile) as ds:
+        return None if ds is None else analysis_core.contour(ds, lvls, iv, bs, attr)
 
 
 # rst_isoband: tile + breaks (ARRAY<DOUBLE>) ->
@@ -2896,36 +2915,8 @@ def _isoband_udf(tile, breaks):
         return None
     if not breaks:
         return None
-    with ot._open(tile) as ds:
-        return features.isoband(ds, breaks)
-
-
-def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
-    """Reclassify a raster band into value bins and return one polygon per contiguous patch.
-
-    Mirrors ``gbx_rst_isoband``. Implemented with ``numpy.digitize`` +
-    ``rasterio.features.shapes`` (light tier, no GDAL required).
-
-    Each output element covers a contiguous run of pixels that fell in the same
-    break interval ``[breaks[i], breaks[i+1])``. NoData pixels are excluded.
-
-    Args:
-        tile:   Tile struct column.
-        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
-                defining N bands (e.g. ``f.array(f.lit(0.0), f.lit(5.0),
-                f.lit(10.0))`` → bands [0, 5) and [5, 10)).
-                Values below ``breaks[0]`` or >= ``breaks[-1]`` are dropped.
-
-    Returns:
-        ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>``
-        — one struct per contiguous polygon, tagged with its zero-based band index
-        and the ``[lower, upper)`` interval boundaries. ``geom_wkb`` is a WKB
-        Polygon in the raster's CRS.
-
-    Raises:
-        ValueError: if ``breaks`` is not strictly ascending.
-    """
-    return _isoband_udf(_col(tile), _col(breaks))
+    with _open_or_none(tile) as ds:
+        return None if ds is None else features.isoband(ds, breaks)
 
 
 def _viewshed_bytes(
@@ -3104,41 +3095,6 @@ def _light_rst_transformcrs(
     return _build_uf_transformcrs(_grid_dirs)(
         tc, file_ref_arg(tc), _crs_col(target_crs)
     )
-
-
-def rst_contour(
-    tile: ColLike,
-    levels: ColLike,
-    interval: ColLike = 0.0,
-    base: ColLike = 0.0,
-    attr_field: ColLike = "elev",
-) -> Column:
-    """Generate contour lines from a raster as ``(geom_wkb, value)`` features.
-
-    Mirrors the heavyweight ``gbx_rst_contour`` (GDAL ContourGenerateEx),
-    implemented with ``skimage.measure.find_contours``.
-
-    Args:
-        tile:       Tile struct column.
-        levels:     ARRAY<DOUBLE> of explicit contour values (e.g.
-                    ``f.array(f.lit(10.0), f.lit(20.0))``). Pass an empty array
-                    (``f.array().cast("array<double>")``) to use ``interval``.
-        interval:   Equal-interval step; used only when ``levels`` is empty
-                    (must then be > 0). Defaults to 0.0.
-        base:       Contour base value for the interval mode. Defaults to 0.0.
-        attr_field: Value-field label (parity-only; the struct field is always
-                    ``value``). Defaults to "elev".
-
-    Returns:
-        ARRAY<struct(geom_wkb BINARY, value DOUBLE)> — one LineString per
-        contour, in the raster's CRS.
-    """
-    iv = (
-        f.lit(float(interval)) if isinstance(interval, (int, float)) else _col(interval)
-    )
-    bs = f.lit(float(base)) if isinstance(base, (int, float)) else _col(base)
-    attr = f.lit(attr_field) if isinstance(attr_field, str) else _col(attr_field)
-    return _contour_udf(_col(tile), _col(levels), iv, bs, attr)
 
 
 def _tower_window_paths(tile_map, x0, y0, tile_m, radius):
@@ -4263,34 +4219,27 @@ class _RstPolygonizeUDTF:
     polygon list (unbounded fan-out OOM guard).
     """
 
-    def eval(self, tile, band, connectedness):
-        if _tile_is_empty(tile):
+    def eval(self, tile, band=1, connectedness=4):
+        band = 1 if band is None else int(band)  # a NULL optional is its default
+        connectedness = 4 if connectedness is None else int(connectedness)
+        if connectedness not in (4, 8):
+            raise ValueError(
+                f"rst_polygonize: connectedness must be 4 or 8; got {connectedness}"
+            )
+        if _tile_is_empty(tile):  # NULL, an error tile: nothing to polygonize
             return
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        with ot._open(tile) as ds:
-            for g, v in features.polygonize(ds, int(band), int(connectedness)):
+        with _open_or_none(tile) as ds:
+            if ds is None:
+                return
+            if not 1 <= band <= ds.count:
+                raise ValueError(
+                    f"rst_polygonize: band {band} is outside the tile's {ds.count} band(s)"
+                )
+            for g, v in features.polygonize(ds, band, connectedness):
                 yield (g, v)
-
-
-def rst_polygonize(
-    tile: ColLike, band: ColLike = 1, connectedness: ColLike = 4
-) -> None:
-    """Extract vector polygons from a raster's contiguous equal-value regions.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.geom_wkb, t.value
-        FROM <df>, LATERAL gbx_rst_polygonize(tile, band, connectedness) t
-
-    Returns one row per contiguous equal-value region; NoData pixels excluded.
-    Each row: geom_wkb BINARY (WKB geometry), value DOUBLE (pixel value).
-    """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_polygonize(tile, band, connectedness) t"
-    )
 
 
 # --- Tier 1e2: tiling UDTFs (separatebands, retile, tooverlappingtiles) -----
@@ -4389,6 +4338,12 @@ class _RstToOverlappingTilesUDTF:
     """Streaming UDTF: yield one sub-tile struct per overlapping window."""
 
     def eval(self, tile, tile_width, tile_height, overlap, file_ref=None):
+        tiling.require_window(tile_width, tile_height, "gbx_rst_tooverlappingtiles")
+        if overlap is not None and not 0 <= int(overlap) < 100:
+            raise ValueError(
+                f"gbx_rst_tooverlappingtiles: overlap must be from 0 to below 100 percent, got {int(overlap)}. "
+                "Fix: pass the overlap as a percentage of the tile size."
+            )
         if _tile_is_empty(tile):
             yield from _empty_tile_rows(tile, "RST_ToOverlappingTiles")
             return
@@ -4496,22 +4451,6 @@ class _RstH3TessellateUDTF:
             return
 
 
-def rst_separatebands(tile: ColLike):
-    """Split a multi-band tile into single-band tiles (one row per band).
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>, LATERAL gbx_rst_separatebands(tile) t
-
-    Each output row is a tile struct carrying the same georeferencing and CRS
-    as the input; one row per band.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _RstSeparateBandsUDTF(tc, file_ref_arg(tc))
-
-
 def _light_rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
     """The light Column composition of ``gbx_rst_retile`` (the bench's light form and the
     light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_retile``.
@@ -4532,77 +4471,6 @@ def _light_rst_retile(tile: ColLike, tile_width: ColLike, tile_height: ColLike):
 
     tc = _col(tile)
     return _RstRetileUDTF(tc, _col(tile_width), _col(tile_height), file_ref_arg(tc))
-
-
-def rst_tooverlappingtiles(
-    tile: ColLike,
-    tile_width: ColLike,
-    tile_height: ColLike,
-    overlap: ColLike,
-):
-    """Partition a tile into overlapping sub-tiles.
-
-    Each tile is tile_width x tile_height pixels. *overlap* is a **percentage**
-    of the tile size: the per-edge overlap is ``ceil(tile_width * overlap / 100)``
-    pixels and the stride is ``tile_width - overlap_px`` (likewise for height).
-    Edge tiles are clamped to the raster boundary.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>,
-        LATERAL gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap) t
-
-    Each output row is a tile struct; one row per sub-tile.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _RstToOverlappingTilesUDTF(
-        tc, _col(tile_width), _col(tile_height), _col(overlap), file_ref_arg(tc)
-    )
-
-
-def rst_h3_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-):
-    """Tessellate a raster into H3 cells (mirrors ``gbx_rst_h3_tessellate``).
-
-    For every H3 cell overlapping the raster's extent at *resolution*, the
-    raster is clipped to that cell's hexagon and one tile is produced, carrying
-    the H3 cell id as its ``cellid``. A cell is skipped only when its hexagon
-    does not geometrically overlap the raster; a cell that overlaps but clips to
-    entirely NoData is still emitted in complete coverage mode, and its value
-    reducers (``gbx_rst_max``/``min``/``avg``/``median``) return SQL ``NULL``
-    for it.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>, LATERAL gbx_rst_h3_tessellate(tile, resolution) t
-        SELECT t.* FROM <df>, LATERAL gbx_rst_h3_tessellate(tile, resolution, 'centroid') t
-        SELECT t.* FROM <df>, LATERAL gbx_rst_h3_tessellate(tile, resolution, 'centroid', 'complete') t
-
-    Each output row is a tile struct; one row per overlapping H3 cell.
-
-    Args:
-        tile:       Tile struct column.
-        resolution: H3 resolution in ``[0, 15]``.
-        assignment: Tessellation mode: ``"centroid"`` (default) — each valid
-                    pixel is assigned to exactly one cell by its centroid
-                    (strict partition, no overlap); ``"covering"`` — each H3
-                    cell that overlaps the raster extent is clipped to its
-                    hexagon boundary.
-        coverage:   ``"complete"`` (default) — emit covered-but-empty cells;
-                    ``"sparse"`` — skip all-NoData chips.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _RstH3TessellateUDTF(
-        tc, _col(resolution), _col(assignment), _col(coverage), file_ref_arg(tc)
-    )
 
 
 @udtf(returnType=V2_TILE_SCHEMA)
@@ -4679,6 +4547,9 @@ class _RstBngTessellateUDTF:
         from databricks.labs.gbx.pygx import _bng
         from databricks.labs.gbx.pyrx import _env
 
+        _bng.get_resolution(
+            resolution
+        )  # a resolution BNG does not define is a parameter error: it raises
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
@@ -4699,53 +4570,6 @@ class _RstBngTessellateUDTF:
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_BNG_Tessellate: {e}")
             return
-
-
-def rst_bng_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-):
-    """Tessellate a raster into BNG cells (mirrors ``gbx_rst_bng_tessellate``).
-
-    The raster is reprojected to EPSG:27700 (British National Grid) first
-    (skipped if already 27700). For every BNG cell overlapping the raster's
-    extent at *resolution*, the raster is clipped to that cell's square and one
-    tile is produced; the BNG cell id (e.g. ``"TQ38SW"``) is carried in the
-    tile's ``cellid`` struct field (matching heavy tier behaviour). Cell
-    enumeration is boundary-complete: the bbox is buffered by the cell
-    half-diagonal before polyfill so cells whose square overlaps the raster but
-    whose centroid sits just outside the bbox are still emitted; out-of-GB cells
-    are dropped.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution) t
-        SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution, 'centroid') t
-        SELECT t.* FROM <df>, LATERAL gbx_rst_bng_tessellate(tile, resolution, 'centroid', 'complete') t
-
-    Each output row is a tile struct; one row per overlapping BNG cell.
-
-    Args:
-        tile:       Tile struct column.
-        resolution: BNG resolution — an Int index (``±1..±6``: 1=100km .. 6=1m,
-                    negatives=quadrants) or a resolutionMap string key
-                    (e.g. ``"1km"``, ``"100m"``).
-        assignment: Tessellation mode: ``"centroid"`` (default) — each valid
-                    pixel is assigned to exactly one cell by its centroid
-                    (strict partition, no overlap); ``"covering"`` — each BNG
-                    cell overlapping the raster extent is clipped to its
-                    square.
-        coverage:   ``"complete"`` (default) — emit covered-but-empty cells;
-                    ``"sparse"`` — skip all-NoData chips.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _RstBngTessellateUDTF(
-        tc, _col(resolution), _col(assignment), _col(coverage), file_ref_arg(tc)
-    )
 
 
 # --- Custom-grid tessellate UDTF -------------------------------------------
@@ -4810,100 +4634,6 @@ class _RstCustomTessellateUDTF:
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_Custom_Tessellate: {e}")
             return
-
-
-def rst_custom_tessellate(
-    tile: ColLike,
-    grid: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-):
-    """Tessellate a raster into custom-grid cells (mirrors ``gbx_rst_custom_tessellate``).
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>,
-        LATERAL gbx_rst_custom_tessellate(tile, grid, resolution) t
-        SELECT t.* FROM <df>,
-        LATERAL gbx_rst_custom_tessellate(tile, grid, resolution, 'centroid') t
-
-    SQL arg order: ``(tile, grid, resolution, [assignment], [coverage])``.
-
-    Args:
-        tile:       Tile struct column.
-        grid:       Custom-grid spec struct (from ``gbx_custom_grid(...)``).
-        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
-        assignment: ``"centroid"`` (default) or ``"covering"``.
-        coverage:   ``"complete"`` (default) or ``"sparse"``.
-    """
-    raise NotImplementedError(
-        "Invoke the registered UDTF as a SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_rst_custom_tessellate(tile, grid, resolution"
-        " [, assignment [, coverage]]) t"
-    )
-
-
-def rst_quadbin_tessellate(
-    tile: ColLike,
-    resolution: ColLike,
-    assignment: ColLike = "centroid",
-    coverage: ColLike = "complete",
-):
-    """Tessellate a raster into quadbin cells (mirrors ``gbx_rst_quadbin_tessellate``).
-
-    For every quadbin cell overlapping the raster's extent at *resolution*, the
-    raster is clipped to that cell's bounding-box polygon and one tile is
-    produced, carrying the quadbin cell id as its ``cellid``. A cell is skipped
-    only when its bbox does not geometrically overlap the raster; a cell that
-    overlaps but clips to entirely NoData is still emitted in complete coverage
-    mode, and its value reducers return SQL ``NULL`` for it.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution) t
-        SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution, 'centroid') t
-        SELECT t.* FROM <df>, LATERAL gbx_rst_quadbin_tessellate(tile, resolution, 'centroid', 'complete') t
-
-    Each output row is a tile struct; one row per overlapping quadbin cell.
-
-    Args:
-        tile:       Tile struct column.
-        resolution: Quadbin resolution in ``[0, 20]`` (polyfill limit).
-        assignment: Tessellation mode: ``"centroid"`` (default) — each valid
-                    pixel is assigned to exactly one cell by its centroid
-                    (strict partition, no overlap); ``"covering"`` — each
-                    quadbin cell overlapping the raster extent is clipped to
-                    its bbox.
-        coverage:   ``"complete"`` (default) — emit covered-but-empty cells;
-                    ``"sparse"`` — skip all-NoData chips.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _RstQuadbinTessellateUDTF(
-        tc, _col(resolution), _col(assignment), _col(coverage), file_ref_arg(tc)
-    )
-
-
-def rst_maketiles(tile: ColLike, size_in_mb: ColLike):
-    """Split a raster into tiles of approximately size_in_mb each (one row per tile).
-
-    Quad-splits the raster into a power-of-4 grid (1, 4, 16, ... tiles) until
-    each tile's encoded size fits within the target MB budget, then partitions
-    it into non-overlapping sub-tiles. Each output tile carries the correct
-    windowed transform and CRS.
-
-    Light tier is a Python UDTF — invoke as a SQL LATERAL table function::
-
-        SELECT t.* FROM <df>, LATERAL gbx_rst_maketiles(tile, size_in_mb) t
-
-    Each output row is a tile struct; one row per sub-tile.
-    """
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _RstMakeTilesUDTF(tc, _col(size_in_mb), file_ref_arg(tc))
 
 
 # --- Tier 1f: terrain UDFs (slope, aspect, hillshade) ----------------------

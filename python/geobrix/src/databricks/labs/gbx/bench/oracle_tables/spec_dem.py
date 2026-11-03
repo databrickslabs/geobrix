@@ -175,3 +175,30 @@ SPEC_DEM = (
         ONLY,
     ),
 )
+
+# The contour lines: `vz_columns` (raster_vectorize.py) rises by one per pixel to the east, so the line of value v is
+# the vertical line half way between the centres of columns v - 0.5 and v + 0.5, at x = 400000 + (v + 0.5) * 10.
+CT = "gbx_rst_contour"
+COLUMNS = Build("vz_columns")
+
+SPEC_DEM += (
+    Case(
+        "contour_levels",
+        CT,
+        (COLUMNS, [1.5, 3.5]),
+        "contours",
+        {1.5: 400020.0, 3.5: 400040.0},
+        ONLY,
+    ),
+    Case(
+        "contour_interval",
+        CT,
+        (COLUMNS, [], 2.0, 0.5),
+        "contours",
+        {0.5: 400010.0, 2.5: 400030.0, 4.5: 400050.0},
+        ONLY,
+    ),
+    Case("contour_null_tile", CT, (None, [1.5]), "null", None, ONLY),
+    Case("contour_error_tile", CT, (ERR, [1.5]), "null", None, ONLY),
+    Case("contour_corrupt", CT, (CORRUPT, [1.5]), "null", None, ONLY),
+)

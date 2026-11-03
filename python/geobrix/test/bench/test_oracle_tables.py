@@ -389,3 +389,82 @@ def test_the_grid_and_vector_generator_kinds_can_fail():
     assert judge("mvt_tiles", {**want, "layer": "x"}, [row(0)]) is not None
     assert judge("mvt_tiles", {**want, "props": {"a": 2}}, [row(0)]) is not None
     assert judge("mvt_tiles", want, [row(1)]) is not None
+
+
+def test_the_raster_generator_and_vectorize_kinds_can_fail():
+    import numpy as np
+    from shapely import wkb
+    from shapely.geometry import LineString, box
+
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import cg_id
+
+    def tile(values, origin=(0.0, 2000.0), px=1000.0):
+        return oracles._gtiff(
+            np.array(values, dtype="float64")[np.newaxis],
+            "EPSG:27700",
+            nodata=None,
+            origin=origin,
+            px=px,
+        )
+
+    def judge(kind, expect, rows, args=()):
+        case = oracles.Case("probe", "f", args, kind, expect)
+        return oracles._check_rows(case, rows, args)
+
+    # tile_rows: the first band of each row, in order
+    r = lambda v: {"raster": tile(v), "cellid": 0, "metadata": {}}  # noqa: E731
+    ok = {"pixels": [[[1.0, 2.0]], [[3.0, 4.0]]]}
+    assert judge("tile_rows", ok, [r([[1, 2]]), r([[3, 4]])]) is None
+    assert judge("tile_rows", ok, [r([[3, 4]]), r([[1, 2]])]) is not None  # order
+    assert judge("tile_rows", ok, [r([[1, 2]])]) is not None  # a row missing
+    assert judge("tile_rows", ok, [r([[1, 2]]), r([[3, 5]])]) is not None  # a pixel
+
+    # tessellation: a 2 x 2 raster of 1 km pixels at (0, 2000) is four custom-grid cells of resolution 0
+    source = {"raster": tile([[1, 2], [3, 4]])}
+    chip = lambda v, cell: {  # noqa: E731
+        "cellid": cell,
+        "raster": tile([[v]], origin=(0.0, 2000.0), px=1000.0),
+    }
+    cells = {(0, 1): 1.0, (1, 1): 2.0, (0, 0): 3.0, (1, 0): 4.0}
+    rows = [chip(v, cg_id(c, rw, 0)) for (c, rw), v in cells.items()]
+    want = {"grid": "custom", "res": 0}
+    assert judge("tessellation", want, rows, (source,)) is None
+    assert (
+        judge("tessellation", want, rows[1:], (source,)) is not None
+    )  # a cell missing
+    bad = rows[:3] + [chip(9.0, cg_id(1, 0, 0))]
+    assert judge("tessellation", want, bad, (source,)) is not None  # a sum
+    assert (
+        judge("tessellation", want, rows + [chip(0.0, cg_id(7, 7, 0))], (source,))
+        is not None
+    )  # an extra cell
+
+    # polygons: value and area per row
+    poly = lambda v, g: {"geom_wkb": wkb.dumps(g), "value": v}  # noqa: E731
+    assert judge("polygons", [(1.0, 4.0)], [poly(1.0, box(0, 0, 2, 2))]) is None
+    assert judge("polygons", [(1.0, 4.0)], [poly(1.0, box(0, 0, 2, 3))]) is not None
+    assert judge("polygons", [(1.0, 4.0)], [poly(2.0, box(0, 0, 2, 2))]) is not None
+
+    # isobands and contours judge the array a scalar returns
+    iso = lambda b, a: {  # noqa: E731
+        "geom_wkb": wkb.dumps(box(0, 0, a, 1)),
+        "band": b,
+        "lower": 0.0,
+        "upper": 1.0,
+    }
+    case = oracles.Case("probe", "f", (), "isobands", [(0, 0.0, 1.0, 3.0)])
+    assert oracles.check(case, [iso(0, 3.0)], ()) is None
+    assert oracles.check(case, [iso(0, 4.0)], ()) is not None
+    assert oracles.check(case, None, ()) is not None
+
+    def line(v, x):
+        return {"geom_wkb": wkb.dumps(LineString([(x, 0), (x, 5)])), "value": v}
+
+    case = oracles.Case("probe", "f", (), "contours", {1.5: 20.0})
+    assert oracles.check(case, [line(1.5, 20.0)], ()) is None
+    assert (
+        oracles.check(case, [line(1.5, 20.00001)], ()) is None
+    )  # GDAL moves a line off a pixel value by 1e-5
+    assert oracles.check(case, [line(1.5, 21.0)], ()) is not None
+    assert oracles.check(case, [line(2.5, 20.0)], ()) is not None

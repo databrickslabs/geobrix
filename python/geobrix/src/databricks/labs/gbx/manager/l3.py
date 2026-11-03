@@ -117,7 +117,15 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
             target, resolve_ref(spec["callable"]), _return_type(spec["returns"])
         )
     elif "udtf" in spec:
-        reg.udtf.register(name, resolve_ref(spec["udtf"]))
+        table_fn = resolve_ref(spec["udtf"])
+        if spec.get("arrow"):
+            # Arrow batches between the JVM and Python: the same class and schema, registered as an Arrow UDTF
+            from pyspark.sql.functions import udtf
+
+            table_fn = udtf(
+                table_fn.func, returnType=table_fn.returnType, useArrow=True
+            )
+        reg.udtf.register(name, table_fn)
     else:
         raise ValueError(f"{fn.sql_name}: unknown L3 registration")
     if target != name:

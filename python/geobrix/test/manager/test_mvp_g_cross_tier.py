@@ -53,7 +53,8 @@ NAMED = {
 SHAPES = {
     # the table function form: a Python UDTF (L3), or the Catalyst generator installed as a table function (L1)
     "udtf": Shape("L3", LAT, (RT, TE), ANY, None, False),
-    "l1_tvf": Shape("L1", LAT, (RT, TE), ANY, None, False),
+    # retile has no L1 level (its output is one tile column and the companion is deleted in the decision sweep)
+    "l1_tvf": Shape("L1", LAT, (TE,), ANY, None, False),
     # the array form: a scalar returning the chips, exploded by inline
     "array_inline": Shape("L3", INLINE, (TS,), ANY, None, False),
     "l1_array_inline": Shape("L1", INLINE, (TS,), ANY, None, False),

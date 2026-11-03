@@ -78,12 +78,11 @@ def check_tessellation(case, tiles, args) -> Optional[str]:
     For BNG, whose id is not a number a library gives, the sums are compared as a list and the cells counted.
     """
     import numpy as np
-    from rasterio.io import MemoryFile
 
-    from databricks.labs.gbx.bench.oracles import _masked_band, _raster_of
+    from databricks.labs.gbx.bench.oracles import _masked_band, _ref_dataset
 
     e = case.expect
-    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
+    with _ref_dataset(args) as src:
         z = src.read(1, masked=True)
         ys, xs = np.mgrid[0 : src.height, 0 : src.width]
         cx, cy = src.transform * (xs.ravel() + 0.5, ys.ravel() + 0.5)
@@ -281,12 +280,11 @@ def check_grid_stats(case, rows, args) -> Optional[str]:
     pixel may also come out, with a NULL measure (0.0 for a count).
     """
     import numpy as np
-    from rasterio.io import MemoryFile
 
-    from databricks.labs.gbx.bench.oracles import _raster_of
+    from databricks.labs.gbx.bench.oracles import _ref_dataset
 
     e = case.expect
-    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
+    with _ref_dataset(args) as src:
         bands = [src.read(b, masked=True) for b in range(1, src.count + 1)]
         ys, xs = np.mgrid[0 : src.height, 0 : src.width]
         cx, cy = src.transform * (xs.ravel() + 0.5, ys.ravel() + 0.5)

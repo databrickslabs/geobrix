@@ -3088,14 +3088,12 @@ def _check_ref(case: Case, out, args) -> Optional[str]:
     """The output's first band equals the reference (to float32 rounding) on the same NoData mask. A reference of
     several bands (3-D arrays) is held to every band of the output, in order, and to the band count.
     """
-    from rasterio.io import MemoryFile
-
     raster = _raster_bytes(out)  # a tile struct, or the bytes of an aggregate
     if raster is None:
         return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
     want, want_mask = _REFS[case.expect](args)
     if want.ndim == 3:
-        with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+        with _ref_dataset([raster]) as ds:
             if ds.count != want.shape[0]:
                 return (
                     f"{case.cid}: {ds.count} bands, the reference has {want.shape[0]}"

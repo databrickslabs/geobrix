@@ -48,7 +48,9 @@ _ALLOWLIST = {
     # decode that follows (agg_core's open of the collected members) applies the read
     # cap, so the probe must not refuse first (a merge or combine refuses an over-cap
     # member there, never drops it). Same bytes, same purpose; only the cap skip is new.
-    "_serde.open_tile(candidate, gate=False)": 14,
+    # The table functions' `_member_bytes` is a 15th probe of the same kind: it opens the front-door bytes
+    # `_tile_raster_bytes` returns (a virtual tile is materialized first), to drop a member that does not open.
+    "_serde.open_tile(candidate, gate=False)": 15,
 }
 
 # The v1 shared UDF builders in _udf.py. Every registered rst_* function was

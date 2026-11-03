@@ -182,6 +182,10 @@ SCALA_SITES = {
         "val sr = new SpatialReference(); sr.ImportFromWkt(wkt)",
     ): DATASET_WKT,
     (
+        "rasterx/operations/MergeRasters.scala",
+        's"gdalwarp -t_srs ${wktFile.toString} -te $left $bottom $right $top -tr $xres $yres -r near"',
+    ): WARP_DATASET,
+    (
         "rasterx/operations/RasterProject.scala",
         'command = s"gdalwarp -t_srs $authName:$authCode"',
     ): WARP_RESOLVED,

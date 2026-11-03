@@ -370,7 +370,7 @@ For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](.
 
 ## Triangulation and elevation
 
-These generators build a Delaunay triangulated irregular network (TIN) from Z-valued mass points and optional breaklines, then either expose the triangles directly or sample the surface on a regular grid to produce elevation points. Useful for surface modeling, DTM/DEM derivation, and elevation sampling from survey point clouds. All three run in both tiers; both honor break lines.
+These generators build a Delaunay triangulated irregular network (TIN) from Z-valued mass points and optional breaklines. They then either expose the triangles directly or sample the surface on a regular grid to produce elevation points. Useful for surface modeling, DTM/DEM derivation, and elevation sampling from survey point clouds. All three run in both tiers; both honor break lines.
 
 ### Triangulation modes: `constrained` vs `conforming`
 
@@ -418,7 +418,7 @@ Rows: `elevation_point` `BINARY`.
 
 <Impl udtf/>
 
-Builds a TIN from mass points and breaklines, then samples elevation on a regular pixel grid covering an **explicit bounding box**. Use this when you already know the output extent in absolute coordinates — for example, when snapping to a fixed tile extent or aligning with a raster grid.
+Builds a TIN from mass points and breaklines, then samples elevation on a regular pixel grid covering an **explicit bounding box**. Use this when you already know the output extent in absolute coordinates. For example, snap to a fixed tile extent or align with a raster grid.
 
 **Generator:** Emits one row per in-hull grid cell (cells whose centers fall outside the TIN convex hull are dropped). The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 
@@ -461,7 +461,7 @@ Rows: `elevation_point` `BINARY`.
 
 <Impl udtf/>
 
-Builds a TIN from mass points and breaklines, then samples elevation on a regular grid **anchored to a geometry origin** with explicit cell sizes. Use this when the grid must be defined relative to a known point — for example, when the grid origin comes from data (a survey control point) or when different rows need different grid placements.
+Builds a TIN from mass points and breaklines, then samples elevation on a regular grid **anchored to a geometry origin** with explicit cell sizes. Use this when the grid must be defined relative to a known point. For example, the grid origin comes from data (a survey control point), or different rows need different grid placements.
 
 **Generator:** Emits one row per in-hull grid cell. The output schema column is `elevation_point` (`BINARY` WKB POINT Z). Use with SQL `LATERAL` to materialize the grid.
 

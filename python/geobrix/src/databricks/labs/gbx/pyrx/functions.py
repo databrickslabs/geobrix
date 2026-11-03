@@ -7156,12 +7156,14 @@ def _member_bytes(tile):
     """
     if _error_tile_of(tile) is not None:
         return None
-    b = _tile_raster_bytes(tile)
-    if b is None:
+    candidate = _tile_raster_bytes(tile)  # front-door bytes: a virtual tile is materialized
+    if candidate is None:
         return None
     try:
-        with _serde.open_tile(b, gate=False):  # a validity probe: the decode gates
-            return b
+        with _serde.open_tile(
+            candidate, gate=False
+        ):  # a validity probe: the decode gates
+            return candidate
     except Exception:  # noqa: BLE001
         return None
 

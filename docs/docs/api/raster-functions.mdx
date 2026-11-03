@@ -1169,7 +1169,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. A `NaN` that is a real value, not a null, is ignored the same way on both tiers: beside a number in one cell the number is burned, and a cell whose values are all `NaN` burns `NaN`.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. A `NaN` that is a real value, not a null, is ignored the same way on both tiers. Beside a number in one cell, the number is burned. A cell whose values are all `NaN` burns `NaN`.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
@@ -1232,7 +1232,7 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 | `height` | `INT` |  | The canvas height in pixels. |
 {/* END GENERATED gbx_rst_bng_rasterize_tvf */}
 
-Use it instead of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) for groups of many cells: `SELECT * FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT key, cellid, value FROM cells) PARTITION BY (key), xmin, ymin, xmax, ymax, width, height)` reads each key's cells a row at a time, keeping only the largest value per cell, so it needs less memory than the grouped aggregate and burns the same pixels. The canvas is explicit, and a key with no cell gives no row.
+Use it instead of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) for groups of many cells: `SELECT * FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT key, cellid, value FROM cells) PARTITION BY (key), xmin, ymin, xmax, ymax, width, height)`. It reads each key's cells a row at a time and keeps only the largest value per cell. It needs less memory than the grouped aggregate and burns the same pixels. The canvas is explicit, and a key with no cell gives no row.
 
 ---
 
@@ -1263,7 +1263,7 @@ Use it instead of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg) for groups o
 | `out_crs` | `STRING` | `NULL` | Must be NULL. Reproject the tile with `gbx_rst_transformcrs` instead. |
 {/* END GENERATED gbx_rst_bng_rasterize */}
 
-Rasterize an array of BNG cells into one tile, the scalar twin of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg). Collect the group's cells first, for example `gbx_rst_bng_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+Rasterize an array of BNG cells into one tile, the scalar twin of [`rst_bng_rasterize_agg`](#rst_bng_rasterize_agg). Collect the group's cells first, for example `gbx_rst_bng_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.
 
 ### rst_combineavg_agg
 
@@ -1518,7 +1518,7 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
@@ -1575,7 +1575,7 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 | `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
 {/* END GENERATED gbx_rst_h3_rasterize */}
 
-Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg). Collect the group's cells first, for example `gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg). Collect the group's cells first, for example `gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.
 
 ### rst_merge_agg
 
@@ -1595,7 +1595,7 @@ Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_raster
 <Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS, so a mosaic built in memory and one streamed from disk (when it is too large for memory) place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
+Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS. A mosaic built in memory and one streamed from disk (when it is too large for memory) then place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) gets the footprint of the warp as its mask. The mosaic then has a mask band, and a pixel no tile reaches is invalid in it. A gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
 :::
 
 :::warning `gbx_rst_merge_agg` returns BINARY
@@ -1640,7 +1640,7 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 | `rows` | `TABLE` |  | The tiles, as `TABLE(SELECT key, tile FROM ...) PARTITION BY (key)`: one mosaic per key. An error tile, an empty tile and a tile that does not open are left out. |
 {/* END GENERATED gbx_rst_merge_tvf */}
 
-Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))` merges each key's tiles with the same pixels as the aggregate, reading them a row at a time instead of as one batch of the whole group. A key with no readable tile gives no row; one whose mosaic is too large to build raises with a Fix that names `merge_by_key`.
+Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))`. It merges each key's tiles into the same pixels as the aggregate. It reads them a row at a time, not as one batch of the whole group. A key with no readable tile gives no row; one whose mosaic is too large to build raises with a Fix that names `merge_by_key`.
 
 ### rst_quadbin_rasterize_agg
 
@@ -1671,7 +1671,7 @@ Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * 
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio` — it burns each quadbin cell's geometry/value into the output band via `rasterio.features.rasterize`, matching the heavyweight cell set and burn values exactly.
@@ -1728,7 +1728,7 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
 | `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
 {/* END GENERATED gbx_rst_quadbin_rasterize */}
 
-Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg). Collect the group's cells first, for example `gbx_rst_quadbin_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg). Collect the group's cells first, for example `gbx_rst_quadbin_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.
 
 ### rst_custom_rasterize_agg
 
@@ -1759,7 +1759,7 @@ Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quad
 
 <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number. A cell whose values are all null burns `NaN`, also when the whole `value` column is null. Only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first.
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent auto-derives from the cell set when canvas parameters are null.
@@ -1806,7 +1806,7 @@ Streaming aggregator that burns custom-grid cell values into one raster tile per
 | `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
 {/* END GENERATED gbx_rst_custom_rasterize */}
 
-Rasterize an array of custom-grid cells into one tile, the scalar twin of [`rst_custom_rasterize_agg`](#rst_custom_rasterize_agg). Collect the group's cells first, for example `gbx_rst_custom_rasterize(collect_list(struct(cellid, value)), ...)`: the answer is the same bytes as the aggregate gives, and a group that does not fit the aggregate's streaming shape (a Serverless finalize, a group built in an earlier step) can use it. It is a session function, with no Unity Catalog form.
+Rasterize an array of custom-grid cells into one tile, the scalar twin of [`rst_custom_rasterize_agg`](#rst_custom_rasterize_agg). Collect the group's cells first, for example `gbx_rst_custom_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.
 
 ### rst_rasterize_agg
 
@@ -1841,7 +1841,7 @@ Powered by **rasterio** (`rasterio.features`). Aggregate — burns the group's `
 In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-Streaming aggregator that burns geometry/value pairs (one row per feature) into a single rasterized tile per group; use when features arrive as individual rows rather than as a pre-built collection.
+Streaming aggregator that burns geometry/value pairs (one row per feature) into a single rasterized tile per group. Use it when features arrive as individual rows, not as a pre-built collection.
 
 _Multi-row fixture: 3 polygon rows burned at values 1.0/2.0/3.0 over a `[0,0,4,4]` EPSG:4326 extent. All tabs use the same grouped-agg burn invocation._
 
@@ -2000,7 +2000,7 @@ _Constructor — builds a tile from binary content. Example uses Spark's `binary
 
 Read a raster file by path into a tile.
 
-In Python, `rst_fromfile` returns a _virtual_ tile by default: it holds no bytes, points at `path` over the whole-file window and reads `width`, `height` and the CRS from the header. No pixel is read until a later function needs it, so it is the way to load large rasters lazily. Pass `materialize=True` to read the pixels now. There is no `virtualize_dir` or `virtualize_prefix` argument, because the source file is the durable store.
+In Python, `rst_fromfile` returns a _virtual_ tile by default. It holds no bytes, points at `path` over the whole-file window and reads `width`, `height` and the CRS from the header. No pixel is read until a later function needs it, so it is the way to load large rasters lazily. Pass `materialize=True` to read the pixels now. There is no `virtualize_dir` or `virtualize_prefix` argument, because the source file is the durable store.
 
 The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function: it needs the lightweight tier (the env wheel, or the plain wheel off Databricks) and has no Scala form. The JVM cannot read a UC Volume `/Volumes/...` path, because the credential lives in the Spark Python worker. A path that cannot be opened gives null.
 
@@ -2009,7 +2009,7 @@ A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here. `rst_fromfile` refus
 :::
 
 :::caution `materialize=True` errors over the Serverless cap
-Reading a file larger than the connect-aware stream cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic) with `materialize=True`, or through the SQL function `gbx_rst_fromfile`, raises a `ValueError`. The error is intentional, because reading an oversized tile would run the executor out of memory. The Python default (`materialize` unset, a virtual tile) is Serverless-safe: pixels are read lazily and size-gated at each later function. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
+Reading a file larger than the connect-aware stream cap raises a `ValueError`. The cap is **64 MiB on Serverless / Spark Connect** and 256 MiB on classic. This applies to `materialize=True` and to the SQL function `gbx_rst_fromfile`. The error is intentional, because reading an oversized tile would run the executor out of memory. The Python default (`materialize` unset, a virtual tile) is Serverless-safe: pixels are read lazily and size-gated at each later function. See [Serverless & Memory](../serverless-and-memory#rst_fromfile-materialize-true).
 :::
 
 <FunctionExamples
@@ -2608,7 +2608,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Aggregate raster values to H3 grid cells, and utility functions for H3-based canvas setup (9 total).
 
-The `rst_<grid>_rastertogrid<stat>` reducers of all four grids (H3, quadbin, BNG, custom grid) are **table functions** at every implementation level: one row per band and cell, with `band` (from 1), `cellID` and `measure`. Call them in the `FROM` clause with `LATERAL`, or through the Python API, which takes the input DataFrame first and returns it joined with the rows:
+The `rst_<grid>_rastertogrid<stat>` reducers of all four grids (H3, quadbin, BNG, custom grid) are **table functions** at every implementation level. They return one row per band and cell, with `band` (from 1), `cellID` and `measure`. Call them in the `FROM` clause with `LATERAL`, or through the Python API, which takes the input DataFrame first and returns it joined with the rows:
 
 ```python
 from databricks.labs.gbx.rasterx import functions as rx
@@ -2616,7 +2616,7 @@ from databricks.labs.gbx.rasterx import functions as rx
 rx.rst_h3_rastertogridavg(df, "tile", 5)  # one row per band and H3 cell, beside the input columns
 ```
 
-A NULL tile, an error tile and a tile that cannot be read give no rows; a resolution the grid does not define, or a `coverage` or `assignment` word that names none, raises and names the value. Cell ids are `BIGINT` (H3, quadbin, custom grid) and never pass through a float; BNG ids are `STRING`.
+A NULL tile, an error tile and a tile that cannot be read give no rows. A resolution the grid does not define raises and names the value. A `coverage` or `assignment` word that names none does the same. Cell ids are `BIGINT` (H3, quadbin, custom grid) and never pass through a float; BNG ids are `STRING`.
 
 ### h3_cell_bbox
 
@@ -3211,7 +3211,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Aggregate raster values to British National Grid (BNG) cells (8 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
 
 :::warning NoData and NULL
-With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`) — the same behavior as the H3 and quadbin reducers. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
+With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`). The H3 and quadbin reducers behave the same. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
 :::
 
 ### rst_bng_rastertogridavg
@@ -3471,7 +3471,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Aggregate raster values to user-defined custom-grid cells (8 total). Custom grids are defined via `gbx_custom_grid(origin_x, origin_y, min_x, min_y, max_x, max_y, root_cell_size_x, root_cell_size_y, crs_srid)` — a regular planar grid with an explicit origin, bounds, and cell size. Cell IDs are **BIGINT** encoded by the custom-grid layout, and the resolution parameter selects the subdivision level. The raster is expected to be in the grid's native CRS — no automatic reprojection is performed; use `rst_transform` upstream if needed.
 
 :::warning NoData and NULL
-With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`) — the same behavior as the H3, quadbin, and BNG reducers. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
+With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`). The H3, quadbin, and BNG reducers behave the same. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
 :::
 
 ### rst_custom_rastertogridavg
@@ -4348,7 +4348,7 @@ The **envelope** is portable, but the **calc expression language is not fully po
 {/* END GENERATED gbx_rst_merge */}
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The JVM level (L1) does the same: it reprojects a tile in another CRS to the reference CRS (the smallest EPSG code present) onto the pixel size and grid of a tile in it, then mosaics them; it never leaves a tile out.
+Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent. Where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins. Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) gets the footprint of the warp as its mask. The mosaic then has a mask band, and a pixel no tile reaches is invalid in it. A gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The JVM level (L1) does the same. It reprojects a tile in another CRS onto the pixel size and grid of a tile in the reference CRS, the smallest EPSG code present. It then mosaics them and never leaves a tile out.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
@@ -4878,7 +4878,7 @@ Powered by **rio-tiler** + **morecantile**. Out-of-extent tiles return a transpa
 
 Render a single web-mercator XYZ tile from a raster as encoded image bytes (e.g. PNG, JPEG, WebP) at the given tile coordinates and pixel size.
 
-A bad argument raises an error that names the value: a `format` other than `PNG`, `JPEG` or `WEBP`, a `size` outside (0, 4096], a `resampling` word that names none, or a `rescale` that is not `auto`, `none` or `min,max`. It raises also when the tile is NULL or cannot be read, because the argument is checked first; a NULL `z`, `x` or `y` gives NULL.
+A bad argument raises an error that names the value. Bad arguments are a `format` other than `PNG`, `JPEG` or `WEBP`, a `size` outside (0, 4096], a `resampling` word that names none, or a `rescale` that is not `auto`, `none` or `min,max`. It raises also when the tile is NULL or cannot be read, because the argument is checked first; a NULL `z`, `x` or `y` gives NULL.
 
 :::note Display RGB(A) output (both tiers)
 The output is a display web-map tile, not the source's raw bands. **PNG and WebP** are **RGBA** (4-band); **JPEG** is **RGB** (3-band, no alpha). The alpha channel is a binary transparency mask derived from the source's valid-data footprint, so a pixel that is NoData — whether outside the raster or an internal hole — renders **transparent**, and both the lightweight and heavyweight tiers agree on which pixels are transparent. Band mapping matches the lightweight tier: a single-band source becomes greyscale RGB (`R=G=B`), a two-band source uses band 1 as greyscale RGB and band 2 as the alpha channel, three bands map to R, G, B, an existing fourth band is treated as alpha, and five-or-more-band sources use the first three bands as RGB. Non-8-bit sources are contrast-rescaled to 8-bit per the `rescale` argument (default `"auto"`; see the `rescale` note above). WebP alpha requires GDAL WebP-alpha support in the runtime; where absent, WebP falls back to RGB.
@@ -5120,7 +5120,7 @@ The two tiers use **different color interpolation engines**, so their pixel valu
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored on both tiers; the `default` keyword is honored only on the heavyweight tier (see the tier note above).
+Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB(A) visualization tile. Special values `nv` (NoData color), `0%`, and `100%` (percentages of the band value range) are honored on both tiers. The `default` keyword is honored only on the heavyweight tier (see the tier note above).
 
 <FunctionExamples
   name="rst_color_relief"
@@ -5859,7 +5859,7 @@ Re-encodes the tile as a Cloud Optimized GeoTIFF (it passes GDAL's COG validator
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier — `ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP` — and so does `AUTO`, its default: a size-adaptive ZSTD level with the dtype predictor on the lightweight tier, ZSTD on the heavyweight tier. `blocksize` is the internal tile size in pixels (square), any multiple of 16 down to 16, on both tiers. `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
+Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier (`ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP`) and `AUTO`, its default. `AUTO` is a size-adaptive ZSTD level with the dtype predictor on the lightweight tier and ZSTD on the heavyweight tier. `blocksize` is the internal tile size in pixels (square), any multiple of 16 down to 16, on both tiers. `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
 
 <FunctionExamples
   name="rst_cog_convert"
@@ -5970,7 +5970,7 @@ With a `maxDistance`, the light tier now returns the window around the observer 
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is WKB / WKT POINT; it is reprojected from its source CRS to the raster CRS (an EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else assumed already aligned). Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of-range) from a DEM tile and an observer POINT via `gdal.ViewshedGenerate`. `observerGeom` is a WKB / WKT POINT. It is reprojected from its source CRS to the raster CRS. An EWKB/EWKT embedded SRID wins, else the optional `crs` argument, else the point is assumed already aligned. Non-POINT geometries raise an error at execution time. Heights are above the DEM at each pixel. `maxDistance` clips the search radius; `null` = unlimited. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 <FunctionExamples
   name="rst_viewshed"

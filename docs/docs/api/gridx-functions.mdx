@@ -612,7 +612,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Fill NULL quadbin cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-`gbx_quadbin_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+`gbx_quadbin_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 :::note Lightweight tier (pygx)
@@ -1568,7 +1568,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Fill NULL BNG cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. BNG cell IDs are `STRING`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-`gbx_bng_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+`gbx_bng_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 :::note Lightweight tier (pygx)
@@ -2293,7 +2293,7 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 Fill NULL custom grid cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. The grid spec is passed as the third argument (unlike the BNG/quadbin/h3 variants where the grid identity is implicit). With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
 :::warning Lightweight and heavyweight return different types
-`gbx_custom_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+`gbx_custom_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 **Returns:**
@@ -2317,7 +2317,7 @@ Fill NULL custom grid cells from valid neighbours within `k` rings using nearest
 `gbx_h3_cellfill` is the grouped aggregator that interpolates missing H3 cell values from valid ring-neighbours, using the same fill algorithm as the BNG, quadbin, and custom-grid variants.
 
 :::warning Return-type divergence
-`gbx_h3_cellfill` returns `BINARY` in Python and SQL on every compute: the serialized fill, a 4-byte count and then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+`gbx_h3_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
 ### h3_cellfill

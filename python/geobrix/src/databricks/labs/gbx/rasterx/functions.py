@@ -589,12 +589,12 @@ def rst_bng_rasterize_agg(
 
 def rst_bng_rasterize_tvf(
     df: DataFrame,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    width: int,
+    height: int,
 ) -> DataFrame:
     """Rasterize each partition's BNG cells onto an explicit EPSG:27700 canvas, as a table function over `TABLE(...) PARTITION BY`.
 

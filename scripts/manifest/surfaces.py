@@ -131,6 +131,27 @@ def _docstring(fn, extras, group=None) -> List[str]:
     return out
 
 
+# The Python type of a table function's constant: it is a literal of the call (`_api.table_by` renders it into the
+# SQL text), so a Column is not accepted and the hint says so.
+LITERAL_TYPES = {
+    "DOUBLE": "float",
+    "FLOAT": "float",
+    "INT": "int",
+    "BIGINT": "int",
+    "SMALLINT": "int",
+    "TINYINT": "int",
+    "STRING": "str",
+    "BOOLEAN": "bool",
+    "BINARY": "bytes",
+}
+
+
+def _py_type(p, literal: bool) -> str:
+    """The annotation of one parameter: ``ColLike`` (a column or a name), or a plain Python type for the constants
+    of a table function."""
+    return LITERAL_TYPES.get(p.session[0], "object") if literal else "ColLike"
+
+
 def render_python_entry(fn) -> str:
     from databricks.labs.gbx.manifest import PY_EXTRAS
 
@@ -140,7 +161,8 @@ def render_python_entry(fn) -> str:
     # a table function's first parameter is its table argument, which `df` stands for
     skip = 1 if fn.table_input is not None else 0
     sig += [
-        f"{p.name}: ColLike" + ("" if i < fn.min_args else " = None")
+        f"{p.name}: {_py_type(p, fn.table_input is not None)}"
+        + ("" if i < fn.min_args else " = None")
         for i, p in enumerate(fn.params)
         if i >= skip
     ]

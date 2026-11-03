@@ -4570,22 +4570,30 @@ def _burn_nulls(expect, null_burn: float):
     return [[null_burn if v == NULL_BURN else v for v in row] for row in expect]
 
 
-def table_call_sql(fn) -> str:
-    """The SQL of one group through a table function: `SELECT * FROM gbx_x(TABLE(<members>) PARTITION BY (<key>), <constants>)`.
+def table_call_sql(fn, omitted=frozenset()) -> str:
+    """The SQL of one group through a table function: `SELECT * FROM gbx_x(TABLE(<members>) PARTITION BY (<keys>), <constants>)`.
 
     The one place the harness calls a function that reads a table argument (a manifest row with `table_input`). The
     members are the view's `key` and `c0..`, named as the function's table argument names its columns; `{args}` is the
-    constants as typed literals (the Spark parser needs the parentheses to tell the key from a constant). The result is
-    `(key, out)` with `out` the function's last column."""
+    constants as typed literals (the Spark parser needs the parentheses to tell the key from a constant). A member
+    whose index is in `omitted` is left out of the table argument. Every partition key is the view's `key`; the result
+    is `(key, out)` with `out` the function's last column.
+    """
     ti = fn.table_input
-    (key,) = ti.partition_by  # one partition key: the harness view has one `key` column
-    members = iter(f"c{i}" for i in range(len(ti.members)))
-    cols = ", ".join(
-        "key" if n == key else f"{next(members)} AS {n}" for n, _ in ti.columns
-    )
+    members = iter(range(len(ti.members)))
+    cols = []
+    for n, _ in ti.columns:
+        if n in ti.partition_by:
+            cols.append("key" if n == "key" else f"key AS {n}")
+            continue
+        i = next(members)
+        if i not in omitted:
+            cols.append(f"c{i} AS {n}")
+    keys = ", ".join(ti.partition_by)
+    first_key = ti.partition_by[0]
     return (
-        f"SELECT key, {fn.columns[-1][0]} AS out FROM {fn.sql_name}("
-        f"TABLE(SELECT {cols} FROM {{src}}) PARTITION BY ({key}){{args}})"
+        f"SELECT {'key' if first_key == 'key' else first_key + ' AS key'}, {fn.columns[-1][0]} AS out "
+        f"FROM {fn.sql_name}(TABLE(SELECT {', '.join(cols)} FROM {{src}}) PARTITION BY ({keys}){{args}})"
     )
 
 
@@ -4666,12 +4674,23 @@ def run_groups(
             if case.kind == "pixels" and not callable(case.expect)
             else case
         )
+        if column_of is not None and fn.table_input is not None:
+            # the Python API renders a table function's constants into the SQL text: a fixture or a structured value
+            # is no literal. That is this row's limit, not the function's: say so rather than score it a failure.
+            for a, v in zip(case.args[1:], consts):
+                if isinstance(a, Build) or isinstance(v, (dict, list, tuple)):
+                    raise TypeError(
+                        f"{case.cid}: a constant of {case.fn} is a fixture or a structured value, which the "
+                        "Python leg cannot pass as a SQL literal. Fix: give the row plain constants, or leave "
+                        "the Python surface out of its `surfaces`."
+                    )
         try:
             src = spark.createDataFrame(rows, schema)
             src.createOrReplaceTempView("_gbx_oracle")
             if column_of is None and fn.table_input is not None:
                 df = spark.sql(
-                    (shape_sql or table_call_sql(fn)).format(
+                    (shape_sql or table_call_sql(fn, omitted)).format(
+                        fn=case.fn,
                         src="_gbx_oracle",
                         args="".join(f", {lit}" for lit in literals),
                     )
@@ -4683,7 +4702,14 @@ def run_groups(
                 ti = fn.table_input
                 names = {k: "key" for k in ti.partition_by}
                 names.update({n: f"c{i}" for i, (n, _) in enumerate(ti.members)})
-                table = src.select(*[F.col(names[n]).alias(n) for n, _ in ti.columns])
+                member_index = {n: i for i, (n, _) in enumerate(ti.members)}
+                table = src.select(
+                    *[
+                        F.col(names[n]).alias(n)
+                        for n, _ in ti.columns
+                        if member_index.get(n) not in omitted
+                    ]
+                )
                 got_df = column_of(case.fn)(table, *consts)
                 df = got_df.select(
                     *ti.partition_by, F.col(fn.columns[-1][0]).alias("out")

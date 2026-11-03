@@ -160,6 +160,8 @@ def extra_call(sql_name: str, extras, *values):
 def _sql_literal(value: Any, param) -> str:
     from databricks.labs.gbx.manifest import sql_type
 
+    if type(value).__module__ == "numpy" and hasattr(value, "item"):
+        value = value.item()  # a numpy scalar is its Python value (a 0-d array too)
     if value is None:
         if param.py == "col_null":
             return "NULL"
@@ -229,11 +231,13 @@ def table_by(df, sql_name: str, *values):
     """The table function ``sql_name`` over ``df`` as its table argument, partitioned by the function's key:
     ``SELECT * FROM sql_name(TABLE(SELECT <its columns> FROM df) PARTITION BY (<key>), values...)``.
 
-    ``df`` needs the columns the function's table argument names (others are left out); ``values`` are the
-    function's constants after the table argument, plain Python values (a Column is not constant). One output row
-    per partition, as the function gives it.
+    ``df`` needs the columns the function's table argument names (others are left out); each is cast to the type
+    the function declares. ``values`` are the function's constants after the table argument, plain Python values
+    (a Column is not constant; a numpy scalar is its value). One output row per partition, as the function gives it.
     """
     from pyspark.sql import Column
+
+    from databricks.labs.gbx.manifest import sql_type
 
     fn = _fn(sql_name)
     ti = fn.table_input
@@ -255,7 +259,12 @@ def table_by(df, sql_name: str, *values):
             )
         args.append(_sql_literal(v, p))
     quote = lambda c: "`" + c.replace("`", "``") + "`"  # noqa: E731
-    cols = ", ".join(quote(n) for n, _ in ti.columns)
+    # each column as the type the function declares (a key of INT reaches a `key string` as a string); a TILE
+    # column is a struct the function reads as it is
+    cols = ", ".join(
+        quote(n) if t == "TILE" else f"CAST({quote(n)} AS {sql_type(t)}) AS {quote(n)}"
+        for n, t in ti.columns
+    )
     keys = ", ".join(quote(k) for k in ti.partition_by)
     spark = df.sparkSession
     ensure(spark, sql_name)

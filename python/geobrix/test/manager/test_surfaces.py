@@ -83,6 +83,49 @@ def test_middle_optional_none_takes_the_sql_default(spark):
     assert len(trailing) == 2
 
 
+def test_a_table_function_takes_literal_constants_and_casts_its_table(spark):
+    """`rst_bng_rasterize_tvf` through the Python API: the constants are hinted as the plain values the call
+    renders into its SQL (a Column or a wrong count is a TypeError, a numpy scalar is its value), and the table's
+    columns are cast to the types the function declares (an INT key reaches its `key string`).
+    """
+    import inspect
+
+    import numpy as np
+
+    from databricks.labs.gbx import _api, register
+    from databricks.labs.gbx.rasterx import functions as rx
+
+    params = inspect.signature(rx.rst_bng_rasterize_tvf).parameters
+    assert [params[n].annotation for n in ("xmin", "xmax", "width", "height")] == [
+        float,
+        float,
+        int,
+        int,
+    ]
+    register(spark, only=["gbx_rst_bng_rasterize_tvf"])
+    df = spark.createDataFrame(
+        [(7, "TQ3080", 1.0), (7, "TQ3180", 2.0)], "key int, cellid string, value double"
+    )
+    canvas = (
+        np.float64(530000.0),
+        180000.0,
+        np.float64(533000.0),
+        182000.0,
+        np.int64(3),
+        2,
+    )
+    (row,) = rx.rst_bng_rasterize_tvf(df, *canvas).collect()
+    assert row["key"] == "7" and row["raster"]
+    with pytest.raises(TypeError, match="needs 6 arguments"):
+        _api.table_by(df, "gbx_rst_bng_rasterize_tvf", 1.0)
+    with pytest.raises(TypeError, match="at most 6"):
+        _api.table_by(df, "gbx_rst_bng_rasterize_tvf", *canvas, 1)
+    with pytest.raises(TypeError, match="is a constant of the call"):
+        from pyspark.sql import functions as F
+
+        rx.rst_bng_rasterize_tvf(df, F.col("key"), *canvas[1:])
+
+
 def test_first_python_call_registers_through_the_manager_on_connect(
     monkeypatch, capsys
 ):

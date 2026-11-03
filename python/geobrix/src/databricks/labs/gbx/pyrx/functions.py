@@ -7156,7 +7156,9 @@ def _member_bytes(tile):
     """
     if _error_tile_of(tile) is not None:
         return None
-    candidate = _tile_raster_bytes(tile)  # front-door bytes: a virtual tile is materialized
+    candidate = _tile_raster_bytes(
+        tile
+    )  # front-door bytes: a virtual tile is materialized
     if candidate is None:
         return None
     try:
@@ -7179,6 +7181,32 @@ def _table_column(row, fn_name, column, columns):
         ) from None
 
 
+def _same_partition(fn_name, rows_seen, held, key):
+    """`key`, after checking it is the key the partition holds so far (`rows_seen` says whether it holds one). A
+    table function gives one row per partition, so a call not partitioned by `key` would burn or merge rows of
+    different keys into one output under the last key: raise instead.
+    """
+    if rows_seen and held != key:
+        raise ValueError(
+            f"{fn_name}: one partition holds more than one key ({held!r} and {key!r}). "
+            "Fix: call it as TABLE(SELECT key, ... FROM ...) PARTITION BY (key)."
+        )
+    return key
+
+
+def _table_tile(row, fn_name, columns):
+    """The `tile` column of a table row, which must be a TILE struct: raw BINARY has no cell id or metadata for the
+    merge to read, so it raises with the Fix (wrap the bytes with gbx_rst_fromcontent) instead of a TypeError.
+    """
+    tile = _table_column(row, fn_name, "tile", columns)
+    if isinstance(tile, (bytes, bytearray, memoryview)):
+        raise ValueError(
+            f"{fn_name}: the 'tile' column is BINARY, not a TILE struct. "
+            "Fix: pass gbx_rst_fromcontent(<bytes>, 'GTiff') as tile."
+        )
+    return tile
+
+
 @udtf(returnType="key string, raster binary")
 class _RstMergeTvf:
     """`gbx_rst_merge_tvf`: the partition's tiles merged into one mosaic (the table function of `gbx_rst_merge_agg`)."""
@@ -7187,13 +7215,15 @@ class _RstMergeTvf:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        self.key, self.rasters = None, []
+        self.key, self.rasters, self.rows = None, [], 0
 
     def eval(self, row):
-        self.key = _table_column(row, "gbx_rst_merge_tvf", "key", ("key", "tile"))
-        b = _member_bytes(
-            _table_column(row, "gbx_rst_merge_tvf", "tile", ("key", "tile"))
+        name, columns = "gbx_rst_merge_tvf", ("key", "tile")
+        self.key = _same_partition(
+            name, self.rows, self.key, _table_column(row, name, "key", columns)
         )
+        self.rows += 1
+        b = _member_bytes(_table_tile(row, name, columns))
         if b is not None:
             self.rasters.append(b)
 
@@ -7215,11 +7245,23 @@ class _RstBngRasterizeTvf:
         from databricks.labs.gbx.pyrx import _env
 
         _env.configure_gdal_env()
-        self.key, self.best, self.canvas = None, {}, None
+        self.key, self.best, self.canvas, self.rows = None, {}, None, 0
 
     def eval(self, row, xmin, ymin, xmax, ymax, width, height):
         name = "gbx_rst_bng_rasterize_tvf"
-        self.key = _table_column(row, name, "key", self._COLUMNS)
+        canvas = dict(
+            xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax, width=width, height=height
+        )
+        for c, v in canvas.items():
+            if v is None or (isinstance(v, float) and v != v):
+                raise ValueError(
+                    f"{name}: the canvas constant {c!r} is NULL. "
+                    "Fix: pass xmin, ymin, xmax, ymax, width and height as plain numbers."
+                )
+        self.key = _same_partition(
+            name, self.rows, self.key, _table_column(row, name, "key", self._COLUMNS)
+        )
+        self.rows += 1
         cell = _table_column(row, name, "cellid", self._COLUMNS)
         value = _table_column(row, name, "value", self._COLUMNS)
         if cell is None:

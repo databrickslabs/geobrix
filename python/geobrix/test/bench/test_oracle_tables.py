@@ -625,3 +625,52 @@ def test_a_table_function_is_called_with_a_partition_clause_and_a_wrong_row_fail
     wrong = dataclasses.replace(case, expect=[[0.0] * 3, [0.0] * 3])
     ((_, msg),) = oracles.run_groups(spark, [wrong], tmpdir=str(tmp_path))
     assert msg and "pixels" in msg
+
+
+def test_a_table_function_harness_leaves_out_omitted_members_and_takes_several_keys():
+    import dataclasses
+
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench import oracles
+
+    fn = manifest.load().functions["gbx_rst_bng_rasterize_tvf"]
+    left_out = oracles.table_call_sql(fn, omitted={1})
+    assert "c1" not in left_out and "c0 AS cellid" in left_out
+    two = dataclasses.replace(
+        fn,
+        table_input=dataclasses.replace(
+            fn.table_input,
+            columns=(("k1", "STRING"), ("k2", "STRING"), *fn.table_input.columns[1:]),
+            partition_by=("k1", "k2"),
+        ),
+    )
+    sql = oracles.table_call_sql(two)
+    assert "key AS k1, key AS k2" in sql and "PARTITION BY (k1, k2)" in sql
+    assert sql.startswith("SELECT k1 AS key, raster AS out FROM")
+
+
+def test_a_table_function_shape_may_name_the_function_and_a_fixture_constant_is_a_harness_error(
+    spark, tmp_path
+):
+    import dataclasses
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench import oracles
+
+    fn = manifest.load().functions["gbx_rst_bng_rasterize_tvf"]
+    register(spark, only=[fn.sql_name])
+    (case,) = [c for c in oracles.TABLES[fn.oracle] if c.cid == "bt_dup_max"]
+    shape = (
+        "SELECT key, raster AS out FROM {fn}(TABLE(SELECT key, c0 AS cellid, c1 AS value "
+        "FROM {src}) PARTITION BY (key){args})"
+    )
+    assert [m for _, m in oracles.run_groups(spark, [case], shape, str(tmp_path))] == [
+        None
+    ]
+    fixture = dataclasses.replace(
+        case, args=(*case.args[:2], oracles.Build("tile_32"), *case.args[3:])
+    )
+    with pytest.raises(TypeError, match="Python leg cannot pass"):
+        oracles.run_groups(
+            spark, [fixture], tmpdir=str(tmp_path), column_of=lambda name: None
+        )

@@ -894,6 +894,66 @@ def test_a_merge_too_big_to_build_raises_with_the_fix_where_the_result_is_bytes(
         out.collect()
 
 
+# The table functions read one partition's rows: a call not partitioned by `key`, a BINARY `tile` and a NULL canvas
+# constant each raise with the Fix, and name what to change.
+_BNG_ROWS = (
+    "TABLE(SELECT 'a' AS key, 'TQ3080' AS cellid, 1.0D AS value) PARTITION BY (key)"
+)
+_BNG_CANVAS = "530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2"
+
+
+def test_a_table_function_raises_when_a_partition_holds_two_keys(spark):
+    from databricks.labs.gbx import register
+
+    register(spark, only=["gbx_rst_merge_tvf"])
+    df = _tiles_df(
+        spark,
+        [
+            ("a", _ras_bytes(np.ones((4, 4)))),
+            ("b", _ras_bytes(np.ones((4, 4)), ulx=4.0)),
+        ],
+    )
+    df.createOrReplaceTempView("two_keys")
+    with pytest.raises(Exception, match=r"more than one key.*PARTITION BY \(key\)"):
+        spark.sql(
+            "SELECT * FROM gbx_rst_merge_tvf("
+            "TABLE(SELECT k AS key, tile FROM two_keys) WITH SINGLE PARTITION)"
+        ).collect()
+
+
+def test_a_binary_tile_column_of_a_table_function_raises_with_the_fix(spark):
+    from databricks.labs.gbx import register
+
+    register(spark, only=["gbx_rst_merge_tvf"])
+    df = _tiles_df(spark, [("a", _ras_bytes(np.ones((4, 4))))])
+    df.select("k", f.col("tile.raster").alias("tile")).createOrReplaceTempView(
+        "binary_tiles"
+    )
+    with pytest.raises(Exception, match=r"BINARY.*gbx_rst_fromcontent"):
+        spark.sql(
+            "SELECT * FROM gbx_rst_merge_tvf("
+            "TABLE(SELECT k AS key, tile FROM binary_tiles) PARTITION BY (key))"
+        ).collect()
+
+
+@pytest.mark.parametrize("name", ["xmin", "ymax", "width", "height"])
+def test_a_null_canvas_constant_of_the_bng_tvf_raises_naming_it(spark, name):
+    from databricks.labs.gbx import register
+
+    register(spark, only=["gbx_rst_bng_rasterize_tvf"])
+    canvas = dict(
+        zip(
+            ("xmin", "ymin", "xmax", "ymax", "width", "height"),
+            _BNG_CANVAS.split(", "),
+        )
+    )
+    canvas[name] = "CAST(NULL AS INT)" if name in ("width", "height") else "NULL"
+    with pytest.raises(Exception, match=rf"canvas constant '{name}' is NULL"):
+        spark.sql(
+            f"SELECT * FROM gbx_rst_bng_rasterize_tvf({_BNG_ROWS}, {', '.join(canvas.values())})"
+        ).collect()
+
+
 # ---------------------------------------------------------------------------
 # Heavyweight-only non-aggregator constructors / array operations
 # (rst_merge, rst_combineavg, rst_frombands, rst_fromfile)

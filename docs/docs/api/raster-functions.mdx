@@ -1223,7 +1223,7 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
-| `rows` | `TABLE` |  | The cells, as `TABLE(SELECT key, cellid, value FROM ...) PARTITION BY (key)`: one canvas per key. `cellid` is the BNG cell id (for example `'TQ3080'`) and `value` the value burned for it. A repeated cell burns its largest value; a NULL value never wins against a number, and a cell of nothing but NULL burns NaN. A NULL cell id is skipped. |
+| `rows` | `TABLE` |  | The cells, as `TABLE(SELECT key, cellid, value FROM ...) PARTITION BY (key)`: one canvas per key. `cellid` is the BNG cell id (for example `'TQ3080'`) and `value` the value burned for it. A repeated cell burns its largest value; a NULL value never wins against a number, and a cell of nothing but NULL burns NaN. A NULL cell id is skipped. A partition that holds more than one key raises. A NULL canvas value raises and names the value. |
 | `xmin` | `DOUBLE` |  | The west edge of the canvas in EPSG:27700 metres. |
 | `ymin` | `DOUBLE` |  | The south edge of the canvas in EPSG:27700 metres. |
 | `xmax` | `DOUBLE` |  | The east edge of the canvas in EPSG:27700 metres. |
@@ -1637,7 +1637,7 @@ Rows: `key` `STRING`, `raster` `BINARY`.
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
-| `rows` | `TABLE` |  | The tiles, as `TABLE(SELECT key, tile FROM ...) PARTITION BY (key)`: one mosaic per key. An error tile, an empty tile and a tile that does not open are left out. |
+| `rows` | `TABLE` |  | The tiles, as `TABLE(SELECT key, tile FROM ...) PARTITION BY (key)`: one mosaic per key. An error tile, an empty tile and a tile that does not open are left out. The `tile` column is a tile, not BINARY: wrap bytes with `gbx_rst_fromcontent`. A partition that holds more than one key raises. |
 {/* END GENERATED gbx_rst_merge_tvf */}
 
 Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * FROM gbx_rst_merge_tvf(TABLE(SELECT key, tile FROM tiles) PARTITION BY (key))`. It merges each key's tiles into the same pixels as the aggregate. It reads them a row at a time, not as one batch of the whole group. A key with no readable tile gives no row; one whose mosaic is too large to build raises with a Fix that names `merge_by_key`.

@@ -24,7 +24,7 @@ def gbx_file_read_then_decode(spark, path=None):
 
     files = gbx_file_read(spark, path or SAMPLE_RASTER_DIR, extensions=(".tif",))
     # files has columns: path (STRING), size (BIGINT), file (FILE ref or null)
-    tiles = files.select("path", rst_fromfile(files["path"], materialize=False).alias("tile"))
+    tiles = files.select("path", rst_fromfile(files["path"]).alias("tile"))
     n = tiles.count()
     assert n > 0, "expected at least one decoded tile"
     return n

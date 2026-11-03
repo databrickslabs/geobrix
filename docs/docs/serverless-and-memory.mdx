@@ -133,8 +133,8 @@ See [Readers & Writers](./readers-writers#file-gbx) for the full file-access bas
 | `raster_gbx` directory read | Yes | Size-gated; ~30 s / 1k tiles — prefer Delta-table path |
 | Virtual tiles (default) | Yes | No bytes materialized at the reader stage |
 | Materialized tiles (`virtualTiles=false`) | Yes | Bytes size-gated by the connect-aware cap |
-| `rst_fromfile(materialize=False)` | Yes | No bytes loaded at read time |
-| `rst_fromfile` (default, materialized) | **Caution** — see [below](#rst_fromfile-materialize-true) | Errors if file exceeds cap |
+| `rst_fromfile` (Python default, virtual) | Yes | No bytes loaded at read time |
+| `rst_fromfile(materialize=True)` and SQL `gbx_rst_fromfile` | **Caution** — see [below](#rst_fromfile-materialize-true) | Errors if file exceeds cap |
 | `rst_fromcontent` | Yes, with size caveat | Bytes are in a column — [you own their size](#rst_fromcontent-you-own-the-bytes) |
 | **— Vector —** | | |
 | FILE-column vector table (`vector_file_read`, table mode) | Yes | Open-amortized; avoids per-file FUSE opens |
@@ -158,11 +158,11 @@ See [Readers & Writers](./readers-writers#file-gbx) for the full file-access bas
 
 ## Caveats
 
-### `rst_fromfile` materialized {#rst_fromfile-materialize-true}
+### `rst_fromfile(materialize=True)` {#rst_fromfile-materialize-true}
 
-`rst_fromfile` puts the raster bytes into the tile's `raster` field immediately, unless you pass `materialize=False`. If the file is larger than the connect-aware cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic), this raises a `ValueError`. The error is intentional — silently materializing an oversized tile would OOM the executor.
+`rst_fromfile` with `materialize=True` (and the SQL function `gbx_rst_fromfile`, which always materializes) forces the raster bytes into the tile's `raster` field immediately. If the file is larger than the connect-aware cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic), this raises a `ValueError`. The error is intentional — silently materializing an oversized tile would OOM the executor.
 
-**Fix:** Pass `materialize=False`. Virtual tiles are Serverless-safe by construction — pixels are read lazily, size-gated, at each downstream operation.
+**Fix:** Use the virtual default (`materialize=False`, or omit the argument; Python only). Virtual tiles are Serverless-safe by construction — pixels are read lazily, size-gated, at each downstream operation.
 
 ### `rst_fromcontent` — you own the bytes {#rst_fromcontent-you-own-the-bytes}
 

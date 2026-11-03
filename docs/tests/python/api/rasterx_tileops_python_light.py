@@ -420,12 +420,12 @@ def rst_fromfile_python_example(spark):
     rx.register(spark)
     path = str(single_band_path())
     path_df = spark.createDataFrame([(path,)], ["path"])
-    # materialize=False: a VIRTUAL v2 tile — raster is null, path + window are populated.
-    return path_df.select(rx_api.rst_fromfile("path", materialize=False).alias("tile")).first()["tile"]
+    # Default: a VIRTUAL v2 tile — raster is null, path + window are populated.
+    return path_df.select(rx_api.rst_fromfile("path").alias("tile")).first()["tile"]
 
 
 rst_fromfile_python_example_output = """
-# materialize=False — a VIRTUAL v2 tile (same struct as always, just bytes-free):
+# Default — a VIRTUAL v2 tile (same struct as always, just bytes-free):
 +------------------------------------------------------------+
 |tile                                                        |
 +------------------------------------------------------------+
@@ -433,7 +433,7 @@ rst_fromfile_python_example_output = """
 +------------------------------------------------------------+
 (raster is null → bytes-free; path + whole-file window carry the reference)
 
-# rst_fromfile("path") (materialize unset, or True) instead returns a MATERIALIZED v2 tile:
+# rst_fromfile("path", materialize=True) instead returns a MATERIALIZED v2 tile:
 #   {0, <raster bytes>, null, null, ..., {driver -> GTiff, ...}}  (raster set)
 """
 

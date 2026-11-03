@@ -58,10 +58,10 @@ def access_path_and_binary(spark):
     ``tile.raster``, not by ``tile.path`` alone.
     """
 
-    # rst_fromfile(materialize=False) returns a VIRTUAL tile:
+    # rst_fromfile returns a VIRTUAL tile by default:
     # raster=null, path set to the source path.
     virtual_df = spark.range(1).select(
-        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff"), materialize=False).alias("tile")
+        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
     ).select(
         f.col("tile.path").alias("path"),          # non-null: source file path
         f.col("tile.raster").isNull().alias("is_virtual"),  # True: bytes-free
@@ -105,7 +105,7 @@ def tile_path_mode_storage(spark):
 
     # Virtual tile (plain FUSE path) — raster null, path set, path_mode null
     virtual_df = spark.range(1).select(
-        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff"), materialize=False).alias("tile")
+        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
     ).select(
         f.col("tile.path_mode").alias("path_mode"),          # null (plain FUSE virtual)
         f.col("tile.raster").isNull().alias("is_virtual"),   # True
@@ -241,16 +241,16 @@ def processing_binary_raster_data(spark):
 
 
 def comparing_fromfile_vs_fromcontent_tiles(spark):
-    """Compare rst_fromfile(materialize=False) and rst_fromcontent (always materialized).
+    """Compare rst_fromfile (virtual by default) and rst_fromcontent (always materialized).
 
-    ``rst_fromfile`` returns a **materialized** tile unless you pass ``materialize=False``,
-    which gives a **virtual** tile — bytes-free, path+window set. ``rst_fromcontent``
+    In Python, ``rst_fromfile`` returns a **virtual** tile — bytes-free,
+    path+window set. Pass ``materialize=True`` to force bytes. ``rst_fromcontent``
     always embeds the bytes you supply, returning a materialized tile.
     """
 
-    # rst_fromfile(materialize=False): VIRTUAL tile (raster=null, path set)
+    # rst_fromfile: VIRTUAL tile (raster=null, path set)
     fromfile_tile = spark.range(1).select(
-        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff"), materialize=False).alias("tile")
+        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
     )
 
     fromfile_tile.select(
@@ -549,7 +549,7 @@ processing_binary_raster_data_output = """
 """
 
 comparing_fromfile_vs_fromcontent_tiles_output = """
-rst_fromfile(materialize=False) — VIRTUAL tile:
+rst_fromfile (virtual by default) — VIRTUAL tile:
 +-----------+---------+
 |raster_null|path_null|
 +-----------+---------+

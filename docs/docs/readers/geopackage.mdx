@@ -3,63 +3,37 @@ sidebar_position: 6
 sidebar_label: GeoPackage
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
-import geopackageExamples from '!!raw-loader!../../tests/python/readers/geopackage_examples.py';
-import geopackageScala from '!!raw-loader!../../tests/scala/readers/GeoPackageExamples.scala';
 import geopackageGbx from '!!raw-loader!../../tests/python/readers/geopackage_gbx_examples.py';
 
 # GeoPackage Reader
 
-_Since:_ lightweight `gpkg_gbx` **v0.4.0** · heavyweight `gpkg_ogr` **v0.2.0**
+_Since:_ lightweight `gpkg_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
 
-Both tiers produce the same `(attrs..., <geom>, <geom>_srid, <geom>_srid_proj)` schema, where `<geom>` is the geometry column's name in the layer (`geom` in the sample file) — see [Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
-
-:::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) and heavyweight readers emit the **same schema**, but your
-**compute usually decides the tier**. The lightweight tier needs **no JAR**
-and is the **only** option on Serverless and standard (shared) clusters. The
-heavyweight tier runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-Where it is available it uses native GDAL on the JVM and tends to pull ahead on large workloads. See
-the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and methodology.
-:::
+`gpkg_gbx` reads OGC GeoPackage files. It is pure Python (pyogrio-backed) and needs no JAR.
+It produces the `(attrs..., <geom>, <geom>_srid, <geom>_srid_proj)` schema, where `<geom>` is the geometry column's name in the layer (`geom` in the sample file).
 
 ## Options
 
-GeoPackage files can contain multiple layers; both tiers (lightweight `gpkg_gbx`, heavyweight `gpkg_ogr`) preset the GPKG driver and expose a layer selector. They take the same options, except where a row says otherwise.
+GeoPackage files can contain multiple layers. `gpkg_gbx` presets the GPKG driver and exposes a layer selector.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `chunkSize` | `"10000"` | Features per unit of work. Lightweight: the layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. Heavyweight: each partition reads this many features, so a large file is read in parallel. |
+| `chunkSize` | `"10000"` | Features per unit of work. The layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. |
 | `layerNumber` | `"0"` | Layer index to read (0-based). Ignored when `layerName` is set. |
 | `layerName` | `""` | Layer name to read; takes precedence over the layer index when set. |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
-| `codedDomains` | `"code"` | Lightweight only. Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default — the same values the heavyweight reader returns) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
+| `codedDomains` | `"code"` | Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
 
 All other [OGR reader options](./vector#options) (`driverName`, …) are also available.
 
-Example — selecting a specific layer in a multi-layer GeoPackage:
-
-<CodeFromTest
-  code={geopackageExamples}
-  language="python"
-  functionName="READ_SPECIFIC_LAYER"
-  source="docs/tests/python/readers/geopackage_examples.py"
-  testFile="docs/tests/python/readers/test_geopackage_examples.py"
-  outputConstant="READ_SPECIFIC_LAYER_output"
-/>
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · gpkg_gbx">
-
-`gpkg_gbx` is the lightweight GeoPackage reader (pyogrio-backed, no JAR). It reads OGC GeoPackage files and emits the same schema as the heavyweight `gpkg_ogr` reader.
+## Basic usage
 
 <CodeFromTest code={geopackageGbx} language="python" functionName="READ_GPKG_GBX"
   source="docs/tests/python/readers/geopackage_gbx_examples.py"
   testFile="docs/tests/python/readers/test_geopackage_gbx_examples.py" />
 
-It is the lightweight counterpart of the heavyweight `gpkg_ogr` reader, supporting Python and SQL bindings (not Scala).
+The reader has Python and SQL bindings.
 
 ### Typical pipeline: ingest into a table
 
@@ -70,7 +44,7 @@ df = spark.read.format("gpkg_gbx").load("/Volumes/main/geo/raw/")  # a folder of
 df.write.mode("overwrite").saveAsTable("main.geo.districts")        # Delta table on Databricks
 ```
 
-Reading a folder fans the files across the cluster (one partition per file), so ingest scales with the data — unlike a single-node `pyogrio.read_*` that parses one file on one machine. See [Benchmarking](../api/benchmarking) for light-vs-heavy ingest figures.
+Reading a folder fans the files across the cluster, one partition per file, so ingest scales with the data. A single-node `pyogrio.read_*` parses one file on one machine. See [Benchmarking](../api/benchmarking) for ingest figures.
 
 ### Regular-expression filters (REGEXP)
 
@@ -85,62 +59,6 @@ database, so the plain `SQLITE` dialect, like the readers' `where` option, runs 
   testFile="docs/tests/python/readers/test_geopackage_gbx_examples.py"
   outputConstant="REGEXP_GPKG_output" />
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · gpkg_ogr">
-
-The GeoPackage reader provides support for reading OGC GeoPackage format, a modern SQLite-based geospatial format.
-
-## Format Name
-
-`gpkg_ogr`
-
-## Overview
-
-This is a named OGR Reader that uses the [GPKG](https://gdal.org/en/stable/drivers/vector/geojson.html) driver. GeoPackage is an open, standards-based, platform-independent, portable, self-describing format for transferring geospatial information.
-
-## Key Features
-
-- **Self-contained**: Single-file SQLite database
-- **Multi-layer**: Can contain multiple vector layers and raster tiles
-- **Attributes**: Full attribute support with data types
-- **Spatial Index**: Built-in spatial indexing
-- **Portable**: Cross-platform compatibility
-
-## Basic Usage
-
-### Python
-
-<CodeFromTest
-  code={geopackageExamples}
-  language="python"
-  functionName="READ_GEOPACKAGE"
-  source="docs/tests/python/readers/geopackage_examples.py"
-  testFile="docs/tests/python/readers/test_geopackage_examples.py"
-  outputConstant="READ_GEOPACKAGE_output"
-/>
-
-### Scala
-
-<CodeFromTest
-  code={geopackageScala}
-  language="scala"
-  functionName="READ_GEOPACKAGE"
-  source="docs/tests/scala/readers/GeoPackageExamples.scala"
-  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
-  outputConstant="READ_GEOPACKAGE_output"
-/>
-
-### SQL
-
-<CodeFromTest
-  code={geopackageExamples}
-  language="sql"
-  functionName="SQL_GEOPACKAGE"
-  source="docs/tests/python/readers/geopackage_examples.py"
-  testFile="docs/tests/python/readers/test_geopackage_examples.py"
-  outputConstant="SQL_GEOPACKAGE_output"
-/>
-
 ## Output Schema
 
 The output keeps the attribute columns and adds the geometry columns. The geometry column has the name the layer gives it (`geom` in the sample file) and is followed by its `_srid` and `_srid_proj` columns:
@@ -152,9 +70,6 @@ root
  |-- geom_srid: string (spatial reference ID)
  |-- geom_srid_proj: string (projection definition)
 ```
-
-</TabItem>
-</Tabs>
 
 ## Next Steps
 

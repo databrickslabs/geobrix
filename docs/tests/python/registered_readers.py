@@ -158,6 +158,16 @@ _SELF = {
     REPO_ROOT / "connectors/lakeflow/sources/geobrix/tests/test_connector.py",
 }
 
+# Notebooks that still name a retired reader. Each file is listed on purpose, so the guard does not skip it
+# silently: the entry goes when the notebook is rewritten to a lightweight reader, and
+# ``test_deferred_notebooks_still_need_a_rewrite`` fails if a listed file is already clean.
+# Until the notebooks are rewritten (Task 27), the scan reports their references apart from the docs.
+DEFERRED_NOTEBOOKS = frozenset(
+    {
+        "examples/tests/classic_proj_grid_validation.ipynb",  # cell 5 reads with format("gdal")
+    }
+)
+
 
 def _arguments(text, call_start):
     """Top-level arguments of the call whose ``(`` is at ``call_start``, as
@@ -314,8 +324,18 @@ def scan():
     """``(references, unregistered)`` across the docs, examples and READMEs.
 
     Each is a list of ``(file, where, kind, name)``; ``where`` is ``line N`` or, in a
-    notebook, ``cell N``.
+    notebook, ``cell N``. ``unregistered`` leaves out the ``DEFERRED_NOTEBOOKS``; ``deferred_scan()`` lists those.
     """
+    references, unregistered = _scan()
+    return references, [e for e in unregistered if e[0] not in DEFERRED_NOTEBOOKS]
+
+
+def deferred_scan():
+    """The unregistered names in the ``DEFERRED_NOTEBOOKS``, as ``(file, where, kind, name)``."""
+    return [e for e in _scan()[1] if e[0] in DEFERRED_NOTEBOOKS]
+
+
+def _scan():
     known = registered_reader_names() | BUILTIN_FORMATS
     references, unregistered = [], []
     for path in scan_files():

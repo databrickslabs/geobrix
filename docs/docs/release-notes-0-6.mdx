@@ -309,7 +309,6 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - Each skip logs a warning in the driver log.
   - A file you name as the path is never skipped.
   - A directory in which every file is of another format fails the read. The error names the files and the reader to use.
-  - See [Vector Readers](./readers/vector?tier=heavyweight#unreadable-files).
 - **Fixes.**
   - Paths with a space or another special character (`/Volumes/main/data/my maps/city #1.geojson`) read with the heavyweight vector readers and `netcdf_gdal`.
   - An empty folder with a space or `%` in its name reads as 0 rows when you pass a `.schema(...)`.

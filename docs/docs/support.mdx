@@ -69,7 +69,7 @@ Getting error when reading large GeoTIFF files.
 </CodeFromTest>
 
 <CodeFromTest language="python" validationLevel="static" title="Reproduction Code">
-{`df = spark.read.format("gdal").load("/data/large.tif")
+{`df = spark.read.format("raster_gbx").load("/data/large.tif")
 df.count()`}
 </CodeFromTest>
 
@@ -80,8 +80,6 @@ Should read file successfully.
 **Actual:**
 OOM error on executors.`}
 </CodeFromTest>
-
-(The `gdal` reader shown above is part of the heavyweight tier — see [Choosing an Execution Tier](./api/execution-tiers).)
 
 ### Reproduce on Databricks Runtime 19
 

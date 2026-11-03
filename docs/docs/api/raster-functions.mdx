@@ -136,7 +136,7 @@ The setup below loads `GTIFF_SAMPLE_DIR` into `rasters` and then loads the other
   code={rasterxCode}
 />
 
-**Scala** uses this same heavyweight (`rasterx`) setup: create the four views with `spark.read.format("gtiff_gdal").load(...).createOrReplaceTempView("rasters")` (and `netcdf_gdal` for the NetCDF view), then each Scala example reads `val df = spark.table("multiband_rasters")`. Registration is only needed for the SQL functions — the Scala `rx.*` Column API works without it.
+**Scala** uses this same heavyweight (`rasterx`) setup: create the four views with `spark.read.format("binaryFile").load(...)` and the `rst_fromcontent` function, then `createOrReplaceTempView("rasters")`. Each Scala example reads `val df = spark.table("multiband_rasters")`. Registration is only needed for the SQL functions — the Scala `rx.*` Column API works without it.
 
 Prefer pure SQL? Register RasterX (Python: `rx.register(spark)`), then create the same four views directly so the SQL examples can use `FROM rasters`, `FROM multiband_rasters`, and so on:
 

@@ -2,9 +2,6 @@
 sidebar_position: 1
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Readers Overview
 
 GeoBrix provides Spark readers for geospatial file formats.
@@ -14,10 +11,7 @@ See [Ingestion Pipelines](../ingestion/overview): a Lakeflow connector, Auto Loa
 `read_paths` read only the new and changed files with these readers, and track what changed.
 :::
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pyrx)">
-
-The lightweight tier ships native Python DataSource V2 readers — no JAR.
+GeoBrix ships native Python DataSource V2 readers. They need no JAR.
 
 :::tip Distributed readers, virtual tiles by default
 These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers): work is
@@ -30,19 +24,18 @@ for materialized reads). See **[Virtual Tiles](../api/virtual-tiles)**.
 :::
 
 :::note Register first
-Unlike the heavyweight readers (auto-discovered from the JAR), the lightweight Python
-DataSources are **not** auto-registered — call `register(spark)` once per session before
-using any `*_gbx` format:
+The Python DataSources are **not** auto-registered. Call `register_sources(spark)` once per session
+before you use any `*_gbx` format:
 
 ```python
-from databricks.labs.gbx.ds.register import register
-register(spark)
+from databricks.labs.gbx import manager
+manager.register_sources(spark)
 ```
 
 To register only the formats this session uses, pass `only=` (by format name, with or without the `_gbx` suffix):
 
 ```python
-register(spark, only=["raster_gbx", "gtiff_gbx"])
+manager.register_sources(spark, only=["raster_gbx", "gtiff_gbx"])
 ```
 
 An unrecognized format raises `ValueError`.
@@ -131,210 +124,5 @@ redundant sort step.
 
 ## Benchmarks
 
-Each `*_gbx` lightweight reader corresponds to a `*_ogr` (or `gdal`/`gtiff_gdal`) heavyweight
-counterpart. The generic `vector_gbx` catch-all reader pairs with the heavyweight `ogr` generic
-OGR reader; named readers such as `shapefile_gbx` pair with `shapefile_ogr`, and so on.
-
-Both tiers are benchmarked on the same cluster, same source file, same row counts. Parity
-(row-count equality between the two tiers) is a hard gate — a mismatch fails the run
-immediately. Per-format timing results are published on the [Benchmarking](../api/benchmarking)
-page; the vector-reader comparison table is in the **Results — vector readers** section (timing
-figures will be filled in once a controlled cluster run is completed).
-
-For the full methodology, raster-function results, and the PMTiles writer comparison, see the
-[Benchmarking](../api/benchmarking) page.
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (rasterx)">
-
-Heavyweight readers are implemented as Spark DataSource V2 connectors backed by GDAL (raster) and OGR (vector). They are registered automatically when the GeoBrix JAR is on the classpath — no additional configuration needed.
-
-## Available Readers
-
-### Raster Readers (GDAL-based)
-
-| Reader | Format Name | Description |
-|--------|-------------|-------------|
-| [Raster Reader](./raster) | `gdal` / `gtiff_gdal` | GDAL-backed raster readers (generic and GeoTIFF named) |
-| [NetCDF Reader](./netcdf) | `netcdf_gdal` | GDAL-backed named reader for NetCDF grids (raster) |
-
-### Vector Readers (OGR-based)
-
-| Reader | Format Name | Description |
-|--------|-------------|-------------|
-| [Vector Reader](./vector) | `ogr` | Generic reader for any OGR-supported vector format |
-| [Shapefile Reader](./shapefile) | `shapefile_ogr` | Named reader for ESRI Shapefiles |
-| [GeoJSON Reader](./geojson) | `geojson_ogr` | Named reader for GeoJSON/GeoJSONSeq |
-| [GeoPackage Reader](./geopackage) | `gpkg_ogr` | Named reader for GeoPackage |
-| [FileGDB Reader](./filegdb) | `file_gdb_ogr` | Named reader for ESRI File Geodatabase |
-| [NetCDF Reader](./netcdf) | `netcdf_ogr` | OGR-backed named reader for NetCDF as vector features (CF-DSG points) |
-
-## Basic Usage
-
-All readers follow the same pattern:
-
-```python
-# Python
-df = spark.read.format("<reader_name>").load("/path/to/file")
-
-# Scala
-val df = spark.read.format("<reader_name>").load("/path/to/file")
-```
-
-```sql
--- SQL
-SELECT * FROM <reader_name>.`/path/to/file`;
-```
-
-### Examples
-
-**Raster (GeoTIFF)**:
-```python
-df = spark.read.format("gtiff_gdal").load("/path/to/raster.tif")
-```
-
-**Vector (Shapefile)**:
-```python
-df = spark.read.format("shapefile_ogr").load("/path/to/data.shp")
-```
-
-**Generic (any format)**:
-```python
-# Generic GDAL for rasters
-df = spark.read.format("gdal").option("driver", "NetCDF").load("/path/to/data.nc")
-
-# Generic OGR for vectors
-df = spark.read.format("ogr").option("driverName", "KML").load("/path/to/data.kml")
-```
-
-## Output Schemas
-
-### Raster Output
-
-_Produces the standard `tile` format used by GeoBrix APIs._
-
-```
-root
- |-- tile: struct
-     |-- cellid: bigint (grid cell ID, nullable)
-     |-- raster: binary (raster file content)
-     |-- metadata: map<string,string> (driver, extension, etc.)
-```
-
-See [Tile Structure](../api/tile-structure) for detailed field descriptions.
-
-### Vector Output
-
-_Output will vary, depending on format / driver conventions._
-
-```
-root
- |-- geom_0: binary (geometry in WKB format)
- |-- geom_0_srid: integer (spatial reference ID)
- |-- geom_0_srid_proj: string (projection definition)
- |-- <attribute_columns>: various (feature attributes)
-```
-
-## Path Types
-
-All readers support:
-- **Single file**: `/path/to/file.tif`
-- **Directory**: `/path/to/directory/`
-- **Wildcard**: `/path/to/*.tif`
-- **Cloud storage**: `s3://bucket/path`, `abfss://...`, `gs://bucket/path`
-- **Unity Catalog Volumes**: `/Volumes/catalog/schema/volume/path`
-
-## Common Options
-
-### Raster Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `driver` | Auto-detect | GDAL driver name (e.g., "GTiff", "NetCDF") |
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split (one tile per file); positive MB value splits large files |
-| `filterRegex` | `".*"` | Filter files by regex pattern |
-
-### Vector Options
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `driverName` | Auto-detect | OGR driver name (e.g., "ESRI Shapefile") |
-| `chunkSize` | `"10000"` | Features per chunk. The heavyweight reader splits Shapefile, GeoPackage and File Geodatabase files into chunks of this size, read in parallel (GeoJSON files are read whole, one task per file). The lightweight readers read each file in one task and stream it in batches of this size |
-| `layerName` | `""` | Layer name for multi-layer formats |
-| `layerNumber` | `"0"` | Layer index for multi-layer formats (0-based). Ignored when `layerName` is set |
-| `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text) |
-
-## Reader Types Explained
-
-**Generic Readers** (`gdal`, `ogr`):
-- Work with any format supported by GDAL/OGR
-- Require `driver` or `driverName` option for non-standard formats
-- Use when format doesn't have a named reader
-
-**Named Readers** (`gtiff_gdal`, `shapefile_ogr`, etc.):
-- Preset the driver option for common formats
-- Cleaner syntax, no driver option needed
-- Recommended for supported formats
-
-**Example**:
-```python
-# Named reader (cleaner)
-df = spark.read.format("gtiff_gdal").load("/path/to/file.tif")
-
-# Generic reader (more verbose, same result)
-df = spark.read.format("gdal").option("driver", "GTiff").load("/path/to/file.tif")
-```
-
-## Performance Tips
-
-1. **Use appropriate split size for rasters**:
-   ```python
-   df = spark.read.format("gdal").option("sizeInMB", "32").load("/path")
-   ```
-
-2. **Use chunk size for vectors**:
-   ```python
-   df = spark.read.format("ogr").option("chunkSize", "50000").load("/path")
-   ```
-
-3. **Filter files with regex**:
-   ```python
-   df = spark.read.format("gdal").option("filterRegex", ".*_2024.*\\.tif").load("/path")
-   ```
-
-4. **Write data after read to a table (avoid repeat loading from file)**:
-   ```python
-   df = spark.read.format("shapefile_ogr").load("/path").write.saveAsTable(...)
-   ```
-
-## Reader Types Correspondence
-
-Each lightweight `*_gbx` reader maps directly to a heavyweight counterpart: `gtiff_gbx` ↔
-`gtiff_gdal`, `shapefile_gbx` ↔ `shapefile_ogr`, `geojson_gbx` ↔ `geojson_ogr`, `gpkg_gbx`
-↔ `gpkg_ogr`, `file_gdb_gbx` ↔ `file_gdb_ogr`. The **generic catch-all** pair is `vector_gbx`
-(lightweight) ↔ `ogr` (heavyweight), used for any OGR-supported format without a named reader.
-
-## Benchmarks
-
-Each heavyweight reader is benchmarked against its `*_gbx` lightweight counterpart on the same
-cluster, same source file, same row counts. Parity (row-count equality between the two tiers)
-is a hard gate — a mismatch fails the run immediately. Per-format timing results are published
-on the [Benchmarking](../api/benchmarking) page; the vector-reader comparison table is in the
-**Results — vector readers** section (timing figures will be filled in once a controlled
-cluster run is completed).
-
-For the full methodology, raster-function results, and the PMTiles writer comparison, see the
-[Benchmarking](../api/benchmarking) page.
-
-## Next Steps
-
-- [Raster Reader](./raster) - Generic and GeoTIFF raster readers
-- [GeoTIFF Reader](./geotiff) - Named GeoTIFF reader
-- [Vector Reader](./vector) - Generic vector reader
-- [Shapefile Reader](./shapefile) - Named Shapefile reader
-- [GeoJSON Reader](./geojson) - Named GeoJSON reader
-- [GeoPackage Reader](./geopackage) - Named GeoPackage reader
-- [FileGDB Reader](./filegdb) - Named File Geodatabase reader
-
-</TabItem>
-</Tabs>
+Per-format timing results are published on the [Benchmarking](../api/benchmarking) page, with the methodology, the
+raster-function results and the PMTiles writer comparison.

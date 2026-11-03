@@ -3,31 +3,19 @@ sidebar_position: 4
 sidebar_label: Shapefile
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
-import shapefileExamples from '!!raw-loader!../../tests/python/readers/shapefile_examples.py';
-import shapefileScala from '!!raw-loader!../../tests/scala/readers/ShapefileExamples.scala';
 import shapefileGbx from '!!raw-loader!../../tests/python/readers/shapefile_gbx_examples.py';
 
 # Shapefile Reader
 
-_Since:_ lightweight `shapefile_gbx` **v0.4.0** · heavyweight `shapefile_ogr` **v0.2.0**
+_Since:_ lightweight `shapefile_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
 
-Both tiers produce the same `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema — see [Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
-
-:::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) and heavyweight readers emit the **same schema**, but your
-**compute usually decides the tier**. The lightweight tier needs **no JAR**
-and is the **only** option on Serverless and standard (shared) clusters. The
-heavyweight tier runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-Where it is available it uses native GDAL on the JVM and tends to pull ahead on large workloads. See
-the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and methodology.
-:::
+`shapefile_gbx` reads ESRI Shapefiles, zipped or not. It is pure Python (pyogrio-backed) and needs no JAR.
+It produces the `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema.
 
 ## What you can point `.load()` at
 
-The table below covers all three accepted forms. The behavior is identical in both tiers (`shapefile_gbx` and `shapefile_ogr`).
+The table below covers all three accepted forms.
 
 | Path passed to `.load()` | What happens |
 |---|---|
@@ -49,38 +37,24 @@ Either pass a path to a specific `.shp` file, or ensure all shapefiles in the di
 
 ## Options
 
-Both tiers (lightweight `shapefile_gbx`, heavyweight `shapefile_ogr`) preset the ESRI Shapefile driver and take the same options.
+`shapefile_gbx` presets the ESRI Shapefile driver.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `chunkSize` | `"10000"` | Features per unit of work. Lightweight: the layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. Heavyweight: each partition reads this many features, so a large file is read in parallel. |
+| `chunkSize` | `"10000"` | Features per unit of work. The layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. |
 | `layerNumber` | `"0"` | Layer index for multi-layer formats (0-based). Ignored when `layerName` is set. |
 | `layerName` | `""` | Layer name (overrides the layer index when set). |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
 
 All other [OGR reader options](./vector#options) (`driverName`, …) are also available.
 
-Example — tuning the chunk size for performance:
-
-<CodeFromTest
-  code={shapefileExamples}
-  language="python"
-  functionName="READ_WITH_OPTIONS"
-  source="docs/tests/python/readers/shapefile_examples.py"
-  testFile="docs/tests/python/readers/test_shapefile_examples.py"
-  outputConstant="READ_WITH_OPTIONS_output"
-/>
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · shapefile_gbx">
-
-`shapefile_gbx` is the lightweight Shapefile reader (pyogrio-backed, no JAR). It reads `.shp` and zipped shapefiles and emits the same schema as the heavyweight `shapefile_ogr` reader.
+## Basic usage
 
 <CodeFromTest code={shapefileGbx} language="python" functionName="READ_SHAPEFILE_GBX"
   source="docs/tests/python/readers/shapefile_gbx_examples.py"
   testFile="docs/tests/python/readers/test_shapefile_gbx_examples.py" />
 
-It is the lightweight counterpart of the heavyweight `shapefile_ogr` reader, supporting Python and SQL bindings (not Scala).
+The reader has Python and SQL bindings.
 
 ### Typical pipeline: ingest into a table
 
@@ -91,60 +65,7 @@ df = spark.read.format("shapefile_gbx").load("/Volumes/main/geo/raw/")  # a fold
 df.write.mode("overwrite").saveAsTable("main.geo.parcels")               # Delta table on Databricks
 ```
 
-Reading a folder fans the files across the cluster (one partition per file), so ingest scales with the data — unlike a single-node `pyogrio.read_*` that parses one file on one machine. See [Benchmarking](../api/benchmarking) for light-vs-heavy ingest figures.
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · shapefile_ogr">
-
-Read ESRI Shapefile format using the `shapefile` reader.
-
-## Format Name
-
-`shapefile_ogr`
-
-## Supported Files
-
-- **`.shp`** - Standard shapefile (requires .shx, .dbf files)
-- **`.zip`** - ZIP files containing shapefiles
-- Directories with multiple shapefiles
-
-## Basic Usage
-
-### Python
-
-<CodeFromTest
-  code={shapefileExamples}
-  language="python"
-  functionName="READ_SHAPEFILE"
-  source="docs/tests/python/readers/shapefile_examples.py"
-  testFile="docs/tests/python/readers/test_shapefile_examples.py"
-  outputConstant="READ_SHAPEFILE_output"
-/>
-
-### Scala
-
-<CodeFromTest
-  code={shapefileScala}
-  language="scala"
-  functionName="READ_SHAPEFILE"
-  source="docs/tests/scala/readers/ShapefileExamples.scala"
-  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
-  outputConstant="READ_SHAPEFILE_output"
-/>
-
-### SQL
-
-<CodeFromTest
-  code={shapefileExamples}
-  language="sql"
-  functionName="SQL_SHAPEFILE"
-  source="docs/tests/python/readers/shapefile_examples.py"
-  testFile="docs/tests/python/readers/test_shapefile_examples.py"
-  outputConstant="SQL_SHAPEFILE_output"
-/>
-
-</TabItem>
-</Tabs>
+Reading a folder fans the files across the cluster, one partition per file, so ingest scales with the data. A single-node `pyogrio.read_*` parses one file on one machine. See [Benchmarking](../api/benchmarking) for ingest figures.
 
 ## Next Steps
 

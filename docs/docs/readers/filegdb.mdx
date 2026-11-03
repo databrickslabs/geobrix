@@ -3,39 +3,27 @@ sidebar_position: 7
 sidebar_label: GeoDatabase
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
-import filegdbExamples from '!!raw-loader!../../tests/python/readers/filegdb_examples.py';
-import filegdbScala from '!!raw-loader!../../tests/scala/readers/FileGDBExamples.scala';
 import filegdbGbx from '!!raw-loader!../../tests/python/readers/filegdb_gbx_examples.py';
 
 # File GeoDatabase Reader
 
-_Since:_ lightweight `file_gdb_gbx` **v0.4.0** · heavyweight `file_gdb_ogr` **v0.2.0**
+_Since:_ lightweight `file_gdb_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
 
-Both tiers produce the same `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema — see [Choosing an Execution Tier](../api/execution-tiers#the-one-line-swap).
-
-:::tip Benchmark & tradeoff
-The lightweight (`*_gbx`) and heavyweight readers emit the **same schema**, but your
-**compute usually decides the tier**. The lightweight tier needs **no JAR**
-and is the **only** option on Serverless and standard (shared) clusters. The
-heavyweight tier runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
-Where it is available it uses native GDAL on the JVM and tends to pull ahead on large workloads. See
-the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and methodology.
-:::
+`file_gdb_gbx` reads ESRI File Geodatabases. It is pure Python (pyogrio-backed) and needs no JAR.
+It produces the `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema.
 
 ## Options
 
-File Geodatabases contain multiple feature classes (layers); both tiers (lightweight `file_gdb_gbx`, heavyweight `file_gdb_ogr`) preset the OpenFileGDB driver and expose a feature-class selector. They take the same options, except where a row says otherwise.
+File Geodatabases contain multiple feature classes (layers). `file_gdb_gbx` presets the OpenFileGDB driver and exposes a feature-class selector.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `chunkSize` | `"10000"` | Features per unit of work. Lightweight: the layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. Heavyweight: each partition reads this many features, so a large file is read in parallel. |
+| `chunkSize` | `"10000"` | Features per unit of work. The layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. |
 | `layerNumber` | `"0"` | Feature-class index to read (0-based, first feature class). Ignored when `layerName` is set. |
 | `layerName` | `""` (first feature class) | Feature-class (layer) name to read; takes precedence over the index when set. |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
-| `codedDomains` | `"code"` | Lightweight only. Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default — the same values the heavyweight reader returns) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
+| `codedDomains` | `"code"` | Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
 
 All other [OGR reader options](./vector#options) (`driverName`, …) are also available.
 
@@ -44,27 +32,13 @@ transparently — GDAL opens it via `/vsizip/`, so just point `.load()` at the a
 directory of them); no option is required. This is the layout the
 [`file_gdb_gbx` writer](../writers/filegdb) produces with `zip=true`.
 
-Example — reading a specific feature class by name:
-
-<CodeFromTest
-  code={filegdbExamples}
-  language="python"
-  functionName="READ_WITH_LAYER"
-  source="docs/tests/python/readers/filegdb_examples.py"
-  testFile="docs/tests/python/readers/test_filegdb_examples.py"
-  outputConstant="READ_WITH_LAYER_output"
-/>
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight · file_gdb_gbx">
-
-`file_gdb_gbx` is the lightweight File Geodatabase reader (pyogrio-backed, no JAR). It reads ESRI File Geodatabases and emits the same schema as the heavyweight `file_gdb_ogr` reader.
+## Basic usage
 
 <CodeFromTest code={filegdbGbx} language="python" functionName="READ_FILEGDB_GBX"
   source="docs/tests/python/readers/filegdb_gbx_examples.py"
   testFile="docs/tests/python/readers/test_filegdb_gbx_examples.py" />
 
-It is the lightweight counterpart of the heavyweight `file_gdb_ogr` reader, supporting Python and SQL bindings (not Scala).
+The reader has Python and SQL bindings.
 
 ### Typical pipeline: ingest into a table
 
@@ -75,55 +49,7 @@ df = spark.read.format("file_gdb_gbx").load("/Volumes/main/geo/raw/")  # a folde
 df.write.mode("overwrite").saveAsTable("main.geo.parcels")              # Delta table on Databricks
 ```
 
-Reading a folder fans the files across the cluster (one partition per file), so ingest scales with the data — unlike a single-node `pyogrio.read_*` that parses one file on one machine. See [Benchmarking](../api/benchmarking) for light-vs-heavy ingest figures.
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight · file_gdb_ogr">
-
-Read ESRI File Geodatabase (.gdb) format - the standard multi-layer geospatial format used in ArcGIS.
-
-## Format Name
-
-`file_gdb_ogr`
-
-## Overview
-
-This is a named OGR Reader that uses the [OpenFileGDB](https://gdal.org/en/stable/drivers/vector/openfilegdb.html) driver. File Geodatabases are directory-based formats that can contain multiple feature classes (layers), making them ideal for complex geospatial datasets.
-
-## Basic Usage
-
-### Python
-
-<CodeFromTest
-  code={filegdbExamples}
-  language="python"
-  functionName="READ_FILEGDB"
-  source="docs/tests/python/readers/filegdb_examples.py"
-  testFile="docs/tests/python/readers/test_filegdb_examples.py"
-  outputConstant="READ_FILEGDB_output"
-/>
-
-### Scala
-
-<CodeFromTest
-  code={filegdbScala}
-  language="scala"
-  functionName="READ_FILEGDB"
-  source="docs/tests/scala/readers/FileGDBExamples.scala"
-  testFile="docs/tests/scala/readers/ReadersDocTest.scala"
-  outputConstant="READ_FILEGDB_output"
-/>
-
-### SQL
-
-<CodeFromTest
-  code={filegdbExamples}
-  language="sql"
-  functionName="SQL_FILEGDB"
-  source="docs/tests/python/readers/filegdb_examples.py"
-  testFile="docs/tests/python/readers/test_filegdb_examples.py"
-  outputConstant="SQL_FILEGDB_output"
-/>
+Reading a folder fans the files across the cluster, one partition per file, so ingest scales with the data. A single-node `pyogrio.read_*` parses one file on one machine. See [Benchmarking](../api/benchmarking) for ingest figures.
 
 ## Output Schema
 
@@ -141,32 +67,8 @@ root
 Column names in File Geodatabases are case-insensitive.
 :::
 
-## Key Features
-
-- **Multi-Layer**: Contains multiple feature classes (layers)
-- **Rich Attributes**: Full attribute support with domains and subtypes
-- **Topology**: Can include topology rules (read-only)
-- **ArcGIS Native**: The standard format for ESRI ArcGIS
-
-## Use Cases
-
-- **ArcGIS Migration**: Moving from ArcGIS workflows to Databricks
-- **Enterprise Geodata**: Reading complex organizational geospatial datasets
-- **Multi-Layer Datasets**: Working with related feature classes in one file
-- **Attribute-Rich Data**: Preserving domains, subtypes, and relationships
-
-## Limitations
-
-:::note Read-Only Access
-The OpenFileGDB driver provides read-only access. You cannot create, modify, or write File Geodatabases using this reader.
-:::
-
-- Supports File Geodatabase versions 9.x and later
-- Topology and relationship rules are read-only
-- Some advanced ArcGIS features may not be fully supported
-
-</TabItem>
-</Tabs>
+The reader is read-only: the OpenFileGDB driver cannot write. To write a File Geodatabase, use the
+[`file_gdb_gbx` writer](../writers/filegdb).
 
 ## Next Steps
 

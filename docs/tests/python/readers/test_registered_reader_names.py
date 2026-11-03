@@ -174,3 +174,12 @@ def test_docs_and_examples_name_only_registered_readers():
         "(the manifest datasources):\n  "
         + "\n  ".join(report)
     )
+
+
+def test_deferred_notebooks_still_need_a_rewrite():
+    """A notebook on the allowlist names a retired reader; a clean one must leave the list."""
+    stale = {file for file, *_ in rr.deferred_scan()}
+    assert stale == set(rr.DEFERRED_NOTEBOOKS), (
+        "these listed notebooks name no retired reader any more; remove them from "
+        f"registered_readers.DEFERRED_NOTEBOOKS: {sorted(set(rr.DEFERRED_NOTEBOOKS) - stale)}"
+    )

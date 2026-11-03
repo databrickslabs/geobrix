@@ -89,47 +89,47 @@ boroughs.write.format("geojson_gbx").mode("overwrite").save("/Volumes/.../out.ge
 
 ## Readers & writers
 
-Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyweight counterpart (`*_ogr` / `gdal` / `gtiff_gdal`). Both tiers emit the **same schema** and are held to row-count / byte parity, so they are drop-in swaps. Full options, output schemas, and examples: [Readers](https://databrickslabs.github.io/geobrix/docs/readers/overview) · [Writers](https://databrickslabs.github.io/geobrix/docs/writers/overview).
+Readers and writers (`*_gbx`) are pure Python and need no JAR. Full options, output schemas, and examples: [Readers](https://databrickslabs.github.io/geobrix/docs/readers/overview) · [Writers](https://databrickslabs.github.io/geobrix/docs/writers/overview).
 
 **Readers**
 
-| Format | Lightweight | Heavyweight |
-|---|---|---|
-| Raster (generic) | `raster_gbx` | `gdal` |
-| GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
-| COG | `cog_gbx` | — (light-only) |
-| NetCDF | `netcdf_gbx` | `netcdf_gdal` / `netcdf_ogr` |
-| Zarr | `zarr_gbx` (plain stores; `gbx_zarr_read` adds versions) | — (light-only) |
-| PMTiles | `pmtiles_gbx` | — (light-only) |
-| File lister | `file_gbx` | — (light-only) |
-| LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
-| EXIF/GPS (images) | `exif_gbx` | — (light-only) |
-| Vector (generic) | `vector_gbx` | `ogr` |
-| Shapefile | `shapefile_gbx` | `shapefile_ogr` |
-| GeoJSON | `geojson_gbx` | `geojson_ogr` |
-| GeoJSONL | `geojsonl_gbx` | — (light-only reader) |
-| GeoPackage | `gpkg_gbx` | `gpkg_ogr` |
-| File Geodatabase | `file_gdb_gbx` | `file_gdb_ogr` |
+| Format | Reader |
+|---|---|
+| Raster (generic) | `raster_gbx` |
+| GeoTIFF | `gtiff_gbx` |
+| COG | `cog_gbx` |
+| NetCDF | `netcdf_gbx` |
+| Zarr | `zarr_gbx` (plain stores; `gbx_zarr_read` adds versions) |
+| PMTiles | `pmtiles_gbx` |
+| File lister | `file_gbx` |
+| LiDAR (LAS/LAZ) | `lidar_gbx` |
+| EXIF/GPS (images) | `exif_gbx` |
+| Vector (generic) | `vector_gbx` |
+| Shapefile | `shapefile_gbx` |
+| GeoJSON | `geojson_gbx` |
+| GeoJSONL | `geojsonl_gbx` |
+| GeoPackage | `gpkg_gbx` |
+| File Geodatabase | `file_gdb_gbx` |
 
 **Writers**
 
-| Format | Lightweight | Heavyweight |
-|---|---|---|
-| Raster (generic) | `raster_gbx` | `gdal` |
-| GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
-| COG | `cog_gbx` | — (light-only) |
-| Zarr | `gbx_zarr_write` (a function, not a DataSource) | — (light-only) |
-| PMTiles | `pmtiles_gbx` | `pmtiles` |
-| NetCDF | `netcdf_gbx` | — (light-only) |
-| LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
-| Vector (generic) | `vector_gbx` | — (light-only) |
-| Shapefile | `shapefile_gbx` | — (light-only) |
-| GeoJSON | `geojson_gbx` | — (light-only) |
-| GeoJSONL — *sharded, multi-file* | `geojsonl_gbx` | `geojsonl_ogr` |
-| GeoPackage | `gpkg_gbx` | — (light-only) |
-| File Geodatabase | `file_gdb_gbx` | — (light-only) |
+| Format | Reader |
+|---|---|
+| Raster (generic) | `raster_gbx` |
+| GeoTIFF | `gtiff_gbx` |
+| COG | `cog_gbx` |
+| Zarr | `gbx_zarr_write` (a function, not a DataSource) |
+| PMTiles | `pmtiles_gbx` |
+| NetCDF | `netcdf_gbx` |
+| LiDAR (LAS/LAZ) | `lidar_gbx` |
+| Vector (generic) | `vector_gbx` |
+| Shapefile | `shapefile_gbx` |
+| GeoJSON | `geojson_gbx` |
+| GeoJSONL — *sharded, multi-file* | `geojsonl_gbx` |
+| GeoPackage | `gpkg_gbx` |
+| File Geodatabase | `file_gdb_gbx` |
 
-Single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer (multi-file, one shard per partition, no driver merge — the recommended writer at any scale) is available in **both** tiers.
+The **sharded GeoJSONL** writer writes one shard per partition, with no driver merge. It is the recommended vector writer at any scale.
 
 Light vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
 

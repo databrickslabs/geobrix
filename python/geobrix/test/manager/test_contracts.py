@@ -1197,7 +1197,7 @@ def test_oracle_gate_names_a_missing_table_a_missing_row_and_a_multi_row_example
         for f in gates.oracle_findings([_row(fn.sql_name, example="nonexistent")])
     )
     with_variants = next(
-        c for c in getattr(oracles, fn.oracle) if c.fn == fn.sql_name and c.variants
+        c for c in oracles.TABLES[fn.oracle] if c.fn == fn.sql_name and c.variants
     )
     assert any(
         "is not a single-row case" in f

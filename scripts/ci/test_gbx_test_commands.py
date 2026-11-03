@@ -61,7 +61,8 @@ def _run_parity(sandbox, *args):
 def test_the_default_run_covers_every_test_parity_file_in_the_repo(sandbox):
     _parity_sandbox(sandbox, TEST_ROOT)
     every = {_repo_rel(p) for p in TEST_ROOT.rglob("test_parity*.py")}
-    assert len(every) >= 18  # the files the old fixed list missed are among them
+    # Not a count of today's files (they come and go): a floor that only catches a glob matching nothing.
+    assert len(every) >= 5
 
     res, ran = _run_parity(sandbox)
 

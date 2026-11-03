@@ -344,3 +344,48 @@ def test_the_tiles_of_a_pyramid_are_exactly_the_expected_ones_as_png_images():
         oracles._check_rows(case, [row(8, 127, 84), row(8, 127, 85, _png(255, 4))], ())
         is not None
     )  # size
+
+
+def test_the_grid_and_vector_generator_kinds_can_fail():
+    import mapbox_vector_tile as mvt
+    from shapely import wkb
+    from shapely.geometry import Point, Polygon
+
+    from databricks.labs.gbx.bench import oracles
+
+    def judge(kind, expect, rows):
+        return oracles._check_rows(
+            oracles.Case("probe", "f", (), kind, expect), rows, ()
+        )
+
+    big = 5233961835417305087  # past 2**53: a float would round it
+    cell = lambda c: {"cellid": c}  # noqa: E731
+    assert judge("cell_rows", [big, 1], [cell(1), cell(big)]) is None
+    assert judge("cell_rows", [big, 1], [cell(1)]) is not None  # a cell missing
+    assert (
+        judge("cell_rows", [big, 1], [cell(1), cell(1), cell(big)]) is not None
+    )  # twice
+    assert judge("cell_rows", [big], [cell(float(big))]) is not None  # through a float
+
+    tri = lambda *v: {"triangle": wkb.dumps(Polygon(v))}  # noqa: E731
+    t = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+    assert judge("triangles", [t], [tri(*t[::-1])]) is None  # vertex order aside
+    assert (
+        judge("triangles", [t], [tri((0.0, 0.0), (2.0, 0.0), (0.0, 1.0))]) is not None
+    )
+    assert judge("triangles", [t], []) is not None
+
+    pt = lambda x, y, z: {"elevation_point": wkb.dumps(Point(x, y, z))}  # noqa: E731
+    assert judge("elev_points", [(1.0, 2.0, 3.0)], [pt(1.0, 2.0, 3.0)]) is None
+    assert judge("elev_points", [(1.0, 2.0, 3.0)], [pt(1.0, 2.0, 3.5)]) is not None
+    assert judge("elev_points", [(1.0, 2.0, 3.0)], [pt(1.0, 2.0, 3.0)] * 2) is not None
+
+    blob = mvt.encode(
+        {"name": "l", "features": [{"geometry": "POINT(1 1)", "properties": {"a": 1}}]}
+    )
+    row = lambda z, b=blob: {"z": z, "x": 0, "y": 0, "mvt_bytes": b}  # noqa: E731
+    want = {"tiles": [(0, 0, 0)], "layer": "l", "props": {"a": 1}}
+    assert judge("mvt_tiles", want, [row(0)]) is None
+    assert judge("mvt_tiles", {**want, "layer": "x"}, [row(0)]) is not None
+    assert judge("mvt_tiles", {**want, "props": {"a": 2}}, [row(0)]) is not None
+    assert judge("mvt_tiles", want, [row(1)]) is not None

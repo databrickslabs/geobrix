@@ -45,8 +45,9 @@ case class Custom_GeometryKRingExplode(
             val modeStr = if (mRaw == null) GeomDilation.DEFAULT_MODE else mRaw.asInstanceOf[UTF8String].toString
             val cvRaw   = coverage.eval(input)
             val coverageStr = if (cvRaw == null) GeomDilation.DEFAULT_COVERAGE else cvRaw.asInstanceOf[UTF8String].toString
+            GeomDilation.requireMode(modeStr) // PARAMETER: an unknown mode raises, never zero rows
             val sys     = Custom_GridSpec.systemFromRow(gridRaw.asInstanceOf[InternalRow])
-            val res     = Custom_GridSpec.asInt(resRaw, "resolution")
+            val res     = Custom_GridSpec.asResolution(resRaw, "resolution") // PARAMETER: whole number, as text too
             val kVal    = Custom_GridSpec.asInt(kRaw, "k")
             GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
                 val geomDecoded = Custom_PointAsCell.decodeGeom(geomRaw)

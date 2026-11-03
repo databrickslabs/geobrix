@@ -192,36 +192,20 @@ def _quadbin_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
 
 @udtf(returnType="cellid: bigint")
 class _QuadbinGeomKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _quadbin.geometry_k_ring(
-                geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _quadbin_geomkring(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: bigint")
 class _QuadbinGeomKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _quadbin.geometry_k_loop(
-                geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _quadbin_geomkloop(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 def _kring(cell, k):
@@ -572,76 +556,38 @@ def _bng_tessellate(geom, res, keep_core_geom=False):
 
 @udtf(returnType="cellid: string")
 class _BngKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, cellid, k):
-        if cellid is None or k is None:
-            return
-        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
-        if cid is None:
-            return
-        for c in _bng.k_ring(cid, int(k)):
-            yield (_bng.format(c),)
+        for c in _bng_kring(cellid, k) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string")
 class _BngKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, cellid, k):
-        if cellid is None or k is None:
-            return
-        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
-        if cid is None:
-            return
-        for c in _bng.k_loop(cid, int(k)):
-            yield (_bng.format(c),)
+        for c in _bng_kloop(cellid, k) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string")
 class _BngGeomKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        k_int = int(k)  # bad k PARAMETER -> raises
-        try:
-            for c in sorted(
-                _bng.geometry_k_ring_str(
-                    geom,
-                    _norm_res(res),
-                    k_int,
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _bng_geomkring(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string")
 class _BngGeomKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or res is None or k is None:
-            return
-        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        k_int = int(k)  # bad k PARAMETER -> raises
-        try:
-            for c in sorted(
-                _bng.geometry_k_loop_str(
-                    geom,
-                    _norm_res(res),
-                    k_int,
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _bng_geomkloop(geom, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: string, core: boolean, chip: binary")
@@ -973,46 +919,20 @@ def _custom_geomkloop(geom, grid, res, k, mode="boundary-out", coverage="coveras
 
 @udtf(returnType="cellid: bigint")
 class _CustomGeomKRingExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, grid, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or grid is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _custom.geometry_k_ring(
-                _custom.conf_from_row(grid),
-                geom,
-                int(res),
-                int(k),
-                mode or "boundary-out",
-                coverage or "coveras",
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _custom_geomkring(geom, grid, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: bigint")
 class _CustomGeomKLoopExplode:
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
+
     def eval(self, geom, grid, res, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or grid is None or res is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in _custom.geometry_k_loop(
-                _custom.conf_from_row(grid),
-                geom,
-                int(res),
-                int(k),
-                mode or "boundary-out",
-                coverage or "coveras",
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
+        for c in _custom_geomkloop(geom, grid, res, k, mode, coverage) or ():
+            yield (c,)
 
 
 def _custom_kring(cell, grid, k):
@@ -1284,54 +1204,20 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
 
 @udtf(returnType="cellid: bigint")
 class _H3GeomKRingExplode:
-    """SQL-LATERAL UDTF: geometry-aware h3 k-ring, one row per cell id."""
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
 
     def eval(self, geom, resolution, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or resolution is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in sorted(
-                _h3mod.geom_expand(
-                    "ring",
-                    geom,
-                    int(resolution),
-                    int(k),
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad geometry DATA -> zero rows
+        for c in _h3_geomkring(geom, resolution, k, mode, coverage) or ():
+            yield (c,)
 
 
 @udtf(returnType="cellid: bigint")
 class _H3GeomKLoopExplode:
-    """SQL-LATERAL UDTF: geometry-aware h3 k-loop, one row per cell id."""
+    """One row per cell of the array function of the same name; a NULL or unreadable input gives no rows."""
 
     def eval(self, geom, resolution, k, mode="boundary-out", coverage="coveras"):
-        if geom is None or resolution is None or k is None:
-            return
-        _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
-        try:
-            for c in sorted(
-                _h3mod.geom_expand(
-                    "loop",
-                    geom,
-                    int(resolution),
-                    int(k),
-                    mode or "boundary-out",
-                    coverage or "coveras",
-                )
-            ):
-                yield (c,)
-        except ValueError:
-            raise  # re-raise param errors
-        except Exception:
-            return  # bad cell ids DATA -> zero rows
+        for c in _h3_geomkloop(geom, resolution, k, mode, coverage) or ():
+            yield (c,)
 
 
 def _registrar_groups() -> List[_register.Group]:
@@ -1551,35 +1437,6 @@ def quadbin_cellunion_agg(cellid: ColLike) -> Column:
     return _cellunion_agg_udf(_col(cellid))
 
 
-# The two *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier).
-
-_QUADBIN_EXPLODE_HINT = (
-    "Light quadbin {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def quadbin_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_quadbin_geomkringexplode(geom, res, k). No Column form."""
-    raise NotImplementedError(
-        _QUADBIN_EXPLODE_HINT.format(
-            name="quadbin_geomkringexplode", udtf="gbx_quadbin_geomkringexplode"
-        )
-    )
-
-
-def quadbin_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_quadbin_geomkloopexplode(geom, res, k). No Column form."""
-    raise NotImplementedError(
-        _QUADBIN_EXPLODE_HINT.format(
-            name="quadbin_geomkloopexplode", udtf="gbx_quadbin_geomkloopexplode"
-        )
-    )
-
-
 # --- BNG aggregate Column wrappers (the scalars are gridx.bng.functions) --------------------
 
 
@@ -1597,83 +1454,9 @@ def bng_cellintersection_agg(input_chip: ColLike) -> Column:
     return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
 
 
-# The five *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier). They
-# exist here as importable names for binding parity, but raise NotImplementedError
-# pointing to the registered UDTF; invoke them via SQL LATERAL instead.
-
-_EXPLODE_HINT = (
-    "Light BNG {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def bng_kringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kringexplode(cellid, k). No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(name="bng_kringexplode", udtf="gbx_bng_kringexplode")
-    )
-
-
-def bng_kloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kloopexplode(cellid, k). No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(name="bng_kloopexplode", udtf="gbx_bng_kloopexplode")
-    )
-
-
-def bng_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkringexplode(geom, res, k) t. No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(
-            name="bng_geomkringexplode", udtf="gbx_bng_geomkringexplode"
-        )
-    )
-
-
-def bng_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkloopexplode(geom, res, k) t. No Column form."""
-    raise NotImplementedError(
-        _EXPLODE_HINT.format(
-            name="bng_geomkloopexplode", udtf="gbx_bng_geomkloopexplode"
-        )
-    )
-
-
 # --- Custom-grid Column wrappers (mirror heavy gridx.custom.functions) ------------------------
 # Cell ids are BIGINT; geometry outputs are plain WKB (NO SRID). custom_grid ALWAYS
 # supplies all 8 args (defaulting srid=-1) so the validating @udf sees a fixed arity.
-
-
-# The two *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier).
-
-_CUSTOM_EXPLODE_HINT = (
-    "Light custom {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def custom_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_custom_geomkringexplode(geom, grid, res, k). No Column form."""
-    raise NotImplementedError(
-        _CUSTOM_EXPLODE_HINT.format(
-            name="custom_geomkringexplode", udtf="gbx_custom_geomkringexplode"
-        )
-    )
-
-
-def custom_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_custom_geomkloopexplode(geom, grid, res, k). No Column form."""
-    raise NotImplementedError(
-        _CUSTOM_EXPLODE_HINT.format(
-            name="custom_geomkloopexplode", udtf="gbx_custom_geomkloopexplode"
-        )
-    )
 
 
 # --- cellfill Column wrappers ------------------------------------------------
@@ -1757,41 +1540,4 @@ def custom_cellfill(
         _col(k),
         _method,
         _col(power),
-    )
-
-
-# --- H3 geometry-aware kring/kloop Column wrappers --------------------------
-# Geom-taking, exactly like the other grids: geom column + resolution + k
-# [+ mode]. The registered gbx_h3_geomkring/kloop UDFs do the whole job in
-# Python via the h3 library (polyfill + neighbour walk) — no Databricks product
-# functions, runs anywhere. gridx.h3.functions.geomkring/geomkloop are thin
-# aliases of these.
-
-
-# The two *explode functions are SQL-LATERAL-only table functions in the light
-# tier — they have no Python DataFrame Column form (unlike the heavy tier).
-
-_H3_EXPLODE_HINT = (
-    "Light h3 {name} is a streaming table function (registered UDTF {udtf}): it "
-    "emits one row per cell with no array materialized, so it has no pyspark "
-    "Column form by design. Invoke via SQL LATERAL, e.g. "
-    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
-)
-
-
-def h3_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_h3_geomkringexplode(geom, resolution, k[, mode]). No Column form."""
-    raise NotImplementedError(
-        _H3_EXPLODE_HINT.format(
-            name="h3_geomkringexplode", udtf="gbx_h3_geomkringexplode"
-        )
-    )
-
-
-def h3_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_h3_geomkloopexplode(geom, resolution, k[, mode]). No Column form."""
-    raise NotImplementedError(
-        _H3_EXPLODE_HINT.format(
-            name="h3_geomkloopexplode", udtf="gbx_h3_geomkloopexplode"
-        )
     )

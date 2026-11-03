@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.gridx.bng.generators
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.{BNG, GeomDilation}
+import com.databricks.labs.gbx.kernels.Coerce
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -37,13 +38,15 @@ case class BNG_GeometryKRingExplode(
         if (geometryRaw == null || resolutionRaw == null || kRaw == null) {
             Seq.empty
         } else {
-            val resolutionVal = resolution.dataType match {
-                case StringType  => BNG.resolutionMap(resolutionRaw.asInstanceOf[UTF8String].toString)
-                case IntegerType => resolutionRaw.asInstanceOf[Int]
+            // PARAMETERS: a resolution BNG does not define and an unknown mode raise, naming the value; never zero rows
+            val resolutionVal = resolutionRaw match {
+                case i: java.lang.Integer => Coerce.bngResolution(i, digitStrings = false)
+                case other                => Coerce.bngResolution(other.toString, digitStrings = true)
             }
             val kVal = kRaw.asInstanceOf[Int]
             val modeStr = if (modeRaw == null) GeomDilation.DEFAULT_MODE else modeRaw.asInstanceOf[UTF8String].toString
             val coverageStr = if (coverageRaw == null) GeomDilation.DEFAULT_COVERAGE else coverageRaw.asInstanceOf[UTF8String].toString
+            GeomDilation.requireMode(modeStr)
 
             GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
                 val geometryVal = geom.dataType match {

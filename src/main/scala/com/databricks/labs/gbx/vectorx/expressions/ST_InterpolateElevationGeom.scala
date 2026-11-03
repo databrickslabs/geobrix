@@ -78,6 +78,8 @@ case class ST_InterpolateElevationGeom(
         val ptsElemType = pointsArray.dataType.asInstanceOf[org.apache.spark.sql.types.ArrayType].elementType
         val pts = geomsFromArrayData(pointsVal.asInstanceOf[ArrayData], ptsElemType)
         if (pts.isEmpty) return Iterator.empty
+        // a NULL required argument gives no rows, as explode(NULL) does
+        if (Seq(mergeTolerance, snapTolerance, splitPointFinder, gridOrigin, gridCols, gridRows, cellSizeX, cellSizeY).exists(_.eval(input) == null)) return Iterator.empty
 
         val breaklines: Seq[LineString] = {
             val bVal = breaklinesArray.eval(input)

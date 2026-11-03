@@ -603,6 +603,10 @@ def sql_type(t: str) -> str:
     """Symbolic manifest type -> SQL type text."""
     if t == "ARRAY<TILE>":
         return f"array<{TILE_SQL}>"
+    if (
+        t == "STRUCT"
+    ):  # a struct of any fields (a feature's attributes): NULL casts to the empty struct
+        return "struct<>"
     return TILE_SQL if t == "TILE" else t
 
 

@@ -96,6 +96,10 @@ def _mvt_tile_return():
 @udtf(returnType=_mvt_tile_return())
 class _AsMvtPyramidUDTF:
     def eval(self, geom, attrs, min_z: int, max_z: int, layer_name=None, extent=None):
+        if (
+            min_z is None or max_z is None
+        ):  # a NULL required argument: no rows, as explode(NULL)
+            return
         ln = "layer" if layer_name is None else str(layer_name)
         ex = _mvt.DEFAULT_EXTENT if extent is None else int(extent)
         # Yield incrementally — never build the full list (fan-out OOM guard).
@@ -166,6 +170,12 @@ class _TriangulateUDTF:
         mode=None,
     ):
         _validate_mode(mode)
+        if (
+            merge_tolerance is None
+            or snap_tolerance is None
+            or split_point_finder is None
+        ):
+            return  # a NULL required argument: no rows, as explode(NULL)
         import numpy as np
         from shapely import to_wkb
         from shapely.geometry import Polygon
@@ -193,6 +203,8 @@ def _elevation_schema():
 
 def _emit_elevation(points, breaklines, mt, st, spf, mode, cell_iter, srid):
     _validate_mode(mode)
+    if mt is None or st is None or spf is None:
+        return  # a NULL required argument: no rows, as explode(NULL)
     import numpy as np
     from shapely import set_srid, to_wkb
     from shapely.geometry import Point
@@ -231,6 +243,9 @@ class _InterpElevBBoxUDTF:
         srid,
         mode=None,
     ):
+        if None in (xmin, ymin, xmax, ymax, width_px, height_px, srid):
+            _validate_mode(mode)
+            return  # a NULL required argument: no rows, as explode(NULL)
         yield from _emit_elevation(
             points,
             breaklines,
@@ -270,6 +285,9 @@ class _InterpElevGeomUDTF:
 
         from ._geom import parse_geom
 
+        if None in (grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y):
+            _validate_mode(mode)
+            return  # a NULL required argument: no rows, as explode(NULL)
         og = parse_geom(grid_origin)
         ox, oy = (og.x, og.y) if og is not None else (0.0, 0.0)
         srid = get_srid(og) if og is not None else 0
@@ -478,99 +496,6 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
         spark = SparkSession.builder.getOrCreate()
     _register.run_groups(_registrar_groups(), spark, only)
     globals()["_gbx_registered"] = True
-
-
-def st_asmvt_pyramid(
-    geom: ColLike,
-    attrs: ColLike,
-    min_z: ColLike,
-    max_z: ColLike,
-    layer_name: Union[ColLike, None] = None,
-    extent: Union[ColLike, None] = None,
-):
-    """Generator: one (z,x,y,mvt_bytes) row per intersecting tile across [min_z,max_z].
-
-    In the light tier the pyramid generator is a Python UDTF and is invoked only via
-    SQL LATERAL — it has no Python DataFrame Column form (unlike the heavy tier, which
-    exposes a Column API for this generator). Calling this wrapper directly raises
-    NotImplementedError; instead register and call it as a SQL LATERAL table function:
-
-        SELECT t.* FROM features, LATERAL gbx_st_asmvt_pyramid(geom, attrs, 0, 12, 'layer', 4096) t
-
-    The output schema (z,x,y,mvt_bytes) matches the heavyweight generator and feeds
-    gbx_pmtiles_agg downstream, so the two tiers are interchangeable at the SQL level.
-    """
-    raise NotImplementedError(
-        "Light st_asmvt_pyramid has no Python Column form; invoke the registered UDTF as a "
-        "SQL LATERAL table function: "
-        "SELECT t.* FROM <df>, LATERAL gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, layer, extent) t"
-    )
-
-
-def st_triangulate(
-    points_array,
-    breaklines_array,
-    merge_tolerance,
-    snap_tolerance,
-    split_point_finder,
-    mode: ColLike = "constrained",
-):
-    """Constrained Delaunay triangulation. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_triangulate(points_array, breaklines_array, mt, st, spf, mode) t
-    mode='conforming' is heavy-only."""
-    raise NotImplementedError(
-        "Light st_triangulate has no Python Column form; invoke the registered UDTF via SQL LATERAL."
-    )
-
-
-def st_interpolateelevationbbox(
-    points_array,
-    breaklines_array,
-    merge_tolerance,
-    snap_tolerance,
-    split_point_finder,
-    xmin,
-    ymin,
-    xmax,
-    ymax,
-    width_px,
-    height_px,
-    srid,
-    mode: ColLike = "constrained",
-):
-    """Interpolate barycentric Z over the constrained TIN at bbox grid centers. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_interpolateelevationbbox(
-        points_array, breaklines_array, mt, st, spf, xmin, ymin, xmax, ymax, width_px, height_px, srid, mode) t
-    One POINT Z WKB per in-hull cell (outside-hull dropped). mode='conforming' is heavy-only.
-    """
-    raise NotImplementedError(
-        "Light st_interpolateelevationbbox has no Python Column form; "
-        "invoke the registered UDTF via SQL LATERAL."
-    )
-
-
-def st_interpolateelevationgeom(
-    points_array,
-    breaklines_array,
-    merge_tolerance,
-    snap_tolerance,
-    split_point_finder,
-    grid_origin,
-    grid_cols,
-    grid_rows,
-    cell_size_x,
-    cell_size_y,
-    mode: ColLike = "constrained",
-):
-    """Interpolate barycentric Z over the constrained TIN at origin-grid centers. Invoke via SQL LATERAL:
-    SELECT t.* FROM <df>, LATERAL gbx_st_interpolateelevationgeom(
-        points_array, breaklines_array, mt, st, spf, origin, cols, rows, cell_x, cell_y, mode) t
-    SRID is taken from the origin EWKB. One POINT Z WKB per in-hull cell (outside-hull dropped).
-    mode='conforming' is heavy-only."""
-    raise NotImplementedError(
-        "Light st_interpolateelevationgeom has no Python Column form; "
-        "invoke the registered UDTF via SQL LATERAL."
-    )
 
 
 def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:

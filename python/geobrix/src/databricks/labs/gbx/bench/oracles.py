@@ -51,6 +51,11 @@ class Case:
     # carries: a (WKT, SRID) pair fixes the SRID (0 for none), a bare WKT means the SRID of the first argument.
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
     # Generators also use no_rows | windows | cells, and error_tile means exactly one row.
+    # cell_rows: `expect` is the cell ids the rows' `cellid` column must hold, each once, in any order, as Python ints
+    # (a BIGINT id never passes through a float) or strings. triangles: `expect` is the triangles (three (x, y) vertices
+    # each) the `triangle` column's polygons must be, vertex order aside. elev_points: `expect` is the (x, y, z) of each
+    # `elevation_point` row (a dict may add "srid"). mvt_tiles: `expect` is {"tiles": [(z, x, y)], "layer": name,
+    # "props": {..}}; every row's `mvt_bytes` decodes to that layer with one feature of those properties.
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
     # Aggregates use merged_equals | pixels | error_group | null; `args[0]` is the group's rows.
@@ -146,6 +151,10 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "quadbin_res_3_5_raises_geomk",
             "quadbin_res_digit_string_geomk",
             "quadbin_inf_point_geomk",
+            "qb_geomkringx_digit_res",
+            "qb_geomkringx_bad_mode",
+            "qb_geomkringx_res_3_5",
+            "qb_geomkloopx_bad_mode",
         )
     },
     **{
@@ -3730,6 +3739,13 @@ def _ddl_type(value, param) -> str:
         return param.session[0]
     if isinstance(value, dict) and param.session[0].upper().startswith("MAP<"):
         return param.session[0].lower()  # a map parameter (a band map)
+    if param.session[0] == "STRUCT" and isinstance(value, dict):
+        # a struct of any fields (a feature's attributes): the type of each value
+        return (
+            "struct<"
+            + ",".join(f"{k}:{_ddl_type(v, _Scalar())}" for k, v in value.items())
+            + ">"
+        )
     if isinstance(value, dict) or "TILE" in param.session:
         return TILE_SQL
     if isinstance(value, bool):
@@ -3746,6 +3762,12 @@ def _ddl_type(value, param) -> str:
     if isinstance(value, str):
         return "string"
     return _SQL[param.session[0]] if param.session[0] in _SQL else _unmapped(param)
+
+
+class _Scalar:
+    """A stand-in parameter for the type of one field of a struct argument."""
+
+    session = ("",)
 
 
 def _unmapped(param):
@@ -3970,6 +3992,47 @@ def _check_window_batch(case: Case, tiles: list, arg_rows) -> Optional[str]:
     return f"{case.cid}: {sum((want - got).values())} expected pieces missing {sorted((want - got))[:2]}, unexpected {sorted((got - want))[:2]}"
 
 
+def _check_cell_rows(case: Case, rows: list) -> Optional[str]:
+    """The rows' `cellid` values are exactly `case.expect`, each once, as the type the expectation has."""
+    got = [_field(r, "cellid") for r in rows]
+    want = sorted(case.expect)
+    if any(type(c) is not type(want[0]) for c in got):
+        return f"{case.cid}: cell ids are {sorted({type(c).__name__ for c in got})}, want {type(want[0]).__name__}"
+    return (
+        None
+        if sorted(got) == want
+        else f"{case.cid}: {len(got)} rows {sorted(got)}, want {want}"
+    )
+
+
+def _check_windows(case: Case, tiles: list, args) -> Optional[str]:
+    """The sub-tiles are exactly the windows of `case.expect`, each with the pixels of its window."""
+    from rasterio.io import MemoryFile
+    from rasterio.windows import Window
+
+    if any(_field(t, "raster") is None for t in tiles):
+        return f"{case.cid}: a sub-tile has no raster"
+    with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
+        seen = []
+        for t in tiles:
+            win = _window_of(t, src)
+            declared = _field(t, "window")
+            if declared is not None and tuple(declared[k] for k in _WINDOW_KEYS) != win:
+                return f"{case.cid}: window field {tuple(declared[k] for k in _WINDOW_KEYS)}, pixels say {win}"
+            want = float(src.read(1, window=Window(*win), masked=True).sum())
+            with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as got:
+                if abs(float(got.read(1, masked=True).sum()) - want) > 1e-6 * max(
+                    1.0, abs(want)
+                ):
+                    return f"{case.cid}: pixel sum differs in window {win}"
+            seen.append(win)
+    return (
+        None
+        if sorted(seen) == sorted(case.expect)
+        else f"{case.cid}: windows {sorted(seen)}, want {sorted(case.expect)}"
+    )
+
+
 def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     """Judge the rows a generator produced for one case."""
     from databricks.labs.gbx._geom import parse_geom
@@ -3990,33 +4053,9 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
     if case.kind == "windows_batch":
         return _check_window_batch(case, tiles, args)
     if case.kind == "windows":
-        from rasterio.io import MemoryFile
-        from rasterio.windows import Window
-
-        if any(_field(t, "raster") is None for t in tiles):
-            return f"{case.cid}: a sub-tile has no raster"
-        with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
-            seen = []
-            for t in tiles:
-                win = _window_of(t, src)
-                declared = _field(t, "window")
-                if (
-                    declared is not None
-                    and tuple(declared[k] for k in _WINDOW_KEYS) != win
-                ):
-                    return f"{case.cid}: window field {tuple(declared[k] for k in _WINDOW_KEYS)}, pixels say {win}"
-                want = float(src.read(1, window=Window(*win), masked=True).sum())
-                with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as got:
-                    if abs(float(got.read(1, masked=True).sum()) - want) > 1e-6 * max(
-                        1.0, abs(want)
-                    ):
-                        return f"{case.cid}: pixel sum differs in window {win}"
-                seen.append(win)
-        return (
-            None
-            if sorted(seen) == sorted(case.expect)
-            else f"{case.cid}: windows {sorted(seen)}, want {sorted(case.expect)}"
-        )
+        return _check_windows(case, tiles, args)
+    if case.kind in _ROW_CHECKS:
+        return _ROW_CHECKS[case.kind](case, rows)
     if case.kind == "cells":
         e = case.expect
         got = {
@@ -4048,6 +4087,73 @@ def _check_rows(case: Case, rows: list, args) -> Optional[str]:
             return f"{case.cid}: core chips are not whole cells"
         return None
     raise ValueError(case.kind)
+
+
+def _check_vector_rows(case: Case, rows: list) -> Optional[str]:
+    """Judge the rows of a vector fan-out (see `Case`): triangles, elevation points or MVT tiles."""
+    from databricks.labs.gbx._geom import parse_geom
+
+    if case.kind == "triangles":
+        got = []
+        for r in rows:
+            poly = parse_geom(bytes(_field(r, "triangle")))
+            ring = [
+                (round(x, 9), round(y, 9)) for x, y in list(poly.exterior.coords)[:-1]
+            ]
+            if len(ring) != 3:
+                return f"{case.cid}: a triangle with {len(ring)} vertices"
+            got.append(frozenset(ring))
+        want = [
+            frozenset((round(x, 9), round(y, 9)) for x, y in t) for t in case.expect
+        ]
+        return (
+            None
+            if len(got) == len(want)
+            and set(got) == set(want)
+            and len(set(got)) == len(got)
+            else f"{case.cid}: {len(got)} triangles {sorted(map(sorted, got))}, want {sorted(map(sorted, want))}"
+        )
+    if case.kind == "elev_points":
+        want = case.expect
+        got = []
+        for r in rows:
+            pt = parse_geom(bytes(_field(r, "elevation_point")))
+            if not pt.has_z:
+                return f"{case.cid}: a point without Z"
+            got.append((pt.x, pt.y, pt.z))
+        got.sort()
+        want = sorted(want)
+        ok = len(got) == len(want) and all(
+            all(abs(a - b) <= 1e-9 * max(1.0, abs(b)) for a, b in zip(g, w))
+            for g, w in zip(got, want)
+        )
+        return None if ok else f"{case.cid}: {len(got)} points {got}, want {want}"
+    import mapbox_vector_tile as mvt
+
+    want = case.expect
+    got = sorted(
+        (int(_field(r, "z")), int(_field(r, "x")), int(_field(r, "y"))) for r in rows
+    )
+    if got != sorted(want["tiles"]):
+        return f"{case.cid}: tiles {got}, want {sorted(want['tiles'])}"
+    for r in rows:
+        layer = mvt.decode(bytes(_field(r, "mvt_bytes"))).get(want["layer"])
+        feats = layer["features"] if layer else []
+        if len(feats) != 1:
+            return f"{case.cid}: layer {want['layer']!r} holds {len(feats)} features in tile {_field(r, 'z')}/{_field(r, 'x')}/{_field(r, 'y')}"
+        if any(feats[0]["properties"].get(k) != v for k, v in want["props"].items()):
+            return (
+                f"{case.cid}: properties {feats[0]['properties']}, want {want['props']}"
+            )
+    return None
+
+
+_ROW_CHECKS = {
+    "cell_rows": _check_cell_rows,
+    "triangles": lambda case, rows: _check_vector_rows(case, rows),
+    "elev_points": lambda case, rows: _check_vector_rows(case, rows),
+    "mvt_tiles": lambda case, rows: _check_vector_rows(case, rows),
+}
 
 
 def _check_xyz_tiles(case: Case, rows: list) -> Optional[str]:

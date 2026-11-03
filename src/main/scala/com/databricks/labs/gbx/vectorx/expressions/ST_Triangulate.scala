@@ -57,6 +57,8 @@ case class ST_Triangulate(
         val ptsElemType = pointsArray.dataType.asInstanceOf[org.apache.spark.sql.types.ArrayType].elementType
         val pts = geomsFromArrayData(pointsVal.asInstanceOf[ArrayData], ptsElemType)
         if (pts.isEmpty) return Iterator.empty
+        // a NULL required argument gives no rows, as explode(NULL) does
+        if (Seq(mergeTolerance, snapTolerance, splitPointFinder).exists(_.eval(input) == null)) return Iterator.empty
 
         val breaklines: Seq[Geometry] = {
             val bVal = breaklinesArray.eval(input)

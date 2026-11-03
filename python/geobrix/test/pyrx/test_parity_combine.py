@@ -158,7 +158,8 @@ def _canonical_tiles():
 
 
 def _tile_struct(b: bytes) -> dict:
-    """Minimal v1-compatible tile struct (3-field schema accepted by both tiers)."""
+    """A minimal 3-field tile struct. Only a scalar column takes it (`rst_align_to` below); an array of tiles is
+    built by `_tile_structs`, because the arrays' tile type has all nine fields."""
     return {"cellid": 0, "raster": bytearray(b), "metadata": {}}
 
 
@@ -167,29 +168,23 @@ def _tile_struct(b: bytes) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _combine_df(spark, tiles):
-    """One-row DataFrame with `tiles` = ARRAY of 3 tile structs (v1 schema)."""
-    from pyspark.sql.types import (
-        ArrayType,
-        BinaryType,
-        LongType,
-        MapType,
-        StringType,
-        StructField,
-        StructType,
-    )
+def _tile_structs(spark, tiles):
+    """The tile structs of raw GTiff bytes, built by the real constructor (`gbx_rst_fromcontent`): the 9-field
+    struct both tiers read. Collected here so the view holds values, not a plan that a later registration changes.
+    Needs the light functions registered (phase 1)."""
+    df = spark.createDataFrame([(t,) for t in tiles], "content binary")
+    out = df.selectExpr("gbx_rst_fromcontent(content, 'GTiff') AS t")
+    return [r["t"] for r in out.collect()], out.schema["t"].dataType
 
-    tile_schema = StructType(
-        [
-            StructField("cellid", LongType(), False),
-            StructField("raster", BinaryType(), True),
-            StructField("metadata", MapType(StringType(), StringType()), True),
-        ]
-    )
-    rows = [{"tiles": [_tile_struct(t) for t in tiles]}]
+
+def _combine_df(spark, tiles):
+    """One-row DataFrame with `tiles` = ARRAY of the tile structs `gbx_rst_fromcontent` builds."""
+    from pyspark.sql.types import ArrayType, StructField, StructType
+
+    structs, tile_type = _tile_structs(spark, tiles)
     return spark.createDataFrame(
-        rows,
-        schema=StructType([StructField("tiles", ArrayType(tile_schema), True)]),
+        [{"tiles": structs}],
+        schema=StructType([StructField("tiles", ArrayType(tile_type), True)]),
     )
 
 

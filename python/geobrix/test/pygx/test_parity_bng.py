@@ -245,9 +245,8 @@ def test_bng_full_parity(spark_with_jar):
         return {r["cell"]: (r["core"], r["geom"]) for r in exploded.collect()}
 
     def agg_chip_geom(mod):
-        """Dissolve a group of identical-cell chips. Light returns BINARY (the chip
-        geometry); heavy returns STRUCT<cellid, core, chip> -> take .chip. Compare
-        the decoded chip GEOMETRY either way (the load-bearing field)."""
+        """Dissolve a group of identical-cell chips. Both tiers return BINARY: the
+        dissolved geometry as WKB (no SRID). Compare the decoded geometry."""
         mod.register(spark)
         chip_geom = _bng.cell_id_to_geometry(_bng.parse(seed))
         chip_wkb = _wkb(chip_geom)
@@ -412,13 +411,9 @@ def test_bng_full_parity(spark_with_jar):
             continue
         _assert_geom_parity(lgeom, hgeom, f"tessellate-chip cell={cell}")
 
-    # aggregates: light BINARY vs heavy STRUCT.chip -- compare decoded chip geometry
-    light_agg_u_blob = light_agg_u
-    heavy_agg_u_blob = heavy_agg_u["chip"] if heavy_agg_u is not None else None
-    _assert_geom_parity(light_agg_u_blob, heavy_agg_u_blob, "cellunion_agg")
-    light_agg_i_blob = light_agg_i
-    heavy_agg_i_blob = heavy_agg_i["chip"] if heavy_agg_i is not None else None
-    _assert_geom_parity(light_agg_i_blob, heavy_agg_i_blob, "cellintersection_agg")
+    # aggregates: both tiers return the dissolved geometry as WKB (BINARY) -- compare it decoded
+    _assert_geom_parity(light_agg_u, heavy_agg_u, "cellunion_agg")
+    _assert_geom_parity(light_agg_i, heavy_agg_i, "cellintersection_agg")
 
 
 # --- tessellateexplode: the heavy generator emits the columns it declares ---------------------

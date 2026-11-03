@@ -1,16 +1,8 @@
-"""gbx_<grid>_cellfill cross-tier parity: light BINARY vs heavy array<struct<cellid,value>>.
+"""gbx_<grid>_cellfill cross-tier parity: both tiers return the same BINARY payload.
 
-OUTPUT ASYMMETRY (the crux of this test):
-  - Light  returns BINARY (pandas_udf grouped-agg cannot return array-of-struct).
-    Decoded via ``_cellfill.decode`` → list[(cellid_int, value|None)].
-  - Heavy returns array<struct<cellid, value>> where cellid is LONG for H3/Quadbin/
-    Custom, STRING for BNG.  Collected as a Python list of Row objects.
-
-Reconciliation:
-  - Light  → {int_cellid: value_or_None}  (decode then dict)
-  - Heavy LONG grids → {r.cellid: r.value for r in array_result}
-  - Heavy BNG        → {_bng.parse_safe(r.cellid): r.value for r in array_result}
-    (int64 keys to match the light BINARY encoding, which stores int64 even for BNG)
+The payload (documented in ``gridx-functions``): a big-endian Int32 count, then per cell an Int64 id, a present
+byte and, when present, a Float64, in ascending id order. A BNG id is the grid's own Int64 number in the payload
+in both tiers. ``_cellfill.decode`` reads it in both → ``{int_cellid: value_or_None}``.
 
 Two scenarios per grid:
   - mean/k=1 : center NULL surrounded by valid ring-1 neighbours (all 5.0)
@@ -114,30 +106,11 @@ def spark_with_jar():
 # ---------------------------------------------------------------------------
 
 
-def _decode_light(blob) -> Dict[int, Optional[float]]:
-    """Decode light BINARY payload → {int_cellid: value_or_None}."""
+def _decode(blob) -> Dict[int, Optional[float]]:
+    """Decode a cellfill BINARY payload → {int_cellid: value_or_None} (the same layout in both tiers)."""
     if blob is None:
         return {}
     return dict(_cellfill.decode(bytes(blob)))
-
-
-def _decode_heavy_long(array_result) -> Dict[int, Optional[float]]:
-    """Decode heavy array<struct<cellid LONG, value DOUBLE?>> → {int: val|None}."""
-    if array_result is None:
-        return {}
-    return {r.cellid: r.value for r in array_result}
-
-
-def _decode_heavy_bng(array_result) -> Dict[int, Optional[float]]:
-    """Decode heavy array<struct<cellid STRING, value DOUBLE?>> → {int: val|None}.
-
-    Heavy BNG renders cell IDs as OS grid reference STRINGs (e.g. 'TQ3080');
-    light BINARY stores them as int64.  Reconcile by parsing the STRING back to
-    int64 via ``_bng.parse_safe`` so both dicts share the same key type.
-    """
-    if array_result is None:
-        return {}
-    return {_bng.parse_safe(r.cellid): r.value for r in array_result}
 
 
 # ---------------------------------------------------------------------------
@@ -370,7 +343,7 @@ def test_cellfill_parity_all_grids(spark_with_jar):
         rows = spark.sql(
             f"SELECT grp, {fn_sql} AS fill FROM {view} GROUP BY grp"
         ).collect()
-        return {r.grp: _decode_light(r.fill) for r in rows}
+        return {r.grp: _decode(r.fill) for r in rows}
 
     h3_mean_light = _collect(
         "_cf_h3_mean", "gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0)"
@@ -408,45 +381,35 @@ def test_cellfill_parity_all_grids(spark_with_jar):
     bnghx.register(spark)
     custhx.register(spark)
 
-    def _collect_heavy_long(
-        view: str, fn_sql: str
-    ) -> Dict[int, Dict[int, Optional[float]]]:
+    def _collect_heavy(view: str, fn_sql: str) -> Dict[int, Dict[int, Optional[float]]]:
         rows = spark.sql(
             f"SELECT grp, {fn_sql} AS fill FROM {view} GROUP BY grp"
         ).collect()
-        return {r.grp: _decode_heavy_long(r.fill) for r in rows}
+        return {r.grp: _decode(r.fill) for r in rows}
 
-    def _collect_heavy_bng(
-        view: str, fn_sql: str
-    ) -> Dict[int, Dict[int, Optional[float]]]:
-        rows = spark.sql(
-            f"SELECT grp, {fn_sql} AS fill FROM {view} GROUP BY grp"
-        ).collect()
-        return {r.grp: _decode_heavy_bng(r.fill) for r in rows}
-
-    h3_mean_heavy = _collect_heavy_long(
+    h3_mean_heavy = _collect_heavy(
         "_cf_h3_mean", "gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0)"
     )
-    h3_idw_heavy = _collect_heavy_long(
+    h3_idw_heavy = _collect_heavy(
         "_cf_h3_idw", "gbx_h3_cellfill(cellid, value, 2, 'idw', 2.0)"
     )
-    qb_mean_heavy = _collect_heavy_long(
+    qb_mean_heavy = _collect_heavy(
         "_cf_qb_mean", "gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0)"
     )
-    qb_idw_heavy = _collect_heavy_long(
+    qb_idw_heavy = _collect_heavy(
         "_cf_qb_idw", "gbx_quadbin_cellfill(cellid, value, 2, 'idw', 2.0)"
     )
-    bng_mean_heavy = _collect_heavy_bng(
+    bng_mean_heavy = _collect_heavy(
         "_cf_bng_mean", "gbx_bng_cellfill(cellid, value, 1, 'mean', 2.0)"
     )
-    bng_idw_heavy = _collect_heavy_bng(
+    bng_idw_heavy = _collect_heavy(
         "_cf_bng_idw", "gbx_bng_cellfill(cellid, value, 2, 'idw', 2.0)"
     )
-    cust_mean_heavy = _collect_heavy_long(
+    cust_mean_heavy = _collect_heavy(
         "_cf_cust_mean",
         f"gbx_custom_cellfill(cellid, value, {_GRID_SQL}, 1, 'mean', 2.0)",
     )
-    cust_idw_heavy = _collect_heavy_long(
+    cust_idw_heavy = _collect_heavy(
         "_cf_cust_idw",
         f"gbx_custom_cellfill(cellid, value, {_GRID_SQL}, 2, 'idw', 2.0)",
     )

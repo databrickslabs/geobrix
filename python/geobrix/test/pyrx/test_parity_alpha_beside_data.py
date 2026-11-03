@@ -312,9 +312,18 @@ def _masked_rgb_nir():
     )
 
 
-def _sql_rows(spark, raster, tier, sql):
-    """The rows of ``sql`` over a one-row view ``_alpha_t(tile)`` made from ``raster`` in one tier."""
+def _sql_rows(spark, raster, tier, sql, jvm=()):
+    """The rows of ``sql`` over a one-row view ``_alpha_t(tile)`` made from ``raster`` in one tier.
+
+    The heavyweight register puts the manager's choice back for every name, so a function whose default is the
+    lightweight level runs light in the "heavy" tier. ``jvm`` names the functions to run on their JVM companion
+    (L1), registered after the tier's own register; use it where the test is about the JVM's behaviour.
+    """
     _, df = _tile_df(spark, raster, tier)
+    if tier == "heavy" and jvm:
+        from databricks.labs.gbx import register
+
+        register(spark, only=list(jvm), _levels={n: ("L1", "-") for n in jvm})
     df.createOrReplaceTempView("_alpha_t")
     return spark.sql(sql).collect()
 
@@ -356,7 +365,13 @@ def _default_range_histograms(spark, name):
         tier: {
             k: list(v)
             for k, v in dict(
-                _sql_rows(spark, _raster_of(name), tier, sql[tier])[0]["h"]
+                _sql_rows(
+                    spark,
+                    _raster_of(name),
+                    tier,
+                    sql[tier],
+                    jvm=("gbx_rst_histogram",),
+                )[0]["h"]
             ).items()
         }
         for tier in ("light", "heavy")

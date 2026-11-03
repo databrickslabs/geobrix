@@ -348,8 +348,13 @@ def test_conforming_is_heavy_only(spark_with_jar):
     """
     from pyspark.sql import functions as f
 
+    from databricks.labs.gbx import register
+
     spark = spark_with_jar
-    _both_registered(spark)
+    _both_registered(
+        spark
+    )  # loads the JAR; the manager then picks one level for the name
+    fn = "gbx_st_triangulate"
 
     pts = _pts_wkb(_GENERAL_PTS)
     df = spark.createDataFrame(
@@ -358,7 +363,9 @@ def test_conforming_is_heavy_only(spark_with_jar):
     )
     df.createOrReplaceTempView("tin_conf")
 
-    # Light (SQL UDTF) must raise — conforming is heavy-only.
+    # Light (SQL UDTF, its level asked for by name) must raise — conforming is heavy-only. The manager's own
+    # choice for the name is the JVM generator, which supports conforming, so the lightweight level is selected.
+    register(spark, only=[fn], _levels={fn: ("L3", "-")})
     with pytest.raises(Exception, match="conforming"):
         spark.sql(
             "SELECT t.triangle FROM tin_conf, LATERAL "
@@ -366,6 +373,7 @@ def test_conforming_is_heavy_only(spark_with_jar):
         ).collect()
 
     # Heavy (JVM generator) supports conforming → rows.
+    register(spark, only=[fn], _levels={fn: ("L1", "-")})
     heavy_rows = df.select(
         f.call_function(
             "gbx_st_triangulate",

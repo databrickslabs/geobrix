@@ -99,3 +99,40 @@ def test_rst_bng_rasterize_agg_null_cellid_value_alignment(spark):
         # Cell c0 should carry 10.0 and cell c1 should carry 20.0.
         assert 10.0 in covered, "c0's value 10.0 not found in output"
         assert 20.0 in covered, "c1's value 20.0 not found in output"
+
+
+def test_a_null_canvas_arriving_as_nan_derives_the_canvas_and_a_partial_one_raises():
+    """A NULL INT or DOUBLE constant reaches a pandas UDF as NaN, not None. A NULL `xmin`..`height` derives the
+    canvas from the cells (the documented contract); a canvas given in part names the NULL constants.
+    """
+    import numpy as np
+    import pandas as pd
+    import pytest
+
+    from databricks.labs.gbx.pyrx.core import cellraster
+
+    ad = cellraster._adapter("bng")
+    cells = ["TQ3080", "TQ3180"]
+    values = rx._max_value_per_cell(cells, [1.0, 2.0], ad.to_key)
+
+    def body(canvas, px=1000.0):
+        s = lambda v: pd.Series([v])  # noqa: E731
+        return rx._rasterize_agg_body(
+            values,
+            cells,
+            ad,
+            "bng",
+            27700,
+            s(px),
+            *map(s, canvas),
+            s("centroids"),
+            s(0),
+        )
+
+    derived = body([None] * 6)
+    assert derived is not None
+    assert body([np.nan] * 6) == derived
+    with pytest.raises(
+        ValueError, match=r"given in part \(xmin\).*ymin.*are NULL.*Fix:"
+    ):
+        body([530000.0, np.nan, np.nan, np.nan, np.nan, np.nan])

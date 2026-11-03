@@ -6518,21 +6518,34 @@ def _rasterize_agg_body(
     from databricks.labs.gbx.pyrx.core import cellraster as cr
 
     res = _ad.resolution([_ad.to_key(c) for c in cells])
-    _mode = (
-        mode_s.iloc[0]
-        if mode_s is not None and mode_s.iloc[0] is not None
-        else "centroids"
-    )
-    _kp = (
-        int(kring_pad_s.iloc[0])
-        if kring_pad_s is not None and kring_pad_s.iloc[0] is not None
-        else 1
-    )
 
     def _has(s):
-        return s is not None and s.iloc[0] is not None
+        # a NULL arrives as None in an object column and as NaN in a numeric one (an INT or DOUBLE constant)
+        return s is not None and not pd.isna(s.iloc[0])
 
-    if _has(xmin_s) and _has(width_s):
+    _mode = mode_s.iloc[0] if _has(mode_s) else "centroids"
+    _kp = int(kring_pad_s.iloc[0]) if _has(kring_pad_s) else 1
+
+    canvas = dict(
+        xmin=xmin_s,
+        ymin=ymin_s,
+        xmax=xmax_s,
+        ymax=ymax_s,
+        width=width_s,
+        height=height_s,
+    )
+    given = [n for n, s in canvas.items() if _has(s)]
+    if given and len(given) < len(canvas):
+        # NULL xmin derives the canvas from the cells; a canvas given in part is neither that nor an explicit one
+        missing = [n for n in canvas if n not in given]
+        raise ValueError(
+            f"{grid_name} rasterize_agg: the canvas is given in part ({', '.join(given)}), "
+            f"but {', '.join(missing)} {'is' if len(missing) == 1 else 'are'} NULL. "
+            "Fix: pass xmin, ymin, xmax, ymax, width and height together, or NULL for all six to derive the canvas "
+            "from the cells."
+        )
+
+    if given:
         _gs = (
             float(xmin_s.iloc[0]),
             float(ymin_s.iloc[0]),

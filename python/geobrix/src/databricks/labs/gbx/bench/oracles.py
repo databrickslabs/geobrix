@@ -250,6 +250,21 @@ HEAVY_PENDING.update(
     }
 )
 
+# The JVM companions of two Task 15 / 18b names that refuse a group the light level handles, and are not the default.
+# `gbx_rst_derivedband_agg` has a `session_returns: TILE` L1 block, so it is not selected: a member over the cap is an
+# error tile (a NULL raster, the reason and its Fix in the metadata), not a raise. `gbx_rst_merge` (the array form)
+# refuses a group over the memory budget the same way, with `merge_by_key` in the Fix, where light streams it.
+_DERIVEDBAND_AGG_L1 = (
+    "the non-selectable JVM tile aggregate returns an error tile; Task 21 deletes it"
+)
+_MERGE_ARRAY_L1 = "the JVM array merge refuses a group over the budget with its error tile; light streams; Task 29 decides the level"
+HEAVY_PENDING.update(
+    {
+        "db_agg_member_over_cap_refused": {"L1": _DERIVEDBAND_AGG_L1},
+        "merge_array_streams_under_budget": {"L1": _MERGE_ARRAY_L1},
+    }
+)
+
 # Rows every level runs through SQL with the session's read cap (`spark.databricks.labs.gbx.read_cap`) lowered to
 # this many bytes: the decoded-size gate where each level reads a tile's bytes.
 READ_CAP_ROWS: Dict[str, int] = {

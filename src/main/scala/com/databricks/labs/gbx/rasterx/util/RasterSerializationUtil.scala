@@ -168,16 +168,18 @@ object RasterSerializationUtil {
 
     /** As above, plus an optional ``clipCrs`` canonical CRS string stamped into the
       * v2 ``clip_crs`` field. Used by the GDAL/GTiff reader's clipCrs
-      * option (parity with the light reader); ``None`` leaves it null. */
+      * option (parity with the light reader); ``None`` leaves it null. `writeExtra` are write options for this
+      * encoding only, not stamped into the tile's metadata (`gbx_rst_cog_convert`'s block size). */
     def tileToRow(
         tuple: (Long, Dataset, Map[String, String]),
         dataType: DataType,
         hconf: SerializableConfiguration,
-        clipCrs: Option[String]
+        clipCrs: Option[String],
+        writeExtra: Map[String, String] = Map.empty
     ): InternalRow = {
         val metadata = SerializationUtil.toMapData[String, String](tuple._3)
         // A null Dataset is an error tile: its raster is NULL, the one form every tier uses.
-        val bytes: Array[Byte] = if (tuple._2 == null) null else RasterDriver.writeToBytes(tuple._2, tuple._3)
+        val bytes: Array[Byte] = if (tuple._2 == null) null else RasterDriver.writeToBytes(tuple._2, tuple._3, writeExtra)
         V2Tile.row(
             cellid  = tuple._1,
             raster  = bytes,
@@ -224,10 +226,11 @@ object RasterSerializationUtil {
       *
       *   - a NULL element, an error tile, a tile with no raster and a tile whose bytes cannot be opened are skipped
       *     (the corrupt ones are counted in the result's `last_error`);
-      *   - an array with no usable member is NULL (also the empty array), except an array of nothing but error tiles,
-      *     which is the first of them as it is;
+      *   - an array with no usable member is NULL (also the empty array), except an array of nothing but error tiles
+      *     (NULL elements aside), which is the first of them as it is;
       *   - a member decoded over the read cap, or members that add up to more than it, are refused
-      *     ([[TileBytesRefused]]) and the caller's `safeEval` turns that into the row's error tile with its Fix.
+      *     ([[TileBytesRefused]]): the row's error tile with its Fix, whatever else the array holds (an error member
+      *     does not hide it).
       *
       * `compute` gets the usable members and returns the result tile; the inputs and the result are released here.
       */
@@ -237,11 +240,10 @@ object RasterSerializationUtil {
         val tiles = scala.collection.mutable.ArrayBuffer.empty[(Long, Dataset, Map[String, String])]
         val errors = scala.collection.mutable.ArrayBuffer.empty[InternalRow]
         var skipped = 0
-        var empty = 0
+        var empty = 0 // tiles with no raster bytes that are not error tiles; a NULL element is not counted
         try {
             (0 until array.numElements()).foreach { i =>
-                if (array.isNullAt(i)) empty += 1
-                else {
+                if (!array.isNullAt(i)) {
                     val row = array.getStruct(i, elementFieldCount)
                     if (isErrorTile(row)) errors += row.copy()
                     else if (row.isNullAt(tileLayout(row).raster)) {
@@ -269,6 +271,9 @@ object RasterSerializationUtil {
                 try tileToRow((cell, ds, metadata), BinaryType, hconf)
                 finally RasterDriver.releaseDataset(ds)
             }
+        } catch {
+            // the group's answer, as the light tier gives it: the refusal and its Fix, not an error member's tile
+            case e: TileBytesRefused => RST_ErrorHandler.refusedGroupTile(e, BinaryType)
         } finally tiles.foreach(t => RasterDriver.releaseDataset(t._2))
     }
 

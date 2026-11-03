@@ -127,14 +127,12 @@ object TileBytes {
         new java.util.Vector[String](section.allowedDrivers.filterNot(refused).asJava)
     }
 
-    /** The decoded size of `ds` (every band at the first band's type), from its header. */
+    /** The decoded size of `ds` (each band at its own type), from its header. */
     private[gdal] def decodedSize(ds: Dataset): Long = {
-        val bands = ds.getRasterCount
-        if (bands == 0) 0L
-        else {
-            val item = math.max(1, gdal.GetDataTypeSize(ds.GetRasterBand(1).getDataType) / 8)
-            ds.getRasterXSize.toLong * ds.getRasterYSize * bands * item
-        }
+        val pixels = ds.getRasterXSize.toLong * ds.getRasterYSize
+        (1 to ds.getRasterCount).map { b =>
+            pixels * math.max(1, gdal.GetDataTypeSize(ds.GetRasterBand(b).getDataType) / 8)
+        }.sum
     }
 
     /** The refusal of a tile decoded to `decodedBytes` when that is over the read cap, else None: the one rule and

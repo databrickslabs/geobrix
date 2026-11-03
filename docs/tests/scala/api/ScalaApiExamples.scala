@@ -2091,28 +2091,6 @@ result.show(truncate = false)
 (array of contour features: LineString + elevation value)
 """.trim
 
-  val rst_viewshed_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(
-  rx.rst_viewshed(col("tile"), lit("POINT(-73.5 40.5)"), lit(100.0), lit(1.6), lit(5000.0)).alias("viewshed")
-)
-result.show(truncate = false)
-""".trim
-
-  val rst_viewshed_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|viewshed                                                   |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(binary visibility mask: 1=visible, 0=not visible)
-""".trim
-
   val rst_sample_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

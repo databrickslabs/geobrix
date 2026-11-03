@@ -75,6 +75,14 @@ object RST_CogConvert extends WithExpressionInfo {
         overviewResampling: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, compression, blocksize.toInt, overviewResampling, conf, BinaryType)
 
+    /** The least block size a COG is written with: GDAL's tile sizes are multiples of 16, and the 64-pixel floor
+      * other derived tiles are written with does not apply here. */
+    private val MinBlocksize: Int = 16
+
+    /** The write options the result is encoded with: its block size, down to [[MinBlocksize]]. */
+    private def blockWrite(blocksize: Int): Map[String, String] =
+        Map("blocksize" -> blocksize.toString, "blocksize_floor" -> MinBlocksize.toString)
+
     /** The codecs `compression` takes (GDAL's COG driver, the light tier's profile names), and `AUTO`/`NONE`. */
     private val Codecs: Set[String] = Set(
       "AUTO", "NONE", "RAW", "ZSTD", "DEFLATE", "LZW", "LERC", "LERC_DEFLATE", "LERC_ZSTD", "JPEG", "WEBP", "PACKBITS", "LZMA"
@@ -114,7 +122,10 @@ object RST_CogConvert extends WithExpressionInfo {
                   Option(overviewResampling).map(_.toString).getOrElse("AVERAGE")
               )
               RasterDriver.releaseDataset(ds)
-              val out = RasterSerializationUtil.tileToRow((cell, resDs, resMtd), dt, exprConf.hConf)
+              // the result is encoded with the block size it was asked for (a multiple of 16, below the 64 floor
+              // other tiles are written with), not only translated to it
+              val out = RasterSerializationUtil.tileToRow(
+                  (cell, resDs, resMtd), dt, exprConf.hConf, None, blockWrite(blocksize))
               RasterDriver.releaseDataset(resDs)
               out
           },
@@ -134,6 +145,8 @@ object RST_CogConvert extends WithExpressionInfo {
     ): (Dataset, Map[String, String]) = {
         require(ds != null, "RST_CogConvert.execute: source Dataset is null")
         require(blocksize > 0, s"gbx_rst_cog_convert: blocksize must be > 0; got $blocksize")
+        require(compression != null && compression.nonEmpty,
+            "gbx_rst_cog_convert: compression must be non-empty")
         // AUTO is the light tier's size-adaptive ZSTD; the JVM's baseline codec is ZSTD, and NONE is no compression
         // scalastyle:off caselocale
         val codec = compression.toUpperCase match {
@@ -142,8 +155,6 @@ object RST_CogConvert extends WithExpressionInfo {
             case other  => other
         }
         // scalastyle:on caselocale
-        require(compression != null && compression.nonEmpty,
-            "gbx_rst_cog_convert: compression must be non-empty")
         require(overviewResampling != null && overviewResampling.nonEmpty,
             "gbx_rst_cog_convert: overview_resampling must be non-empty")
 
@@ -156,6 +167,7 @@ object RST_CogConvert extends WithExpressionInfo {
         val writeOpts = options ++ Map(
             "format" -> "COG",
             "compression" -> codec,
+            "blocksize_floor" -> MinBlocksize.toString,
             "blocksize" -> blocksize.toString,
             "overview_resampling" -> overviewResampling
         )

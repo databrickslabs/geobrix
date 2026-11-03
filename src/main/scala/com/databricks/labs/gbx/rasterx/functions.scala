@@ -1066,23 +1066,4 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         tile: Column, levels: Column, interval: Column, base: Column, attrField: Column
     ): Column = ColumnAdapter(RST_Contour.name, Seq(tile, levels, interval, base, attrField))
 
-    // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
-    // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
-    // runs. eval maps NaN -> None. Mirrors RST_Viewshed.builder().
-    def rst_viewshed(tile: Column, observerGeom: Column, observerHeight: Column): Column =
-        ColumnAdapter(RST_Viewshed.name, Seq(
-            tile, observerGeom, observerHeight, lit(1.6), lit(Double.NaN)
-        ))
-    def rst_viewshed(
-        tile: Column, observerGeom: Column, observerHeight: Column, targetHeight: Column
-    ): Column = ColumnAdapter(RST_Viewshed.name, Seq(
-        tile, observerGeom, observerHeight, targetHeight, lit(Double.NaN)
-    ))
-    def rst_viewshed(
-        tile: Column, observerGeom: Column, observerHeight: Column,
-        targetHeight: Column, maxDistance: Column
-    ): Column = ColumnAdapter(RST_Viewshed.name, Seq(
-        tile, observerGeom, observerHeight, targetHeight, maxDistance
-    ))
-
 }

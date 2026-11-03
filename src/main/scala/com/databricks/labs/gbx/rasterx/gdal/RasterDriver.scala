@@ -228,8 +228,10 @@ object RasterDriver {
       * paths) to GTiff before serializing. Any caller upstream that hands us a VRT-driver
       * Dataset (or metadata claiming driver=VRT) gets a real GTiff out. Bytes are sniffed
       * post-write and re-translated if a VRT magic header still appears, as a belt-and-braces
-      * check against future regressions or metadata drift. */
-    def writeToBytes(ds: Dataset, options: Map[String, String]): Array[Byte] = {
+      * check against future regressions or metadata drift.
+      *
+      * `writeExtra` are write options for this one encoding only (they are not part of the tile's metadata). */
+    def writeToBytes(ds: Dataset, options: Map[String, String], writeExtra: Map[String, String] = Map.empty): Array[Byte] = {
         val isZip = options.getOrElse("isZip", "false").toBoolean
         // VRT bytes are never a valid self-contained tile.raster payload — they reference
         // /vsimem/ tempfiles that only exist on the producing executor. If metadata or the
@@ -240,8 +242,8 @@ object RasterDriver {
         val rawDriverName = options.getOrElse("driver", Option(ds).map(_.GetDriver().getShortName).getOrElse("GTiff"))
         val driverName = if (rawDriverName == "VRT") "GTiff" else rawDriverName
         val translateOptions =
-            if (rawDriverName == "VRT") options ++ Map("driver" -> "GTiff", "format" -> "GTiff")
-            else options
+            if (rawDriverName == "VRT") options ++ Map("driver" -> "GTiff", "format" -> "GTiff") ++ writeExtra
+            else options ++ writeExtra
         val extension = GDAL.getExtension(driverName)
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val tempPath =
@@ -270,7 +272,7 @@ object RasterDriver {
             val recoverPath = s"/vsimem/temp_raster_recover_$uuid.tif"
             val (resRecover, _) = GDALTranslate.executeTranslate(
               recoverPath, ds, "gdal_translate",
-              options ++ Map("driver" -> "GTiff", "format" -> "GTiff")
+              options ++ Map("driver" -> "GTiff", "format" -> "GTiff") ++ writeExtra
             )
             resRecover.FlushCache()
             resRecover.delete()

@@ -1598,8 +1598,7 @@
       "description": "Compute a binary viewshed from a DEM tile and an observer point.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },

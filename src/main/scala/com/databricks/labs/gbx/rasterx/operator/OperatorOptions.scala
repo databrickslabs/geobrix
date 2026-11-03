@@ -153,7 +153,10 @@ object OperatorOptions {
             }
 
         val w = ds.GetRasterXSize; val h = ds.GetRasterYSize
-        val rawBlk = math.max(64, math.min(writeOptions.getOrElse("blocksize", "512").toInt, math.min(w, h)))
+        // The block is at least 64 pixels, unless the caller names a lower floor ("blocksize_floor"): gbx_rst_cog_convert
+        // does, so that the block size it was asked for (a multiple of 16) is the one the result is written with.
+        val floorBlk = math.max(16, writeOptions.getOrElse("blocksize_floor", "64").toInt)
+        val rawBlk = math.max(floorBlk, math.min(writeOptions.getOrElse("blocksize", "512").toInt, math.min(w, h)))
         val blk = (rawBlk / 16) * 16 // floor to nearest multiple of 16
 
         val coBase = format match {

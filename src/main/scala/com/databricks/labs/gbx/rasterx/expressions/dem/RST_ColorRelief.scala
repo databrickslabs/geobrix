@@ -42,8 +42,9 @@ object RST_ColorRelief extends WithExpressionInfo {
         runDispatch(row, colorTablePath, conf, BinaryType)
 
     private def runDispatch(row: InternalRow, colorTablePath: UTF8String, conf: UTF8String, dt: DataType): InternalRow = {
-        // A colour file that does not exist is a bad argument: it raises, naming the path, whatever the tile is.
-        if (colorTablePath != null && !localFile(colorTablePath.toString).isFile) {
+        // A local colour file that does not exist is a bad argument: it raises, naming the path, whatever the tile is.
+        // A remote or GDAL virtual path (a URI scheme, /vsi...) is GDAL's to open, so it is not checked here.
+        if (colorTablePath != null && isLocal(colorTablePath.toString) && !localFile(colorTablePath.toString).isFile) {
             throw new java.io.FileNotFoundException(
               s"gbx_rst_color_relief: the colour table '${colorTablePath.toString}' does not exist")
         }
@@ -69,13 +70,33 @@ object RST_ColorRelief extends WithExpressionInfo {
         new java.io.File(bare)
     }
 
+    private val UriScheme = "^[A-Za-z][A-Za-z0-9+.-]*:.*".r
+
+    /** True for a path on this machine's file system (a plain path, or `dbfs:` / `file:`, which are stripped): not a
+      * GDAL virtual path (`/vsi...`) and not a remote URI (`s3://`, `abfss://`, `https://`, ...). */
+    private[dem] def isLocal(path: String): Boolean =
+        !path.startsWith("/vsi") && (path.startsWith("dbfs:") || path.startsWith("file:") || !UriScheme.pattern.matcher(path).matches())
+
+    /** Whether each colour file read has an alpha column, by (path, modified time, length): the table is read once, not
+      * once per row. */
+    private val alphaOf = new java.util.concurrent.ConcurrentHashMap[(String, Long, Long), Boolean]()
+
     /** True when a stop of the colour file has an alpha column (`elevation R G B A`): the output is then RGBA, as
-      * the light tier writes it. The `nv` line and comments do not count. */
-    private def hasAlpha(path: String): Boolean =
+      * the light tier writes it (`_parse_color_table`: any line whose R, G, B and A are integers, the `nv` line too). */
+    private def hasAlpha(path: String): Boolean = {
+        val file = localFile(path)
+        if (!isLocal(path) || !file.isFile) false
+        else alphaOf.computeIfAbsent((path, file.lastModified, file.length), _ => readHasAlpha(file))
+    }
+
+    private def readHasAlpha(file: java.io.File): Boolean =
         scala.util.Try {
-            val src = scala.io.Source.fromFile(localFile(path))
-            try src.getLines().map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#") && !l.toLowerCase.startsWith("nv"))
-                .exists(_.split("[\\s,]+").length >= 5)
+            val src = scala.io.Source.fromFile(file)
+            try src.getLines().map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#"))
+                .exists { l =>
+                    val parts = l.split("[\\s,]+")
+                    parts.length >= 5 && parts.slice(1, 5).forall(p => scala.util.Try(p.toInt).isSuccess)
+                }
             finally src.close()
         }.getOrElse(false)
 

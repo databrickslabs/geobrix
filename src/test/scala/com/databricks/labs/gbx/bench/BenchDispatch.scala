@@ -1245,8 +1245,8 @@ object BenchDispatch {
         rst_color_relief(tile, colorTablePath)
       case "rst_viewshed" =>
         import org.apache.spark.sql.functions.lit
-        rst_viewshed(tile, lit("POINT (0 0)"), lit(argD(a, "observer_height", 2.0)),
-          lit(argD(a, "target_height", 1.6)))
+        org.apache.spark.sql.functions.call_function("gbx_rst_viewshed", tile, lit("POINT (0 0)"),
+          lit(argD(a, "observer_height", 2.0)), lit(argD(a, "target_height", 1.6)))
       case "rst_sample" =>
         import org.apache.spark.sql.functions.lit
         rst_sample(tile, lit("POINT (0 0)"))

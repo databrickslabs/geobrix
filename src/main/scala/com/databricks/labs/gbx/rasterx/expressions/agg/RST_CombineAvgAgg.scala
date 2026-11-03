@@ -94,19 +94,17 @@ case class RST_CombineAvgAgg(
                 onlyErrors // NULL unless every member is an error tile
             } else {
                 // If merging multiple index rasters, the index value is dropped
-                val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
-                val (res, resMtd) = CombineAVG.compute(tiles.map(_._2).toArray, tiles.head._3)
-
-                val finalMtd = if (dropped > 0)
-                    resMtd + ("last_error" -> s"RST_CombineAvgAgg: skipped $dropped corrupt input tile(s)")
-                else resMtd
-
-                val resRow = RasterSerializationUtil.tileToRow((idx, res, finalMtd), rasterType, exprConf.hConf)
-
-                tiles.foreach(t => RasterDriver.releaseDataset(t._2))
-                RasterDriver.releaseDataset(res)
-
-                resRow
+                // the opened members are released whatever the combine does (misaligned members raise)
+                try {
+                    val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
+                    val (res, resMtd) = CombineAVG.compute(tiles.map(_._2).toArray, tiles.head._3)
+                    try {
+                        val finalMtd = if (dropped > 0)
+                            resMtd + ("last_error" -> s"RST_CombineAvgAgg: skipped $dropped corrupt input tile(s)")
+                        else resMtd
+                        RasterSerializationUtil.tileToRow((idx, res, finalMtd), rasterType, exprConf.hConf)
+                    } finally RasterDriver.releaseDataset(res)
+                } finally tiles.foreach(t => RasterDriver.releaseDataset(t._2))
             }
         }
     }

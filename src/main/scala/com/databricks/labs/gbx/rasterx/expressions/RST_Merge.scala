@@ -57,7 +57,7 @@ object RST_Merge extends WithExpressionInfo {
         )
 
     def execute(dss: Array[Dataset], options: Map[String, String]): (Dataset, Map[String, String]) = {
-        MergeRasters.merge(dss, options)
+        MergeRasters.mergeConformed(dss, options)
     }
 
     override def name: String = "gbx_rst_merge"

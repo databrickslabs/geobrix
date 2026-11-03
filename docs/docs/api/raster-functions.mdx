@@ -3776,7 +3776,7 @@ The **envelope** is portable, but the **calc expression language is not fully po
 {/* END GENERATED gbx_rst_merge */}
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The JVM level (L1) does not merge tiles in different CRSs and returns one of them.
+Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (where tiles overlap, the winner does not depend on the array order: the tile whose bytes sort last wins). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The JVM level (L1) does the same: it reprojects a tile in another CRS to the reference CRS (the smallest EPSG code present) onto the pixel size and grid of a tile in it, then mosaics them; it never leaves a tile out.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
@@ -5278,7 +5278,7 @@ Re-encodes the tile as a Cloud Optimized GeoTIFF (it passes GDAL's COG validator
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier — `ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP` — and its default is `ZSTD` on the heavyweight tier. The **lightweight tier additionally accepts `AUTO`** (its default): a size-adaptive ZSTD level with the dtype predictor. `blocksize` is the internal tile size in pixels (square). `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
+Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Both tiers use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec on either tier — `ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP` — and so does `AUTO`, its default: a size-adaptive ZSTD level with the dtype predictor on the lightweight tier, ZSTD on the heavyweight tier. `blocksize` is the internal tile size in pixels (square), any multiple of 16 down to 16, on both tiers. `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
 
 <FunctionExamples
   name="rst_cog_convert"
@@ -5346,7 +5346,7 @@ Compute a Float32 raster where each pixel holds the distance to the nearest sour
 ### rst_viewshed
 
 {/* BEGIN GENERATED gbx_rst_viewshed: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5381,7 +5381,6 @@ Compute a binary viewshed Byte raster (`255` = visible, `0` = invisible / out-of
   name="rst_viewshed"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 

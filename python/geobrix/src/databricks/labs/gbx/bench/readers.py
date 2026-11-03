@@ -557,7 +557,12 @@ def run_format_read(
         # heavy leg of the NetCDF raster bench; gtiff_gdal/gdal are the GeoTIFF readers.
         try:
 
-            gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_rst_",),
+                only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
+                level="L1",
+            )
         except Exception:  # noqa: BLE001
             pass  # best-effort GDAL init; failure surfaces in the timed call
 
@@ -728,7 +733,12 @@ def run_format_write(
     if read_fmt in _heavy_fmts:
         try:
 
-            gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_rst_",),
+                only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
+                level="L1",
+            )
         except Exception:  # noqa: BLE001
             pass
 
@@ -1319,7 +1329,12 @@ def run_mvt_agg(
         else:
             from databricks.labs.gbx.vectorx import functions as hx
 
-            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
             asmvt_fn = hx.st_asmvt
     except Exception as e:  # noqa: BLE001
         return ResultRow(
@@ -3544,7 +3559,12 @@ def run_triangulate(
             gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
 
-            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3666,7 +3686,12 @@ def run_interp_bbox(
             gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
 
-            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -3797,7 +3822,12 @@ def run_interp_geom(
             gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
         else:
 
-            gbx_manager.register_family(spark, ("gbx_st_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_st_",),
+                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -4941,7 +4971,12 @@ def _register_bng(spark, api: str) -> None:
         )
     else:
 
-        gbx_manager.register_family(spark, ("gbx_bng_",), level="L1")
+        gbx_manager.register_family(
+            spark,
+            ("gbx_bng_",),
+            only=gbx_manager.names_at_level(("gbx_bng_",), "L1"),
+            level="L1",
+        )
 
 
 def run_bng_pointascell(
@@ -8174,7 +8209,12 @@ def run_fanout_udtf(
             gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
         else:
 
-            gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
+            gbx_manager.register_family(
+                spark,
+                ("gbx_rst_",),
+                only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
+                level="L1",
+            )
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,

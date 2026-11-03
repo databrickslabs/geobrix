@@ -21,6 +21,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 from shapely import to_wkb
@@ -158,7 +159,7 @@ def test_parity_quadbin_geomkring_simple_all_modes(spark_with_jar, coverage):
         light_results[mode] = _collect_light(_NYC_BOX, _RES_SIMPLE, 1, mode, coverage)
 
     # Now register heavy (overwrites light SQL names).
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _NYC_BOX, _RES_SIMPLE, 1, mode, "gbx_quadbin_geomkring", coverage
@@ -187,7 +188,7 @@ def test_parity_quadbin_geomkloop_simple_all_modes(spark_with_jar, coverage):
             _NYC_BOX, _RES_SIMPLE, 1, mode, coverage
         )
 
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _NYC_BOX, _RES_SIMPLE, 1, mode, "gbx_quadbin_geomkloop", coverage
@@ -214,7 +215,7 @@ def test_parity_quadbin_geomkring_holed_all_modes(spark_with_jar, coverage):
     for mode in _MODES:
         light_results[mode] = _collect_light(_HOLED_POLY, _RES_HOLED, 1, mode, coverage)
 
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_quadbin_geomkring", coverage
@@ -243,7 +244,7 @@ def test_parity_quadbin_geomkloop_holed_all_modes(spark_with_jar, coverage):
             _HOLED_POLY, _RES_HOLED, 1, mode, coverage
         )
 
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_quadbin_geomkloop", coverage
@@ -317,7 +318,7 @@ def test_parity_quadbin_geomkring_boundary_out_aligned(spark_with_jar, coverage)
     light_ring = _collect_light(
         _QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
     )
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     heavy_ring = _collect_heavy(
         spark,
         _QB_ALIGNED_GEOM,
@@ -364,7 +365,7 @@ def test_parity_quadbin_geomkloop_boundary_out_aligned(spark_with_jar, coverage)
     light = _collect_light_loop(
         _QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
     )
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     heavy = _collect_heavy(
         spark,
         _QB_ALIGNED_GEOM,
@@ -390,7 +391,7 @@ def test_parity_quadbin_geomkring_boundary_out_large(spark_with_jar, coverage):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = _collect_light(_QB_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     heavy = _collect_heavy(
         spark,
         _QB_LARGE_GEOM,
@@ -416,7 +417,7 @@ def test_parity_quadbin_geomkloop_boundary_out_large(spark_with_jar, coverage):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = _collect_light_loop(_QB_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     heavy = _collect_heavy(
         spark,
         _QB_LARGE_GEOM,
@@ -464,7 +465,7 @@ def test_parity_quadbin_geomkring_gc_all_modes(spark_with_jar, coverage):
     for mode in _MODES:
         light_results[mode] = _collect_light(_GC_MIXED, _RES_GC, 1, mode, coverage)
 
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_quadbin_geomkring", coverage
@@ -491,7 +492,7 @@ def test_parity_quadbin_geomkloop_gc_all_modes(spark_with_jar, coverage):
     for mode in _MODES:
         light_results[mode] = _collect_light_loop(_GC_MIXED, _RES_GC, 1, mode, coverage)
 
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_quadbin_geomkloop", coverage

@@ -611,7 +611,12 @@ def register_h_heavy(spark):
     """The JVM names (RST_MergeAgg, RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
     from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ("gbx_rst_",), level="L1")
+    gbx_manager.register_family(
+        spark,
+        ("gbx_rst_",),
+        only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
+        level="L1",
+    )
 
 
 def _stats(df, tile_expr: Optional[str]):

@@ -50,6 +50,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -239,9 +240,8 @@ def _collect_combine_light(spark, stat: str, tiles) -> bytes:
 
 def _collect_combine_heavy(spark, stat: str) -> bytes:
     """Phase 2: register rasterx (heavy, OVERWRITES SQL names), run same SQL."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
     rows = spark.sql(
         f"SELECT gbx_rst_combine{stat}(tiles) AS result FROM _combine_parity_tbl"
     ).collect()
@@ -265,9 +265,8 @@ def _collect_align_light(spark, src_bytes: bytes, ref_bytes: bytes) -> bytes:
 
 def _collect_align_heavy(spark) -> bytes:
     """Phase 2: register rasterx (heavy), run same SQL rst_align_to."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
     rows = spark.sql(
         "SELECT gbx_rst_align_to(tile, ref) AS result FROM _align_parity_tbl"
     ).collect()

@@ -45,6 +45,7 @@ Run the integration test additionally (needs JAR):
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import numpy as np
 import pytest
@@ -336,8 +337,6 @@ def test_r3_oob_raster_heavy_raises_clear_error(spark_with_jar):
     """
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx import manager as gbx_manager
-
     spark = spark_with_jar
 
     # Use a cell from inside _GRID_A (a valid long cellid from the grid A conf).
@@ -358,7 +357,7 @@ def test_r3_oob_raster_heavy_raises_clear_error(spark_with_jar):
     valid_cell = _cmod.point_to_cell_id(conf_a, 531000.0, 181000.0, 1)
 
     # Register heavy.
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
 
     # Use an explicit HUGE pixel_size so the derived canvas extends past the grid bound.
     # With pixel_size=10000m and a cell centroid at (531000,181000) in a 4000m-wide grid,

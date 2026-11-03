@@ -904,7 +904,9 @@ def test_h3_cell_bbox_sql_example(spark):
     """h3_cell_bbox example string exists and executes to non-null bbox structs."""
     from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx_manager.register_family(
+        spark, ('gbx_rst_', 'gbx_pmtiles_', 'gbx_h3_'), level="L3"
+    )
     sql = rasterx_functions_sql.h3_cell_bbox_sql_example()
     assert isinstance(sql, str) and len(sql) > 0
     assert "gbx_h3_cell_bbox" in sql

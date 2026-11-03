@@ -52,6 +52,7 @@ simply are not in it); the gate's default rebuild removes that failure mode.
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -174,9 +175,8 @@ def spark_with_jar():
 @pytest.fixture(scope="module")
 def heavy(spark_with_jar):
     """Spark session with the HEAVY (JAR) gbx_st_* CRS functions registered."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark_with_jar, ("gbx_st_",))
+    heavy_register(spark_with_jar, ("gbx_st_",))
     return spark_with_jar
 
 

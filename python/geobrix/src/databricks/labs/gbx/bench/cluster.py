@@ -1380,7 +1380,7 @@ if HEAVYWEIGHT:
             ).cache(); _dfh.count()
             from databricks.labs.gbx.vectorx import functions as _hx
             from databricks.labs.gbx import manager as _gbx_mgr
-            _gbx_mgr.register_family(spark, ('gbx_st_',), level="L1")
+            _gbx_mgr.register_family(spark, ('gbx_st_',), only=_gbx_mgr.names_at_level(('gbx_st_',), "L1"), level="L1")
             _hrows = (_dfh.groupBy("z","x","y")
                 .agg(_hx.st_asmvt(_F_mvth.col("geom"), _F_mvth.col("attrs"), _F_mvth.lit("layer")).alias("mvt"))
                 .collect())
@@ -1530,14 +1530,35 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _v = "LEGACY PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
     print(_v); _verdicts.append(_v)
     assert _v.startswith("LEGACY PARITY: PASS"), _v
-    # --- TIN: register both tiers (different catalog paths -> coexist). ---
+    # --- TIN: both tiers use the same SQL names and a later registration replaces the earlier one, so the
+    # light leg (L3, SQL LATERAL) runs and is collected first, then L1 is registered for the heavy leg. ---
     from databricks.labs.gbx.pyvx import functions as _vx_tin
     from databricks.labs.gbx.vectorx import functions as _hx_tin
     from databricks.labs.gbx import manager as _gbx_mgr
-    _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3"); _gbx_mgr.register_family(spark, ('gbx_st_',), level="L1")
     _tdata, _tschema = _cv.generate_tin_points(_TIN_N_ROWS, n_points=_TIN_N_POINTS)
     _tdf = spark.createDataFrame(_tdata, schema=_tschema)
     _tdf.createOrReplaceTempView("_tin_parity_v")
+    _gbx_mgr.register_family(spark, ('gbx_st_',), level="L3")
+    _tin_light = {}
+    for _k, _q in (
+        ("tri", "SELECT t.triangle FROM _tin_parity_v, LATERAL "
+                "gbx_st_triangulate(pts, bl, mt, st, spf, 'constrained') t"),
+        ("bbox", "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
+                 "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, xmin, ymin, xmax, ymax, "
+                 "w, h, srid, 'constrained') t"),
+        ("geom", "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
+                 "gbx_st_interpolateelevationgeom(pts, bl, mt, st, spf, origin, cols, rows_n, "
+                 "cell_x, cell_y, 'constrained') t"),
+    ):
+        try:
+            _tin_light[_k] = spark.sql(_q).collect()
+        except Exception as _pe:
+            _tin_light[_k] = _pe
+    def _light_rows(_k):
+        if isinstance(_tin_light[_k], Exception):
+            raise _tin_light[_k]
+        return _tin_light[_k]
+    _gbx_mgr.register_family(spark, ('gbx_st_',), only=_gbx_mgr.names_at_level(('gbx_st_',), "L1"), level="L1")
     def _centroid(_blob):
         _g = _shp_wkb.loads(bytes(_blob)); _c = _g.centroid
         return (round(_c.x, 6), round(_c.y, 6))
@@ -1548,8 +1569,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         return None
     # triangulate: count + centroid-set match within 1e-6.
     try:
-        _lt = spark.sql("SELECT t.triangle FROM _tin_parity_v, LATERAL "
-                        "gbx_st_triangulate(pts, bl, mt, st, spf, 'constrained') t").collect()
+        _lt = _light_rows("tri")
         _ht = _tdf.select(_F_tin.call_function(
             "gbx_st_triangulate", _F_tin.col("pts"), _F_tin.col("bl"), _F_tin.col("mt"),
             _F_tin.col("st"), _F_tin.col("spf"), _F_tin.lit("constrained")
@@ -1574,10 +1594,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         return _out
     # bbox
     try:
-        _lb = _grid_dict(spark.sql(
-            "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
-            "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, xmin, ymin, xmax, ymax, "
-            "w, h, srid, 'constrained') t").collect(), "p")
+        _lb = _grid_dict(_light_rows("bbox"), "p")
         _hb = _grid_dict(_tdf.select(_F_tin.call_function(
             "gbx_st_interpolateelevationbbox", _F_tin.col("pts"), _F_tin.col("bl"),
             _F_tin.col("mt"), _F_tin.col("st"), _F_tin.col("spf"), _F_tin.col("xmin"),
@@ -1595,10 +1612,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
     assert _v.startswith("TIN INTERP BBOX PARITY: PASS"), _v
     # geom
     try:
-        _lg2 = _grid_dict(spark.sql(
-            "SELECT t.elevation_point AS p FROM _tin_parity_v, LATERAL "
-            "gbx_st_interpolateelevationgeom(pts, bl, mt, st, spf, origin, cols, rows_n, "
-            "cell_x, cell_y, 'constrained') t").collect(), "p")
+        _lg2 = _grid_dict(_light_rows("geom"), "p")
         _hg2 = _grid_dict(_tdf.select(_F_tin.call_function(
             "gbx_st_interpolateelevationgeom", _F_tin.col("pts"), _F_tin.col("bl"),
             _F_tin.col("mt"), _F_tin.col("st"), _F_tin.col("spf"), _F_tin.col("origin"),
@@ -2102,7 +2116,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_pac
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_cells = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_pointascell(geom, '%s') AS cell FROM _bng_pac_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2127,7 +2141,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_pf
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_pf = [sorted(r["cells"]) for r in spark.sql(
             "SELECT gbx_bng_polyfill(geom, '%s') AS cells FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2152,7 +2166,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % _BNG_GEOM_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ts
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ts = [_chip_cells(r["chips"]) for r in spark.sql(
             "SELECT gbx_bng_tessellate(geom, '%s') AS chips FROM _bng_geom_parity_v"
             % _BNG_GEOM_RES).collect()]
@@ -2178,7 +2192,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % _BNG_KRING_K).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_kr
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_kr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kring(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KRING_K).collect()]
@@ -2206,7 +2220,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "FROM _bng_agg_parity_v GROUP BY group").collect() if r["u"] is not None}
         from databricks.labs.gbx.gridx.bng import functions as _hx_ag
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         # Heavy returns STRUCT<cellid, core, chip>; the load-bearing field is .chip (BINARY).
         _heavy_ag = {r["group"]: bytes(r["u"]["chip"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
@@ -2240,7 +2254,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_wb
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_wb = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_parity_v").collect()]
         _wb_ok = len(_light_wb) == len(_heavy_wb) > 0
@@ -2265,7 +2279,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_wt
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_wt = [r["g"] for r in spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_parity_v").collect()]
         _wt_ok = len(_light_wt) == len(_heavy_wt) > 0
@@ -2289,7 +2303,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ct
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ct = [bytes(r["g"]) for r in spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_parity_v").collect()]
         _ct_ok = len(_light_ct) == len(_heavy_ct) > 0
@@ -2312,7 +2326,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ca
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ca = [r["a"] for r in spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_parity_v").collect()]
         _ca_ok = (len(_light_ca) == len(_heavy_ca) > 0 and _light_ca == _heavy_ca)
@@ -2335,7 +2349,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "FROM _bng_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_di
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_di = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
@@ -2355,7 +2369,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "FROM _bng_pair_parity_v").collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ed
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ed = [r["d"] for r in spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
             "FROM _bng_pair_parity_v").collect()]
@@ -2380,7 +2394,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_en
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_en = [r["cell"] for r in spark.sql(
             "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
             "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
@@ -2402,7 +2416,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % _BNG_KLOOP_K).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_kl
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_kl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_kloop(cell, %d) AS ring FROM _bng_cell_parity_v"
             % _BNG_KLOOP_K).collect()]
@@ -2424,7 +2438,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_gkr
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_gkr = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkring(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
@@ -2445,7 +2459,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
         from databricks.labs.gbx.gridx.bng import functions as _hx_gkl
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_gkl = [sorted(r["ring"]) for r in spark.sql(
             "SELECT gbx_bng_geomkloop(geom, '%s', %d) AS ring FROM _bng_geom_parity_v"
             % (_BNG_GEOM_RES, _BNG_GEOMK_K)).collect()]
@@ -2473,7 +2487,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
                      if r["c"] is not None]
         from databricks.labs.gbx.gridx.bng import functions as _hx_ci
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ci = [bytes(r["c"]) for r in spark.sql(_ci_sql).collect()
                      if r["c"] is not None]
         _ci_ok = len(_light_ci) == len(_heavy_ci) > 0
@@ -2500,7 +2514,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
                      if r["c"] is not None]
         from databricks.labs.gbx.gridx.bng import functions as _hx_cu
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_cu = [bytes(r["c"]) for r in spark.sql(_cu_sql).collect()
                      if r["c"] is not None]
         _cu_ok = len(_light_cu) == len(_heavy_cu) > 0
@@ -2530,7 +2544,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             "FROM _bng_agg_parity_v GROUP BY group").collect() if r["u"] is not None}
         from databricks.labs.gbx.gridx.bng import functions as _hx_ai
         from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
         _heavy_ai = {r["group"]: bytes(r["u"]["chip"]) for r in spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_parity_v GROUP BY group").collect()
@@ -2560,7 +2574,7 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
             _lset = sorted(r["cellid"] for r in spark.sql(_light_lateral).collect())
             from databricks.labs.gbx.gridx.bng import functions as _hx_ex
             from databricks.labs.gbx import manager as _gbx_mgr
-            _gbx_mgr.register_family(spark, ('gbx_bng_',), level="L1")
+            _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
             _hset = sorted(r["cellid"] for r in spark.sql(_heavy_array_sql).collect())
             _ok = (len(_lset) == len(_hset) > 0 and _lset == _hset)
             _vv = ("BNG %s PARITY: PASS (%d flat cells, global set equality)"

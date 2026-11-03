@@ -40,6 +40,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -250,9 +251,8 @@ def _run_heavy_isoband(spark, raster_bytes):
 
     The SQL name gbx_rst_isoband is now bound to the GDAL Scala expression.
     """
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
 
     df = spark.createDataFrame(
         [(bytearray(raster_bytes),)],

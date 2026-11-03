@@ -57,6 +57,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -188,9 +189,8 @@ def _run_heavy(spark, stat):
     Returns (float32 band array, nodata value).  The non-null assertion is the
     primary regression guard for the Decimal→Double coercion path.
     """
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
 
     spark.range(1).createOrReplaceTempView("_bp_parity_heavy")
     sql = _SQL_TEMPLATE.format(stat=stat, view="_bp_parity_heavy")
@@ -449,7 +449,7 @@ def test_binpoints_half_open_edge_parity(spark_with_jar):
     assert light_row is not None, "light half-open edge test returned null"
     light_arr, light_nd = _read_band(light_row)
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
     spark.range(1).createOrReplaceTempView("_bp_edge_heavy")
     heavy_row = spark.sql(edge_sql.format(view="_bp_edge_heavy")).collect()[0]["r"]
     assert heavy_row is not None, "heavy half-open edge test returned null"

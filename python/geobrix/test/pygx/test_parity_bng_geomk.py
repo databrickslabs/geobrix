@@ -22,6 +22,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 from shapely import to_wkb
@@ -170,7 +171,7 @@ def test_parity_bng_geomkring_simple_all_modes(spark_with_jar, coverage):
         )
 
     # Now register heavy (overwrites light SQL names).
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _LONDON_BOX, _RES_SIMPLE, 1, mode, "gbx_bng_geomkring", coverage
@@ -199,7 +200,7 @@ def test_parity_bng_geomkloop_simple_all_modes(spark_with_jar, coverage):
             _LONDON_BOX, _RES_SIMPLE, 1, mode, coverage
         )
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _LONDON_BOX, _RES_SIMPLE, 1, mode, "gbx_bng_geomkloop", coverage
@@ -226,7 +227,7 @@ def test_parity_bng_geomkring_holed_all_modes(spark_with_jar, coverage):
     for mode in _MODES:
         light_results[mode] = _collect_light(_HOLED_POLY, _RES_HOLED, 1, mode, coverage)
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_bng_geomkring", coverage
@@ -255,7 +256,7 @@ def test_parity_bng_geomkloop_holed_all_modes(spark_with_jar, coverage):
             _HOLED_POLY, _RES_HOLED, 1, mode, coverage
         )
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_bng_geomkloop", coverage
@@ -290,7 +291,7 @@ def test_parity_bng_geomkring_boundary_out_aligned(spark_with_jar, coverage):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = _collect_light(_BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_ALIGNED_GEOM,
@@ -318,7 +319,7 @@ def test_parity_bng_geomkloop_boundary_out_aligned(spark_with_jar, coverage):
     light = _collect_light_loop(
         _BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
     )
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_ALIGNED_GEOM,
@@ -344,7 +345,7 @@ def test_parity_bng_geomkring_boundary_out_large(spark_with_jar, coverage):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = _collect_light(_BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_LARGE_GEOM,
@@ -372,7 +373,7 @@ def test_parity_bng_geomkloop_boundary_out_large(spark_with_jar, coverage):
     light = _collect_light_loop(
         _BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage
     )
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy = _collect_heavy(
         spark,
         _BNG_LARGE_GEOM,
@@ -432,7 +433,7 @@ def test_parity_bng_geomkring_gc_all_modes(spark_with_jar, coverage):
     for mode in _MODES:
         light_results[mode] = _collect_light(_GC_MIXED, _RES_GC, 1, mode, coverage)
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_bng_geomkring", coverage
@@ -459,7 +460,7 @@ def test_parity_bng_geomkloop_gc_all_modes(spark_with_jar, coverage):
     for mode in _MODES:
         light_results[mode] = _collect_light_loop(_GC_MIXED, _RES_GC, 1, mode, coverage)
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     for mode in _MODES:
         heavy = _collect_heavy(
             spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_bng_geomkloop", coverage

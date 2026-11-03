@@ -39,6 +39,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 from shapely import equals_exact, from_wkb, from_wkt, get_dimensions, get_srid
@@ -160,8 +161,10 @@ def _register_tier(spark, mod, prefixes):
     """The light tier (pygx) at L3, the heavy one (the gridx module) at L1: each leg of a parity test installs its own."""
     from databricks.labs.gbx import manager as gbx_manager
 
-    level = "L3" if mod.__name__.startswith("databricks.labs.gbx.pygx") else "L1"
-    gbx_manager.register_family(spark, prefixes, level=level)
+    if mod.__name__.startswith("databricks.labs.gbx.pygx"):
+        gbx_manager.register_family(spark, prefixes, level="L3")
+    else:
+        heavy_register(spark, prefixes)
 
 
 def test_bng_full_parity(spark_with_jar):
@@ -308,9 +311,8 @@ def test_bng_full_parity(spark_with_jar):
         kloopexplode <-> gbx_bng_kloop, geomk*explode <-> gbx_bng_geomk*,
         tessellateexplode <-> gbx_bng_tessellate (chip cellids). The generator's own
         columns are compared in test_bng_tessellateexplode_columns_parity."""
-        from databricks.labs.gbx import manager as gbx_manager
 
-        gbx_manager.register_family(spark, ("gbx_bng_",))
+        heavy_register(spark, ("gbx_bng_",))
 
         def arr(call):
             row = df.select(call.alias("a")).collect()[0]["a"]
@@ -349,7 +351,6 @@ def test_bng_full_parity(spark_with_jar):
     heavy = scalar_row(hx, None)
     heavy_chip = chip_row(hx)
     heavy_tess = tess_rows(hx, False)  # heavy: keep_core_geom=False
-    heavy_agg_u, heavy_agg_i = agg_chip_geom(hx)
     heavy_expl = explode_sets_heavy()
 
     # === cell-ID / set parity (EXACT) ===
@@ -425,9 +426,13 @@ def test_bng_full_parity(spark_with_jar):
             continue
         _assert_geom_parity(lgeom, hgeom, f"tessellate-chip cell={cell}")
 
-    # aggregates: both tiers return the dissolved geometry as WKB (BINARY) -- compare it decoded
-    _assert_geom_parity(light_agg_u, heavy_agg_u, "cellunion_agg")
-    _assert_geom_parity(light_agg_i, heavy_agg_i, "cellintersection_agg")
+    # aggregates: the manifest rows are light-only (BINARY WKB, no L1 row). The JAR's leftover companions return a
+    # cell, not a geometry, so there is no heavy contract to compare; the light result is checked on its own.
+    for ctx, blob in (
+        ("cellunion_agg", light_agg_u),
+        ("cellintersection_agg", light_agg_i),
+    ):
+        assert blob is not None and from_wkb(bytes(blob)) is not None, ctx
 
 
 # --- tessellateexplode: the heavy generator emits the columns it declares ---------------------
@@ -481,7 +486,7 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
     light = by_cell(light_df)
 
     # ---- HEAVY ----
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy_two_arg_df = spark.sql(
         "SELECT gbx_bng_tessellateexplode(wkb, res) FROM bng_te_parity"
     )
@@ -1003,7 +1008,6 @@ def test_bng_geomkring_geomkloop_mode_parity(spark_with_jar, mode):
     from pyspark.sql import functions as f
     from shapely import from_wkt as _swkt
 
-    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.pygx import _bng
 
     spark = spark_with_jar
@@ -1017,7 +1021,7 @@ def test_bng_geomkring_geomkloop_mode_parity(spark_with_jar, mode):
     light_loop = sorted(_bng.geometry_k_loop_str(holed_geom, _res_local, 1, mode))
 
     # --- HEAVY: register heavy and collect via SQL ---
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     df_h = spark.createDataFrame([(holed_wkb, _res_local)], "geom binary, res int")
 
     def arr(col_expr):

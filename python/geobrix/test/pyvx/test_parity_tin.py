@@ -12,12 +12,11 @@ INVOCATION SURFACES DIFFER PER TIER (important):
     inside ``.select(...)``. A single-field struct unwraps, so the selected column
     holds the WKB directly.
 
-These resolve through DIFFERENT catalog paths, so the shared SQL name does NOT
-let one tier overwrite the other (verified: the Python UDTF registration shadows
-the JVM Generator for ``LATERAL`` TVF resolution, and the JVM Generator is only
-reachable via ``call_function``). We therefore invoke EACH tier through its own
-native surface in the same session — light via SQL LATERAL, heavy via the
-generator-Column DataFrame API — and compare the decoded outputs.
+Both tiers register under the SAME SQL name and a later registration replaces
+the earlier one, so each leg registers its own level (L3 or L1) right before it
+runs and its rows are collected before the other leg registers. Each tier is
+invoked through its own native surface — light via SQL LATERAL, heavy via the
+generator-Column DataFrame API — and the decoded outputs are compared.
 
 Parity posture (per the pyvx TIN spec):
 - **No breaklines** → Delaunay is ~unique for points in general position: assert
@@ -107,17 +106,19 @@ def _pts_wkb(coords):
     return [bytearray(to_wkb(Point(*c))) for c in coords]
 
 
-def _both_registered(spark):
-    """Register light (Python UDTF) then heavy (JVM Generator). They occupy
-    different resolution paths, so both surfaces are usable in this session."""
+def _leg(spark, level):
+    """Register ``gbx_st_*`` at ``level`` for the leg that runs next. Both tiers use the same SQL names and a later
+    registration replaces an earlier one, so each leg registers right before it runs and its rows are collected
+    before the other leg registers."""
     from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
-    gbx_manager.register_family(spark, ("gbx_st_",))
+    names = gbx_manager.names_at_level(("gbx_st_",), level)
+    gbx_manager.register_family(spark, ("gbx_st_",), only=names, level=level)
 
 
 def _light_triangles(spark, view, mode):
     """Light triangles via SQL LATERAL UDTF → list of WKB-bearing rows (col 'triangle')."""
+    _leg(spark, "L3")
     return spark.sql(
         "SELECT t.triangle FROM " + view + ", LATERAL "
         "gbx_st_triangulate(pts, bl, mt, st, spf, '" + mode + "') t"
@@ -129,6 +130,7 @@ def _heavy_triangles(df, mode):
     unwraps, so the aliased column holds the triangle WKB directly."""
     from pyspark.sql import functions as f
 
+    _leg(df.sparkSession, "L1")
     return df.select(
         f.call_function(
             "gbx_st_triangulate",
@@ -164,6 +166,7 @@ def _triangle_edges(rows, col="triangle", ndigits=6):
 
 
 def _interp_grid_light(spark, view, mode):
+    _leg(spark, "L3")
     rows = spark.sql(
         "SELECT t.elevation_point AS p FROM " + view + ", LATERAL "
         "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, xmin, ymin, xmax, ymax, w, h, srid, '"
@@ -176,6 +179,7 @@ def _interp_grid_light(spark, view, mode):
 def _interp_grid_heavy(df, mode):
     from pyspark.sql import functions as f
 
+    _leg(df.sparkSession, "L1")
     rows = df.select(
         f.call_function(
             "gbx_st_interpolateelevationbbox",
@@ -229,7 +233,6 @@ def test_triangulate_parity_no_breaklines(spark_with_jar):
     EXACTLY equal — zero divergence between light scipy and heavy JTS.)
     """
     spark = spark_with_jar
-    _both_registered(spark)
 
     pts = _pts_wkb(_GENERAL_PTS)
     df = spark.createDataFrame(
@@ -271,7 +274,6 @@ def test_interpolate_parity_surface_closeness(spark_with_jar):
     (Observed max Z divergence: ~1.8e-15 — floating-point noise.)
     """
     spark = spark_with_jar
-    _both_registered(spark)
 
     pts = _pts_wkb(_GENERAL_PTS)
     df = spark.createDataFrame(
@@ -309,7 +311,6 @@ def test_triangulate_breakline_edges_present_both(spark_with_jar):
     and intentionally not exercised here.)
     """
     spark = spark_with_jar
-    _both_registered(spark)
 
     corners = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0), (0.0, 10.0, 0.0)]
     pts = _pts_wkb(corners)
@@ -350,9 +351,6 @@ def test_conforming_is_heavy_only(spark_with_jar):
     from databricks.labs.gbx import register
 
     spark = spark_with_jar
-    _both_registered(
-        spark
-    )  # loads the JAR; the manager then picks one level for the name
     fn = "gbx_st_triangulate"
 
     pts = _pts_wkb(_GENERAL_PTS)

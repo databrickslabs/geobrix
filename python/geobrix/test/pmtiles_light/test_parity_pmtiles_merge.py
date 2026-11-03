@@ -20,6 +20,7 @@ native libraries. Auto-skips when absent. Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import mapbox_vector_tile as mvt
 import pytest
@@ -135,9 +136,7 @@ def _heavy_archive(spark_with_jar):
     """Run heavy gbx_pmtiles_agg and return the archive bytes."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark_with_jar, ("gbx_pmtiles_",))
+    heavy_register(spark_with_jar, ("gbx_pmtiles_",))
     df = spark_with_jar.createDataFrame(
         [
             ("g", bytearray(_BLOB_A), _Z, _X, _Y),

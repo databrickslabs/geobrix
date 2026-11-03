@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, struct
+from pyspark.sql.functions import call_function, col, lit, struct
 
 HERE = Path(__file__).resolve()
 LIBDIR = (HERE.parents[2] / "lib").resolve()
@@ -21,7 +21,7 @@ JAR = candidates[-1].resolve()
 
 @pytest.fixture(scope="module")
 def spark():
-    from databricks.labs.gbx import manager as gbx_manager
+    from test._heavy import heavy_register
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     s = (
@@ -36,7 +36,7 @@ def spark():
     )
     s.sparkContext.setLogLevel("ERROR")
 
-    gbx_manager.register_family(s, ("gbx_st_",))
+    heavy_register(s, ("gbx_st_",))  # the JVM expressions
     yield s
 
 
@@ -53,18 +53,17 @@ def _polygon_wkb_30deg_band() -> bytes:
 
 def test_st_asmvt_pyramid_emits_rows(spark):
     """Pyramid generator emits one row per intersecting tile across z=2..2."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     rect_wkb = _polygon_wkb_30deg_band()
     df = spark.createDataFrame([(rect_wkb, "region-a", 1)], ["geom_wkb", "name", "id"])
     # Generators are top-level in Spark 4.0 - invoke directly in select(), no f.explode wrap.
     out = df.select(
-        vx.st_asmvt_pyramid(
+        call_function(
+            "gbx_st_asmvt_pyramid",
             col("geom_wkb"),
             struct(col("name"), col("id")),
-            2,
-            2,
-            "regions",
+            lit(2),
+            lit(2),
+            lit("regions"),
         ).alias("t")
     ).collect()
     # At z=2 the rectangle straddles the prime meridian — tiles x=1 and x=2 in the y=1 row.

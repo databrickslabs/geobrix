@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit
+from pyspark.sql.functions import call_function, col, lit
 from pyspark.sql.types import ArrayType, DoubleType, StringType, StructField, StructType
 
 HERE = Path(__file__).resolve()
@@ -25,7 +25,7 @@ JAR = candidates[-1].resolve()
 
 @pytest.fixture(scope="module")
 def spark():
-    from databricks.labs.gbx import manager as gbx_manager
+    from test._heavy import heavy_register
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     s = (
@@ -40,7 +40,7 @@ def spark():
     )
     s.sparkContext.setLogLevel("ERROR")
 
-    gbx_manager.register_family(s, ("gbx_st_",))
+    heavy_register(s, ("gbx_st_",))  # the JVM expressions
     yield s
 
 
@@ -80,8 +80,6 @@ _TIN_SCHEMA = StructType(
 
 def test_st_triangulate_emits_triangle_rows(spark):
     """Triangulate returns at least 1 triangle WKB row for a non-collinear square."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     # Build a single-row df: points_wkt (array of WKT strings), breaklines (empty array).
     # Explicit schema required because PySpark cannot infer the type of an empty Python list.
     df = spark.createDataFrame(
@@ -90,7 +88,8 @@ def test_st_triangulate_emits_triangle_rows(spark):
     )
     # Generators are top-level in Spark 4.0 — invoke directly in select(), no explode.
     out = df.select(
-        vx.st_triangulate(
+        call_function(
+            "gbx_st_triangulate",
             col("pts"),
             col("breaks"),
             col("merge_tol"),
@@ -115,8 +114,6 @@ def test_st_triangulate_emits_triangle_rows(spark):
 
 def test_st_interpolateelevationbbox_emits_elevation_rows(spark):
     """BBox grid interpolation returns 100 Z-point rows for a 10x10 grid over a 100x100 square."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     # 4 corners of 100x100 square, z=0 everywhere (flat plane)
     pts_wkt = [
         "POINT Z (0 0 0)",
@@ -138,7 +135,8 @@ def test_st_interpolateelevationbbox_emits_elevation_rows(spark):
         schema=bbox_schema,
     )
     out = df.select(
-        vx.st_interpolateelevationbbox(
+        call_function(
+            "gbx_st_interpolateelevationbbox",
             col("pts"),
             col("breaks"),
             col("merge_tol"),
@@ -170,15 +168,14 @@ def test_st_interpolateelevationbbox_emits_elevation_rows(spark):
 
 def test_st_interpolateelevationgeom_emits_elevation_rows(spark):
     """Origin-grid interpolation returns >= 1 Z-point row for a 3x3 grid over a 10x10 square."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     df = spark.createDataFrame(
         [(_SQUARE_CORNERS_WKT, [], _MERGE_TOL, _SNAP_TOL, _SPLIT_FINDER)],
         schema=_TIN_SCHEMA,
     )
     # grid_origin as WKT string (no SRID prefix — plain WKT, SRID will be 0)
     out = df.select(
-        vx.st_interpolateelevationgeom(
+        call_function(
+            "gbx_st_interpolateelevationgeom",
             col("pts"),
             col("breaks"),
             col("merge_tol"),

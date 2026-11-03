@@ -35,6 +35,7 @@ Run in geobrix-dev Docker:
 import io
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import numpy as np
 import pytest
@@ -109,9 +110,8 @@ def spark_with_jar():
 @pytest.fixture(scope="module")
 def heavy_registered(spark_with_jar):
     """Register heavy rasterx functions and return the spark session."""
-    from databricks.labs.gbx import manager as gbx_manager
 
-    gbx_manager.register_family(spark_with_jar, ("gbx_rst_",))
+    heavy_register(spark_with_jar, ("gbx_rst_",))
     return spark_with_jar
 
 

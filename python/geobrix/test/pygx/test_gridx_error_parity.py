@@ -41,6 +41,7 @@ The suite is ``@integration`` and requires a staged JAR.  A plain
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -122,7 +123,7 @@ def test_bng_malformed_cellid_null_both_tiers(spark_with_jar):
     light_centroid = spark.sql("SELECT gbx_bng_centroid('!!') g").first()["g"]
     light_kring = spark.sql("SELECT gbx_bng_kring('!!', 1) arr").first()["arr"]
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy_aswkb = spark.sql("SELECT gbx_bng_aswkb('!!') g").first()["g"]
     heavy_aswkt = spark.sql("SELECT gbx_bng_aswkt('!!') g").first()["g"]
     heavy_cellarea = spark.sql("SELECT gbx_bng_cellarea('!!') a").first()["a"]
@@ -179,7 +180,7 @@ def test_bng_bad_resolution_raises_both_tiers(spark_with_jar):
     with pytest.raises(Exception):
         spark.sql(f"SELECT gbx_bng_pointascell({valid_geom}, 'bogus')").first()
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     with pytest.raises(Exception):
         spark.sql(f"SELECT gbx_bng_pointascell({valid_geom}, 'bogus')").first()
 
@@ -212,7 +213,7 @@ def test_quadbin_out_of_range_lat_clamped_not_null(spark_with_jar):
         "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(89.0 AS DOUBLE), 10) c"
     ).first()["c"]
 
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     heavy_val = spark.sql(
         "SELECT gbx_quadbin_pointascell(CAST(10.0 AS DOUBLE), CAST(89.0 AS DOUBLE), 10) c"
     ).first()["c"]
@@ -253,7 +254,7 @@ def test_bng_kringexplode_zero_rows_both_tiers(spark_with_jar):
     )
     light_count = spark.sql("SELECT cellid FROM gbx_bng_kringexplode('!!', 1)").count()
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy_count = spark.sql("SELECT cellid FROM gbx_bng_kringexplode('!!', 1)").count()
 
     assert (
@@ -280,7 +281,7 @@ def test_bng_kloopexplode_zero_rows_both_tiers(spark_with_jar):
     )
     light_count = spark.sql("SELECT cellid FROM gbx_bng_kloopexplode('!!', 1)").count()
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    heavy_register(spark, ("gbx_bng_",))
     heavy_count = spark.sql("SELECT cellid FROM gbx_bng_kloopexplode('!!', 1)").count()
 
     assert (

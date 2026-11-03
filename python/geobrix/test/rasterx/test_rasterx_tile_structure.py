@@ -164,14 +164,13 @@ def test_tessellated_tiles_have_cellid(spark):
     """Test that tessellated tiles have non-null cellid"""
     from databricks.labs.gbx.rasterx import functions as rx
 
-    # rst_h3_tessellate is a generator that produces rows directly (no explode needed)
+    # rst_h3_tessellate is a generator: it takes the DataFrame first and gives one row per cell tile
     # Use resolution 1 (coarse) to avoid generating too many cells
+    src = spark.range(1).select(
+        tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile")
+    )
     df = (
-        spark.range(1)
-        .select(tile_from_path(rx, f, str(MODIS_B01), "GTiff").alias("tile"))
-        .select(rx.rst_h3_tessellate(f.col("tile"), f.lit(1)).alias("tess_tile"))
-        .select(f.col("tess_tile.cellid").alias("cellid"))
-        .limit(10)
+        rx.rst_h3_tessellate(src, "tile", 1).select("cellid").limit(10)
     )  # Limit for test efficiency
 
     result = df.collect()

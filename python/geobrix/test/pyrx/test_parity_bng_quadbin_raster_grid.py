@@ -1943,9 +1943,10 @@ def _single_tile(spark, raster, tier, fn):
     from pyspark.sql import functions as f
 
     if tier == "light":
+        from databricks.labs.gbx import manager as gbx_manager
         from databricks.labs.gbx.pyrx import functions as mod
 
-        heavy_register(spark, ("gbx_rst_",))
+        gbx_manager.register_family(spark, ("gbx_rst_",), level="L3")
         df = tp.light_tile_df(spark, raster)
     else:
         from databricks.labs.gbx.rasterx import functions as mod

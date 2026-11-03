@@ -19,6 +19,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -178,7 +179,7 @@ def outputs(spark_with_jar):
         for r in spark.sql(f"SELECT t.cellid FROM rt, LATERAL {retile} t").collect()
     ]
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
     heavy = {
         f: [
             r.raster
@@ -196,7 +197,7 @@ def outputs(spark_with_jar):
     ]
     heavy_merge_w = (
         spark.sql(
-            "SELECT gbx_rst_width(gbx_rst_fromcontent(gbx_rst_merge_agg(g), 'GTiff')) w FROM "
+            "SELECT gbx_rst_width(gbx_rst_merge_agg(g)) w FROM "
             "(SELECT gbx_rst_retile(tile, 512, 512) AS g FROM lce)"
         )
         .collect()[0]

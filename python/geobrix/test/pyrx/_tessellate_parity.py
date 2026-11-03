@@ -9,6 +9,7 @@ them first).
 """
 
 import math
+from test._heavy import heavy_register
 
 import numpy as np
 
@@ -89,10 +90,9 @@ def heavy_chips(spark, raster, fn_name, resolution, assignment, coverage, id_fn)
     DataFrame-first now) -> same shape as light."""
     from pyspark.sql import functions as f
 
-    from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.rasterx import functions as hx
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    heavy_register(spark, ("gbx_rst_",))
     df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         hx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )

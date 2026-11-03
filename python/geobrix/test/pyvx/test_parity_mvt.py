@@ -104,8 +104,8 @@ def test_light_vs_heavy_asmvt_decoded_parity(spark_with_jar):
     from databricks.labs.gbx.vectorx import functions as hx
 
     spark = spark_with_jar
-    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
-    gbx_manager.register_family(spark, ("gbx_st_",))
+    # The light leg calls the Python aggregator directly; the heavy leg calls the SQL name, pinned to L1.
+    gbx_manager.register_family(spark, ("gbx_st_",), only=["gbx_st_asmvt"], level="L1")
 
     rows = [
         (bytearray(to_wkb(Point(100.0, 200.0))), 1, 3.5, "alpha"),
@@ -170,8 +170,8 @@ def test_light_vs_heavy_asmvt_small_polygon_parity(spark_with_jar):
     from databricks.labs.gbx.vectorx import functions as hx
 
     spark = spark_with_jar
-    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
-    gbx_manager.register_family(spark, ("gbx_st_",))
+    # The light leg calls the Python aggregator directly; the heavy leg calls the SQL name, pinned to L1.
+    gbx_manager.register_family(spark, ("gbx_st_",), only=["gbx_st_asmvt"], level="L1")
 
     # Mix a small polygon with a point so we prove polygons specifically survive.
     poly = Polygon(

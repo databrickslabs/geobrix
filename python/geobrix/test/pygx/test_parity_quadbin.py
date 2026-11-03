@@ -29,6 +29,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 
@@ -154,7 +155,7 @@ def test_pointascell_edge_antimeridian_and_pole(spark_with_jar):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = [r["c"] for r in df.select(col).collect()]
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))  # overwrites the SQL name
+    heavy_register(spark, ("gbx_quadbin_",))  # overwrites the SQL name
     heavy = [
         r["c"]
         for r in df.select(
@@ -192,7 +193,7 @@ def test_polyfill_bbox_corner_tile_boundary(spark_with_jar):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = sorted(df.select(col).collect()[0]["pf"])
-    gbx_manager.register_family(spark, ("gbx_quadbin_",))
+    heavy_register(spark, ("gbx_quadbin_",))
     heavy = sorted(
         df.select(hx.quadbin_polyfill(f.col("geom"), f.lit(res)).alias("pf")).collect()[
             0

@@ -97,14 +97,18 @@ def test_legacy_parity_polygon_with_hole_and_z(spark_with_jar):
     df.createOrReplaceTempView("legv")
 
     # light first
-    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
+    gbx_manager.register_family(
+        spark, ("gbx_st_",), only=["gbx_st_legacyaswkb"], level="L3"
+    )
     light = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legv").collect()[0]["w"]
     )
 
     # heavy overwrites the same SQL name
 
-    gbx_manager.register_family(spark, ("gbx_st_legacy",))
+    gbx_manager.register_family(
+        spark, ("gbx_st_legacy",), only=["gbx_st_legacyaswkb"], level="L1"
+    )
     heavy = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legv").collect()[0]["w"]
     )
@@ -149,14 +153,18 @@ def test_legacy_parity_multipolygon_hole_on_second(spark_with_jar):
     df.createOrReplaceTempView("legmp")
 
     # light first
-    gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
+    gbx_manager.register_family(
+        spark, ("gbx_st_",), only=["gbx_st_legacyaswkb"], level="L3"
+    )
     light = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legmp").collect()[0]["w"]
     )
 
     # heavy overwrites the same SQL name
 
-    gbx_manager.register_family(spark, ("gbx_st_legacy",))
+    gbx_manager.register_family(
+        spark, ("gbx_st_legacy",), only=["gbx_st_legacyaswkb"], level="L1"
+    )
     heavy = bytes(
         spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM legmp").collect()[0]["w"]
     )

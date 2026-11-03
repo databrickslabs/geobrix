@@ -1,11 +1,10 @@
-"""Heavy Python TIN wrappers expose the optional ``mode`` parameter.
+"""The JVM TIN expressions take the optional trailing ``mode`` parameter.
 
 The Scala/SQL ``gbx_st_triangulate`` / ``gbx_st_interpolateelevation{bbox,geom}``
 expressions are arity-overloaded with a trailing ``mode`` arg
-(``'constrained'`` default, ``'conforming'`` Steiner). These tests assert the
-HEAVY Python Column wrappers in
-``databricks.labs.gbx.vectorx.functions`` accept and forward ``mode`` so a
-DataFrame-API user can reach both modes — matching the light pyvx wrappers.
+(``'constrained'`` default, ``'conforming'`` Steiner). These tests call the
+installed JVM companions by SQL name, with and without ``mode``, and assert both
+modes are reachable and the shorter arity still works.
 
 Heavy generators are top-level Generator Columns in Spark 4.0: invoke directly
 in ``select(...)`` (the single-field struct unwraps to the WKB value).
@@ -25,7 +24,7 @@ from pathlib import Path
 from test._heavy import heavy_register  # noqa: E402
 
 import pytest
-from pyspark.sql.functions import col, lit
+from pyspark.sql.functions import call_function, col, lit
 from pyspark.sql.types import ArrayType, DoubleType, StringType, StructField, StructType
 
 pytestmark = pytest.mark.integration
@@ -113,14 +112,13 @@ def _tin_df(spark):
 
 
 @pytest.mark.parametrize("mode", ["constrained", "conforming"])
-def test_st_triangulate_wrapper_mode(spark, mode):
-    """The heavy wrapper forwards mode for both 'constrained' and 'conforming'."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
+def test_st_triangulate_expression_mode(spark, mode):
+    """The JVM expression takes mode for both 'constrained' and 'conforming'."""
     out = (
         _tin_df(spark)
         .select(
-            vx.st_triangulate(
+            call_function(
+                "gbx_st_triangulate",
                 col("pts"),
                 col("breaks"),
                 col("merge_tol"),
@@ -136,14 +134,13 @@ def test_st_triangulate_wrapper_mode(spark, mode):
         assert r["t"] is not None and len(r["t"]) > 0
 
 
-def test_st_triangulate_wrapper_default_mode(spark):
+def test_st_triangulate_expression_default_mode(spark):
     """Default (no mode arg) still works — back-compat with the 5-arg arity."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     out = (
         _tin_df(spark)
         .select(
-            vx.st_triangulate(
+            call_function(
+                "gbx_st_triangulate",
                 col("pts"),
                 col("breaks"),
                 col("merge_tol"),
@@ -162,14 +159,13 @@ def test_st_triangulate_wrapper_default_mode(spark):
 
 
 @pytest.mark.parametrize("mode", ["constrained", "conforming"])
-def test_st_interpolateelevationbbox_wrapper_mode(spark, mode):
-    """The heavy bbox wrapper forwards mode for both modes and emits rows."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
+def test_st_interpolateelevationbbox_expression_mode(spark, mode):
+    """The JVM bbox expression takes mode for both modes and emits rows."""
     out = (
         _tin_df(spark)
         .select(
-            vx.st_interpolateelevationbbox(
+            call_function(
+                "gbx_st_interpolateelevationbbox",
                 col("pts"),
                 col("breaks"),
                 col("merge_tol"),
@@ -192,14 +188,13 @@ def test_st_interpolateelevationbbox_wrapper_mode(spark, mode):
         assert r["t"] is not None and len(r["t"]) > 0
 
 
-def test_st_interpolateelevationbbox_wrapper_default_mode(spark):
+def test_st_interpolateelevationbbox_expression_default_mode(spark):
     """Default (no mode arg) still works — back-compat with the 12-arg arity."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     out = (
         _tin_df(spark)
         .select(
-            vx.st_interpolateelevationbbox(
+            call_function(
+                "gbx_st_interpolateelevationbbox",
                 col("pts"),
                 col("breaks"),
                 col("merge_tol"),
@@ -225,14 +220,13 @@ def test_st_interpolateelevationbbox_wrapper_default_mode(spark):
 
 
 @pytest.mark.parametrize("mode", ["constrained", "conforming"])
-def test_st_interpolateelevationgeom_wrapper_mode(spark, mode):
-    """The heavy origin-grid wrapper forwards mode for both modes and emits rows."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
+def test_st_interpolateelevationgeom_expression_mode(spark, mode):
+    """The JVM origin-grid expression takes mode for both modes and emits rows."""
     out = (
         _tin_df(spark)
         .select(
-            vx.st_interpolateelevationgeom(
+            call_function(
+                "gbx_st_interpolateelevationgeom",
                 col("pts"),
                 col("breaks"),
                 col("merge_tol"),
@@ -253,14 +247,13 @@ def test_st_interpolateelevationgeom_wrapper_mode(spark, mode):
         assert r["t"] is not None and len(r["t"]) > 0
 
 
-def test_st_interpolateelevationgeom_wrapper_default_mode(spark):
+def test_st_interpolateelevationgeom_expression_default_mode(spark):
     """Default (no mode arg) still works — back-compat with the 10-arg arity."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
     out = (
         _tin_df(spark)
         .select(
-            vx.st_interpolateelevationgeom(
+            call_function(
+                "gbx_st_interpolateelevationgeom",
                 col("pts"),
                 col("breaks"),
                 col("merge_tol"),

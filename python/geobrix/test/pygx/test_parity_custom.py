@@ -49,6 +49,7 @@ Run in geobrix-dev Docker:
 
 import logging
 from pathlib import Path
+from test._heavy import heavy_register  # noqa: E402
 
 import pytest
 from shapely import equals_exact, from_wkb, get_srid, set_srid
@@ -207,9 +208,7 @@ def test_custom_pointascell_polyfill_all_four_encodings(spark_with_jar):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light_pac, light_pf = collect_enc()
-    gbx_manager.register_family(
-        spark, ("gbx_custom_",)
-    )  # overwrites the gbx_custom_* names
+    heavy_register(spark, ("gbx_custom_",))  # overwrites the gbx_custom_* names
     heavy_pac, heavy_pf = collect_enc()
 
     # All four encodings agree within each tier (pointascell).
@@ -274,7 +273,7 @@ def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
         spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
     )
     light = spark.sql(sql).collect()[0]["c"]
-    gbx_manager.register_family(
+    heavy_register(
         spark, ("gbx_custom_",)
     )  # overwrites the catalog with heavy expressions
     heavy = spark.sql(sql).collect()[0]["c"]

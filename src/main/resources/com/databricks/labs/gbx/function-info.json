@@ -388,7 +388,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridavg(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridavg( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Mean of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -398,7 +398,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridcount(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridcount( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Count the pixels in each custom-grid cell, per band.",
       "surfaces": [
@@ -408,7 +408,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridmax(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmax( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Maximum of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -418,7 +418,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridmedian(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmedian( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Median of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -428,7 +428,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridmin(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmin( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Minimum of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -438,7 +438,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridstddev(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridstddev( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Population standard deviation of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -448,7 +448,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridsum(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridsum( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Sum of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -458,7 +458,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_rastertogridvariance(c0, c1, 1) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridvariance( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Population variance of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
@@ -468,7 +468,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_tessellate": {
-      "examples": "Examples:\n      > SELECT gbx_out.* FROM gbx_example, LATERAL gbx_rst_custom_tessellate(c0, c1, 0) AS gbx_out;",
+      "examples": "Examples:\n      > SELECT gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r;",
       "usage_args": "tile, grid, resolution, [assignment], [coverage]",
       "description": "Cut a tile into custom-grid cells, one tile per cell.",
       "surfaces": [

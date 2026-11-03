@@ -170,4 +170,13 @@ RASTER_TO_GRID = _stat_rows() + (
     Case(
         "cg_rtg_null_grid", _fn("custom", "avg"), (BNG, None, 1), "no_rows", None, ONLY
     ),
+    Case(
+        "cg_rtg_negative_res", _fn("custom", "avg"), (BNG, G, -1), "raises", "-1", ONLY
+    ),
+    # the custom-grid function has its own eval(tile, grid, resolution, ...): an error tile and unreadable bytes
+    # give no rows there too
+    Case("cg_rtg_error_tile", _fn("custom", "avg"), (ERR, G, 1), "no_rows", None, ONLY),
+    Case(
+        "cg_rtg_corrupt", _fn("custom", "avg"), (CORRUPT, G, 1), "no_rows", None, ONLY
+    ),
 )

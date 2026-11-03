@@ -508,3 +508,37 @@ def test_the_grid_stats_kind_can_fail():
         judge([row(float(c), m) for c, m in cells.items()]) is not None
     )  # an id through a float
     assert judge(rows, past_2_53=True) is not None  # no id there is past 2**53
+
+    # covering (count): the shares add up to the 3 valid pixels, each centre cell has a share, and no cell is far off
+    cover = {"stat": "count", "assignment": "covering"}
+    c0, c1, c2 = cells
+    far = cg_id(5, 5, 0)
+    assert judge([row(c, 1.0) for c in cells], **cover) is None
+    assert (
+        judge([row(c0, 1.0), row(c1, 1.0), row(c2, 0.5)], **cover) is not None
+    )  # adds up to 2.5
+    assert (
+        judge([row(c, 1.0, band=2) for c in cells], **cover) is not None
+    )  # band 1 has none
+    assert (
+        judge([row(c0, 2.0), row(c1, 1.0)], **cover) is not None
+    )  # a centre cell with no share
+    assert (
+        judge([row(c0, 1.0), row(c1, 1.0), row(c2, 0.5), row(far, 0.5)], **cover)
+        is not None
+    )  # a cell no valid pixel is near
+    assert (
+        judge([row(c, 1.0) for c in cells], stat="sum", assignment="covering")
+        is not None
+    )  # not count
+
+
+def test_the_bng_oracle_names_the_100km_square_and_refuses_quadrants():
+    from databricks.labs.gbx.bench import oracle_checks
+
+    # TQ is the square holding (530000, 180000) (central London); at res 1 the id is the two letters alone
+    assert oracle_checks._bng_square(530000.0, 180000.0, 100000) == "TQ"
+    assert oracle_checks._bng_square(530000.0, 180000.0, 10000) == "TQ38"
+    assert oracle_checks._grid_keys("bng", 1, [530000.0], [180000.0]) == ["TQ"]
+    with pytest.raises(ValueError, match="unsupported in the oracle"):
+        oracle_checks._grid_keys("bng", -3, [530000.0], [180000.0])

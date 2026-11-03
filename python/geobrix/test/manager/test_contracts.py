@@ -2522,3 +2522,71 @@ def test_an_arrow_l3_row_registers_an_arrow_udtf_and_another_row_does_not(
     assert seen["gbx_rst_retile"].evalType == PythonEvalType.SQL_ARROW_TABLE_UDF
     assert seen["gbx_bng_tessellateexplode"].evalType == PythonEvalType.SQL_TABLE_UDF
     assert "arrow" in manifest.LEVEL_KEYS["L3"]
+
+
+def test_the_heavy_register_puts_back_every_name_without_an_l1(monkeypatch):
+    """The JAR registers a scalar under each Scala name, and the last registration wins: right after it the old
+    `register(spark)` calls must re-apply the manager for every manifest row with no L1 (the raster-to-grid
+    table functions, clip, retile, ...), or `LATERAL gbx_rst_h3_rastertogridavg(...)` meets a JAR scalar.
+    No JAR here: the JVM call is a fake session; the manager call is recorded."""
+    from pyspark.sql import SparkSession
+
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.gridx.h3 import functions as h3x
+    from databricks.labs.gbx.vectorx import functions as vx
+
+    class _Chain:
+        def __getattr__(self, _name):
+            return self
+
+        def __call__(self, *a, **k):
+            return self
+
+        def collect(self):
+            return []
+
+    class _Fake:
+        read = _Chain()
+        _jvm = _Chain()
+        _jsparkSession = None
+
+    calls = []
+    monkeypatch.setattr(SparkSession.Builder, "getOrCreate", lambda self: _Fake())
+    monkeypatch.setattr(
+        manager, "register", lambda spark, **kw: calls.append(kw["only"]) or {}
+    )
+    rx.register(None)
+    h3x.register(None)
+    vx.register(None)
+    rst, h3, st = calls
+    assert len(calls) == 3
+    expect = {n for n, f in MAN.functions.items() if "L1" not in f.levels}
+    for names, prefix in ((rst, "gbx_rst_"), (h3, "gbx_h3_"), (st, "gbx_st_")):
+        assert names and all(n.startswith(prefix) for n in names)
+        assert set(names) == {n for n in expect if n.startswith(prefix)} - {
+            n for n, f in MAN.functions.items() if f.status == "mvp"
+        }
+    assert len([n for n in rst if "rastertogrid" in n]) == 32
+    assert not any("L1" in MAN.functions[n].levels for n in rst + h3 + st)
+
+
+@pytest.mark.integration
+def test_the_heavy_register_leaves_a_no_l1_name_a_table_function(jvm_spark):
+    """With the JAR loaded, `rasterx.register(spark)` registers the JVM scalar under each Scala name; the manifest
+    row has no L1, so `LATERAL` must still resolve to the light table function, and the Python API's per-session
+    cache must still agree with the session."""
+    from databricks.labs.gbx import _api
+
+    tile = (
+        "CAST(NULL AS STRUCT<cellid:BIGINT,raster:BINARY,metadata:MAP<STRING,STRING>>)"
+    )
+    rx.register(jvm_spark)
+    got = jvm_spark.sql(
+        f"SELECT t.* FROM (SELECT 1 AS x), LATERAL gbx_rst_h3_rastertogridavg({tile}, 5) t"
+    ).collect()
+    assert (
+        got == []
+    )  # a NULL tile gives no rows; a JVM scalar here is UNRESOLVABLE_TABLE_VALUED_FUNCTION
+    assert "gbx_rst_h3_rastertogridavg" in _api._done(jvm_spark)
+    df = jvm_spark.sql(f"SELECT {tile} AS tile")
+    assert rx.rst_h3_rastertogridavg(df, "tile", 5).collect() == []

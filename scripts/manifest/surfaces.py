@@ -289,21 +289,55 @@ def first_statement(sql: str) -> Optional[str]:
     return None
 
 
+def _text_of(node, consts: Dict[str, str]) -> Optional[str]:
+    """The text of a string literal, or of an f-string whose fields are module-level string constants (the docs
+    modules share a grid literal and a sample path that way); None for anything else."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for v in node.values:
+            if isinstance(v, ast.Constant):
+                parts.append(v.value)
+            elif (
+                isinstance(v, ast.FormattedValue)
+                and isinstance(v.value, ast.Name)
+                and v.value.id in consts
+                and v.conversion == -1
+                and v.format_spec is None
+            ):
+                parts.append(consts[v.value.id])
+            else:
+                return None
+        return "".join(parts)
+    return None
+
+
 def hand_written_sql_examples() -> Dict[str, str]:
-    """The ``<name>_sql_example()`` texts of the docs SQL modules, read without importing them."""
+    """The ``<name>_sql_example()`` texts of the docs SQL modules, read without importing them. A text built as an
+    f-string of module-level string constants is read too, so it shows the same on a function's page.
+    """
     found: Dict[str, str] = {}
     for path in sorted((REPO / "docs/tests/python/api").glob("*_functions_sql.py")):
-        for node in ast.parse(path.read_text()).body:
+        body = ast.parse(path.read_text()).body
+        consts: Dict[str, str] = {}
+        for node in body:
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+            ):
+                text = _text_of(node.value, consts)
+                if text is not None:
+                    consts[node.targets[0].id] = text
+        for node in body:
             if isinstance(node, ast.FunctionDef) and node.name.endswith("_sql_example"):
                 ret = next(
                     (n for n in ast.walk(node) if isinstance(n, ast.Return)), None
                 )
-                if (
-                    ret is not None
-                    and isinstance(ret.value, ast.Constant)
-                    and isinstance(ret.value.value, str)
-                ):
-                    stmt = first_statement(ret.value.value)
+                text = _text_of(ret.value, consts) if ret is not None else None
+                if text is not None:
+                    stmt = first_statement(text)
                     if stmt:
                         found["gbx_" + node.name[: -len("_sql_example")]] = stmt
     return found

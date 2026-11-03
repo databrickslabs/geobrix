@@ -40,6 +40,10 @@ def register(_spark: SparkSession) -> None:
     """
     _spark = SparkSession.builder.getOrCreate()
     _spark.read.format("register_ds").option("functions", "gridx.h3").load().collect()
+    # names the manifest serves without a Catalyst level stay light (the JAR's scalar must not replace them)
+    from databricks.labs.gbx import manager
+
+    manager.reapply_no_l1(_spark, "gbx_h3_")
 
 
 def _col(x: ColLike) -> Column:

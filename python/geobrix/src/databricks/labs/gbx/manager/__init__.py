@@ -130,6 +130,32 @@ def register(
     return out
 
 
+def no_l1_names(prefix: str = "gbx_") -> List[str]:
+    """The SQL names starting with ``prefix`` whose manifest row has no Catalyst level (L1).
+
+    The JAR still registers a scalar under some of these names (the raster-to-grid reducers, clip, retile,
+    ...); the manifest says the session serves them from a light table function or UDF.
+    """
+    return sorted(
+        n
+        for n, f in manifest.load().functions.items()
+        if n.startswith(prefix) and "L1" not in f.levels and f.status != "mvp"
+    )
+
+
+def reapply_no_l1(spark, prefix: str = "gbx_") -> Dict[str, Choice]:
+    """Register the manifest's choice again for every ``prefix`` name that has no L1.
+
+    The package ``register(spark)`` calls of the old heavy path load every Scala expression under its
+    ``gbx_*`` name, and the last registration wins; a JAR scalar would then replace the table function the
+    manifest names (``FROM t, LATERAL gbx_rst_h3_rastertogridavg(...)`` fails over a scalar). Called right
+    after that JVM registration, this puts the manifest's function back, and marks the names registered so
+    the Python API's first-use check stays true.
+    """
+    names = no_l1_names(prefix)
+    return register(spark, only=names) if names else {}
+
+
 def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
     """Install ``fn`` at ``choice``; each line it has to say goes into ``lines`` as (name, line)."""
     from databricks.labs.gbx.manager import l3

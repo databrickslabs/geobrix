@@ -191,20 +191,26 @@ def _bng_square(e: float, n: float, size: int) -> str:
     second = ((19 - n100) * 5) % 25 + e100 % 5
     first += first > 7  # the alphabet has no I
     second += second > 7
-    width = len(str(100000 // size)) - 1
-    return (
-        chr(first + 65)
-        + chr(second + 65)
-        + str(int(e % 100000 // size)).zfill(width)
+    width = len(str(100000 // size)) - 1  # 0 digits for the 100 km square itself
+    digits = (
+        str(int(e % 100000 // size)).zfill(width)
         + str(int(n % 100000 // size)).zfill(width)
+        if width
+        else ""
     )
+    return chr(first + 65) + chr(second + 65) + digits
 
 
 def _grid_keys(grid: str, res, cx, cy) -> list:
     """The id of the cell each pixel centre is in: a number for h3, quadbin and custom, the OS reference for BNG."""
     if grid != "bng":
         return _pixel_cells(grid, res, cx, cy)
-    size = {1: 100000, 2: 10000, 3: 1000, 4: 100, 5: 10, 6: 1}[res]
+    sizes = {1: 100000, 2: 10000, 3: 1000, 4: 100, 5: 10, 6: 1}
+    if res not in sizes:
+        raise ValueError(
+            f"the oracle computes BNG resolutions 1 to 6 only, not {res!r} (quadrant resolutions are unsupported in the oracle)"
+        )
+    size = sizes[res]
     return [_bng_square(x, y, size) for x, y in zip(cx, cy)]
 
 
@@ -224,6 +230,45 @@ def _reduce(stat: str, vals):
             "variance": np.var,
         }[stat](vals)
     )
+
+
+def _check_covering(case, e, bands, got, keys, geo) -> Optional[str]:
+    """`assignment: "covering"`, judged for `count` only (the share of a pixel in a cell is the overlap area, which
+    the oracle does not recompute): per band the counts add up to its valid pixels (each pixel is shared out whole),
+    the cell each valid pixel's centre is in holds a positive share, and a cell with a positive share is the cell of
+    some valid pixel's centre or corner (so a wrong cell id fails; a cell lying inside one pixel is not judged).
+    """
+    import numpy as np
+
+    if e["stat"] != "count":
+        return (
+            f"{case.cid}: covering is judged for count only, not {e['stat']!r} "
+            "(the oracle does not recompute overlap-weighted statistics)"
+        )
+    src, cx, cy = geo
+    cols, rows = np.mgrid[0 : src.height, 0 : src.width]
+    corners = [
+        _grid_keys(
+            e["grid"],
+            e["res"],
+            *(src.transform * (cols.ravel() + dc, rows.ravel() + dr)),
+        )
+        for dr in (0, 1)
+        for dc in (0, 1)
+    ]
+    for b, band in enumerate(bands, start=1):
+        have = sum(m for (bb, _), m in got.items() if bb == b and m is not None)
+        if abs(have - band.count()) > 1e-6:
+            return f"{case.cid}: band {b} counts add up to {have}, want its {band.count()} valid pixels"
+        valid = ~np.ma.getmaskarray(band).ravel()
+        centre = {k for k, v in zip(keys, valid) if v}
+        near = centre | {k for ks in corners for k, v in zip(ks, valid) if v}
+        share = {c for (bb, c), m in got.items() if bb == b and m is not None and m > 0}
+        if centre - share:
+            return f"{case.cid}: band {b} cells {sorted(map(str, centre - share))[:3]} hold a pixel centre but no share"
+        if share - near:
+            return f"{case.cid}: band {b} cells {sorted(map(str, share - near))[:3]} overlap no valid pixel's centre or corner"
+    return None
 
 
 def check_grid_stats(case, rows, args) -> Optional[str]:
@@ -255,11 +300,7 @@ def check_grid_stats(case, rows, args) -> Optional[str]:
     if any(isinstance(c, float) or isinstance(c, bool) for _, c in got):
         return f"{case.cid}: a cell id is not an int or a string: {sorted(map(str, got))[:3]}"
     if e.get("assignment") == "covering":
-        for b, band in enumerate(bands, start=1):
-            have = sum(m for (bb, _), m in got.items() if bb == b and m is not None)
-            if abs(have - band.count()) > 1e-6:
-                return f"{case.cid}: band {b} counts add up to {have}, want its {band.count()} valid pixels"
-        return None
+        return _check_covering(case, e, bands, got, keys, (src, cx, cy))
     want: dict = {}
     for b, band in enumerate(bands, start=1):
         cells: dict = {}

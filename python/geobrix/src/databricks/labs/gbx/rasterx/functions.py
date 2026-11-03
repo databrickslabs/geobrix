@@ -63,6 +63,11 @@ def register(_spark: SparkSession) -> None:
     """
     _spark = SparkSession.builder.getOrCreate()
     _spark.read.format("register_ds").option("functions", "rasterx").load().collect()
+    # The JAR registers a scalar under every Scala name, including names the manifest serves from a light table
+    # function or UDF (no L1): put the manifest's choice back, before the fromfile override below.
+    from databricks.labs.gbx import manager
+
+    manager.reapply_no_l1(_spark, "gbx_rst_")
 
     # gbx_rst_fromfile reads a file on the executor. On Databricks the JVM (Scala) cannot read a
     # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held

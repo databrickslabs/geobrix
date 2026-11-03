@@ -491,10 +491,10 @@ def check_arguments(
         from databricks.labs.gbx.pygx import _custom
 
         max_res = _custom.conf_from_row(grid_conf).max_resolution
-        if resolution > max_res:
+        if resolution < 0 or resolution > max_res:
             raise ValueError(
-                f"raster->custom: resolution ({resolution}) exceeds max "
-                f"{max_res} for this grid conf"
+                f"raster->custom: resolution ({resolution}) is outside "
+                f"[0, {max_res}] for this grid conf"
             )
 
 
@@ -759,10 +759,10 @@ def _raster_to_custom(
     conf = _custom.conf_from_row(grid_conf)
 
     # Validate resolution against the conf-derived maximum.
-    if resolution > conf.max_resolution:
+    if resolution < 0 or resolution > conf.max_resolution:
         raise ValueError(
-            f"raster->custom: resolution ({resolution}) exceeds max "
-            f"{conf.max_resolution} for this grid conf"
+            f"raster->custom: resolution ({resolution}) is outside "
+            f"[0, {conf.max_resolution}] for this grid conf"
         )
 
     def _run(work_ds):

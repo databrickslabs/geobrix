@@ -264,6 +264,25 @@ def test_a_hand_example_with_a_checkout_path_ships_a_volume_path(monkeypatch):
     assert "/Volumes/<catalog>/<schema>/<volume>/b.tif" in ex and str(REPO) not in ex
 
 
+def test_a_hand_example_written_as_an_fstring_of_constants_is_read():
+    """The custom-grid examples are f-strings of a shared grid literal and path; they show on the function's
+    page like any other hand-written example, never the oracle fixture's `gbx_example` statement.
+    """
+    surfaces = _tool("surfaces")
+    hand = surfaces.hand_written_sql_examples()
+    stmt = hand["gbx_rst_custom_rastertogridavg"]
+    assert (
+        "LATERAL gbx_rst_custom_rastertogridavg(" in stmt and "gbx_custom_grid(" in stmt
+    )
+    assert "{" not in stmt
+    info = surfaces.function_info_entries(manifest.load())
+    assert all(
+        "gbx_example" not in info[n]["examples"]
+        for n in info
+        if n.startswith("gbx_rst_custom_rastertogrid")
+    )
+
+
 def test_an_aggregate_example_needs_literal_per_group_arguments():
     import dataclasses
 

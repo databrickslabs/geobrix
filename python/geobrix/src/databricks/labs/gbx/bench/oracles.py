@@ -3831,8 +3831,8 @@ def reader_failures(cid: str, form: str, src, tiles) -> List[str]:
     return failures
 
 
-def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):
-    """`rst_viewshed_towers` over the case's DSM and towers, at `level` (None: the default one).
+def run_towers(spark, case: Case, tmpdir: str):
+    """`rst_viewshed_towers` over the case's DSM and towers.
     Returns {tower: (visible_px, total_px)}; a tower with no row is not in it."""
     from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
 
@@ -3847,7 +3847,7 @@ def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):
         + (f", {height} double" if masts else ""),
     )
     got = rst_viewshed_towers(
-        sites, tiles, radius, height, x0=0.0, y0=0.0, tile_m=DSM_TILE_M, _levels=level
+        sites, tiles, radius, height, x0=0.0, y0=0.0, tile_m=DSM_TILE_M
     )
     return {r["tower_cellid"]: (r["visible_px"], r["total_px"]) for r in got.collect()}
 
@@ -3867,11 +3867,8 @@ def towers_differ(want: Dict, got: Dict) -> Optional[str]:
     return "; ".join(bad) or None
 
 
-def run_helpers(
-    spark, cases, tmpdir: Optional[str] = None, level: Optional[str] = None
-):
-    """Build a (key, tile) DataFrame from the case, call the helper by name, check the rows.
-    A towers case runs at `level` (None: the default one)."""
+def run_helpers(spark, cases, tmpdir: Optional[str] = None):
+    """Build a (key, tile) DataFrame from the case, call the helper by name, check the rows."""
     from databricks.labs.gbx.manifest import TILE_SQL
     from databricks.labs.gbx.rasterx import helpers
 
@@ -3882,7 +3879,7 @@ def run_helpers(
             continue
         if case.fn == "rst_viewshed_towers":
             try:
-                got = run_towers(spark, case, tmpdir, level)
+                got = run_towers(spark, case, tmpdir)
                 if case.kind == "raises":
                     out.append(
                         (case, f"{case.cid}: returned {len(got)} rows, want an error")

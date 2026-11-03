@@ -49,17 +49,11 @@ def test_jvm_forms_without_the_jar_are_na_by_design(spark_session_local, tmp_pat
     assert all("no geobrix JAR" in r.note for r in bng)
 
 
-def test_levels_leg_times_the_towers_at_l3_and_not_at_the_jvm_levels_without_a_jar(
-    spark_session_local, tmp_path, monkeypatch
-):
+def test_levels_leg_times_the_towers_at_l3(spark_session_local, tmp_path, monkeypatch):
     """The towers input is a DSM of tiles under the corpus with the towers beside it. L3 runs it and
-    fingerprints one row per tower; L1-steps and JVM-DF are not applicable where there is no JAR.
+    fingerprints one row per tower.
     """
-    from databricks.labs.gbx.manager import capabilities
-
     spark = spark_session_local
-    if capabilities.detect(spark, need_jvm=True).jar is not None:
-        pytest.skip("this session carries the geobrix JAR")
     monkeypatch.setattr(lf, "_DSM_GRID", 2)
     monkeypatch.setattr(lf, "_DSM_TILE_PX", 64)
     monkeypatch.setattr(lf, "_TOWER_RADIUS", 20.0)
@@ -67,50 +61,13 @@ def test_levels_leg_times_the_towers_at_l3_and_not_at_the_jvm_levels_without_a_j
         lf.FORMS, "H", [f for f in lf.FORMS["H"] if f.fn == "rst_viewshed_towers"]
     )
     rows = run_s(
-        spark, tmp_path, scales=(1,), base_rows=6, mvp="H",
-        only_levels=("L3", "L1-steps", "JVM-DF"),
-    )  # fmt: skip
+        spark, tmp_path, scales=(1,), base_rows=6, mvp="H", only_levels=("L3",)
+    )
     by = {r.level: r for r in rows}
-    assert set(by) == {"L3", "L1-steps", "JVM-DF"}
+    assert set(by) == {"L3"}
     assert (
         by["L3"].status == "ok" and by["L3"].rows == 6 and by["L3"].output_fingerprint
     )
-    for level in ("L1-steps", "JVM-DF"):
-        assert by[level].status == "na_by_design", by[level]
-        assert "no geobrix JAR" in by[level].note
-
-
-def test_a_heavy_towers_form_is_an_error_row_when_its_level_would_fall_back_to_light(
-    spark_session_local, tmp_path, monkeypatch
-):
-    """A session that has the JAR but cannot load GDAL runs rst_viewshed_towers at L3 whatever level is asked for:
-    the heavy forms must be error rows saying so, never an ok row timed under a heavy name.
-    """
-    import weakref
-
-    from databricks.labs.gbx.manager import capabilities
-    from databricks.labs.gbx.manager import levels as manager_levels
-
-    jar = capabilities.JarIdentity("0.6.0", "0" * 64)
-    no_gdal = capabilities.Capabilities(
-        False, False, jar, "", "GDAL natives not loadable (test)", True
-    )
-    monkeypatch.setattr(capabilities, "detect", lambda spark, need_jvm: no_gdal)
-    # as a session that has set nothing up (an earlier test may have set up a heavy level on this one)
-    monkeypatch.setattr(manager_levels, "_READY", weakref.WeakKeyDictionary())
-    monkeypatch.setattr(lf, "_DSM_GRID", 2)
-    monkeypatch.setattr(lf, "_DSM_TILE_PX", 64)
-    monkeypatch.setattr(lf, "_TOWER_RADIUS", 20.0)
-    monkeypatch.setitem(
-        lf.FORMS, "H", [f for f in lf.FORMS["H"] if f.fn == "rst_viewshed_towers"]
-    )
-    rows = run_s(
-        spark_session_local, tmp_path, scales=(1,), base_rows=6, mvp="H",
-        only_levels=("L1-steps", "JVM-DF"),
-    )  # fmt: skip
-    assert {r.level: r.status for r in rows} == {"L1-steps": "error", "JVM-DF": "error"}
-    for r in rows:
-        assert f"cannot run rst_viewshed_towers at {r.level}" in r.failure_mode
 
 
 def test_the_dsm_tiles_are_copied_into_place_and_a_half_written_one_is_rewritten(

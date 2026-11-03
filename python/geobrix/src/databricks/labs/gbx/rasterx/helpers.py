@@ -880,7 +880,6 @@ def rst_viewshed_towers(
     x_col: str = "x",
     y_col: str = "y",
     num_partitions: Optional[int] = None,
-    _levels: Optional[str] = None,
 ) -> DataFrame:
     """Per-tower raster viewshed over a tiled DSM — one scalar row per tower.
 
@@ -927,13 +926,6 @@ def rst_viewshed_towers(
         num_partitions: Fan-out for the heavy per-tower stage (``repartition`` by
                       ``tower_id_col``). Defaults to the distinct tower count
                       (~one tower per task).
-        _levels:      Testing only. The level to run: ``"L3"`` (the default: all
-                      light), ``"L1-steps"`` (the viewshed and the histogram are
-                      the heavyweight's Catalyst steps) or ``"JVM-DF"`` (the whole
-                      per-tower pipeline is one Scala DataFrame step through py4j;
-                      no ``to_crs``, and ``vrt_dir`` is not used). The two heavy
-                      levels need a dedicated cluster with the geobrix JAR; where
-                      the session cannot run one, a line says why and L3 runs.
 
     The viewshed of a tower is the window around it, as :func:`rst_viewshed` returns
     it with a max distance: ``total_px`` is the window's pixel count (``radius_m``
@@ -960,15 +952,6 @@ def rst_viewshed_towers(
     analysis_core._validate_towers_inputs(dsm_tiles_df.columns, radius_m)
     if tile_m is None or tile_m <= 0:
         raise ValueError(f"tile_m must be > 0 (got {tile_m!r}).")
-    from databricks.labs.gbx.manager import levels as manager_levels
-
-    if (
-        to_crs is not None
-        and (_levels or manager_levels.PREFERENCE["rst_viewshed_towers"][0]) == "JVM-DF"
-    ):
-        raise ValueError("_levels='JVM-DF' does not support to_crs")
-    level = manager_levels.towers_level(towers_df.sparkSession, _levels)
-
     # Bytes-free tile manifest -> {(tx, ty): path}. Only tile index + path
     # strings reach the driver (never raster bytes), so this is Connect/Serverless
     # safe and bounded by the DSM tile count, not the pixel volume.
@@ -1004,15 +987,11 @@ def rst_viewshed_towers(
             return mint_vrt(paths, out=os.path.join(_vrt_dir, f"tower_{tower_id}.vrt"))
         return mint_vrt(paths)
 
-    @f.udf("string")
-    def _window_tiles(obs_x, obs_y):
-        return ", ".join(window_paths(obs_x, obs_y) or [])
-
     base = towers_df.select(
         f.col(tower_id_col).alias("tower_id"),
         f.col(x_col).cast(DoubleType()).alias("observer_x"),
         f.col(y_col).cast(DoubleType()).alias("observer_y"),
-        # A NULL mast height is 0.0 at every level (the light viewshed reads it so).
+        # A NULL mast height is 0.0 (the light viewshed reads it so).
         f.coalesce(
             analysis_core._observer_height_col(observer_height).cast("double"),
             f.lit(0.0),
@@ -1033,41 +1012,6 @@ def rst_viewshed_towers(
     # is readable where it was written).
     if num_partitions is None:
         num_partitions = max(base.select("tower_id").distinct().count(), 1)
-    if level == "JVM-DF":
-        from databricks.labs.gbx.manager import jvm
-
-        # The Scala step repartitions by tower id itself. It takes the id as a string; as on L3, a tower with
-        # no coordinate has no row.
-        in_df = base.where(
-            f.col("observer_x").isNotNull() & f.col("observer_y").isNotNull()
-        ).select(
-            f.col("tower_id").cast("string"),
-            "observer_x",
-            "observer_y",
-            "observer_height",
-        )
-        done = jvm.viewshed_towers_jvm(
-            towers_df.sparkSession,
-            in_df,
-            tile_map,
-            _x0,
-            _y0,
-            _tile_m,
-            _radius,
-            float(target_height),
-            int(num_partitions),
-        )
-        return with_frac(
-            done.select(
-                f.col("tower_id")
-                .cast(base.schema["tower_id"].dataType)
-                .alias(tower_id_col),
-                "observer_x",
-                "observer_y",
-                "visible_px",
-                "total_px",
-            )
-        )
     base = base.repartition(int(num_partitions), "tower_id")
 
     # Fixed-point WKT POINT (never scientific notation) in the raster CRS.
@@ -1075,39 +1019,22 @@ def rst_viewshed_towers(
         "POINT (%.6f %.6f)", f.col("observer_x"), f.col("observer_y")
     )
 
-    # L3 is all light. At L1-steps the viewshed and the histogram are the heavyweight's Catalyst steps, which
-    # take raster bytes: the DEM is materialized (through the same cap) instead of left a path.
-    heavy = level == "L1-steps"
-
     def viewshed():
-        args = (
+        from databricks.labs.gbx.rasterx import functions as rx_api
+
+        return rx_api.rst_viewshed(
+            f.col("_dem"),
             observer_wkt,
             f.col("observer_height"),
             f.lit(float(target_height)),
             f.lit(_radius),
+            materialize=True,
         )
-        if heavy:
-            return f.call_function("gbx__l1_rst_viewshed", f.col("_dem"), *args)
-        from databricks.labs.gbx.rasterx import functions as rx_api
-
-        return rx_api.rst_viewshed(f.col("_dem"), *args, materialize=True)
 
     def histogram(tile_col: str):
-        args = (f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False))
-        if heavy:
-            return f.call_function("gbx__l1_rst_histogram", f.col(tile_col), *args)
-        return _light_rst_histogram(tile_col, *args)
-
-    def cells(tile_col: str, vis, invis):
-        """The cells of the viewshed: the two histogram classes, or at L1-steps the size of the raster. The
-        heavyweight viewshed marks 0 as NoData and its histogram leaves NoData out, so it counts what is visible.
-        """
-        if heavy:
-            w = f.call_function("gbx__l1_rst_width", f.col(tile_col))
-            return w.cast("long") * f.call_function(
-                "gbx__l1_rst_height", f.col(tile_col)
-            )
-        return invis + vis
+        return _light_rst_histogram(
+            tile_col, f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False)
+        )
 
     piped = (
         base.withColumn(
@@ -1115,29 +1042,11 @@ def rst_viewshed_towers(
         )
         .where(f.col("_vrt").isNotNull())
         .withColumn(
-            "_dem", _fromfile_extra(f.col("_vrt"), f.lit("GTiff"), f.lit(bool(heavy)))
+            "_dem", _fromfile_extra(f.col("_vrt"), f.lit("GTiff"), f.lit(False))
         )
     )
-    if heavy:
-        # The light read gives NULL for a tile it cannot read, and a heavyweight step gives an error tile for a
-        # failure: either would become a (0, 0) row, where L3 fails the query. Fail it here, naming the cause.
-        tower = f.col("tower_id").cast("string")
-        piped = piped.withColumn(
-            "_dem",
-            _raise_if_null(
-                f.col("_dem"),
-                f.concat(
-                    f.lit("rst_viewshed_towers: a DSM tile for tower "),
-                    tower,
-                    f.lit(" could not be read, one of: "),
-                    _window_tiles("observer_x", "observer_y"),
-                ),
-                f.col("_dem"),
-            ),
-        ).withColumn("_vs", viewshed())
-    else:
-        piped = piped.withColumn("_vs", viewshed())
-    # An unreadable DSM tile fails the query at every level: the viewshed of a tile op that cannot read its DEM is the
+    piped = piped.withColumn("_vs", viewshed())
+    # An unreadable DSM tile fails the query: the viewshed of a tile op that cannot read its DEM is the
     # row's error tile (no raster), which the histogram would count as a (0, 0) row.
     tower = f.col("tower_id").cast("string")
     piped = piped.withColumn(
@@ -1165,7 +1074,7 @@ def rst_viewshed_towers(
         f.col("observer_x"),
         f.col("observer_y"),
         f.coalesce(vis, f.lit(0)).cast("long").alias("visible_px"),
-        f.coalesce(cells("_vs", vis, invis), f.lit(0)).cast("long").alias("total_px"),
+        f.coalesce(invis + vis, f.lit(0)).cast("long").alias("total_px"),
     ]
 
     if to_crs is not None:
@@ -1178,9 +1087,7 @@ def rst_viewshed_towers(
         invis_r = f.col("_hist_reproj")["band_1"].getItem(0)
         out_cols += [
             f.coalesce(vis_r, f.lit(0)).cast("long").alias("visible_px_reproj"),
-            f.coalesce(cells("_vs_reproj", vis_r, invis_r), f.lit(0))
-            .cast("long")
-            .alias("total_px_reproj"),
+            f.coalesce(invis_r + vis_r, f.lit(0)).cast("long").alias("total_px_reproj"),
         ]
 
     return with_frac(piped.select(*out_cols))

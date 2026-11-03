@@ -564,13 +564,9 @@ _TESS_UDTF = _TILE_FP.format(
     down="gbx_rst_transformcrs(struct(t.*), 'EPSG:3857')",
     udtf="gbx_rst_bng_tessellate(tile, 3)",
 )
-# The light aggregate returns the mosaic as BINARY; the heavy one returns a tile struct.
+# The aggregate returns the mosaic as BINARY.
 _MERGE_L3 = (
     "SELECT count(*) AS n, sum(length(x)) AS fp, count(x) AS n_out FROM "
-    "(SELECT gbx_rst_merge_agg(tile) AS x FROM {src} GROUP BY key)"
-)
-_MERGE_L1 = (
-    "SELECT count(*) AS n, sum(length(x.raster)) AS fp, count(x.raster) AS n_out FROM "
     "(SELECT gbx_rst_merge_agg(tile) AS x FROM {src} GROUP BY key)"
 )
 _COMBINE_SQL = (
@@ -608,7 +604,7 @@ def register_h_combine_l3(spark):
 
 
 def register_h_heavy(spark):
-    """The JVM names (RST_MergeAgg, RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
+    """The JVM names (RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
     from databricks.labs.gbx import manager as gbx_manager
 
     gbx_manager.register_family(
@@ -665,56 +661,20 @@ def h_combine_avg(spark, src):
     return _stats(helpers.combine_by_key(spark.table(src), ["key"], stat="avg"), None)
 
 
-def _towers(spark, src, level):
-    """(n, fp, n_out, df) of `rst_viewshed_towers` at `level` over the towers of `src` and the DSM beside them: the
-    tower count, the summed visible pixels, and the non-NULL count of them. The counts differ between levels
-    where their GDAL builds do, so the fingerprints are compared within a level, not across them.
-    """
+def h_towers_l3(spark, src):
+    """(n, fp, n_out, df) of `rst_viewshed_towers` over the towers of `src` and the DSM beside them: the tower
+    count, the summed visible pixels, and the non-NULL count of them."""
     from pyspark.sql import functions as F
 
     from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
 
     done = rst_viewshed_towers(
         spark.table(src), spark.table(src + "_tiles"), _TOWER_RADIUS, _TOWER_MAST,
-        x0=0.0, y0=0.0, tile_m=float(_DSM_TILE_PX), _levels=level,
+        x0=0.0, y0=0.0, tile_m=float(_DSM_TILE_PX),
     )  # fmt: skip
     out = done.agg(F.count(F.lit(1)), F.sum("visible_px"), F.count("visible_px"))
     r = out.collect()[0]
     return r[0], r[1], r[2], out
-
-
-def h_towers_l3(spark, src):
-    return _towers(spark, src, "L3")
-
-
-def h_towers_l1_steps(spark, src):
-    return _towers(spark, src, "L1-steps")
-
-
-def h_towers_jvm_df(spark, src):
-    return _towers(spark, src, "JVM-DF")
-
-
-def _set_up_towers_level(spark, level):
-    """Set `level` up for `rst_viewshed_towers` (once, outside the timed region). A session that cannot run it
-    would fall back to L3 and time that under this level's name: that is an error here, with the reason.
-    """
-    from databricks.labs.gbx.manager import levels
-
-    if levels.towers_level(spark, level) != level:
-        raise RuntimeError(
-            f"this session cannot run rst_viewshed_towers at {level}; it would time L3 (see the line above)"
-        )
-
-
-def setup_h_towers_l1_steps(spark):
-    """The Catalyst steps of the L1-steps form under their private names (needs the staged JAR)."""
-    _set_up_towers_level(spark, "L1-steps")
-
-
-def setup_h_towers_jvm_df(spark):
-    """The capability check of the JVM-DF form, done once here and not in the timed region."""
-    _set_up_towers_level(spark, "JVM-DF")
 
 
 _H = "databricks.labs.gbx.bench.levels_forms:"
@@ -799,41 +759,12 @@ FORMS["H"] = [
     _h("rst_viewshed_towers", "L3", "h_towers_l3", "dsm_towers", run="h_towers_l3"),
     # The JVM comparators (the staged JAR, a dedicated cluster); last, because they replace the light names.
     _h(
-        "gbx_rst_merge_agg",
-        "L1",
-        "h_merge_l1_agg",
-        "tiles_grouped_mat",
-        sql=_MERGE_L1,
-        setup="register_h_heavy",
-        computes=("dedicated",),
-    ),
-    _h(
         "gbx_rst_combineavg",
         "L1",
         "h_combine_l1",
         "tiles_aligned_mat",
         sql=_COMBINE_SQL,
         setup="register_h_heavy",
-        computes=("dedicated",),
-    ),
-    # The towers' viewshed and histogram as heavy steps, and the whole pipeline as one Scala DataFrame step through
-    # py4j: neither runs on a Connect session, so both are dedicated only.
-    _h(
-        "rst_viewshed_towers",
-        "L1-steps",
-        "h_towers_l1_steps",
-        "dsm_towers",
-        run="h_towers_l1_steps",
-        setup="setup_h_towers_l1_steps",
-        computes=("dedicated",),
-    ),
-    _h(
-        "rst_viewshed_towers",
-        "JVM-DF",
-        "h_towers_jvm_df",
-        "dsm_towers",
-        run="h_towers_jvm_df",
-        setup="setup_h_towers_jvm_df",
         computes=("dedicated",),
     ),
 ]
@@ -859,10 +790,6 @@ _RT_LATERAL = (
     _RT_FP.format(x="t.raster")
     + "{{src}} s, LATERAL {fn}(s.tile, {size}) t"  # the light UDTF: the tile fields
 )
-_RT_LATERAL_L1 = (
-    _RT_FP.format(x="t.tile.raster")
-    + "{{src}} s, LATERAL {fn}(s.tile, {size}) t"  # the Catalyst generator: one `tile` column
-)
 _RT_ARRAY = (
     _RT_FP.format(x="x.raster")
     + "(SELECT explode(gbx_mvp_rst_retile_array(tile, {size})) AS x FROM {{src}})"
@@ -871,16 +798,6 @@ _RT_PART = (
     _RT_FP.format(x="x.raster")
     + "(SELECT gbx_mvp_rst_retile_part(tile, {size}, i) AS x FROM {{src}} "
     "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count(tile, {size}) - 1)) v AS i)"
-)
-# The Java UDFs take raster bytes and give bytes back.
-_RT_ARRAY_L2 = (
-    _RT_FP.format(x="b")
-    + "(SELECT explode(gbx_mvp_rst_retile_array_l2(tile.raster, {size})) AS b FROM {{src}})"
-)
-_RT_PART_L2 = (
-    _RT_FP.format(x="b")
-    + "(SELECT gbx_mvp_rst_retile_part_l2(tile.raster, {size}, i) AS b FROM {{src}} "
-    "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count_l2(tile.raster, {size}) - 1)) v AS i)"
 )
 # The session TVF over the array form: a SQL body, so no Python between the rows and the plan.
 _RT_TVF = (
@@ -891,10 +808,6 @@ _RT_TVF = (
 _TE_FP = "SELECT count(*) AS n, sum(pmod(xxhash64({x}), 2147483647)) AS fp, count({x}) AS n_out FROM "
 _TE_LATERAL = _TE_FP.format(x="t.cellid") + "{{src}} s, LATERAL {fn}(s.wkt, 3) t"
 _TE_ARRAY = _TE_FP.format(x="c.cellid") + "(SELECT inline({fn}(wkt, 3)) FROM {{src}}) c"
-_TE_ARRAY_L2 = (
-    _TE_FP.format(x="c.cellid")
-    + "(SELECT inline(gbx_mvp_bng_tessellate_l2(wkt, 3, false)) FROM {{src}}) c"
-).format()
 _TE_UC = (
     _TE_FP.format(x="t.cellid")
     + "{{src}} s, LATERAL {{uc}}.gbx_bng_tessellateexplode(CAST(st_geomfromwkt(s.wkt, 27700) AS GEOMETRY(ANY)), '3') t"
@@ -906,13 +819,6 @@ def setup_g_probes(spark):
     from databricks.labs.gbx.pyrx import _mvp_forms
 
     _mvp_forms.register_probe_forms(spark)
-
-
-def setup_g_l2(spark):
-    """The Java UDF facades under probe names (needs the JAR)."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
-
-    _mvp_forms.register_l2_probes(spark)
 
 
 def setup_g_tvf(spark):
@@ -994,34 +900,6 @@ FORMS["G"] = [
         _retile(_RT_TVF, _RT_CELL),
         setup="setup_g_tvf",
     ),
-    _g(
-        RT,
-        "L1",
-        "tvf",
-        "tiles_mat",
-        _retile(_RT_LATERAL_L1, _RT_CELL, fn=RT),
-        register=True,
-        computes=("dedicated",),
-    ),
-    _g(
-        RT,
-        "L2",
-        "array_inline",
-        "tiles_mat",
-        _retile(_RT_ARRAY_L2, _RT_CELL),
-        setup="setup_g_l2",
-        computes=("dedicated",),
-    ),
-    _g(
-        RT,
-        "L2",
-        "count_part",
-        "tiles_mat",
-        _retile(_RT_PART_L2, _RT_CELL),
-        setup="setup_g_l2",
-        computes=("dedicated",),
-        memory_probe=True,
-    ),
     # the same three light shapes on big tiles (512 windows each): what the shapes cost in memory
     _g(
         RT,
@@ -1077,15 +955,6 @@ FORMS["G"] = [
         "bng_polys",
         _TE_ARRAY.format(fn=TS),
         register=True,
-        computes=("dedicated",),
-    ),
-    _g(
-        TS,
-        "L2",
-        "array_inline",
-        "bng_polys",
-        _TE_ARRAY_L2,
-        setup="setup_g_l2",
         computes=("dedicated",),
     ),
     _g(TE, "L4", "uc-tvf", "bng_polys", _TE_UC, computes=("serverless", "dedicated")),
@@ -1144,9 +1013,7 @@ def _ma_shapes():
     """The SQL of each shape of the merge over `(key, tile)`. A result that is a tile struct gives its raster."""
     return {
         "grouped": f"SELECT key, {_MA}(tile) AS out FROM {{src}} GROUP BY key",
-        "udaf": f"SELECT key, {_MA}(tile).raster AS out FROM {{src}} GROUP BY key",
         "finalize": "SELECT key, gbx_rst_merge(collect_list(tile)).raster AS out FROM {src} GROUP BY key",
-        "finalize_l2": "SELECT key, gbx_mvp_rst_merge_array_l2(collect_list(tile.raster)) AS out FROM {src} GROUP BY key",
         "tvf": (
             "SELECT key, raster AS out FROM gbx_rst_merge_tvf("
             "TABLE(SELECT key, tile FROM {src}) PARTITION BY (key))"
@@ -1267,6 +1134,21 @@ def _a_jvm(fn, shapes, inputs):
     both = ("dedicated",)  # no Java handler for the finalize on standard access mode
     out = []
     for inp, sfx in inputs:
+        if (
+            fn == _MA
+        ):  # the merge aggregate has no JVM form; the Catalyst finalize over an array of tiles does
+            out.append(
+                _a(
+                    fn,
+                    "L1",
+                    "finalize" + sfx,
+                    inp,
+                    shapes["finalize"],
+                    setup="setup_a_l1_merge",
+                    computes=("dedicated",),
+                )
+            )
+            continue
         out += [
             _a(
                 fn,
@@ -1287,20 +1169,6 @@ def _a_jvm(fn, shapes, inputs):
                 computes=("dedicated",),
             ),
         ]
-        if (
-            fn == _MA
-        ):  # the Catalyst finalize over an array of tiles; the rasterize has none
-            out.append(
-                _a(
-                    fn,
-                    "L1",
-                    "finalize" + sfx,
-                    inp,
-                    shapes["finalize"],
-                    setup="setup_a_l1_merge",
-                    computes=("dedicated",),
-                )
-            )
     return out
 
 

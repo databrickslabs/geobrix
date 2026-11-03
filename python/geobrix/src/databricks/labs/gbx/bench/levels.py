@@ -28,7 +28,6 @@ _L3_VARIANTS = (
 _PYTHON_LEVELS = (
     "L3",
     "DF",
-    "L1-steps",
 )  # levels whose body runs in Spark's Python workers
 # What only a Spark Python worker produces: not applicable to a JVM level or a UC function.
 _PYTHON_FIELDS = (
@@ -45,7 +44,7 @@ _NO_PLAN = {**{k: None for k in attribution.METRICS}, "source": "dataframe-form"
 class Form:
     mvp: str
     fn: str
-    level: str  # L1 | L2 | L3 | L4 | DF | L1-steps | JVM-DF
+    level: str  # L1 | L2 | L3 | L4 | DF | JVM-DF
     variant: str  # c0|c1|d, or a shape name (udtf, array_inline, count_part, udaf, ...)
     input: str  # key in levels_forms.INPUTS
     # A one-row SELECT over {src} (and {uc} for L4) returning (n, fp, n_out): the output
@@ -247,7 +246,7 @@ class _Ctx:
     report_tasks: bool = False
 
 
-_JVM_LEVELS = ("L1", "L2", "L1-steps", "JVM-DF")  # forms whose body is the geobrix JAR
+_JVM_LEVELS = ("L1", "L2", "JVM-DF")  # forms whose body is the geobrix JAR
 
 
 def _no_jar(ctx: "_Ctx") -> str:

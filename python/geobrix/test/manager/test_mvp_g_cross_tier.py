@@ -2,7 +2,7 @@
 
 One table, one test. A shape is a level plus the SQL that reaches it: the table function form every
 tier shares (`LATERAL fn(...)`), the array form with `inline`, and the probe forms the perf matrix
-times (count+part with an LRU, Arrow UDTFs, the Java UDF facades). The JVM shapes need the staged JAR
+times (count+part with an LRU, Arrow UDTFs). The JVM shapes need the staged JAR
 and run under `gbx-test-parity.sh`.
 """
 
@@ -17,21 +17,6 @@ from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
 RT, TE, TS = oracles.RT, oracles.TE, oracles.TS
 LAT = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t"
 INLINE = "SELECT inline({fn}({args})) FROM _gbx_oracle"
-# The Java UDFs give back bytes. This is what the manager's SQL wrapper makes of them: a tile whose raster is
-# the bytes, or an error tile (NULL raster and a reason) when they are NULL.
-_ERR = "the heavy kernel could not process this tile (see the executor log)"
-_TILE_OF = (
-    "named_struct('raster', {b}, 'path', CAST(NULL AS STRING), "
-    "'metadata', IF({b} IS NULL, map('last_error', '"
-    + _ERR
-    + "'), CAST(map() AS map<string,string>)))"
-)
-_ROWS_OF = (
-    "SELECT explode(transform({arr}, b -> "
-    + _TILE_OF.format(b="b")
-    + ")) AS tile FROM _gbx_oracle"
-)
-
 # Shape: the level it exercises ("-" = a probe form registered under its own name), the SQL, the
 # functions it answers for (and the case kinds it can judge), the name the SQL calls, whether to fill in
 # the default arguments, and the rows it cannot judge.
@@ -66,46 +51,8 @@ SHAPES = {
         "-", NAMED["gbx_mvp_rst_retile_part"], (RT,), PROBE, None, False
     ),
     "udtf_arrow": Shape("-", LAT, (RT, TE), ANY, lambda f: f + "_mvp_arrow", False),
-    # probe forms: the Java UDF facades on bytes (L2). A fixed-arity UDF is called with the defaults filled in. A
-    # raster that does not open is one error tile, as on the other levels; an error tile IN is the wrapper's to
-    # pass on (the facade only sees bytes, and a tile with no raster has none), so that row is not judged here.
-    "l2_array_inline": Shape(
-        "-",
-        INLINE,
-        (TS,),
-        ("cells", "no_rows"),
-        lambda f: "gbx_mvp_bng_tessellate_l2",
-        True,
-    ),
-    "l2_retile_array": Shape(
-        "-",
-        _ROWS_OF.format(arr="gbx_mvp_rst_retile_array_l2(c0.raster, c1, c2)"),
-        (RT,),
-        PROBE + ("error_tile",),
-        None,
-        False,
-        ("rt_error_in",),
-    ),
-    "l2_retile_count_part": Shape(
-        "-",
-        "SELECT "
-        + _TILE_OF.format(b="p")
-        + " AS tile FROM (SELECT gbx_mvp_rst_retile_part_l2(c0.raster, c1, c2, i) AS p FROM _gbx_oracle "
-        "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count_l2(c0.raster, c1, c2) - 1)) x AS i)",
-        (RT,),
-        PROBE + ("error_tile",),
-        None,
-        False,
-        ("rt_error_in",),
-    ),
 }
-JVM = {
-    "l1_tvf",
-    "l1_array_inline",
-    "l2_array_inline",
-    "l2_retile_array",
-    "l2_retile_count_part",
-}
+JVM = {"l1_tvf", "l1_array_inline"}
 
 
 @pytest.mark.parametrize(
@@ -121,8 +68,6 @@ def test_mvp_g_oracle(request, tmp_path, shape):
     from databricks.labs.gbx.pyrx import _mvp_forms
 
     _mvp_forms.register_probe_forms(spark)
-    if shape.startswith("l2_"):
-        _mvp_forms.register_l2_probes(spark)
     failures = []
     for fn in s.fns:
         if s.level != "-":

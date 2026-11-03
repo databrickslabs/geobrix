@@ -187,31 +187,3 @@ def install_private_l1(spark, fqn: str, name: str) -> Optional[str]:
     """`install_companion` under a private session name (`gbx__l1_<x>`): a helper that calls the heavy step itself
     uses it as it is, beside whatever the registrar put under the SQL name."""
     return install_companion(spark, fqn, name)
-
-
-def viewshed_towers_jvm(
-    spark, base_df, tile_map, x0, y0, tile_m, radius, target_height, num_partitions
-):
-    """The per-tower viewshed of `rst_viewshed_towers` as one Scala DataFrame step (dedicated clusters only).
-
-    `base_df` has tower_id, observer_x, observer_y and observer_height; `tile_map` maps (tx, ty) to a tile
-    path. Returns tower_id, observer_x, observer_y, visible_px and total_px, a row per tower that has a tile in
-    reach. Called only after `capabilities.detect` found a matching JAR on a classic session.
-    """
-    from pyspark.sql import DataFrame
-
-    _point_jvm_at_payload(
-        spark
-    )  # before the step reads the session's conf for its executors
-    jdf = spark._jvm.com.databricks.labs.gbx.kernels.df.ViewshedTowersJvm.run(
-        spark._jsparkSession,
-        base_df._jdf,
-        {f"{tx},{ty}": p for (tx, ty), p in tile_map.items()},
-        float(x0),
-        float(y0),
-        float(tile_m),
-        float(radius),
-        float(target_height),
-        int(num_partitions),
-    )
-    return DataFrame(jdf, spark)

@@ -515,9 +515,7 @@ def canvas_max(rasters):
     return write_gtiff(profile, out.astype(profile["dtype"])[None, :, :])
 
 
-_L2 = "com.databricks.labs.gbx.kernels.udf."
-_CHIPS = "array<struct<cellid:string,core:boolean,chip:binary>>"
-_L1_AGGREGATES = ("gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg")
+_L1_AGGREGATES = ("gbx_rst_bng_rasterize_agg",)
 
 
 def register_probe_forms(spark) -> None:
@@ -534,34 +532,13 @@ def register_probe_forms(spark) -> None:
 
 
 def register_l2_probes(spark) -> None:
-    """The Java UDF facades (they take raster BYTES, not a tile struct); needs the staged JAR."""
-    spark.udf.registerJavaFunction(
-        "gbx_mvp_bng_tessellate_l2", _L2 + "BngTessellateUdf", _CHIPS
-    )
-    spark.udf.registerJavaFunction(
-        "gbx_mvp_rst_retile_array_l2", _L2 + "RstRetileArrayBytesUdf", "array<binary>"
-    )
-    spark.udf.registerJavaFunction(
-        "gbx_mvp_rst_retile_count_l2", _L2 + "RstRetileCountBytesUdf", "int"
-    )
-    spark.udf.registerJavaFunction(
-        "gbx_mvp_rst_retile_part_l2", _L2 + "RstRetilePartBytesUdf", "binary"
-    )
-    spark.udf.registerJavaFunction(
-        "gbx_mvp_rst_merge_array_l2", _L2 + "RstMergeArrayBytesUdf", "binary"
-    )
+    """The Java UDF facade of the BNG rasterize finalize (it takes raster BYTES, not a tile struct); needs the
+    staged JAR."""
     spark.udf.registerJavaFunction(
         "gbx_mvp_rst_bng_rasterize_cells_l2",
         "com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf",
         "binary",
     )
-
-
-# The aggregates' Catalyst companions. `gbx_rst_merge_agg` has no L1 level in the manifest any more (a deletion
-# candidate, the sweep removes it), so the shape probe names its class here.
-_L1_COMPANIONS = {
-    "gbx_rst_merge_agg": "com.databricks.labs.gbx.rasterx.expressions.agg.RST_MergeAgg",
-}
 
 
 def register_l1_udafs(spark) -> None:
@@ -572,9 +549,7 @@ def register_l1_udafs(spark) -> None:
     )
 
     for name in _L1_AGGREGATES:
-        companion = _L1_COMPANIONS.get(name) or (
-            manifest.load().functions[name].levels["L1"]["companion"]
-        )
+        companion = manifest.load().functions[name].levels["L1"]["companion"]
         why = jvm.install_companion(spark, companion, name)
         if why:
             raise RuntimeError(f"{name}: L1 install gave {why}")

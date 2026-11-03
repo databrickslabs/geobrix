@@ -1,8 +1,8 @@
 """The aggregates oracle: aggregates through every shape.
 
 One table, one test. A shape is a level plus the SQL that reaches it: the grouped aggregate itself (Arrow
-UDF on L3, the Catalyst aggregate on L1), the finalize scalar over `collect_list` (light probes, and the Java
-UDF facades on L2), a tree of finalizes over salted partial results, and a Python table function over
+UDF on L3, the Catalyst aggregate on L1 where one is left), the finalize scalar over `collect_list` (light probes,
+and the Java UDF facade on L2), a tree of finalizes over salted partial results, and a Python table function over
 `TABLE(...) PARTITION BY`. The JVM shapes need the staged JAR and run under `gbx-test-parity.sh`.
 """
 
@@ -98,8 +98,8 @@ Shape = namedtuple("Shape", "setup sql null_burn")
 SHAPES = {
     # the aggregate itself: an Arrow UDF (L3 c0) and the Catalyst aggregate (L1)
     "grouped": Shape(_grouped, {MA: GROUPED, BR: GROUPED}, oracles.NAN),
-    "udaf": Shape(_udaf, {MA: GROUPED, BR: GROUPED}, oracles.NAN),
-    # collect_list into a finalize scalar: light (gbx_rst_merge is the product's), and the Java UDFs on bytes
+    "udaf": Shape(_udaf, {BR: GROUPED}, oracles.NAN),
+    # collect_list into a finalize scalar: light (gbx_rst_merge is the product's), and the Java UDF on bytes
     "collect_finalize": Shape(
         _light,
         _finalize("gbx_rst_merge", "gbx_mvp_rst_bng_rasterize_cells"),
@@ -111,11 +111,7 @@ SHAPES = {
     ),
     "collect_finalize_l2": Shape(
         _l2,
-        _finalize(
-            "gbx_mvp_rst_merge_array_l2",
-            "gbx_mvp_rst_bng_rasterize_cells_l2",
-            merge_of="c0.raster",
-        ),
+        {BR: _finalize("", "gbx_mvp_rst_bng_rasterize_cells_l2")[BR]},
         1.0,
     ),
     # partial canvases per (key, salt), merged by a per-pixel max: associative, so exact

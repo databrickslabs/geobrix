@@ -184,7 +184,7 @@ def probe_failures(
     skipped += [
         f"{f.fn} {f.level}/{f.variant}: not checkable here (needs the JAR or Unity Catalog)"
         for f in forms
-        if f.level in ("L4", "L1", "L2", "L1-steps", "JVM-DF") and f not in standin_src
+        if f.level in ("L4", "L1", "L2", "JVM-DF") and f not in standin_src
     ]
     return failures, skipped
 

@@ -2467,6 +2467,20 @@ result.show(truncate = false)
 (array of tile structs per MB subdivision)
 """
 
+  // ============================================================================
+  // H3 Rastertogrid Functions — Scala
+  // ============================================================================
+
+  val rst_h3_rastertogridavg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val raster = spark.table("multiband_rasters")
+val result = raster.select(rx.rst_h3_rastertogridavg(col("tile"), lit(4)).alias("h3_grid")).first()
+result.getAs[Seq[Seq[Row]]]("h3_grid")
+""".trim
+
   val rst_h3_rastertogridavg_scala_example_output: String =
     """Vector(Vector(Row(cellID: 599686042433355775, measure: 123.45), ...), ...)
 (Seq[Seq[Row]]: outer seq = bands, inner seq = cells per band)"""

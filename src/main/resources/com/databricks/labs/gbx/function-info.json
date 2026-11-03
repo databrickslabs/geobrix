@@ -695,7 +695,8 @@
       "bindings": [
         "sql",
         "python-light",
-        "python-heavy"
+        "python-heavy",
+        "scala"
       ],
       "since": "0.2.0"
     },

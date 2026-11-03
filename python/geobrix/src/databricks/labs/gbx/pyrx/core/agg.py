@@ -349,7 +349,7 @@ _VRT_ROUTE = (
 # documented VRT mosaic, docs/api/vrt-mosaic).
 _MOSAIC_ROUTE = (
     "keep the tiles as files on a Volume and build the mosaic over them with "
-    'databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...") '
+    'databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...") '
     "(or the cog_gbx writer with vrtMosaic=true), then read the VRT"
 )
 _COMBINE_ROUTE = (

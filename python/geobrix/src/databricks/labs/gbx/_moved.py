@@ -26,6 +26,8 @@ HELPER_HOMES: Dict[str, str] = {
     "rst_hillshade_grouped": "databricks.labs.gbx.rasterx.helpers",
     "bin_points_tiled": "databricks.labs.gbx.rasterx.helpers",
     "rst_h3_gridspec": "databricks.labs.gbx.rasterx.helpers",
+    "tile_to_numpy": "databricks.labs.gbx.rasterx.helpers",
+    "rst_apply": "databricks.labs.gbx.rasterx.helpers",
     "coverage_simplify": "databricks.labs.gbx.vectorx.helpers",
 }
 

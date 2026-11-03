@@ -672,7 +672,7 @@ def test_the_encoded_result_of_a_bytes_aggregate_is_bounded():
     right = _ras(np.arange(64 * 64).reshape(64, 64) % 241, ulx=64.0, uly=64.0)
     assert agg.merge_tiles([left, right], max_out=1 << 20)
     with pytest.raises(
-        agg.OutputOverBudget, match=r"ds\._mosaic\.mint_vrt\(paths"
+        agg.OutputOverBudget, match=r"rasterx\.helpers\.mint_vrt\(paths"
     ) as err:
         agg.merge_tiles([left, right], max_out=100)
     assert "merge_by_key" not in str(err.value)

@@ -23,7 +23,7 @@ cluster. Mind the memory: a fold holds a whole group in a task, and measured at 
 execution memory was 40.3 GB, where the aggregate ``gbx_rst_merge_agg`` streamed the same groups in
 7.4 GB. On Serverless the aggregate streams under the worker's read cap. A result over the cap stops
 with a ``Fix:`` that names the VRT-mosaic route: keep the tiles as files on a Volume and build the
-mosaic with ``databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...")`` (or the cog_gbx
+mosaic with ``databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")`` (or the cog_gbx
 writer's mosaic mode), then read the VRT, because ``merge_by_key`` also returns BINARY bounded by
 the same cap. ``merge_by_key(..., method="vrt")`` is the route for a group whose result fits the
 cap but whose members do not fit in memory: it reads paths only and streams the mosaic to a COG
@@ -45,7 +45,7 @@ from pyspark.sql.types import BinaryType, DoubleType, StructField, StructType
 
 from databricks.labs.gbx._gdal_policy import open_data
 
-__all__ = [  # noqa: F822  (tile_range and prepare_cogs load on first use)
+__all__ = [  # noqa: F822  (the last five load on first use)
     "retile_virtual",
     "bng_tessellate_virtual",
     "merge_by_key",
@@ -68,6 +68,9 @@ __all__ = [  # noqa: F822  (tile_range and prepare_cogs load on first use)
     "rst_h3_gridspec",
     "tile_range",
     "prepare_cogs",
+    "mint_vrt",
+    "tile_to_numpy",
+    "rst_apply",
 ]
 
 _FIX_VIRTUAL = (
@@ -663,7 +666,7 @@ def _vrt_mosaic(members, cap_bytes: int):
             raise ValueError(
                 f"the merged mosaic is {size / 2**20:.0f} MiB, over the {cap_bytes / 2**20:.0f} MiB "
                 f"cap for bytes in a row. Fix: keep the tiles as files on a Volume and build the mosaic over "
-                f'them with databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...") (or the cog_gbx '
+                f'them with databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...") (or the cog_gbx '
                 f"writer with vrtMosaic=true), then read the VRT; or split the groups"
             )
         with open(out, "rb") as fh:
@@ -686,7 +689,7 @@ def merge_by_key(
     7.4 GB for the ``gbx_rst_merge_agg`` aggregate). On Serverless, ``method='vrt'`` is the route for
     a group whose result fits the worker's read cap but whose members do not fit in memory. The result
     is BINARY, bounded by that same cap: a mosaic over the cap is kept as files instead (the cog_gbx
-    writer's mosaic mode, or ``databricks.labs.gbx.ds._mosaic.mint_vrt(paths, out="/Volumes/...")``,
+    writer's mosaic mode, or ``databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")``,
     then read the VRT), and this call stops with a ``Fix:`` that says so.
 
     ``method='fold'`` shuffles the tiles by key and merges each group in a sorted Arrow stream with
@@ -1944,8 +1947,10 @@ def rst_h3_gridspec(
 
 
 def __getattr__(name: str):
-    """``tile_range`` and ``prepare_cogs`` load on first use: their modules need rasterio, and importing the helpers
-    must not. ``prepare_cogs`` is the one public path of the driver-side COG preparer (same signature and docstring).
+    """``tile_range``, ``prepare_cogs``, ``mint_vrt``, ``tile_to_numpy`` and ``rst_apply`` load on first use: their
+    modules need rasterio, and importing the helpers must not. Each is the one public path of its function (same
+    object, signature and docstring): the driver-side COG preparer, the transient VRT mosaic, and the two NumPy
+    escape hatches.
     """
     if name == "tile_range":
         from databricks.labs.gbx.pyrx.core.tiling import tile_range
@@ -1955,4 +1960,16 @@ def __getattr__(name: str):
         from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
 
         return prepare_cogs
+    if name == "mint_vrt":
+        from databricks.labs.gbx.ds._mosaic import mint_vrt
+
+        return mint_vrt
+    if name == "tile_to_numpy":
+        from databricks.labs.gbx.pyrx.core.escape import tile_to_numpy
+
+        return tile_to_numpy
+    if name == "rst_apply":
+        from databricks.labs.gbx.pyrx.core.escape import rst_apply
+
+        return rst_apply
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

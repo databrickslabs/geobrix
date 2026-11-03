@@ -70,7 +70,6 @@ from databricks.labs.gbx.pyrx.core.compression import (
     source_profile,
     write_gtiff,
 )
-from databricks.labs.gbx.pyrx.core.escape import rst_apply, tile_to_numpy  # noqa: F401
 from databricks.labs.gbx.pyrx.core.virtual_tile import (
     BAND_METADATA_KEY,
     V2_TILE_SCHEMA,

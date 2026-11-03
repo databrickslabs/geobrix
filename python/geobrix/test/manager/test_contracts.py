@@ -2847,6 +2847,8 @@ def test_removed_light_api_names_the_new_module(monkeypatch):
         ("pyrx", "rst_clip_grouped", "rasterx.helpers"),
         ("pyrx", "bin_points_tiled", "rasterx.helpers"),
         ("pyrx", "rst_h3_gridspec", "rasterx.helpers"),
+        ("pyrx", "tile_to_numpy", "rasterx.helpers"),
+        ("pyrx", "rst_apply", "rasterx.helpers"),
         ("pyvx", "coverage_simplify", "vectorx.helpers"),
     ],
 )
@@ -2863,12 +2865,24 @@ def test_a_removed_python_only_function_names_its_helpers_module(pkg, name, home
     assert callable(getattr(new, name))
 
 
-def test_prepare_cogs_has_one_public_path_under_rasterx_helpers():
-    from databricks.labs.gbx.pyrx.core import preparer
+@pytest.mark.parametrize(
+    "name, module",
+    [
+        ("prepare_cogs", "databricks.labs.gbx.pyrx.core.preparer"),
+        ("mint_vrt", "databricks.labs.gbx.ds._mosaic"),
+        ("tile_to_numpy", "databricks.labs.gbx.pyrx.core.escape"),
+        ("rst_apply", "databricks.labs.gbx.pyrx.core.escape"),
+    ],
+)
+def test_a_documented_function_of_an_internal_module_has_one_public_path_under_rasterx_helpers(
+    name, module
+):
+    import importlib
+
     from databricks.labs.gbx.rasterx import helpers
 
-    assert helpers.prepare_cogs is preparer.prepare_cogs
-    assert "prepare_cogs" in helpers.__all__
+    assert getattr(helpers, name) is getattr(importlib.import_module(module), name)
+    assert name in helpers.__all__
 
 
 def test_the_moved_modules_are_under_the_public_packages_and_gone_from_the_light_ones():

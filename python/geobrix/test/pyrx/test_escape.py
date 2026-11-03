@@ -5,7 +5,7 @@ from pyspark.sql.types import IntegerType, StructField, StructType
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
-from databricks.labs.gbx.pyrx.functions import rst_apply, tile_to_numpy
+from databricks.labs.gbx.rasterx.helpers import rst_apply, tile_to_numpy
 
 
 def test_tile_to_numpy_bytes_and_struct_agree():

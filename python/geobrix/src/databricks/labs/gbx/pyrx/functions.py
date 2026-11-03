@@ -899,6 +899,35 @@ def _fromfile_render_vrt(path, local, drv, cap_bytes):
     return _serde.build_tile(new_bytes, drv, 0)
 
 
+def _fromfile_read_remote(url, drv, cap_bytes):
+    """``rst_fromfile`` materialized over a remote location the driver's switch allows: open it through GDAL, gate the
+    DECODED size by the same cap as a local file (header only, before any pixel), then read and re-encode it.
+    """
+    import numpy as _np_cap
+
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
+
+    with open_data(url) as src:
+        decoded = (
+            src.count
+            * src.width
+            * src.height
+            * int(_np_cap.dtype(src.dtypes[0]).itemsize)
+        )
+        if materialize_decision(decoded, "ingest", cap_bytes=cap_bytes) == "error":
+            raise StageTooLargeError(
+                f"rst_fromfile materialize=True unsuccessful: {decoded / 1024 ** 2:.1f} MiB decoded exceeds the "
+                f"Serverless materialize cap. Omit materialize=True (the virtual default is Serverless-safe) or "
+                f"split the source (sizeInMB=)."
+            )
+        data = src.read()
+        mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
+        new_bytes = write_gtiff(
+            src.profile, data, alpha_like=src.colorinterp, mask=mask
+        )
+    return _serde.build_tile(new_bytes, drv, 0)
+
+
 def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
     virtual). Returns a v2 tile row (virtual by default, materialized when asked),
@@ -940,6 +969,10 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
         )
 
         try:
+            if _gdal_policy.remote_location(str(path)) is not None:
+                # the driver's remote-path switch is on (data_path above refused it otherwise): GDAL reads the URL
+                # (/vsicurl/ and friends) and the pixels are decoded under the same cap as a local file
+                return _fromfile_read_remote(str(path), drv, cap_bytes)
             staged, is_temp = _stage_local_if_needed(local)
             try:
                 # Serverless-cap guard: gate on the DECODED size (the RAM-relevant

@@ -1091,8 +1091,8 @@ def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
         w.write(np.ones((1, 6, 8), dtype="uint8"))
     server = _RangeHandler(tif.read_bytes())
     worker_env = F.udf(lambda _: os.environ.get(_gdal_policy.REMOTE_ENV), "string")
-    # the SQL name materializes, and the materializing reader reads local files only: with the switch carried the
-    # remote path passes the policy gate (the answer is NULL, not a refusal); without it the gate refuses
+    # the SQL name materializes: with the switch carried the remote path passes the policy gate and is read;
+    # without it the gate refuses
     query = f"SELECT gbx_rst_fromfile('{server.url}', 'GTiff') AS t"
     try:
         monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
@@ -1107,6 +1107,33 @@ def test_the_switch_is_read_on_the_driver_and_carried_to_the_workers(
         )
         with pytest.raises(Exception, match="names a remote location"):
             spark.sql(query).collect()
+    finally:
+        server.close()
+
+
+def test_fromfile_remote_switch_on(spark8, monkeypatch, tmp_path):
+    """``gbx_rst_fromfile('http://...')`` with the driver's remote-path switch on reads the URL through GDAL and
+    returns the file's tile (never a silent NULL); with the switch off the gate refuses it.
+    """
+    from databricks.labs.gbx import manager as gbx_manager
+
+    _rasterio_or_skip()
+    from rasterio.io import MemoryFile
+
+    spark = spark8
+    server = _served_tif(tmp_path)
+    query = f"SELECT gbx_rst_fromfile('{server.url}', 'GTiff') AS t"
+    try:
+        monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
+        gbx_manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_fromfile"], level="L3"
+        )
+        tile = spark.sql(query).collect()[0]["t"]
+        assert tile is not None and tile["raster"] is not None
+        with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as ds:
+            assert (ds.count, ds.height, ds.width) == (1, 6, 8)
+            assert int(ds.read(1).sum()) == 48
+        assert "GET" in server.hits
     finally:
         server.close()
 

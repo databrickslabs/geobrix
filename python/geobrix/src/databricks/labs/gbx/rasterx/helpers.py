@@ -699,7 +699,8 @@ def merge_by_key(
 
     ``method='vrt'`` takes virtual tiles that are whole files and shuffles only their paths: the
     mosaic is a VRT over the files, streamed to a COG, so no member is decoded into memory. The
-    members must share a CRS, pixel size, band count and data type. A member that is a smaller window
+    members must share a CRS, pixel size, band count and data type: bring a mixed group to one CRS and
+    pixel size first (``gbx_rst_transform``, ``gbx_rst_resample_to_res``). A member that is a smaller window
     of its file, or that has a clip, stops the query with a ``Fix:`` message.
 
     The two methods agree wherever the members do not overlap. Where they overlap, ``fold`` lets the

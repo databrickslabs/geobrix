@@ -136,7 +136,8 @@ def test_a_mosaic_over_the_cap_is_refused_before_it_is_read(
     from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")
-    with pytest.raises(Exception, match="merged mosaic is"):
+    with pytest.raises(Exception, match="merged mosaic is") as err:
         helpers.merge_by_key(
             _frame(spark, tmp_path, "quad_paths"), ["key"], method="vrt"
         ).collect()
+    assert "mint_vrt" in str(err.value)

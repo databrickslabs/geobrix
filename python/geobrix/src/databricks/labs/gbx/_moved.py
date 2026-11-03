@@ -74,17 +74,26 @@ def install(package: str, moved: Dict[str, str]) -> Callable[[str], object]:
 
 @functools.lru_cache(maxsize=1)
 def _removed_index() -> Tuple[Dict[str, str], Dict[str, str]]:
-    """The manifest's Python names, once: (SQL function's Python name -> its module, helper name -> its module)."""
-    from databricks.labs.gbx import manifest
+    """The manifest's Python names, once: (SQL function's Python name -> its module, helper name -> its module).
 
-    man = manifest.load()
+    One caching rule for success and failure: the result is cached either way, so a ``hasattr`` probe (or pickle's
+    ``whichmodule`` scan) of a missing name does not reload the manifest each time. The index is therefore fixed for the
+    life of the process: a manifest patched or reloaded after the first lookup is not seen until
+    ``_removed_index.cache_clear()``. A manifest that does not load gives empty indexes, which read as "no such name".
+    """
     fns: Dict[str, str] = {}
-    for fn in man.functions.values():
-        if fn.python is not None:
-            fns.setdefault(fn.python.name, fn.python.module)
     helpers: Dict[str, str] = {}
-    for h in man.helpers:
-        helpers.setdefault(h.name, h.module)
+    try:
+        from databricks.labs.gbx import manifest
+
+        man = manifest.load()
+        for fn in man.functions.values():
+            if fn.python is not None:
+                fns.setdefault(fn.python.name, fn.python.module)
+        for h in man.helpers:
+            helpers.setdefault(h.name, h.module)
+    except Exception:  # noqa: BLE001 - a lookup failure must read as "no such name"
+        return {}, {}
     return fns, helpers
 
 
@@ -92,13 +101,10 @@ def removed_name(module: str, name: str):
     """Raise the AttributeError of a name a light ``functions`` module no longer defines.
 
     A SQL function's Python entry is in the generated module; a helper is in ``helpers``. Whatever goes wrong in the
-    lookup (the manifest does not load) ends as the plain AttributeError: ``hasattr``, ``getattr(..., default)`` and
+    lookup (the manifest does not load, see :func:`_removed_index`) ends as the plain AttributeError: ``hasattr``, ``getattr(..., default)`` and
     pickle's ``whichmodule`` catch nothing else.
     """
-    try:
-        fns, helpers = _removed_index()
-    except Exception:  # noqa: BLE001 - a lookup failure must read as "no such name"
-        fns, helpers = {}, {}
+    fns, helpers = _removed_index()
     pkg = fns.get(name)
     if pkg is not None:
         raise AttributeError(

@@ -357,10 +357,40 @@ _COMBINE_ROUTE = (
     "databricks.labs.gbx.rasterx.helpers.combine_by_key(...)"
 )
 # A combine whose result is over the cap: smaller results first, or combine_by_key where the result fits the cap.
+# Retiling changes the shape of the result, so the Fix says so: grouped by key and sub-tile it is one raster per sub-tile.
 _COMBINE_OUT_ROUTE = (
-    "retile the tiles first (gbx_rst_retile) so each result is smaller, or combine them per key, outside the "
-    "aggregate, with databricks.labs.gbx.rasterx.helpers.combine_by_key(...) where the result fits"
+    "retile the tiles first (gbx_rst_retile) so each result is smaller (the result is then one raster per sub-tile, "
+    "not one per key), or combine them per key, outside the aggregate, with "
+    "databricks.labs.gbx.rasterx.helpers.combine_by_key(...) where the result fits"
 )
+# A VRT (mint_vrt, merge_by_key(method="vrt")) needs every member on one CRS and pixel size: a mixed group is brought to
+# one grid first, as merge_tiles itself does onto its reference grid.
+_ONE_GRID = (
+    "bring the tiles to one CRS and pixel size first (gbx_rst_transform to one SRID, gbx_rst_resample_to_res to one "
+    "pixel size), then "
+)
+
+
+def _mixed_grid(hdrs, ref_crs) -> bool:
+    """True when the members are not on one CRS and pixel size (what ``merge_tiles`` reprojects onto its reference grid),
+    so a VRT over them cannot be built until they are."""
+    if any(
+        h.crs is not None and ref_crs is not None and h.crs != ref_crs for h in hdrs
+    ):
+        return True
+    sizes = [s for s in (_pixel_size(h) for h in hdrs) if s is not None]
+    return any(
+        not (
+            math.isclose(s[0], sizes[0][0], rel_tol=1e-9)
+            and math.isclose(s[1], sizes[0][1], rel_tol=1e-9)
+        )
+        for s in sizes[1:]
+    )
+
+
+def _vrt_fix(route: str, mixed: bool) -> str:
+    """*route*, led by the step that gives a mixed group the one grid its VRT needs."""
+    return _ONE_GRID + route if mixed else route
 
 
 class _Hdr:
@@ -458,12 +488,13 @@ def _in_ram_bytes(hdrs: List[_Hdr], ref_crs, union: int) -> int:
     return int(total)
 
 
-def _merge_refusal(decoded: int, cap: int) -> str:
+def _merge_refusal(decoded: int, cap: int, mixed: bool = False) -> str:
     """A member that must be decoded whole (reprojected, or rewritten with its mask) is over the budget (*decoded* is
-    the size it is decoded at: for a reprojected one, the reprojected tile)."""
+    the size it is decoded at: for a reprojected one, the reprojected tile). *mixed*: the group is not on one CRS and
+    pixel size, which its VRT route needs first."""
     from databricks.labs.gbx.ds.file_gbx import read_cap_refusal
 
-    return f"{read_cap_refusal(decoded, cap)}, or {_VRT_ROUTE}"
+    return f"{read_cap_refusal(decoded, cap)}, or {_vrt_fix(_VRT_ROUTE, mixed)}"
 
 
 def _output_refusal(size: int, cap: int, route: str) -> str:
@@ -518,6 +549,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
         # encoded bytes, NOT the group's.
         hdrs = _scan_headers(sorted_rasters)
         ref_crs = _pick_ref_crs(hdrs)
+        mixed = _mixed_grid(hdrs, ref_crs)
         tile_crses = [h.crs for h in hdrs]
         ref_tile = _reference_tile(hdrs, ref_crs)
         ref_pixel_res = _pixel_size(ref_tile)
@@ -557,7 +589,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
                     else hdrs[i].decoded
                 )
                 if whole > budget:
-                    raise ReadCapRefused(_merge_refusal(whole, budget))
+                    raise ReadCapRefused(_merge_refusal(whole, budget, mixed))
             if needs_reproject:
                 # Reproject to ref_crs, snapping to the reference pixel grid via
                 # target_res so all tiles share the same pixel boundaries and the
@@ -606,7 +638,11 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
         # Read the COG back as bytes and return (a bound on a BINARY aggregate's row is judged before the read).
         if max_out is not None and os.path.getsize(cog_path) > max_out:
             raise OutputOverBudget(
-                _output_refusal(os.path.getsize(cog_path), max_out, _MOSAIC_ROUTE)
+                _output_refusal(
+                    os.path.getsize(cog_path),
+                    max_out,
+                    _vrt_fix(_MOSAIC_ROUTE, mixed),
+                )
             )
         with open(cog_path, "rb") as fh:
             return fh.read()
@@ -717,6 +753,7 @@ def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
         # members. A failure to compute the size falls back to the in-RAM path rather than crashing.
         hdrs = _scan_headers(rasters)
         ref_crs = _pick_ref_crs(hdrs)
+        mixed = _mixed_grid(hdrs, ref_crs)
         union = None
         try:
             union = _union_decoded_bytes(hdrs, ref_crs)
@@ -740,7 +777,7 @@ def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
                     f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
                     f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "
                     f"place and one CRS together (key the group by them), or retile first; to mosaic the files of "
-                    f"one place, {_MOSAIC_ROUTE}"
+                    f"one place, {_vrt_fix(_MOSAIC_ROUTE, mixed)}"
                 )
             if how == "stream" and _in_ram_bytes(hdrs, ref_crs, union) > budget:
                 how = "driver"
@@ -818,7 +855,7 @@ def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
                 if own_mask is not None:
                     dst.write_mask(own_mask)
             out = out_mf.read()
-        return _bounded(out, max_out, _MOSAIC_ROUTE)
+        return _bounded(out, max_out, _vrt_fix(_MOSAIC_ROUTE, mixed))
     finally:
         for mf, rds in extra:
             if rds is not None:
@@ -895,7 +932,7 @@ def _fold_windows(shape, kind: str, n: int, budget: int, block_rows: int = 1):
         raise ArrayOverBudget(
             f"the {n} tiles are too many to combine at {cols} pixels wide: one row of them needs {size}, over this "
             f"compute's memory budget ({have}) for one call. Fix: {_COMBINE_ROUTE}, or retile them first "
-            "(gbx_rst_retile) into fewer, smaller tiles"
+            "(gbx_rst_retile) into smaller tiles, which gives one result per sub-tile, not one per key"
         )
     if step >= block_rows > 1:
         step -= step % block_rows

@@ -145,7 +145,8 @@ RASTER_AGGREGATE = (
     # What streaming cannot cover raises with a Fix: never an executor OOM, never a NULL (which reads as an empty group).
     # Tiles 10^7 m apart make a mosaic past what a merge can stream (the Fix names the VRT-mosaic route, mint_vrt); and a
     # tile in another CRS over the read cap (READ_CAP_ROWS: 150 bytes, a member of aa_mixed_crs is 192) must be decoded
-    # whole to be reprojected (the Fix names merge_by_key(method="vrt"): the members need no RAM there).
+    # whole to be reprojected (the Fix names merge_by_key(method="vrt"): the members need no RAM there; as the members are
+    # not on one CRS, it first says to bring them to one with gbx_rst_transform and gbx_rst_resample_to_res).
     Case(
         "merge_agg_over_budget_refused",
         MA,

@@ -611,8 +611,10 @@ def test_a_member_decoded_whole_is_judged_at_its_output_size_against_the_merge_b
     # 4 x 4 pixels of 0.01 degrees: 16 bytes at the source, about 46 x 46 once on the 100 m reference grid
     small_source = _tile_in(np.ones((4, 4)), "EPSG:4326", 9.0, 44.0, 0.01)
     with _gdal_policy.carried(None, 1500):
-        with pytest.raises(agg.ReadCapRefused, match="merge_by_key"):
+        with pytest.raises(agg.ReadCapRefused, match="merge_by_key") as err:
             agg._merge_tiles_streaming(sorted([ref, small_source]))
+        # the members are in two CRSs, which the VRT route needs on one first
+        assert "gbx_rst_transform" in str(err.value)
     with _gdal_policy.carried(None, 5000):
         assert agg._merge_tiles_streaming(sorted([ref, small_source]))
 
@@ -685,8 +687,9 @@ def test_the_encoded_result_of_a_bytes_aggregate_is_bounded():
     with pytest.raises(agg.OutputOverBudget, match="combine_by_key") as err:
         agg.combineavg_tiles([left, left], max_out=100)
     assert "merge_by_key" not in str(err.value) and "gbx_rst_retile" in str(err.value)
-    with pytest.raises(agg.OutputOverBudget, match="combine_by_key"):
+    with pytest.raises(agg.OutputOverBudget, match="combine_by_key") as err:
         agg._combine_stat_tiles([left, left], "max", max_out=100)
+    assert "gbx_rst_retile" in str(err.value)
 
 
 def test_the_fold_windows_are_whole_output_blocks_and_the_refusal_names_the_combine_route():

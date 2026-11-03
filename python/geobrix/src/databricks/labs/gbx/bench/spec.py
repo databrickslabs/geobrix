@@ -13,7 +13,7 @@ own adapters in a later task and are added with the appropriate `modes`.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -4126,6 +4126,56 @@ REGISTRY: Dict[str, FnSpec] = {
         input_kind="synthetic_rgb_tile",
     ),
 }
+
+# The specs whose heavyweight run is skipped: the JVM bench (``BenchDispatch``, in
+# src/test/scala/.../bench) has no case for the name, so the run would only report an unknown
+# function. These have the lightweight form alone, or a heavyweight form that is timed through
+# a reader section of the cluster run. ``heavy`` is False exactly for the names ``BenchDispatch``
+# does not know; ``test_spec.py`` checks both directions against its source, so a new
+# ``BenchDispatch`` case or a new spec cannot leave this set stale. The raster-to-grid reducers,
+# retile, the merge aggregate and the other specs that carry ``heavy=False`` in their own entry are
+# the names ``BenchDispatch`` dropped with their companions.
+_NO_BENCH_DISPATCH = frozenset(
+    {
+        "rst_fromfile",
+        "rst_land_cover",
+        "rst_custom_tessellate",
+        "rst_custom_rasterize_agg",
+        "rst_custom_rastertogridavg",
+        "rst_custom_rastertogridcount",
+        "rst_custom_rastertogridmax",
+        "rst_custom_rastertogridmin",
+        "rst_custom_rastertogridmedian",
+        "rst_custom_rastertogridsum",
+        "rst_custom_rastertogridvariance",
+        "rst_custom_rastertogridstddev",
+        "quadbin_cellfill",
+        "custom_cellfill",
+        "st_asmvt",
+        "st_asmvt_pyramid",
+        "st_legacyaswkb",
+        "st_triangulate",
+        "st_interpolateelevationgeom",
+        "st_interpolateelevationbbox",
+        "st_crs",
+        "st_setcrs",
+        "st_transformcrs",
+        "st_shiftlongitude",
+        "st_split",
+        "st_wrapx",
+        "st_explainvalidity",
+        "st_makevalid",
+        "st_node",
+        "st_reduceprecision",
+        "st_removerepeatedpoints",
+        "st_simplifypreservetopology",
+        "st_snap",
+        "st_coverageisvalid",
+        "st_coverageinvalidedges",
+    }
+)
+for _name in _NO_BENCH_DISPATCH:
+    REGISTRY[_name] = replace(REGISTRY[_name], heavy=False)
 
 # Maps each tile-aggregator FnSpec to the bench.synth recipe whose tiles form its
 # fixed CONSISTENCY group (write-once-read-both, identical bytes across tiers).

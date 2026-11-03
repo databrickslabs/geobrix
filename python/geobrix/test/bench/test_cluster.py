@@ -141,6 +141,11 @@ def test_build_bench_notebook_cells():
     assert nb["nbformat"] == 4
 
 
+def test_run_heavy_runs_only_the_specs_marked_heavy():
+    """The emitted run_heavy hands the JVM only the specs whose ``heavy`` flag is set."""
+    assert "if mode in f.modes and f.heavy" in cl._HEAVY_HELPERS
+
+
 def test_quadbin_grid_cell_has_no_heavyweight_leg():
     """Quadbin has no heavyweight form: the grid cell times and registers the lightweight level only."""
     assert 'api="heavyweight"' not in cl._CELL_GRID_QUADBIN

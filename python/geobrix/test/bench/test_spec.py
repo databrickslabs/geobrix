@@ -1163,8 +1163,12 @@ def test_virtual_disposition_override_wins():
 
 
 def test_light_only_specs_are_the_names_bench_dispatch_dropped():
-    """A spec marked ``heavy=False`` has no JVM form: BenchDispatch must not know its name, and the
-    heavyweight run skips it."""
+    """``heavy`` is True exactly for the names ``BenchDispatch`` has a case for.
+
+    A spec marked ``heavy=False`` has no JVM form: BenchDispatch must not know its name. A spec marked
+    ``heavy=True`` with a spark-path (or pure-core) mode must be known there, or the heavyweight run
+    sends the JVM a name it cannot dispatch.
+    """
     import re
     from pathlib import Path
 
@@ -1179,4 +1183,11 @@ def test_light_only_specs_are_the_names_bench_dispatch_dropped():
     known = set(re.findall(r'"([a-z0-9_]+)"\s*(?:->|=>)', text))
     light_only = {n for n, f in s.REGISTRY.items() if not f.heavy}
     assert {"rst_median", "rst_retile", "rst_h3_rastertogridavg"} <= light_only
+    assert {"rst_fromfile", "rst_land_cover", "st_makevalid"} <= light_only
     assert not (light_only & known), light_only & known
+    heavy_unknown = {
+        n
+        for n, f in s.REGISTRY.items()
+        if f.heavy and ({"spark-path", "pure-core"} & set(f.modes)) and n not in known
+    }
+    assert not heavy_unknown, sorted(heavy_unknown)

@@ -5408,9 +5408,9 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 Classify an RGB(+NIR) tile into land-cover class ids. The `'spectral'` method uses fixed excess-green and brightness thresholds. The `'kmeans'` method partitions the pixels with a `scipy` k-means over RGB, excess green and brightness, then labels each cluster by the same thresholds. The default `'hybrid'` is the same partition as `'kmeans'` today, kept as its own word so a later release can diverge it. `smooth` runs a binary-opening pass that drops isolated salt-and-pepper specks of each class back to NoData.
 
 Requires a **3+ band** tile (RGB, optionally +NIR — a 4th band is read but not yet consumed by
-any classifier). A tile with fewer bands is an error tile. Each output pixel is an index into the class scheme —
-the class list `["vegetation", "bare", "impervious", "dark"]` by default — so
-map id to name by indexing that list with the value. NoData / unclassified pixels are `-1`, which is
+any classifier). A tile with fewer bands is an error tile. Each output pixel is an index into the class list
+`["vegetation", "bare", "impervious", "dark"]` by default. Map id to name by
+indexing that list with the value. NoData / unclassified pixels are `-1`, which is
 also the output tile's NoData value.
 
 :::tip Tracing class regions to polygons, with a metric min-area filter

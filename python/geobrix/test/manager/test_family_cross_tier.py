@@ -10,7 +10,7 @@ import os
 import pytest
 
 from databricks.labs.gbx import _rs, manifest, register
-from databricks.labs.gbx.bench import oracles
+from databricks.labs.gbx.bench import oracles, product_stand_ins
 from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
 
 # Tables that still have their own cross-tier file. A SPEC_* table of an engine family is never listed here.
@@ -105,6 +105,22 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
     fn = manifest.load().functions[sql_name]
     jvm = level in ("L1", "L2") or variant.startswith("engine")
     spark = request.getfixturevalue("jvm_spark" if jvm else "spark")
+    if level == "L0" and sql_name in product_stand_ins.WORKSPACE_ONLY:
+        pytest.skip(
+            f"{sql_name} {product_stand_ins.WORKSPACE_ONLY[sql_name]}: judged on the workspace"
+        )
+    if (
+        level == "L0"
+    ):  # a body that calls a product built-in the local engine lacks runs against its stand-in
+        with product_stand_ins.l0_stand_in(fn):
+            _test_family_oracle(
+                spark, request, tmp_path, fn, sql_name, level, variant, api
+            )
+        return
+    _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api)
+
+
+def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api):
     register(spark, only=[sql_name], _levels={sql_name: (level, variant)})
     cases = [
         c
@@ -178,6 +194,7 @@ _UC_TABLES = (
     "WEB_TILES",
     "RASTER_AGGREGATE",
     "VECTOR_GENERATOR",
+    "CELL_AGGREGATE",
 )
 
 
@@ -239,6 +256,10 @@ def test_family_oracle_uc_sql_kernels(spark, tmp_path, table, sql_name):
     """The UC rows of a function whose UC form is a SQL kernel, on the local Spark: the kernel is created as a temporary
     function with the UC signature (the warehouse runs the same text in bench.probes.run_uc_slice).
     """
+    if sql_name in product_stand_ins.WORKSPACE_ONLY:
+        pytest.skip(
+            f"{sql_name} {product_stand_ins.WORKSPACE_ONLY[sql_name]}: judged on the workspace"
+        )
     cases = [c for c in oracles.TABLES[table] if c.fn == sql_name]
     ran = oracles.run_sql_kernels(spark, cases, tmpdir=str(tmp_path))
     assert ran and sum("uc" in c.surfaces for c in cases) == len(ran)

@@ -12,7 +12,7 @@ from databricks.labs.gbx.core import crs as gcrs
 from databricks.labs.gbx.manager import capabilities as caps_mod
 from databricks.labs.gbx.manager import levels
 from databricks.labs.gbx.rasterx import functions as rx
-from databricks.labs.gbx.uc import ddl
+from databricks.labs.gbx.uc import ddl, sqlbody
 
 from .connect_stub import ConnectStub
 
@@ -666,9 +666,10 @@ def test_uc_ddl_contract(fn):
     impl = stmts[0]
     assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only
     if fn in UC_SQL_FNS:
-        (text,) = (
-            stmts  # a SQL kernel's DEFAULTs are declared on the function itself; a helper-less body is one statement
-        )
+        # a SQL kernel's DEFAULTs are declared on the function itself; its helpers come first, each a SQL function
+        *helpers, text = stmts
+        assert len(helpers) == len(ddl.sql_helper_names(fn))
+        assert all("LANGUAGE SQL\nDETERMINISTIC" in h for h in helpers)
         assert (
             "LANGUAGE SQL\nDETERMINISTIC" in text
             and "PYTHON" not in text
@@ -1059,6 +1060,14 @@ PRIV_TVF = sorted(
     }
 )
 UC_NAMES.update({n: f"geobrix 0.6.0: {MAN.private[n].summary}" for n in PRIV_TVF})
+# the SQL helpers of a kernel are created and verified with it (one definition however many functions name it)
+SQL_HELPERS = {h["name"]: h for f in UC_SQL_FNS for h in sqlbody.l4_source(f)[1]}
+UC_NAMES.update(
+    {
+        n: f"geobrix 0.6.0: {h.get('summary') or 'SQL helper of a kernel'}"
+        for n, h in SQL_HELPERS.items()
+    }
+)
 VOLUME_DIR = "/Volumes/c/s/v/dir"
 
 
@@ -1224,7 +1233,7 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
             else 2 if any(p.default for p in f.params) else 1
         )
         for f in UC_FNS
-    ) + len(PRIV_TVF)
+    ) + len(PRIV_TVF) + len(SQL_HELPERS)
     assert all(ENV6_WHEEL in s for s in everything if "LANGUAGE PYTHON" in s)
     only = uc.install(
         "cat", "sch", VOLUME_DIR, only=["gbx_bng_eastnorthasbng"], dry_run=True

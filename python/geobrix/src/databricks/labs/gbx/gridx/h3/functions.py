@@ -122,6 +122,43 @@ def h3_cellfill(
     )
 
 
+def h3_cellfill_array(
+    cells: ColLike,
+    k: ColLike = None,
+    method: ColLike = None,
+    power: ColLike = None,
+) -> Column:
+    """Fill the NULL cells of an array of H3 cells from their valid neighbours.
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. A NULL value marks a covered cell to
+            fill; a repeated cell keeps its largest value; a NULL cell id is skipped.
+        k: The neighbourhood radius in rings, at least 0; 0 fills nothing. SQL default:
+            ``1``.
+        method: `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring
+            distance). Any other word raises. SQL default: ``'mean'``.
+        power: The distance exponent of `'idw'`; unused by `'mean'`. SQL default:
+            ``2.0``.
+
+    Returns:
+        The filled cells as an array of structs `(cellid, value)` in ascending id order,
+        the cells of the aggregate `gbx_h3_cellfill`: a valid cell passes through, a
+        NULL one takes the mean (or the inverse-distance mean) of its valid neighbours
+        within `k` rings, and one with no valid neighbour stays NULL. An array with no
+        cell gives NULL.
+
+    SQL: ``gbx_h3_cellfill_array(cells, [k], [method], [power])``
+    """
+    return _api.call(
+        "gbx_h3_cellfill_array",
+        cells,
+        k,
+        method,
+        power,
+    )
+
+
 def h3_geomkloop(
     geom: ColLike,
     resolution: ColLike,

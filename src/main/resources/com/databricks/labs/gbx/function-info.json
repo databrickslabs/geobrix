@@ -1885,6 +1885,17 @@
       ],
       "since": "0.5.1"
     },
+    "gbx_bng_cellfill_array": {
+      "examples": "Examples:\n      > SELECT gbx_bng_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "usage_args": "cells, [k], [method], [power]",
+      "description": "Fill the NULL cells of an array of BNG cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_bng_cellintersection": {
       "examples": "Examples:\n      > SELECT gbx_bng_cellintersection(chip, chip) AS intersection_chip FROM ( SELECT explode( gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) ) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "left_chip, right_chip",
@@ -1907,6 +1918,17 @@
       ],
       "since": "0.2.0"
     },
+    "gbx_bng_cellintersection_array": {
+      "examples": "Examples:\n      > SELECT gbx_bng_cellintersection_array(c0) AS out FROM gbx_example;",
+      "usage_args": "chips",
+      "description": "Take the intersection of an array of chips of one cell.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_bng_cellunion": {
       "examples": "Examples:\n      > SELECT gbx_bng_cellunion(chip, chip) AS union_chip FROM ( SELECT explode( gbx_bng_tessellate( 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))', 3 ) ) AS chip ) t WHERE t.chip.cellid = 'TQ3080';",
       "usage_args": "left_chip, right_chip",
@@ -1928,6 +1950,17 @@
         "python"
       ],
       "since": "0.2.0"
+    },
+    "gbx_bng_cellunion_array": {
+      "examples": "Examples:\n      > SELECT gbx_bng_cellunion_array(c0) AS out FROM gbx_example;",
+      "usage_args": "chips",
+      "description": "Take the union of an array of chips of one cell.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
     },
     "gbx_bng_centroid": {
       "examples": "Examples:\n      > SELECT gbx_bng_centroid('TQ3080') as centroid;",
@@ -2120,6 +2153,39 @@
         "scala"
       ],
       "since": "0.2.0"
+    },
+    "gbx_custom_cellfill_array": {
+      "examples": "Examples:\n      > SELECT gbx_custom_cellfill_array(c0, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "usage_args": "cells, grid, [k], [method], [power]",
+      "description": "Fill the NULL cells of an array of custom-grid cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
+    "gbx_h3_cellfill_array": {
+      "examples": "Examples:\n      > SELECT gbx_h3_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "usage_args": "cells, [k], [method], [power]",
+      "description": "Fill the NULL cells of an array of H3 cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
+    "gbx_quadbin_cellfill_array": {
+      "examples": "Examples:\n      > SELECT gbx_quadbin_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example;",
+      "usage_args": "cells, [k], [method], [power]",
+      "description": "Fill the NULL cells of an array of quadbin cells from their valid neighbours.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
     },
     "_package_gridx_custom": "--- gridx_custom ---",
     "gbx_custom_cellaswkb": {

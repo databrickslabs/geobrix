@@ -607,6 +607,27 @@ Powered by the **pure-Python quadbin interpolation port**. Cell-set and value pa
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
+### quadbin_cellfill_array
+
+{/* BEGIN GENERATED gbx_quadbin_cellfill_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_quadbin_cellfill_array(cells, [k], [method], [power])` | `array<struct<cellid:bigint,value:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_cellfill_array(cells, [k], [method], [power])` | `array<struct<cellid:bigint,value:double>>` |
+| Python | `gridx.quadbin.functions.quadbin_cellfill_array(cells, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. A NULL value marks a covered cell to fill; a repeated cell keeps its largest value; a NULL cell id is skipped. |
+| `k` | `INT` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_quadbin_cellfill_array */}
+
+Fill missing quadbin cell values from one array of `(cellid, value)` structs. It is the array form of `gbx_quadbin_cellfill`: the same fill, one call per group. On Unity Catalog the array is limited to 64 MiB; a larger one is refused with a Fix.
+
 ---
 
 ### Geometry-Aware Expansion (Quadbin)
@@ -1484,6 +1505,24 @@ GROUP BY group_key
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
+### bng_cellintersection_array
+
+{/* BEGIN GENERATED gbx_bng_cellintersection_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellintersection_array(chips)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_cellintersection_array(chips)` | `BINARY` |
+| Python | `gridx.bng.functions.bng_cellintersection_array(chips)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `chips` | `array<struct<cellid:string,core:boolean,chip:binary>>` | `array<struct<cellid:string,core:boolean,chip:binary>>` |  | The chips of one cell as an array of structs `(cellid, core, chip)`, for example `collect_list(struct(cellid, core, chip))`. A core chip has no geometry and stands for the whole cell; a NULL element is skipped. |
+{/* END GENERATED gbx_bng_cellintersection_array */}
+
+Intersect the chips of one BNG cell from one array of `(cellid, core, chip)` structs. It is the array form of `gbx_bng_cellintersection_agg`, including its rule that a core chip stands for the whole cell. On Unity Catalog it is a SQL function that calls the product `st_intersection`, so it needs no Python; chips of more than one cell give NULL.
+
 ---
 
 ### bng_cellunion_agg
@@ -1534,6 +1573,24 @@ GROUP BY group_key
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
+### bng_cellunion_array
+
+{/* BEGIN GENERATED gbx_bng_cellunion_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellunion_array(chips)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_cellunion_array(chips)` | `BINARY` |
+| Python | `gridx.bng.functions.bng_cellunion_array(chips)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `chips` | `array<struct<cellid:string,core:boolean,chip:binary>>` | `array<struct<cellid:string,core:boolean,chip:binary>>` |  | The chips of one cell as an array of structs `(cellid, core, chip)`, for example `collect_list(struct(cellid, core, chip))`. A core chip has no geometry and stands for the whole cell; a NULL element is skipped. |
+{/* END GENERATED gbx_bng_cellunion_array */}
+
+Union the chips of one BNG cell from one array of `(cellid, core, chip)` structs, for example `collect_list(struct(cellid, core, chip))`. It is the array form of `gbx_bng_cellunion_agg`. A core chip has no geometry and stands for the whole cell, so the answer is then the cell polygon. On Unity Catalog it is a SQL function that calls the product `st_union`, so it needs no Python; chips of more than one cell give NULL.
+
 ---
 
 ### bng_cellfill
@@ -1578,6 +1635,27 @@ Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity wi
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
+
+### bng_cellfill_array
+
+{/* BEGIN GENERATED gbx_bng_cellfill_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_bng_cellfill_array(cells, [k], [method], [power])` | `array<struct<cellid:string,value:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_cellfill_array(cells, [k], [method], [power])` | `array<struct<cellid:string,value:double>>` |
+| Python | `gridx.bng.functions.bng_cellfill_array(cells, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `array<struct<cellid:string,value:double>>` | `array<struct<cellid:string,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. A NULL value marks a covered cell to fill; a repeated cell keeps its largest value; a NULL cell id is skipped. |
+| `k` | `INT` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_bng_cellfill_array */}
+
+Fill missing BNG cell values from one array of `(cellid, value)` structs with BNG cell ids such as `'TQ3080'`. It is the array form of `gbx_bng_cellfill`: the same fill, one call per group. A string that is not a cell is skipped. On Unity Catalog the array is limited to 64 MiB; a larger one is refused with a Fix.
 
 ---
 
@@ -2315,6 +2393,28 @@ Fill NULL custom grid cells from valid neighbours within `k` rings using nearest
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 
+### custom_cellfill_array
+
+{/* BEGIN GENERATED gbx_custom_cellfill_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_custom_cellfill_array(cells, grid, [k], [method], [power])` | `array<struct<cellid:bigint,value:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_cellfill_array(cells, grid, [k], [method], [power])` | `array<struct<cellid:bigint,value:double>>` |
+| Python | `gridx.custom.functions.custom_cellfill_array(cells, grid, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. A NULL value marks a covered cell to fill; a repeated cell keeps its largest value; a NULL cell id is skipped. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, from `gbx_custom_grid`. |
+| `k` | `INT` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_custom_cellfill_array */}
+
+Fill missing custom-grid cell values from one array of `(cellid, value)` structs and the grid from `gbx_custom_grid`. It is the array form of `gbx_custom_cellfill`: the same fill, one call per group. On Unity Catalog the array is limited to 64 MiB; a larger one is refused with a Fix.
+
 ---
 
 ## H3 Cell Fill
@@ -2355,6 +2455,27 @@ Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed 
   scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
+
+### h3_cellfill_array
+
+{/* BEGIN GENERATED gbx_h3_cellfill_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_h3_cellfill_array(cells, [k], [method], [power])` | `array<struct<cellid:bigint,value:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_h3_cellfill_array(cells, [k], [method], [power])` | `array<struct<cellid:bigint,value:double>>` |
+| Python | `gridx.h3.functions.h3_cellfill_array(cells, k=None, method=None, power=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. A NULL value marks a covered cell to fill; a repeated cell keeps its largest value; a NULL cell id is skipped. |
+| `k` | `INT` | `INT` | `1` | The neighbourhood radius in rings, at least 0; 0 fills nothing. |
+| `method` | `STRING` | `STRING` | `'mean'` | `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring distance). Any other word raises. |
+| `power` | `DOUBLE` | `DOUBLE` | `2.0` | The distance exponent of `'idw'`; unused by `'mean'`. |
+{/* END GENERATED gbx_h3_cellfill_array */}
+
+Fill missing H3 cell values from one array of `(cellid, value)` structs, for example `collect_list(struct(cellid, value))`. It is the array form of `gbx_h3_cellfill`: the same fill, the same rules, one call per group. On Unity Catalog it is a SQL function that calls the product `h3_kringdistances`, so it needs no Python. A repeated cell id keeps its largest value, and a cell id that is NULL is skipped.
 
 ---
 

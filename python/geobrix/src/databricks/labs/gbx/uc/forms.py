@@ -261,6 +261,87 @@ def h3_cellfill_cells(cells, k, method, power):
     return [{"cellid": c, "value": v} for c, v in filled]
 
 
+# --- cell fill for the grids with no product ring: the array twin of each aggregate ---------------------------------
+def _fill_array(fn, session_fn, cells, k, method, power, ring, parse=None, fmt=None):
+    """The shared body of ``gbx_<grid>_cellfill_array``: ``cells`` (an array of ``(cellid, value)`` structs) filled with
+    the grid's ring function, as an array of ``{cellid, value}`` in ascending id order. NULL for NULL or for an array with
+    no cell id; a wrong k or method raises with a Fix; an array over the cap is refused.
+    """
+    from databricks.labs.gbx.pygx import _cellfill
+
+    if cells is None:
+        return None
+    _check_cells(fn, cells, session_fn)
+    rows = [(_field(c, "cellid"), _field(c, "value")) for c in cells if c is not None]
+    if parse is not None:  # a cell id that is no cell is skipped
+        rows = [(parse(c), v) for c, v in rows if c is not None]
+    try:
+        filled = _cellfill.fill_cells(
+            ((c, v) for c, v in rows if c is not None), k, method, power, ring
+        )
+    except ValueError as exc:
+        raise _parameter(
+            fn,
+            f"{exc}. Fix: pass k of at least 0 and method 'mean' or 'idw'; the aggregate {session_fn} takes the same",
+        ) from exc
+    if filled is None:
+        return None
+    return [{"cellid": fmt(c) if fmt else c, "value": v} for c, v in filled]
+
+
+def quadbin_cellfill_array(cells, k=1, method="mean", power=2.0):
+    """gbx_quadbin_cellfill_array: the filled cells of ``gbx_quadbin_cellfill`` as an array of ``(cellid, value)``."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    return _fill_array(
+        "gbx_quadbin_cellfill_array",
+        "gbx_quadbin_cellfill",
+        cells,
+        k,
+        method,
+        power,
+        _quadbin.k_loop,
+    )
+
+
+def bng_cellfill_array(cells, k=1, method="mean", power=2.0):
+    """gbx_bng_cellfill_array: the filled cells of ``gbx_bng_cellfill`` as an array of ``(cellid, value)``, the ids as
+    BNG strings. A string that is no cell is skipped."""
+    from databricks.labs.gbx.pygx import _bng
+
+    return _fill_array(
+        "gbx_bng_cellfill_array",
+        "gbx_bng_cellfill",
+        cells,
+        k,
+        method,
+        power,
+        _bng.k_loop,
+        parse=lambda c: _bng.parse_safe(str(c)),
+        fmt=_bng.format,
+    )
+
+
+def custom_cellfill_array(cells, grid, k=1, method="mean", power=2.0):
+    """gbx_custom_cellfill_array: the filled cells of ``gbx_custom_cellfill`` as an array of ``(cellid, value)``."""
+    from databricks.labs.gbx.pygx import _custom
+    from databricks.labs.gbx.uc.handlers import _custom_conf
+
+    fn = "gbx_custom_cellfill_array"
+    if cells is None or grid is None:
+        return None
+    conf = _custom_conf(fn, grid)
+    return _fill_array(
+        fn,
+        "gbx_custom_cellfill",
+        cells,
+        k,
+        method,
+        power,
+        lambda cid, d: _custom.k_loop(conf, cid, d),
+    )
+
+
 # --- vector tile merge: the array twin of the aggregate ------------------------------------------------------------
 def st_asmvt_features(tiles, layer_name, extent):
     """gbx__st_asmvt_features: the one-feature tiles of one tile (the ``mvt_bytes`` of ``gbx_st_asmvt_pyramid``, collected
@@ -302,5 +383,8 @@ HANDLERS = {
     "gbx__st_asmvt_pyramid_cells": st_asmvt_pyramid_cells,
     "gbx_rst_h3_rasterize": rst_h3_rasterize,
     "gbx__h3_cellfill_cells": h3_cellfill_cells,
+    "gbx_quadbin_cellfill_array": quadbin_cellfill_array,
+    "gbx_bng_cellfill_array": bng_cellfill_array,
+    "gbx_custom_cellfill_array": custom_cellfill_array,
     "gbx__st_asmvt_features": st_asmvt_features,
 }

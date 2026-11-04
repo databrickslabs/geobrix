@@ -36,6 +36,17 @@ def collect(
     return cells
 
 
+def check_args(k: int, method: str) -> str:
+    """The fill's two arguments checked: ``k`` at least 0, ``method`` ``'mean'`` or ``'idw'`` in any case. Returns the
+    method in lower case; a wrong one is a ValueError that names the value."""
+    if k < 0:
+        raise ValueError(f"cellfill: k must be >= 0; got {k}")
+    m = method.lower()
+    if m not in ("mean", "idw"):
+        raise ValueError(f"cellfill: method must be 'mean' or 'idw'; got '{method}'")
+    return m
+
+
 def fill(
     cells: Dict[int, Optional[float]],
     k: int,
@@ -71,11 +82,7 @@ def fill(
     Returns:
         ``list[(cell_id, Optional[float])]`` in ascending unsigned int64 order.
     """
-    if k < 0:
-        raise ValueError(f"cellfill: k must be >= 0; got {k}")
-    m = method.lower()
-    if m not in ("mean", "idw"):
-        raise ValueError(f"cellfill: method must be 'mean' or 'idw'; got '{method}'")
+    m = check_args(k, method)
 
     # Ascending unsigned int64 order (mirrors Scala Long.compareUnsigned sort).
     ordered = sorted(cells.keys(), key=lambda x: x & 0xFFFF_FFFF_FFFF_FFFF)
@@ -104,6 +111,30 @@ def fill(
                 result.append((cell_id, num / den))
 
     return result
+
+
+def fill_cells(
+    rows: Iterable[Tuple[Optional[int], Optional[float]]],
+    k,
+    method,
+    power,
+    k_loop_fn: Callable[[int, int], List[int]],
+) -> Optional[List[Tuple[int, Optional[float]]]]:
+    """The array form of the fill: ``(cell_id, value)`` rows to the filled ``[(cell_id, value)]`` in ascending unsigned
+    id order, or None when no row has a cell id. A NULL ``k``, ``method`` or ``power`` takes 1, ``'mean'`` and 2.0;
+    a NaN value is a missing one. One kernel for the session UDFs and the Unity Catalog handlers of every grid.
+    """
+    k = 1 if k is None else int(k)
+    method = "mean" if method is None else str(method)
+    check_args(k, method)  # a wrong argument raises whatever the cells are
+    cells = collect(
+        (int(c), None if v is None or v != v else float(v))
+        for c, v in rows
+        if c is not None
+    )
+    if not cells:
+        return None
+    return fill(cells, k, method, 2.0 if power is None else float(power), k_loop_fn)
 
 
 def encode(filled: List[Tuple[int, Optional[float]]]) -> bytes:

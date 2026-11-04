@@ -154,6 +154,43 @@ def bng_cellfill(
     )
 
 
+def bng_cellfill_array(
+    cells: ColLike,
+    k: ColLike = None,
+    method: ColLike = None,
+    power: ColLike = None,
+) -> Column:
+    """Fill the NULL cells of an array of BNG cells from their valid neighbours.
+
+    Args:
+        cells: The group's cells as an array of structs `(cellid, value)`, for example
+            `collect_list(struct(cellid, value))`. A NULL value marks a covered cell to
+            fill; a repeated cell keeps its largest value; a NULL cell id is skipped.
+        k: The neighbourhood radius in rings, at least 0; 0 fills nothing. SQL default:
+            ``1``.
+        method: `'mean'` (the mean of the valid neighbours) or `'idw'` (weighted by ring
+            distance). Any other word raises. SQL default: ``'mean'``.
+        power: The distance exponent of `'idw'`; unused by `'mean'`. SQL default:
+            ``2.0``.
+
+    Returns:
+        The filled cells as an array of structs `(cellid, value)` in ascending id order,
+        the cells of the aggregate `gbx_bng_cellfill`: a valid cell passes through, a
+        NULL one takes the mean (or the inverse-distance mean) of its valid neighbours
+        within `k` rings, and one with no valid neighbour stays NULL. An array with no
+        cell gives NULL. The ids are BNG cell ids, for example `'TQ3080'`.
+
+    SQL: ``gbx_bng_cellfill_array(cells, [k], [method], [power])``
+    """
+    return _api.call(
+        "gbx_bng_cellfill_array",
+        cells,
+        k,
+        method,
+        power,
+    )
+
+
 def bng_cellintersection(
     left_chip: ColLike,
     right_chip: ColLike,
@@ -199,6 +236,29 @@ def bng_cellintersection_agg(
     )
 
 
+def bng_cellintersection_array(
+    chips: ColLike,
+) -> Column:
+    """Take the intersection of an array of chips of one cell.
+
+    Args:
+        chips: The chips of one cell as an array of structs `(cellid, core, chip)`, for
+            example `collect_list(struct(cellid, core, chip))`. A core chip has no geometry
+            and stands for the whole cell; a NULL element is skipped.
+
+    Returns:
+        The intersection as WKB (no SRID), or NULL when it is empty or the array has no
+        chip. A core chip stands for the whole cell, and the answer is then the cell
+        polygon, as in the aggregate. Chips of more than one cell give NULL.
+
+    SQL: ``gbx_bng_cellintersection_array(chips)``
+    """
+    return _api.call(
+        "gbx_bng_cellintersection_array",
+        chips,
+    )
+
+
 def bng_cellunion(
     left_chip: ColLike,
     right_chip: ColLike,
@@ -241,6 +301,29 @@ def bng_cellunion_agg(
     return _api.call(
         "gbx_bng_cellunion_agg",
         input_chip,
+    )
+
+
+def bng_cellunion_array(
+    chips: ColLike,
+) -> Column:
+    """Take the union of an array of chips of one cell.
+
+    Args:
+        chips: The chips of one cell as an array of structs `(cellid, core, chip)`, for
+            example `collect_list(struct(cellid, core, chip))`. A core chip has no geometry
+            and stands for the whole cell; a NULL element is skipped.
+
+    Returns:
+        The union as WKB (no SRID), or NULL when it is empty or the array has no chip. A
+        core chip stands for the whole cell, and the answer is then the cell polygon.
+        Chips of more than one cell give NULL.
+
+    SQL: ``gbx_bng_cellunion_array(chips)``
+    """
+    return _api.call(
+        "gbx_bng_cellunion_array",
+        chips,
     )
 
 

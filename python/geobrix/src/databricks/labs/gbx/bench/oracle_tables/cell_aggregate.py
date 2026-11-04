@@ -14,6 +14,9 @@ a negative k raise naming the value; a NULL cell id beside BIGINT ids past 2**53
 over as float64 and round the ids to other cells).
 """
 
+from dataclasses import replace
+
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, twin
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
     CUSTOM_GRID,
     H3_CELL,
@@ -238,6 +241,143 @@ def _fill_rows(prefix):
 CELL_AGGREGATE = tuple(row for p in _GRIDS for row in _fill_rows(p))
 
 
+# ------------------------------------------------------------------------------------------------ the array forms
+# `gbx_<grid>_cellfill_array` is the scalar twin of each aggregate: the group is one ARRAY of (cellid, value) structs and
+# the answer an array of the same structs, ascending, not the BINARY payload. Its rows are the aggregate's, run on the
+# session and on UC with the same expectation. Not twinned: a NULL cell id beside ids past 2**53 raises in the aggregate
+# (its float64 batches round them); a row UDF reads the ids exactly, so the array form skips the NULL id (pinned below).
+H3FA, QBFA, BNFA, CGFA = (
+    "gbx_h3_cellfill_array",
+    "gbx_quadbin_cellfill_array",
+    "gbx_bng_cellfill_array",
+    "gbx_custom_cellfill_array",
+)
+
+
+def _array_rows(prefix, fn):
+    rows = [
+        c
+        for c in CELL_AGGREGATE
+        if c.cid.startswith(f"{prefix}_fill_") and not c.cid.endswith("beside_big_id")
+    ]
+    return tuple(
+        replace(c, surfaces=("session", "uc")) for c in twin(tuple(rows), fn, Adapt())
+    )
+
+
+for _prefix, _fn in (("h3", H3FA), ("qb", QBFA), ("bng", BNFA), ("cg", CGFA)):
+    CELL_AGGREGATE += _array_rows(_prefix, _fn)
+
+
+def _null_id_expect(prefix):
+    c = _GRIDS[prefix][1]()[0]
+    if (
+        prefix == "cg"
+    ):  # the cell of the builder: resolution 1 puts the resolution in bit 56, past 2**53
+        c = cg_id(1061, 361, 1)
+    return {c: 1.0}
+
+
+CELL_AGGREGATE += tuple(
+    Case(
+        f"{p}_fill_null_beside_big_id__{fn[4:]}",
+        fn,
+        (Build(f"{p}_fill_null_id"), *_consts(p, 1, "mean", 2.0)),
+        "cellfill",
+        lambda p=p: _null_id_expect(p),  # the NULL id is skipped, the valid cell stays
+        ("session", "uc"),
+    )
+    for p, fn in (("h3", H3FA), ("qb", QBFA), ("cg", CGFA))
+)
+
+
+# Rows only the array forms have: a NULL array, an empty one, k = 0, a method in capitals; the pentagon row is H3 only.
+_FA = {"h3": H3FA, "qb": QBFA, "bng": BNFA, "cg": CGFA}
+
+
+def _extra_array_rows(prefix, fn):
+    both = ("session", "uc")
+    return (
+        Case(
+            f"{prefix}_fill_array_null__{fn[4:]}",
+            fn,
+            (None, *_consts(prefix, 1, "mean", 2.0)),
+            "null",
+            None,
+            both,
+        ),
+        Case(
+            f"{prefix}_fill_array_empty__{fn[4:]}",
+            fn,
+            ([], *_consts(prefix, 1, "mean", 2.0)),
+            "null",
+            None,
+            both,
+        ),
+        # k = 0 fills nothing: the NULL cell stays NULL and the valid cells pass through
+        Case(
+            f"{prefix}_fill_array_k0__{fn[4:]}",
+            fn,
+            (Build(f"{prefix}_fill_mean"), *_consts(prefix, 0, "mean", 2.0)),
+            "cellfill",
+            lambda p=prefix: {
+                _GRIDS[p][1]()[0]: None,
+                _GRIDS[p][1]()[1][0]: 10.0,
+                _GRIDS[p][1]()[1][1]: 20.0,
+            },
+            both,
+        ),
+        # the method is read in any case, as the aggregate reads it
+        Case(
+            f"{prefix}_fill_array_method_case__{fn[4:]}",
+            fn,
+            (Build(f"{prefix}_fill_mean"), *_consts(prefix, 1, "MEAN", 2.0)),
+            "cellfill",
+            _expect(prefix, "mean"),
+            both,
+        ),
+    )
+
+
+for _prefix, _fn in _FA.items():
+    CELL_AGGREGATE += _extra_array_rows(_prefix, _fn)
+
+
+@builder("h3_fill_pentagon")
+def _h3_fill_pentagon(tmpdir):
+    """A pentagon with no value and its five neighbours valued 1..5: the ring around a pentagon has five cells, not six."""
+    import h3
+
+    pent = h3.get_pentagons(8)[0]
+    ring = sorted(h3.str_to_int(c) for c in h3.grid_ring(pent, 1))
+    assert len(ring) == 5
+    return [(h3.str_to_int(pent), None)] + [
+        (c, float(i + 1)) for i, c in enumerate(ring)
+    ]
+
+
+def _h3_pentagon_expect():
+    import h3
+
+    pent = h3.get_pentagons(8)[0]
+    ring = sorted(h3.str_to_int(c) for c in h3.grid_ring(pent, 1))
+    want = {h3.str_to_int(pent): 3.0}  # the mean of 1..5
+    want.update({c: float(i + 1) for i, c in enumerate(ring)})
+    return want
+
+
+CELL_AGGREGATE += (
+    Case(
+        "h3_fill_pentagon__h3_cellfill_array",
+        H3FA,
+        (Build("h3_fill_pentagon"), 1, "mean", 2.0),
+        "cellfill",
+        _h3_pentagon_expect,
+        ("session", "uc"),
+    ),
+)
+
+
 # ------------------------------------------------------------------------------------------------ quadbin union
 def _qb_boundary(cell):
     import quadbin
@@ -357,4 +497,125 @@ CELL_AGGREGATE += (
     # Strips that do not meet intersect in nothing: NULL.
     Case("bi_agg_disjoint", BIN, (Build("chips_strips"),), "null", None, ONLY),
     Case("bi_agg_null_chips", BIN, (Build("chips_null"),), "null", None, ONLY),
+)
+
+
+# ------------------------------------------------------------------------------------------------ BNG chip arrays
+# `gbx_bng_cellunion_array` and `gbx_bng_cellintersection_array` are the array twins of the two chip aggregates: the
+# aggregate's rows run on the session and on UC. The chips of one cell are an array; chips of several cells are a caller's
+# mistake, and the array form answers NULL where the aggregate's fold is order dependent (pinned below).
+BUA, BIA = "gbx_bng_cellunion_array", "gbx_bng_cellintersection_array"
+CELL_AGGREGATE += tuple(
+    replace(c, surfaces=("session", "uc"))
+    for fn, prefix in ((BUA, "bu_agg"), (BIA, "bi_agg"))
+    for c in twin(
+        tuple(r for r in CELL_AGGREGATE if r.cid.startswith(prefix)), fn, Adapt()
+    )
+)
+
+
+def _ewkb(geom):
+    import shapely
+
+    return shapely.to_wkb(shapely.set_srid(geom, 27700), include_srid=True)
+
+
+@builder("chips_west_east_ewkb")
+def _chips_west_east_ewkb(tmpdir):
+    """The chips as gbx_bng_tessellate writes them on UC: EWKB with SRID 27700."""
+    import shapely
+
+    return [
+        {**c, "chip": _ewkb(shapely.from_wkb(c["chip"]))}
+        for c in _chips_west_east(tmpdir)
+    ]
+
+
+@builder("chips_two_cells")
+def _chips_two_cells(tmpdir):
+    return [
+        _chip(_box(530000, 530600)),
+        _chip(_box(530400, 531000), cell="TQ3180"),
+    ]
+
+
+@builder("chips_with_null_element")
+def _chips_with_null_element(tmpdir):
+    return [None, *_chips_west_east(tmpdir)]
+
+
+@builder("chips_west_core_other_cell")
+def _chips_west_core_other_cell(tmpdir):
+    """A core chip of TQ3180 beside a chip of TQ3080: the first core chip names the polygon."""
+    return [_chip(_box(530000, 530600)), _chip(None, core=True, cell="TQ3180")]
+
+
+def _box_wkt_xy(x0, y0, x1, y1):
+    import shapely
+
+    return lambda: shapely.box(x0, y0, x1, y1).wkt
+
+
+CELL_AGGREGATE += (
+    Case(
+        "bu_array_ewkb_chips",
+        BUA,
+        (Build("chips_west_east_ewkb"),),
+        "geom_equals",
+        _box_wkt(530000, 531000),
+        ("session", "uc"),
+    ),
+    Case(
+        "bi_array_ewkb_chips",
+        BIA,
+        (Build("chips_west_east_ewkb"),),
+        "geom_equals",
+        _box_wkt(530400, 530600),
+        ("session", "uc"),
+    ),
+    # a NULL element beside chips is skipped
+    Case(
+        "bu_array_null_element",
+        BUA,
+        (Build("chips_with_null_element"),),
+        "geom_equals",
+        _box_wkt(530000, 531000),
+        ("session", "uc"),
+    ),
+    Case(
+        "bi_array_null_element",
+        BIA,
+        (Build("chips_with_null_element"),),
+        "geom_equals",
+        _box_wkt(530400, 530600),
+        ("session", "uc"),
+    ),
+    Case("bu_array_null", BUA, (None,), "null", None, ("session", "uc")),
+    Case("bi_array_empty", BIA, ([],), "null", None, ("session", "uc")),
+    # chips of two cells: NULL (the aggregate folds them in the order they arrive)
+    Case(
+        "bu_array_two_cells",
+        BUA,
+        (Build("chips_two_cells"),),
+        "null",
+        None,
+        ("session", "uc"),
+    ),
+    Case(
+        "bi_array_two_cells",
+        BIA,
+        (Build("chips_two_cells"),),
+        "null",
+        None,
+        ("session", "uc"),
+    ),
+    # a core chip stands for its own cell, whatever the other chips say
+    Case(
+        "bu_array_core_names_the_cell",
+        BUA,
+        (Build("chips_west_core_other_cell"),),
+        "geom_equals",
+        _box_wkt_xy(531000, 180000, 532000, 181000),
+        ("session", "uc"),
+    ),
 )

@@ -333,17 +333,33 @@ def check_grid_stats(case, rows, args) -> Optional[str]:
     )
 
 
-def check_cellfill(case, out, args) -> Optional[str]:
-    """`cellfill`: the BINARY payload of a cellfill aggregate holds `case.expect` ({cell id: value or None}, a BNG id as
-    its string). The payload is decoded here from its documented layout (a big-endian Int32 count, then per cell an
-    Int64 id, a present byte and, when present, a Float64), so the check does not call the function under test.
-    Cells come out in ascending unsigned id order.
+def _cellfill_pairs(case, out):
+    """The ``(cell id, value)`` pairs of a fill result and a problem text: the aggregate's BINARY payload (decoded here
+    from its documented layout, so the check does not call the function under test) or the array form's structs.
     """
-    import math
     import struct
 
-    if out is None:
-        return f"{case.cid}: got NULL, want {len(case.expect)} cells"
+    if not isinstance(
+        out, (bytes, bytearray, memoryview)
+    ):  # the array form: structs of (cellid, value)
+        from databricks.labs.gbx.pygx import _bng
+
+        def part(row, name, pos):
+            try:
+                return row[name]
+            except (KeyError, TypeError, IndexError, ValueError):
+                return row[pos]
+
+        got = [
+            (
+                (lambda c: _bng.parse(c) if isinstance(c, str) else c)(
+                    part(r, "cellid", 0)
+                ),
+                part(r, "value", 1),
+            )
+            for r in out
+        ]
+        return got, None
     data = bytes(out)
     (count,) = struct.unpack_from(">i", data, 0)
     pos, got = 4, []
@@ -358,7 +374,23 @@ def check_cellfill(case, out, args) -> Optional[str]:
             v = None
         got.append((cid, v))
     if pos != len(data):
-        return f"{case.cid}: {len(data) - pos} bytes left after {count} cells"
+        return got, f"{case.cid}: {len(data) - pos} bytes left after {count} cells"
+    return got, None
+
+
+def check_cellfill(case, out, args) -> Optional[str]:
+    """`cellfill`: a fill result holds `case.expect` ({cell id: value or None}, a BNG id as its string). The result is
+    the BINARY payload of a cellfill aggregate (a big-endian Int32 count, then per cell an Int64 id, a present byte and,
+    when present, a Float64) or the array of `(cellid, value)` structs of a `_cellfill_array` function; either is read
+    here, not by the function under test. Cells come out in ascending unsigned id order.
+    """
+    import math
+
+    if out is None:
+        return f"{case.cid}: got NULL, want {len(case.expect)} cells"
+    got, problem = _cellfill_pairs(case, out)
+    if problem:
+        return problem
     want = {}
     for k, v in case.expect.items():
         if isinstance(k, str):  # a BNG reference: its id is the grid's own number

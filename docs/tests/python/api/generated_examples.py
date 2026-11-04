@@ -24,6 +24,11 @@ EXAMPLES = {
         "bng_fill_mean",
         "SELECT gbx_bng_cellfill(c0, c1, 1, 'mean', 2.0D) AS out FROM gbx_example",
     ),
+    "gbx_bng_cellfill_array": (
+        "CELL_AGGREGATE",
+        "bng_fill_mean__bng_cellfill_array",
+        "SELECT gbx_bng_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_bng_cellintersection": (
         "GRID_SCALAR",
         "cellint_halves",
@@ -34,6 +39,11 @@ EXAMPLES = {
         "bi_agg_two_chips",
         "SELECT gbx_bng_cellintersection_agg(c0) AS out FROM gbx_example",
     ),
+    "gbx_bng_cellintersection_array": (
+        "CELL_AGGREGATE",
+        "bi_agg_two_chips__bng_cellintersection_array",
+        "SELECT gbx_bng_cellintersection_array(c0) AS out FROM gbx_example",
+    ),
     "gbx_bng_cellunion": (
         "GRID_SCALAR",
         "cellunion_halves",
@@ -43,6 +53,11 @@ EXAMPLES = {
         "CELL_AGGREGATE",
         "bu_agg_two_chips",
         "SELECT gbx_bng_cellunion_agg(c0) AS out FROM gbx_example",
+    ),
+    "gbx_bng_cellunion_array": (
+        "CELL_AGGREGATE",
+        "bu_agg_two_chips__bng_cellunion_array",
+        "SELECT gbx_bng_cellunion_array(c0) AS out FROM gbx_example",
     ),
     "gbx_bng_centroid": (
         "GRID_SCALAR",
@@ -139,6 +154,11 @@ EXAMPLES = {
         "cg_fill_mean",
         "SELECT gbx_custom_cellfill(c0, c1, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 1, 'mean', 2.0D) AS out FROM gbx_example",
     ),
+    "gbx_custom_cellfill_array": (
+        "CELL_AGGREGATE",
+        "cg_fill_mean__custom_cellfill_array",
+        "SELECT gbx_custom_cellfill_array(c0, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_custom_centroid": (
         "GRID_SCALAR",
         "cg_centroid",
@@ -204,6 +224,11 @@ EXAMPLES = {
         "h3_fill_mean",
         "SELECT gbx_h3_cellfill(c0, c1, 1, 'mean', 2.0D) AS out FROM gbx_example",
     ),
+    "gbx_h3_cellfill_array": (
+        "CELL_AGGREGATE",
+        "h3_fill_mean__h3_cellfill_array",
+        "SELECT gbx_h3_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
     "gbx_h3_geomkloop": (
         "GRID_ARRAY",
         "h3_geomkloop_point_k1",
@@ -238,6 +263,11 @@ EXAMPLES = {
         "CELL_AGGREGATE",
         "qb_fill_mean",
         "SELECT gbx_quadbin_cellfill(c0, c1, 1, 'mean', 2.0D) AS out FROM gbx_example",
+    ),
+    "gbx_quadbin_cellfill_array": (
+        "CELL_AGGREGATE",
+        "qb_fill_mean__quadbin_cellfill_array",
+        "SELECT gbx_quadbin_cellfill_array(c0, 1, 'mean', 2.0D) AS out FROM gbx_example",
     ),
     "gbx_quadbin_cellunion": (
         "GRID_SCALAR",

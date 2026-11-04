@@ -23,7 +23,16 @@ import pandas as pd
 from pyspark.sql import Column
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udf, udtf
-from pyspark.sql.types import BinaryType, DoubleType, IntegerType, LongType, StringType
+from pyspark.sql.types import (
+    ArrayType,
+    BinaryType,
+    DoubleType,
+    IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 from . import _bng, _cellfill, _custom
 from . import _h3 as _h3mod
@@ -652,6 +661,28 @@ def _bng_cellintersection_agg_udf(chip: pd.DataFrame) -> Optional[bytes]:
     return _fold_chip_geom(chip, _bng.cell_intersection)
 
 
+def _fold_chip_array(chips, op):
+    """The array form of the chip folds: the chips of ONE cell as an array. Chips of several cells give NULL (the
+    aggregate folds them in arrival order, which has no meaning for a set); a core chip names the answer, as there.
+    """
+    if chips is None:
+        return None
+    rows = [_to_positional(r) for r in chips if r is not None]
+    if not any(r[1] for r in rows) and len({r[0] for r in rows}) > 1:
+        return None
+    return _fold_chip_geom(chips, op)
+
+
+@udf(returnType=BinaryType())
+def _bng_cellunion_array_udf(chips):
+    return _fold_chip_array(chips, _bng.cell_union)
+
+
+@udf(returnType=BinaryType())
+def _bng_cellintersection_array_udf(chips):
+    return _fold_chip_array(chips, _bng.cell_intersection)
+
+
 def _res_or_null(res):
     """The resolution of ONE ROW of a pandas batch, NULL-safe: ``None`` for a NULL, else
     :func:`_norm_res`.
@@ -1056,6 +1087,64 @@ def _custom_cellfill_agg_udf(
         cells, _parse_k(k), _parse_method(method), _parse_power(power), _k_loop_fn
     )
     return _cellfill.encode(filled)
+
+
+# --- the array forms: gbx_<grid>_cellfill_array -------------------------------------------------------------------
+# A scalar over ONE array of (cellid, value) structs, the array twin of the aggregate above. A plain row UDF reads the
+# BIGINT ids exactly (the aggregate's float64 batches cannot), so a NULL id beside big ids is skipped, not refused.
+
+
+def _fill_array_type(cellid_type):
+    return ArrayType(
+        StructType(
+            [StructField("cellid", cellid_type), StructField("value", DoubleType())]
+        )
+    )
+
+
+def _array_rows(cells):
+    return ((c["cellid"], c["value"]) for c in cells if c is not None)
+
+
+@udf(returnType=_fill_array_type(LongType()))
+def _h3_cellfill_array_udf(cells, k=None, method=None, power=None):
+    if cells is None:
+        return None
+    return _cellfill.fill_cells(_array_rows(cells), k, method, power, _h3_k_loop)
+
+
+@udf(returnType=_fill_array_type(LongType()))
+def _quadbin_cellfill_array_udf(cells, k=None, method=None, power=None):
+    if cells is None:
+        return None
+    return _cellfill.fill_cells(_array_rows(cells), k, method, power, _quadbin.k_loop)
+
+
+@udf(returnType=_fill_array_type(StringType()))
+def _bng_cellfill_array_udf(cells, k=None, method=None, power=None):
+    if cells is None:
+        return None
+    parsed = (
+        (_bng.parse_safe(str(c)), v) for c, v in _array_rows(cells) if c is not None
+    )
+    filled = _cellfill.fill_cells(
+        ((c, v) for c, v in parsed if c is not None), k, method, power, _bng.k_loop
+    )
+    return None if filled is None else [(_bng.format(c), v) for c, v in filled]
+
+
+@udf(returnType=_fill_array_type(LongType()))
+def _custom_cellfill_array_udf(cells, grid, k=None, method=None, power=None):
+    if cells is None or grid is None:
+        return None
+    conf = _custom.conf_from_row(grid)
+    return _cellfill.fill_cells(
+        _array_rows(cells),
+        k,
+        method,
+        power,
+        lambda cid, d: _custom.k_loop(conf, cid, d),
+    )
 
 
 # ============================================================================

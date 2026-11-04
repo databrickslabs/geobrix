@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
+from databricks.labs.gbx.bench import product_stand_ins
 from databricks.labs.gbx.uc.ddl import UC_GEOMETRY, sql_type
 
 MERC_PROJ = (
@@ -4028,7 +4029,17 @@ def _ddl_type(value, param) -> str:
         return "binary"
     if isinstance(value, str):
         return "string"
-    return _SQL[param.session[0]] if param.session[0] in _SQL else _unmapped(param)
+    return _param_sql(param)
+
+
+def _param_sql(param) -> str:
+    """The DDL type a parameter is written with: the table above, or a composite type as the manifest spells it."""
+    t = param.session[0]
+    if t in _SQL:
+        return _SQL[t]
+    if t.lower().startswith(("array<", "map<", "struct<")):
+        return t.lower()
+    return _unmapped(param)
 
 
 class _Scalar:
@@ -4612,7 +4623,7 @@ def _typed_literal(value, param, case: Case) -> str:
     if isinstance(value, dict) and is_flat_struct(param.session[0]):
         return struct_literal(value, param.session[0])
     lit = _sql_literal(value, param, case)
-    return lit if value is None else f"CAST({lit} AS {_SQL[param.session[0]]})"
+    return lit if value is None else f"CAST({lit} AS {_param_sql(param)})"
 
 
 # How many leading parameters one row of an aggregate's group fills (its member columns); the others are the group's
@@ -5004,13 +5015,20 @@ def run_sql_kernels(
     sources = dict(sources or {})
 
     def source(name):
-        return sources.get(name) or sqlbody.l4_source(man.functions[name])
+        got = sources.get(name) or sqlbody.l4_source(man.functions[name])
+        return None if got is None else product_stand_ins.rewrite_source(got)
 
     names = sorted(
         {c.fn for c in cases if "uc" in c.surfaces and source(c.fn) is not None}
     )
     mine = [c for c in cases if c.fn in names]
+    # a body that calls a product built-in the local engine lacks runs against its stand-in (bench.product_stand_ins)
+    texts = [c.sql for c in mine if c.sql] + [
+        part for n in names for part in _source_texts(source(n))
+    ]
+    stood = []
     try:
+        stood = product_stand_ins.register(spark, texts)
         for name in names:
             # a UDF of this name from an earlier test in the session cannot be replaced by a SQL function
             spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
@@ -5019,6 +5037,13 @@ def run_sql_kernels(
     finally:
         for name in names:
             spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
+        product_stand_ins.drop(spark, stood)
+
+
+def _source_texts(source) -> List[str]:
+    """The SQL texts of a kernel source ``(body, helpers)``: the body and each helper's body."""
+    body, helpers = source
+    return [body, *(h["sql"] for h in helpers)]
 
 
 def run_handlers_rows(cases, tmpdir: Optional[str] = None):

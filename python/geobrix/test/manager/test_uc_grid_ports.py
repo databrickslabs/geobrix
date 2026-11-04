@@ -59,3 +59,21 @@ def test_quadbin_chips_are_ewkb_with_the_4326_srid():
         and c["geom"][:1] == b"\x01"
         for c in chips
     )
+
+
+def test_bng_chip_results_are_ewkb_with_srid_27700_and_a_tuple_chip_is_read_by_position():
+    box = shapely.box
+    west = {
+        "cellid": "TQ3080",
+        "core": False,
+        "chip": shapely.to_wkb(box(530000, 180000, 530500, 181000)),
+    }
+    south = ("TQ3080", False, shapely.to_wkb(box(530000, 180000, 531000, 180500)))
+    for fn, area in (
+        (handlers.bng_cellunion, 750000.0),
+        (handlers.bng_cellintersection, 250000.0),
+    ):
+        out = fn(west, south)
+        g = shapely.from_wkb(out["chip"])
+        assert out["chip"][:1] == b"\x01" and shapely.get_srid(g) == 27700
+        assert abs(g.area - area) < 1e-6

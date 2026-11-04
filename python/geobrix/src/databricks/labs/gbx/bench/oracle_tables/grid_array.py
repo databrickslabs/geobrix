@@ -292,6 +292,7 @@ GRID_ARRAY = uc_view(
     {
         "gbx_bng_polyfill": 27700,
         "gbx_bng_geomkring": 27700,
+        GKL: 27700,
         CPF: 27700,
         CGKR: 27700,
         CGKL: 27700,
@@ -441,5 +442,22 @@ GRID_ARRAY += (
         None,
         ("uc",),
         geom_srid=27700,
+    ),
+)
+
+# --- BNG loops on UC: a cell id that is no cell is NULL, a wrong k raises, a geometry outside SRID 27700 is refused, a
+# loop over the cap is refused.
+GRID_ARRAY += (
+    Case("uc_kloop_bad_cell", KL, ("XX9999", 1), "null", None, ("uc",)),
+    Case("uc_kloop_negative_k", KL, ("TQ3080", -1), "raises", "-1", ("uc",)),
+    Case("uc_kloop_over_cap", KL, ("TQ3080", 10_000_000), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_geomkloop_wrong_srid",
+        GKL,
+        (POINT, 3, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
     ),
 )

@@ -46,6 +46,34 @@ def _chip_south(tmpdir):
     return _chip("TQ3080", False, SOUTH)
 
 
+def _chip_ewkb(cellid, core, wkt, srid):
+    """A chip as gbx_bng_tessellate writes it on UC: the geometry as EWKB with its SRID."""
+    import shapely
+
+    return {
+        "cellid": cellid,
+        "core": core,
+        "chip": shapely.to_wkb(
+            shapely.set_srid(shapely.from_wkt(wkt), srid), include_srid=True
+        ),
+    }
+
+
+@builder("chip_west_ewkb")
+def _chip_west_ewkb(tmpdir):
+    return _chip_ewkb("TQ3080", False, WEST, 27700)
+
+
+@builder("chip_south_ewkb")
+def _chip_south_ewkb(tmpdir):
+    return _chip_ewkb("TQ3080", False, SOUTH, 27700)
+
+
+@builder("chip_west_4326")
+def _chip_west_4326(tmpdir):
+    return _chip_ewkb("TQ3080", False, WEST, 4326)
+
+
 @builder("chip_no_bytes")
 def _chip_no_bytes(tmpdir):
     """A non-core chip with no geometry: what an empty intersection leaves in a chip table."""
@@ -624,6 +652,60 @@ GRID_SCALAR += (
     ),
     Case("uc_qb_cellunion_not_a_cell", QUNI, ([QB_C, 0],), "null", None, ("uc",)),
     Case("uc_qb_cellunion_empty", QUNI, ([],), "null", None, ("uc",)),
+    # A cell id that is not a BNG cell is a data error: NULL.
+    Case("uc_aswkt_bad_cell", AWKT, ("XX9999",), "null", None, ("uc",)),
+    Case(
+        "uc_distance_bad_cell",
+        DIST,
+        ("XX9999", "TQ3080"),
+        "null",
+        None,
+        ("uc",),
+        variants=(("TQ3080", "XX9999"),),
+    ),
+    Case(
+        "uc_edistance_bad_cell",
+        EDIST,
+        ("XX9999", "TQ3080"),
+        "null",
+        None,
+        ("uc",),
+        variants=(("TQ3080", "XX9999"),),
+    ),
+    # The chips of gbx_bng_tessellate on UC are EWKB with SRID 27700: they go in as they come out, and the answer is the
+    # same chip. A chip in another SRID is refused with a Fix:.
+    Case(
+        "uc_cellunion_ewkb_chips",
+        CUNI,
+        (Build("chip_west_ewkb"), Build("chip_south_ewkb")),
+        "cells",
+        {"cells": {"TQ3080": 750000.0}, "core": 0},
+        ("uc",),
+    ),
+    Case(
+        "uc_cellint_ewkb_chips",
+        CINT,
+        (Build("chip_west_ewkb"), Build("chip_south_ewkb")),
+        "cells",
+        {"cells": {"TQ3080": 250000.0}, "core": 0},
+        ("uc",),
+    ),
+    Case(
+        "uc_cellunion_wrong_srid",
+        CUNI,
+        (Build("chip_west_4326"), Build("chip_south_ewkb")),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_cellint_wrong_srid",
+        CINT,
+        (Build("chip_south_ewkb"), Build("chip_west_4326")),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
     # A custom grid is defined in its own SRID: a geometry in another one is refused with a Fix:. A grid with no CRS
     # (srid -1) takes a geometry with SRID 0 and no other.
     Case(

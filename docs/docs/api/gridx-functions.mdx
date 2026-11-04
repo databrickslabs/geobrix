@@ -864,16 +864,17 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
 ### bng_aswkt
 
 {/* BEGIN GENERATED gbx_bng_aswkt: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_aswkt(cellid)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_aswkt(cellid)` | `STRING` |
 | Python | `gridx.bng.functions.bng_aswkt(cellid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
 {/* END GENERATED gbx_bng_aswkt */}
 
 Convert a BNG cell ID to Well-Known Text (WKT) format.
@@ -972,17 +973,18 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
 ### bng_distance
 
 {/* BEGIN GENERATED gbx_bng_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_distance(cellid1, cellid2)` | `BIGINT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_distance(cellid1, cellid2)` | `BIGINT` |
 | Python | `gridx.bng.functions.bng_distance(cellid1, cellid2)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid1` | `STRING` |  | The first BNG cell id. |
-| `cellid2` | `STRING` |  | The second BNG cell id. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid1` | `STRING` | `STRING` |  | The first BNG cell id. |
+| `cellid2` | `STRING` | `STRING` |  | The second BNG cell id. |
 {/* END GENERATED gbx_bng_distance */}
 
 Return the grid-step distance between two BNG cells.
@@ -1007,17 +1009,18 @@ Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count
 ### bng_euclideandistance
 
 {/* BEGIN GENERATED gbx_bng_euclideandistance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_euclideandistance(cellid1, cellid2)` | `BIGINT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_euclideandistance(cellid1, cellid2)` | `BIGINT` |
 | Python | `gridx.bng.functions.bng_euclideandistance(cellid1, cellid2)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid1` | `STRING` |  | The first BNG cell id. |
-| `cellid2` | `STRING` |  | The second BNG cell id. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid1` | `STRING` | `STRING` |  | The first BNG cell id. |
+| `cellid2` | `STRING` | `STRING` |  | The second BNG cell id. |
 {/* END GENERATED gbx_bng_euclideandistance */}
 
 Return the Chebyshev grid-unit distance between two BNG cells.
@@ -1050,17 +1053,18 @@ Operations combining multiple BNG chip structs.
 ### bng_cellintersection
 
 {/* BEGIN GENERATED gbx_bng_cellintersection: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_cellintersection(left_chip, right_chip)` | `struct<cellid:string,core:boolean,chip:binary>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_cellintersection(left_chip, right_chip)` | `struct<cellid:string,core:boolean,chip:binary>` |
 | Python | `gridx.bng.functions.bng_cellintersection(left_chip, right_chip)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `left_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip: a struct of `cellid`, `core` and `chip` (WKB), read by position. |
-| `right_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | The second chip, in the same form. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `left_chip` | `struct<cellid:string,core:boolean,chip:binary>` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip: a struct of `cellid`, `core` and `chip` (WKB), read by position. |
+| `right_chip` | `struct<cellid:string,core:boolean,chip:binary>` | `struct<cellid:string,core:boolean,chip:binary>` |  | The second chip, in the same form. |
 {/* END GENERATED gbx_bng_cellintersection */}
 
 Intersect two BNG chip structs and return the dissolved intersection chip.
@@ -1085,17 +1089,18 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the sa
 ### bng_cellunion
 
 {/* BEGIN GENERATED gbx_bng_cellunion: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_cellunion(left_chip, right_chip)` | `struct<cellid:string,core:boolean,chip:binary>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_cellunion(left_chip, right_chip)` | `struct<cellid:string,core:boolean,chip:binary>` |
 | Python | `gridx.bng.functions.bng_cellunion(left_chip, right_chip)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `left_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip: a struct of `cellid`, `core` and `chip` (WKB), read by position. |
-| `right_chip` | `struct<cellid:string,core:boolean,chip:binary>` |  | The second chip, in the same form. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `left_chip` | `struct<cellid:string,core:boolean,chip:binary>` | `struct<cellid:string,core:boolean,chip:binary>` |  | A chip: a struct of `cellid`, `core` and `chip` (WKB), read by position. |
+| `right_chip` | `struct<cellid:string,core:boolean,chip:binary>` | `struct<cellid:string,core:boolean,chip:binary>` |  | The second chip, in the same form. |
 {/* END GENERATED gbx_bng_cellunion */}
 
 Union two BNG chip structs and return the dissolved union chip.
@@ -1237,17 +1242,18 @@ Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distan
 ### bng_kloop
 
 {/* BEGIN GENERATED gbx_bng_kloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_kloop(cellid, k)` | `array<string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_kloop(cellid, k)` | `array<string>` |
 | Python | `gridx.bng.functions.bng_kloop(cellid, k)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
-| `k` | `INT` |  | The ring distance: 1 is the eight neighbours of the cell. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` | `INT` |  | The ring distance: 1 is the eight neighbours of the cell. |
 {/* END GENERATED gbx_bng_kloop */}
 
 Generate a k-loop of cells around a center cell (hollow ring).
@@ -1311,20 +1317,21 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the 
 ### bng_geomkloop
 
 {/* BEGIN GENERATED gbx_bng_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<string>` |
 | Python | `gridx.bng.functions.bng_geomkloop(geom, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
-| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_bng_geomkloop */}
 
 Generate a k-loop of cells around a geometry at specified resolution. The loop is the hollow outer ring: cells in `kring(k)` but not in `kring(k-1)`.

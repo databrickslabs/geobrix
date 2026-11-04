@@ -1006,6 +1006,120 @@ def custom_geomkloop(
     )
 
 
+# --- BNG ------------------------------------------------------------------------------------------------------------
+
+
+def bng_aswkt(cellid):
+    """The cell polygon as WKT (EPSG:27700 metres)."""
+    from databricks.labs.gbx.pygx import _bng
+
+    cid = _bng_cell(cellid)
+    return None if cid is None else _bng.cell_aswkt(cid)
+
+
+def bng_distance(cellid1, cellid2):
+    from databricks.labs.gbx.pygx import _bng
+
+    if cellid1 is None or cellid2 is None:
+        return None
+    a, b = _bng_cell(cellid1), _bng_cell(cellid2)
+    return None if a is None or b is None else int(_bng.distance(a, b))
+
+
+def bng_euclideandistance(cellid1, cellid2):
+    from databricks.labs.gbx.pygx import _bng
+
+    if cellid1 is None or cellid2 is None:
+        return None
+    a, b = _bng_cell(cellid1), _bng_cell(cellid2)
+    return None if a is None or b is None else int(_bng.euclidean_distance(a, b))
+
+
+def bng_kloop(cellid, k):
+    from databricks.labs.gbx.pygx import _bng
+
+    fn = "gbx_bng_kloop"
+    if cellid is None or k is None:
+        return None
+    kk = _ring_k(fn, k)
+    cid = _bng_cell(cellid)
+    if cid is None:
+        return None  # a string that is no cell
+    _check_array(fn, 8 * kk)  # a loop of distance k is 8k cells
+    return [_bng.format(c) for c in _bng.k_loop(cid, kk)]
+
+
+def bng_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
+    from databricks.labs.gbx.pygx import _bng
+
+    fn = "gbx_bng_geomkloop"
+    if geom is None or resolution is None or k is None:
+        return None
+    res = _bng_res(fn, resolution)
+    mode, coverage, kk = _dilation(fn, mode, coverage, k)
+    g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
+    return _cells_of(
+        fn,
+        g,
+        lambda g: sorted(_bng.geometry_k_loop_str(g, res, kk, mode, coverage)),
+    )
+
+
+def _chip(fn: str, chip):
+    """A chip struct ``{cellid, core, chip}`` as ``(cellid, core, shapely geometry)``: the geometry is EWKB with SRID
+    27700 (what gbx_bng_tessellate writes) or plain WKB, and NULL bytes are an empty geometry (an empty intersection).
+    """
+    import shapely
+
+    from databricks.labs.gbx.pygx import _bng
+
+    if isinstance(chip, (tuple, list)):  # a plain tuple is read by position
+        cellid, core, raw = chip[0], chip[1], chip[2]
+    else:
+        cellid, core, raw = (_field(chip, n) for n in ("cellid", "core", "chip"))
+    if raw is None:
+        return cellid, bool(core), _bng._empty_polygon()
+    g = shapely.from_wkb(bytes(raw))
+    srid = shapely.get_srid(g)
+    if srid not in (0, BNG_SRID):
+        raise _refuse(
+            fn,
+            f"BNG chips are in SRID {BNG_SRID}; got a chip in SRID {srid} (st_transform the chip geometry first)",
+        )
+    return cellid, bool(core), g
+
+
+def _chip_pair(fn: str, left, right, kernel):
+    if left is None or right is None:
+        return None
+    a, b = _chip(fn, left), _chip(fn, right)
+    try:
+        cellid, core, g = kernel(a, b)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except Exception:  # noqa: BLE001 - a chip that cannot be combined is NULL
+        return None
+    return {
+        "cellid": cellid,
+        "core": bool(core),
+        "chip": None if g is None or g.is_empty else _ewkb(g, BNG_SRID),
+    }
+
+
+def bng_cellunion(left_chip, right_chip):
+    from databricks.labs.gbx.pygx import _bng
+
+    return _chip_pair("gbx_bng_cellunion", left_chip, right_chip, _bng.cell_union)
+
+
+def bng_cellintersection(left_chip, right_chip):
+    from databricks.labs.gbx.pygx import _bng
+
+    return _chip_pair(
+        "gbx_bng_cellintersection", left_chip, right_chip, _bng.cell_intersection
+    )
+
+
 def st_explainvalidity(geom):
     from databricks.labs.gbx.pyvx._validity import explain_validity
 

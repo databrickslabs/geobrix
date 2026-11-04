@@ -4966,6 +4966,11 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
                 uc_args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
                 with _uc_geometry_type():
                     got = _from_uc_geometry(handler(*uc_args))
+                if (
+                    case.kind == "cells"
+                ):  # one chip (a struct) is one cell, as `verdict` reads it
+                    msgs.append(_check_rows(case, [] if got is None else [got], args))
+                    continue
                 msgs.append(
                     check(case, got, args)
                 )  # a bare-WKT expectation reads the session-shaped argument

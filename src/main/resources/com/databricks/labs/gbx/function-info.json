@@ -1853,6 +1853,7 @@
       "description": "Return a BNG cell's boundary polygon as WKT.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1887,6 +1888,7 @@
       "description": "Intersect two chips of the same BNG cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1908,6 +1910,7 @@
       "description": "Union two chips of the same BNG cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1941,6 +1944,7 @@
       "description": "Return the grid distance between two BNG cells (Manhattan, in cells).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1964,6 +1968,7 @@
       "description": "Return the grid distance between two BNG cells (the larger axis offset, in cells).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1975,6 +1980,7 @@
       "description": "Return the BNG cells at exactly ring distance k from a geometry's cells.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2021,6 +2027,7 @@
       "description": "Return the cells at exactly ring distance k from a BNG cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

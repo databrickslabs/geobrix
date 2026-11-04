@@ -20,7 +20,8 @@ LEVELS = [("L1", "engine"), ("L3", "engine-c0"), ("L3", "engine-c1")]
 
 
 def _rows(fn):
-    rows = [c for c in oracles.SPEC_SE if c.fn == fn]
+    # the session rows only: run_session skips a row of another surface (the uc rows run in the UC handler test)
+    rows = [c for c in oracles.SPEC_SE if c.fn == fn and "session" in c.surfaces]
     if fn == "gbx_rst_transformcrs":  # its own oracle rows, unchanged
         rows += [c for c in oracles.MVP_S if c.fn == fn and "session" in c.surfaces]
     return rows

@@ -334,6 +334,16 @@ def check_grows(fn: str, width: int, height: int, dtypes) -> None:
         raise result_refusal(fn, decoded, DECODED_CAP)
 
 
+def check_bands(fn: str, ds, named: Dict[str, int]) -> None:
+    """A band argument the tile does not have (1-based) is a wrong argument: it raises with a Fix."""
+    for name, value in named.items():
+        if not 1 <= int(value) <= ds.count:
+            raise _Parameter(
+                f"{fn}: {name} {int(value)} is outside the tile's {ds.count} band(s). "
+                f"Fix: pass a band from 1 to {ds.count} (gbx_rst_numbands gives the count)"
+            )
+
+
 def with_tile(fn: str, tile, kernel: Callable, driver: str = "GTiff"):
     """``with_dataset`` for a function that returns a tile: ``kernel(ds)`` makes the raster bytes (None for no
     tile), an error tile goes through unchanged, and the result is cap-checked by :func:`tile_row`.
@@ -354,13 +364,15 @@ def _tile_fn(
     cast: Optional[Callable] = None,
     grows: Optional[Callable] = None,
     driver=None,
+    bands: Optional[Dict[str, int]] = None,
 ) -> Callable:
     """A handler ``(tile, *args)`` that returns the tile ``<module>.<attr>(ds, *args)`` makes.
 
     NULL in is NULL out for the tile and every argument not named in ``optional`` (positions after the tile).
     ``check(*args)`` raises a ``ValueError`` for a wrong argument, before the tile is read; ``cast(*args)`` gives the
     kernel's arguments; ``grows(ds, *args)`` gives the ``(width, height, dtypes)`` of the result grid, which is
-    refused over the cap before the kernel makes it; ``driver(*args)`` names the format of the bytes.
+    refused over the cap before the kernel makes it; ``driver(*args)`` names the format of the bytes; ``bands`` maps
+    the name of each band argument to its position, and a band the tile does not have raises.
     """
     fn = sql_name
     free = frozenset(optional)
@@ -378,6 +390,8 @@ def _tile_fn(
         kargs = cast(*args) if cast is not None else args
 
         def kernel(ds):
+            if bands:
+                check_bands(fn, ds, {name: args[i] for name, i in bands.items()})
             if grows is not None:
                 check_grows(fn, *grows(ds, *args))
             return _kernel(module, attr)(ds, *kargs)
@@ -603,11 +617,7 @@ def rst_band(tile, band_index):
         )
 
     def kernel(ds):
-        if int(band_index) > ds.count:
-            raise _Parameter(
-                f"{fn}: band_index {int(band_index)} is outside the tile's {ds.count} band(s). "
-                f"Fix: pass a band from 1 to {ds.count} (gbx_rst_numbands gives the count)"
-            )
+        check_bands(fn, ds, {"band_index": band_index})
         return _kernel("edit", "band")(ds, int(band_index))
 
     return with_tile(fn, tile, kernel)
@@ -759,3 +769,78 @@ rst_tri = _tile_fn("gbx_rst_tri", "terrain", "tri", grows=_surface("float32"))
 rst_roughness = _tile_fn(
     "gbx_rst_roughness", "terrain", "roughness", grows=_surface("float32")
 )
+
+
+# --- spectral indices: bands to one index band -----------------------------------------------------------------------
+rst_ndvi = _tile_fn(
+    "gbx_rst_ndvi",
+    "indices",
+    "ndvi",
+    cast=lambda red, nir: (int(red), int(nir)),
+    bands={"red_idx": 0, "nir_idx": 1},
+    grows=_surface("float32"),
+)
+rst_ndwi = _tile_fn(
+    "gbx_rst_ndwi",
+    "indices",
+    "ndwi",
+    cast=lambda green, nir: (int(green), int(nir)),
+    bands={"green_idx": 0, "nir_idx": 1},
+    grows=_surface("float32"),
+)
+rst_nbr = _tile_fn(
+    "gbx_rst_nbr",
+    "indices",
+    "nbr",
+    cast=lambda nir, swir: (int(nir), int(swir)),
+    bands={"nir_idx": 0, "swir_idx": 1},
+    grows=_surface("float32"),
+)
+rst_savi = _tile_fn(
+    "gbx_rst_savi",
+    "indices",
+    "savi",
+    cast=lambda red, nir, l_val: (int(red), int(nir), float(l_val)),
+    bands={"red_idx": 0, "nir_idx": 1},
+    grows=_surface("float32"),
+)
+rst_evi = _tile_fn(
+    "gbx_rst_evi",
+    "indices",
+    "evi",
+    cast=lambda red, nir, blue, l_val, c1, c2, g: (
+        int(red),
+        int(nir),
+        int(blue),
+        float(l_val),
+        float(c1),
+        float(c2),
+        float(g),
+    ),
+    bands={"red_idx": 0, "nir_idx": 1, "blue_idx": 2},
+    grows=_surface("float32"),
+)
+
+
+def rst_index(tile, formula_name, band_map):
+    """gbx_rst_index: a built-in index (ndvi, msavi, ...) from the bands named in `band_map`, one Float32 band."""
+    fn = "gbx_rst_index"
+    if tile is None or formula_name is None or band_map is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    key, mapped = _kernel("indices", "check_index")(formula_name, band_map)
+    needed = {
+        f"band_map['{b}']": mapped[b] for b in _kernel("indices", "formula_bands")(key)
+    }
+
+    def kernel(ds):
+        check_bands(fn, ds, needed)
+        check_grows(fn, *_surface("float32")(ds))
+        return _kernel("indices", "index")(ds, str(formula_name), dict(band_map))
+
+    return with_tile(fn, tile, kernel)
+
+
+HANDLERS["gbx_rst_index"] = rst_index

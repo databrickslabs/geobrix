@@ -4381,18 +4381,19 @@ Merge tiles into mosaic.
 ### rst_ndvi
 
 {/* BEGIN GENERATED gbx_rst_ndvi: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_ndvi(tile, red_idx, nir_idx)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_ndvi(tile, red_idx, nir_idx)` | `TILE` |
 | Python | `rasterx.functions.rst_ndvi(tile, red_idx, nir_idx, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The multi-band tile. |
-| `red_idx` | `INT` |  | The 1-based band of red. |
-| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The multi-band tile. |
+| `red_idx` | `INT` | `INT` |  | The 1-based band of red. |
+| `nir_idx` | `INT` | `INT` |  | The 1-based band of near infrared. |
 {/* END GENERATED gbx_rst_ndvi */}
 
 :::note NoData
@@ -5346,23 +5347,24 @@ Multi-band satellite math. Band arguments are 1-based GDAL band indices; the out
 ### rst_evi
 
 {/* BEGIN GENERATED gbx_rst_evi: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_evi(tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_evi(tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g])` | `TILE` |
 | Python | `rasterx.functions.rst_evi(tile, red_idx, nir_idx, blue_idx, l=None, c1=None, c2=None, g=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The multi-band tile. |
-| `red_idx` | `INT` |  | The 1-based band of red. |
-| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
-| `blue_idx` | `INT` |  | The 1-based band of blue. |
-| `l` | `DOUBLE` | `1.0` | The canopy background adjustment. |
-| `c1` | `DOUBLE` | `6.0` | The aerosol coefficient for red. |
-| `c2` | `DOUBLE` | `7.5` | The aerosol coefficient for blue. |
-| `g` | `DOUBLE` | `2.5` | The gain factor. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The multi-band tile. |
+| `red_idx` | `INT` | `INT` |  | The 1-based band of red. |
+| `nir_idx` | `INT` | `INT` |  | The 1-based band of near infrared. |
+| `blue_idx` | `INT` | `INT` |  | The 1-based band of blue. |
+| `l` | `DOUBLE` | `DOUBLE` | `1.0` | The canopy background adjustment. |
+| `c1` | `DOUBLE` | `DOUBLE` | `6.0` | The aerosol coefficient for red. |
+| `c2` | `DOUBLE` | `DOUBLE` | `7.5` | The aerosol coefficient for blue. |
+| `g` | `DOUBLE` | `DOUBLE` | `2.5` | The gain factor. |
 {/* END GENERATED gbx_rst_evi */}
 
 :::note NoData
@@ -5385,18 +5387,19 @@ Enhanced Vegetation Index. Formula: `G * (NIR - Red) / (NIR + C1*Red - C2*Blue +
 ### rst_index
 
 {/* BEGIN GENERATED gbx_rst_index: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_index(tile, formula_name, band_map)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_index(tile, formula_name, band_map)` | `TILE` |
 | Python | `rasterx.functions.rst_index(tile, formula_name, band_map, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The multi-band tile. |
-| `formula_name` | `STRING` |  | The index: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi` or `ndsi` (any case). |
-| `band_map` | `MAP<STRING,INT>` |  | The 1-based band of each name the index needs, such as `map('red', 1, 'nir', 2)`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The multi-band tile. |
+| `formula_name` | `STRING` | `STRING` |  | The index: `ndvi`, `gndvi`, `msavi`, `ndvi_re`, `ndmi` or `ndsi` (any case). |
+| `band_map` | `MAP<STRING,INT>` | `MAP<STRING,INT>` |  | The 1-based band of each name the index needs, such as `map('red', 1, 'nir', 2)`. |
 {/* END GENERATED gbx_rst_index */}
 
 :::note NoData
@@ -5483,18 +5486,19 @@ threshold.
 ### rst_nbr
 
 {/* BEGIN GENERATED gbx_rst_nbr: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_nbr(tile, nir_idx, swir_idx)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_nbr(tile, nir_idx, swir_idx)` | `TILE` |
 | Python | `rasterx.functions.rst_nbr(tile, nir_idx, swir_idx, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The multi-band tile. |
-| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
-| `swir_idx` | `INT` |  | The 1-based band of shortwave infrared. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The multi-band tile. |
+| `nir_idx` | `INT` | `INT` |  | The 1-based band of near infrared. |
+| `swir_idx` | `INT` | `INT` |  | The 1-based band of shortwave infrared. |
 {/* END GENERATED gbx_rst_nbr */}
 
 :::note NoData
@@ -5517,18 +5521,19 @@ Normalized Burn Ratio. Formula: `(NIR - SWIR) / (NIR + SWIR)`. The pre-/post-fir
 ### rst_ndwi
 
 {/* BEGIN GENERATED gbx_rst_ndwi: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_ndwi(tile, green_idx, nir_idx)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_ndwi(tile, green_idx, nir_idx)` | `TILE` |
 | Python | `rasterx.functions.rst_ndwi(tile, green_idx, nir_idx, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The multi-band tile. |
-| `green_idx` | `INT` |  | The 1-based band of green. |
-| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The multi-band tile. |
+| `green_idx` | `INT` | `INT` |  | The 1-based band of green. |
+| `nir_idx` | `INT` | `INT` |  | The 1-based band of near infrared. |
 {/* END GENERATED gbx_rst_ndwi */}
 
 :::note NoData
@@ -5551,19 +5556,20 @@ Normalized Difference Water Index (McFeeters 1996). Formula: `(Green - NIR) / (G
 ### rst_savi
 
 {/* BEGIN GENERATED gbx_rst_savi: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_savi(tile, red_idx, nir_idx, [l])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_savi(tile, red_idx, nir_idx, [l])` | `TILE` |
 | Python | `rasterx.functions.rst_savi(tile, red_idx, nir_idx, l=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The multi-band tile. |
-| `red_idx` | `INT` |  | The 1-based band of red. |
-| `nir_idx` | `INT` |  | The 1-based band of near infrared. |
-| `l` | `DOUBLE` | `0.5` | The soil-brightness correction; 0 reduces SAVI to NDVI. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The multi-band tile. |
+| `red_idx` | `INT` | `INT` |  | The 1-based band of red. |
+| `nir_idx` | `INT` | `INT` |  | The 1-based band of near infrared. |
+| `l` | `DOUBLE` | `DOUBLE` | `0.5` | The soil-brightness correction; 0 reduces SAVI to NDVI. |
 {/* END GENERATED gbx_rst_savi */}
 
 :::note NoData

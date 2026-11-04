@@ -566,6 +566,7 @@
       "description": "Compute EVI = G * (NIR - Red) / (NIR + C1 * Red - C2 * Blue + L).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -858,6 +859,7 @@
       "description": "Compute a named spectral index from a map of band names to band numbers.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1022,6 +1024,7 @@
       "description": "Compute NBR = (NIR - SWIR) / (NIR + SWIR).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1032,6 +1035,7 @@
       "description": "Compute NDVI = (NIR - Red) / (NIR + Red).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -1042,6 +1046,7 @@
       "description": "Compute NDWI = (Green - NIR) / (Green + NIR).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1383,6 +1388,7 @@
       "description": "Compute SAVI = (NIR - Red) / (NIR + Red + L) * (1 + L).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

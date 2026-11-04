@@ -72,17 +72,23 @@ def test_table_functions_are_sql_bodies_over_the_array_function():
     assert "explode(" in explode[0]
 
 
+PAGE = Path(__file__).parents[3] / "docs" / "api" / "uc-functions.mdx"
+
+
+def _listed_on_the_page():
+    """The function names in the tables under "What UC provides". Prose may name other functions, such as a Fix."""
+    text = PAGE.read_text()
+    section = text.split("## What UC provides", 1)[1].split("## Python and Scala handlers", 1)[0]
+    rows = "\n".join(line for line in section.splitlines() if line.startswith("|"))
+    return set(re.findall(r"`(gbx_[a-z0-9]+(?:_[a-z0-9]+)*)`", rows))
+
+
 def test_the_slice_the_page_lists_is_the_manifest_slice():
     names = _uc_names()
-    listed = {
-        "gbx_bng_pointascell", "gbx_bng_polyfill", "gbx_bng_aswkb", "gbx_bng_centroid", "gbx_bng_kring",
-        "gbx_bng_geomkring", "gbx_bng_cellarea", "gbx_bng_eastnorthasbng", "gbx_bng_tessellate",
-        "gbx_quadbin_pointascell", "gbx_quadbin_polyfill", "gbx_h3_geomkring",
-        "gbx_st_explainvalidity", "gbx_st_legacyaswkb", "gbx_st_makevalid", "gbx_st_wrapx",
-        "gbx_rst_transformcrs",
-        "gbx_bng_kringexplode", "gbx_bng_geomkringexplode", "gbx_bng_tessellateexplode", "gbx_h3_geomkringexplode",
-    }
-    assert names == listed
+    listed = _listed_on_the_page()
+    assert names - listed == set(), "the page does not list these UC functions"
+    assert listed - names == set(), "the page lists these functions, which have no UC level"
+    assert len([n for n in names if n.startswith("gbx_rst_")]) > 90
 
 
 def _split_args(call_args):
@@ -110,6 +116,7 @@ def _split_args(call_args):
         ex.UC_KRINGEXPLODE_SQL,
         ex.UC_WKB_TO_GEOMETRY_SQL,
         ex.UC_TRANSFORMCRS_SQL,
+        ex.UC_RASTER_MERGE_SQL,
     ],
 )
 def test_sql_examples_call_a_uc_function_with_a_valid_argument_count(sql):
@@ -166,3 +173,27 @@ def test_corrupt_data_is_null():
 def test_a_bad_parameter_raises():
     message = ex.bad_parameter_is_refused()
     assert "99" in message
+
+
+@pytest.mark.parametrize("sql", [ex.UC_RASTER_HEADER_SQL, ex.UC_RASTER_TILE_SQL])
+def test_raster_sql_examples_call_uc_functions_with_a_valid_argument_count(sql):
+    man = manifest.load()
+    calls = re.findall(r"main\.geobrix\.(gbx_\w+)\(([^()]*)\)", sql)
+    assert len(calls) >= 2
+    for name, args in calls:
+        assert name in _uc_names()
+        fn = man.functions[name]
+        assert fn.min_args <= len(_split_args(args)) <= len(fn.params)
+
+
+def test_a_virtual_tile_is_refused_with_a_fix_naming_the_session_function():
+    message = ex.virtual_tile_is_refused()
+    assert "virtual tiles" in message
+    assert "Fix: use the session function gbx_rst_avg" in message
+
+
+def test_a_tile_over_64_mib_is_refused_by_a_pixel_function_and_a_header_function_answers():
+    width, message = ex.tile_over_the_limit()
+    assert width == 4200
+    assert "the tile is 67 MiB decoded, over the 64 MiB" in message
+    assert "Fix: run gbx_rst_avg in a notebook or job session, or retile first" in message

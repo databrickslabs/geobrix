@@ -14,7 +14,7 @@ UC carries a slice of GeoBrix, not the whole set. Session SQL and the Python API
 
 ## Install
 
-Run `gbx.uc.install` from an env 6 notebook or job. It needs Serverless env 6 or DBR 19. It creates the functions in one schema.
+Run `gbx.uc.install` from an env 6 notebook or job. It needs Serverless env 6 or DBR 19. It creates the functions in one schema. The raster functions install the same way, with the same call.
 
 <CodeFromTest code={ucExamples} language="python" functionName="INSTALL_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
@@ -66,7 +66,7 @@ A warehouse reads rasters and vector files through the session readers. Ingest t
 | Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill` |
 | H3 cells | `gbx_h3_geomkring` |
 | Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` |
-| Raster | `gbx_rst_transformcrs` |
+| Raster | See [Raster functions](#raster-functions) |
 | Table functions | `gbx_bng_kringexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode` |
 
 A function with default arguments installs as a SQL wrapper over a private function named `gbx__<name>`. Call the public name.
@@ -111,6 +111,55 @@ Any other form is refused with a `Fix:` that names the session function. That co
 ### Numbers as arguments
 
 The SQL engine casts an argument to the parameter type before GeoBrix runs. A string passed as an easting becomes a number there. With ANSI mode off, a string that is no number becomes `NULL` before GeoBrix sees it.
+
+### Raster functions
+
+The raster functions take the arguments of their session functions and give the same answers. These rules apply on UC.
+
+**A tile must be materialized.** A materialized tile carries its pixels. A virtual tile holds a path and no pixels, and UC refuses it. The `Fix:` names the session function.
+
+<CodeFromTest code={ucExamples} language="python" functionName="virtual_tile_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+**A function that reads pixels refuses a tile larger than 64 MiB decoded.** The `Fix:` says to retile first with `gbx_rst_retile`, or to run the session function in a notebook or job. A header accessor reads no pixel, so it answers a tile of any size. `gbx_rst_tryopen` does the same.
+
+<CodeFromTest code={ucExamples} language="python" functionName="tile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+**A merge or a combine checks its size before it reads a pixel.** It adds up the tiles in the array and the result. Over the limit, the `Fix:` names a session route:
+
+- `gbx_rst_merge` points to `rasterx.helpers.mint_vrt` or `merge_by_key(method="vrt")`, which keep the tiles as files.
+- The `gbx_rst_combine*` functions point to `combine_by_key`, or to retiling first.
+- `gbx_rst_frombands` and `gbx_rst_mapalgebra` point to the session function.
+
+**A data error gives `NULL`. A bad argument raises.** Corrupt tile bytes give `NULL`. A band outside the tile or a bad expression raises with a `Fix:`. Two functions answer differently. `gbx_rst_tilexyz` gives a transparent image for a tile with nothing to render. `gbx_rst_fromcontent` refuses bytes that GDAL cannot open and gives the reason.
+
+A CRS argument takes an integer SRID, `EPSG:<n>` or `ESRI:<n>`, as in [CRS arguments](#crs-arguments).
+
+A tile function takes a tile column. An array function takes an `ARRAY` of tiles, so it needs no aggregate.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_HEADER_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_TILE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_MERGE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+| Family | Functions |
+|---|---|
+| Header accessors: size and type | `gbx_rst_width`, `gbx_rst_height`, `gbx_rst_numbands`, `gbx_rst_format`, `gbx_rst_type`, `gbx_rst_getnodata` |
+| Header accessors: CRS and bounds | `gbx_rst_srid`, `gbx_rst_crs`, `gbx_rst_boundingbox`, `gbx_rst_georeference` |
+| Header accessors: geotransform | `gbx_rst_pixelwidth`, `gbx_rst_pixelheight`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_rotation` |
+| Header accessors: metadata | `gbx_rst_metadata`, `gbx_rst_bandmetadata`, `gbx_rst_subdatasets` |
+| Header accessors: pixel and world coordinates | `gbx_rst_rastertoworldcoord`, `gbx_rst_rastertoworldcoordx`, `gbx_rst_rastertoworldcoordy`, `gbx_rst_worldtorastercoord`, `gbx_rst_worldtorastercoordx`, `gbx_rst_worldtorastercoordy` |
+| Pixel statistics | `gbx_rst_avg`, `gbx_rst_min`, `gbx_rst_max`, `gbx_rst_median`, `gbx_rst_pixelcount`, `gbx_rst_summary`, `gbx_rst_histogram`, `gbx_rst_isempty`, `gbx_rst_sample`, `gbx_rst_tryopen` |
+| Tile operations: warp and edit | `gbx_rst_transform`, `gbx_rst_transformcrs`, `gbx_rst_to_webmercator`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_resample`, `gbx_rst_resample_to_size`, `gbx_rst_resample_to_res`, `gbx_rst_clip`, `gbx_rst_align_to`, `gbx_rst_updatetype`, `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_band`, `gbx_rst_asformat`, `gbx_rst_getsubdataset`, `gbx_rst_filter`, `gbx_rst_convolve`, `gbx_rst_fillnodata` |
+| Tile operations: terrain | `gbx_rst_slope`, `gbx_rst_aspect`, `gbx_rst_hillshade`, `gbx_rst_tpi`, `gbx_rst_tri`, `gbx_rst_roughness` |
+| Tile operations: indices | `gbx_rst_ndvi`, `gbx_rst_ndwi`, `gbx_rst_nbr`, `gbx_rst_savi`, `gbx_rst_evi`, `gbx_rst_index` |
+| Tile operations: other | `gbx_rst_chm`, `gbx_rst_land_cover`, `gbx_rst_percentile_stretch`, `gbx_rst_proximity` |
+| Tile arrays: combiners | `gbx_rst_combineavg`, `gbx_rst_combinecount`, `gbx_rst_combinemax`, `gbx_rst_combinemedian`, `gbx_rst_combinemin`, `gbx_rst_combinestddev`, `gbx_rst_combinesum` |
+| Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
+| Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms` |
+| Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
+| From file bytes | `gbx_rst_fromcontent` |
+| Web tiles | `gbx_rst_tilexyz` |
 
 ## Python and Scala handlers
 

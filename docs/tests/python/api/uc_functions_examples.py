@@ -44,6 +44,22 @@ FROM points"""
 # The CRS argument of a UC function takes three forms.
 UC_TRANSFORMCRS_SQL = "SELECT main.geobrix.gbx_rst_transformcrs(tile, 'EPSG:4326') AS tile FROM rasters"
 
+# Raster functions take a tile column that carries its pixels. A header function reads no pixel.
+UC_RASTER_HEADER_SQL = """SELECT main.geobrix.gbx_rst_width(tile) AS width,
+       main.geobrix.gbx_rst_srid(tile) AS srid,
+       main.geobrix.gbx_rst_avg(tile) AS band_means
+FROM rasters"""
+
+# A tile function returns a tile. A CRS argument is an integer SRID, EPSG:<n> or ESRI:<n>.
+UC_RASTER_TILE_SQL = """SELECT main.geobrix.gbx_rst_ndvi(tile, 3, 4) AS ndvi,
+       main.geobrix.gbx_rst_slope(tile, 'percent') AS slope
+FROM rasters"""
+
+# An array function takes an ARRAY of tiles, so it needs no aggregate.
+UC_RASTER_MERGE_SQL = """SELECT main.geobrix.gbx_rst_merge(collect_list(tile)) AS mosaic
+FROM rasters
+WHERE scene = 'T30UXC'"""
+
 # Check the version and the language of the functions in a schema.
 UC_ROUTINES_SQL = """SELECT routine_name, external_language, comment
 FROM main.information_schema.routines
@@ -122,3 +138,48 @@ def bad_parameter_is_refused():
         handlers.bng_eastnorthasbng(530000.0, 180000.0, "99")
     except ValueError as err:
         return str(err)
+
+
+def _float_tile(width, height):
+    """A tile that carries the pixels of a width by height float32 GeoTIFF, as a Unity Catalog function receives it."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=width,
+            height=height,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=from_origin(0.0, 1.0, 1.0 / width, 1.0 / height),
+            compress="deflate",
+            tiled=True,
+        ) as dst:
+            dst.write(np.zeros((height, width), dtype="float32"), 1)
+        return {"cellid": 0, "raster": mf.read(), "path": None, "metadata": {}}
+
+
+def virtual_tile_is_refused():
+    """A virtual tile holds a path and no pixels. A UC function refuses it and names the session function."""
+    from databricks.labs.gbx.uc import tier_b
+
+    virtual = {"cellid": 0, "raster": None, "path": "/Volumes/main/geobrix/rasters/dem.tif", "metadata": {}}
+    try:
+        tier_b.HANDLERS["gbx_rst_avg"](virtual)
+    except ValueError as err:
+        return str(err)
+
+
+def tile_over_the_limit():
+    """A pixel function refuses a tile decoded over 64 MiB. A header function answers at any size."""
+    from databricks.labs.gbx.uc import tier_b
+
+    tile = _float_tile(4200, 4200)  # 67 MiB decoded
+    width = tier_b.HANDLERS["gbx_rst_width"](tile)
+    try:
+        tier_b.HANDLERS["gbx_rst_avg"](tile)
+    except ValueError as err:
+        return width, str(err)

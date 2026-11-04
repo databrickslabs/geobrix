@@ -232,13 +232,14 @@ def _check_h3_ids(fn: str, ids) -> None:
             ) from exc
 
 
-def _check_fill_work(fn: str, n_null: int, k: int) -> None:
-    """Refuse a cell fill whose work is over the cap, before any ring is built: each NULL cell looks at the
-    ``(2k+1)^2`` cells within k rings, counted at the size of a cell of an array."""
+def _check_fill_work(fn: str, k: int) -> None:
+    """Refuse a cell fill whose largest ring is over the cap, before any ring is built. The fill builds one NULL cell's
+    ``(2k+1)^2`` cells at a time and the output is as long as the input (already bounded), so the memory peak is a
+    single ring, not the sum over the NULL cells: only k is bounded here."""
     _check_array(
         fn,
-        n_null * (2 * k + 1) ** 2,
-        "the neighbour cells to look at for the NULL cells",
+        (2 * k + 1) ** 2,
+        "the neighbour cells to look at for one NULL cell",
         lower="lower k, or split the cells into smaller groups",
     )
 
@@ -264,7 +265,7 @@ def h3_cellfill_cells(cells, k, method, power):
         (int(c), None if v is None or v != v else float(v)) for c, v in zip(ids, values)
     )
     if int(ring) >= 0:  # a negative k is the fill's own error, below
-        _check_fill_work(fn, sum(1 for v in collected.values() if v is None), int(ring))
+        _check_fill_work(fn, int(ring))
     try:
         filled = _cellfill.fill(collected, int(ring), how, exponent, _h3_ring)
     except ValueError as exc:
@@ -279,8 +280,8 @@ def h3_cellfill_cells(cells, k, method, power):
 def _fill_array(fn, session_fn, cells, k, method, power, ring, parse=None, fmt=None):
     """The shared body of ``gbx_<grid>_cellfill_array``: ``cells`` (an array of ``(cellid, value)`` structs) filled with
     the grid's ring function, as an array of ``{cellid, value}`` in ascending id order. NULL for NULL or for an array with
-    no cell id; a wrong k or method raises with a Fix; an array over the cap is refused, and so is a fill whose work
-    (the NULL cells, each looking at ``(2k+1)^2`` neighbours) is over the cap, before any ring is built.
+    no cell id; a wrong k or method raises with a Fix; an array over the cap is refused, and so is a k whose ring
+    (``(2k+1)^2`` neighbours of one NULL cell) is over the cap, before any ring is built.
     """
     from databricks.labs.gbx.pygx import _cellfill
 
@@ -298,7 +299,7 @@ def _fill_array(fn, session_fn, cells, k, method, power, ring, parse=None, fmt=N
             method,
             power,
             ring,
-            before_fill=lambda n_null, radius: _check_fill_work(fn, n_null, radius),
+            before_fill=lambda radius: _check_fill_work(fn, radius),
         )
     except _Refusal:
         raise

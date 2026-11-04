@@ -136,7 +136,7 @@ def test_the_cell_arrays_over_the_cap_are_refused_with_the_session_function(
 def test_a_fill_radius_whose_work_is_over_the_cap_is_refused_before_any_ring_is_built(
     monkeypatch,
 ):
-    """Each NULL cell looks at (2k+1)^2 cells: the work is judged before the kernel, with a Fix naming the session route."""
+    """One NULL cell looks at (2k+1)^2 cells: the ring is judged before the kernel, with a Fix naming the session route."""
     from databricks.labs.gbx.pygx import _cellfill
 
     def never(*_a, **_k):
@@ -162,6 +162,25 @@ def test_a_fill_radius_whose_work_is_over_the_cap_is_refused_before_any_ring_is_
     # a small radius is not refused (its own work is far under the cap)
     monkeypatch.undo()
     assert forms.h3_cellfill_cells(cells, 1, "mean", 2.0)
+
+
+def test_many_null_cells_at_a_small_radius_are_not_refused(monkeypatch):
+    """The fill holds one ring at a time, so the cap bounds k, not the number of NULL cells."""
+    from databricks.labs.gbx.pygx import _cellfill
+
+    forms._check_fill_work(
+        "gbx_h3_cellfill", 3
+    )  # (2*3+1)^2 cells of one ring, far under the cap
+    with pytest.raises(_Refusal, match="Fix: lower k"):
+        forms._check_fill_work("gbx_h3_cellfill", 100_000)
+
+    # 100k NULL cells at k = 3 reach the kernel (stubbed: only the guard in front of it is under test)
+    monkeypatch.setattr(forms, "_check_h3_ids", lambda *_a, **_k: None)
+    monkeypatch.setattr(_cellfill, "fill", lambda *_a, **_k: [])
+    cells = [
+        {"cellid": 612_000_000_000_000_000 + i, "value": None} for i in range(100_000)
+    ]
+    assert forms.h3_cellfill_cells(cells, 3, "mean", 2.0) == []
 
 
 def test_the_filled_array_is_the_input_of_the_h3_rasterizer():

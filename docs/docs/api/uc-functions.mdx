@@ -62,12 +62,13 @@ A warehouse reads rasters and vector files through the session readers. Ingest t
 
 | Family | Functions |
 |---|---|
-| BNG cells | `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_geomkring`, `gbx_bng_cellarea`, `gbx_bng_aswkb`, `gbx_bng_centroid` |
-| Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill` |
-| H3 cells | `gbx_h3_geomkring` |
+| BNG cells | `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_kloop`, `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_cellarea`, `gbx_bng_aswkb`, `gbx_bng_aswkt`, `gbx_bng_centroid`, `gbx_bng_distance`, `gbx_bng_euclideandistance`, `gbx_bng_cellunion`, `gbx_bng_cellintersection` |
+| Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill`, `gbx_quadbin_tessellate`, `gbx_quadbin_resolution`, `gbx_quadbin_kring`, `gbx_quadbin_kloop`, `gbx_quadbin_geomkring`, `gbx_quadbin_geomkloop`, `gbx_quadbin_aswkb`, `gbx_quadbin_centroid`, `gbx_quadbin_distance`, `gbx_quadbin_cellunion` |
+| H3 cells | `gbx_h3_geomkring`, `gbx_h3_geomkloop`, `gbx_h3_cell_bbox` |
+| Custom grid cells | `gbx_custom_grid`, `gbx_custom_pointascell`, `gbx_custom_polyfill`, `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_cellaswkb`, `gbx_custom_cellaswkt`, `gbx_custom_centroid`, `gbx_custom_distance` |
 | Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` |
 | Raster | See [Raster functions](#raster-functions) |
-| Table functions | `gbx_bng_kringexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_st_asmvt_pyramid` |
+| Table functions | `gbx_bng_kringexplode`, `gbx_bng_kloopexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_geomkloopexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_h3_geomkloopexplode`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode`, `gbx_st_asmvt_pyramid` |
 
 A function with default arguments installs as a SQL wrapper over a private function named `gbx__<name>`. Call the public name.
 
@@ -81,6 +82,7 @@ A UC function takes a geometry as `GEOMETRY(ANY)` and reads its integer SRID. Th
 
 - BNG functions take SRID 27700.
 - Quadbin and H3 functions take SRID 4326.
+- Custom grid functions take the SRID of the grid. A grid made with no SRID takes SRID 0.
 
 A geometry in another SRID is refused with a `Fix:` that names `st_transform`. GeoBrix never reads coordinates as the wrong unit.
 
@@ -91,6 +93,25 @@ A WKB `BINARY` is not a `GEOMETRY`. Build the geometry first.
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_WKB_TO_GEOMETRY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 The geometry functions `gbx_st_makevalid`, `gbx_st_wrapx` and `gbx_st_legacyaswkb` return a `GEOMETRY` that keeps its SRID. `gbx_bng_aswkb` and `gbx_bng_centroid` return `BINARY`. On UC that value is little-endian EWKB with SRID 27700, and a BNG cell polygon starts at its south-west corner. The bytes are the same whether the install folder holds the JAR or not.
+
+### Grid functions
+
+These rules hold for the BNG, quadbin, H3 and custom grid functions.
+
+- **A cell id that is no cell gives `NULL`.** That covers a text that is no BNG cell and a number that is no cell of the grid.
+- **A geometry result is little-endian EWKB with the SRID of the grid.** A custom grid made with no SRID gives plain WKB.
+- **A ring or loop result over 64 MiB is refused with a `Fix:`.** This covers the `kring`, `kloop`, `geomkring` and `geomkloop` functions. The `Fix:` says to lower `k`, split the input, or call the session function.
+- **A geometry that cannot be read, or has a coordinate that is not finite, gives `NULL`.** A bad `mode`, `coverage`, `k` or resolution raises with a `Fix:` before any row is read.
+
+A custom grid is a struct. Build it once with `gbx_custom_grid` and pass it to the other `gbx_custom_*` functions. `gbx_custom_grid` raises for bounds or sizes that make no grid.
+
+`gbx_quadbin_distance` raises for two cells of different zooms. Compare cells of one zoom, and read a zoom with `gbx_quadbin_resolution`.
+
+`gbx_h3_cell_bbox` takes its CRS as an integer SRID, `EPSG:<n>` or `ESRI:<n>`. UC refuses WKT. `out_crs`, when set, wins over `srid`. A `mode` other than `centroids` or `spatial_envelope` raises, and so does a negative `kring_pad`.
+
+### Functions that run as SQL
+
+`gbx_quadbin_resolution`, `gbx_custom_grid` and `gbx_rst_memsize` run as SQL functions with no Python. They give the same answers as the session functions. `gbx_rst_memsize` returns the length of the tile's pixel bytes and refuses a virtual tile with a `Fix:`.
 
 ### CRS arguments
 
@@ -144,7 +165,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 
 | Family | Functions |
 |---|---|
-| Header accessors: size and type | `gbx_rst_width`, `gbx_rst_height`, `gbx_rst_numbands`, `gbx_rst_format`, `gbx_rst_type`, `gbx_rst_getnodata` |
+| Header accessors: size and type | `gbx_rst_width`, `gbx_rst_height`, `gbx_rst_numbands`, `gbx_rst_memsize`, `gbx_rst_format`, `gbx_rst_type`, `gbx_rst_getnodata` |
 | Header accessors: CRS and bounds | `gbx_rst_srid`, `gbx_rst_crs`, `gbx_rst_boundingbox`, `gbx_rst_georeference` |
 | Header accessors: geotransform | `gbx_rst_pixelwidth`, `gbx_rst_pixelheight`, `gbx_rst_upperleftx`, `gbx_rst_upperlefty`, `gbx_rst_scalex`, `gbx_rst_scaley`, `gbx_rst_skewx`, `gbx_rst_skewy`, `gbx_rst_rotation` |
 | Header accessors: metadata | `gbx_rst_metadata`, `gbx_rst_bandmetadata`, `gbx_rst_subdatasets` |
@@ -236,9 +257,9 @@ The `id` of the source must be unique for `gbx_polygons_to_bng`, `gbx_clean_geom
 
 `gbx_mosaic_by_key` and `gbx_combine_by_key` take any number of tiles per key. A call to a UC function holds at most eight tiles, so each procedure works in levels. It merges or combines the tiles of a key eight at a time into a scratch table beside the target. It repeats on the results until a key has one tile. The scratch table is dropped when the call ends, also when it fails. A key with one tile goes to the target as it is.
 
-Tiles of a key should not overlap in `gbx_mosaic_by_key`: which of two overlapping tiles shows is not defined. The tiles of a key in `gbx_combine_by_key` must be aligned (same size, extent and CRS), as for the `gbx_rst_combine*` functions. Pixels with no data are left out of the statistic. `avg` and `stddev` return Float32 tiles, and `stddev` is the population standard deviation. The `median` op is refused with a `Fix:`: it does not split into partial tiles, so combine at most 10 tiles per key with `gbx_rst_combinemedian`.
+Tiles of a key should not overlap in `gbx_mosaic_by_key`: which of two overlapping tiles shows is not defined. The tiles of a key in `gbx_combine_by_key` must be aligned (same size, extent and CRS), as for the `gbx_rst_combine*` functions. Pixels with no data are left out of the statistic. `avg` and `stddev` return Float32 tiles, and `stddev` is the population standard deviation. The `median` op is refused with a `Fix:`: it does not split into partial tiles, so combine at most 10 tiles per key with `gbx_rst_combinemedian`. Any other unknown `op` is refused too.
 
-A merged or combined tile over 64 MiB is refused, because a UC function returns no more. The `Fix:` of `gbx_mosaic_by_key` names `mint_vrt` for a mosaic that large (see [VRT & Mosaics](./vrt-mosaic)). The H3 surface and vector tile procedures refuse an array over 64 MiB and name the session function.
+A merged or combined tile over 64 MiB is refused, because a UC function returns no more. The `Fix:` of `gbx_mosaic_by_key` names `mint_vrt` for a mosaic that large (see [VRT & Mosaics](./vrt-mosaic)). The `Fix:` of `gbx_combine_by_key` says to combine that key with the session aggregate, or to split the key. A key that needs more than 10 levels of 8 tiles is refused: split the key. The H3 surface and vector tile procedures refuse an array over 64 MiB and name the session function.
 
 The vector tile procedure writes tiles to a table. A `.pmtiles` archive is built outside Unity Catalog.
 

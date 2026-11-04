@@ -27,7 +27,9 @@ def test_the_install_preview_is_one_create_per_function_plus_default_wrappers():
     expected = 0
     for n in _uc_names():
         fn = man.functions[n]
-        expected += 2 if any(p.default for p in fn.params) and "tvf_over" not in fn.levels["L4"] else 1
+        # a SQL kernel carries its defaults itself; a Python or Scala handler sits behind a SQL wrapper that does
+        wrapped = any(p.default for p in fn.params) and not {"tvf_over", "sql"} & set(fn.levels["L4"])
+        expected += 2 if wrapped else 1
     expected += len({f.levels["L4"]["tvf_over"] for f in man.functions.values() if f.levels.get("L4", {}).get("tvf_over") in man.private})
     assert len(statements) == expected
     assert all(s.startswith("CREATE OR REPLACE FUNCTION `main`.`geobrix`.") for s in statements)

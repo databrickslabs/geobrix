@@ -2,7 +2,8 @@
 shares, and the two rows every one adds (a virtual tile is refused with a Fix, a corrupt tile is NULL).
 """
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Any, Callable, Optional
 
 from databricks.labs.gbx.bench.oracles import Build, Case
 
@@ -20,6 +21,80 @@ def share(rows, *cids):
         out.append(c)
     missing = wanted - seen
     assert not missing, f"no such oracle rows to share with UC: {sorted(missing)}"
+    return tuple(out)
+
+
+def _same(x):
+    return x
+
+
+@dataclass(frozen=True)
+class Adapt:
+    """How a session row becomes the row of a UC form that has another shape: ``args`` maps one argument row to the UC
+    form's (the group's members to one array, an argument dropped or added), ``expect`` maps the session's expected value
+    to the UC output (a decoded payload, EWKB bytes), and ``kind`` names the check when it differs on UC.
+    """
+
+    args: Callable[[tuple], tuple] = _same
+    expect: Callable[[Any], Any] = _same
+    kind: Optional[str] = None
+
+
+def collect_group(project: Optional[Callable[[Any], Any]] = None):
+    """An argument adapter for an aggregate's twin: the first argument (the group's members) becomes one array, each
+    member through ``project`` when given (the member's one field, the ``struct`` the UC form reads), and the constants
+    after it stay."""
+
+    def adapt(args: tuple) -> tuple:
+        members = list(args[0]) if isinstance(args[0], (list, tuple)) else [args[0]]
+        return ([project(m) for m in members] if project else members, *args[1:])
+
+    return adapt
+
+
+def twin(rows, uc_fn: str, adapt: Adapt, *cids):
+    """The UC rows of a form that is not the session's: each named session row (all of them without ``cids``) copied to
+    the UC surface under the function ``uc_fn``, its arguments and expected value adapted. ``share`` is for a UC function
+    of the session's own name; this is for another name or shape (an array twin of an aggregate, a partial-state form).
+
+    The result holds only the UC rows (``twin_of`` names the session row each came from); add them to the family table
+    beside the session rows. ``uc_fn`` must be a manifest function that has a UC form, so a twin cannot outlive or
+    precede its function; a row that is no row, or runs on no session, raises."""
+    from databricks.labs.gbx import manifest
+
+    fn = manifest.load().functions.get(uc_fn)
+    if fn is None or "L4" not in fn.levels:
+        raise ValueError(f"twin: {uc_fn} is no UC function in the manifest")
+    wanted = set(cids) or {c.cid for c in rows}
+    found = {c.cid for c in rows}
+    assert (
+        not wanted - found
+    ), f"no such oracle rows to twin on UC: {sorted(wanted - found)}"
+    out = []
+    for c in rows:
+        if c.cid not in wanted:
+            continue
+        if c.fn == uc_fn:
+            raise ValueError(
+                f"twin: {c.cid} already runs {uc_fn}; use share() for a UC function of the session's name"
+            )
+        if "session" not in c.surfaces:
+            raise ValueError(
+                f"twin: {c.cid} has no session surface, so no session value to adapt"
+            )
+        out.append(
+            replace(
+                c,
+                cid=f"{c.cid}__{uc_fn[len('gbx_'):]}",
+                fn=uc_fn,
+                args=adapt.args(c.args),
+                expect=adapt.expect(c.expect),
+                kind=adapt.kind or c.kind,
+                surfaces=("uc",),
+                variants=tuple(adapt.args(v) for v in c.variants),
+                twin_of=c.cid,
+            )
+        )
     return tuple(out)
 
 

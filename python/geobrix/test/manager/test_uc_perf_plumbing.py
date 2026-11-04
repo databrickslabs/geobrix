@@ -405,3 +405,75 @@ def test_an_l0_only_function_is_served_and_a_failed_l0_install_names_the_reason(
             forced=False,
             lines=[],
         )
+
+
+# ---- twin(): an oracle row for a UC form that is not the session's shape --------------------------------------
+
+
+def _agg_rows():
+    from databricks.labs.gbx.bench.oracles import Case
+
+    return (
+        Case("agg_a", "gbx_rst_merge_agg", ([(1, "x"), (2, "y")], 3), "exact", "ok"),
+        Case(
+            "agg_b",
+            "gbx_rst_merge_agg",
+            ([(5, "z")], 3),
+            "exact",
+            "ok",
+            variants=(([(6, "w")], 3),),
+        ),
+        Case("agg_py", "gbx_rst_merge_agg", ([],), "exact", None, surfaces=("python",)),
+    )
+
+
+def test_twin_copies_a_session_row_to_the_uc_form_with_adapted_arguments_and_output():
+    from databricks.labs.gbx.bench.oracle_tables._uc_tile import (
+        Adapt,
+        collect_group,
+        twin,
+    )
+
+    rows = _agg_rows()
+    out = twin(
+        rows,
+        "gbx_rst_merge",
+        Adapt(args=collect_group(lambda m: m[1]), expect=lambda e: e.upper()),
+        "agg_a",
+        "agg_b",
+    )
+    a, b = out
+    assert (a.cid, a.fn, a.surfaces, a.twin_of) == (
+        "agg_a__rst_merge",
+        "gbx_rst_merge",
+        ("uc",),
+        "agg_a",
+    )
+    assert a.args == (["x", "y"], 3) and a.expect == "OK" and a.kind == "exact"
+    assert b.variants == (
+        (["w"], 3),
+    )  # every argument row is adapted, variants included
+    # the kind of the check can differ on UC (the session payload is decoded there)
+    (c,) = twin(rows, "gbx_rst_merge", Adapt(kind="approx"), "agg_a")
+    assert c.kind == "approx" and c.args == rows[0].args
+    # nothing else is copied: the originals are untouched and the python-only row is not a candidate
+    assert rows[0].surfaces == ("session", "uc") and rows[0].twin_of is None
+
+
+def test_twin_refuses_a_row_that_is_not_there_a_python_only_row_a_same_name_form_and_a_missing_uc_form():
+    from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, twin
+
+    rows = _agg_rows()
+    with pytest.raises(AssertionError, match="no such oracle rows"):
+        twin(rows, "gbx_rst_merge", Adapt(), "nope")
+    with pytest.raises(ValueError, match="session"):
+        twin(rows, "gbx_rst_merge", Adapt(), "agg_py")
+    same = (_agg_rows()[0].__class__("same", "gbx_rst_merge", ([],), "exact", None),)
+    with pytest.raises(ValueError, match="share"):
+        twin(same, "gbx_rst_merge", Adapt(), "same")
+    with pytest.raises(ValueError, match="no UC function"):
+        twin(rows, "gbx_does_not_exist", Adapt(), "agg_a")
+    with pytest.raises(ValueError, match="no UC function"):
+        twin(
+            rows, "gbx_quadbin_cellunion", Adapt(), "agg_a"
+        )  # a session function, no L4

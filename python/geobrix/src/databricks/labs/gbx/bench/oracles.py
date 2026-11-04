@@ -88,6 +88,9 @@ class Case:
     variants: Tuple[Tuple[Any, ...], ...] = ()
     # Keywords the Python API leg adds to the call, as (name, value) pairs: a Python-only keyword has no SQL argument.
     py_kw: Tuple[Tuple[str, Any], ...] = ()
+    # The cid of the session row this UC row is a twin of (see oracle_tables._uc_tile.twin): the UC form has another
+    # name or shape, and its expected value is the session row's, adapted.
+    twin_of: Optional[str] = None
 
 
 def uc_view(

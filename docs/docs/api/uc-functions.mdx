@@ -217,9 +217,10 @@ A caller needs `EXECUTE` on the procedure and `SELECT` and `MODIFY` on the table
 | `gbx_polygons_to_bng` | `id`, `geom` in SRID 27700 | `id`, `cellid`, `core`, `chip` |
 | `gbx_clean_geometries` | `id`, `geom` | the valid geometries, and a rejects table with the reason |
 | `gbx_migrate_mosaic_geometry` | `id`, a legacy Mosaic `geom` of one SRID | the same table with a `GEOMETRY` column of that SRID |
-| `gbx_points_to_h3_surface` | `longitude`, `latitude`, `value` | one GeoTIFF surface per name |
+| `gbx_points_to_h3_surface` | `longitude`, `latitude`, `value` | one GeoTIFF surface per name, with the empty cells filled |
 | `gbx_features_to_mvt` | `geom` in EPSG:4326, `attrs` as a struct | `z`, `x`, `y`, `mvt` |
 | `gbx_mosaic_by_key` | `tile_key`, `tile` | one merged tile per key |
+| `gbx_combine_by_key` | `tile_key`, `tile`, and an `op` | one tile per key, each pixel the `avg`, `sum`, `count`, `min`, `max` or `stddev` of the key's tiles |
 | `gbx_zonal_stats` | zones with `zone_id`, `geom`; tiles with `tile_id`, `tile`, `bbox` | `zone_id`, `tile_id`, `summary` |
 | `gbx_zarr_tag_version`, `gbx_zarr_untag_version`, `gbx_zarr_version_history` | a Zarr store's manifest table | a tag, its removal, or the list of commits |
 
@@ -227,11 +228,17 @@ Most procedures upsert. A row already in the target that the source no longer ha
 
 The `id` of the source must be unique for `gbx_polygons_to_bng`, `gbx_clean_geometries` and `gbx_migrate_mosaic_geometry`. A repeated `id` makes the merge fail. In `gbx_zonal_stats`, each `zone_id` must be unique in the zones and each `tile_id` in the tiles.
 
-`gbx_clean_geometries` keeps each `id` in one table per call. A geometry that is valid now is merged into the target and removed from the rejects. One that is invalid now goes to the rejects and is removed from the target.
+`gbx_clean_geometries` keeps each `id` in one table per call. A geometry that is valid now is merged into the target and removed from the rejects. One that is invalid now goes to the rejects and is removed from the target. A row whose `id` is NULL is matched like any other. The four writes are not one transaction. They hold when the call succeeds. If it fails part-way, run it again to repair the tables.
+
+`gbx_points_to_h3_surface` adds the cells within `fill_rings` of a point's cell, with no value, before it fills. A cell no point fell in then takes the mean of the neighbours that have a value. So `fill_rings` fills gaps, not only the cells you gave with no value.
 
 <CodeFromTest code={ucExamples} language="sql" functionName="CALL_POLYGONS_TO_BNG_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-Two procedures refuse input that is too large for a UC function. `gbx_mosaic_by_key` refuses a key with more than 10 tiles. Its `Fix:` names the session aggregate `gbx_rst_merge_agg`. The H3 surface and vector tile procedures refuse an array over 64 MiB and name the session function.
+`gbx_mosaic_by_key` and `gbx_combine_by_key` take any number of tiles per key. A call to a UC function holds at most eight tiles, so each procedure works in levels. It merges or combines the tiles of a key eight at a time into a scratch table beside the target. It repeats on the results until a key has one tile. The scratch table is dropped when the call ends, also when it fails. A key with one tile goes to the target as it is.
+
+Tiles of a key should not overlap in `gbx_mosaic_by_key`: which of two overlapping tiles shows is not defined. The tiles of a key in `gbx_combine_by_key` must be aligned (same size, extent and CRS), as for the `gbx_rst_combine*` functions. Pixels with no data are left out of the statistic. `avg` and `stddev` return Float32 tiles, and `stddev` is the population standard deviation. The `median` op is refused with a `Fix:`: it does not split into partial tiles, so combine at most 10 tiles per key with `gbx_rst_combinemedian`.
+
+A merged or combined tile over 64 MiB is refused, because a UC function returns no more. The `Fix:` of `gbx_mosaic_by_key` names `mint_vrt` for a mosaic that large (see [VRT & Mosaics](./vrt-mosaic)). The H3 surface and vector tile procedures refuse an array over 64 MiB and name the session function.
 
 The vector tile procedure writes tiles to a table. A `.pmtiles` archive is built outside Unity Catalog.
 

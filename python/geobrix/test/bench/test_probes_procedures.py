@@ -145,3 +145,26 @@ def test_warehouse_statements_call_each_procedure_then_diff_it_against_plain_sql
     assert (
         "FILE" not in stmts["zarr:create"]
     )  # the fuse manifest: a plain STRING file column
+
+
+def test_install_procedures_replaces_only_the_procedures_before_the_calls(
+    monkeypatch, capsys, tmp_path
+):
+    import databricks.labs.gbx as gbx
+
+    monkeypatch.setattr(gbx, "register", lambda *_a, **_k: {})
+    monkeypatch.setattr(probes, "_proc_tile_cases", lambda *_a: [])
+    spark = _Spark()
+    out = probes.run_procedures(spark, "c", "s", str(tmp_path), install_procedures=True)
+    creates = [
+        s
+        for s in spark.stmts
+        if s.startswith(("CREATE OR REPLACE PROCEDURE", "CREATE OR REPLACE FUNCTION"))
+    ]
+    assert creates and all(
+        s.startswith("CREATE OR REPLACE PROCEDURE `c`.`s`.gbx_") for s in creates
+    )  # no function is touched
+    assert out["installed"] == len(creates)
+    first_call = next(i for i, s in enumerate(spark.stmts) if s.startswith("CALL "))
+    assert spark.stmts.index(creates[-1]) < first_call
+    assert "[PROC] install procedures DONE" in capsys.readouterr().out

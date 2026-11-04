@@ -1266,13 +1266,19 @@ def _proc_rows(rows, case) -> list:
 
 
 def run_procedures(
-    spark, catalog: str, schema: str, tmpdir: str, volume_dir: str = None
+    spark,
+    catalog: str,
+    schema: str,
+    tmpdir: str,
+    volume_dir: str = None,
+    install_procedures: bool = False,
 ) -> dict:
     """CALL each governed ETL procedure on a small input table and compare its output with the same flow in session SQL.
 
     ``volume_dir`` (the Volume folder with the one env 6 wheel) makes the run install the functions and the
     procedures first, with ``gbx.uc.install(..., procedures=True)``; without it they must be installed already. The
-    session functions the flows need are registered in this session. Tables are ``<catalog>.<schema>.gbxproc_*``,
+    ``install_procedures`` (without ``volume_dir``) replaces only the procedures, from this wheel's text, and leaves
+    the installed functions as they are. The session functions the flows need are registered in this session. Tables are ``<catalog>.<schema>.gbxproc_*``,
     dropped at the end. ``tmpdir`` is a scratch folder (a Zarr store root).
 
     Prints ``[PROC] <procedure> <surface> START`` and ``[PROC] <procedure> <surface> DONE <s>s rows=<n>`` per procedure
@@ -1328,8 +1334,14 @@ def run_procedures(
                 lambda: uc.install(catalog, schema, volume_dir, spark=spark, procedures=True),
             )  # fmt: skip
             out["installed"] = len(stmts) if err is None else err
-        _, built_skipped = procedures.build_all(catalog, schema)
+        built, built_skipped = procedures.build_all(catalog, schema)
         out["skipped"] = built_skipped
+        if install_procedures and volume_dir is None:
+            _, err, _ = step(
+                "install", "procedures",
+                lambda: [spark.sql(text) for _name, text in built],
+            )  # fmt: skip
+            out["installed"] = len(built) if err is None else err
         register(
             spark,
             only=[
@@ -1402,14 +1414,14 @@ def _proc_zarr(
     spark, catalog: str, schema: str, tmpdir: str, step, tables: list
 ) -> dict:
     """Tag, history and untag through the procedures on one manifest table, against the Python functions on a twin."""
-    from databricks.labs.gbx.zarr import _maint
-    from databricks.labs.gbx.zarr import _manifest as M
-
     base = f"`{catalog}`.`{schema}`.{PROC_PREFIX}"
     a, b = base + "zm_proc", base + "zm_py"
-    props = M.StoreProps("managed", tmpdir, None, True, "fuse", "7 days")
     rec = {}
     try:
+        from databricks.labs.gbx.zarr import _maint
+        from databricks.labs.gbx.zarr import _manifest as M
+
+        props = M.StoreProps("managed", tmpdir, None, True, "fuse", "7 days")
         for tbl in (a, b):
             tables.append(tbl)
             spark.sql(f"DROP TABLE IF EXISTS {tbl}")

@@ -146,8 +146,11 @@ def clean_geometries(catalog: str, schema: str) -> str:
         f"UNION ALL\nSELECT id, geom, 'the geometry is NULL' AS reason\n"
         f"FROM IDENTIFIER(source_table) WHERE geom IS NULL"
     )
+    # The target keeps the type of the source column: a UC function returns GEOMETRY(ANY), and Delta takes no column
+    # of an unspecified SRID, so the table is not made from the type of the repaired expression.
     body = f"""
-{_create_like(good)}
+CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS
+SELECT id, geom FROM IDENTIFIER(source_table) WHERE false;
 CREATE TABLE IF NOT EXISTS IDENTIFIER(rejects_table) AS
 SELECT * FROM (
 {bad}
@@ -194,8 +197,24 @@ def migrate_mosaic_geometry(catalog: str, schema: str) -> str:
         f"SELECT * EXCEPT (geom), {q}.gbx_st_legacyaswkb(geom) AS geom\n"
         f"FROM IDENTIFIER(source_table)"
     )
+    # The legacy struct carries its SRID per row, the function returns GEOMETRY(ANY) and Delta takes no column of an
+    # unspecified SRID: the table is made with the one SRID of the source, read first, by a statement built from it.
+    create = (
+        "EXECUTE IMMEDIATE concat('CREATE TABLE IF NOT EXISTS IDENTIFIER(:t) AS SELECT * EXCEPT (geom), "
+        "CAST(NULL AS GEOMETRY(', CAST(v_srid AS STRING), ')) AS geom FROM IDENTIFIER(:s) WHERE false') "
+        "USING target_table AS t, source_table AS s;"
+    )
+    fix = (
+        "gbx_migrate_mosaic_geometry: the geometries of the source have more than one SRID. Fix: migrate the rows "
+        "of each SRID into a table of their own."
+    )
     body = f"""
-{_create_like(sel)}
+DECLARE v_srid INT;
+SET v_srid = coalesce((SELECT min(geom.srid) FROM IDENTIFIER(source_table)), 4326);
+IF coalesce((SELECT max(geom.srid) FROM IDENTIFIER(source_table)), v_srid) <> v_srid THEN
+  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = {ddl.quote_str(fix)};
+END IF;
+{create}
 MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
@@ -207,7 +226,8 @@ WHEN NOT MATCHED THEN INSERT *;"""
         catalog,
         schema,
         "gbx_migrate_mosaic_geometry",
-        "Convert a table with a legacy Mosaic geometry column (columns id, geom) to a table with a GEOMETRY column.",
+        "Convert a table with a legacy Mosaic geometry column (columns id, geom, one SRID) to a table with a "
+        "GEOMETRY column of that SRID.",
         [SRC, TGT],
         body,
     )

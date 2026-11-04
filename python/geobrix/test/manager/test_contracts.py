@@ -3553,6 +3553,22 @@ def test_uc_procedure_ddl_contract(name, text):
     )  # the catalog and schema are quoted identifiers
 
 
+def test_no_procedure_makes_a_table_column_of_an_unspecified_srid():
+    # A UC function returns GEOMETRY(ANY) and Delta refuses a column of an unspecified SRID
+    # (DELTA_GEOSPATIAL_SRID_NOT_SUPPORTED), so CREATE TABLE ... AS must not take the type of a geometry function:
+    # clean_geometries copies the source column's type, migrate builds the type from the one SRID it read.
+    from databricks.labs.gbx.uc import procedures
+
+    clean = procedures.clean_geometries("cat", "sch")
+    assert (
+        "CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS\n"
+        "SELECT id, geom FROM IDENTIFIER(source_table) WHERE false;" in clean
+    )
+    migrate = procedures.migrate_mosaic_geometry("cat", "sch")
+    assert "CAST(NULL AS GEOMETRY(', CAST(v_srid AS STRING), ')) AS geom" in migrate
+    assert "more than one SRID" in migrate
+
+
 def test_a_procedure_name_is_quoted_and_validated_before_any_text_is_built():
     from databricks.labs.gbx.uc import procedures
 

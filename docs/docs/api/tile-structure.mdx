@@ -94,7 +94,7 @@ Access individual metadata keys from a tile:
 
 ### Using Tiles in Custom UDFs
 
-Access tile components for custom processing:
+Access tile components for custom processing. The reader returns virtual tiles by default, and their `tile.raster` is `NULL`. This example sets `virtualTiles` to `false`, so each tile carries its bytes:
 
 <CodeFromTest code={tileStructureExamples} functionName="using_tiles_in_custom_udfs" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="using_tiles_in_custom_udfs_output" />
 
@@ -110,7 +110,7 @@ A virtual tile has `tile.raster = null` and `tile.path` set to the source file p
 
 <CodeFromTest code={tileStructureExamples} functionName="tile_path_mode_storage" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="tile_path_mode_storage_output" />
 
-When `tile.raster` contains binary data, use it with rasterio or GDAL:
+When `tile.raster` contains binary data, use it with rasterio or GDAL. Read with `virtualTiles` set to `false` to get the bytes, because a virtual tile has none:
 
 <CodeFromTest code={tileStructureExamples} functionName="processing_binary_raster_data" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="processing_binary_raster_data_output" />
 

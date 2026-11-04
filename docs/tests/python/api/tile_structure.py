@@ -10,7 +10,7 @@ Paths use sample data from mounted Volumes (see docs/docs/sample-data.mdx).
 
 from path_config import SAMPLE_DATA_BASE
 SAMPLE_NYC_RASTER = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
-SAMPLE_NYC_RASTERS = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/*.tif"
+SAMPLE_NYC_RASTERS = f"{SAMPLE_DATA_BASE}/nyc/sentinel2"  # a folder: the reader takes a file or a folder, not a glob
 
 # Conditional imports for documentation testing
 try:
@@ -156,7 +156,7 @@ def accessing_tile_fields_python(spark):
     from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx
     
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTERS)
     
     # Access individual fields
     df.select(
@@ -195,18 +195,15 @@ def using_tiles_in_custom_udfs(spark):
     from pyspark.sql.types import IntegerType
     
     @udf(IntegerType())
-    def get_raster_size(raster_binary, metadata):
-        """Get size of raster data"""
-        if metadata and "size" in metadata:
-            return int(metadata["size"])
-        elif raster_binary:
-            return len(raster_binary)
-        return 0
-    
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
+    def get_raster_size(raster_binary):
+        """Size in bytes of the tile's raster data (0 for a virtual tile, which holds none)"""
+        return len(raster_binary) if raster_binary else 0
+
+    # virtualTiles=false: the tiles carry their bytes in tile.raster
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTERS)
     df_with_size = df.withColumn(
         "data_size",
-        get_raster_size(f.col("tile.raster"), f.col("tile.metadata"))
+        get_raster_size(f.col("tile.raster"))
     )
     return df_with_size
 
@@ -234,8 +231,8 @@ def processing_binary_raster_data(spark):
                 data = src.read(1)
                 return float(np.mean(data))
     
-    # Use with tiles from content or GDAL reader (sample data)
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
+    # The reader gives virtual tiles (raster is NULL) unless virtualTiles is "false"
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTER)
     stats_df = df.withColumn(
         "mean_value",
         compute_mean_from_tile(f.col("tile.raster"))
@@ -285,7 +282,7 @@ def comparing_fromfile_vs_fromcontent_tiles(spark):
 
 def non_tessellated_tiles(spark):
     """Non-Tessellated Tiles."""
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTER)
     
     df.select(
         f.col("tile.cellid"),      # null
@@ -400,20 +397,20 @@ def pattern_joining_tiles_by_cell_id(spark):
     return joined
 
 
-def pattern_extract_binary_for_external_processing(spark):
+def pattern_extract_binary_for_external_processing(spark, export_path=None):
     """Pattern 3: Extract Binary for External Processing."""
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTER)
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTER)
     
     # Extract binary rasters for download or external processing
-    export_path = f"{SAMPLE_DATA_BASE}/export"
-    export_df = df.select(
-        f.col("path"),
+    export_path = export_path or f"{SAMPLE_DATA_BASE}/export"
+    df.select(
+        f.col("source"),
         f.col("tile.raster").alias("raster_bytes")
     ).write.parquet(export_path)
     
-    # Or iterate rows (path, binary) for external processing
-    # for row in df.select("path", "tile.raster").collect(): ...
-    return export_df
+    # Or iterate rows (source, binary) for external processing
+    # for row in df.select("source", "tile.raster").collect(): ...
+    return spark.read.parquet(export_path)
 
 
 def performance_io_patterns(spark):
@@ -435,7 +432,7 @@ def performance_io_patterns(spark):
 
 def troubleshooting_inspect_raster_field(spark):
     """Troubleshooting: inspect the raster field's type and size."""
-    df = spark.read.format("raster_gbx").load(SAMPLE_NYC_RASTERS)
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(SAMPLE_NYC_RASTERS)
 
     # Raster is always BinaryType; length gives the on-wire byte size.
     df.select(
@@ -536,19 +533,19 @@ Filtered DataFrame (e.g. driver = GTiff or extension = .tif).
 """
 
 using_tiles_in_custom_udfs_output = """
-+----+---------+
-|path|data_size|
-+----+---------+
-|... |12345678 |
-+----+---------+
++------+---------+
+|source|data_size|
++------+---------+
+|...   |12345678 |
++------+---------+
 """
 
 processing_binary_raster_data_output = """
-+----+----------+
-|path|mean_value|
-+----+----------+
-|... |0.42      |
-+----+----------+
++------+----------+
+|source|mean_value|
++------+----------+
+|...   |0.42      |
++------+----------+
 """
 
 comparing_fromfile_vs_fromcontent_tiles_output = """

@@ -2386,12 +2386,60 @@ def test_local_timing_passes_the_corpus_dir_through_to_the_module(sandbox):
     assert cmd.endswith("--corpus-dir /Volumes/main/default/bench-corpus/rows"), cmd
 
 
-@pytest.mark.parametrize("missing", ["jar", "payload"])
-def test_local_timing_without_the_jar_or_the_payload_says_so_and_exits_2(sandbox, missing):
+@pytest.mark.parametrize(
+    "needs,missing",
+    [("jar=1 rust=0", "jar"), ("jar=0 rust=1", "payload"), ("jar=1 rust=1", "jar")],
+)
+def test_local_timing_without_the_jar_or_the_payload_says_so_and_exits_2(sandbox, needs, missing):
+    # Only an artifact the set's forms need (the --needs answer) is demanded, and it is demanded before the lock.
     _timing_sandbox(sandbox, jar=missing != "jar", payload=missing != "payload")
-    res = sandbox.run("gbx-bench-local-timing.sh")
+    res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_NEEDS_STDOUT=needs)
     assert res.returncode == 2 and "PRECONDITION MISSING" in res.output, res.output
     assert _timing_exec(sandbox) == []
+
+
+def test_local_timing_demands_no_artifact_the_forms_do_not_need(sandbox):
+    _timing_sandbox(sandbox, jar=False, payload=False)
+    res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_NEEDS_STDOUT="jar=0 rust=0")
+    assert res.returncode == 0, res.output
+    assert len(_timing_exec(sandbox)) == 1  # the pass ran
+
+
+def test_local_timing_probes_what_the_forms_need_with_the_environment_of_the_pass(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", "--set", "S")
+    assert res.returncode == 0, res.output
+    probes = [(c, e) for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "--needs" in c]
+    ((probe, probe_env),) = probes
+    assert probe[-3:] == ["--set", "S", "--needs"], probe
+    (pass_env,) = [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "local_timing" in c[-1]]
+    assert probe_env == pass_env and probe_env["GBX_NATIVE_PTH"] == "0", (probe_env, pass_env)
+    assert probe_env["GBX_NATIVE_ROOT"] == "/root/geobrix/build/env-wheel/env6/payload"
+
+
+def test_local_timing_reports_a_failed_needs_probe_as_a_failed_pass_not_a_missing_precondition(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", FAKE_DOCKER_NEEDS_RC="1")
+    assert res.returncode == 3 and "--needs probe exited 1" in res.output, res.output
+    assert "PRECONDITION MISSING" not in res.output and _timing_exec(sandbox) == []
+    # the module's usage error (an unknown set) stays a refusal, exit 2
+    res = sandbox.run("gbx-bench-local-timing.sh", "--set", "NOPE", FAKE_DOCKER_NEEDS_RC="2")
+    assert res.returncode == 2 and _timing_exec(sandbox) == [], res.output
+
+
+def test_local_timing_dry_run_prints_the_needs_and_the_command_and_takes_no_lock_and_runs_no_pass(sandbox):
+    _timing_sandbox(sandbox)
+    res = sandbox.run("gbx-bench-local-timing.sh", "--dry-run", "--k", "4", FAKE_DOCKER_NEEDS_STDOUT="jar=0 rust=1")
+    assert res.returncode == 0, res.output
+    assert "The IO forms need: jar=0 rust=1" in res.output and "Dry run" in res.output, res.output
+    assert "local_timing --set IO --k 4" in res.output, res.output
+    assert _timing_exec(sandbox) == []
+    # only the --needs probe reached the container: no lock holder, no pass
+    assert [c for c in sandbox.execs() if "--needs" not in c] == [], sandbox.execs()
+    # a dry run still stops on a missing artifact
+    (sandbox.root / "build" / "env-wheel" / "env6" / "payload" / "_native" / "aarch64" / "rs" / "_gbxrs.abi3.so").unlink()
+    res = sandbox.run("gbx-bench-local-timing.sh", "--dry-run", FAKE_DOCKER_NEEDS_STDOUT="jar=0 rust=1")
+    assert res.returncode == 2 and "PRECONDITION MISSING" in res.output, res.output
 
 
 def test_local_timing_exits_non_zero_when_the_pass_flags_a_form(sandbox):

@@ -35,7 +35,7 @@ show_help() {
     echo -e "  build/env-wheel/env6/payload, from gbx:build:wheel --env 6). A form at level L1/L2/JVM-DF would need a built"
     echo -e "  JAR (python/geobrix/lib or target/). Exit 2 with a PRECONDITION MISSING line when a needed artifact is absent,"
     echo -e "  or the corpus is short, or the baseline is missing; exit 1 when the pass flags a form; exit 3 when the pass"
-    echo -e "  itself fails."
+    echo -e "  itself fails or the --needs probe does (the probe runs with the pass' environment)."
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-bench-local-timing.sh${NC}"
@@ -96,10 +96,37 @@ show_banner "GeoBrix: Local Timing Pass ($SET)"
 check_docker
 setup_log_file "$LOG_PATH"
 
+# The payload also carries the GDAL the timed reads use: pass it on when it is there, even if no form needs its kernels.
+# Decided before the --needs probe, so the probe and the pass run with the same environment.
+NATIVE_ROOT_DEFAULT="build/env-wheel/env6/payload"
+NATIVE_ROOT_DIR="${GBX_NATIVE_ROOT:-$NATIVE_ROOT_DEFAULT}"
+[[ "$NATIVE_ROOT_DIR" = /* ]] || NATIVE_ROOT_DIR="$PROJECT_ROOT/$NATIVE_ROOT_DIR"
+if [ -n "${GBX_NATIVE_ROOT:-}" ] || [ -d "$NATIVE_ROOT_DIR/_native" ]; then
+    export GBX_NATIVE_ROOT="${GBX_NATIVE_ROOT:-$NATIVE_ROOT_DEFAULT}"
+fi
+gbx_native_env_args
+
+# The same docker exec environment for the --needs probe and the timed pass.
+# GBX_NATIVE_PTH=0: the image's startup .pth puts /opt/gbx-native's rasterio ahead of the payload's, while the per-open
+# sidecar mode (pyrx readdir_option) reaches the payload's libgdal: the two differ and the mode is silently off.
+timing_exec() {
+    docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src -e GBX_NATIVE_PTH=0 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
+        "$GBX_DEV_CONTAINER" "$@"
+}
+
 # What the set's forms need (the module knows: an L1/L2 form the JAR, the L3 d form the Rust payload). Read-only, so
-# before the lock; an unknown set ends here with the module's own usage error.
-NEEDS=$(docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src "$GBX_DEV_CONTAINER" \
-    python3 -m databricks.labs.gbx.bench.local_timing --set "$SET" --needs) || { echo "$NEEDS" >&2; exit 2; }
+# before the lock. An unknown set ends here with the module's own usage error (exit 2). A probe that fails otherwise
+# (the module does not import, the container is broken) is a broken pass, exit 3, not a missing precondition.
+NEEDS=$(timing_exec python3 -m databricks.labs.gbx.bench.local_timing --set "$SET" --needs)
+PROBE_RC=$?
+if [ $PROBE_RC -eq 2 ]; then
+    echo "$NEEDS" >&2
+    exit 2
+elif [ $PROBE_RC -ne 0 ]; then
+    echo "$NEEDS" >&2
+    echo -e "${RED}Local timing failed: the --needs probe exited $PROBE_RC (see above): this is not a missing precondition.${NC}"
+    exit 3
+fi
 NEED_JAR=0; NEED_RUST=0
 [[ "$NEEDS" == *"jar=1"* ]] && NEED_JAR=1
 [[ "$NEEDS" == *"rust=1"* ]] && NEED_RUST=1
@@ -111,37 +138,27 @@ check_preconditions() {
         echo -e "${RED}PRECONDITION MISSING: no built JAR (python/geobrix/lib, target/); local timing not run. Build it: gbx:test:parity (or gbx:docker:exec \"mvn clean package -PskipScoverage -DskipTests\")${NC}"
         exit 2
     fi
-    local root="${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload}"
-    [[ "$root" = /* ]] || root="$PROJECT_ROOT/$root"
-    if [ "$NEED_RUST" = 1 ] && ! ls "$root"/_native/*/rs/_gbxrs*.so >/dev/null 2>&1; then
-        echo -e "${RED}PRECONDITION MISSING: no Rust payload at ${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload} (needs _native/<arch>/rs/_gbxrs*.so); local timing not run. Build it: gbx:build:wheel --env 6${NC}"
+    if [ "$NEED_RUST" = 1 ] && ! ls "$NATIVE_ROOT_DIR"/_native/*/rs/_gbxrs*.so >/dev/null 2>&1; then
+        echo -e "${RED}PRECONDITION MISSING: no Rust payload at ${GBX_NATIVE_ROOT:-$NATIVE_ROOT_DEFAULT} (needs _native/<arch>/rs/_gbxrs*.so); local timing not run. Build it: gbx:build:wheel --env 6${NC}"
         exit 2
-    fi
-    # The payload also carries the GDAL the timed reads use: pass it on when it is there, even if no form needs its kernels.
-    if [ -n "${GBX_NATIVE_ROOT:-}" ] || [ -d "$root/_native" ]; then
-        export GBX_NATIVE_ROOT="${GBX_NATIVE_ROOT:-build/env-wheel/env6/payload}"
     fi
 }
 
+CMD="cd /root/geobrix && python3 -m databricks.labs.gbx.bench.local_timing --set $(printf '%q' "$SET")"
+[ -n "$K" ] && CMD="$CMD --k $(printf '%q' "$K")"
+CMD="$CMD$BASELINE_ARGS$CORPUS_ARGS"
+
 if [ "$DRY_RUN" = true ]; then
     check_preconditions
+    echo -e "${CYAN}Command: $CMD${NC}"
     echo -e "${GREEN}Dry run: the preconditions for the $SET set hold; no lock taken, no pass run.${NC}"
     exit 0
 fi
 gbx_acquire_test_lock
 check_preconditions
 
-gbx_native_env_args
-
-CMD="cd /root/geobrix && python3 -m databricks.labs.gbx.bench.local_timing --set $(printf '%q' "$SET")"
-[ -n "$K" ] && CMD="$CMD --k $(printf '%q' "$K")"
-CMD="$CMD$BASELINE_ARGS$CORPUS_ARGS"
-
 echo -e "${CYAN}Timing the $SET forms on local[8] in $GBX_DEV_CONTAINER (a few minutes)...${NC}"
-# GBX_NATIVE_PTH=0: the image's startup .pth puts /opt/gbx-native's rasterio ahead of the payload's, while the per-open
-# sidecar mode (pyrx readdir_option) reaches the payload's libgdal: the two differ and the mode is silently off.
-docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src -e GBX_NATIVE_PTH=0 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
-    "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$CMD"
+timing_exec $GBX_LOCK_RUN /bin/bash -c "$CMD"
 EXIT=$?
 
 if [ $EXIT -eq 0 ]; then

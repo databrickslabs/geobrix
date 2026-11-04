@@ -40,8 +40,12 @@ def test_access_metadata_fields(spark):
 
 
 def test_accessing_tile_fields_python(spark):
-    """Test accessing tile fields in Python (structure check)."""
-    assert callable(tile_structure.accessing_tile_fields_python)
+    """The reader the example uses hands back the raster bytes it selects."""
+    df = tile_structure.accessing_tile_fields_python(spark)
+    rows = df.select("tile.raster", "tile.metadata.driver").collect()
+    assert rows
+    assert all(r["raster"] is not None and len(r["raster"]) > 0 for r in rows)
+    assert {r["driver"] for r in rows} == {"GTiff"}
 
 
 def test_sql_accessing_tile_fields():
@@ -56,13 +60,23 @@ def test_filtering_by_metadata(spark):
 
 
 def test_using_tiles_in_custom_udfs(spark):
-    """Test using tiles in custom UDFs (structure check)."""
-    assert callable(tile_structure.using_tiles_in_custom_udfs)
+    """data_size is the byte length of each tile's raster: positive, not the 0 a virtual tile gives."""
+    df = tile_structure.using_tiles_in_custom_udfs(spark)
+    sizes = [r["data_size"] for r in df.select("data_size").collect()]
+    assert sizes
+    assert all(n > 0 for n in sizes)
 
 
 def test_processing_binary_raster_data(spark):
-    """Test processing binary raster data (structure check)."""
-    assert callable(tile_structure.processing_binary_raster_data)
+    """mean_value is the band-1 mean of the file, not None."""
+    import rasterio
+
+    df = tile_structure.processing_binary_raster_data(spark)
+    means = [r["mean_value"] for r in df.select("mean_value").collect()]
+    assert len(means) == 1 and means[0] is not None
+    with rasterio.open(tile_structure.SAMPLE_NYC_RASTER) as src:
+        expected = float(src.read(1).mean())
+    assert means[0] == pytest.approx(expected, rel=1e-6)
 
 
 def test_comparing_fromfile_vs_fromcontent_tiles(spark):
@@ -71,8 +85,11 @@ def test_comparing_fromfile_vs_fromcontent_tiles(spark):
 
 
 def test_non_tessellated_tiles(spark):
-    """Test non-tessellated tiles (structure check)."""
-    assert callable(tile_structure.non_tessellated_tiles)
+    """The tiles carry the raster bytes the example selects."""
+    df = tile_structure.non_tessellated_tiles(spark)
+    rows = df.select("tile.raster").collect()
+    assert rows
+    assert all(r["raster"] is not None and len(r["raster"]) > 0 for r in rows)
 
 
 def test_tessellated_tiles(spark):
@@ -105,9 +122,19 @@ def test_pattern_joining_tiles_by_cell_id(spark):
     assert callable(tile_structure.pattern_joining_tiles_by_cell_id)
 
 
-def test_pattern_extract_binary_for_external_processing(spark):
-    """Test pattern for extracting binary (structure check)."""
-    assert callable(tile_structure.pattern_extract_binary_for_external_processing)
+def test_pattern_extract_binary_for_external_processing(spark, tmp_path):
+    """The exported parquet holds the raster bytes, and they open as a raster."""
+    from rasterio.io import MemoryFile
+
+    exported = tile_structure.pattern_extract_binary_for_external_processing(
+        spark, export_path=str(tmp_path / "export")
+    )
+    rows = exported.collect()
+    assert rows
+    for r in rows:
+        assert r["raster_bytes"] is not None and len(r["raster_bytes"]) > 0
+        with MemoryFile(bytes(r["raster_bytes"])) as mem, mem.open() as src:
+            assert src.width > 0 and src.height > 0
 
 
 def test_performance_io_patterns(spark):
@@ -116,8 +143,11 @@ def test_performance_io_patterns(spark):
 
 
 def test_troubleshooting_inspect_raster_field(spark):
-    """Test troubleshooting raster-field inspection (structure check)."""
-    assert callable(tile_structure.troubleshooting_inspect_raster_field)
+    """The raster field is non-empty binary, so its length is a real byte count."""
+    df = tile_structure.troubleshooting_inspect_raster_field(spark)
+    sizes = [r[0] for r in df.select(tile_structure.f.length("tile.raster")).collect()]
+    assert sizes
+    assert all(n and n > 0 for n in sizes)
 
 
 def test_troubleshooting_null_cellid(spark):

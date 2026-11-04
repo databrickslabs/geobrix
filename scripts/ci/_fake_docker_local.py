@@ -16,6 +16,10 @@ to $FAKE_DOCKER_EXEC_LOG.env, same line number -- and then either
 When $FAKE_DOCKER_EXEC_LOG is set, every call's whole argv is also appended to
 $FAKE_DOCKER_EXEC_LOG.argv (one JSON line each), so a test can see which container each call named.
 
+A call that passes `--needs` (the local-timing probe of what a set's forms need) is answered apart from the
+work it precedes: it prints $FAKE_DOCKER_NEEDS_STDOUT (default `jar=0 rust=0`) and exits $FAKE_DOCKER_NEEDS_RC
+(default 0), so $FAKE_DOCKER_EXEC_RC and $FAKE_DOCKER_EXEC_STDOUT stay the pass' own.
+
 A path under /root/geobrix is run from $FAKE_DOCKER_ROOT instead (the scratch repo), so the
 real scripts/docker/gbx-lock.sh runs as it does in the container. Every other docker command
 succeeds and does nothing.
@@ -72,6 +76,9 @@ def main(args):
         if root:
             command = [part.replace(CONTAINER_REPO, root) for part in command]
         return subprocess.call(command, env=env)
+    if "--needs" in command:
+        print(os.environ.get("FAKE_DOCKER_NEEDS_STDOUT", "jar=0 rust=0"))
+        return int(os.environ.get("FAKE_DOCKER_NEEDS_RC", "0"))
     print(os.environ.get("FAKE_DOCKER_EXEC_STDOUT", ""), end="")
     return int(os.environ.get("FAKE_DOCKER_EXEC_RC", "0"))
 

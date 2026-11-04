@@ -4,7 +4,7 @@ Import-light, as :mod:`databricks.labs.gbx.uc.handlers`: no pyspark, and a kerne
 handler first runs, so a function needs only the dependencies its manifest block declares. Each handler is a thin
 function over the pure core of the light kernel (``pyrx/core``), built from a table:
 
-- NULL in is NULL out; an error tile (no raster, no path, ``last_error`` in its metadata) passes through a
+- NULL in is NULL out; an error tile (no raster, no path, ``last_error`` or ``error_message`` in its metadata) passes through a
   tile-returning function and is NULL for any other.
 - A virtual tile (a path, no raster bytes) is refused with a ``Fix:`` that names the session function: virtual
   tiles are session-only.
@@ -51,7 +51,13 @@ def cap_refusal(fn: str, decoded: int, cap: int) -> _Refusal:
 
 
 def _is_error_tile(tile) -> bool:
-    return ERROR_KEY in (_field(tile, "metadata") or {})
+    """The session's rule (``pyrx.functions._error_tile_of``): a swallowed failure has no raster and no path, and its
+    reason is under ``last_error`` or ``error_message``. A tile that still has pixels is never one: the combine and
+    merge results carry a note of the members they skipped under ``last_error``."""
+    if _field(tile, "raster") is not None or _field(tile, "path") is not None:
+        return False
+    md = _field(tile, "metadata") or {}
+    return ERROR_KEY in md or "error_message" in md
 
 
 def raster_of(fn: str, tile) -> Optional[bytes]:
@@ -71,11 +77,15 @@ def _kernel(module: str, attr: str) -> Callable:
     return getattr(importlib.import_module(f"{_CORES}.{module}"), attr)
 
 
-def with_dataset(fn: str, tile, kernel: Callable, on_empty=None):
+def with_dataset(
+    fn: str, tile, kernel: Callable, on_empty=None, header_only: bool = False
+):
     """Open a materialized tile's raster, refuse it over the cap, and return ``kernel(ds)``.
 
     Unreadable bytes, and a kernel that cannot read the pixels, are NULL. A refusal, a wrong argument, resource
     exhaustion and a missing dependency raise. ``on_empty`` is the answer for an error tile (default NULL).
+    ``header_only`` is for a kernel that reads no pixel (a size, a CRS, a geotransform, a tag): the cap guards the memory
+    a decode takes, so such a tile is opened at any size the transport carries.
     """
     from rasterio.io import MemoryFile
 
@@ -86,9 +96,10 @@ def with_dataset(fn: str, tile, kernel: Callable, on_empty=None):
         return on_empty if tile is not None and _is_error_tile(tile) else None
     try:
         with MemoryFile(raster) as mf, open_bytes(mf) as ds:
-            decoded = decoded_bytes(ds)
-            if decoded > DECODED_CAP:
-                raise cap_refusal(fn, decoded, DECODED_CAP)
+            if not header_only:
+                decoded = decoded_bytes(ds)
+                if decoded > DECODED_CAP:
+                    raise cap_refusal(fn, decoded, DECODED_CAP)
             return kernel(ds)
     except (MemoryError, RecursionError, ImportError, _Refusal, _Parameter):
         raise
@@ -97,16 +108,27 @@ def with_dataset(fn: str, tile, kernel: Callable, on_empty=None):
 
 
 def _scalar(
-    sql_name: str, module: str, attr: str, nargs: int = 0, on_empty=None
+    sql_name: str,
+    module: str,
+    attr: str,
+    nargs: int = 0,
+    on_empty=None,
+    header_only: bool = False,
 ) -> Callable:
-    """A handler ``(tile, *args)`` that answers ``<module>.<attr>(ds, *args)``; a NULL argument is NULL."""
+    """A handler ``(tile, *args)`` that answers ``<module>.<attr>(ds, *args)``; a NULL argument is NULL.
+    ``header_only`` marks a kernel that reads no pixel: it answers a tile of any size (see :func:`with_dataset`).
+    """
     fn = sql_name
 
     def handler(tile, *args):
         if tile is None or any(a is None for a in args):
             return None
         return with_dataset(
-            fn, tile, lambda ds: _kernel(module, attr)(ds, *args), on_empty
+            fn,
+            tile,
+            lambda ds: _kernel(module, attr)(ds, *args),
+            on_empty,
+            header_only,
         )
 
     handler.__name__ = sql_name[len("gbx_") :]
@@ -116,44 +138,58 @@ def _scalar(
 
 
 # --- header accessors: size, CRS, geotransform, metadata, pixel <-> world ---------------------------------------
-rst_width = _scalar("gbx_rst_width", "accessors", "width")
-rst_height = _scalar("gbx_rst_height", "accessors", "height")
-rst_numbands = _scalar("gbx_rst_numbands", "accessors", "numbands")
-rst_srid = _scalar("gbx_rst_srid", "accessors", "srid")
-rst_crs = _scalar("gbx_rst_crs", "accessors", "crs")
-rst_pixelwidth = _scalar("gbx_rst_pixelwidth", "accessors", "pixelwidth")
-rst_pixelheight = _scalar("gbx_rst_pixelheight", "accessors", "pixelheight")
-rst_upperleftx = _scalar("gbx_rst_upperleftx", "accessors", "upperleftx")
-rst_upperlefty = _scalar("gbx_rst_upperlefty", "accessors", "upperlefty")
-rst_scalex = _scalar("gbx_rst_scalex", "accessors", "scalex")
-rst_scaley = _scalar("gbx_rst_scaley", "accessors", "scaley")
-rst_skewx = _scalar("gbx_rst_skewx", "accessors", "skewx")
-rst_skewy = _scalar("gbx_rst_skewy", "accessors", "skewy")
-rst_rotation = _scalar("gbx_rst_rotation", "accessors", "rotation")
-rst_boundingbox = _scalar("gbx_rst_boundingbox", "accessors", "boundingbox")
-rst_format = _scalar("gbx_rst_format", "accessors", "format")
-rst_type = _scalar("gbx_rst_type", "accessors", "type")
-rst_getnodata = _scalar("gbx_rst_getnodata", "accessors", "getnodata")
-rst_georeference = _scalar("gbx_rst_georeference", "accessors", "georeference")
-rst_metadata = _scalar("gbx_rst_metadata", "accessors", "metadata")
-rst_subdatasets = _scalar("gbx_rst_subdatasets", "accessors", "subdatasets")
+rst_width = _scalar("gbx_rst_width", "accessors", "width", header_only=True)
+rst_height = _scalar("gbx_rst_height", "accessors", "height", header_only=True)
+rst_numbands = _scalar("gbx_rst_numbands", "accessors", "numbands", header_only=True)
+rst_srid = _scalar("gbx_rst_srid", "accessors", "srid", header_only=True)
+rst_crs = _scalar("gbx_rst_crs", "accessors", "crs", header_only=True)
+rst_pixelwidth = _scalar(
+    "gbx_rst_pixelwidth", "accessors", "pixelwidth", header_only=True
+)
+rst_pixelheight = _scalar(
+    "gbx_rst_pixelheight", "accessors", "pixelheight", header_only=True
+)
+rst_upperleftx = _scalar(
+    "gbx_rst_upperleftx", "accessors", "upperleftx", header_only=True
+)
+rst_upperlefty = _scalar(
+    "gbx_rst_upperlefty", "accessors", "upperlefty", header_only=True
+)
+rst_scalex = _scalar("gbx_rst_scalex", "accessors", "scalex", header_only=True)
+rst_scaley = _scalar("gbx_rst_scaley", "accessors", "scaley", header_only=True)
+rst_skewx = _scalar("gbx_rst_skewx", "accessors", "skewx", header_only=True)
+rst_skewy = _scalar("gbx_rst_skewy", "accessors", "skewy", header_only=True)
+rst_rotation = _scalar("gbx_rst_rotation", "accessors", "rotation", header_only=True)
+rst_boundingbox = _scalar(
+    "gbx_rst_boundingbox", "accessors", "boundingbox", header_only=True
+)
+rst_format = _scalar("gbx_rst_format", "accessors", "format", header_only=True)
+rst_type = _scalar("gbx_rst_type", "accessors", "type", header_only=True)
+rst_getnodata = _scalar("gbx_rst_getnodata", "accessors", "getnodata", header_only=True)
+rst_georeference = _scalar(
+    "gbx_rst_georeference", "accessors", "georeference", header_only=True
+)
+rst_metadata = _scalar("gbx_rst_metadata", "accessors", "metadata", header_only=True)
+rst_subdatasets = _scalar(
+    "gbx_rst_subdatasets", "accessors", "subdatasets", header_only=True
+)
 rst_rastertoworldcoord = _scalar(
-    "gbx_rst_rastertoworldcoord", "coords", "raster_to_world_coord"
+    "gbx_rst_rastertoworldcoord", "coords", "raster_to_world_coord", header_only=True
 )
 rst_rastertoworldcoordx = _scalar(
-    "gbx_rst_rastertoworldcoordx", "coords", "raster_to_world_x"
+    "gbx_rst_rastertoworldcoordx", "coords", "raster_to_world_x", header_only=True
 )
 rst_rastertoworldcoordy = _scalar(
-    "gbx_rst_rastertoworldcoordy", "coords", "raster_to_world_y"
+    "gbx_rst_rastertoworldcoordy", "coords", "raster_to_world_y", header_only=True
 )
 rst_worldtorastercoord = _scalar(
-    "gbx_rst_worldtorastercoord", "coords", "world_to_raster_coord"
+    "gbx_rst_worldtorastercoord", "coords", "world_to_raster_coord", header_only=True
 )
 rst_worldtorastercoordx = _scalar(
-    "gbx_rst_worldtorastercoordx", "coords", "world_to_raster_x"
+    "gbx_rst_worldtorastercoordx", "coords", "world_to_raster_x", header_only=True
 )
 rst_worldtorastercoordy = _scalar(
-    "gbx_rst_worldtorastercoordy", "coords", "world_to_raster_y"
+    "gbx_rst_worldtorastercoordy", "coords", "world_to_raster_y", header_only=True
 )
 
 
@@ -171,7 +207,7 @@ def rst_bandmetadata(tile, band):
             )
         return _kernel("accessors", "bandmetadata")(ds, int(band))
 
-    return with_dataset(fn, tile, kernel)
+    return with_dataset(fn, tile, kernel, header_only=True)
 
 
 HANDLERS["gbx_rst_bandmetadata"] = rst_bandmetadata
@@ -245,8 +281,13 @@ def rst_tryopen(tile):
     fn = "gbx_rst_tryopen"
     if tile is None:
         return None
-    # opening is the test (as ops.try_open): bytes that do not open come back from with_dataset as None
-    return bool(with_dataset(fn, tile, lambda ds: ds.count is not None, on_empty=False))
+    # opening is the test (as ops.try_open, which opens without the decode cap): bytes that do not open come back from
+    # with_dataset as None
+    return bool(
+        with_dataset(
+            fn, tile, lambda ds: ds.count is not None, on_empty=False, header_only=True
+        )
+    )
 
 
 HANDLERS["gbx_rst_tryopen"] = rst_tryopen
@@ -541,7 +582,8 @@ rst_resample_to_size = _tile_fn(
 
 def _res_size(ds, x_res, y_res, algorithm):
     left, bottom, right, top = ds.bounds
-    return (right - left) / float(x_res), (top - bottom) / float(y_res)
+    # rounded as resample.resample_to_res rounds, so the grid checked is the grid made
+    return round((right - left) / float(x_res)), round((top - bottom) / float(y_res))
 
 
 rst_resample_to_res = _tile_fn(
@@ -863,7 +905,14 @@ def rst_chm(dsm_tile, dem_tile):
             decoded = decoded_bytes(dem_ds)
             if decoded > DECODED_CAP:
                 raise cap_refusal(fn, decoded, DECODED_CAP)
-            check_grows(fn, dem_ds.width, dem_ds.height, ["float32"])
+            # the DSM is warped onto the DEM's grid with all its bands in its own type (warp.align_datasets), and the
+            # Float32 result is made beside it
+            check_grows(
+                fn,
+                dem_ds.width,
+                dem_ds.height,
+                [*(dsm_ds.dtypes[:1] * dsm_ds.count), "float32"],
+            )
         return _kernel("chm", "chm")(dsm, dem)
 
     return with_tile(fn, dsm_tile, kernel)
@@ -1126,8 +1175,8 @@ def rst_merge(tiles):
         union = agg._union_decoded_bytes(hdrs, ref_crs)
     except (
         Exception
-    ):  # noqa: BLE001 - the kernel's own size gate falls back the same way
-        union = max(h.decoded for h in hdrs)
+    ) as exc:  # noqa: BLE001 - a mosaic of unknown size is not built in the sandbox
+        raise _Refusal(f"{fn}: {agg._merge_size_refusal(len(hdrs), mixed)}") from exc
     check_array_cap(
         fn,
         hdrs,
@@ -1598,8 +1647,27 @@ def rst_tilexyz(tile, z, x, y, format, size, resampling, rescale):
     raster = raster_of(fn, tile)
     if raster is None:
         return transparent(sz)
+    import contextlib
 
-    def render(ds):
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+
+    # as the session: only a tile that cannot be opened is a transparent image; a failure of the render itself raises
+    with contextlib.ExitStack() as stack:
+        try:
+            ds = stack.enter_context(
+                open_bytes(stack.enter_context(MemoryFile(raster)))
+            )
+        except (MemoryError, RecursionError, ImportError):
+            raise
+        except (
+            Exception
+        ):  # noqa: BLE001 - bytes GDAL cannot open (the session's _UnreadableTile)
+            return transparent(sz)
+        decoded = decoded_bytes(ds)
+        if decoded > DECODED_CAP:
+            raise cap_refusal(fn, decoded, DECODED_CAP)
         check_made(
             fn,
             sz,
@@ -1611,9 +1679,6 @@ def rst_tilexyz(tile, z, x, y, format, size, resampling, rescale):
         return _kernel("xyz", "render_tile")(
             ds, int(z), int(x), int(y), fmt, sz, resamp, rescale=rsc
         )
-
-    made = with_dataset(fn, tile, render)
-    return transparent(sz) if made is None else made
 
 
 HANDLERS["gbx_rst_tilexyz"] = rst_tilexyz

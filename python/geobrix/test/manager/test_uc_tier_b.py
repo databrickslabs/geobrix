@@ -32,10 +32,28 @@ def test_a_tile_decoded_over_the_cap_is_refused_with_a_fix_naming_the_session_fu
         tier_b, "DECODED_CAP", 1024
     )  # the 64 x 48 float32 tile is 12 KiB decoded
     with pytest.raises(ValueError) as err:
-        tier_b.HANDLERS["gbx_rst_width"](_tile(tmp_path))
+        tier_b.HANDLERS["gbx_rst_avg"](_tile(tmp_path))
     text = str(err.value)
     assert "the tile is 12 KiB decoded, over the 1 KiB" in text
-    assert "Fix: run gbx_rst_width in a notebook or job session" in text
+    assert "Fix: run gbx_rst_avg in a notebook or job session" in text
+
+
+def test_a_header_function_answers_a_tile_over_the_cap_and_a_pixel_function_refuses_it(
+    tmp_path, monkeypatch
+):
+    tile = _tile(tmp_path)
+    monkeypatch.setattr(tier_b, "DECODED_CAP", 1024)
+    assert tier_b.HANDLERS["gbx_rst_tryopen"](tile) is True
+    assert tier_b.HANDLERS["gbx_rst_width"](tile) == 64
+    assert tier_b.HANDLERS["gbx_rst_height"](tile) == 48
+    assert tier_b.HANDLERS["gbx_rst_srid"](tile) == 4326
+    assert tier_b.HANDLERS["gbx_rst_metadata"](tile)["width"] == "64"
+    assert tier_b.HANDLERS["gbx_rst_bandmetadata"](tile, 1) is not None
+    assert tier_b.HANDLERS["gbx_rst_boundingbox"](tile)
+    for name in ("gbx_rst_avg", "gbx_rst_summary", "gbx_rst_isempty"):
+        with pytest.raises(ValueError, match=r"the tile is 12 KiB decoded, over the"):
+            tier_b.HANDLERS[name](tile)
+    assert tier_b.HANDLERS["gbx_rst_tryopen"](_built("tile_corrupt", tmp_path)) is False
 
 
 def test_the_cap_is_the_serverless_worker_cap():
@@ -46,6 +64,23 @@ def test_an_error_tile_is_null_and_a_null_argument_is_null(tmp_path):
     err = {"cellid": 0, "raster": None, "path": None, "metadata": {"last_error": "x"}}
     assert tier_b.HANDLERS["gbx_rst_width"](err) is None
     assert tier_b.HANDLERS["gbx_rst_bandmetadata"](_tile(tmp_path), None) is None
+
+
+def test_an_error_tile_has_no_pixels_and_a_reason_under_last_error_or_error_message(
+    tmp_path,
+):
+    good = _tile(tmp_path)
+    noted = {
+        **good,
+        "metadata": {"last_error": "RST_Merge: skipped 1 corrupt input tile(s)"},
+    }
+    assert not tier_b._is_error_tile(noted) and not tier_b._is_error_tile(good)
+    for key in ("last_error", "error_message"):
+        err = {"cellid": 0, "raster": None, "path": None, "metadata": {key: "x"}}
+        assert tier_b._is_error_tile(err)
+        assert tier_b.HANDLERS["gbx_rst_setsrid"](err, 3857)["metadata"] == {key: "x"}
+        assert tier_b.HANDLERS["gbx_rst_width"](err) is None
+    assert tier_b.HANDLERS["gbx_rst_width"](noted) == 64
 
 
 def test_a_band_outside_the_tile_raises_with_a_fix(tmp_path):
@@ -264,6 +299,78 @@ def test_a_bad_map_algebra_expression_raises_and_a_virtual_member_refuses_the_ar
         tier_b.HANDLERS["gbx_rst_mapalgebra"](stack, '{"calc": "A", "A_index": 9}')
 
 
+def test_map_algebra_computes_over_a_good_tile_that_carries_a_skipped_member_note(
+    tmp_path,
+):
+    a, b, _ = _built("aa_stack", tmp_path)
+    noted = {
+        **a,
+        "metadata": {"last_error": "RST_CombineAvg: skipped 1 corrupt input tile(s)"},
+    }
+    out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([noted, b], "A + B")
+    assert out["raster"] is not None and out["metadata"]["driver"] == "GTiff"
+    err = {"cellid": 0, "raster": None, "path": None, "metadata": {"last_error": "up"}}
+    assert (
+        tier_b.HANDLERS["gbx_rst_mapalgebra"]([noted, err, b], "A + B")["raster"]
+        is None
+    )
+
+
+def test_a_mosaic_whose_size_cannot_be_worked_out_is_refused_not_assumed_to_be_its_largest_member(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.pyrx.core import agg
+
+    def broken(*_a, **_k):
+        raise RuntimeError("no size")
+
+    monkeypatch.setattr(agg, "_union_decoded_bytes", broken)
+    with pytest.raises(
+        ValueError, match=r"gbx_rst_merge: .*could not be worked out.*Fix: .*mint_vrt\("
+    ):
+        tier_b.HANDLERS["gbx_rst_merge"](_built("quad_tiles", tmp_path))
+
+
+def _multiband_float64(bands, width=16, height=12):
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=width,
+            height=height,
+            count=bands,
+            dtype="float64",
+            crs="EPSG:4326",
+            transform=from_origin(0.0, 1.0, 1.0 / width, 1.0 / height),
+        ) as dst:
+            dst.write(np.ones((bands, height, width)))
+        return {"cellid": 0, "raster": mf.read(), "path": None, "metadata": {}}
+
+
+def test_chm_refuses_a_dsm_whose_aligned_grid_is_over_the_cap_before_it_is_made(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.pyrx.core import chm
+
+    def never(*_a, **_k):
+        raise AssertionError("the chm kernel ran for a grid over the cap")
+
+    monkeypatch.setattr(chm, "chm", never)
+    dem = _tile(tmp_path)  # 64 x 48 float32: 12 KiB
+    dsm = _multiband_float64(
+        3
+    )  # 16 x 12 x 3 float64: 4.5 KiB, but 72 KiB on the DEM's grid
+    monkeypatch.setattr(tier_b, "DECODED_CAP", 16 * 1024)
+    with pytest.raises(
+        ValueError,
+        match=r"gbx_rst_chm: the result would be 84 KiB decoded, over the 16 KiB.*Fix: run gbx_rst_chm",
+    ):
+        tier_b.HANDLERS["gbx_rst_chm"](dsm, dem)
+
+
 # --- constructors: geometries or points to a tile --------------------------------------------------------------------
 def _square():
     import shapely
@@ -456,3 +563,64 @@ def test_tilexyz_refuses_a_wrong_argument_with_a_fix_and_an_image_too_big_to_ren
         tier_b.HANDLERS["gbx_rst_tilexyz"](
             tile, 3, 1, 1, "PNG", 4096, "bilinear", "auto"
         )
+
+
+# --- arguments are checked before the tile is read ----------------------------------------------------------------------
+def test_proximity_targets_that_are_not_numbers_raise_whatever_the_tile_holds(tmp_path):
+    for tile in (_tile(tmp_path), _built("tile_corrupt", tmp_path)):
+        with pytest.raises(
+            ValueError, match=r"target_values must be comma-separated numbers"
+        ):
+            tier_b.HANDLERS["gbx_rst_proximity"](tile, "a,b", "GEO", None)
+    out = tier_b.HANDLERS["gbx_rst_proximity"](_tile(tmp_path), "1, 2", "PIXEL", None)
+    assert out["raster"] is not None
+
+
+@pytest.mark.parametrize(
+    "statistic", ["percentile:abc", "percentile:150", "percentile:-1", "percentile:"]
+)
+def test_a_percentile_statistic_that_is_not_a_number_from_0_to_100_raises_with_a_fix(
+    statistic,
+):
+    with pytest.raises(
+        ValueError,
+        match=r"needs a number from 0 to 100.*Fix: pass arrays of one length",
+    ):
+        tier_b.HANDLERS["gbx_rst_binpoints"](
+            [1.5], [8.5], [10.0], 0.0, 0.0, 10.0, 10.0, 10, 10, 3857, statistic
+        )
+    out = tier_b.HANDLERS["gbx_rst_binpoints"](
+        [1.5], [8.5], [10.0], 0.0, 0.0, 10.0, 10.0, 10, 10, 3857, "percentile:90"
+    )
+    assert out["raster"] is not None
+
+
+def test_the_grid_checked_for_a_resample_to_res_is_the_grid_the_kernel_makes(tmp_path):
+    from rasterio.io import MemoryFile
+
+    tile = _tile(tmp_path)
+    with MemoryFile(tile["raster"]) as mf, mf.open() as ds:
+        left, bottom, right, top = ds.bounds
+        x_res, y_res = (right - left) / 2.6, (top - bottom) / 3.7  # 2.6 -> 3, 3.7 -> 4
+        assert tier_b._res_size(ds, x_res, y_res, "bilinear") == (3, 4)
+    out = tier_b.HANDLERS["gbx_rst_resample_to_res"](tile, x_res, y_res, "bilinear")
+    assert (out["metadata"]["width"], out["metadata"]["height"]) == ("3", "4")
+
+
+def test_tilexyz_lets_a_failure_of_the_render_raise_and_answers_an_image_only_for_a_tile_that_does_not_open(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.pyrx.core import xyz
+
+    def broken(*_a, **_k):
+        raise RuntimeError("render failed")
+
+    monkeypatch.setattr(xyz, "render_tile", broken)
+    with pytest.raises(RuntimeError, match="render failed"):
+        tier_b.HANDLERS["gbx_rst_tilexyz"](
+            _tile(tmp_path), 3, 1, 1, "PNG", 64, "bilinear", "auto"
+        )
+    png = tier_b.HANDLERS["gbx_rst_tilexyz"](
+        _built("tile_corrupt", tmp_path), 3, 1, 1, "PNG", 64, "bilinear", "auto"
+    )
+    assert png[:4] == b"\x89PNG"

@@ -83,13 +83,13 @@ OOM error on executors.`}
 
 ### Reproduce on Databricks Runtime 19
 
-On a Databricks Runtime 19 cluster (light tier):
+On a Databricks Runtime 19 cluster:
 
 <CodeFromTest language="python" validationLevel="static" title="DBR 19 Reproduction Template">
 {`# Adapt the path below to your staged wheel location (see installation guide).
 %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
 
-from databricks.labs.gbx import pyrx
+from databricks.labs.gbx import register
 
 # Define sample code here to reproduce the issue.
 # Include the output and full error traceback.`}

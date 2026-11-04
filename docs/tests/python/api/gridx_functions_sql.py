@@ -1342,7 +1342,7 @@ def h3_geomkringexplode_sql_example():
     Self-contained: no Databricks product functions required.
     """
     return """
--- lightweight tier (H3 geometry-aware functions have no heavyweight implementation)
+-- Python level only (H3 geometry-aware functions have no JVM implementation)
 SELECT t.*
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))' AS geom) src,
 LATERAL gbx_h3_geomkringexplode(src.geom, 9, 1, 'boundary-out') t;
@@ -1352,11 +1352,11 @@ LATERAL gbx_h3_geomkringexplode(src.geom, 9, 1, 'boundary-out') t;
 def h3_geomkloopexplode_sql_example():
     """Explode geometry-aware H3 k-loop (hollow ring) into one row per cell via SQL LATERAL.
 
-    Lightweight tier only (a table function, called with ``FROM t, LATERAL f(...)``;
+    Python level only (a table function, called with ``FROM t, LATERAL f(...)``;
     no Python Column form).  Each row yields one BIGINT H3 cell id at exactly k steps.
     """
     return """
--- lightweight tier (H3 geometry-aware functions have no heavyweight implementation)
+-- Python level only (H3 geometry-aware functions have no JVM implementation)
 SELECT t.*
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))' AS geom) src,
 LATERAL gbx_h3_geomkloopexplode(src.geom, 9, 1, 'boundary-out') t;

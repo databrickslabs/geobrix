@@ -151,6 +151,7 @@ const sidebars = {
         'api/error-handling',
         'api/language-bindings',
         'api/availability',
+        'api/uc-functions',
         {
           type: 'category',
           label: 'RasterX',

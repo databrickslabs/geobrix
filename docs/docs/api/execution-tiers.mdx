@@ -1,177 +1,154 @@
 ---
 sidebar_position: 1
+title: Surfaces and levels
 ---
 
-# Choosing an Execution Tier
+# Surfaces and levels
 
-**One API, two engines.** Every GeoBrix raster function exists in two interchangeable
-**Execution Tiers**, behind the *same* `rst_*` Python names and `gbx_rst_*` SQL names:
+GeoBrix has one function set. You choose a **surface**: where you call a function from. GeoBrix chooses the **level**: which implementation runs it.
 
-- **Lightweight (`pyrx`)** — pure Python/rasterio, no JAR. Runs **everywhere**:
-  Serverless, standard/shared clusters, ARM, Lakeflow declarative pipelines. Works with bytes-free
-  **[virtual tiles](./virtual-tiles)** so huge rasters ingest without out-of-memory. **The
-  recommended default.**
-- **Heavyweight (`rasterx`)** — JVM-native (Scala + GDAL JNI) on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path). Operates on
-  **materialized** (binary) tiles.
+You never pick a level. The compute decides, and GeoBrix says why when it falls back to another level.
 
-Both tiers cover the **full raster function set** and agree within tolerance across the benchmark
-suite — so switching is a **one-line import change** and the rest of your code is identical. Pick the
-tier that fits your environment; the sections below cover what each provides and how to choose.
+## The four surfaces
 
-## The one-line swap
+| Surface | Form | Use it for | Runs on |
+|---|---|---|---|
+| **SQL (session)** | `gbx_*` after `register(spark)` | Notebooks, jobs and pipelines | Every compute except a SQL warehouse |
+| **SQL (Unity Catalog)** | `<catalog>.<schema>.gbx_*` after `gbx.uc.install` | Warehouses, dashboards, governed and ad-hoc SQL | SQL warehouses, and any compute through a three-part name |
+| **Python** | `rasterx`, `gridx.<grid>`, `vectorx`, `pmtiles` | DataFrame code, readers, writers and helpers | Every compute except a SQL warehouse |
+| **Scala** | `com.databricks.labs.gbx.<package>.functions` | Scala code on a dedicated cluster | Dedicated clusters with the JAR |
 
-```python
-from databricks.labs.gbx.rasterx import functions as rx   # Heavyweight tier
-from databricks.labs.gbx.pyrx    import functions as rx   # Lightweight tier — same alias
+A function has the same name on the SQL surfaces. The Python and Scala names drop the `gbx_` prefix.
 
-# everything below is identical across tiers:
-df.select(rx.rst_setcrs("tile", "EPSG:4326"))
-```
+Not every function exists on every surface. The [availability page](./availability) lists each function and the surfaces it runs on. Each function section shows the same badges.
 
-Ten functions are not in the `pyrx`, `pygx` and `pyvx` modules by name: `rst_slope`, `rst_transformcrs`, `rst_mapalgebra`, `rst_retile`, `rst_merge_agg`, `rst_bng_rasterize_agg`, `bng_eastnorthasbng`, `bng_tessellate`, `bng_tessellateexplode` and `st_makevalid`. Call them from `rasterx`, `gridx.bng` and `vectorx`. They run on either tier once `register(spark)` has run: the manager registers the implementation that suits the compute.
+A name that exists on both SQL surfaces takes the same arguments and gives the same result. Where a UC function differs, the [Unity Catalog page](./uc-functions) says how.
 
-```python
-from databricks.labs.gbx.rasterx import functions as rx
+## One registrar
 
-df.select(rx.rst_slope("tile", unit="degrees"))
-```
-
-After an explicit `rx.register(spark)`, the SQL names are identical too (`gbx_rst_*`), so SQL is portable across tiers.
-
-:::warning Heavyweight needs more than the wheel
-The one-line *import* swap is symmetric, but the *install* is not. The **lightweight** tier installs the env wheel for the runtime (e.g. `geobrix-<version>+env6` on Serverless env 6; see [Installation](../installation) for the wheels and their extras) via `%pip`. The **heavyweight** tier additionally requires the **GeoBrix JAR** on a dedicated cluster. The env wheel supplies the native GDAL. Install the wheel and the JAR as cluster libraries, or use a [Databricks Container Service](../installation/dcs.mdx) image. The wheel alone will not resolve the import or the JVM expressions. See [Choose an install path](../installation.mdx#choose-an-install-path) for the three install paths.
-:::
-
-## Function availability
-
-Both tiers implement the **full raster set** — every `rst_*` function, including the BNG and quadbin
-raster-grid functions — so the tier choice is about *environment*, not *capability*. The remaining
-heavyweight-only surface is narrow: the `conforming` triangulation mode. For the per-function
-breakdown see the [Raster Functions](./raster-functions) availability section; for the tier tile
-model (virtual vs. materialized), see [Virtual Tiles](./virtual-tiles).
-
-## Registering a subset (`only=`)
-
-`register()` installs every `gbx_*` SQL name for the tier. To register just the functions a session uses, pass `only=` (lightweight tiers — `pyrx`, `pygx`, `pyvx`):
-
-```python
-from databricks.labs.gbx.pyrx import functions as rx
-
-rx.register(spark, only=["rst_slope", "rst_clip"])   # just these two
-rx.register(spark)                                   # all (default)
-```
-
-Names are case-insensitive and accept either the SQL name (`gbx_rst_slope`) or the short form (`rst_slope`). An unrecognized name raises `ValueError` (typo guard). `only=[]` registers nothing.
-
-**Readers and writers** register with the functions. One call installs both:
+Call `register` once per session:
 
 ```python
 from databricks.labs.gbx import register
 
-register(spark)   # every gbx_* function and every *_gbx reader and writer
+register(spark)   # every gbx_* SQL function and every *_gbx reader and writer
 ```
 
-**Mixing tiers per function.** Because both tiers share the `gbx_*` names (last registration wins), you can register the heavyweight set and then override individual functions with the lightweight implementation:
+- The call registers the functions and the lightweight data sources.
+- The Python API also registers a function on its first call, so `register(spark)` is optional for Python-only code.
+- Scala registers no SQL. A Scala caller relies on the Python call. See [Language bindings](./language-bindings).
+- The old per-package `register` calls (`rasterx.functions.register` and the like) raise an error. The message gives the fix.
+
+Pass `only=` to register a subset. Names are case-insensitive and take the SQL name or the short name.
 
 ```python
-from databricks.labs.gbx.rasterx import functions as heavy
-from databricks.labs.gbx.pyrx    import functions as light
-
-heavy.register(spark)                       # all heavy gbx_rst_*
-light.register(spark, only=["rst_slope"])   # gbx_rst_slope now lightweight
+register(spark, only=["rst_slope", "rst_clip"])   # just these two
 ```
 
-The reverse — re-registering a few **heavy** functions over a lightweight session — is not yet available; `only=` is currently a lightweight-tier feature (heavy registers its full set). Mixing works for **materialized** tiles (raster bytes present) — both tiers share the same GTiff payload, so a bytes-carrying tile produced by one tier flows into a function from the other. A lightweight **virtual** tile (bytes-free path+window) must be materialized before a heavyweight function can use it; see [Virtual tiles and the light→heavy bridge](#light-heavy-bridge).
+A name that no function matches raises a `ValueError`. `only=[]` registers nothing.
 
-## Tradeoffs
+## The levels
 
-The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-distributed): see how much of the rasterio/GDAL surface is already distributed — and what stays heavyweight-only for now.
+A level is one implementation of a function. A function has one to four levels.
 
-| Aspect | Heavyweight (rasterx) | Lightweight (pyrx) |
+| Level | What runs | Where it is available |
 |---|---|---|
-| Install | The env wheel plus the JAR as cluster libraries, or the DCS image (includes both) | Volume-staged wheel (`%pip` or cluster library) |
-| Native GDAL | From the env wheel (nothing else to install) | Bundled with rasterio (nothing to install) |
-| ARM support | x86 (DBR 17.3 / 18 / 19) and Graviton (arm64, DBR 19) | x86 and ARM |
-| Serverless / shared clusters / Lakeflow SDP | Not supported | Supported |
-| Execution model | JVM-native (Scala + GDAL JNI) | Python-worker UDFs (rasterio + NumPy) |
-| Tile model | Materialized (binary) tiles only | Materialized **and** bytes-free **[virtual tiles](./virtual-tiles)** (lazy windowed reads; no ingest OOM) |
-| Driver coverage | Full custom GDAL build | rasterio's bundled build (narrower) |
-| SQL default arguments | Supported | Pass all arguments explicitly |
-| Function coverage | Full raster set | Full raster set — every `rst_*` function, including the BNG/quadbin raster-grid functions |
-| Readers | None (the Python readers serve every compute) | `raster_gbx`, `gtiff_gbx`, `vector_gbx` and the other `*_gbx` readers (no JAR) |
-| Writers | None (the Python writers serve every compute) | `raster_gbx` / `gtiff_gbx` and the other `*_gbx` writers (no JAR) |
+| **L1** | JVM expression (Scala and GDAL) | Dedicated clusters with the GeoBrix JAR |
+| **L2** | JVM scalar function (a Java UDF) | Standard access mode with the JAR added to the session. Only `gbx_bng_eastnorthasbng` has this level |
+| **L3** | Python (rasterio, NumPy, Shapely and the other libraries named in each function's note) | Everywhere the env wheel installs: Serverless, standard, dedicated, Lakeflow pipelines and the UC sandbox |
+| **L4** | Unity Catalog function | SQL warehouses, and any compute through a three-part name |
 
-## How to choose
+Every function has an L3 level, so the wheel alone runs the whole library. The JAR adds L1 and L2 where they are faster. The [Unity Catalog page](./uc-functions) covers L4.
 
-**Start with Lightweight (pyrx).** It installs as a single wheel (`%pip` or cluster library) with no GDAL and no JAR, runs everywhere — serverless, standard/shared clusters, ARM, and Lakeflow declarative pipelines — and covers the full raster set: every `rst_*` function, including the BNG and quadbin raster-grid functions. For most raster work it is the recommended default.
+## How GeoBrix picks a level
 
-Choose **Heavyweight (rasterx)** in two cases:
+The wheel ships a table that lists, for each function, the levels to try and in what order. The order comes from measurements. Where a function has not been measured, GeoBrix tries the highest level first.
 
-1. **Your environment is already JVM/GDAL-based.** The wheel and JAR, or the DCS image, are in place. Or you want JVM-native execution on a dedicated cluster.
-2. **You need the heavy-only `conforming` triangulation mode.** GridX is **fully lightweight**: the **quadbin** (`gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom-grid** (`gbx_custom_*`) functions all run in both tiers via the lightweight `pygx` package. The full **VectorX** function set runs in the lightweight `pyvx` tier: vector-tile encoding (`gbx_st_asmvt`, `gbx_st_asmvt_pyramid`), TIN surface modeling (`gbx_st_triangulate`, `gbx_st_interpolateelevation*`), and legacy-geometry migration (`gbx_st_legacyaswkb`). Only the Steiner-point `conforming` triangulation mode is heavyweight-only. The default `constrained` mode runs in both tiers. See [GridX](./gridx-functions) and [VectorX Function Reference](./vectorx-functions).
+For each function, `register` takes the first level that works on this compute. It skips a level when the JAR is missing, when the session is Spark Connect, or when a library is absent.
 
-The `conforming` triangulation mode is the remaining heavyweight-only surface. Both tiers offer all readers and writers, the full VectorX function set, all of GridX (quadbin, BNG, and custom grids), and the `gbx_pmtiles_agg` aggregate. Heavyweight's unique surface is expected to keep narrowing.
+Most functions run on L3. Raster tile operations default to L3, because the Python implementation measured as fast or faster. On a dedicated cluster with the JAR, GeoBrix picks L1 for these families:
 
-## Performance
+- the BNG, custom-grid and H3 cell functions that have a JVM form, and the BNG explode and tessellate functions;
+- the raster combine family, `gbx_rst_merge` and `gbx_rst_frombands`;
+- `gbx_rst_fromcontent` and `gbx_rst_gridfrompoints`;
+- `gbx_rst_cog_convert`, `gbx_rst_slope`, `gbx_st_triangulate` and `gbx_st_interpolateelevationbbox`.
 
-The one-line swap keeps your code identical across tiers. The lightweight tier is functionally complete for raster — it implements every `rst_*` function, including the BNG and quadbin raster-grid functions listed below — and for VectorX, implementing every `gbx_st_*` function (MVT, TIN, legacy migration).
+On standard access mode, `gbx_bng_eastnorthasbng` runs on L2 when the JAR is added to the session. Everything else runs on L3.
 
-**Raster-grid surface (BNG/quadbin) — tier status:**
+### GeoBrix says why
 
-| Function family | Tier | Notes |
+When a faster level cannot run, `register` prints one line that names the level and the reason. A reason that applies to several functions prints once, with a count. Each line prints once per session.
+
+```text
+geobrix: heavy (Catalyst) unavailable: Spark Connect session (standard access mode)
+```
+
+`register` returns a dictionary of the level it chose for each name. Use it to check a session:
+
+```python
+chosen = register(spark)
+chosen["gbx_bng_eastnorthasbng"].level   # 'L1', 'L2' or 'L3'
+```
+
+A name that no level can serve on this compute is skipped, with a line that says why. The other names still register.
+
+### Test-only controls
+
+`register` also takes `_levels` and `_prefer`. They force or favor a level so that tests can compare levels. Do not use them in a job. They carry no compatibility promise.
+
+## Generators are table functions
+
+A generator returns many rows for each input. Call it as a table function:
+
+```sql
+SELECT gbx_out.*
+FROM my_cells AS t, LATERAL gbx_bng_kringexplode(t.cellid, 1) AS gbx_out
+```
+
+This form works at every default level. The select-list form (`SELECT gbx_...(args)`) and `LATERAL VIEW` work only when you force the JVM level (L1) on a dedicated cluster. The Catalyst generator resolves there and a Python table function does not. Use the `FROM t, LATERAL` form unless you force L1.
+
+## Where the JAR helps
+
+Install the JAR only when you want the JVM level on a dedicated cluster. The wheel works alone everywhere.
+
+- Dedicated clusters can use the env wheel and the JAR as cluster libraries, or a [DCS image](../installation/dcs.mdx). See [Choose an install path](../installation.mdx#choose-an-install-path).
+- `databricks.labs.gbx.stage_jar(vol_dir)` copies the wheel's JAR to a Volume folder.
+- A cluster runs one GeoBrix JAR. `stage_jar` refuses a second JAR in the same Volume folder, with a fix.
+- Serverless cannot load the JAR, so it runs L3 and L4. A SQL warehouse runs L4 only.
+
+For measured differences between levels, see [Performance & Benchmarking](./performance).
+
+## Virtual tiles and the JVM level {#light-heavy-bridge}
+
+A virtual tile has no raster bytes. It holds a path and a window, and a Python worker reads it lazily. A materialized tile carries the encoded raster in its `raster` field. See [Virtual tiles](./virtual-tiles).
+
+The JVM level reads bytes only. In SQL, GeoBrix routes the two kinds for you:
+
+- A virtual tile goes to the Python implementation.
+- A materialized tile goes to the JVM implementation, when the JVM level is the chosen one.
+- An error tile comes out unchanged at every level.
+
+A few functions run on the JVM level without that routing when you force L1 (`gbx_rst_contour`, `gbx_rst_isoband`). A virtual tile raises an error there. To use one, materialize the tile first: pass `materialize=True`, or write with a raster writer and read the output back. Every writer is a materialization boundary.
+
+The Python tile functions take three optional keywords: `virtualize_dir`, `virtualize_prefix` and `materialize`. SQL has none of them. See the [force-output parameters](./raster-functions#virtual-tile-overrides).
+
+### Virtual and materialized advice {#virtual-materialized-advice}
+
+Ask which operations need pixels and which can stay lazy.
+
+| Operation type | Behavior on a virtual tile | Notes |
 |---|---|---|
-| `gbx_rst_bng_rastertogrid{avg,count,max,min,median,sum,variance,stddev}` | Light | Table functions served by `pyrx` (`pygx._bng` cell math + `rasterio`, EPSG:27700 auto-warp, STRING cell IDs) |
-| `gbx_rst_quadbin_rastertogrid{avg,count,max,min,median,sum,variance,stddev}` | Light | Table functions served by `pyrx` |
-| `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate` | Both | Light support via `pyrx` (`pygx._quadbin` / `_bng` cell math + `rasterio`) |
-| `gbx_rst_quadbin_rasterize_agg`, `gbx_rst_bng_rasterize_agg` | Both | Light support via `pyrx` (`pygx._quadbin` / `_bng` cell math + `rasterio`) |
+| **Metadata accessors** (`rst_width`, `rst_height`, `rst_srid`, `rst_boundingbox`, `rst_format`, `rst_georeference`, `rst_metadata`, `rst_rotation`, `rst_scalex`, `rst_scaley`, `rst_skewx`, `rst_skewy`, `rst_numbands`, `rst_type`, `rst_getnodata`, `rst_upperleftx`, `rst_upperlefty`) | Free. No pixels are read | The header opens lazily |
+| **Pixel accessors and statistics** (`rst_avg`, `rst_min`, `rst_max`, `rst_median`, `rst_pixelcount`, `rst_summary`, `rst_histogram`, `rst_sample`, `rst_isempty`) | Read the window, then return a scalar or array | Pixels are held only for the computation |
+| **Reference and passthrough operations** (`rst_clip`, `rst_setsrid`, `rst_initnodata`, `rst_band`, and `rst_transform` to the tile's own CRS) | Record an instruction or a region. No new pixels | The instruction applies at the next read. `virtualize_dir` has no effect |
+| **Pixel-producing operations** (slope, aspect, hillshade, terrain, focal, map algebra, spectral indices, rasterize, resample, `rst_transform` to another CRS, `rst_merge`, `rst_combineavg`, `rst_frombands`) | Materialize and return bytes | Pass `virtualize_dir` to write the result to a durable path and get a virtual tile |
+| **Writers** (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) | Always materialize | A virtual DataFrame is directly writable. `cog_gbx` converts whole-file virtual tiles path-direct |
 
-On per-operation timing the lightweight tier is **competitive-to-faster for the large majority** of functions. Band math is dramatically faster, because the heavyweight tier shells out to a subprocess there. Terrain, focal filters, and discrete-grid (H3/quadbin) aggregation are a few times faster following recent vectorization. A small number of algorithm-bound operations (for example viewshed) are slower on the lightweight tier but remain sub-second in absolute terms. Metadata accessors are sub-millisecond on both.
+**Short rule:** chain deferrable operations as long as you like. Materialize when you need pixels.
 
-Across the benchmark suite the two tiers agree within tolerance on **115 of 116** functions. The one that differed, **`rst_convolve`**, did so in a one-pixel edge ring; the lightweight convolution now adds only the neighbours that are on the raster, as the heavyweight one does, so the two agree over the whole raster (the count is that of the last benchmark run). All three tessellation generators (`rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`) use a **positive-area covering keep-test** on both tiers: a cell is emitted iff its geometry has greater-than-zero area overlap with the raster — a cell that merely touches the raster along a boundary edge or corner (zero pixel overlap) is excluded, while a within-extent cell whose pixels are all NoData is still emitted (NoData renders in place, it does not punch a gap into the mosaic). With that shared semantic the three tessellators agree **exactly** across tiers (identical cell sets), including on grid-aligned tiles where the raster edges land on cell boundaries. The BNG and quadbin raster-grid **reducers** (`rst_bng_rastertogrid{avg,count,max,min,median,sum,variance,stddev}`) were measured on a British-National-Grid tile with real cells and agree **within tolerance** across tiers; the two `*_rasterize_agg` aggregators agree **exactly**. See **[Benchmarking](./benchmarking)** for the full per-function heavy-vs-light results and how to run the benchmark on a cluster or locally.
+## Next steps
 
-## Virtual tiles and the light→heavy bridge {#light-heavy-bridge}
-
-**The lightweight tier is for light (virtual) raster tiles; the heavyweight tier is for heavy
-(binary) raster tiles.** Both tiers share the same v2 tile struct — the difference is in the
-`raster` field: a virtual tile has `raster = null` (bytes-free, path + window backed); a
-materialized tile carries raster bytes (`raster` is not null).
-
-The **heavyweight tier** accepts both v1 and v2 **materialized** tiles as input and always emits
-the v2 tile struct. Passing a **virtual** tile (bytes-free, path-backed) to a heavyweight function
-raises a clear error telling you to materialize it in the lightweight tier first — either with
-`materialize=True`, or by writing via any raster writer and reading the output back. The JVM cannot
-lazily read from a Unity Catalog Volume FUSE path the way a Python worker can, so the materialization
-step is required before crossing the tier boundary.
-
-**If a heavy function does not produce the expected result from a light-tier tile**, the tile may be
-virtual (no bytes). You have two options:
-
-- **Stay in the lightweight tier.** For most raster work, `pyrx` covers the full function set and runs
-  everywhere (serverless, standard clusters, ARM). If you don't specifically need the JVM execution
-  model, there is no reason to cross to heavy.
-- **Materialize before crossing.** If you do need a heavyweight function: call a tile-returning
-  lightweight function with `materialize=True` to produce a bytes-carrying tile, or write via any
-  raster writer (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) and read the output back — every writer is a
-  materialization boundary.
-
-The lightweight-tier `rst_*` functions accept three optional force-output params (`virtualize_dir`,
-`virtualize_prefix`, `materialize`) to control this; the heavyweight tier has none of them. See
-[Virtual-tile force-output params](./raster-functions#virtual-tile-overrides) for the full param
-reference.
-
-### Virtual↔materialized advice {#virtual-materialized-advice}
-
-When working with virtual tiles in the lightweight tier, the key question is: **which operations need
-pixels, and which can stay lazy?**
-
-| Operation type | Behavior under auto | Notes |
-|---|---|---|
-| **Metadata accessors** (`rst_width`, `rst_height`, `rst_srid`, `rst_boundingbox`, `rst_format`, `rst_georeference`, `rst_metadata`, `rst_rotation`, `rst_scalex`, `rst_scaley`, `rst_skewx`, `rst_skewy`, `rst_numbands`, `rst_type`, `rst_getnodata`, `rst_upperleftx`, `rst_upperlefty`) | Free on virtual tiles — no pixels read | The header is opened lazily; `.read()` is never called |
-| **Pixel accessors / stats** (`rst_avg`, `rst_min`, `rst_max`, `rst_median`, `rst_pixelcount`, `rst_summary`, `rst_histogram`, `rst_sample`, `rst_isempty`) | Read the window (transient materialize), return scalars/arrays | Pixels are materialized for the computation only; no bytes in the output row |
-| **Reference / passthrough tile ops** (`rst_clip`, `rst_setsrid`, `rst_initnodata`, `rst_band`, **identity `rst_transform`** where target CRS == source CRS) | Reference/passthrough class — record instructions or clip references; no new pixels read | `rst_initnodata`, `rst_setsrid`, and `rst_band` record a pending instruction on the virtual tile and stay bytes-free; the instruction is applied at the next read. `rst_clip` and identity `rst_transform` record a region reference. None of these ops produce new pixels on a virtual tile. `virtualize_dir` has no meaningful effect on them. |
-| **Pixel-producing tile ops** (slope, aspect, hillshade, terrain, focal, mapalgebra, spectral indices, rasterize, resample, **non-identity `rst_transform`**, **`rst_merge` / `rst_combineavg` / `rst_frombands`**) | Materialize and return bytes | Pass `virtualize_dir` to write the computed result to a durable path and get a light virtual row — the **only** way these return a virtual tile |
-| **Writers** (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) | Always a materialization boundary | A virtual DataFrame is directly writable — writers auto-materialize; `cog_gbx` converts whole-file virtual tiles path-direct (no bytes round-trip) |
-| **Crossing to heavy** | Materialize first | Heavy consumes only materialized tiles — stay in light (recommended), or materialize first (`materialize=True`, or write + read back) before handing off |
-
-**Short rule:** chain deferrable ops as long as you like; when you need pixels (or need to cross to
-heavy), materialize at that point — not before.
+- [Language bindings](./language-bindings): the registration and import patterns of each language
+- [Availability](./availability): every function by surface
+- [Unity Catalog functions](./uc-functions): the governed SQL slice
+- [Performance & Benchmarking](./performance): measured behavior by level

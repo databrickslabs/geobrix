@@ -147,7 +147,7 @@ Before using GeoBrix functions in Python or SQL, register them with the Spark se
 
 ### Register selectively
 
-GeoBrix raster functions come in two execution tiers; this example uses the heavyweight tier. See [Choosing an Execution Tier](./execution-tiers).
+Pass `only=` to register a few functions. GeoBrix still picks the implementation level for each. See [Surfaces and levels](./execution-tiers).
 
 <CodeFromTest code={packagesExamples} language="python" functionName="register_only_rasterx" testFile="docs/tests/python/packages/test_examples.py" validationLevel="compile" />
 

@@ -165,7 +165,7 @@ A small number of capabilities run only in the heavyweight tier:
 
 - **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message.
 
-See [Execution Tiers](./execution-tiers) for how to choose and switch between tiers.
+See [Surfaces and levels](./execution-tiers) for how GeoBrix picks an implementation.
 
 ### Known behavior divergences
 

@@ -2173,7 +2173,7 @@ def rst_dtmfromgeoms(
     Args:
         points_array: The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an
             array.
-        breaklines_array: Break lines, as an array; NULL or empty for none. The light
+        breaklines_array: Break lines, as an array; NULL or empty for none. The Python
             level uses their vertices as extra points and does not enforce them as edges.
         merge_tolerance: Accepted for compatibility with the JVM level; not applied.
         snap_tolerance: Accepted for compatibility with the JVM level; not applied.
@@ -2551,7 +2551,8 @@ def rst_fromfile(
     Returns:
         A tile that holds the file's bytes, re-encoded as a GeoTIFF. NULL for a NULL
         path or a file that cannot be opened; an error tile with a `Fix:` for a format
-        GeoBrix refuses, or a file whose decoded size is over the materialize cap.
+        GeoBrix refuses. A file whose decoded size is over the materialize cap fails the
+        call with an error that says how to fix it.
 
     SQL: ``gbx_rst_fromfile(path, [driver])``
     """

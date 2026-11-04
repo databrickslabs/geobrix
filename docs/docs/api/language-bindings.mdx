@@ -4,80 +4,96 @@ sidebar_position: 7
 
 # Language Bindings
 
-GeoBrix exposes one canonical function set across **SQL**, **Python**, and **Scala**. The per-function reference — signatures, parameters, return types, and runnable examples — lives on the package pages: [RasterX](./raster-functions), [GridX](./gridx-functions), [VectorX](./vectorx-functions), and [PMTiles](./pmtiles-functions). This page orients you to the registration and import patterns each language uses, and to the lightweight-vs-heavyweight tier choice for raster.
+GeoBrix exposes one function set across **SQL**, **Python**, and **Scala**. The per-function reference lives on the package pages: [RasterX](./raster-functions), [GridX](./gridx-functions), [VectorX](./vectorx-functions), and [PMTiles](./pmtiles-functions). This page covers the names, registration and import pattern of each language, and how SQL names resolve in a session and in Unity Catalog.
 
-## One function, three surfaces
+## One function, four surfaces
 
-Every function has a single canonical name; the surface determines only how you call it:
+Every function has one canonical name. The surface decides only how you call it.
 
 | Surface | Form | Example |
 |---|---|---|
-| **SQL** | `gbx_<name>` (prefixed) | `gbx_rst_boundingbox(tile)` |
-| **Python** | `<name>` via a package module | `rx.rst_boundingbox(tile)` |
-| **Scala** | `<name>` via a package import | `rst_boundingbox(col("tile"))` |
+| **SQL (session)** | `gbx_<name>` | `gbx_rst_boundingbox(tile)` |
+| **SQL (Unity Catalog)** | `<catalog>.<schema>.gbx_<name>` | `main.geobrix.gbx_bng_aswkb(cell)` |
+| **Python** | `<name>` in a package module | `rx.rst_boundingbox(tile)` |
+| **Scala** | `<name>` in a package object | `rst_boundingbox(col("tile"))` |
 
-The `gbx_` SQL prefix distinguishes GeoBrix functions from Databricks built-in `st_*` functions. Python and Scala use the bare `rst_*` / `bng_*` / `quadbin_*` / `st_*` / `pmtiles_*` names.
+The `gbx_` prefix keeps GeoBrix functions apart from the Databricks built-in `st_*` functions. Python and Scala use the bare `rst_*`, `bng_*`, `quadbin_*`, `st_*` and `pmtiles_*` names. The [availability page](./availability) shows which function runs on which surface.
 
-## Registration and imports
+## Python
 
-### SQL
+Each package has one Python API. Import its `functions` module and call the bare names:
 
-SQL functions are not available until they are registered into the Spark catalog from Python or Scala. Once registered, they work in any SQL context (notebooks, Databricks SQL, jobs):
+| Package | Import |
+|---|---|
+| RasterX | `from databricks.labs.gbx.rasterx import functions as rx` |
+| GridX (BNG) | `from databricks.labs.gbx.gridx.bng import functions as bx` |
+| GridX (other grids) | `gridx.quadbin`, `gridx.custom`, `gridx.h3` |
+| VectorX | `from databricks.labs.gbx.vectorx import functions as vx` |
+| PMTiles | `from databricks.labs.gbx.pmtiles import functions as pm` |
 
 ```python
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)            # installs gbx_rst_* into the catalog
+
+df.select(rx.rst_boundingbox("tile"))
+```
+
+- **The first call registers the function.** You need no `register(spark)` for Python code. GeoBrix registers the name at the level the compute offers, then later calls cost nothing.
+- **Wrappers take a `Column` or a scalar.** Numbers, booleans and bytes are wrapped for you. A bare string follows PySpark's rule and names a column. Wrap a string literal in `f.lit("...")`.
+- **Table functions take the DataFrame.** A generator returns many rows per input, so its wrapper takes the DataFrame first and returns a DataFrame: `bx.bng_kringexplode(df, "cellid", 1)`. Pass argument columns by name. The wrapper refuses an input column that clashes with an output column, and the message gives the fix.
+- **Some keywords exist only in Python.** The tile functions take `virtualize_dir`, `virtualize_prefix` and `materialize`. A few functions take a trailing `out_crs`. SQL binds arguments by position, so these keywords have no SQL form. Each function section lists them.
+- **Helpers live in `helpers` modules.** Python-only helpers sit in `databricks.labs.gbx.rasterx.helpers` (`merge_by_key`, `combine_by_key`, `mint_vrt`, `prepare_cogs`, `tile_to_numpy`, `rst_apply`, `rst_viewshed_towers`, the `*_grouped` functions and others), `vectorx.helpers` and `gridx.helpers`. The `pyrx`, `pygx` and `pyvx` packages are internal.
+
+## SQL
+
+SQL functions exist only after registration. One call registers every function and the lightweight data sources:
+
+```python
+from databricks.labs.gbx import register
+
+register(spark)
 ```
 
 ```sql
 SELECT gbx_rst_width(tile) FROM rasters;
 ```
 
-Use `SHOW USER FUNCTIONS LIKE 'gbx_*'` to list what is registered, and `DESCRIBE FUNCTION gbx_rst_clip` for a signature.
+Use `SHOW USER FUNCTIONS LIKE 'gbx_*'` to list what is registered. Use `DESCRIBE FUNCTION EXTENDED gbx_rst_clip` for a signature.
 
-### Python
+SQL binds arguments by position. A call with an extra argument drops it silently, so check a function's signature on its reference page. Generators are table functions: write `FROM t, LATERAL gbx_...(args)`.
 
-Import a package's `functions` module and call the bare names. `register(spark)` is only needed if you also want the SQL surface; the Python column expressions work without it:
+### Session SQL and Unity Catalog SQL
 
-```python
-from databricks.labs.gbx.rasterx import functions as rx     # heavyweight raster
-from databricks.labs.gbx.gridx.bng import functions as bx    # BNG
-from databricks.labs.gbx.vectorx import functions as vx      # vector
+A name such as `gbx_bng_aswkb` can exist twice: as a session function and as a Unity Catalog function. The rules for which one runs:
 
-df.select(rx.rst_boundingbox("tile"))
-```
+- A three-part name always runs the Unity Catalog function: `main.geobrix.gbx_bng_aswkb(cell)`.
+- A bare name runs the session function when one is registered. The session path comes before the built-ins and the current schema.
+- A bare name reaches Unity Catalog only when no session function has that name and the schema is on the path.
+- GeoBrix never changes your path. `SET PATH` is your choice. The [Unity Catalog page](./uc-functions) gives the statement.
+- Nothing warns you when a session function shadows a Unity Catalog one.
 
-Wrappers accept `Column` or scalar values; non-string scalars are auto-wrapped, while a bare string follows PySpark's column-reference convention (wrap a string literal in `f.lit("...")`).
+To see which one a name resolves to, run `DESCRIBE FUNCTION EXTENDED`. A session function shows a bare name. A Unity Catalog function shows the three-part name. `SHOW USER FUNCTIONS` shows the same difference.
 
-### Scala
+`register(spark, catalog="main", schema="geobrix")` checks that the schema's GeoBrix version matches the wheel. It prints one line when it does not. `register(spark, target="uc", ...)` registers no session function, so a notebook behaves as a SQL warehouse does.
 
-GeoBrix is natively written in Scala. Import a package's `functions` object to bring the column functions into scope, and call `register(spark)` for the SQL surface:
+## Scala
+
+GeoBrix is written in Scala, and the JAR provides the column functions. The JAR registers no SQL. The Python manager registers the SQL names and installs the JVM expressions on a dedicated cluster.
 
 ```scala
+import org.apache.spark.sql.functions.{call_function, col}
 import com.databricks.labs.gbx.rasterx.functions._
 
-functions.register(spark)                 // optional: installs gbx_rst_*
 df.select(rst_boundingbox(col("tile")))
 ```
 
-Typed overloads accept `Boolean` / `Int` / `Double` / `String` value parameters directly (no `lit(...)` wrapping); `Column` arguments such as geometry and tile still take `Column`.
+- **The kept per-name wrappers call a SQL name.** `rst_boundingbox` calls `gbx_rst_boundingbox`, so the Python manager must have registered it. Call `register(spark)` from Python first, in the same session.
+- **A name with no wrapper uses `call_function`.** Write `call_function("gbx_rst_clip", col("tile"), lit(wkt), lit(true))`. This is how the Scala examples call functions such as `gbx_rst_clip`, `gbx_rst_retile` and `gbx_rst_metadata`.
+- **Typed overloads** accept `Boolean`, `Int`, `Double` and `String` directly. `Column` arguments such as a geometry or a tile still take `Column`.
+- **A session with no Python registration has no `gbx_*` functions.** Registration is a Python step, so a Scala-only session cannot call the SQL names.
 
-## Lightweight vs heavyweight: a one-line swap (raster)
+## Next steps
 
-RasterX ships in two execution tiers that share the same function names. The only thing that changes is the import:
-
-```python
-from databricks.labs.gbx.rasterx import functions as rx     # heavyweight (GDAL/JVM)
-from databricks.labs.gbx.pyrx     import functions as rx     # lightweight (pure-Python)
-```
-
-Downstream code is identical, except for ten functions that you call from `rasterx`, `gridx.bng` and `vectorx` on either tier (listed in [Choosing an Execution Tier](./execution-tiers#the-one-line-swap)). See [Choosing an Execution Tier](./execution-tiers) for the comparison and the lightweight install, and [Performance & Benchmarking](./performance) for tier-by-tier timings.
-
-## Next Steps
-
-- [API Overview](./overview)
-- [RasterX Function Reference](./raster-functions)
-- [GridX Function Reference](./gridx-functions)
-- [VectorX Function Reference](./vectorx-functions)
-- [PMTiles Function Reference](./pmtiles-functions)
-- [Choosing an Execution Tier](./execution-tiers)
+- [Surfaces and levels](./execution-tiers): how GeoBrix picks the implementation
+- [API overview](./overview)
+- [RasterX](./raster-functions), [GridX](./gridx-functions), [VectorX](./vectorx-functions), [PMTiles](./pmtiles-functions)
+- [Unity Catalog functions](./uc-functions)

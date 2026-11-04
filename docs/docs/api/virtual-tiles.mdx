@@ -23,7 +23,7 @@ lifecycle.
 ## What a virtual tile is
 
 Every GeoBrix raster tile is one typed struct — the **v2 tile struct** — shared
-by both execution tiers:
+by every implementation level:
 
 ```
 struct<
@@ -205,7 +205,7 @@ pixel-producing operations materialize — but you can always ask for the other.
 For the full rule (which operations are free on virtual tiles and which
 materialize), see the
 [Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice) on
-the Execution Tiers page.
+the Surfaces and levels page.
 
 ### Instructions that stay virtual
 
@@ -228,19 +228,11 @@ masked pixels take it. An internal mask band is carried wherever the file is rea
 external `.msk` sidecar file is not carried when the source is copied to local disk first
 or read through a FileRef stream, so prefer an internal mask.
 
-## Tiers: light tiles vs. heavy tiles
+## Virtual tiles and the JVM level
 
-**The lightweight tier is for light (virtual) raster tiles; the heavyweight tier
-is for heavy (binary) raster tiles.**
+The Python level generates and operates on virtual tiles, and materializes them on demand.
 
-- The **lightweight tier** (`pyrx`) generates and operates on virtual tiles, and
-  materializes them on demand. Virtual tiles are a lightweight-tier capability.
-- The **heavyweight tier** (`rasterx`) accepts both v1 and v2 **materialized**
-  tiles as input and always emits the v2 tile struct. It operates only on
-  materialized tiles: a virtual tile passed to a heavyweight function raises a
-  clear error telling you to materialize it first (call the lightweight function
-  with `materialize=True`, or write it out and read it back). Writing is itself a
-  materialization boundary.
+The JVM level (a dedicated cluster with the JAR) accepts both v1 and v2 **materialized** tiles and always emits the v2 tile struct. In SQL, GeoBrix sends a virtual tile to the Python implementation. A function you force onto the JVM level raises a clear error for a virtual tile. Materialize it first: call the Python function with `materialize=True`, or write it out and read it back. Writing is itself a materialization boundary.
 
 ## See also
 
@@ -248,8 +240,8 @@ is for heavy (binary) raster tiles.**
   `cog_gbx` `driverMode`) and the format/memory details behind windowed reads.
 - [VRT & Mosaics](./vrt-mosaic) — a `.vrt` index over mini-COG tiles expands into
   one virtual tile row per member; `rst_*` functions run per-tile unchanged.
-- [Execution Tiers](./execution-tiers) — the full virtual↔materialized taxonomy
-  and the light→heavy bridge.
+- [Surfaces and levels](./execution-tiers) — the full virtual↔materialized taxonomy
+  and the JVM level.
 - [COG reader (`cog_gbx`)](../readers/cog) and [Readers overview](../readers/overview)
   — the windowed-read option reference.
 - [Zarr Reader](../readers/zarr) and [Zarr Stores](../formats/zarr) — tiles cut from N-dimensional

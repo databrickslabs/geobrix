@@ -930,7 +930,7 @@ def london_rasters_view(spark):
 
 
 # The rastertogrid functions are table functions at every level, so their SQL examples show the LATERAL form
-# only (marked lightweight, the implementation that serves them). The executable round-trips live in
+# only. The executable round-trips live in
 # test_rasterx_gridagg_python_light.py.
 _RASTERTOGRID_SQL_EXAMPLES = [
     (f"rst_{grid}_rastertogrid{agg}_sql_example", f"gbx_rst_{grid}_rastertogrid{agg}")
@@ -945,8 +945,7 @@ def test_rastertogrid_sql_example_shape(example_attr, sql_fn):
     coverage and assignment, with the output constant beside it."""
     sql = getattr(rasterx_functions_sql, example_attr)()
     assert isinstance(sql, str) and sql.strip(), f"{example_attr} must be non-empty"
-    tiers = [t for t, _ in rasterx_functions_sql._sql_statements(sql)]
-    assert tiers == ["lightweight", "lightweight"], tiers
+    assert len(rasterx_functions_sql._sql_statements(sql)) == 2
     for stmt in (b for _, b in rasterx_functions_sql._sql_statements(sql)):
         assert f", LATERAL {sql_fn}(tile" in stmt and "LATERAL VIEW" not in stmt
     assert "'complete', 'covering'" in sql

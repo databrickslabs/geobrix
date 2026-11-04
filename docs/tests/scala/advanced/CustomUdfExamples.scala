@@ -197,8 +197,8 @@ def processProprietaryFormat: UserDefinedFunction =
       // Use GDAL's flexible driver system
       val ds = gdal.Open(filePath)
       
-      // Extract metadata using execute methods
-      val metadata = RST_BandMetaData.execute(ds.GetRasterBand(1))
+      // Read the dataset-level metadata domain through GDAL (needs scala.jdk.CollectionConverters._)
+      val metadata = ds.GetMetadata_Dict("").asInstanceOf[java.util.Hashtable[String, String]].asScala.toMap
       
       // Apply domain-specific interpretation
       val calibrationFactor = metadata.getOrElse("CAL_FACTOR", "1.0").toDouble

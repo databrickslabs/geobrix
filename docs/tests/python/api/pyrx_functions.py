@@ -80,17 +80,16 @@ def _tile_df(spark, **kw):
 
 
 def pyrx_setup_example(spark):
-    """Register pyrx and load each sample raster into a `tile` DataFrame + temp view.
+    """Register GeoBrix and load each sample raster into a `tile` DataFrame + temp view.
 
     Assumes the geobrix wheel is already installed (see the Installation guide).
     The examples on this page read from four temp views; this builds all of them.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs.gbx import register
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
-    # Register the lightweight Python DataSource readers (raster_gbx / gtiff_gbx /
-    # netcdf_gbx / cog_gbx). Pure-Python, no JAR.
-    gbx_manager.register_sources(spark)
+    # One call registers every gbx_* SQL function and the Python DataSource readers
+    # (raster_gbx / gtiff_gbx / netcdf_gbx / cog_gbx).
+    register(spark)
 
     GTIFF_SAMPLE_DIR = _SAMPLE_PATHS["gtiff"]
     GTIFF_MULTI_DIR = _SAMPLE_PATHS["gtiff_multi"]

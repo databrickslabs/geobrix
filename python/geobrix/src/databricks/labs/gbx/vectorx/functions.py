@@ -262,8 +262,8 @@ def st_interpolateelevationbbox(
         height_px: The number of grid rows, above 0.
         srid: The SRID of the output points; 0 for none.
         mode: `'constrained'`, the default. `'conforming'` adds points along the break
-            lines and runs on the JVM level only; the lightweight level raises for it. Any
-            other word raises. SQL default: ``'constrained'``.
+            lines and runs on the JVM level only; the Python level raises for it. Any other
+            word raises. SQL default: ``'constrained'``.
 
     Returns:
         One row per grid cell inside the surface: `elevation_point`, a WKB point with Z.
@@ -329,8 +329,8 @@ def st_interpolateelevationgeom(
         cell_size_y: The cell height in the geometry's units; a negative value steps
             south.
         mode: `'constrained'`, the default. `'conforming'` adds points along the break
-            lines and runs on the JVM level only; the lightweight level raises for it. Any
-            other word raises. SQL default: ``'constrained'``.
+            lines and runs on the JVM level only; the Python level raises for it. Any other
+            word raises. SQL default: ``'constrained'``.
 
     Returns:
         One row per grid cell inside the surface: `elevation_point`, a WKB point with Z.
@@ -642,8 +642,8 @@ def st_triangulate(
             mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default,
             does not use it.
         mode: `'constrained'`, the default. `'conforming'` adds points along the break
-            lines and runs on the JVM level only; the lightweight level raises for it. Any
-            other word raises. SQL default: ``'constrained'``.
+            lines and runs on the JVM level only; the Python level raises for it. Any other
+            word raises. SQL default: ``'constrained'``.
 
     Returns:
         One row per triangle: `triangle`, a 2D WKB polygon. A NULL or empty

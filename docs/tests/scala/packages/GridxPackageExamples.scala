@@ -11,7 +11,7 @@ object GridxPackageExamples {
 import org.apache.spark.sql.functions._
 
 // Register functions
-bx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 
 // Calculate cell area
 val areaDf = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area")

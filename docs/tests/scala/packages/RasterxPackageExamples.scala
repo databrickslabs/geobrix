@@ -11,7 +11,7 @@ object RasterxPackageExamples {
 import org.apache.spark.sql.functions._
 
 // Register functions
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 
 // Read raster files (sample data path; see Sample Data guide)
 val rasterPath = "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif"

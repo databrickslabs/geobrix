@@ -16,10 +16,9 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import com.databricks.labs.gbx.gridx.bng.{functions => bx}
 import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
 
-// Register each package
-rx.register(spark)
-bx.register(spark)
-vx.register(spark)
+// Registration is a Python step, once per session:
+//   from databricks.labs.gbx import register; register(spark)
+// The Scala functions below call the registered SQL names.
 """.trim
 
   val RegisterAllPackages_output: String =
@@ -31,8 +30,8 @@ RasterX, GridX, and VectorX functions registered (gbx_rst_*, gbx_bng_*, gbx_st_*
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 
-// Register functions
-rx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Use functions
 val df = rasters.select(rx.rst_boundingbox(col("tile")))
@@ -42,8 +41,8 @@ val df = rasters.select(rx.rst_boundingbox(col("tile")))
     """
 import com.databricks.labs.gbx.gridx.bng.{functions => bx}
 
-// Register functions
-bx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Use functions
 val df = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000)")
@@ -53,8 +52,8 @@ val df = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000)")
     """
 import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
 
-// Register functions
-vx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Use functions
 val df = legacyData.select(vx.st_legacyaswkb(col("mosaic_geom")))
@@ -65,8 +64,8 @@ val df = legacyData.select(vx.st_legacyaswkb(col("mosaic_geom")))
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-// Register functions
-rx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Read rasters (sample data path)
 val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
@@ -89,7 +88,7 @@ metadata.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 
 val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 
@@ -106,8 +105,8 @@ val clipped = rasters.select(
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-// Register functions
-rx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Read rasters (sample data path)
 val rasters = spark.read.format("binaryFile").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
@@ -133,8 +132,8 @@ catalog.write.mode("overwrite").saveAsTable("raster_catalog")
 import com.databricks.labs.gbx.gridx.bng.{functions => bx}
 import org.apache.spark.sql.functions._
 
-// Register functions
-bx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Calculate cell area
 val area = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area_sqm")
@@ -157,8 +156,8 @@ bngCells.show()
 import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
 import org.apache.spark.sql.functions._
 
-// Register functions
-vx.register(spark)
+// Registration is a Python step:
+//   from databricks.labs.gbx import register; register(spark)
 
 // Convert legacy geometries
 val legacy = spark.table("legacy_mosaic_table")
@@ -1045,7 +1044,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Constructor: binaryFile reader + rst_fromcontent is the canonical tier-agnostic pattern.
 // binaryFile runs in Spark (holds the Volume credential) and works on any compute.
 val binary = spark.read.format("binaryFile")
@@ -1283,7 +1282,7 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-row fixture: 3 BNG (EPSG:27700) scalar x/y/z rows over a 1 km extent at 10×10 pixels.
 val schema = StructType(Seq(
   StructField("region", StringType()), StructField("x", DoubleType()),
@@ -1313,7 +1312,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-tile fixture: load multiband tif and split to 3 per-band rows (same grid).
 val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
@@ -1339,7 +1338,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-tile fixture: load multiband tif and split to 3 per-band rows.
 val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("region", lit("R1"))
@@ -1366,7 +1365,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-tile fixture: load multiband tif and split to 3 per-band rows with band_index.
 val mb = spark.read.format("binaryFile").load("src/test/resources/binary/geotiff-small/rgb_nir_small.tif").select(col("path"), call_function("gbx_rst_fromcontent", col("content"), lit("GTiff")).alias("tile"))
 val b1 = mb.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1)).withColumn("region", lit("R1"))
@@ -1392,7 +1391,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-row fixture: 3 rows with WKB polygons + burn values over a 4x4 EPSG:4326 canvas.
 spark.sql("CREATE OR REPLACE TEMP VIEW _rst_agg_src AS SELECT 'R1' AS region, unhex('010300000001000000050000000000000000000000000000000000000000000000000000000000000000001040000000000000104000000000000000000000000000001040000000000000104000000000000000000000000000000000') AS geom, 1.0 AS value UNION ALL SELECT 'R1', unhex('010300000001000000050000000000000000000000000000000000000000000000000000000000000000001040000000000000104000000000000000000000000000001040000000000000104000000000000000000000000000000000'), 2.0 UNION ALL SELECT 'R1', unhex('010300000001000000050000000000000000000000000000000000000000000000000000000000000000001040000000000000104000000000000000000000000000001040000000000000104000000000000000000000000000000000'), 3.0")
 val df = spark.table("_rst_agg_src")
@@ -1418,7 +1417,7 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-row fixture: 3 H3 resolution-9 cell ids (as BIGINT) with burn values.
 val schema = StructType(Seq(
   StructField("cellid", LongType()), StructField("value", DoubleType()), StructField("region", StringType())))
@@ -1446,8 +1445,8 @@ import com.databricks.labs.gbx.gridx.{functions => gx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
-gx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-row fixture: 3 quadbin zoom-12 cells near central London.
 val schema = StructType(Seq(StructField("region", StringType()), StructField("lon", DoubleType()), StructField("lat", DoubleType()), StructField("val", DoubleType())))
 val rows = Seq(("R1",-0.10,51.50,1.0),("R1",-0.11,51.51,2.0),("R1",-0.09,51.49,3.0))
@@ -1475,8 +1474,8 @@ import com.databricks.labs.gbx.gridx.bng.{functions => bng}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
-bng.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Multi-row fixture: 3 BNG 1km cells near central London (EPSG:27700).
 val schema = StructType(Seq(StructField("region", StringType()), StructField("e", DoubleType()), StructField("n", DoubleType()), StructField("val", DoubleType())))
 val rows = Seq(("R1",530000.0,180000.0,1.0),("R1",531000.0,181000.0,2.0),("R1",529000.0,179000.0,3.0))
@@ -1967,7 +1966,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Create synthetic point cloud with WKB-encoded points and values
 val points = spark.createDataFrame(Seq(
   (Array[Array[Byte]](/* WKB point 1 */, /* WKB point 2 */), Array[Double](100.0, 110.0))
@@ -2195,7 +2194,7 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // H3 res-9 cell ids (as BIGINT); scalar bbox in EPSG:4326, centroids mode.
 val schema = StructType(Seq(StructField("cellid", LongType())))
 val rows = Seq(617733151020810239L, 617733151085035519L, 617733151021334527L)
@@ -2341,7 +2340,7 @@ import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Custom grid: 4km BNG London square, root cell 4000m, splits=2 -> res 1 = four 2km cells.
 val grid = call_function("gbx_custom_grid",
   lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
@@ -2377,7 +2376,7 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-rx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // Synthetic 2km London raster (EPSG:27700); custom grid with the same CRS and extent.
 val londonWkt = "POLYGON((529000 179000, 531000 179000, 531000 181000, 529000 181000, 529000 179000))"
 val raster = spark.range(1).select(
@@ -2406,7 +2405,7 @@ result.show(truncate = false)
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("mvt_features")
 val result = df.groupBy("z", "x", "y").agg(
   vx.st_asmvt(col("geom_wkb"), col("attrs"), lit("layer")).alias("mvt")
@@ -2441,7 +2440,7 @@ result.first().getAs[Array[Byte]]("mvt")
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("tin_survey")
 val result = df.select(
   vx.st_triangulate(col("pts"), col("bl"), lit(0), lit(0), lit("NONENCROACHING"), lit("constrained")).alias("triangle")
@@ -2464,7 +2463,7 @@ result.show()
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("tin_survey")
 val result = df.select(
   vx.st_interpolateelevationbbox(
@@ -2494,7 +2493,7 @@ result.show()
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val origin = expr("unhex('010100000000000000000000000000000000002440')")
 val df = spark.table("tin_survey")
 val result = df.select(
@@ -2529,7 +2528,7 @@ result.show()
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("vector_geoms")
 val result = df.select(vx.st_crs(col("geom")).alias("crs")).first()
 result.getString(0)
@@ -2549,7 +2548,7 @@ result.getString(0)
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("vector_geoms")
 val result = df.select(vx.st_setcrs(col("geom"), "EPSG:4326").alias("stamped")).first()
 result.getAs[Array[Byte]]("stamped")
@@ -2569,7 +2568,7 @@ result.getAs[Array[Byte]]("stamped")
 import com.databricks.labs.gbx.vectorx.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("vector_geoms")
 val result = df.select(vx.st_transformcrs(col("geom"), lit("EPSG:32633")).alias("utm33n")).first()
 result.getAs[Array[Byte]]("utm33n")
@@ -2597,7 +2596,7 @@ result.getAs[Array[Byte]]("utm33n")
 import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
 import org.apache.spark.sql.functions._
 
-vx.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 val df = spark.table("legacy_geoms")
 val result = df.select(vx.st_legacyaswkb(col("geom_legacy")).alias("wkb")).first()
 result.getAs[Array[Byte]]("wkb")
@@ -3394,7 +3393,7 @@ import com.databricks.labs.gbx.pmtiles.{functions => px}
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.types._
 
-px.register(spark)
+// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
 // 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
 val rows = Seq(
   (2,0,0,"t00".getBytes),(2,0,1,"t01".getBytes),(2,0,2,"t02".getBytes),

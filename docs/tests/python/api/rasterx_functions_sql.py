@@ -46,30 +46,24 @@ Every example on this page reads from one of these views.
 
 
 def _sql_statements(sql: str):
-    """Split an example into ``(tier, statement)`` pairs, in order.
+    """Split an example into ``(None, statement)`` pairs, in order.
 
-    ``tier`` is ``"heavyweight"`` or ``"lightweight"`` when the comment block before
-    the statement has a ``-- heavyweight tier`` / ``-- lightweight tier`` line, else
-    ``None``. Statements end at a line whose code (not a ``--`` comment, which may
-    itself hold a ``;``) ends with ``;``; comment lines are dropped from the text.
+    Statements end at a line whose code (not a ``--`` comment, which may itself hold a ``;``)
+    ends with ``;``; comment lines are dropped from the text. The first element is kept for
+    callers that unpack pairs.
     """
-    out, tier, code = [], None, []
+    out, code = [], []
     for line in sql.splitlines():
         text = line.strip()
         if text.startswith("--"):
-            low = text[2:].strip().lower()
-            if low.startswith("heavyweight tier"):
-                tier = "heavyweight"
-            elif low.startswith("lightweight tier"):
-                tier = "lightweight"
             continue
         if text:
             code.append(line)
         if text.endswith(";"):
-            out.append((tier, "\n".join(code).strip().rstrip(";").strip()))
-            tier, code = None, []
+            out.append((None, "\n".join(code).strip().rstrip(";").strip()))
+            code = []
     if "\n".join(code).strip():
-        out.append((tier, "\n".join(code).strip()))
+        out.append((None, "\n".join(code).strip()))
     return out
 
 
@@ -77,19 +71,11 @@ def _sql_variant(sql: str, *, lateral: bool) -> str:
     """Pick one statement from an example that carries more than one.
 
     A generator is a table function, called as ``FROM t, LATERAL f(...)``, which works at
-    every level. An example may mark a statement ``-- heavyweight tier`` or
-    ``-- lightweight tier`` when the form belongs to one level only; ``lateral=True`` then
-    returns the lightweight statement and ``lateral=False`` the heavyweight one. An example
-    without markers falls back to "has a ``LATERAL`` table-function call" for ``lateral=True``;
-    a single-statement example returns its statement either way.
+    every level. ``lateral=True`` returns the statement that has a ``LATERAL`` table-function
+    call; ``lateral=False`` returns the other one. A single-statement example returns its
+    statement either way.
     """
-    want = "lightweight" if lateral else "heavyweight"
     stmts = _sql_statements(sql)
-    if any(t for t, _ in stmts):
-        for tier, body in stmts:
-            if tier == want:
-                return body
-        raise ValueError(f"example has no {want} statement")
     for _tier, body in stmts:
         if lateral == ("LATERAL" in body.upper()):
             return body
@@ -1334,12 +1320,10 @@ rst_bng_tessellate_sql_example_output = """
 def rst_h3_rastertogridavg_sql_example():
     """Aggregate raster values to H3 grid using average"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1361,12 +1345,10 @@ rst_h3_rastertogridavg_sql_example_output = """
 def rst_h3_rastertogridcount_sql_example():
     """Count pixels per H3 cell (measure is DOUBLE)"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1386,12 +1368,10 @@ rst_h3_rastertogridcount_sql_example_output = """
 def rst_h3_rastertogridmax_sql_example():
     """Get maximum values per H3 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1411,12 +1391,10 @@ rst_h3_rastertogridmax_sql_example_output = """
 def rst_h3_rastertogridmin_sql_example():
     """Get minimum values per H3 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1436,12 +1414,10 @@ rst_h3_rastertogridmin_sql_example_output = """
 def rst_h3_rastertogridmedian_sql_example():
     """Get median values per H3 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1461,12 +1437,10 @@ rst_h3_rastertogridmedian_sql_example_output = """
 def rst_h3_rastertogridsum_sql_example():
     """Get the sum of pixel values per H3 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1486,12 +1460,10 @@ rst_h3_rastertogridsum_sql_example_output = """
 def rst_h3_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per H3 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1511,12 +1483,10 @@ rst_h3_rastertogridvariance_sql_example_output = """
 def rst_h3_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per H3 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1536,12 +1506,10 @@ rst_h3_rastertogridstddev_sql_example_output = """
 def rst_quadbin_rastertogridavg_sql_example():
     """Aggregate raster values to CARTO quadbin v0 cells using average"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1561,12 +1529,10 @@ rst_quadbin_rastertogridavg_sql_example_output = """
 def rst_quadbin_rastertogridcount_sql_example():
     """Count pixels per CARTO quadbin v0 cell (measure is DOUBLE)"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1586,12 +1552,10 @@ rst_quadbin_rastertogridcount_sql_example_output = """
 def rst_quadbin_rastertogridmax_sql_example():
     """Get maximum values per CARTO quadbin v0 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1611,12 +1575,10 @@ rst_quadbin_rastertogridmax_sql_example_output = """
 def rst_quadbin_rastertogridmin_sql_example():
     """Get minimum values per CARTO quadbin v0 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1636,12 +1598,10 @@ rst_quadbin_rastertogridmin_sql_example_output = """
 def rst_quadbin_rastertogridmedian_sql_example():
     """Get median values per CARTO quadbin v0 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1661,12 +1621,10 @@ rst_quadbin_rastertogridmedian_sql_example_output = """
 def rst_quadbin_rastertogridsum_sql_example():
     """Get the sum of pixel values per CARTO quadbin v0 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1686,12 +1644,10 @@ rst_quadbin_rastertogridsum_sql_example_output = """
 def rst_quadbin_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per CARTO quadbin v0 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1711,12 +1667,10 @@ rst_quadbin_rastertogridvariance_sql_example_output = """
 def rst_quadbin_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per CARTO quadbin v0 cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4, 'complete', 'covering') t;
 """
 
@@ -1749,12 +1703,10 @@ rst_quadbin_rastertogridstddev_sql_example_output = """
 def rst_bng_rastertogridavg_sql_example():
     """Aggregate raster values to British National Grid cells using average"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1774,12 +1726,10 @@ rst_bng_rastertogridavg_sql_example_output = """
 def rst_bng_rastertogridcount_sql_example():
     """Count pixels per British National Grid cell (measure is DOUBLE)"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1799,12 +1749,10 @@ rst_bng_rastertogridcount_sql_example_output = """
 def rst_bng_rastertogridmax_sql_example():
     """Get maximum values per British National Grid cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1824,12 +1772,10 @@ rst_bng_rastertogridmax_sql_example_output = """
 def rst_bng_rastertogridmin_sql_example():
     """Get minimum values per British National Grid cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1849,12 +1795,10 @@ rst_bng_rastertogridmin_sql_example_output = """
 def rst_bng_rastertogridmedian_sql_example():
     """Get median values per British National Grid cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1874,12 +1818,10 @@ rst_bng_rastertogridmedian_sql_example_output = """
 def rst_bng_rastertogridsum_sql_example():
     """Get the sum of pixel values per British National Grid cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1899,12 +1841,10 @@ rst_bng_rastertogridsum_sql_example_output = """
 def rst_bng_rastertogridvariance_sql_example():
     """Get the population variance of pixel values per British National Grid cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3, 'complete', 'covering') t;
 """
 
@@ -1924,12 +1864,10 @@ rst_bng_rastertogridvariance_sql_example_output = """
 def rst_bng_rastertogridstddev_sql_example():
     """Get the population standard deviation of pixel values per British National Grid cell"""
     return """
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'
 SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3, 'complete', 'covering') t;
 """
 
@@ -3390,7 +3328,6 @@ _CUSTOM_RASTER_PATH = (
 def rst_custom_rastertogridavg_sql_example():
     """Aggregate raster values to custom-grid cells using average (custom grid)"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3401,7 +3338,6 @@ LATERAL gbx_rst_custom_rastertogridavg(
     1
 ) t;
 
--- lightweight tier, explicit coverage='complete', assignment='covering'.
 SELECT t.band, t.cellID, t.measure
 FROM (SELECT gbx_rst_fromfile('{_CUSTOM_RASTER_PATH}') AS tile) AS r,
 LATERAL gbx_rst_custom_rastertogridavg(
@@ -3425,7 +3361,6 @@ rst_custom_rastertogridavg_sql_example_output = """
 def rst_custom_rastertogridcount_sql_example():
     """Count raster pixels per custom-grid cell (measure is DOUBLE)"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3451,7 +3386,6 @@ rst_custom_rastertogridcount_sql_example_output = """
 def rst_custom_rastertogridmax_sql_example():
     """Get maximum raster value per custom-grid cell"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3477,7 +3411,6 @@ rst_custom_rastertogridmax_sql_example_output = """
 def rst_custom_rastertogridmin_sql_example():
     """Get minimum raster value per custom-grid cell"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3503,7 +3436,6 @@ rst_custom_rastertogridmin_sql_example_output = """
 def rst_custom_rastertogridmedian_sql_example():
     """Get median raster value per custom-grid cell"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3529,7 +3461,6 @@ rst_custom_rastertogridmedian_sql_example_output = """
 def rst_custom_rastertogridsum_sql_example():
     """Sum raster values per custom-grid cell"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3555,7 +3486,6 @@ rst_custom_rastertogridsum_sql_example_output = """
 def rst_custom_rastertogridvariance_sql_example():
     """Population variance of raster values per custom-grid cell"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure
@@ -3581,7 +3511,6 @@ rst_custom_rastertogridvariance_sql_example_output = """
 def rst_custom_rastertogridstddev_sql_example():
     """Population standard deviation of raster values per custom-grid cell"""
     return f"""
--- lightweight tier
 -- A table function, called with FROM ..., LATERAL: one row per band and cell,
 -- with the columns [band, cellID, measure].
 SELECT t.band, t.cellID, t.measure

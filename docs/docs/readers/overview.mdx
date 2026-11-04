@@ -24,21 +24,16 @@ for materialized reads). See **[Virtual Tiles](../api/virtual-tiles)**.
 :::
 
 :::note Register first
-The Python DataSources are **not** auto-registered. Call `register_sources(spark)` once per session
+The Python DataSources are **not** auto-registered. Call `register(spark)` once per session
 before you use any `*_gbx` format:
 
 ```python
-from databricks.labs.gbx import manager
-manager.register_sources(spark)
+from databricks.labs.gbx import register
+
+register(spark)   # every gbx_* function and every *_gbx reader and writer
 ```
 
-To register only the formats this session uses, pass `only=` (by format name, with or without the `_gbx` suffix):
-
-```python
-manager.register_sources(spark, only=["raster_gbx", "gtiff_gbx"])
-```
-
-An unrecognized format raises `ValueError`.
+The call registers all readers and writers. There is no call that registers only some of them.
 :::
 
 :::tip On Serverless, read from a FILE-column table

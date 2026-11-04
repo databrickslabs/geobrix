@@ -51,34 +51,32 @@ except ImportError:
 
 def register_all_packages(spark):
     """
-    Register all GeoBrix packages at once.
-    
-    Imports and registers RasterX, GridX (BNG), and VectorX functions.
+    Register every GeoBrix function and reader.
+
+    One call covers RasterX, GridX and VectorX. GeoBrix picks the implementation
+    level for each function.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    # Register all packages
+    from databricks.labs.gbx import register
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
     from databricks.labs.gbx.vectorx import functions as vx
-    
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    gbx_manager.register_family(spark, ('gbx_bng_',))
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
-    
+
+    register(spark)
+
     return rx, bx, vx
 
 
 def register_only_rasterx(spark):
     """
-    Register only RasterX functions.
-    
-    Use when you only need raster processing capabilities.
+    Register only some functions.
+
+    Use when a session needs a few raster functions. Names take the SQL name or the short name.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    # Only register RasterX
+    from databricks.labs.gbx import register
     from databricks.labs.gbx.rasterx import functions as rx
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    
+
+    register(spark, only=["rst_width", "rst_height", "rst_clip"])
+
     return rx
 
 

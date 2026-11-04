@@ -290,6 +290,18 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(BngUc.asWkb("XX9999") == null && BngUc.centroid(null) == null)
     }
 
+    test("BngUc.kRing refuses a ring over the result cap before building it, with the Python handler's text") {
+        // (2k+1)^2 cells at 40 bytes each: k = 2000 is 4001^2 * 40 = 610 MiB; an Int.MaxValue k must not overflow
+        for (k <- Seq(2000, Int.MaxValue)) {
+            val e = intercept[IllegalArgumentException](BngUc.kRing("TQ3080", k))
+            assert(e.getMessage.startsWith("gbx_bng_kring: the array of cells is "), e.getMessage)
+            assert(e.getMessage.contains("over the 64 MiB a Unity Catalog function returns. Fix: lower k, or split the input into smaller groups, or use the session function gbx_bng_kring"), e.getMessage)
+        }
+        assert(intercept[IllegalArgumentException](BngUc.kRing("TQ3080", 2000)).getMessage.contains("is 610 MiB"))
+        // a cell id that is no cell is data (NULL) and is judged before the ring
+        assert(BngUc.kRing("XX9999", 2000) == null)
+    }
+
     test("BngUc cell handlers write the bytes the UC Python handlers write") {
         // the same expected hex as test_family_cross_tier.py: little-endian EWKB, SRID 27700, ring from the south-west corner
         def hex(b: Array[Byte]): String = b.map(x => f"${x & 0xff}%02x").mkString

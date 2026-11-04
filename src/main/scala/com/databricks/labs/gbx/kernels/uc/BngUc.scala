@@ -29,10 +29,34 @@ object BngUc {
     def cellArea(cellid: String): java.lang.Double =
         parseCell(cellid).map(c => java.lang.Double.valueOf(BNG.area(c))).orNull
 
-    /** The ring as `scala.collection.Seq`, the type a UC Scala handler documents for an ARRAY result. */
+    /** The most a UC function returns per result (the Serverless decoded budget the Python handlers check), and the bytes
+      * one cell id of an array is counted at: the same numbers and rule as `handlers._check_array`. */
+    private val ResultCapBytes = 64L << 20
+    private val ArrayItemBytes = 40L
+
+    /** The refusal of a ring of distance `k` whose `(2k+1)^2` cells are over the cap, checked BEFORE the ring is built
+      * (bounded, never truncated); the text and Fix are those of the Python handler. */
+    private def checkRing(k: Int): Unit = {
+        val side = BigInt(2L * math.max(k, 0) + 1L)
+        val size = side * side * ArrayItemBytes
+        if (size > BigInt(ResultCapBytes)) {
+            def text(n: BigInt) = if (n >= BigInt(1L << 20)) s"${n >> 20} MiB" else s"${n >> 10} KiB"
+            throw new IllegalArgumentException(
+              s"gbx_bng_kring: the array of cells is ${text(size)}, over the ${text(BigInt(ResultCapBytes))} a Unity Catalog " +
+                  "function returns. Fix: lower k, or split the input into smaller groups, or use the session function " +
+                  "gbx_bng_kring (after databricks.labs.gbx.register(spark)) or the Python API."
+            )
+        }
+    }
+
+    /** The ring as `scala.collection.Seq`, the type a UC Scala handler documents for an ARRAY result. A ring over the
+      * result cap is refused with a Fix before it is built. */
     def kRing(cellid: String, k: java.lang.Integer): scala.collection.Seq[String] =
         if (k == null) null
-        else parseCell(cellid).map(c => BNG.kRing(c, k.intValue).map(BNG.format)).orNull
+        else parseCell(cellid).map { c =>
+            checkRing(k.intValue)
+            BNG.kRing(c, k.intValue).map(BNG.format)
+        }.orNull
 
     /** The cell polygon as little-endian EWKB with SRID 27700; the ring starts at the cell's south-west corner. */
     def asWkb(cellid: String): Array[Byte] = parseCell(cellid).map(c => toEwkb(BNG.cellIdToGeometry(c))).orNull

@@ -129,3 +129,64 @@ def test_the_full_install_creates_both_private_routines_before_their_procedures(
     )
     # the new procedure is installed, and installed with the functions it calls
     assert any(h.endswith("gbx_combine_by_key") for h in heads)
+
+
+# --- the scratch table is named in the target's catalog and schema, from a sanitized base ----------------------------
+
+
+def _scratch_statements(name):
+    text = _text(name)
+    return text, next(s for s in _statements(text) if s.startswith("SET v_scratch"))
+
+
+def test_every_staging_procedure_builds_a_quoted_three_level_scratch_name_and_drops_that_name():
+    for name in ("gbx_clean_geometries", "gbx_mosaic_by_key", "gbx_combine_by_key"):
+        text, name_stmt = _scratch_statements(name)
+        # not the target's text plus a suffix (that breaks on a backtick-quoted target)
+        assert "concat(target_table" not in text, name
+        assert (
+            "replace(target_table, '`', '')" in name_stmt
+        ), name  # the backticks stripped
+        assert "current_catalog()" in name_stmt and "current_schema()" in name_stmt
+        # the table part is reduced to word characters, then every part is quoted
+        assert (
+            "regexp_replace(try_element_at(p, -1), '[^A-Za-z0-9_]', '_')" in name_stmt
+        )
+        assert name_stmt.count("concat('`'") == 3, name
+        # one name, set before any statement uses it, and the exit handler drops that same variable
+        assert text.count("SET v_scratch") == 1, name
+        handler = text[text.index("DECLARE EXIT HANDLER") : text.index("SET v_scratch")]
+        assert "DROP TABLE IF EXISTS IDENTIFIER(v_scratch)" in handler, name
+        assert text.index("SET v_scratch") < text.index(
+            "IDENTIFIER(v_scratch)", text.index("SET v_scratch") + 20
+        )
+
+
+def test_the_scratch_name_stays_in_the_target_schema_for_backticked_and_odd_targets(
+    spark,
+):
+    """Evaluate the name expression on the local Spark: a backtick-quoted target, a plain one, a short one, a dashed table."""
+    _, name_stmt = _scratch_statements("gbx_clean_geometries")
+
+    inner = name_stmt.rstrip(";")
+    query = inner[
+        len("SET v_scratch = (") : -1
+    ]  # the scalar subquery without its parentheses
+
+    def scratch(target):
+        return spark.sql(
+            query.replace("target_table", "'" + target.replace("'", "''") + "'")
+        ).first()[0]
+
+    for target, head in (
+        ("`my-cat`.`sch`.`tab-le`", "`my-cat`.`sch`.`tab_le_scratch_"),
+        ("cat.sch.tab", "`cat`.`sch`.`tab_scratch_"),
+    ):
+        got = scratch(target)
+        assert got.startswith(head) and got.endswith("`"), (target, got)
+        assert "``" not in got.replace("`.`", ".")
+    short = scratch("tab")
+    assert (
+        short.endswith(".`tab_scratch_" + short.split("_scratch_")[1])
+        and short.count("`") == 6
+    )

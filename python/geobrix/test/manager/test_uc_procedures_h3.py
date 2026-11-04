@@ -20,7 +20,7 @@ def _text(name):
 
 def test_the_h3_surface_pads_the_absent_neighbours_as_null_cells_before_the_fill():
     text = _text("gbx_points_to_h3_surface")
-    pad = text.index("h3_kring(cellid, greatest(fill_rings, 0))")
+    pad = text.index("h3_kring(cellid, greatest(coalesce(fill_rings, 1), 0))")
     # the padded cells are what the fill is given: they feed the collect_list that is its first argument
     assert pad > text.index("collect_list(struct(cellid, value)) AS cells FROM (")
     assert "g.cells" in text[: text.index("collect_list(struct(cellid, value))")]
@@ -29,6 +29,14 @@ def test_the_h3_surface_pads_the_absent_neighbours_as_null_cells_before_the_fill
     assert "CAST(NULL AS DOUBLE) AS value" in text[pad - 200 : pad + 200]
     # a cell with a value keeps it (max ignores the NULL of its own padding row)
     assert "max(value) AS value" in text
+
+
+def test_a_null_fill_rings_is_the_default_one_in_the_padding_and_in_the_fill():
+    """The fill reads a NULL k as 1; the padding must pad the same rings (greatest(NULL, 0) padded none)."""
+    text = _text("gbx_points_to_h3_surface")
+    assert "greatest(fill_rings" not in text
+    assert text.count("coalesce(fill_rings, 1)") == 2
+    assert "gbx__h3_cellfill_cells(g.cells, coalesce(fill_rings, 1)," in text
 
 
 def test_filling_the_padded_cells_gives_the_absent_neighbours_a_value():

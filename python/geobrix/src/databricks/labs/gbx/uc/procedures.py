@@ -173,16 +173,26 @@ WHEN NOT MATCHED THEN INSERT *;"""
 
 
 # --- the scratch table of a procedure that stages rows ---------------------------------------------------------------
-# A staged table sits beside the target (the caller can create tables there) and is named once per call. The handler
-# drops it when any statement fails, whether a refusal of the procedure or an error of a function; the last
-# statement drops it when the call succeeds.
-_SCRATCH_DECLARE = "DECLARE v_scratch STRING DEFAULT concat(target_table, '_scratch_', replace(uuid(), '-', ''));"
+# A staged table sits beside the target (the caller can create tables there) and is named once per call. The name is
+# built from the parts of the target's name with the backticks stripped, in the target's catalog and schema (the current
+# ones when the target is named with fewer parts), and always 3-level and quoted, so a target written with backticks or a
+# table name with a dash gives a name that parses (a dot inside the backticks is not supported). The handler drops it when any statement fails, whether a refusal of the
+# procedure or an error of a function; the last statement drops it when the call succeeds.
+_SCRATCH_DECLARE = "DECLARE v_scratch STRING;"
+_SCRATCH_NAME = (
+    "SET v_scratch = (SELECT concat_ws('.',\n"
+    "  concat('`', coalesce(try_element_at(p, -3), current_catalog()), '`'),\n"
+    "  concat('`', coalesce(try_element_at(p, -2), current_schema()), '`'),\n"
+    "  concat('`', regexp_replace(try_element_at(p, -1), '[^A-Za-z0-9_]', '_'), '_scratch_', "
+    "replace(uuid(), '-', ''), '`'))\n"
+    "  FROM (SELECT split(replace(target_table, '`', ''), '[.]') AS p));"
+)
 _SCRATCH_HANDLER = (
     "DECLARE EXIT HANDLER FOR SQLEXCEPTION\n"
     "BEGIN\n"
-    "  DROP TABLE IF EXISTS IDENTIFIER(v_scratch);\n"
+    "  IF v_scratch IS NOT NULL THEN DROP TABLE IF EXISTS IDENTIFIER(v_scratch); END IF;\n"
     "  RESIGNAL;\n"
-    "END;"
+    "END;\n" + _SCRATCH_NAME
 )
 _SCRATCH_DROP = "DROP TABLE IF EXISTS IDENTIFIER(v_scratch);"
 
@@ -322,19 +332,19 @@ def points_to_h3_surface(catalog: str, schema: str) -> str:
     )
     # The fill only changes the cells it is given: a neighbour that no point fell in is not a cell of the set and
     # would never get a value. So every cell within fill_rings of a cell is added with no value (the product
-    # h3_kring); max() keeps the value of a cell that has one, as the NULL of its own padding row never wins.
+    # h3_kring); a NULL fill_rings is the default 1 in both places, as the fill reads a NULL k; max() keeps the value of a cell that has one, as the NULL of its own padding row never wins.
     padded = (
         "WITH c AS (\n" + cells + "\n)\n"
         "SELECT cellid, max(value) AS value FROM (\n"
         "  SELECT cellid, value FROM c\n"
         "  UNION ALL\n"
-        "  SELECT explode(h3_kring(cellid, greatest(fill_rings, 0))) AS cellid, CAST(NULL AS DOUBLE) AS value FROM c\n"
+        "  SELECT explode(h3_kring(cellid, greatest(coalesce(fill_rings, 1), 0))) AS cellid, CAST(NULL AS DOUBLE) AS value FROM c\n"
         ") GROUP BY cellid"
     )
     sel = (
         f"SELECT surface_name AS surface,\n"
         f"  {q}.gbx_rst_h3_rasterize(\n"
-        f"    {q}.gbx__h3_cellfill_cells(g.cells, fill_rings, 'mean', 2.0),\n"
+        f"    {q}.gbx__h3_cellfill_cells(g.cells, coalesce(fill_rings, 1), 'mean', 2.0),\n"
         f"    4326, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),\n"
         f"    CAST(NULL AS DOUBLE), CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 0, CAST(NULL AS STRING)) AS tile\n"
         f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM (\n{padded}\n)) AS g"

@@ -127,8 +127,6 @@ def test_the_scratch_table_is_dropped_after_an_error_and_after_success(name):
     assert "DROP TABLE IF EXISTS IDENTIFIER(v_scratch);" in body
     assert body.rstrip().endswith("RESIGNAL;")  # the caller still gets the error
     assert text.rstrip().endswith("DROP TABLE IF EXISTS IDENTIFIER(v_scratch);\nEND")
-    # the scratch table sits beside the target, named once per call
-    assert (
-        "DECLARE v_scratch STRING DEFAULT concat(target_table, '_scratch_', replace(uuid(), '-', ''));"
-        in text
-    )
+    # the scratch table sits in the target's catalog and schema, named once per call
+    assert "DECLARE v_scratch STRING;" in text and text.count("SET v_scratch") == 1
+    assert "'_scratch_', replace(uuid(), '-', '')" in text

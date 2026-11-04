@@ -116,6 +116,16 @@ def known_driver(name, fn: str) -> str:
     return hit
 
 
+def content_refusal(exc) -> str:
+    """The reason and Fix of ``rst_fromcontent`` for bytes that cannot be opened as a raster (what GDAL or the driver
+    policy says, then how to pass a raster file's bytes)."""
+    return (
+        f"rst_fromcontent: the content cannot be opened as a raster: {exc}. "
+        "Fix: pass the bytes of a whole raster file in a format GDAL reads, such as the content column of "
+        "spark.read.format('binaryFile')."
+    )
+
+
 def written_driver(new_format: str) -> str:
     """The driver the bytes of ``as_format(ds, new_format)`` open as, for the tile metadata:
     the driver itself, except COG, which is a layout of a GeoTIFF and opens as ``GTiff`` (the

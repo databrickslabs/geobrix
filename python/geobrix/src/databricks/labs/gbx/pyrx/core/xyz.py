@@ -385,6 +385,24 @@ def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
         return transparent_png(s)
 
 
+def render_args(format, size, resampling, rescale):
+    """The arguments of ``rst_tilexyz`` with each NULL as its default (PNG, 256, bilinear, auto), validated:
+    ``(format, size, resampling, rescale)``. ValueError, naming the value, for one that is wrong.
+    """
+    sz = int(size) if size is not None else 256
+    fmt = str(format) if format is not None else "PNG"
+    resamp = str(resampling) if resampling is not None else "bilinear"
+    rsc = rescale if rescale is not None else "auto"
+    validate_render_args(fmt, sz, resamp, rsc)
+    return fmt, sz, resamp, rsc
+
+
+def render_working_bytes(size: int, bands: int) -> int:
+    """An upper estimate of the memory :func:`render_tile` holds at its peak: the warped samples, their 8-bit copy and
+    the RGBA image, 10 bytes a sample of each band and 8 a pixel besides."""
+    return int(size) * int(size) * (10 * max(1, int(bands)) + 8)
+
+
 def validate_render_args(fmt, size, resampling, rescale) -> None:
     """Raise ValueError, naming the value, for a bad format, size, resampling or rescale: the arguments of a render
     are parameters, not data, so they are checked before any tile is opened."""

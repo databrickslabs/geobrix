@@ -772,12 +772,7 @@ def _fromcontent_udf(raster, drv):
     except (
         Exception
     ) as exc:  # noqa: BLE001 - what GDAL or the policy says is the content's reason
-        return _serde.build_error_tile(
-            f"rst_fromcontent: the content cannot be opened as a raster: {exc}. "
-            "Fix: pass the bytes of a whole raster file in a format GDAL reads, such as the content column of "
-            "spark.read.format('binaryFile').",
-            0,
-        )
+        return _serde.build_error_tile(ops_core.content_refusal(exc), 0)
 
 
 def _fromfile_extra(path, driver, materialize):
@@ -4534,11 +4529,7 @@ def _tilexyz_udf(
     # argument raises, also for such a tile.
     if z is None or x is None or y is None:
         return None
-    sz = int(size) if size is not None else 256
-    fmt = str(format) if format is not None else "PNG"
-    resamp = str(resampling) if resampling is not None else "bilinear"
-    rsc = rescale if rescale is not None else "auto"
-    xyz.validate_render_args(fmt, sz, resamp, rsc)
+    fmt, sz, resamp, rsc = xyz.render_args(format, size, resampling, rescale)
     if _tile_is_empty(tile):
         return xyz.transparent_png(sz)
     from databricks.labs.gbx.pyrx import _env

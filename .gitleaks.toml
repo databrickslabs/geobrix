@@ -1,0 +1,10 @@
+# Extends the default gitleaks rules. The allowlist below is for files of
+# public content that match a generic rule by name only.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "SHA-256 digests of the public UC install statements, keyed by function name"
+paths = [
+  '''python/geobrix/test/manager/fixtures/uc_install_default\.json''',
+]

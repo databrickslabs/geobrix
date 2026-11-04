@@ -3420,4 +3420,28 @@ result.show()
 +------------------------------------------+
 (BINARY: PMTiles v3 archive — starts with magic bytes b'PMTiles' + version byte 3; contains 9 synthetic tiles at zoom 2)""".trim
 
+  // ===========================================================================
+  // SQL from a JVM job (docs/docs/installation.mdx)
+  // ===========================================================================
+
+  val jvm_job_dataframe_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+// The wrapper calls gbx_rst_avg by name. A Python step ran gbx.register(spark)
+// in this session, so the name resolves.
+val averages = spark.table("main.geobrix.rasters")
+  .select(col("path"), rx.rst_avg(col("tile")).alias("band_averages"))
+averages.show()
+""".trim
+
+  val jvm_job_uc_example: String =
+    """
+// No registration. An admin ran gbx.uc.install("main", "geobrix", ...) once.
+// A three-level name always runs the Unity Catalog function.
+val ring = spark.sql("SELECT main.geobrix.gbx_bng_kring('TQ3080', 1) AS cells")
+ring.show(truncate = false)
+""".trim
+
 }

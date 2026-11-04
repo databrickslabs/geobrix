@@ -5,6 +5,7 @@ description: Install GeoBrix the way your compute needs — the env wheel for th
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
+import scalaApiExamples from '!!raw-loader!../tests/scala/api/ScalaApiExamples.scala';
 
 # Installation
 
@@ -294,6 +295,54 @@ An owner installs the functions once. Run `gbx.uc.install` from a notebook on Se
 />
 
 Run it again after each upgrade. The [Unity Catalog functions](./api/uc-functions) page lists the functions and the permissions the owner needs.
+
+## SQL from a JVM job {#jvm-sql}
+
+GeoBrix registers its SQL functions from Python with `gbx.register(spark)`. The JAR adds faster implementations for many functions. It registers no SQL names.
+
+A JVM job, in Scala or Java, reaches the functions in three ways.
+
+### Unity Catalog functions
+
+Install the functions once with `gbx.uc.install`, as [above](#uc-functions). The job then calls a three-level name with `spark.sql`. This route needs no registration and no Python task.
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="jvm_job_uc_example"
+  language="scala"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="Call a Unity Catalog function from Scala"
+/>
+
+Unity Catalog carries a slice of GeoBrix. See [Unity Catalog functions](./api/uc-functions).
+
+### The Scala DataFrame API
+
+The `com.databricks.labs.gbx.<package>.functions` objects hold Column wrappers, such as `rasterx.functions.rst_avg`. The packages are `rasterx`, `gridx.bng`, `gridx.h3`, `gridx.custom`, `vectorx` and `pmtiles`.
+
+A wrapper calls the function by its SQL name, so the session must resolve that name. Run `gbx.register(spark)` in the same session first. Or put a schema that holds the Unity Catalog functions on the path. See [Names and the path](./api/uc-functions#names-and-the-path).
+
+<CodeFromTest
+  code={scalaApiExamples}
+  functionName="jvm_job_dataframe_example"
+  language="scala"
+  source="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/scala/api/ScalaApiExamplesDocTest.scala"
+  title="Call a Column wrapper from Scala"
+/>
+
+A function whose JVM implementation was removed has no wrapper. Call it with `call_function("gbx_<name>", …)`.
+
+### A notebook that mixes languages
+
+Run `gbx.register(spark)` in a Python cell. The `%sql` and `%scala` cells of the same notebook then see the functions, because the cells share one session.
+
+### Tasks of a job do not share a session
+
+Each task of a job has its own session. Functions registered in a Python task are not visible to a later JAR task.
+
+A function with no Scala wrapper and no Unity Catalog form needs a Python task. Most aggregates and table functions are in this group. The Python task writes its result to a Delta table, and the JVM task reads that table.
 
 ## Next Steps
 

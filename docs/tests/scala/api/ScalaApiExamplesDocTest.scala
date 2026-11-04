@@ -298,4 +298,16 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_isempty_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_tryopen_scala_example_output.nonEmpty)
   }
+
+  test("JVM job examples compile and are non-empty") {
+    // Compile-only, like the rest of this suite: the signatures are the ones the docs show.
+    def averages(spark: SparkSession) =
+      spark.table("main.geobrix.rasters")
+        .select(col("path"), rx.rst_avg(col("tile")).alias("band_averages"))
+    def ring(spark: SparkSession) =
+      spark.sql("SELECT main.geobrix.gbx_bng_kring('TQ3080', 1) AS cells")
+    val _ = (averages _, ring _)
+    assert(ScalaApiExamples.jvm_job_dataframe_example.contains("rx.rst_avg"))
+    assert(ScalaApiExamples.jvm_job_uc_example.contains("main.geobrix.gbx_bng_kring"))
+  }
 }

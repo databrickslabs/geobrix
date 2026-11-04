@@ -216,7 +216,7 @@ A caller needs `EXECUTE` on the procedure and `SELECT` and `MODIFY` on the table
 |---|---|---|
 | `gbx_polygons_to_bng` | `id`, `geom` in SRID 27700 | `id`, `cellid`, `core`, `chip` |
 | `gbx_clean_geometries` | `id`, `geom` | the valid geometries, and a rejects table with the reason |
-| `gbx_migrate_mosaic_geometry` | `id`, a legacy Mosaic `geom` | the same table with a `GEOMETRY` column |
+| `gbx_migrate_mosaic_geometry` | `id`, a legacy Mosaic `geom` of one SRID | the same table with a `GEOMETRY` column of that SRID |
 | `gbx_points_to_h3_surface` | `longitude`, `latitude`, `value` | one GeoTIFF surface per name |
 | `gbx_features_to_mvt` | `geom` in EPSG:4326, `attrs` as a struct | `z`, `x`, `y`, `mvt` |
 | `gbx_mosaic_by_key` | `tile_key`, `tile` | one merged tile per key |

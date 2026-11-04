@@ -3554,9 +3554,10 @@ def test_uc_procedure_ddl_contract(name, text):
 
 
 def test_no_procedure_makes_a_table_column_of_an_unspecified_srid():
-    # A UC function returns GEOMETRY(ANY) and Delta refuses a column of an unspecified SRID
-    # (DELTA_GEOSPATIAL_SRID_NOT_SUPPORTED), so CREATE TABLE ... AS must not take the type of a geometry function:
-    # clean_geometries copies the source column's type, migrate builds the type from the one SRID it read.
+    # A UC function returns GEOMETRY(ANY): Delta refuses a column of that type (DELTA_GEOSPATIAL_SRID_NOT_SUPPORTED)
+    # and no assignment casts it to GEOMETRY(<srid>). So a procedure that writes a geometry reads the one SRID of its
+    # source, builds the statement with it as a literal (st_geomfromwkb(..., <srid>) is GEOMETRY(<srid>)), and
+    # passes its table names as parameters.
     from databricks.labs.gbx.uc import procedures
 
     clean = procedures.clean_geometries("cat", "sch")
@@ -3564,9 +3565,18 @@ def test_no_procedure_makes_a_table_column_of_an_unspecified_srid():
         "CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS\n"
         "SELECT id, geom FROM IDENTIFIER(source_table) WHERE false;" in clean
     )
+    assert "st_geomfromwkb(st_asbinary(geom), ', CAST(v_srid AS STRING), ')" in clean
     migrate = procedures.migrate_mosaic_geometry("cat", "sch")
     assert "CAST(NULL AS GEOMETRY(', CAST(v_srid AS STRING), ')) AS geom" in migrate
-    assert "more than one SRID" in migrate
+    assert "st_geomfromwkb(st_asbinary(`cat`.`sch`.gbx_st_legacyaswkb(geom))" in migrate
+    for text in (clean, migrate):
+        assert "more than one SRID" in text
+        # the dynamic statements name their tables by parameter marker, never by text
+        assert "USING target_table AS t, source_table AS s" in text
+        assert re.search(r"EXECUTE IMMEDIATE concat\('[^']*IDENTIFIER\(:t\)", text)
+    # a function that takes GEOMETRY(ANY) is given the source column cast to it
+    assert "gbx_st_makevalid(CAST(geom AS GEOMETRY(ANY))" in clean
+    assert "gbx_st_explainvalidity(CAST(original AS GEOMETRY(ANY)))" in clean
 
 
 def test_a_procedure_name_is_quoted_and_validated_before_any_text_is_built():

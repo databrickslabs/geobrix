@@ -92,6 +92,23 @@ def _create_like(select: str) -> str:
     )
 
 
+def _with_srid(sql: str) -> str:
+    """The SQL expression for ``sql`` as a STRING, its ``@SRID@`` marks replaced by the local variable ``v_srid``.
+
+    A UC function returns GEOMETRY(ANY), which no table column takes (DELTA_GEOSPATIAL_SRID_NOT_SUPPORTED) and no
+    assignment casts to GEOMETRY(<srid>). ``st_geomfromwkb(st_asbinary(geom), <srid>)`` has the type GEOMETRY(<srid>)
+    only when the SRID is a literal of the statement, so the statement is built from ``v_srid`` and run with
+    EXECUTE IMMEDIATE (its table names and values go in as parameters, never into the text).
+    """
+    return (
+        "concat("
+        + ", CAST(v_srid AS STRING), ".join(
+            ddl.quote_str(part) for part in sql.split("@SRID@")
+        )
+        + ")"
+    )
+
+
 # --- polygons to BNG cells -------------------------------------------------------------------------------------------
 def polygons_to_bng(catalog: str, schema: str) -> str:
     q = _q(catalog, schema)
@@ -134,34 +151,50 @@ WHEN NOT MATCHED THEN INSERT *;"""
 # --- clean geometries --------------------------------------------------------------------------------------------
 def clean_geometries(catalog: str, schema: str) -> str:
     q = _q(catalog, schema)
-    fixed = (
-        f"SELECT id, {q}.gbx_st_makevalid(geom, repair_level) AS geom, geom AS original\n"
-        f"FROM IDENTIFIER(source_table) WHERE geom IS NOT NULL"
-    )
-    good = f"SELECT id, geom FROM (\n{fixed}\n) WHERE geom IS NOT NULL AND st_isvalid(geom)"
+
+    def fixed(src: str, level: str) -> str:
+        return (
+            f"SELECT id, {q}.gbx_st_makevalid(CAST(geom AS GEOMETRY(ANY)), {level}) AS geom, geom AS original\n"
+            f"FROM {src} WHERE geom IS NOT NULL"
+        )
+
+    def good(src: str, level: str) -> str:
+        return (
+            f"SELECT id, st_geomfromwkb(st_asbinary(geom), @SRID@) AS geom FROM (\n{fixed(src, level)}\n) "
+            "WHERE geom IS NOT NULL AND st_isvalid(geom)"
+        )
+
     bad = (
         f"SELECT id, original AS geom, "
-        f"coalesce({q}.gbx_st_explainvalidity(original), 'the geometry could not be repaired') AS reason\n"
-        f"FROM (\n{fixed}\n) WHERE geom IS NULL OR NOT st_isvalid(geom)\n"
+        f"coalesce({q}.gbx_st_explainvalidity(CAST(original AS GEOMETRY(ANY))), "
+        f"'the geometry could not be repaired') AS reason\n"
+        f"FROM (\n{fixed('IDENTIFIER(source_table)', 'repair_level')}\n) WHERE geom IS NULL OR NOT st_isvalid(geom)\n"
         f"UNION ALL\nSELECT id, geom, 'the geometry is NULL' AS reason\n"
         f"FROM IDENTIFIER(source_table) WHERE geom IS NULL"
     )
-    # The target keeps the type of the source column: a UC function returns GEOMETRY(ANY), and Delta takes no column
-    # of an unspecified SRID, so the table is not made from the type of the repaired expression.
+    merge = (
+        "MERGE INTO IDENTIFIER(:t) AS t USING (\n"
+        f"{good('IDENTIFIER(:s)', ':r')}\n"
+        ") AS s ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
+    )
+    fix = (
+        "gbx_clean_geometries: the geometries of the source have more than one SRID. Fix: clean the rows of each "
+        "SRID into a table of their own."
+    )
+    # The target keeps the type of the source column (GEOMETRY(<srid>)); the repaired geometry is given that SRID.
     body = f"""
+DECLARE v_srid INT;
+SET v_srid = coalesce((SELECT min(st_srid(geom)) FROM IDENTIFIER(source_table)), 4326);
+IF coalesce((SELECT max(st_srid(geom)) FROM IDENTIFIER(source_table)), v_srid) <> v_srid THEN
+  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = {ddl.quote_str(fix)};
+END IF;
 CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS
 SELECT id, geom FROM IDENTIFIER(source_table) WHERE false;
 CREATE TABLE IF NOT EXISTS IDENTIFIER(rejects_table) AS
 SELECT * FROM (
 {bad}
 ) WHERE false;
-MERGE INTO IDENTIFIER(target_table) AS t
-USING (
-{good}
-) AS s
-ON t.id <=> s.id
-WHEN MATCHED THEN UPDATE SET *
-WHEN NOT MATCHED THEN INSERT *;
+EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, source_table AS s, repair_level AS r;
 DELETE FROM IDENTIFIER(rejects_table);
 INSERT INTO IDENTIFIER(rejects_table)
 {bad};"""
@@ -169,7 +202,7 @@ INSERT INTO IDENTIFIER(rejects_table)
         catalog,
         schema,
         "gbx_clean_geometries",
-        "Repair the geometries of a table (columns id, geom), merge the valid ones into a target table and "
+        "Repair the geometries of a table (columns id, geom, one SRID), merge the valid ones into a target table and "
         "write the rest, with the reason, to a rejects table.",
         [
             SRC,
@@ -194,15 +227,18 @@ INSERT INTO IDENTIFIER(rejects_table)
 def migrate_mosaic_geometry(catalog: str, schema: str) -> str:
     q = _q(catalog, schema)
     sel = (
-        f"SELECT * EXCEPT (geom), {q}.gbx_st_legacyaswkb(geom) AS geom\n"
-        f"FROM IDENTIFIER(source_table)"
+        f"SELECT * EXCEPT (geom), st_geomfromwkb(st_asbinary({q}.gbx_st_legacyaswkb(geom)), @SRID@) AS geom\n"
+        f"FROM IDENTIFIER(:s)"
     )
-    # The legacy struct carries its SRID per row, the function returns GEOMETRY(ANY) and Delta takes no column of an
-    # unspecified SRID: the table is made with the one SRID of the source, read first, by a statement built from it.
+    # The legacy struct carries its SRID per row. The table is made with the one SRID of the source, read first.
     create = (
-        "EXECUTE IMMEDIATE concat('CREATE TABLE IF NOT EXISTS IDENTIFIER(:t) AS SELECT * EXCEPT (geom), "
-        "CAST(NULL AS GEOMETRY(', CAST(v_srid AS STRING), ')) AS geom FROM IDENTIFIER(:s) WHERE false') "
-        "USING target_table AS t, source_table AS s;"
+        "CREATE TABLE IF NOT EXISTS IDENTIFIER(:t) AS SELECT * EXCEPT (geom), "
+        "CAST(NULL AS GEOMETRY(@SRID@)) AS geom FROM IDENTIFIER(:s) WHERE false"
+    )
+    merge = (
+        "MERGE INTO IDENTIFIER(:t) AS t USING (\n"
+        f"{sel}\n"
+        ") AS s ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
     )
     fix = (
         "gbx_migrate_mosaic_geometry: the geometries of the source have more than one SRID. Fix: migrate the rows "
@@ -214,14 +250,8 @@ SET v_srid = coalesce((SELECT min(geom.srid) FROM IDENTIFIER(source_table)), 432
 IF coalesce((SELECT max(geom.srid) FROM IDENTIFIER(source_table)), v_srid) <> v_srid THEN
   SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = {ddl.quote_str(fix)};
 END IF;
-{create}
-MERGE INTO IDENTIFIER(target_table) AS t
-USING (
-{sel}
-) AS s
-ON t.id <=> s.id
-WHEN MATCHED THEN UPDATE SET *
-WHEN NOT MATCHED THEN INSERT *;"""
+EXECUTE IMMEDIATE {_with_srid(create)} USING target_table AS t, source_table AS s;
+EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, source_table AS s;"""
     return _ddl(
         catalog,
         schema,

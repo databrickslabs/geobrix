@@ -168,3 +168,49 @@ def test_install_procedures_replaces_only_the_procedures_before_the_calls(
     first_call = next(i for i, s in enumerate(spark.stmts) if s.startswith("CALL "))
     assert spark.stmts.index(creates[-1]) < first_call
     assert "[PROC] install procedures DONE" in capsys.readouterr().out
+
+
+class _Row:
+    def __init__(self, **kw):
+        self._d = kw
+
+    def asDict(self, recursive=False):  # noqa: N802 - the Spark Row API name
+        return dict(self._d)
+
+
+def test_the_compare_reads_ewkb_and_wkb_as_one_geometry_and_merges_mvt_per_tile():
+    import mapbox_vector_tile as mvt
+    import shapely
+
+    g = shapely.from_wkt("POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))")
+    plain = shapely.to_wkb(g)
+    ewkb = shapely.to_wkb(shapely.set_srid(g, 27700), include_srid=True)
+    assert plain != ewkb
+    case = {"compare": "rows", "geometries": ["chip"]}
+    assert probes._proc_rows([_Row(chip=plain)], case) == probes._proc_rows(
+        [_Row(chip=ewkb)], case
+    )
+
+    def tile(*points):
+        return mvt.encode(
+            [
+                {
+                    "name": "layer",
+                    "features": [
+                        {"geometry": f"POINT ({x} {y})", "properties": {"n": n}}
+                        for n, (x, y) in enumerate(points)
+                    ],
+                }
+            ]
+        )
+
+    case = {"compare": "mvt"}
+    merged = [_Row(z=0, x=0, y=0, mvt=tile((1, 1), (2, 2)))]
+    split = [
+        _Row(z=0, x=0, y=0, mvt=tile((1, 1))),
+        _Row(z=0, x=0, y=0, mvt=tile((2, 2))),
+    ]
+    got = probes._proc_rows(merged, case)
+    assert len(got) == 1 and len(got[0]["mvt"]) == 2
+    # one tile with both features equals two one-feature tiles of the same tile id (the property n restarts at 0)
+    assert [len(r["mvt"]) for r in probes._proc_rows(split, case)] == [2]

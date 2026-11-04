@@ -803,6 +803,7 @@ def proc_cases(catalog: str, schema: str) -> list:
             "ref": f"SELECT s.id, c.cellid, c.core, c.chip FROM {t('bng_src')} AS s, "
             f"LATERAL gbx_bng_tessellateexplode(st_asewkb(s.geom), '100m', false) AS c ORDER BY cellid, core",
             "compare": "rows",
+            "geometries": ["chip"],
         }
     )
     # clean geometries
@@ -1249,8 +1250,24 @@ def proc_warehouse_statements(
     return out
 
 
+def _proc_geometry(blob):
+    """A WKB or EWKB geometry as normalised text (None for no bytes): the UC functions return EWKB with the SRID
+    where the session functions return WKB, and the geometry is what has to agree."""
+    if blob is None:
+        return None
+    import shapely
+
+    return shapely.to_wkt(
+        shapely.normalize(shapely.from_wkb(bytes(blob))), rounding_precision=6
+    )
+
+
 def _proc_rows(rows, case) -> list:
-    """The rows of a result in a comparable form, by the case's ``compare``."""
+    """The rows of a result in a comparable form, by the case's ``compare``.
+
+    ``geometries`` names the WKB columns compared as geometries. The ``mvt`` rows are merged per tile (z, x, y): the
+    session function returns one tile per feature, the procedure one tile with the features of all of them.
+    """
     kind = case["compare"]
     out = []
     for r in rows:
@@ -1261,7 +1278,17 @@ def _proc_rows(rows, case) -> list:
             d[case["column"]] = _proc_pixels(blob)
         elif kind == "mvt":
             d["mvt"] = _proc_mvt_features(d["mvt"])
+        for col in case.get("geometries", ()):
+            d[col] = _proc_geometry(d[col])
         out.append(_proc_norm(d))
+    if kind == "mvt":
+        merged = {}
+        for d in out:
+            merged.setdefault((d["z"], d["x"], d["y"]), []).extend(d["mvt"])
+        out = [
+            {"z": z, "x": x, "y": y, "mvt": sorted(f)}
+            for (z, x, y), f in sorted(merged.items())
+        ]
     return out
 
 

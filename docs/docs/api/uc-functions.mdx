@@ -1,0 +1,174 @@
+---
+title: Unity Catalog functions
+sidebar_label: Unity Catalog functions
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ucExamples from '!!raw-loader!../../tests/python/api/uc_functions_examples.py';
+
+# Unity Catalog functions
+
+Unity Catalog (UC) functions give governed, persistent SQL for SQL warehouses, dashboards, Genie and agent tools. They use the same `gbx_` names as session SQL, called with a three-level name: `<catalog>.<schema>.gbx_*`.
+
+UC carries a slice of GeoBrix, not the whole set. Session SQL and the Python API keep the full range: every CRS form, every tile, aggregates and the select-list generators. The [availability matrix](./availability) shows the surfaces of each function.
+
+## Install
+
+Run `gbx.uc.install` from an env 6 notebook or job. It needs Serverless env 6 or DBR 19. It creates the functions in one schema.
+
+<CodeFromTest code={ucExamples} language="python" functionName="INSTALL_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The install folder is a Volume folder. Keep these rules for it:
+
+- It holds exactly one env 6 wheel of the same version as the wheel that runs the install.
+- It holds one folder per environment. A wheel for another environment in the folder is refused.
+- It holds only the current version. Install a new version into a clean folder.
+
+The creator needs `USE CATALOG` on the catalog, `USE SCHEMA` and `CREATE FUNCTION` on the schema, and `READ VOLUME` on the Volume. A caller needs `EXECUTE` on the functions.
+
+The install runs `CREATE OR REPLACE FUNCTION` for each function. Run it again after you update the wheel. Each function carries a COMMENT of the form `geobrix <version>: <summary>`, so the schema records which version made it.
+
+### Preview the statements
+
+A dry run returns the statements and sends none. It reads no folder.
+
+<CodeFromTest code={ucExamples} language="python" functionName="preview_install" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Pass `only=` to install some functions. A table function also installs the function it calls.
+
+<CodeFromTest code={ucExamples} language="python" functionName="install_only_the_bng_cells" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Check the schema
+
+`register` with `target="uc"` checks that every UC function exists and was made by this wheel's version. It raises when one is missing or older. It registers no session function.
+
+<CodeFromTest code={ucExamples} language="python" functionName="VERIFY_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A plain `register(spark, catalog="main", schema="geobrix")` registers the session functions. It also says once when the schema holds functions from another version. Session functions win over UC functions for unqualified names, so the line tells you that the schema is behind or ahead of the wheel.
+
+## Where UC functions run
+
+UC functions run on:
+
+- Serverless and pro SQL warehouses;
+- Serverless env 6 notebooks and jobs;
+- dedicated and standard clusters on DBR 19.
+
+They do not run on clusters that use a [Databricks Container Service](../installation/dcs.mdx) image. They do not run on classic SQL warehouses.
+
+A warehouse reads rasters and vector files through the session readers. Ingest the files into a Delta table, then query the table with UC functions. UC has no function that reads a raw file.
+
+## What UC provides
+
+| Family | Functions |
+|---|---|
+| BNG cells | `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_geomkring`, `gbx_bng_cellarea`, `gbx_bng_aswkb`, `gbx_bng_centroid` |
+| Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill` |
+| H3 cells | `gbx_h3_geomkring` |
+| Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` |
+| Raster | `gbx_rst_transformcrs` |
+| Table functions | `gbx_bng_kringexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode` |
+
+A function with default arguments installs as a SQL wrapper over a private function named `gbx__<name>`. Call the public name.
+
+A table function is a SQL body over the array function, and you call it in `FROM`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_KRINGEXPLODE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Geometry in, SRID out
+
+A UC function takes a geometry as `GEOMETRY(ANY)` and reads its integer SRID. The grid fixes the SRID it accepts:
+
+- BNG functions take SRID 27700.
+- Quadbin and H3 functions take SRID 4326.
+
+A geometry in another SRID is refused with a `Fix:` that names `st_transform`. GeoBrix never reads coordinates as the wrong unit.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_BNG_POINTASCELL_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A WKB `BINARY` is not a `GEOMETRY`. Build the geometry first.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_WKB_TO_GEOMETRY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The geometry functions `gbx_st_makevalid`, `gbx_st_wrapx` and `gbx_st_legacyaswkb` return a `GEOMETRY` that keeps its SRID. `gbx_bng_aswkb` and `gbx_bng_centroid` return `BINARY`. On UC that value is little-endian EWKB with SRID 27700, and a BNG cell polygon starts at its south-west corner. The bytes are the same whether the install folder holds the JAR or not.
+
+### CRS arguments
+
+A UC function takes a CRS argument in three forms:
+
+- an integer SRID, such as `4326`;
+- `EPSG:<n>`;
+- `ESRI:<n>`.
+
+Any other form is refused with a `Fix:` that names the session function. That covers WKT, PROJJSON, PROJ strings and custom definitions.
+
+<CodeFromTest code={ucExamples} language="python" functionName="crs_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_rst_transformcrs` takes a tile that carries its pixels. A virtual tile is refused, and so is a tile whose CRS has no authority code.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_TRANSFORMCRS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Numbers as arguments
+
+The SQL engine casts an argument to the parameter type before GeoBrix runs. A string passed as an easting becomes a number there. With ANSI mode off, a string that is no number becomes `NULL` before GeoBrix sees it.
+
+## Python and Scala handlers
+
+Five functions can run as UC Scala functions: `gbx_bng_eastnorthasbng`, `gbx_bng_kring`, `gbx_bng_cellarea`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL.
+
+The install makes them Scala functions when the install folder also holds `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. Without that JAR, or with `only=` that selects none of them, they are Python functions. The names, signatures and answers are the same.
+
+<CodeFromTest code={ucExamples} language="python" functionName="preview_install_with_jar" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The install uses that exact JAR, even when the folder holds other files. It refuses a folder that holds other GeoBrix JARs and not that one, and it names the JAR to stage. Pass `jar=` to use a JAR in another Volume folder. It must be a Volume path that ends in `.jar`.
+
+No raster function runs as a Scala function on UC. Raster functions run as Python functions.
+
+## Cost
+
+Measured on an X-Small pro serverless warehouse. Treat the figures as orders of magnitude.
+
+| Measure | Result |
+|---|---|
+| A `SELECT 1` statement | 0.53 to 0.63 s |
+| A UC Python function over 1M rows | about 10 to 11 s per statement |
+| BNG point to cell over 1M rows, Python handler | about 15.4 s |
+| BNG point to cell over 1M rows, Scala handler | 10.7 to 11.6 s |
+
+The per-statement cost is high next to a session function, and UC functions suit BI and governed use. For bulk transforms use session SQL or the Python API.
+
+A UC Python function holds about 10 tiles of 512 by 512 pixels, at 4.2 MB each. A function that received 50 tiles ran out of memory. UC has no aggregate over tiles, so use a session aggregate for that work.
+
+## Errors on UC
+
+A UC function has no error tile. It follows one rule for each kind of problem:
+
+- **Corrupt data gives `NULL`.** An unreadable geometry, a text that is no cell id and a point that is not finite give `NULL`.
+- **Input the function cannot serve gives an error with a `Fix:`.** A geometry in the wrong SRID, a CRS form UC does not take and a virtual tile fall here. The `Fix:` names the session function.
+- **A wrong parameter raises with a `Fix:`.** A bad resolution, mode, coverage, zoom or `k` is checked before any row is read.
+
+<CodeFromTest code={ucExamples} language="python" functionName="bad_data_is_null" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="python" functionName="bad_parameter_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+UC differs from the session in one place. A data-limit error gives `NULL` on UC where the session raises. `gbx_quadbin_polyfill` on a geometry that covers more than 1,000,000 cells is the example. The [error contract](./error-handling) describes the session behavior.
+
+## Names and the path
+
+A three-level name always runs the UC function. An unqualified `gbx_` name runs the session function when one is registered. On a warehouse there is no session function, so an unqualified name needs `USE` or `SET PATH`.
+
+`SET PATH` is your choice. GeoBrix never runs it. `register(target="uc")` prints the statement for your schema:
+
+<CodeFromTest code={ucExamples} language="sql" functionName="SET_PATH_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Keep `system.session` in the path. Later statements fail without it.
+
+To see which implementation answers, run `DESCRIBE FUNCTION EXTENDED gbx_bng_kring`. A three-part name is the UC function, and a bare name is the session function.
+
+## Reproduce a warehouse in a notebook
+
+`register(spark, target="uc", catalog=..., schema=...)` registers no session function. Call the functions with three-level names, and a notebook gives the answers a warehouse gives. Use it to test the behavior of a UC function, such as its `NULL` for corrupt data.
+
+To list the installed functions and their versions, query the schema:
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_ROUTINES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />

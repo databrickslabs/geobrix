@@ -237,7 +237,7 @@ gbx.register_proj_grids(spark, "/Volumes/<catalog>/<schema>/proj-grids")
 gbx.register(spark)
 ```
 
-After this call, every CRS-handling function — `rst_transformcrs`, `st_transformcrs`, grid-aggregation reprojection, and all raster-reader clipping — finds your grid files on its PROJ search path, on every worker.
+After this call, every lightweight CRS-handling function — `rst_transformcrs`, `st_transformcrs`, grid-aggregation reprojection, and all raster-reader clipping — finds your grid files on its PROJ search path, on every worker. The heavyweight implementation cannot read a Volume path; see [Level support](#level-support).
 
 You can also pass a list of directories, or accumulate directories across multiple calls:
 

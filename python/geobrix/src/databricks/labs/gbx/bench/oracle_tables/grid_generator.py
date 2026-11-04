@@ -196,12 +196,14 @@ GRID_GENERATOR = (
 
 GRID_GENERATOR = uc_view(
     GRID_GENERATOR,
-    {BGKR: 27700},
+    {BGKR: 27700, BGKL: 27700, CGKR: 27700, CGKL: 27700},
     session_only=(
         "geomkringx_bigint_k",  # a BIGINT k: the UC table function declares k INT
         "geomkringx_inf_point",
         "geomkringx_bad_geom",
         "h3_geomkringx_inf_point",
+        "qb_geomkringx_inf_point",
+        "cg_geomkringx_inf_point",
     ),
 )
 
@@ -224,5 +226,68 @@ GRID_GENERATOR += (
         None,
         ("uc",),
         geom_srid=27700,
+    ),
+)
+
+# --- The ring and loop table functions on UC are the array functions exploded: a cell id that is no cell gives no rows,
+# a loop over the cap is refused, and a geometry in another SRID is refused with a Fix:.
+GRID_GENERATOR += (
+    Case("uc_kloopx_bad_cell", BKL, ("XX9999", 1), "no_rows", None, ("uc",)),
+    Case(
+        "uc_kloopx_over_cap", BKL, ("TQ3080", 10_000_000), "uc_refused", None, ("uc",)
+    ),
+    Case(
+        "uc_geomkloopx_wrong_srid",
+        BGKL,
+        (POINT, 3, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_h3_geomkloopx_wrong_srid",
+        HGKL,
+        (QB_PT, 8, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_qb_geomkringx_wrong_srid",
+        QGKR,
+        (QB_PT, 10, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_qb_geomkloopx_wrong_srid",
+        QGKL,
+        (QB_PT, 10, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_cg_geomkringx_wrong_srid",
+        CGKR,
+        (CG0_PT, G, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkloopx_wrong_srid",
+        CGKL,
+        (CG0_PT, G, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
     ),
 )

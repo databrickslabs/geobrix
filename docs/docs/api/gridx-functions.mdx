@@ -709,22 +709,23 @@ Polyfill a geometry at a given quadbin zoom level then return only the hollow ou
 ### quadbin_geomkringexplode
 
 {/* BEGIN GENERATED gbx_quadbin_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_geomkringexplode(geom, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.quadbin.functions.quadbin_geomkringexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
-| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_quadbin_geomkringexplode */}
 
 <Impl udtf/>
@@ -746,22 +747,23 @@ Streaming version of `quadbin_geomkring` — one row per cell. Call it with `FRO
 ### quadbin_geomkloopexplode
 
 {/* BEGIN GENERATED gbx_quadbin_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.quadbin.functions.quadbin_geomkloopexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_quadbin_geomkloopexplode */}
 
 <Impl udtf/>
@@ -1625,19 +1627,20 @@ Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one o
 ### bng_kloopexplode
 
 {/* BEGIN GENERATED gbx_bng_kloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_kloopexplode(cellid, k)` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_kloopexplode(cellid, k)` | rows |
 | Python | `gridx.bng.functions.bng_kloopexplode(df, cellid, k)` | DataFrame |
 
 Rows: `cellid` `STRING`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
-| `k` | `INT` |  | The ring distance: 1 is the eight neighbours of the cell. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `STRING` | `STRING` |  | The BNG cell id, for example `'TQ3080'`. |
+| `k` | `INT` | `INT` |  | The ring distance: 1 is the eight neighbours of the cell. |
 {/* END GENERATED gbx_bng_kloopexplode */}
 
 <Impl udtf/>
@@ -1705,22 +1708,23 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 ### bng_geomkloopexplode
 
 {/* BEGIN GENERATED gbx_bng_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_bng_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_bng_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.bng.functions.bng_geomkloopexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `STRING`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
-| `k` | `INT` |  | The number of rings of dilation around the geometry's cells. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:27700 metres. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `k` | `INT` | `INT` |  | The number of rings of dilation around the geometry's cells. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_bng_geomkloopexplode */}
 
 <Impl udtf/>
@@ -2161,23 +2165,24 @@ Polyfill a geometry at a given custom grid resolution then return only the hollo
 ### custom_geomkringexplode
 
 {/* BEGIN GENERATED gbx_custom_geomkringexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_geomkringexplode(geom, grid, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_geomkringexplode(geom, grid, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.custom.functions.custom_geomkringexplode(df, geom, grid, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
-| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_custom_geomkringexplode */}
 
 <Impl udtf/>
@@ -2200,23 +2205,24 @@ Streaming version of `custom_geomkring` — one row per cell. Call it with `FROM
 ### custom_geomkloopexplode
 
 {/* BEGIN GENERATED gbx_custom_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_geomkloopexplode(geom, grid, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_geomkloopexplode(geom, grid, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.custom.functions.custom_geomkloopexplode(df, geom, grid, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_custom_geomkloopexplode */}
 
 <Impl udtf/>
@@ -2475,22 +2481,23 @@ Streaming version of `h3_geomkring` — one row per cell. Call it with `FROM t, 
 ### h3_geomkloopexplode
 
 {/* BEGIN GENERATED gbx_h3_geomkloopexplode: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])` | rows |
 | Python | `gridx.h3.functions.h3_geomkloopexplode(df, geom, resolution, k, mode=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_h3_geomkloopexplode */}
 
 <Impl udtf/>

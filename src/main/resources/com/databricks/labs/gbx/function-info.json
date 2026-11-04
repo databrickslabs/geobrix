@@ -1810,6 +1810,7 @@
       "description": "Return the H3 cells at exactly k rings from a geometry, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -1994,6 +1995,7 @@
       "description": "Return the BNG cells at exactly ring distance k from a geometry's cells, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2041,6 +2043,7 @@
       "description": "Return the cells at exactly ring distance k of a BNG cell, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2196,6 +2199,7 @@
       "description": "Return the custom-grid cells at exactly k rings from a geometry, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2219,6 +2223,7 @@
       "description": "Return the custom-grid cells of a geometry dilated by k rings, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2602,6 +2607,7 @@
       "description": "Return the quadbin cells at exactly k rings from a geometry, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -2623,6 +2629,7 @@
       "description": "Return the quadbin cells of a geometry dilated by k rings, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"

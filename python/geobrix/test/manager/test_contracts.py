@@ -3629,3 +3629,108 @@ def test_collision_gate_fires_on_a_procedure_named_like_a_function_and_on_a_bad_
     assert any("is a function name" in f for f in found)
     monkeypatch.setattr(procedures, "CALLS", {"gbx_bng_kring": ("gbx_nope",)})
     assert any("calls gbx_nope" in f for f in gates.procedure_findings(MAN, public))
+
+
+def _procedure(name):
+    return dict(PROCEDURES)[name]
+
+
+def test_zarr_tag_version_refuses_an_existing_tag_before_the_merge_and_a_null_name():
+    text = _procedure("gbx_zarr_tag_version")
+    exists = text.index(
+        "IF EXISTS (SELECT 1 FROM IDENTIFIER(manifest_table) WHERE tag = tag_name)"
+    )
+    assert exists < text.index("MERGE INTO IDENTIFIER(manifest_table)")
+    assert "already exists. Fix:" in text[exists : text.index("MERGE INTO")]
+    assert "IF tag_name IS NULL OR NOT regexp_like(tag_name" in text
+    # the commit row records the version it copied, as the Python tag does
+    assert "'write_id', v_write_id, 'from', v_from" in text
+    assert "SET v_from = (SELECT max(_metadata.row_commit_version)" in text
+
+
+def test_the_zarr_procedures_check_the_tag_name_and_untag_checks_the_tag_exists():
+    for name in ("gbx_zarr_tag_version", "gbx_zarr_untag_version"):
+        text = _procedure(name)
+        assert "IF tag_name IS NULL OR NOT regexp_like(tag_name" in text, name
+        assert "is not valid. Fix: use 1-128 characters" in text, name
+    untag = _procedure("gbx_zarr_untag_version")
+    assert (
+        "IF NOT EXISTS (SELECT 1 FROM IDENTIFIER(manifest_table) WHERE tag = tag_name)"
+        in untag
+    )
+    assert "does not exist. Fix: pass an existing tag name." in untag
+
+
+def test_mosaic_by_key_refuses_a_key_with_more_than_ten_tiles_before_it_writes():
+    text = _procedure("gbx_mosaic_by_key")
+    guard = text.index("GROUP BY tile_key HAVING count(*) > 10")
+    assert guard < text.index("CREATE TABLE IF NOT EXISTS")
+    assert "has more than 10 tiles" in text and "gbx_rst_merge_agg" in text
+
+
+def test_the_merge_only_procedures_say_they_upsert_and_which_key_must_be_unique():
+    for name in (
+        "gbx_polygons_to_bng",
+        "gbx_clean_geometries",
+        "gbx_migrate_mosaic_geometry",
+        "gbx_points_to_h3_surface",
+        "gbx_features_to_mvt",
+        "gbx_mosaic_by_key",
+        "gbx_zonal_stats",
+    ):
+        comment = re.search(r"\nCOMMENT '(.*)'\nAS BEGIN", _procedure(name)).group(1)
+        assert "stay" in comment, name
+    for name in (
+        "gbx_polygons_to_bng",
+        "gbx_clean_geometries",
+        "gbx_migrate_mosaic_geometry",
+    ):
+        assert "id must be unique in the source" in _procedure(name), name
+    assert "zone_id must be unique" in _procedure("gbx_zonal_stats")
+
+
+def test_clean_geometries_leaves_each_id_in_one_table_per_call():
+    text = _procedure("gbx_clean_geometries")
+    # a valid id is merged into the target and leaves the rejects; an invalid one is merged into the rejects and
+    # leaves the target
+    merge_target = text.index("EXECUTE IMMEDIATE")
+    delete_target = text.index("DELETE FROM IDENTIFIER(target_table) WHERE id IN")
+    merge_rejects = text.index("MERGE INTO IDENTIFIER(rejects_table)")
+    delete_rejects = text.index("DELETE FROM IDENTIFIER(rejects_table) WHERE id IN")
+    assert merge_target < delete_target < merge_rejects < delete_rejects
+    assert (
+        "INSERT INTO IDENTIFIER(rejects_table)" not in text
+    )  # no wholesale rewrite of the rejects
+    assert "ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET *" in text[merge_rejects:]
+
+
+def test_a_key_that_can_be_null_matches_with_a_null_safe_equality():
+    assert "ON t.tile_key <=> s.tile_key" in _procedure("gbx_mosaic_by_key")
+    assert "ON t.surface <=> s.surface" in _procedure("gbx_points_to_h3_surface")
+
+
+def test_install_with_only_skips_a_procedure_whose_functions_are_not_installed(
+    volume, monkeypatch, capsys
+):
+    from databricks.labs.gbx import uc
+
+    monkeypatch.delenv("DATABRICKS_ENV_VERSION", raising=False)
+    got = uc.install(
+        "cat",
+        "sch",
+        VOLUME_DIR,
+        dry_run=True,
+        procedures=True,
+        only=["gbx_bng_tessellateexplode"],
+    )
+    procs = [s for s in got if "CREATE OR REPLACE PROCEDURE" in s.split("(")[0]]
+    called = " ".join(procs)
+    assert "gbx_polygons_to_bng(" in called  # its one function is installed
+    assert "gbx_features_to_mvt(" not in called and "gbx_zonal_stats(" not in called
+    assert (
+        "gbx_zarr_tag_version(" in called
+    )  # a recipe that calls no function is unaffected
+    # the private routines of the skipped recipes are not created either
+    assert not [s for s in got if "gbx__h3_cellfill_cells(" in s.split("\n")[0]]
+    out = capsys.readouterr().out
+    assert "procedure gbx_features_to_mvt skipped: needs gbx_st_asmvt_pyramid" in out

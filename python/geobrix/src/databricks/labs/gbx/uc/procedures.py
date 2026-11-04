@@ -13,7 +13,7 @@ at install time and :func:`build_all` reports it in one line.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Tuple
 
 from databricks.labs.gbx import __version__, manifest
 from databricks.labs.gbx.uc import ddl
@@ -76,6 +76,11 @@ def _need(*functions: str) -> None:
         raise Skipped(f"needs {', '.join(missing)} on Unity Catalog")
 
 
+# what a MERGE-only procedure says in its COMMENT: it upserts, it never deletes, and its key must be unique
+_UPSERTS = "It upserts: a target row the source no longer has stays."
+_UNIQUE_ID = "The id must be unique in the source: a duplicate makes the MERGE raise."
+
+
 SRC = Param("source_table", "STRING", "The table to read, as catalog.schema.table.")
 TGT = Param(
     "target_table",
@@ -131,7 +136,10 @@ WHEN NOT MATCHED THEN INSERT *;"""
         schema,
         "gbx_polygons_to_bng",
         "Tessellate the polygons of a table (columns id, geom in SRID 27700) into British National Grid "
-        "cells and merge them into a table of (id, cellid, core, chip).",
+        "cells and merge them into a table of (id, cellid, core, chip). "
+        + _UPSERTS
+        + " "
+        + _UNIQUE_ID,
         [
             SRC,
             TGT,
@@ -172,6 +180,10 @@ def clean_geometries(catalog: str, schema: str) -> str:
         f"UNION ALL\nSELECT id, geom, 'the geometry is NULL' AS reason\n"
         f"FROM IDENTIFIER(source_table) WHERE geom IS NULL"
     )
+    good_ids = (
+        f"SELECT id FROM (\n{fixed('IDENTIFIER(source_table)', 'repair_level')}\n) "
+        "WHERE geom IS NOT NULL AND st_isvalid(geom)"
+    )
     merge = (
         "MERGE INTO IDENTIFIER(:t) AS t USING (\n"
         f"{good('IDENTIFIER(:s)', ':r')}\n"
@@ -195,15 +207,23 @@ SELECT * FROM (
 {bad}
 ) WHERE false;
 EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, source_table AS s, repair_level AS r;
-DELETE FROM IDENTIFIER(rejects_table);
-INSERT INTO IDENTIFIER(rejects_table)
-{bad};"""
+DELETE FROM IDENTIFIER(target_table) WHERE id IN (SELECT id FROM (
+{bad}
+));
+MERGE INTO IDENTIFIER(rejects_table) AS t USING (
+{bad}
+) AS s ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *;
+DELETE FROM IDENTIFIER(rejects_table) WHERE id IN (SELECT id FROM (
+{good_ids}
+));"""
     return _ddl(
         catalog,
         schema,
         "gbx_clean_geometries",
         "Repair the geometries of a table (columns id, geom, one SRID), merge the valid ones into a target table and "
-        "write the rest, with the reason, to a rejects table.",
+        "merge the rest, with the reason, into a rejects table. Each id ends up in one table only: a valid id leaves "
+        "the rejects, an invalid one leaves the target. Other rows of both tables stay. "
+        + _UNIQUE_ID,
         [
             SRC,
             TGT,
@@ -257,7 +277,7 @@ EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, source_table AS s
         schema,
         "gbx_migrate_mosaic_geometry",
         "Convert a table with a legacy Mosaic geometry column (columns id, geom, one SRID) to a table with a "
-        "GEOMETRY column of that SRID.",
+        "GEOMETRY column of that SRID. " + _UPSERTS + " " + _UNIQUE_ID,
         [SRC, TGT],
         body,
     )
@@ -284,7 +304,7 @@ MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
 ) AS s
-ON t.surface = s.surface
+ON t.surface <=> s.surface
 WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *;"""
     return _ddl(
@@ -292,7 +312,8 @@ WHEN NOT MATCHED THEN INSERT *;"""
         schema,
         "gbx_points_to_h3_surface",
         "Average the values of a table of points (columns longitude, latitude, value) per H3 cell, fill the "
-        "empty neighbours and merge the surface, one GeoTIFF, into a table of (surface, tile).",
+        "empty neighbours and merge the surface, one GeoTIFF, into a table of (surface, tile). "
+        + _UPSERTS,
         [
             SRC,
             TGT,
@@ -340,7 +361,9 @@ WHEN NOT MATCHED THEN INSERT *;"""
         schema,
         "gbx_features_to_mvt",
         "Cut the features of a table (columns geom in EPSG:4326, attrs a struct) into Mapbox Vector Tiles and merge "
-        "them into a table of (z, x, y, mvt). A .pmtiles archive is built outside Unity Catalog.",
+        "them into a table of (z, x, y, mvt). "
+        + _UPSERTS
+        + " A .pmtiles archive is built outside Unity Catalog.",
         [
             SRC,
             TGT,
@@ -374,7 +397,7 @@ MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
 ) AS s
-ON t.tile_key = s.tile_key
+ON t.tile_key <=> s.tile_key
 WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *;"""
     return _ddl(
@@ -382,7 +405,7 @@ WHEN NOT MATCHED THEN INSERT *;"""
         schema,
         "gbx_mosaic_by_key",
         f"Merge the tiles of a table (columns tile_key, tile) into one tile per key, at most {MOSAIC_MAX_TILES} "
-        "tiles per key.",
+        "tiles per key. " + _UPSERTS,
         [SRC, TGT],
         body,
     )
@@ -413,7 +436,9 @@ WHEN NOT MATCHED THEN INSERT *;"""
         schema,
         "gbx_zonal_stats",
         "Clip the tiles of a table (columns tile_id, tile, bbox) to the zones of another (columns zone_id, geom) "
-        "where their boxes meet, and merge each summary into a table of (zone_id, tile_id, summary).",
+        "where their boxes meet, and merge each summary into a table of (zone_id, tile_id, summary). "
+        + _UPSERTS
+        + " The zone_id must be unique in the zones and the tile_id in the tiles: a duplicate makes the MERGE raise.",
         [
             Param("zones_table", "STRING", "The zones, as catalog.schema.table."),
             Param("source_table", "STRING", "The tiles, as catalog.schema.table."),
@@ -445,7 +470,7 @@ _TAG = Param(
 
 def _tag_check() -> str:
     return (
-        f"IF NOT regexp_like(tag_name, {ddl.quote_str(_TAG_RE)}) THEN\n"
+        f"IF tag_name IS NULL OR NOT regexp_like(tag_name, {ddl.quote_str(_TAG_RE)}) THEN\n"
         "  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = concat('tag name ', coalesce(tag_name, 'NULL'), "
         "' is not valid. Fix: use 1-128 characters of A-Z a-z 0-9 . _ : / @ + = - , starting with a letter or digit.');\n"
         "END IF;"
@@ -457,12 +482,16 @@ def zarr_tag_version(catalog: str, schema: str) -> str:
     names = ", ".join(cols)
     values = ", ".join(f"s.{c}" for c in cols)
     pick = ", ".join(c for c in cols if c not in ("tag", "write_id", "meta"))
-    meta = (
-        "to_json(named_struct('mode', 'tag', 'tag', tag_name, 'write_id', v_write_id))"
-    )
+    # `from` is the version of the manifest the tag copies, as the Python tag records it (the latest commit)
+    meta = "to_json(named_struct('mode', 'tag', 'tag', tag_name, 'write_id', v_write_id, 'from', v_from))"
     body = f"""
 DECLARE v_write_id STRING DEFAULT replace(uuid(), '-', '');
+DECLARE v_from BIGINT;
 {_tag_check()}
+IF EXISTS (SELECT 1 FROM IDENTIFIER(manifest_table) WHERE tag = tag_name) THEN
+  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = concat('tag ', tag_name, ' already exists. Fix: pick another name, or remove it with gbx_zarr_untag_version.');
+END IF;
+SET v_from = (SELECT max(_metadata.row_commit_version) FROM IDENTIFIER(manifest_table) WHERE tag IS NULL);
 MERGE INTO IDENTIFIER(manifest_table) AS t
 USING (
   SELECT {pick}, write_id, tag_name AS tag, meta
@@ -564,15 +593,33 @@ CALLS: Dict[str, Tuple[str, ...]] = {
 
 
 def build_all(
-    catalog: str, schema: str, only: Optional[List[str]] = None
+    catalog: str,
+    schema: str,
+    only: Optional[List[str]] = None,
+    available: Optional[Iterable[str]] = None,
 ) -> Tuple[List[Tuple[str, str]], Dict[str, str]]:
-    """``([(name, DDL)], {skipped name: reason})`` for every recipe (or those in ``only``), in a fixed order."""
+    """``([(name, DDL)], {skipped name: reason})`` for every recipe (or those in ``only``), in a fixed order.
+
+    ``available``, when given, is the set of public functions being installed: a recipe that calls a public function
+    outside it is skipped, with the reason, instead of being built over a function that will not exist.
+    """
     ddl.quote_ident("catalog", catalog)
     ddl.quote_ident("schema", schema)
     built, skipped = [], {}
     for name, builder in RECIPES.items():
         if only is not None and name not in only:
             continue
+        if available is not None:
+            missing = [
+                c
+                for c in CALLS.get(name, ())
+                if not c.startswith("gbx__") and c not in available
+            ]
+            if missing:
+                skipped[name] = (
+                    f"needs {', '.join(missing)}, which are not being installed"
+                )
+                continue
         try:
             built.append((name, builder(catalog, schema)))
         except Skipped as why:

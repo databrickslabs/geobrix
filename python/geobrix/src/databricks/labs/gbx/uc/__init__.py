@@ -205,14 +205,18 @@ def install(
     if procedures:
         from databricks.labs.gbx.uc import procedures as _procedures
 
-        stmts += _private_for_procedures(
-            man, catalog, schema, "file://" + wheel, made_private
+        # with `only`, a recipe whose functions are not all installed is skipped, not built over a missing function
+        built, skipped = _procedures.build_all(
+            catalog, schema, available=set(names) if only is not None else None
         )
-        built, skipped = _procedures.build_all(catalog, schema)
         for name, why in skipped.items():
             print(f"geobrix: procedure {name} skipped: {why}")
-        stmts += [text for _, text in built]
         procedure_names = [name for name, _ in built]
+        wanted = {c for n in procedure_names for c in _procedures.CALLS.get(n, ())}
+        stmts += _private_for_procedures(
+            man, catalog, schema, "file://" + wheel, made_private, wanted
+        )
+        stmts += [text for _, text in built]
     verified = names + sorted(made_private) + procedure_names
     if not dry_run:
         if spark is None:
@@ -229,11 +233,11 @@ def install(
 _PROCEDURE_ONLY = ("gbx__h3_cellfill_cells", "gbx__st_asmvt_features")
 
 
-def _private_for_procedures(man, catalog, schema, wheel_uri, made) -> List[str]:
-    """The DDL of the private routines the procedures call (the ones no table function created), once each."""
+def _private_for_procedures(man, catalog, schema, wheel_uri, made, wanted) -> List[str]:
+    """The DDL of the private routines the built procedures call (the ones no table function created), once each."""
     out = []
     for name in _PROCEDURE_ONLY:
-        if name not in made:
+        if name in wanted and name not in made:
             made.add(name)
             out.append(
                 ddl.private_ddl(

@@ -206,7 +206,7 @@ UC differs from the session in one place. A data-limit error gives `NULL` on UC 
 
 Procedures run a whole ETL step inside Unity Catalog. Each one reads a table, calls GeoBrix functions and merges the result into another table. A procedure adds flow only: it computes nothing itself and writes no file.
 
-Install them with the functions. A procedure is created after the functions it calls, and `SQL SECURITY INVOKER` runs it with the privileges of the caller.
+Install them with the functions. A procedure is created after the functions it calls, and `SQL SECURITY INVOKER` runs it with the privileges of the caller. With `only=`, a procedure is created only when every function it calls is installed. Install prints one line for each procedure it skips.
 
 <CodeFromTest code={ucExamples} language="python" functionName="INSTALL_PROCEDURES_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
@@ -222,6 +222,12 @@ A caller needs `EXECUTE` on the procedure and `SELECT` and `MODIFY` on the table
 | `gbx_mosaic_by_key` | `tile_key`, `tile` | one merged tile per key |
 | `gbx_zonal_stats` | zones with `zone_id`, `geom`; tiles with `tile_id`, `tile`, `bbox` | `zone_id`, `tile_id`, `summary` |
 | `gbx_zarr_tag_version`, `gbx_zarr_untag_version`, `gbx_zarr_version_history` | a Zarr store's manifest table | a tag, its removal, or the list of commits |
+
+Most procedures upsert. A row already in the target that the source no longer has stays there, so a procedure never deletes stale rows. Delete them yourself when the source drops a feature.
+
+The `id` of the source must be unique for `gbx_polygons_to_bng`, `gbx_clean_geometries` and `gbx_migrate_mosaic_geometry`. A repeated `id` makes the merge fail. In `gbx_zonal_stats`, each `zone_id` must be unique in the zones and each `tile_id` in the tiles.
+
+`gbx_clean_geometries` keeps each `id` in one table per call. A geometry that is valid now is merged into the target and removed from the rejects. One that is invalid now goes to the rejects and is removed from the target.
 
 <CodeFromTest code={ucExamples} language="sql" functionName="CALL_POLYGONS_TO_BNG_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 

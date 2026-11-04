@@ -44,6 +44,13 @@ from databricks.labs.gbx._gdal_policy import (
     open_bytes,
     open_data,
 )
+
+# The tile checks live in the engine's own module so a worker that only runs the engine need not import this one
+from databricks.labs.gbx.engine._tile import cellid as _tile_cellid  # noqa: F401
+from databricks.labs.gbx.engine._tile import (  # noqa: F401
+    error_tile_of as _error_tile_of,
+)
+from databricks.labs.gbx.engine._tile import is_empty as _tile_is_empty  # noqa: F401
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import _nodata, accessors
@@ -78,40 +85,12 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import (
     VirtualTile,
 )
 
-
 # --- Virtual-aware tile helpers ---------------------------------------------
 # These let a UDF body consume a v1 tile struct, a v2 tile struct, a virtual
 # (bytes-free) tile, or raw bytes uniformly, and shape a tile-returning result
 # via the shared ``open_tile.shape_output`` force-output helper. The operation
 # math is never touched — only how the input dataset is opened and how the
 # result is shaped.
-def _tile_is_empty(tile) -> bool:
-    """True when a tile carries neither raster bytes nor a virtual ``path``.
-
-    A v1/v2 materialized tile has ``raster``; a virtual tile has ``path`` (+
-    ``window``). Either is openable, so only a tile missing both is "empty"
-    (the null-guard the UDF bodies branch on). Mirrors the old
-    ``tile is None or tile["raster"] is None`` guard for materialized tiles
-    while additionally admitting virtual tiles.
-    """
-    if tile is None:
-        return True
-    if isinstance(tile, (bytes, bytearray)):
-        return len(bytes(tile)) == 0
-    if isinstance(tile, VirtualTile):
-        return tile.raster is None and tile.path is None
-    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
-    return d.get("raster") is None and d.get("path") is None
-
-
-def _tile_cellid(tile) -> int:
-    """Extract ``cellid`` from any tile shape (defaults to 0)."""
-    if isinstance(tile, (bytes, bytearray)):
-        return 0
-    if isinstance(tile, VirtualTile):
-        return int(tile.cellid)
-    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
-    return int(d.get("cellid") or 0)
 
 
 class _UnreadableTile(Exception):
@@ -2427,22 +2406,6 @@ def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):
         raise
     except Exception as e:  # noqa: BLE001
         return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
-
-
-def _error_tile_of(tile):
-    """*tile* as a dict when it is an error tile, else None. The one test every pass-through shares.
-
-    An error tile is a swallowed failure: no raster, no path, and its reason under ``last_error`` or
-    ``error_message``. A tile that still has pixels is never one (the merge aggregates stamp a warning
-    under ``last_error`` on good tiles).
-    """
-    if tile is None or isinstance(tile, (bytes, bytearray, VirtualTile)):
-        return None
-    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
-    if d.get("raster") is not None or d.get("path") is not None:
-        return None
-    md = d.get("metadata") or {}
-    return d if ("last_error" in md or "error_message" in md) else None
 
 
 def _empty_tile_out(tile):

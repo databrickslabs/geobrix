@@ -15,6 +15,31 @@ from databricks.labs.gbx.manifest import TILE_SQL
 N, PARTS = 1000, 8
 
 
+def test_reading_an_engine_input_does_not_import_the_light_function_module():
+    """A worker's first engine row must not import pyrx.functions (about 10,000 lines: over 0.3 s on every new
+    worker, paid even for a NULL row the batch wrapper routes to the row-wise UDF). `_inputs` on a materialized
+    tile reads no pixels and needs no osgeo, so this runs on the host."""
+    import subprocess
+    import sys
+
+    code = (
+        "import sys\n"
+        "from databricks.labs.gbx import manifest\n"
+        "from databricks.labs.gbx.engine import l3\n"
+        "fn = manifest.load().functions['gbx_rst_slope']\n"
+        "tile = {'cellid': 7, 'raster': b'II*\\x00' + bytes(60), 'path': None, 'metadata': {}}\n"
+        "rasters, passthrough, cellid = l3._inputs(fn, tile)\n"
+        "assert rasters and cellid == 7\n"
+        "assert l3._inputs(fn, None) == (None, None, None)\n"
+        "print('databricks.labs.gbx.pyrx.functions' in sys.modules)\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=300
+    )
+    assert out.returncode == 0, out.stderr[-2000:]
+    assert out.stdout.strip() == "False", out.stdout + out.stderr[-2000:]
+
+
 @pytest.fixture(scope="module")
 def tiles(spark8):
     why = run.unavailable_reason()

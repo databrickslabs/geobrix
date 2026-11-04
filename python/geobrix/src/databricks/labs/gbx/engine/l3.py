@@ -21,6 +21,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
 from databricks.labs.gbx import _gdal_policy, manifest
+from databricks.labs.gbx.engine import _tile as tile_checks
 from databricks.labs.gbx.engine import run
 from databricks.labs.gbx.pyrx._serde import V2_TILE_SCHEMA
 
@@ -154,16 +155,14 @@ def _inputs(fn, first, read_cap: Optional[int] = None):
     NULL, empty or error input (an error tile comes out unchanged; NULL and an empty tile give NULL). A virtual
     tile is read by ``_virtual_raster`` (DataError when it is refused or unreadable).
     """
-    from databricks.labs.gbx.pyrx import functions as prx
-
     tiles = [first] if fn.gdal.inputs[0][1] == "raster" else list(first or ())
     if first is None or not tiles:
         return None, None, None
     for t in tiles:
-        err = prx._error_tile_of(t)
+        err = tile_checks.error_tile_of(t)
         if err is not None:
             return None, err, None
-        if t is None or prx._tile_is_empty(t):
+        if t is None or tile_checks.is_empty(t):
             return None, None, None
     rasters = []
     for t in tiles:
@@ -172,7 +171,7 @@ def _inputs(fn, first, read_cap: Optional[int] = None):
         rasters.append(
             bytes(raw) if raw is not None else _virtual_raster(fn, t, read_cap)
         )
-    return rasters, None, prx._tile_cellid(tiles[0])
+    return rasters, None, tile_checks.cellid(tiles[0])
 
 
 def _sql_default(text: Optional[str]):
@@ -233,14 +232,12 @@ def c0(
 
 def _cellid_of(fn, first) -> int:
     """The cell id of the (first) input tile, for an error tile."""
-    from databricks.labs.gbx.pyrx import functions as prx
-
     t = (
         first
         if fn.gdal.inputs[0][1] == "raster"
         else (list(first)[0] if first else None)
     )
-    return prx._tile_cellid(t) if t is not None else 0
+    return tile_checks.cellid(t) if t is not None else 0
 
 
 def _batch(fn, names, rasters, args, section=None):

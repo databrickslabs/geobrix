@@ -2634,20 +2634,21 @@ A NULL tile, an error tile and a tile that cannot be read give no rows. A resolu
 ### h3_cell_bbox
 
 {/* BEGIN GENERATED gbx_h3_cell_bbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_h3_cell_bbox(cellid, [srid], [mode], [kring_pad], [out_crs])` | `struct<xmin:double,ymin:double,xmax:double,ymax:double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_h3_cell_bbox(cellid, [srid], [mode], [kring_pad], [out_crs])` | `struct<xmin:double,ymin:double,xmax:double,ymax:double>` |
 | Python | `gridx.h3.functions.h3_cell_bbox(cellid, srid=None, mode=None, kring_pad=None, out_crs=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid` | `BIGINT` |  | The H3 cell id. |
-| `srid` | `INT` | `4326` | The EPSG code of the output coordinates. |
-| `mode` | `STRING` | `'centroids'` | `'centroids'` wraps the cell centres, `'spatial_envelope'` the whole hexagons. |
-| `kring_pad` | `INT` | `0` | How many rings of neighbours to include before taking the box; 0 is the cell alone. |
-| `out_crs` | `STRING` | `NULL` | The output coordinate system as `EPSG:<n>`, `ESRI:<n>` or WKT; when set it wins over `srid`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid` | `BIGINT` | `BIGINT` |  | The H3 cell id. |
+| `srid` | `INT` | `INT` | `4326` | The EPSG code of the output coordinates. |
+| `mode` | `STRING` | `STRING` | `'centroids'` | `'centroids'` wraps the cell centres, `'spatial_envelope'` the whole hexagons. |
+| `kring_pad` | `INT` | `INT` | `0` | How many rings of neighbours to include before taking the box; 0 is the cell alone. |
+| `out_crs` | `STRING` | `STRING` | `NULL` | The output coordinate system as `EPSG:<n>`, `ESRI:<n>` or WKT; when set it wins over `srid`. |
 {/* END GENERATED gbx_h3_cell_bbox */}
 
 :::note Implementation

@@ -2403,20 +2403,21 @@ Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ri
 ### h3_geomkloop
 
 {/* BEGIN GENERATED gbx_h3_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_h3_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_h3_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
 | Python | `gridx.h3.functions.h3_geomkloop(geom, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | H3 resolution, a whole number from 0 to 15. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | H3 resolution, a whole number from 0 to 15. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_h3_geomkloop */}
 
 Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).

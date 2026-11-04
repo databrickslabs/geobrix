@@ -461,3 +461,16 @@ GRID_ARRAY += (
         geom_srid=4326,
     ),
 )
+
+# --- H3 loops on UC: a geometry outside SRID 4326 is refused with a Fix:.
+GRID_ARRAY += (
+    Case(
+        "uc_h3_geomkloop_wrong_srid",
+        HGKL,
+        (QB_PT, 8, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+)

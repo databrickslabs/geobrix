@@ -1776,6 +1776,7 @@
       "description": "Return the bounding box of an H3 cell, or of the cells around it, in a chosen coordinate system.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1798,6 +1799,7 @@
       "description": "Return the H3 cells at exactly k rings from a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"

@@ -362,6 +362,8 @@ GN = Build("custom_grid_no_crs")  # the same grid, with no CRS (srid -1)
 H3_CELL = 613196570331971583  # h3.latlng_to_cell(37.7749, -122.4194, 8)
 H3_LNG, H3_LAT = -122.41827103692466, 37.773515097238146  # h3.cell_to_latlng
 HBBOX = "gbx_h3_cell_bbox"
+# The centre of H3_CELL in web mercator (EPSG:3857): R * lon, R * ln(tan(pi/4 + lat/2)) with R = 6378137.
+H3_MERC_X, H3_MERC_Y = -13627539.595623404, 4547480.313025928
 
 GRID_SCALAR += (
     # quadbin
@@ -652,6 +654,89 @@ GRID_SCALAR += (
     ),
     Case("uc_qb_cellunion_not_a_cell", QUNI, ([QB_C, 0],), "null", None, ("uc",)),
     Case("uc_qb_cellunion_empty", QUNI, ([],), "null", None, ("uc",)),
+    # gbx_h3_cell_bbox on UC takes the output CRS as an SRID, EPSG:<n> or ESRI:<n> (the same CRS, three spellings), and
+    # refuses any other form with a Fix:. The expected values are web-mercator's closed form on the h3 library's cell
+    # centre and boundary, not the function's own reprojection.
+    Case(
+        "uc_h3bbox_srid_3857",
+        HBBOX,
+        (H3_CELL, 3857),
+        "approx",
+        (H3_MERC_X, H3_MERC_Y, H3_MERC_X, H3_MERC_Y),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_out_crs_epsg",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 0, "EPSG:3857"),
+        "approx",
+        (H3_MERC_X, H3_MERC_Y, H3_MERC_X, H3_MERC_Y),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_out_crs_esri",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 0, "ESRI:102100"),
+        "approx",
+        (H3_MERC_X, H3_MERC_Y, H3_MERC_X, H3_MERC_Y),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_envelope_3857",
+        HBBOX,
+        (H3_CELL, 3857, "spatial_envelope"),
+        "approx",
+        (
+            -13628198.749607671,
+            4546819.546062488,
+            -13626880.430942414,
+            4548141.089024238,
+        ),
+        ("uc",),
+    ),
+    # h3.grid_disk(cell, 1) centres: the box of the cell and its six neighbours
+    Case(
+        "uc_h3bbox_pad_1",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 1),
+        "approx",
+        (
+            -122.42866524710386,
+            37.76527949330821,
+            -122.40787564835524,
+            37.78175025546036,
+        ),
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_wkt_refused",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", 0, 'GEOGCS["WGS 84"]'),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_srid_zero_refused", HBBOX, (H3_CELL, 0), "uc_refused", None, ("uc",)
+    ),
+    Case(
+        "uc_h3bbox_bad_mode",
+        HBBOX,
+        (H3_CELL, 4326, "sideways"),
+        "raises",
+        "sideways",
+        ("uc",),
+    ),
+    Case(
+        "uc_h3bbox_negative_pad",
+        HBBOX,
+        (H3_CELL, 4326, "centroids", -1),
+        "raises",
+        "-1",
+        ("uc",),
+    ),
+    # an id that is no H3 cell is a data error: NULL
+    Case("uc_h3bbox_not_a_cell", HBBOX, (0,), "null", None, ("uc",)),
     # A cell id that is not a BNG cell is a data error: NULL.
     Case("uc_aswkt_bad_cell", AWKT, ("XX9999",), "null", None, ("uc",)),
     Case(

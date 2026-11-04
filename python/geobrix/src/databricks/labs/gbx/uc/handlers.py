@@ -1120,6 +1120,84 @@ def bng_cellintersection(left_chip, right_chip):
     )
 
 
+# --- H3 -------------------------------------------------------------------------------------------------------------
+
+
+def h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
+    from databricks.labs.gbx.pygx import _h3
+
+    fn = "gbx_h3_geomkloop"
+    if geom is None or resolution is None or k is None:
+        return None
+    mode, coverage, kk = _dilation(fn, mode, coverage, k)
+    res = _range(fn, "resolution", _whole(fn, resolution), 0, H3_MAX_RES)
+    g = _grid_geometry(fn, geom, WGS84_SRID, "H3")
+    return _cells_of(
+        fn,
+        g,
+        lambda g: sorted(_h3.geom_expand("loop", g, res, kk, mode, coverage)),
+    )
+
+
+def h3_cell_bbox(cellid, srid=4326, mode="centroids", kring_pad=0, out_crs=None):
+    """The box of an H3 cell (or of it and its ``kring_pad`` rings) as ``(xmin, ymin, xmax, ymax)`` in the output CRS:
+    ``out_crs`` when it is set, else ``srid``. A CRS is an SRID, ``EPSG:<n>`` or ``ESRI:<n>``; any other form is refused.
+    """
+    import h3
+
+    from databricks.labs.gbx.core.crs import get_transformer, parse_uc_crs
+
+    fn = "gbx_h3_cell_bbox"
+    if cellid is None:
+        return None
+    mode = mode or "centroids"
+    if mode not in ("centroids", "spatial_envelope"):
+        raise _parameter(
+            fn,
+            ValueError(
+                f"unknown mode {mode!r}; expected 'centroids' or 'spatial_envelope'"
+            ),
+        )
+    pad = 0 if kring_pad is None else _ring_k(fn, kring_pad)
+    spec = out_crs if out_crs is not None and str(out_crs).strip() else srid
+    crs = parse_uc_crs(4326 if spec is None else spec, fn=fn)
+    try:
+        cell = h3.int_to_str(int(cellid))
+        if not h3.is_valid_cell(cell):
+            return None  # an id that is no H3 cell
+    except (TypeError, ValueError, OverflowError):
+        return None
+    _check_array(fn, 3 * pad * (pad + 1) + 1, "the cells around the cell")
+    cells = list(h3.grid_disk(cell, pad)) if pad else [cell]
+    lons, lats = [], []
+    for c in cells:
+        if mode == "centroids":
+            lat, lon = h3.cell_to_latlng(c)
+            lons.append(lon)
+            lats.append(lat)
+        else:
+            for lat, lon in h3.cell_to_boundary(c):
+                lons.append(lon)
+                lats.append(lat)
+    if crs.code == f"EPSG:{WGS84_SRID}":
+        xs, ys = lons, lats  # the cells are already in the output CRS
+    else:
+        tr = get_transformer(f"EPSG:{WGS84_SRID}", crs.code)
+        if (
+            len(lons) == 1
+        ):  # pyproj reads a one-element array as a scalar, and numpy deprecates that
+            x, y = tr.transform(lons[0], lats[0])
+            xs, ys = [x], [y]
+        else:
+            xs, ys = tr.transform(lons, lats)
+    return {
+        "xmin": float(min(xs)),
+        "ymin": float(min(ys)),
+        "xmax": float(max(xs)),
+        "ymax": float(max(ys)),
+    }
+
+
 def st_explainvalidity(geom):
     from databricks.labs.gbx.pyvx._validity import explain_validity
 

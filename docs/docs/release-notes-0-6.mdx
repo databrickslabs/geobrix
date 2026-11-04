@@ -23,7 +23,12 @@ Breaking:
 - [Install the env wheel, not a light extra](#env-wheels)
 - [The init-script install is removed](#init-script)
 - [GeoBrix no longer installs PySpark](#pyspark)
-- [Heavyweight `*_ogr` readers return declared field types and NULLs](#ogr-field-types)
+- [The Scala readers and writers are retired](#readers-retired)
+- [One Python API; the old modules are internal](#one-python-api)
+- [One registrar: `gbx.register(spark)`](#one-registrar)
+- [Scala no longer registers SQL](#scala-registration)
+- [Renamed and reordered arguments](#signature-changes)
+- [Generators and aggregates change shape](#shape-changes)
 - [`gbx_file_write` defaults to `file_mode="fuse"`](#file-write)
 
 Behavior changes that alter results or signatures:
@@ -31,12 +36,114 @@ Behavior changes that alter results or signatures:
 - [Raster driver policy is on for the process](#driver-policy)
 - [British National Grid transforms use OSTN15](#proj-data)
 - [The native stack is GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](#native-stack)
-- [Heavyweight vector readers fail on unreadable files](#ogr-unreadable)
+- [Errors, NULLs and wrong arguments follow one contract](#error-contract)
+- [Resolutions, NULLs and non-finite input](#grid-contract)
+- [Raster function results](#raster-results)
+- [Vector function arguments](#vector-arguments)
+- [Tile reads honor the compute's memory cap](#read-caps)
+- [WKB is little-endian and cell rings start south-west](#output-formats)
 - [`bng_tessellateexplode` returns `core` and `chip`](#bng-explode)
 - [`bng_tessellate` defaults `keep_core_geom` to false](#bng-tessellate-default)
 - [Centroid tiles are cropped; heavyweight tiling keeps all-NoData windows](#tessellation-parity)
 - [NoData, alpha and mask bands follow one rule](#nodata-alpha-mask)
 - [Lightweight `rst_viewshed` uses GDAL's viewshed](#viewshed)
+
+New:
+
+- [`gbx.stage_jar` stages the JAR the env wheel carries](#stage-jar)
+- [A reminder prints on the first `register`](#register-reminder)
+- [Unity Catalog functions](#unity-catalog-functions)
+- [`netcdf_gbx` reads CF discrete sampling geometries](#readers-retired)
+- [Table functions for grouped merge and BNG rasterize](#read-caps)
+
+## Python API and registration {#python-api}
+
+### One Python API; the old modules are internal (breaking) {#one-python-api}
+
+- **The Python API is `rasterx`, `gridx.<grid>`, `vectorx` and `pmtiles`.** The same import path serves every compute. `<grid>` is `bng`, `quadbin`, `custom` or `h3`.
+- **The `pyrx`, `pygx` and `pyvx` packages are internal.** They export nothing. Their public functions and their `register()` are removed.
+  - An old import path raises an error that gives a `Fix:` with the new path.
+  - Every function keeps its name. `pyrx.functions.rst_width` is `rasterx.functions.rst_width`. `pygx.functions.bng_tessellate` is `gridx.bng.functions.bng_tessellate`. `pyvx.functions.st_makevalid` is `vectorx.functions.st_makevalid`.
+  - The function names GeoBrix moved are every `rst_*`, `bng_*`, `quadbin_*`, `custom_*`, `h3_*` and `st_*` name the old modules defined.
+- **Python-only helpers moved to `helpers` modules.**
+  - `databricks.labs.gbx.rasterx.helpers`: `rst_viewshed_towers`, the `*_grouped` functions, `bin_points_tiled`, `rst_h3_gridspec`, `tile_range`, `mint_vrt`, `tile_to_numpy` and `rst_apply`.
+  - `databricks.labs.gbx.vectorx.helpers`: `coverage_simplify`.
+  - `databricks.labs.gbx.gridx.helpers`: `h3_los_visible` and `h3_viewshed_towers`.
+- **Python-only modules moved.** `pyrx.checkpoint`, `mvs`, `ortho`, `sfm`, `imagery` and `file_table` are now `rasterx.<same name>`. `pyvx.file_read` and `pyvx.file_write` are now `vectorx.<same name>`. `Manifest`, `checkpoint_skip` and `input_signature` live in `rasterx.checkpoint`. The `dense_*` functions, `gpu_infra` and `recommend_dense_allocation` live in `rasterx.mvs`.
+- **`gridx.h3.functions.h3_geomkring` and `h3_geomkloop` replace `geomkring` and `geomkloop`.** They take an optional `coverage` argument. `mode` stays.
+- **`gridx.h3.functions.h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)` replaces `gbx_h3_cell_bbox` in the old modules.** The lightweight function called its `srid` argument `out_srid`. The heavyweight function had no `out_crs`.
+- **`vectorx.functions.st_setcrs` and `st_transformcrs` read a bare string as a CRS.** `vectorx.jts.legacy.functions.st_legacyaswkb` is gone. Use `vectorx.functions.st_legacyaswkb`.
+
+See the [migration guide](./migration-0-6) for the old and new import for each entry point.
+
+### One registrar: `gbx.register(spark)` (breaking) {#one-registrar}
+
+- **One call registers the functions and the readers.** Call `from databricks.labs import gbx`, then `gbx.register(spark)`. It picks the best level for each function on the compute. It also registers the `*_gbx` data sources.
+  - `gbx.register(spark, only=["gbx_rst_width"])` limits the functions. A name no function matches raises a `ValueError`.
+  - The Python API also registers a function on its first call.
+- **The per-package registrars are removed.** The old `register()` functions of the generated modules (`rasterx`, `gridx.<grid>`, `vectorx`) raise an `AttributeError`. So do those of the `pyrx`, `pygx` and `pyvx` modules, of `databricks.labs.gbx.ds.register` and of `vectorx.jts.legacy`. The message gives the fix.
+- **`databricks.labs.gbx.vectorx.jts.legacy` no longer exists.** The legacy decode is `vectorx.functions.st_legacyaswkb`.
+- **Importing `databricks.labs.gbx.ds` no longer registers the readers.** The Scala data source that registered them is gone.
+- **`register` prints a short reminder that links the [migration guide](./migration-0-6).** It prints the reason once when a function falls back to another level.
+- **`gbx.register(spark, catalog="main", schema="geobrix")` says once when that schema holds functions from another version.** See [Unity Catalog functions](#unity-catalog-functions).
+
+### Scala no longer registers SQL (breaking) {#scala-registration}
+
+- **The `register` function of every Scala package is removed.** No Scala code registers SQL. Register once from Python or SQL with `databricks.labs.gbx.register(spark)`, then call the SQL names from Scala.
+- **Scala keeps the per-name wrappers of the functions whose JVM implementation stays.** Those wrappers call the registered SQL names. For every other function, call `call_function("gbx_<name>", ...)` or `expr(...)`.
+- **These Scala wrappers and classes are removed.**
+  - Raster: `rst_retile`, `rst_polygonize`, `rst_rasterize`, `rst_viewshed`, `rst_clip`, `rst_histogram`, `rst_median`, `rst_metadata`, `rst_hillshade`, `rst_ndvi`, `rst_ndwi`, `rst_nbr`, `rst_evi`, `rst_savi`, `rst_index`, `rst_threshold`, `rst_chm`, and the 96 `rst_{h3,quadbin,bng,custom}_rastertogrid{stat}` overloads.
+  - Vector: `st_asmvt_pyramid`.
+  - The `com.databricks.labs.gbx.gridx.quadbin` package. Call `call_function("gbx_quadbin_<name>", ...)`.
+  - The expression classes behind these functions, and `BNG_CellUnionAgg`, `BNG_CellIntersectionAgg`, `RST_MergeAgg`, `RST_DTMFromGeoms`, `RST_DTMFromGeomsAgg` and `RST_GridFromPointsAgg`. The SQL names run on the lightweight level.
+- **Scala wrappers gained or renamed arguments.**
+  - `bng_eastnorthasbng(easting, northing)` replaces `(east, north)`.
+  - `rst_transformcrs(targetCrs)` replaces `(crs)`. `rst_transform` takes `srid`, not `targetSrid`.
+  - `rst_rastertoworldcoord*` and `rst_worldtorastercoord*` take `x` and `y`.
+  - `rst_derivedband` names its second argument `pythonFunc`. `rst_gridfrompoints` names its arguments `pointsArray` and `valuesArray`. `rst_maketiles` names its size `sizeInMb`.
+  - `bng_kringexplode` and `bng_kloopexplode` name their parameter `cellid`. `quadbin_distance(cellid1, cellid2)` and `custom_distance(cellid1, grid, cellid2)` take the new names.
+  - `st_triangulate`, `st_interpolateelevationbbox` and `st_interpolateelevationgeom` gain Column wrappers. `st_legacyaswkb` gains a Scala wrapper.
+- **`rst_viewshed` is lightweight only.** Its Scala wrappers and the Scala tab of its example are gone.
+
+### Renamed and reordered arguments (breaking) {#signature-changes}
+
+These changes affect callers that pass keywords or named arguments.
+
+- **`rst_mapalgebra`: `json_spec` is now `expression`.**
+- **`rst_transformcrs`: `crs` is now `target_crs`.**
+- **`rst_align_to(tile, reference_tile)`** replaces `(tile, reference)`.
+- **`rst_land_cover(tile, method, n_clusters, smooth)`** replaces the keyword-only form. The `classes` argument always raised and is gone.
+- **`rst_bng_rasterize_agg` takes twelve required arguments:** `cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad`. `out_crs` is an optional last argument.
+- **`rst_custom_rasterize_agg(cellid, value, grid, ...)`** replaces `(cellid, grid, value, ...)`.
+- **`custom_pointascell` takes `point` as its first argument** (it was `geom`). `custom_distance` takes `cellid1` and `cellid2`.
+- **`pmtiles_agg(bytes, z, x, y, metadata_json=None)`** replaces `bytes_col`.
+- **`rst_tilexyz` reads `rescale` as `'auto'`, `'none'` or the text `'min,max'`.** A tuple is no longer accepted.
+- **`rst_histogram` takes an integer literal or a column for `n_buckets`.** `rst_sample` takes a literal for `crs`.
+- **`rst_fillnodata` uses the SQL defaults:** 100.0 and 0.
+- **`rst_hillshade` takes optional `xscale` and `yscale` in SQL.** `rst_slope` and `rst_hillshade` refuse one without the other, with a `Fix:`.
+- **String arguments are literals.** These names read a string as its value, not as a column name: `format`, `resampling`, `rescale`, `compression`, `overview_resampling`, `color_table_path`, `crs`, `metadata_json`, `new_format`, `operation`, `python_func`, `func_name`, `subset_name`, `new_type`, `method`, `driver`, `coverage`, `assignment`, `layer_name`, `out_crs`, `attr_field`, `statistic`, `mode`, and the BNG `resolution` and the TIN `split_point_finder` and `grid_origin`.
+  - A column can no longer supply those arguments row by row.
+- **The `rst_fromfile` Python default is a virtual tile.** Pass `materialize=True` for a materialized tile. The SQL function `gbx_rst_fromfile` materializes.
+- **`rst_merge_agg(tile, materialize=False)` returns the unforced BINARY form.** Only `materialize=True` or a directory and prefix force a tile.
+- **`rst_rasterize`, `rst_gridfrompoints` and `rst_dtmfromgeoms` take an optional `out_srid` and a trailing `out_crs`.** `out_crs` is `EPSG:n`, `ESRI:n` or WKT. Setting both raises. A NULL `out_srid` with no `out_crs` leaves the output without a CRS.
+
+### Generators and aggregates change shape (breaking) {#shape-changes}
+
+- **Generators are DataFrame calls in Python.** `rst_retile`, `rst_polygonize`, `rst_xyzpyramid`, `rst_maketiles`, `rst_h3_rastertogridavg` and the other tessellation, TIN and explode functions take the input DataFrame and return it joined with the generated rows.
+  - `gridx.bng.functions.bng_kringexplode(df, "cell", 1)`, `vectorx.functions.st_triangulate(df, ...)` and `rasterx.functions.rst_retile(df, "tile", 512, 512)` are examples.
+  - The retile rows carry the tile's fields (`cellid`, `raster`, `path`), not one `tile` column. Rename an input column that has a generated column's name first.
+  - A string argument in these calls names a column. `bng_tessellateexplode(df, "geom", "res")` reads the size from a column.
+  - `rst_polygonize` is a table-function call. It no longer returns an array Column.
+  - `rst_contour(tile, levels, interval, base, attr_field)` and `rst_isoband(tile, breaks)` are Columns.
+- **The `rst_*_rastertogrid*` reducers return rows.** In SQL, write `FROM t, LATERAL gbx_rst_h3_rastertogridavg(tile, 5) t`. The old `posexplode(...)` and `LATERAL VIEW inline(...)` forms on the `ARRAY` no longer apply.
+- **Aggregates return `BINARY` everywhere.** `rst_combineavg_agg`, `rst_frombands_agg`, `rst_derivedband_agg`, `rst_rasterize_agg`, `rst_gridfrompoints_agg`, `rst_binpoints_agg`, `rst_dtmfromgeoms_agg`, the cell rasterize aggregates, `rst_merge_agg` and `rst_bng_rasterize_agg` return GeoTIFF bytes.
+  - This holds in SQL on every compute and in the Python call. Wrap the result with `rst_fromcontent(col, "GTiff")` for a tile.
+  - Heavyweight SQL callers that read tile fields from a rasterize aggregate must wrap it.
+  - Their optional arguments are positional. The rasterize aggregates take 12 or 13 arguments.
+  - `rst_rasterize_agg` takes WKB only.
+- **The four cell-fill aggregates return the `BINARY` payload,** not `ARRAY<STRUCT<cellid, value>>`.
+- **`gbx_rst_merge_agg` has no JVM level.** It runs in Python on every compute.
+- **`gbx_st_asmvt_pyramid` takes `layer_name` and `extent` as optional arguments.**
 
 ## Installation and runtime {#installation}
 
@@ -67,7 +174,8 @@ Behavior changes that alter results or signatures:
 - **`requests` on Serverless environment 5 and DBR 17.3 / 18.** These runtimes ship `requests` 2.32.3, which can send `~/.netrc` credentials to another host (CVE-2024-47081).
   - The env5 wheel's `[stac]` and `[vizx]` require 2.32.4 or later, below 2.33. Installing either upgrades `requests`.
   - Environment 6 and DBR 19 ship 2.32.5.
-- **The plain wheel is for use off Databricks.** `geobrix-<version>-py3-none-any.whl` declares the lightweight tier as its base dependencies (floors only). `pip install geobrix` then works on a laptop or another Python, with PyPI's GDAL stack.
+- **The env wheels are about 90 to 115 MB.** The 0.5.x wheel was 1.1 MB. Each env wheel carries GDAL, PROJ, GEOS and the GeoBrix JAR.
+- **The plain wheel is for use off Databricks.** `geobrix-<version>-py3-none-any.whl` declares the Python library's base dependencies (floors only). `pip install geobrix` then works on a laptop or another Python, with PyPI's GDAL stack.
 
 ### The init-script install is removed (breaking) {#init-script}
 
@@ -81,8 +189,23 @@ Behavior changes that alter results or signatures:
 - **Heavyweight netCDF-4 with zstd, blosc or bzip2 filters returns NULL, with no error, unless `HDF5_PLUGIN_PATH` is set.** The lightweight tier reads these files without it.
   - Setting `HDF5_PLUGIN_PATH` cluster-wide breaks an h5py write with `hdf5plugin` blosc on a Databricks ML runtime.
   - See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
-- **Heavyweight `rst_mapalgebra` fails on a cluster that has only the env wheel.** The JVM does not find `gdal_calc.py` on its `PATH`. `rst_ndvi` and `rst_chm` share the code path, so expect the same failure. The DCS image is untested for it. Use the lightweight functions.
+- **Band math runs in Python on every compute.** `rst_mapalgebra`, `rst_ndvi`, `rst_chm` and `rst_threshold` need no `gdal_calc.py`, which the env wheel does not carry.
 - **Leave `GDAL_HTTP_VERSION` unset.** See [Remote reads over HTTPS](./readers/raster#remote-reads-over-https).
+
+### The JAR travels inside the env wheel; `gbx.stage_jar` stages it (new) {#stage-jar}
+
+- **Each env wheel carries the GeoBrix JAR of its version.** The env wheels are about 90 to 115 MB, where the 0.5.x wheel was 1.1 MB, because they carry GDAL, PROJ, GEOS and the JAR.
+- **`gbx.stage_jar(vol_dir)` copies the JAR to a Volume folder.** It writes a `.sha256` file beside it and checks the JAR against the wheel's version and its `RECORD` hash.
+  - It refuses a folder that already holds another GeoBrix JAR. A cluster loads one.
+  - It prints the next step: add the path as a cluster library on a dedicated cluster, and restart the cluster.
+  - On standard access mode, a metastore admin must first allowlist the Volume path.
+- **`register` refuses a JAR whose version differs from the wheel's.**
+- **You no longer download the JAR from the release page.** See [Env wheel and JAR](./installation#heavyweight).
+
+### A reminder prints on the first `register` (new) {#register-reminder}
+
+- **`register` prints one line at the start of a session.** It names the env wheel, the registrar and the Python API, and links the [migration guide](./migration-0-6).
+- **Importing a wheel built for another environment fails** and names the file to install.
 
 ### The native stack is GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0 (behavior change) {#native-stack}
 
@@ -122,6 +245,31 @@ Behavior changes that alter results or signatures:
   - Results differ from earlier values by about 1.7 m in central London and up to about 5 m elsewhere in Great Britain.
   - See [Grids that ship with GeoBrix](./api/coordinate-reference-systems#grids-that-ship-with-geobrix).
 - **`projsync` needs a local target directory.** Syncing straight into a Volume leaves `cache.db` at 0 bytes with a `disk I/O error`. Sync to local disk, then copy to the Volume. See [Fetch grids with projsync](./api/coordinate-reference-systems#fetch-grids-from-the-proj-cdn-with-projsync).
+
+## Unity Catalog {#unity-catalog}
+
+### Unity Catalog functions (new) {#unity-catalog-functions}
+
+- **`gbx.uc.install(catalog, schema, volume_dir)` creates GeoBrix functions in Unity Catalog.** Run it from a Serverless environment 6 or DBR 19 notebook. SQL warehouses, dashboards and Genie then call `<catalog>.<schema>.gbx_*`.
+- **The install covers these functions.**
+  - BNG: `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_geomkring`, `gbx_bng_cellarea`, `gbx_bng_aswkb` and `gbx_bng_centroid`.
+  - Quadbin and H3: `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill` and `gbx_h3_geomkring`.
+  - Vector: `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx` and `gbx_st_legacyaswkb`.
+  - Raster: `gbx_rst_transformcrs`.
+  - Table functions: `gbx_bng_kringexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_tessellateexplode` and `gbx_h3_geomkringexplode`.
+- **A geometry goes in as a `GEOMETRY` with an integer SRID.** BNG functions need SRID 27700. Quadbin and H3 functions need 4326. Another SRID is refused with a `Fix:`, never read as the wrong unit.
+  - A WKB `BINARY` is not a `GEOMETRY`. Build it with `st_geomfromwkb(wkb, srid)`.
+  - `gbx_st_wrapx` and `gbx_st_legacyaswkb` return a `GEOMETRY`.
+- **UC functions take a CRS as an integer SRID, `EPSG:<n>` or `ESRI:<n>`.** WKT, PROJJSON and PROJ strings are refused with a `Fix:`.
+- **UC returns NULL where the session function raises for data it cannot serve.** One example is a text that is no cell id, or a quadbin polyfill of too many cells. A wrong parameter (mode, coverage, resolution, zoom or `k`) still raises a `Fix:` error.
+- **Some BNG functions run as Scala functions when the install folder holds the JAR.** These are `gbx_bng_eastnorthasbng`, `gbx_bng_kring`, `gbx_bng_cellarea`, `gbx_bng_aswkb` and `gbx_bng_centroid`. Without the JAR they run as Python functions and give the same answers.
+  - `gbx.uc.install` takes only `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. It refuses a folder without it, and an explicit `jar=` must be a Volume path that ends in `.jar`.
+  - Stage the JAR with [`gbx.stage_jar`](#stage-jar) to use the Scala form.
+- **The SQL engine casts an argument to the parameter type before GeoBrix runs.** A string passed as an easting becomes a number there. With ANSI mode off, a string that is no number becomes NULL.
+- **Each function's COMMENT is `geobrix <version>: <summary>`.** `gbx.register(spark, catalog=..., schema=...)` says once when that schema was made by another version.
+- **`gbx_bng_geomkring` and `gbx_h3_geomkring` raise a `Fix:` for a `k` below 0 or not whole.** They gave NULL. An empty `coverage` reads as the default, as an empty `mode` does.
+
+See [Unity Catalog functions](./api/uc-functions) and [Installation](./installation#uc-functions).
 
 ## Ingestion {#ingestion}
 
@@ -203,19 +351,45 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ## Readers {#readers}
 
+### The Scala readers and writers are retired (breaking) {#readers-retired}
+
+- **The Scala readers are retired.** The lightweight `*_gbx` readers replace them. They run on every compute, and the Scala `gdal` reader was slower than the lightweight path at 4000 and 10000 tiles on a dedicated cluster.
+
+| Retired format | Reader that replaces it |
+|---|---|
+| `gdal` | `raster_gbx` |
+| `gtiff_gdal` | `gtiff_gbx` |
+| `netcdf_gdal` | `netcdf_gbx` |
+| `ogr` | `vector_gbx` |
+| `shapefile_ogr` | `shapefile_gbx` |
+| `geojson_ogr` | `geojson_gbx` |
+| `gpkg_ogr` | `gpkg_gbx` |
+| `file_gdb_ogr` | `file_gdb_gbx` |
+| `netcdf_ogr` | `netcdf_gbx` with `mode="vector"` |
+| `geojsonl_ogr` (write) | `geojsonl_gbx` |
+| `pmtiles` (write) | `pmtiles_gbx` |
+
+- **The JAR registers no data source.** A read with a retired format name gives "data source not found". `gbx.register(spark)` registers the `*_gbx` readers.
+- **The Scala writers are retired.** A write with the `gdal` or `gtiff_gdal` format fails with a `Fix:`. Write with `raster_gbx`, `gtiff_gbx` or `cog_gbx` after `register(spark)`. See [Raster Writer](./writers/raster).
+- **A Python data source cannot be queried by path in SQL.** Create a view instead: `CREATE VIEW v USING raster_gbx OPTIONS (path '...')`.
+- **`netcdf_gbx` vector mode reads CF discrete sampling geometries (new).** A profile file gave no rows, and a trajectory file lost its `time` column. Now each observation is a point.
+  - A profile's altitude is the point's Z. Its id and time repeat on each observation. Indexed and contiguous ragged arrays are supported.
+  - A trajectory or profile file whose latitude and longitude sit on the observation dimension keeps its instance variables (id, time, platform) on each observation.
+  - The file's `time` is a `TIMESTAMP`, its CRS is EPSG:4326, and its coordinate variables on the observation dimension are columns.
+  - A depth (`positive = "down"` or `standard_name = "depth"`) is the point's Z with its stored sign.
+  - A ragged file whose index is missing, negative or past the profiles, or whose counts do not add up, is refused with a `Fix:`. Before, it read the wrong values.
+- **Raster readers with `virtualTiles=false` read several whole files per task.** Without `tileSize`, `windows`, `clipPolygons` or `sizeInMB`, a task returns batches of at most 64 MiB. Set `sizeInMB` or retile a file over the compute's read cap (64 MiB on Serverless, 256 MiB classic). That read now fails with a retile `Fix:`. Before, it read up to 1.8 GiB.
+- **The read cap is enforced on Serverless even where the read is planned without a session.**
+- **`read_paths(..., on_error="skip")` and `"quarantine"` keep the other files of a batched read.** A file that cannot be read is recorded under its own path. With `"fail"` the read still fails and names that file. A missing-file error on a Volume while a header is read is retried.
+
+
 ### Reader staging cache (fix) {#staging-cache}
 
 - **Lightweight readers bound their staged copies (fix).** They copy GeoPackage, FileGDB and (for windowed decodes) raster sources to worker-local disk. The copies used to fill it.
   - GeoBrix now removes the least recently used idle copies. The cap is half the available local disk, or `GBX_STAGE_CACHE_MB`.
   - GeoBrix also removes copies left by exited workers.
   - See [Serverless and Memory](./serverless-and-memory).
-- **Both tiers re-read a file replaced at the same path (fix).** The heavyweight readers reuse a copy only while the source's size and modification time are unchanged.
-- **Heavyweight readers delete their staged copies (fix).** These readers copy a Volume or cloud source to worker-local disk:
-  - `gdal`, `gtiff_gdal` and `netcdf_gdal`.
-  - The OGR vector readers: `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr` and `netcdf_ogr`.
-
-  GeoBrix deletes a copy after an idle period (60 seconds), so the next partition of the same file can reuse it. Set the period with the Spark conf `spark.databricks.labs.gbx.nodecache.retention.ms`. Use a duration such as `60s` or `500ms`; a bare number is milliseconds. `0` deletes a copy as soon as its last read ends.
-- **Heavyweight `gdal` and `gtiff_gdal` writers replace an output of the same name (fix).** An `append` write kept an older file of the same size. Every write of a directory format such as Zarr failed.
+- **The readers re-read a file replaced at the same path (fix).** They reuse a copy only while the source's size and modification time are unchanged.
 
 ### PMTiles reader (behavior change, fix) {#pmtiles-reader}
 
@@ -224,7 +398,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - With `source="raster"`, each source raster is staged once per worker.
   - See [PMTiles Reader](./readers/pmtiles).
 - **A damaged PMTiles header cannot crash a worker.** An archive whose header declares a length beyond the end of the file fails with an error.
-- **`pmtiles_gbx`, `pmtiles_info` and the `gbx.vizx` PMTiles viewers read archives with uncompressed directories (fix).** The heavyweight `pmtiles` writer writes such archives, and they failed with `Not a gzipped file`. These readers now decode directories by the compression the header declares. They read none and gzip.
+- **`pmtiles_gbx`, `pmtiles_info` and the `gbx.vizx` PMTiles viewers read archives with uncompressed directories (fix).** Archives written with uncompressed directories failed with `Not a gzipped file`. These readers now decode directories by the compression the header declares. They read none and gzip.
   - `pmtiles_gbx` fails on any other compression with an error that names it.
   - `pmtiles_info` fails with `internal compression ... is not supported` on unknown, brotli or zstd. This includes an archive that declares unknown but stores gzip.
   - The viewers treat such an archive as unreadable.
@@ -271,7 +445,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - One value too large for any Spark row fails with an error that names the layer, column and feature.
   - `vector_file_read` streams its sources the same way.
   - See [Vector Readers](./readers/vector#options).
-- **Coded-value domain fields read correctly (fix).** FileGDB and GeoPackage fields bound to a coded-value domain failed with `Cannot call the method "getInt"`. They now return the stored code in the field's declared type, as the heavyweight readers do.
+- **Coded-value domain fields read correctly (fix).** FileGDB and GeoPackage fields bound to a coded-value domain failed with `Cannot call the method "getInt"`. They now return the stored code in the field's declared type.
   - The new lightweight-only `codedDomains` option returns the domain descriptions as strings. Its values are `"code"` (default) and `"description"`.
   - See [FileGDB Reader](./readers/filegdb#options) and [GeoPackage Reader](./readers/geopackage#options).
 
@@ -285,42 +459,6 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A `driverName` GDAL does not know fails with the closest matches.
   - With your own `.schema(...)`, a file with an extension GDAL reads by itself is not checked. pyogrio does not expose the driver when it reads.
   - See [Vector Readers](./readers/vector#options).
-
-### Heavyweight vector readers: declared field types and NULLs (breaking behavior change) {#ogr-field-types}
-
-- **The `*_ogr` readers return the declared OGR field types and keep NULLs.** They used to infer each type from sampled values. OGR `Integer` came back as `bigint`, and a numeric-looking `String` as numbers. They also returned unset fields as `0` or `""`.
-  - `Integer` is now `int`, `Integer64` is `bigint`, `String` is `string` and `Real` is `double`.
-  - `Integer` with the Boolean subtype is `boolean`.
-  - Unset fields are `NULL`, as in the lightweight `*_gbx` readers.
-  - Cast explicitly where code relied on the old types.
-- **OGR `Time` fields read as text in both tiers.** Spark has no time-of-day type. A `Time` field (for example the GeoJSON property `"12:34:56"`) is a `string` in GDAL's `HH:MM:SS` form, or `HH:MM:SS.sss` with milliseconds. The lightweight readers failed on these fields with `Cannot call the method "getLong"`.
-
-### Heavyweight vector readers: unreadable files fail the read (behavior change) {#ogr-unreadable}
-
-- **A file the readers cannot plan now fails the read.** These cases used to return 0 rows, or drop the file from a directory read:
-  - An explicit-schema or directory read of an unreadable file.
-  - A missing path.
-  - A `layerName` or `layerNumber` the file lacks.
-
-  The read now fails with an error that names each such file (up to five), the driver and GDAL's message. A folder that cannot be listed fails the read too.
-- **Directory reads skip files that are not datasets of the requested format.**
-  - Metadata files (`.shp.xml`, `.aux.xml`, `.txt`, `.md`) are skipped.
-  - Files of another vector format are skipped when you use a named reader, or `ogr` with a `driverName`.
-  - Each skip logs a warning in the driver log.
-  - A file you name as the path is never skipped.
-  - A directory in which every file is of another format fails the read. The error names the files and the reader to use.
-- **Fixes.**
-  - Paths with a space or another special character (`/Volumes/main/data/my maps/city #1.geojson`) read with the heavyweight vector readers and `netcdf_gdal`.
-  - An empty folder with a space or `%` in its name reads as 0 rows when you pass a `.schema(...)`.
-  - A layer whose feature count is an exact multiple of `chunkSize` no longer gets an empty trailing partition.
-  - Schema inference no longer leaves a staging folder in the driver's temp directory.
-
-### Heavyweight vector readers: `layerNumber` reads the layer it names (fix) {#layer-number}
-
-- **`layerNumber` picks the layer the readers return.** A `layerNumber` above 0 with no `layerName` took its schema from that layer but returned the rows of layer 0.
-  - A `layerName` wins over `layerNumber`, even when the index does not exist.
-  - A `layerNumber` the file lacks fails the read and lists the file's layers.
-- **Option name.** The option is `layerNumber` in both tiers. The heavyweight reader pages listed `layerN`, which was never read, so a read that passed `layerN` got layer 0. See [Vector Readers](./readers/vector#options).
 
 ### Vector writers (new, behavior change, fix) {#vector-writers}
 
@@ -344,20 +482,21 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A null timestamp, date or boolean is the fill value.
   - `merge` keeps the attributes.
   - See [NetCDF Writer](./writers/netcdf).
-- **A GeoJSON Lines write with a bad CRS column fails (behavior change).** The `geojsonl_ogr` writer used to write a layer without a CRS when its `proj4` column did not parse. The same held for its SRID column, when not an integer code.
-  - The writer now fails the write. It names the column and value, and gives a `Fix:` that says how to write the layer's CRS.
-  - A grid named by a file path in that column is refused the same way.
+
+### Vector function arguments (behavior change) {#vector-arguments}
+
+- **A negative or non-finite tolerance raises and names the value.** This covers `st_simplifypreservetopology`, `st_removerepeatedpoints` and `st_snap`, and the grid size of `st_reduceprecision`. They returned garbage or a bare GEOS error. NULL still gives NULL. A NULL `st_removerepeatedpoints` tolerance is the default 0.
+- **`gbx_st_legacyaswkb` returns a 2D geometry for 2D input.** The JVM function had a NaN Z.
+- **The CRS functions `st_crs`, `st_setcrs` and `st_transformcrs` run on the JVM level first when the JAR is present.**
+- **A CRS argument is judged by its kind.** A PROJJSON, with its `"$schema"` URL, and a WKT2 with an ID URI bind to their EPSG code on both levels. A URL, a file name and any grid or init file named by path stay refused. Before, a PROJJSON target was refused.
+- **Contour and isoband run on the lightweight level by default.** A forced JVM level raises for a virtual tile.
+- **`gbx_rst_isoband` raises for breaks that do not rise,** and for a NULL element in `breaks`. `gbx_rst_contour` and `gbx_rst_isoband` give NULL for an unreadable tile.
 
 ## Writers {#writers}
 
 ### Raster writers (fix) {#raster-writers}
 
 - **The lightweight COG writers write `raw` and `none` uncompressed.** This covers `raster_gbx` with `cog=true`, `cog_gbx` and `rst_cog_convert`. `rst_cog_convert` now takes `'NONE'` as well as `'RAW'`. They used to get LZW from the COG driver. A COG written from a tile whose `compression` metadata says `raw` or `none` kept the source's codec.
-- **The heavyweight `gdal` writer writes Zarr with its default options.** DEFLATE is not a Zarr codec, so a Zarr write failed with `Compressor/decompressor for DEFLATE not available`.
-  - The writer now writes DEFLATE as `ZLIB` (with `zlevel` as its level).
-  - It keeps `ZSTD` (with `zstd_level`). `NONE`, `GZIP` and `LZMA` pass through.
-  - Any other codec, such as `LZW`, raises an error that names the codecs the GDAL build has.
-- **The heavyweight `gdal` and `gtiff_gdal` writers refuse an output name that leaves the target directory.** A `nameCol` value with a `..` segment, or starting with `/`, raises and names the value.
 - **`cog_gbx` writes sources with a non-byte-aligned bit depth.** A band tagged with an `NBITS` such as 15 (common for Sentinel-2 `uint16` products) failed with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer promotes such samples to the full width of the data type. This is lossless.
 - **`cog_gbx` names the parts of one source apart.** With no `nameCol`:
   - A tile that is only part of its source is written as `<source name>_<key>.tif`. This covers a window or clip, and one band from `rst_separatebands`.
@@ -365,9 +504,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A tile read whole from a file keeps the plain source name.
   - The key derives from the tile, so a re-run writes the same names.
 
-  The lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record each tile's pixel window in `tile.window`. `rst_separatebands` records the 1-based band in `tile.metadata['band']`. The heavyweight retile-family functions record neither. Set `nameCol` in two cases:
-  - You write heavyweight parts.
-  - You write one source both as a materialized split and as a whole file into one directory.
+  `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record each tile's pixel window in `tile.window`. `rst_separatebands` records the 1-based band in `tile.metadata['band']`. Set `nameCol` when you write one source both as a materialized split and as a whole file into one directory.
 
 ## Raster functions {#raster-functions}
 
@@ -378,7 +515,6 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - Size-adaptive ZSTD.
   - Overviews when the tile is larger than 512 pixels.
 
-  The heavyweight `rst_asformat` still writes a plain GeoTIFF for `'COG'`. A later release fixes that.
 - **The lightweight `rst_asformat` takes a driver name in any case,** and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) are available.
 - **The tile of `rst_asformat(tile, 'COG')` records `metadata['driver'] = 'GTiff'`** (it was `'COG'`). That is the driver its bytes open as, and the one `rst_cog_convert` records. A writer passes those bytes through and keeps the layout and codec you asked for.
 - **Other fixes.**
@@ -413,12 +549,11 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 ### Raster tiling functions (behavior change, fix) {#raster-tiling}
 
-- **Call heavyweight generators in the select list or with `LATERAL VIEW`.** This covers `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`, `rst_custom_tessellate`, `rst_xyzpyramid` and the `rst_*_tessellate` functions.
-  - `FROM t, LATERAL f(...)` reaches only the lightweight table function.
-  - The heavyweight `rst_*_rastertogrid*` reducers return an ARRAY. `posexplode` and `inline` flatten it to the rows the lightweight table functions yield.
+- **Call a generator with `FROM t, LATERAL f(...)`.** This works on every compute for `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`, `rst_custom_tessellate`, `rst_xyzpyramid`, the `rst_*_tessellate` functions and the `rst_*_rastertogrid*` reducers.
+  - The select-list and `LATERAL VIEW` forms work only where the Catalyst generator is installed, on a dedicated cluster with the JAR.
+  - The `rst_*_rastertogrid*` reducers no longer return an `ARRAY`. See [Generators and aggregates change shape](#shape-changes).
 - **Heavyweight tiling and tessellation functions return their error row (fix).** They failed with a `ClassCastException` when a tile cannot be read. These functions are `rst_retile`, `rst_separatebands`, `rst_tooverlappingtiles`, `rst_maketiles` and the four `rst_*_tessellate` functions. Each now returns one row whose `tile` holds the error tile, as [Error handling](./api/error-handling#generators) describes.
   - `rst_maketiles` with a size of 0 or less returns the tile unchanged as one readable row.
-  - The heavyweight `rst_xyzpyramid` returns one row with a NULL `tile`, because its `(z, x, y, bytes)` struct cannot hold an error tile.
 - **Bad arguments raise their own message.**
   - An unknown `format`, `resampling` or `rescale` raises.
   - A `size` outside (0, 4096], a `max_z` above the cap, or a tile count above the limit raises.
@@ -455,7 +590,6 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - `rst_h3_tessellate` and `rst_quadbin_tessellate` raise an error when the footprint crosses the antimeridian or encloses a pole. Reproject the raster first (for example to EPSG:4326), or split it.
 - **Tiling keeps all-NoData windows in both tiers.** The lightweight tier already did. The heavyweight tier dropped them, so row counts differed. A retile-then-merge round trip could lose part of a scene's edge. Both tiers now emit every window in these functions:
   - `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` (with `size_in_mb > 0`).
-  - The heavyweight tiled raster readers: `gdal`, `gtiff_gdal` and `netcdf_gdal` with `sizeInMB > 0`.
 
   To drop the all-NoData windows, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
 - **Retile tiles carry the parent's `cellid`** in both tiers (0 when the parent has none). This covers `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles` and `rst_separatebands`. The lightweight tier numbered them 0, 1, 2, ….
@@ -538,7 +672,6 @@ Both tiers apply one rule for which pixels are valid.
 - **Lightweight merge and mosaic crashes are fixed.**
   - A quadbin, h3 or BNG `cog_gbx` cell that a source barely touches no longer fails with `Invalid dataset dimensions`.
   - `gbx_rst_merge` of tiles in two coordinate systems takes its size and pixel size from the reference system, whichever tile sorts first. It reprojects the other tile onto the reference tile's pixel grid, in memory and streamed alike. That tile can grow by up to a pixel on each side.
-  - The heavyweight `gbx_rst_merge_agg` does not merge tiles in two coordinate systems. It returns one of them.
 - **A lightweight merge no longer overwrites valid pixels with zeros** when a tile is reprojected. The reprojected tile carries its warp footprint as a mask. The mosaic has a mask band, and a pixel no tile covers is invalid.
 - **A streamed lightweight merge reads each tile by its own NoData,** as the in-memory merge does. The `cog_gbx` mosaic index masks a multi-band tile only where every band is NoData. The layout still differs: the streamed result is a Cloud Optimized GeoTIFF (tiled, with overviews), and the in-memory one a striped GeoTIFF.
 - **Heavyweight focal defects are fixed.**
@@ -572,7 +705,129 @@ Both tiers apply one rule for which pixels are valid.
 - **`gbx_rst_bng_rasterize_tvf` burns BNG cells into one raster per key without holding a whole group in memory.** Call it with `TABLE(...) PARTITION BY (key)` and an explicit canvas.
 - **`gbx_rst_merge_tvf` merges each key's tiles into one raster, reading them a row at a time.** Use it instead of `gbx_rst_merge_agg` for large groups.
 
+## Results and errors {#results-errors}
+
+### Errors, NULLs and wrong arguments follow one contract (behavior change) {#error-contract}
+
+Every raster function follows the same order of checks on both implementations.
+
+- **A NULL tile or a NULL required argument gives NULL.** An error tile in comes out as itself.
+- **A tile that cannot be read gives an error tile.** This covers an unreadable tile, a tile the driver policy refuses and a tile over the compute's read cap. The tile has a NULL raster and the reason in `metadata.last_error`, beside `error_message`. `rst_tryopen` is false for it.
+  - A tile whose file cannot be reached now fails the task, so Spark retries it. Examples are a Volume path that has not caught up and a missing file after the retries. Before, the row became an error tile that stayed.
+  - A tile that opens but cannot be read (truncated or corrupt pixels) is the tile's error tile with GDAL's reason. Before, the task failed.
+- **A wrong argument raises and names the value.** These are wrong arguments:
+  - A factor or size of 0, an unknown resampling word, or a data type, driver or operation GeoBrix does not know.
+  - A kernel that is not rectangular with odd sides, or percentiles outside 0 to 100.
+  - A method other than `spectral`, `kmeans` or `hybrid`, a subdataset the tile lacks, or a band past the last band.
+  - An `out_srid` that is not a positive EPSG or ESRI code.
+  - The Python Column API raises the same errors as SQL.
+  - Heavyweight functions that gave an error tile for a wrong argument now fail the call.
+- **An aggregate of only error tiles gives the first error tile.** `rst_combine*` and `rst_frombands` skip a NULL element, an error tile or a tile that cannot be opened, and combine the others.
+  - They give NULL for a NULL or empty array.
+  - Tiles of different shape raise. `rst_combineavg` no longer resamples.
+- **`rst_isempty` is true only for an error tile,** or a raster with no valid pixel. A tile with neither raster nor path and no reason is NULL.
+- **`rst_setsrid(tile, 0)` clears the CRS.** A raster georeferenced by ground control points counts as having a CRS.
+- **A merge too big to build is that group's error tile** with a `Fix:`. The aggregate raises.
+- **A duplicate cell's maximum ignores NaN.** A NaN never beats a number in the rasterize aggregates and the cell fills.
+- **`out_srid` and `out_crs` together raise,** in every rasterizer: `Fix: set one`. This includes the H3 and quadbin rasterizers, where `out_crs` used to win.
+- **`rst_fromfile(vrt, materialize=True)` gives a GeoTIFF tile,** or an error tile with the reason, instead of NULL. A file the driver policy refuses is an error tile. A missing path stays NULL.
+- **Remote paths need a switch.** `gbx_rst_fromfile('https://...')` reads the URL through GDAL's `/vsicurl/` when you set `GBX_ALLOW_REMOTE_PATHS=true` before `register()`. The same size cap applies as for a local file. A URL that cannot be opened gives NULL. With the switch off the call raises with the location and a `Fix:`. A VRT served at a URL is refused, whatever its name.
+- **The `driver` of `rst_fromcontent` and `rst_fromfile` must be a raster driver.** A vector-only driver such as `GeoJSON` raises. The driver is stored as GDAL spells it.
+- **`gbx_rst_fromcontent` gives an error tile with a `Fix:` for bytes GDAL cannot open,** or a format that can name other files (VRT).
+
+### Tile reads honor the compute's memory cap (behavior change) {#read-caps}
+
+- **A tile held in a column is refused when its decoded size passes the cap.** The cap is 64 MiB on Serverless and 1536 MiB on classic and dedicated compute. The lightweight functions used to process such a tile on Serverless. The refusal text is the same on both implementations.
+  - Reading a file over the cap fails the call with a retile `Fix:`. The same holds for `gbx_rst_fromfile`, `rst_fromfile(materialize=True)` and `raster_gbx` with `virtualTiles=false`.
+  - `rst_align_to` reads only the header of the reference tile, so a large reference no longer turns every aligned tile into an error tile.
+- **Heavyweight and lightweight functions take the same tile drivers and refuse the same oversized tiles.** The JVM reads tile bytes of netCDF, HDF, HFA, JP2 and GPKG as a GeoTIFF. Subdatasets and extra metadata domains are not kept. These reads failed before 0.6.0.
+  - `gbx_rst_subdatasets` and `gbx_rst_getsubdataset` read a netCDF or HDF tile as its own dataset, so they keep working.
+  - A netCDF or HDF container with several variables and no band answers `rst_width`, `rst_height`, `rst_numbands`, `rst_subdatasets` and `rst_metadata`. It was an error tile. `rst_metadata` includes the file's own metadata domains.
+  - Heavyweight netCDF and HDF reads run one at a time per executor. This avoids a native crash in GDAL 3.13's netCDF metadata path. Throughput of concurrent netCDF reads in one executor is lower.
+- **A merge or combine over the memory budget no longer fails or returns NULL.** `gbx_rst_merge_agg` and `gbx_rst_combineavg_agg` stream the work, and `gbx_rst_combinesum`, `count`, `median` and `stddev` fold in windows.
+  - The streamed mosaic is a Cloud Optimized GeoTIFF with the same pixels as the in-memory one.
+  - A mosaic past 10 GiB decoded raises a `Fix:`. It says to keep the tiles as files on a Volume, then build the mosaic with `databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")` or the `cog_gbx` writer with `vrtMosaic=true`, and read the VRT.
+  - Members in different CRSs or pixel sizes get a first step in the `Fix:`: bring them to one CRS and pixel size with `gbx_rst_transform` and `gbx_rst_resample_to_res`.
+  - A tile that must be decoded whole and is over the read cap names `merge_by_key(..., method="vrt")`.
+  - A stack too wide for one row names retiling first, then `combine_by_key`. The row is then one raster per sub-tile.
+  - `gbx_rst_combineavg_agg`, `gbx_rst_frombands_agg` and `gbx_rst_derivedband_agg` raise a `Fix:` in SQL for a group they cannot fold or a member over the read cap. The Python tile form keeps the group's error tile.
+  - See [Performance](./api/performance) and [Error handling](./api/error-handling).
+- **`gbx_rst_merge_tvf` and `gbx_rst_bng_rasterize_tvf` are new table functions (new).** Python has `rst_merge_tvf(df)` and `rst_bng_rasterize_tvf(df, xmin, ymin, xmax, ymax, width, height)`. They are the grouped merge and the BNG rasterize as `TABLE(...) PARTITION BY (key)` calls.
+  - One mosaic or canvas per key, with the same pixels as the aggregates. A task reads a row at a time and needs about a third of the aggregate's memory on large groups.
+  - The table needs the columns `key, tile` or `key, cellid, value`. A key with no readable tile or no cell gives no row.
+  - A partition that holds more than one key raises. Call it as `TABLE(SELECT key, ... FROM ...) PARTITION BY (key)`.
+  - A `BINARY` `tile` column raises with `Fix: pass gbx_rst_fromcontent(<bytes>, 'GTiff') as tile`. A NULL canvas value raises and names it.
+  - The cell rasterize aggregates derive the canvas from the cells when `xmin` to `height` and `kring_pad` are all NULL. A canvas given in part raises.
+
+### WKB is little-endian and cell rings start south-west (behavior change) {#output-formats}
+
+- **WKB from the heavyweight functions is little-endian,** as the lightweight functions, GDAL and `st_asbinary` give. The same call returns the same bytes on every compute.
+- **A BNG or custom-grid cell polygon starts at the south-west corner and runs counter-clockwise.** An example is `POLYGON ((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))`. The lightweight level started at the south-east corner.
+- **`gbx_bng_aswkb` and `gbx_bng_centroid` on Unity Catalog return little-endian EWKB with SRID 27700.** The bytes are the same whether the Volume holds the JAR or not. The session functions return plain WKB without an SRID.
+
+### Raster function results (behavior change) {#raster-results}
+
+- **Light band mean and standard deviation are exact to double.** They were off in the 7th digit for `float32` bands.
+- **Heavyweight changes.**
+  - `gbx_rst_srid` is NULL when the CRS has no authority code (it was 0). `gbx_rst_getnodata` is NULL when no band declares NoData (it was NaN per band).
+  - `gbx_rst_sample` raises for a non-point geometry. A longitude/latitude point (EWKT, EWKB or the `crs` argument) lands on the right pixel. It used the authority's axis order and missed the raster.
+  - `gbx_rst_convolve` returns `Float64`. The median filter of an even number of valid pixels is the mean of the two middle values.
+  - `gbx_rst_initnodata` keeps a NoData value every band declares, NaN included. `gbx_rst_percentile_stretch` declares NoData 0.
+  - `gbx_rst_gridfrompoints` with `max_pts` below the number of points weights the nearest `max_pts` points.
+  - `gbx_rst_merge` mosaics tiles in different CRSs. The reference CRS is the smallest EPSG code present. GeoBrix reprojects a tile in another CRS onto the pixel size and grid of the first tile in it. That tile can grow by up to a pixel on each side.
+- **Lightweight changes.**
+  - `gbx_rst_updatetype` rounds a float to the nearest integer and clamps to the type's range. It truncated and wrapped. The type name is read in any case.
+  - `gbx_rst_getsubdataset` works on a tile that points to a netCDF or HDF file, and returns a tile labelled driver `GTiff`.
+  - `rst_getsubdataset` on a tile with a window, clip or pending edits gives an error tile with a `Fix:`.
+  - `rst_filter` with a fractional window such as 3.9 raises. `rst_derivedband` finds a function defined inside `if`, `try`, `with`, `for` or `while`.
+  - `gbx_rst_histogram` with a bucket count below 1 raises. `gbx_rst_bandmetadata(tile, NULL)` is NULL.
+  - Resampling words match at both levels: `near` (or `nearest`), `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` and `q3`, in any case. Words such as `gauss`, `sum` and `rms` raise and list the words that work.
+  - `gbx_rst_transform` and `gbx_rst_to_webmercator` give an error tile with a `Fix:` for a tile with no CRS.
+  - `gbx_rst_proximity` with a NaN or NULL `max_distance` means no cap. It agrees with GDAL to within a pixel's diagonal.
+  - `gbx_rst_clip` with a cutline that cannot be read, or a `clip_crs` that names no CRS, gives the tile's error tile.
+  - `gbx_rst_aspect(..., trigonometric => true)` is 0 to 360. `gbx_rst_threshold` with an unknown operator raises, and `op` and `value` default to `'>'` and 0.0. Passing pixels keep their value and others become NoData.
+  - `rst_tilexyz` of a one-band raster is an RGBA PNG or RGB JPEG. A NULL `z`, `x` or `y` gives NULL.
+  - `rst_cog_convert` writes any block size that is a multiple of 16, and `'AUTO'` is ZSTD at both levels. `rst_color_relief` writes RGBA when a stop has an alpha column.
+  - `gbx_rst_color_relief` and `gbx_rst_cog_convert` accept a colour table at a remote or `/vsi` path.
+  - `gbx_rst_polygonize` defaults band 1 and connectedness 4. It raises for another connectedness or a band the tile lacks.
+  - `gbx_rst_tooverlappingtiles` raises for a window below one pixel and for an overlap outside 0 to 99 percent.
+  - `gbx_rst_viewshed_towers` fails the query when the DSM tile of a tower cannot be read, on every level.
+- **`gbx_rst_gridfrompoints` and `gbx_rst_binpoints` give NULL for a NULL extent, size or SRID.** With no `out_srid` and no `out_crs`, the output has no CRS.
+- **`gbx_rst_rasterize` reprojects an EWKT geometry into the output CRS,** as it did EWKB. A geometry that cannot be read, or an empty string, raises and names it.
+- **A rasterize aggregate with the `value` left out burns 1.0 (the presence mask).** A typed NULL burns NaN.
+- **A GCP-georeferenced raster is warped from its points** by `gbx_rst_transform` and `gbx_rst_to_webmercator`.
+- **A tile's alpha band keeps its label through the band selection of `rst_band`.** See [NoData, alpha and mask bands](#nodata-alpha-mask).
+- **The heavyweight and lightweight `rst_merge` overlap winner does not depend on the array order.** The bytes that sort last win. The old text said the first tile wins.
+- **`gbx_rst_asformat` takes the driver name in any case at both levels.** It resolves the name to GDAL's spelling and leaves a tile that is already in that driver unchanged. The `driver` in the result is the driver the bytes open as (`GTiff` for `COG`).
+- **The JVM cell rasterizers read `out_crs` as `EPSG:<n>` or a bare integer.** They refuse `ESRI:<n>` and WKT with a `Fix:`. The lightweight level accepts them.
+- **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs on the lightweight level only.
+- **SQL tile functions read a `FILE` column through the same fast path as the Python API.**
+- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram`, `gbx_rst_metadata` and `gbx_rst_summary` keep results that differ from the lightweight ones (an even-count median, the top histogram edge, GDAL's merged metadata, a `gdalinfo` JSON summary). None is a default level. With `zero_for_flat`, GDAL's slope output has no NoData and a 0 border. The lightweight tile keeps -9999 at the border.
+
 ## Grid functions {#grid-functions}
+
+### Resolutions, NULLs and non-finite input (behavior change) {#grid-contract}
+
+Every grid function follows one contract for its resolution and its input.
+
+- **A BNG resolution is an index or a digit string.** `'3'` works, and so does `'1km'` for a BNG size. A resolution outside the INT range raises and names the value. Before, the JVM narrowed it to INT and could wrap to a valid index.
+- **A fractional resolution such as 3.5 raises and names the value** in the quadbin, custom-grid and H3 functions. A whole number written as text (`'3'`) is accepted.
+- **A NULL cell gives NULL** in the quadbin and custom-grid cell functions. Before, the lightweight functions raised or gave resolution 0.
+- **A non-finite coordinate gives NULL.** An infinite longitude or latitude in `quadbin_pointascell` was a made-up cell. An infinite geometry gives NULL in `geomkring` and `geomkloop` of all three grids. An unreadable geometry gives NULL in `quadbin_polyfill` and `quadbin_tessellate`.
+- **The custom-grid functions treat NULL, text and bad modes alike.** A NULL resolution or `k` gives NULL. A text resolution works. An unknown dilation mode raises.
+- **The geometry explodes follow the rules of their array functions.** An unknown mode or an undefined resolution raises. A non-finite point or unreadable geometry gives no rows. The BNG and custom explodes raise for an unknown `coverage` before they run, and read a `BIGINT` `k`. A `k` past INT raises.
+- **`gbx_rst_bng_tessellate` raises for a resolution BNG does not define.**
+- **The TIN generators and `gbx_st_asmvt_pyramid` give no rows for a NULL required argument.** They failed the query before.
+
+### Exact cell ids (fix) {#exact-cell-ids}
+
+- **Cell functions that take a `BIGINT` cell no longer return the wrong cell when the batch holds a NULL.** The affected functions are `gbx_quadbin_resolution`, `distance`, `aswkb` and `centroid`, and `gbx_custom_cellaswkb`, `cellaswkt`, `centroid` and `distance`. Pandas rounded ids past 2^53 to a neighbour. They now run row by row.
+- **The grouped aggregates raise for a group with a NULL cell id.** The aggregates are `gbx_quadbin_cellunion_agg`, `gbx_h3_cellfill`, `gbx_quadbin_cellfill` and `gbx_custom_cellfill`. Pandas cannot read exact ids, so the message says to filter first: `WHERE cellid IS NOT NULL`. `gbx_rst_*_rasterize_agg` already did this.
+- **A BNG chip with NULL bytes is an empty geometry** in `gbx_bng_cellunion`, `gbx_bng_cellintersection` and their aggregates, on both levels. The union is the other chip, and the intersection is empty. `gbx_bng_cellintersection` leaves NULL bytes for an empty intersection.
+- **A BIGINT resolution in the custom-grid functions raises an `IllegalArgumentException` that names the value,** where `ArithmeticException: integer overflow` was raised.
+- **The raster-to-grid functions give no rows for an unreadable tile** and no rows for a NULL resolution or custom grid. A bad resolution, coverage or assignment raises and names the value before the tile is opened. A custom resolution above the grid's maximum raises before the tile is opened.
+- **`gbx_rst_*_rastertogrid*` cell functions treat a transparent pixel as no data.** See [NoData, alpha and mask bands](#nodata-alpha-mask).
+
 
 ### `bng_tessellateexplode` columns (behavior change) {#bng-explode}
 
@@ -582,8 +837,7 @@ Both tiers apply one rule for which pixels are valid.
   - The Python wrapper's default changes from true to false.
   - The Scala two-argument wrapper passes false instead of true.
   - A core cell's `chip` is NULL unless you ask for it. Border cells always carry their geometry.
-- **Heavyweight Python `bng_kringexplode`, `bng_kloopexplode`, `bng_geomkringexplode` and `bng_geomkloopexplode` work (fix).** They wrapped the generator in `explode(...)`, which Spark rejects (`UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS`). They now return the generator Column. Select it and it expands to one `cellid` row per cell.
-- **Call heavyweight quadbin and custom-grid explode functions with `LATERAL VIEW` or in the select list.** `FROM t, LATERAL f(...)` reaches only the lightweight table function. H3 geometry-aware functions are lightweight-only.
+- **Call the BNG, quadbin, custom-grid and H3 explode functions with `FROM t, LATERAL f(...)`.** This form works on every compute.
 
 ### `bng_tessellate` core geometry off by default (behavior change) {#bng-tessellate-default}
 
@@ -617,9 +871,6 @@ Both tiers apply one rule for which pixels are valid.
 ### Other grid changes (behavior change, new) {#grid-other}
 
 - **`out_crs` on `gbx_rst_bng_rasterize_agg` is refused on both tiers when it is not NULL (behavior change).** BNG output is always EPSG:27700. Both tiers used to accept and ignore the argument. Pass NULL, and reproject the tile with `gbx_rst_transformcrs` for another CRS.
-- **Heavyweight Python wrappers for the custom-grid and quadbin geometry k-ring and k-loop explode functions (new).** They were SQL-only in the heavyweight tier. They are now callable from Python like their BNG and H3 counterparts.
-  - `custom_geomkringexplode` and `custom_geomkloopexplode` (`databricks.labs.gbx.gridx.custom.functions`).
-  - `quadbin_geomkringexplode` and `quadbin_geomkloopexplode` (`databricks.labs.gbx.gridx.quadbin.functions`).
 
 ## Zarr {#zarr}
 
@@ -699,7 +950,7 @@ Both tiers apply one rule for which pixels are valid.
 
 ### A Databricks Container Service image for dedicated clusters (new) {#dcs-image}
 
-- **A GeoBrix image runs both tiers on a dedicated cluster.** The tags are:
+- **A GeoBrix image runs every function, and the JVM engine, on a dedicated cluster.** The tags are:
   - Graviton (arm64): `mjohns797/geobrix:<version>-env6-arm` (pinned to a release) and `mjohns797/geobrix:env6-arm` (newest release).
   - x86 (amd64): `mjohns797/geobrix:<version>-env6-x86` and `mjohns797/geobrix:env6-x86`.
 - **Contents.** The images are built on the DCS vNext environment 6 images. They carry:
@@ -717,15 +968,9 @@ Both tiers apply one rule for which pixels are valid.
   - GeoBrix built the images and ran their in-image checks. It has not yet run them on a cluster.
   - DBR 17.3 / 18 images are not available. Install the env5 wheel and the JAR as cluster libraries.
   - On a DCS cluster, h5py with `hdf5plugin` can see the plugin directory the image links, so a blosc write with h5py may fail. See [netCDF-4 filters and h5py](./installation/dcs#netcdf-filters).
-  - The heavyweight tier needs dedicated compute. On standard access mode and Serverless, use the lightweight tier.
+  - The JVM engine needs dedicated compute. On standard access mode and Serverless, every function still runs in Python.
 
 See [Databricks Container Service](./installation/dcs.mdx) and [Choose an install path](./installation.mdx#choose-an-install-path).
-
-### Heavyweight vector readers read `/Volumes` on the image (fix) {#dcs-volumes}
-
-- On a DCS dedicated cluster the JVM is refused direct reads of Volume files. Schema inference failed for `ogr` and the named `*_ogr` readers on a `/Volumes` path. These readers include `geojson_ogr`, `gpkg_ogr` and `shapefile_ogr`.
-  - Schema inference now falls back to reading the file through Spark. These readers take the same `/Volumes` paths as the lightweight readers.
-  - The `gdal` raster reader and other compute are unchanged.
 
 ## Dependencies {#dependencies}
 

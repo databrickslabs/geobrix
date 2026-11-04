@@ -22,10 +22,12 @@ v0.6.0 is under development and not yet released.
 
 - **Breaking:** install one [env wheel per runtime family](./release-notes-0-6#env-wheels) (`+env5` or `+env6`). The 0.5.x light extras are gone, and [GeoBrix no longer installs PySpark](./release-notes-0-6#pyspark).
 - **Breaking:** the [init-script install is removed](./release-notes-0-6#init-script). Install the env wheel and the JAR as cluster libraries, or use the DCS image.
-- **Breaking:** the heavyweight `*_ogr` readers [return declared field types and NULLs](./release-notes-0-6#ogr-field-types), and [`gbx_file_write` defaults to `file_mode="fuse"`](./release-notes-0-6#file-write).
+- **Breaking:** one [Python API](./release-notes-0-6#one-python-api) (`rasterx`, `gridx.<grid>`, `vectorx`) and one registrar, [`gbx.register(spark)`](./release-notes-0-6#one-registrar). Scala [registers no SQL](./release-notes-0-6#scala-registration). The [migration guide](./migration-0-6) maps each old call to its new one.
+- **Breaking:** the [Scala readers and writers are retired](./release-notes-0-6#readers-retired). The `*_gbx` readers replace them. [`gbx_file_write` defaults to `file_mode="fuse"`](./release-notes-0-6#file-write).
+- **New:** [Unity Catalog functions](./release-notes-0-6#unity-catalog-functions) for SQL warehouses, installed with `gbx.uc.install`, and [`gbx.stage_jar`](./release-notes-0-6#stage-jar) to stage the JAR the env wheel carries.
 - **New:** incremental ingestion with [`read_paths` and `declare_ingest`](./release-notes-0-6#read-paths), [bad records set aside with `on_error`](./release-notes-0-6#on-error), and a [multi-format Lakeflow connector](./release-notes-0-6#lakeflow-connector).
 - **New:** [transactional, versioned Zarr stores](./release-notes-0-6#zarr-stores) with [direct storage access](./release-notes-0-6#zarr-direct).
-- **New:** a [Databricks Container Service image](./release-notes-0-6#dcs-image) that runs both tiers on dedicated clusters, and [GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](./release-notes-0-6#native-stack) in the env wheel.
+- **New:** a [Databricks Container Service image](./release-notes-0-6#dcs-image) for dedicated clusters, and [GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0](./release-notes-0-6#native-stack) in the env wheel.
 - **Changed:** [raster tessellation](./release-notes-0-6#tessellation-parity) matches across tiers and scales to scene-sized tiles, with one rule for [NoData, alpha and mask bands](./release-notes-0-6#nodata-alpha-mask).
 - **Changed:** [large vector layers stream](./release-notes-0-6#vector-large-layers), [`file_gdb_gbx` writes on any compute](./release-notes-0-6#vector-writers), and [British National Grid transforms use OSTN15](./release-notes-0-6#proj-data).
 

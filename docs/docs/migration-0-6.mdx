@@ -1,0 +1,107 @@
+---
+sidebar_position: 6
+title: Migrate to 0.6
+description: Move code and installs from GeoBrix 0.5.x to 0.6. Each old install line, import, registrar and reader maps to its new form.
+---
+
+# Migrate to 0.6
+
+GeoBrix 0.6 has one install per runtime, one Python API and one registrar. This page maps each 0.5.x form to its 0.6 form. [Release Notes: 0.6.x](./release-notes-0-6) lists every change in full.
+
+A 0.5.x call that no longer exists raises an error. The message gives a `Fix:` with the new form.
+
+## Install
+
+| From | To | Note |
+|---|---|---|
+| `geobrix[light_env6] @ …0.5.x.whl` | `geobrix @ …/geobrix-0.6.0+env6-py3-none-any.whl` | Drop the extra. |
+| `geobrix[light_env6_all]` | `geobrix[stac,vizx] @ …+env6…` | Add `zarr` on env6 if you use Zarr. |
+| `geobrix[light_dbr18] @ …` (classic, Lakeflow) | `geobrix @ …/geobrix-0.6.0+env5-py3-none-any.whl` | The same for `light_env5` and `light_dbr17`. |
+| `geobrix[light_dbr19] @ …` | `geobrix @ …+env6…` | |
+| Init script and a cluster-library wheel | The env wheel, and the JAR from `gbx.stage_jar` | Remove the init script and the GDAL bundle. |
+| GeoBrix JAR downloaded from the release page | `gbx.stage_jar("/Volumes/<cat>/<sch>/<vol>/geobrix/0.6.0/jar")` | The env wheel carries the JAR. |
+| 0.5.x heavyweight on DBR 17.3 or 18 | The env5 wheel and the JAR, or stay on 0.5.2 | DBR 17.3, 18 and 19 are all supported. |
+
+Pick the wheel by runtime, not by extra: `+env6` for Serverless environment 6 and DBR 19, `+env5` for Serverless environment 5, DBR 17.3 and DBR 18. Install the exact file. An old extra such as `light_env6` fails at resolution and names the wheel to install. See [Installation](./installation).
+
+## Entry points
+
+| Old | New |
+|---|---|
+| `from databricks.labs.gbx.pyrx import functions as prx` | `from databricks.labs.gbx.rasterx import functions as rx` |
+| `from databricks.labs.gbx.pygx import functions as gx` | `from databricks.labs.gbx.gridx.<bng\|quadbin\|custom\|h3> import functions` |
+| `from databricks.labs.gbx.pyvx import functions as vx` | `from databricks.labs.gbx.vectorx import functions as vx` |
+| The old `register()` function of `rasterx`, `gridx`, `vectorx` or the `pyrx`, `pygx`, `pyvx` modules | `from databricks.labs import gbx`, then `gbx.register(spark)` |
+| `databricks.labs.gbx.ds.register`, the old reader registrar | `gbx.register(spark)` |
+| The Scala data source that registered the readers | `gbx.register(spark)` |
+| The Scala `register` function of each package | `gbx.register(spark)` from Python or SQL. Scala calls the SQL names. |
+| `vectorx.jts.legacy` and its `register()` | `gbx.register(spark)` and `vectorx.functions.st_legacyaswkb` |
+| `SELECT … LATERAL VIEW gbx_… ` on a generator | `SELECT … FROM t, LATERAL gbx_…(…) t`. This form works on every compute. |
+| `rst_retile(tile, 512, 512)` as a Column | `rst_retile(df, "tile", 512, 512)`, a DataFrame call |
+| `pyrx` helpers such as `rst_viewshed_towers`, `bin_points_tiled`, `*_grouped` | `from databricks.labs.gbx.rasterx import helpers` |
+| `pygx.h3_los_visible`, `pygx.h3_viewshed_towers` | `from databricks.labs.gbx.gridx import helpers` |
+| `pyvx.functions.coverage_simplify` | `from databricks.labs.gbx.vectorx import helpers` |
+| `pyrx.checkpoint`, `mvs`, `ortho`, `sfm`, `imagery`, `file_table` | `databricks.labs.gbx.rasterx.<same name>` |
+| `pyvx.file_read`, `pyvx.file_write` | `databricks.labs.gbx.vectorx.<same name>` |
+| `databricks.labs.gbx.ds._mosaic.mint_vrt` | `databricks.labs.gbx.rasterx.helpers.mint_vrt` |
+
+`gbx.register(spark)` picks the best implementation of each function for the compute. It also registers the `*_gbx` readers and writers. Pass `only=["gbx_rst_width"]` to limit the functions.
+
+## Python calls
+
+Function names do not change. Only these arguments and shapes do:
+
+| Function | Change |
+|---|---|
+| `rst_mapalgebra` | `json_spec` is now `expression`. |
+| `rst_transformcrs` | `crs` is now `target_crs`. |
+| `rst_align_to` | The second argument is `reference_tile`. |
+| `rst_land_cover` | `rst_land_cover(tile, method, n_clusters, smooth)`. `classes` is gone. |
+| `rst_bng_rasterize_agg` | Twelve required arguments, then an optional `out_crs`. |
+| `rst_custom_rasterize_agg` | `(cellid, value, grid, …)`. |
+| `custom_pointascell`, `custom_distance` | `point` replaces `geom`. `cellid1` and `cellid2` replace `cell1` and `cell2`. |
+| `gridx.h3` `geomkring`, `geomkloop` | `h3_geomkring`, `h3_geomkloop`, with an optional `coverage`. |
+| `gbx_h3_cell_bbox` | `gridx.h3.functions.h3_cell_bbox(cellid, srid, mode, kring_pad, out_crs)`. |
+| `pmtiles_agg` | `pmtiles_agg(bytes, z, x, y, metadata_json=None)`. |
+| `rst_merge_agg`, `rst_bng_rasterize_agg` and the other tile aggregates | They return `BINARY`. Wrap the result with `rst_fromcontent(col, "GTiff")` for a tile. |
+| Generators such as `rst_retile`, `rst_polygonize`, `bng_tessellateexplode`, `st_triangulate` | They take the DataFrame and return it joined with the new rows. |
+| `rst_h3_rastertogridavg` and the other 31 reducers | They return rows. Use `LATERAL` in SQL, or the DataFrame call in Python. |
+| `rst_fromfile` | The Python default is a virtual tile. Pass `materialize=True` for pixels. |
+
+A string argument that used to name a column can now be a literal. See [Renamed and reordered arguments](./release-notes-0-6#signature-changes) for the list.
+
+## Readers and writers
+
+The Scala readers and writers are retired. Use the `*_gbx` reader for the format.
+
+| Retired | Use |
+|---|---|
+| `gdal` | `raster_gbx` |
+| `gtiff_gdal` | `gtiff_gbx` |
+| `netcdf_gdal` | `netcdf_gbx` |
+| `ogr` | `vector_gbx` |
+| `shapefile_ogr` | `shapefile_gbx` |
+| `geojson_ogr` | `geojson_gbx` |
+| `gpkg_ogr` | `gpkg_gbx` |
+| `file_gdb_ogr` | `file_gdb_gbx` |
+| `netcdf_ogr` | `netcdf_gbx` with `mode="vector"` |
+
+A Python data source cannot be queried by path in SQL. Create a view instead: `CREATE VIEW v USING raster_gbx OPTIONS (path '…')`. Write rasters with `raster_gbx`, `gtiff_gbx` or `cog_gbx`. See [Readers](./readers/overview).
+
+## Scala
+
+Scala registers no SQL. Register from Python or SQL, then call the SQL names or the Scala wrappers that remain. For a function without a wrapper, use `call_function("gbx_<name>", …)`. [Scala no longer registers SQL](./release-notes-0-6#scala-registration) lists the removed wrappers.
+
+## Results that changed
+
+These changes can alter your results. Read each entry before you upgrade:
+
+- [Errors, NULLs and wrong arguments follow one contract](./release-notes-0-6#error-contract)
+- [Tile reads honor the compute's memory cap](./release-notes-0-6#read-caps)
+- [WKB is little-endian and cell rings start south-west](./release-notes-0-6#output-formats)
+- [NoData, alpha and mask bands](./release-notes-0-6#nodata-alpha-mask)
+- [British National Grid transforms use OSTN15](./release-notes-0-6#proj-data)
+
+## Unity Catalog
+
+SQL warehouses call GeoBrix as Unity Catalog functions. An owner runs `gbx.uc.install("<catalog>", "<schema>", "<volume folder>")` once from a Serverless environment 6 or DBR 19 notebook. See [Unity Catalog functions](./api/uc-functions).

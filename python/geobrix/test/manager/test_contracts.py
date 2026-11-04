@@ -3431,3 +3431,12 @@ def test_every_python_data_source_ref_resolves_and_is_available_after_register(s
             assert "DATA_SOURCE_NOT_FOUND" not in str(
                 exc
             ), f"{d.name} is not registered"
+
+
+def test_the_reminder_links_to_an_existing_page():
+    from databricks.labs.gbx.manager import messages
+
+    page = (
+        REPO / "docs/docs" / (messages.MIGRATION_PATH.removeprefix("/docs/") + ".mdx")
+    )
+    assert page.exists() and messages.MIGRATION_PATH in messages.REMINDER

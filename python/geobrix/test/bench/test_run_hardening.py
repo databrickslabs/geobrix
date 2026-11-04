@@ -259,6 +259,20 @@ def test_a_form_records_its_setup_and_warmup_time_in_its_row_and_its_done_line(
         r"DONE elapsed \d+\.\ds setup \d+\.\ds warmup \d+\.\ds median \d+\.\d\ds$",
         done[0],
     ), done[0]
+    # an error row keeps 0.0 in its row, but its DONE line omits setup/warmup: a 0.0 there reads as measured
+    monkeypatch.setattr(
+        levels, "_run_one", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom"))
+    )
+    hb = liveness.Heartbeat(str(tmp_path / "hb2.json"), interval=3600).start()
+    err = levels.run_mvp(
+        spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1,), where="venv",
+        base_rows=50, only_levels=("L3",), heartbeat=hb, form_cap_s=60,
+    )[0]  # fmt: skip
+    hb.stop()
+    assert err.status == "error" and err.setup_s == 0.0 and err.warmup_s == 0.0
+    done = [ln for ln in _printed(capsys) if " DONE " in ln]
+    assert "setup" not in done[0] and "warmup" not in done[0], done[0]
+    assert done[0].endswith("status error"), done[0]
 
 
 # ---- liveness: each form's rows sink when that form finishes

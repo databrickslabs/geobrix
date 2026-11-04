@@ -185,12 +185,15 @@ def run_mvp(
                 )
             if heartbeat:
                 done = rows[-1]
+                measured = (
+                    done.status == "ok"
+                )  # an error row's 0.0 is a default, not a measurement
                 heartbeat.end(
                     form_done=scale == scales[-1],
-                    median_s=done.iter_median_s if done.status == "ok" else None,
+                    median_s=done.iter_median_s if measured else None,
                     status=done.status,
-                    setup_s=done.setup_s,
-                    warmup_s=done.warmup_s,
+                    setup_s=done.setup_s if measured else None,
+                    warmup_s=done.warmup_s if measured else None,
                 )
             if on_form:
                 # sunk now, not after the last scale: a later scale that hangs or is cancelled loses nothing. The

@@ -12,9 +12,9 @@ df.show()"""
 
 
 def read_shapefile_gbx(spark, path=None):
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_sources(spark)
+    gbx.register(spark)
     df = spark.read.format("shapefile_gbx").load(path or SAMPLE)
     assert "geom_0" in df.columns and "geom_0_srid" in df.columns
     assert df.count() > 0

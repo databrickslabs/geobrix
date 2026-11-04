@@ -7,11 +7,6 @@ using rasterio + numpy rather than reading from /Volumes sample data.
 No path_config import is needed.
 """
 
-try:
-    from databricks.labs.gbx.pyrx import functions as rx
-except ImportError:
-    rx = None
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers

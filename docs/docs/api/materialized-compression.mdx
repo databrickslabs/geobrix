@@ -14,24 +14,24 @@ A **materialized tile** carries its raster payload as encoded bytes. Those bytes
 
 For the structure of a tile and the full virtual↔materialized lifecycle, see **[Tile Structure](./tile-structure)** and **[Virtual Tiles](./virtual-tiles)**.
 
-## GeoBrix's approach: a dtype-matched predictor with a per-tier default codec
+## GeoBrix's approach: a dtype-matched predictor with a per-implementation default codec
 
-Both tiers pair their default codec with a **dtype-matched predictor** that reorders bytes to improve compression ratio. The default codec depends on the tier:
+Both implementations pair their default codec with a **dtype-matched predictor** that reorders bytes to improve compression ratio. The default codec depends on the implementation:
 
-| Tier | Default codec | Why |
+| Implementation | Default codec | Why |
 |---|---|---|
 | Lightweight | **ZSTD** (`auto`, size-adaptive level) through the canonical `creation_opts` | Best ratio and write throughput for materialized tiles; see the level ladder below |
 | Heavyweight | **DEFLATE** (level 6) | Baseline TIFF: every reader decodes it, including Java ImageIO and the Databricks image preview, which cannot decode ZSTD output |
 
-On the heavyweight tier, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` keeps ZSTD as its default on both tiers (the size-adaptive `auto` level on the lightweight tier).
+On the heavyweight implementation, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` keeps ZSTD as its default on both implementations (the size-adaptive `auto` level on the lightweight one).
 
-The predictor rules are the same in both tiers:
+The predictor rules are the same in both implementations:
 
 - **float32 / float64**: predictor 3 (horizontal differencing for floating-point data)
 - **int16 / uint16 / int32 / uint32**: predictor 2 (delta encoding for integer data)
 - **uint8 / int8**: predictor 1 (byte data; predictor adds negligible benefit)
 
-All light-tier raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply uniformly across every writer — no writer skips the predictor or applies a dtype-mismatched value.
+All lightweight raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply to every writer. No writer skips the predictor or applies a dtype-mismatched value.
 
 The lightweight `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**: levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit, and L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
 
@@ -65,7 +65,7 @@ Set `GBX_ZSTD_LEVEL` in the executor environment to override the size-adaptive l
 | `max` | L9 everywhere — the level a heavyweight tile gets when its metadata names ZSTD; no smaller output than L6 on GeoBrix tiles |
 | `1`–`22` | Explicit fixed level applied to all tile sizes, size-independent |
 
-Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable; `max` (L9) matches the old ladder's ceiling, and the default level of an explicit heavyweight ZSTD tile (`zstd_level` is 9). The heavyweight tier defaults to DEFLATE, so that match applies only to heavyweight tiles whose metadata sets `compression` to `ZSTD`.
+Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable. `max` (L9) matches the old ladder's ceiling. It is also the default level of an explicit heavyweight ZSTD tile (`zstd_level` is 9). The heavyweight implementation defaults to DEFLATE, so that match applies only to heavyweight tiles whose metadata sets `compression` to `ZSTD`.
 
 ## When to reach for other codecs
 

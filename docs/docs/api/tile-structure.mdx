@@ -35,7 +35,7 @@ struct<
 >
 ```
 
-A tile is **materialized** when `raster` carries the encoded bytes (the common case, and the only form the heavyweight tier consumes). A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — a bytes-free reference that materializes pixels on demand (a lightweight-tier capability). For the full virtual/materialized model, see **[Virtual Tiles](./virtual-tiles)**.
+A tile is **materialized** when `raster` carries the encoded bytes (the common case, and the only form the heavyweight implementation consumes). A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — a bytes-free reference that materializes pixels on demand (a lightweight capability). For the full virtual/materialized model, see **[Virtual Tiles](./virtual-tiles)**.
 
 ### Field Descriptions
 

@@ -29,8 +29,8 @@ It takes the cube through seven steps:
 **[examples/notebooks/zarr-weather-features](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/zarr-weather-features)** — download `01_zarr_weather_features.ipynb` and import it into your Databricks workspace to run.
 :::
 
-:::info Runs on the lightweight tier (`geobrix[zarr,vizx]`, env6 wheel)
-Zarr stores run only in the **lightweight tier**, so there is no JAR. The notebook targets **Serverless environment 6** with the env6 wheel and `geobrix[zarr,vizx]`. On a classic **Databricks Runtime 19** cluster, install the same env6 wheel and extras. The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Execution Tiers](../api/execution-tiers).
+:::info Runs on Serverless (`geobrix[zarr,vizx]`, env6 wheel)
+Zarr stores need no JAR. The notebook targets **Serverless environment 6** with the env6 wheel and `geobrix[zarr,vizx]`. On a classic **Databricks Runtime 19** cluster, install the same env6 wheel and extras. The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Surfaces and levels](../api/execution-tiers).
 :::
 
 ---

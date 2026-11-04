@@ -26,11 +26,6 @@ try:
 except ImportError:
     rx = None
 
-try:
-    from databricks.labs.gbx.pyrx import functions as pyrx
-except ImportError:
-    pyrx = None
-
 
 # SQL constant for cellid example (use your sample raster path)
 SQL_CELLID_NON_TESSELLATED = f"""-- Non-tessellated: cellid is null

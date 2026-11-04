@@ -7,11 +7,6 @@ or NetCDF) so every function's four tabs show the SAME example — the same fixt
 and argument values expressed in each tier's language.
 """
 
-try:
-    from databricks.labs.gbx.pyrx import functions as rx
-except ImportError:
-    rx = None
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers — imported from _fixtures.py

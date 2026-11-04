@@ -15,6 +15,15 @@ or parenthesized `from ...pyrx import (functions as rx)` counts. A notebook's `%
 read for the bindings it defines (UNRESOLVED when it cannot be read). A rewritten file that no longer compiles
 is reported instead of written. `--dry-run` prints what would change and writes nothing.
 
+`--registers` rewrites the per-package registrars to the one registrar: `<alias>.register(spark)` where `<alias>`
+is bound to a `pyrx` / `pygx` / `pyvx` `functions` module or to `rasterx`, `gridx.*`, `vectorx`, `pmtiles`;
+`register(spark)` / `register_ds(spark)` imported from `databricks.labs.gbx.ds.register`; and the manager helpers
+`gbx_manager.register_family(spark, prefixes[, level=])` and `gbx_manager.register_sources(spark)` become
+`gbx.register(spark)`, with `from databricks.labs import gbx` bound in the scope. A second call in the same
+statement list is dropped, and an import nothing uses any more goes with it (a notebook keeps the module aliases
+its `%run` importers may use). `only=` (functions) is kept for an alias call; a `register_family(only=...)`, a
+`register_sources(only=...)` or a call through any other name is printed as UNRESOLVED.
+
 `--modules` moves the Python-only API: `databricks.labs.gbx.pyrx.<mod>` becomes `...rasterx.<mod>` (and
 `pyvx.<mod>` becomes `vectorx.<mod>`) for the moved modules, in code, strings and import statements; the
 names the light packages used to export (`Manifest`, `tile_range`, `h3_viewshed_towers`, ...) are imported
@@ -49,7 +58,10 @@ ALIAS = {
 
 # --modules: what moved out of the light packages (Task "Python-only API moves under rasterx/gridx/vectorx").
 MOVED_MODULES = {
-    "pyrx": ("rasterx", ("checkpoint", "mvs", "ortho", "sfm", "imagery", "file_table", "helpers")),
+    "pyrx": (
+        "rasterx",
+        ("checkpoint", "mvs", "ortho", "sfm", "imagery", "file_table", "helpers"),
+    ),
     "pyvx": ("vectorx", ("file_read", "file_write")),
 }
 # a name the package `__init__` used to export -> the module that defines it now
@@ -159,7 +171,9 @@ def _parse(text: str):
     try:
         return ast.parse(text)
     except SyntaxError:
-        lines = ["pass" if x.lstrip().startswith(("%", "!")) else x for x in text.split("\n")]
+        lines = [
+            "pass" if x.lstrip().startswith(("%", "!")) else x for x in text.split("\n")
+        ]
         try:
             return ast.parse("\n".join(lines))
         except SyntaxError:
@@ -178,7 +192,9 @@ def _bound_here(nodes, params=()) -> set:
             out.add(n.name)
             stack.extend(n.decorator_list)
             continue
-        if isinstance(n, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+        if isinstance(
+            n, (ast.Lambda, ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+        ):
             continue
         if isinstance(n, (ast.Import, ast.ImportFrom)):
             out |= {a.asname or a.name.split(".")[0] for a in n.names}
@@ -209,9 +225,13 @@ def _imports(text: str) -> Tuple[set, set]:
     if tree is None:
         found = re.findall(rf"from {LIGHT} import functions as (\w+)", text)
         found += re.findall(rf"import {LIGHT}\.functions as (\w+)", text)
-        light = {m[-1] for m in found}  # LIGHT has a group: each match is (package, alias)
+        light = {
+            m[-1] for m in found
+        }  # LIGHT has a group: each match is (package, alias)
         names = set(re.findall(r"\bimport [\w.]+ as (\w+)", text))
-        names |= set(re.findall(r"\bfrom [\w.]+ import (?:\w+ as )?(\w+)\s*$", text, re.M))
+        names |= set(
+            re.findall(r"\bfrom [\w.]+ import (?:\w+ as )?(\w+)\s*$", text, re.M)
+        )
         return light, names | light
     for n in ast.walk(tree):
         if isinstance(n, ast.ImportFrom) and not n.level:
@@ -242,7 +262,11 @@ def _import_anchor(text: str):
             break
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             imports.append(node)
-            mods = [node.module or ""] if isinstance(node, ast.ImportFrom) else [a.name for a in node.names]
+            mods = (
+                [node.module or ""]
+                if isinstance(node, ast.ImportFrom)
+                else [a.name for a in node.names]
+            )
             if any(m.startswith("databricks.labs.gbx") for m in mods):
                 gbx.append(node)
     pick = (gbx or imports or [None])[-1]
@@ -259,7 +283,9 @@ def _compile_issue(text: str):
         return None
     except SyntaxError:
         pass
-    lines = ["pass" if x.lstrip().startswith(("%", "!")) else x for x in text.split("\n")]
+    lines = [
+        "pass" if x.lstrip().startswith(("%", "!")) else x for x in text.split("\n")
+    ]
     try:
         compile("\n".join(lines), "<codemod>", "exec")
         return None
@@ -279,8 +305,13 @@ def _run_code(text: str, base: Path, issues: List[str], seen=()) -> str:
         ref_path = Path(ref)
         found = None
         cands = [ref_path]
-        if ref_path.name:  # `%run .` or `%run ./dir/` names no file: there is no name to suffix
-            cands += [ref_path.with_name(ref_path.name + ".py"), ref_path.with_name(ref_path.name + ".ipynb")]
+        if (
+            ref_path.name
+        ):  # `%run .` or `%run ./dir/` names no file: there is no name to suffix
+            cands += [
+                ref_path.with_name(ref_path.name + ".py"),
+                ref_path.with_name(ref_path.name + ".ipynb"),
+            ]
         for cand in cands:
             full = cand if cand.is_absolute() else base.parent / cand
             if full.is_file():
@@ -291,7 +322,9 @@ def _run_code(text: str, base: Path, issues: List[str], seen=()) -> str:
             try:
                 if found.suffix == ".ipynb":
                     cells = json.loads(found.read_text()).get("cells", [])
-                    code = "\n".join(_cell_text(c) for c in cells if c.get("cell_type") == "code")
+                    code = "\n".join(
+                        _cell_text(c) for c in cells if c.get("cell_type") == "code"
+                    )
                 else:
                     code = found.read_text()
             except (OSError, ValueError, KeyError):
@@ -299,7 +332,9 @@ def _run_code(text: str, base: Path, issues: List[str], seen=()) -> str:
         elif found is not None:
             code = ""  # a cycle: its bindings are already counted
         if code is None:
-            issues.append(f"%run {ref} cannot be read: the names it binds are unknown, check by hand")
+            issues.append(
+                f"%run {ref} cannot be read: the names it binds are unknown, check by hand"
+            )
             continue
         out.append(code)
         if found is not None:
@@ -320,21 +355,29 @@ def _context_names(context: str) -> set:
 
 def _undefined(text: str, names, context: str = "") -> List[Tuple[str, int]]:
     """(name, line) of each load of one of ``names`` that no visible scope binds (a pyflakes F821, limited
-    to ``names``). A function's local binding is not visible to its siblings. None when ``text`` has no AST."""
+    to ``names``). A function's local binding is not visible to its siblings. None when ``text`` has no AST.
+    """
     import ast
 
     tree = _parse(text)
     if tree is None:
         return None
     declared = {
-        g for n in ast.walk(tree) if isinstance(n, (ast.Global, ast.Nonlocal)) for g in n.names
+        g
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.Global, ast.Nonlocal))
+        for g in n.names
     }
     found: List[Tuple[str, int]] = []
 
     def visible(name, chain):
         if name in declared:
             return True
-        return any(name in bound for i, (bound, is_class) in enumerate(chain) if not is_class or i == len(chain) - 1)
+        return any(
+            name in bound
+            for i, (bound, is_class) in enumerate(chain)
+            if not is_class or i == len(chain) - 1
+        )
 
     def visit(n, chain):
         if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
@@ -359,7 +402,12 @@ def _undefined(text: str, names, context: str = "") -> List[Tuple[str, int]]:
                 visit(b, inner)
             return
         if isinstance(n, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
-            targets = {x.id for g in n.generators for x in ast.walk(g.target) if isinstance(x, ast.Name)}
+            targets = {
+                x.id
+                for g in n.generators
+                for x in ast.walk(g.target)
+                if isinstance(x, ast.Name)
+            }
             inner = chain + [(targets, False)]
             for c in ast.iter_child_nodes(n):
                 visit(c, inner)
@@ -426,23 +474,32 @@ def rewrite(
             if found is not None:
                 at, last = found
                 if "noqa: E402" in last:
-                    imp = imp.rstrip("\n") + "  # noqa: E402\n"  # the header's imports follow code
+                    imp = (
+                        imp.rstrip("\n") + "  # noqa: E402\n"
+                    )  # the header's imports follow code
                 if at and not text[:at].endswith("\n"):
                     imp = "\n" + imp
             else:  # no AST (or no import): the old line scan, else after the docstring
                 body = re.search(r"^(def|class|async def|@)\b", text, re.M)
                 head = text[: body.start()] if body else text
-                anchor = list(re.finditer(r"^(from|import) databricks\.labs\.gbx[^\n]*\n", head, re.M))
-                anchor = anchor or list(re.finditer(r"^(from|import) [^\n]*\n", head, re.M))
+                anchor = list(
+                    re.finditer(
+                        r"^(from|import) databricks\.labs\.gbx[^\n]*\n", head, re.M
+                    )
+                )
+                anchor = anchor or list(
+                    re.finditer(r"^(from|import) [^\n]*\n", head, re.M)
+                )
                 at = anchor[-1].end() if anchor else _after_docstring(text)
                 if anchor and "noqa: E402" in anchor[-1].group(0):
                     imp = imp.rstrip("\n") + "  # noqa: E402\n"
             text = text[:at] + imp + text[at:]
     left = _undefined(text, {a for a, _ in chosen.values()}, context) or []
     for name, line in left:
-        unresolved.append(f"line {line}: {name} is still unbound where it is used after the rewrite (F821)")
+        unresolved.append(
+            f"line {line}: {name} is still unbound where it is used after the rewrite (F821)"
+        )
     return text, unresolved
-
 
 
 _GBX = r"databricks\.labs\.gbx"
@@ -462,7 +519,13 @@ def _split_import(node, lines) -> List[str]:
             return []
         if in_functions:
             dest = HELPERS.get(a.name)
-            dest = dest if dest and dest.split(".")[0] == {"pyrx": "rasterx", "pyvx": "vectorx", "pygx": "gridx"}[pkg] else None
+            dest = (
+                dest
+                if dest
+                and dest.split(".")[0]
+                == {"pyrx": "rasterx", "pyvx": "vectorx", "pygx": "gridx"}[pkg]
+                else None
+            )
             target = f"databricks.labs.gbx.{dest}" if dest else None
         elif a.name in MOVED_MODULES.get(pkg, ("", ()))[1]:
             target = f"databricks.labs.gbx.{MOVED_MODULES[pkg][0]}"
@@ -490,11 +553,17 @@ def rewrite_modules(text: str) -> Tuple[str, List[str]]:
     unresolved: List[str] = []
     # 1. a dotted path in code, a string (a monkeypatch target, an importlib name) or a docstring
     for pkg, (new, mods) in MOVED_MODULES.items():
-        text = re.sub(rf"{_GBX}\.{pkg}\.({'|'.join(mods)})\b", rf"databricks.labs.gbx.{new}.\1", text)
+        text = re.sub(
+            rf"{_GBX}\.{pkg}\.({'|'.join(mods)})\b",
+            rf"databricks.labs.gbx.{new}.\1",
+            text,
+        )
     for pkg, new in (("pyrx", "rasterx"), ("pyvx", "vectorx")):
         names = "|".join(n for n, m in HELPERS.items() if m.startswith(new))
         text = re.sub(
-            rf"{_GBX}\.{pkg}\.functions\.({names})\b", rf"databricks.labs.gbx.{new}.helpers.\1", text
+            rf"{_GBX}\.{pkg}\.functions\.({names})\b",
+            rf"databricks.labs.gbx.{new}.helpers.\1",
+            text,
         )
     # 2. import statements (last first, so the line numbers hold)
     tree = _parse(text)
@@ -509,20 +578,295 @@ def rewrite_modules(text: str) -> Tuple[str, List[str]]:
                 lines[node.lineno - 1 : node.end_lineno] = new
         text = "\n".join(lines)
     # 3. a moved name reached through the package alias: edit by hand
-    movers = set(PACKAGE_NAMES["pyrx"]) | set(MOVED_MODULES["pyrx"][1]) | set(PACKAGE_NAMES["pygx"])
+    movers = (
+        set(PACKAGE_NAMES["pyrx"])
+        | set(MOVED_MODULES["pyrx"][1])
+        | set(PACKAGE_NAMES["pygx"])
+    )
     movers |= set(MOVED_MODULES["pyvx"][1])
-    for alias in re.findall(rf"from {_GBX} import (?:pyrx|pygx|pyvx) as (\w+)", text) + re.findall(
-        rf"import {_GBX}\.(?:pyrx|pygx|pyvx) as (\w+)", text
-    ):
-        for m in re.finditer(rf"(?<![\w.]){alias}\.({'|'.join(sorted(movers))})\b", text):
+    for alias in re.findall(
+        rf"from {_GBX} import (?:pyrx|pygx|pyvx) as (\w+)", text
+    ) + re.findall(rf"import {_GBX}\.(?:pyrx|pygx|pyvx) as (\w+)", text):
+        for m in re.finditer(
+            rf"(?<![\w.]){alias}\.({'|'.join(sorted(movers))})\b", text
+        ):
             line = text.count("\n", 0, m.start()) + 1
             unresolved.append(
                 f"line {line}: {alias}.{m.group(1)} reaches a moved name through the package: use its new module by hand"
             )
-    for m in re.finditer(rf"{_GBX}\.(?:pyrx|pygx|pyvx)\.({'|'.join(sorted(movers))})\b", text):
+    for m in re.finditer(
+        rf"{_GBX}\.(?:pyrx|pygx|pyvx)\.({'|'.join(sorted(movers))})\b", text
+    ):
         line = text.count("\n", 0, m.start()) + 1
-        unresolved.append(f"line {line}: {m.group(0)} reaches a moved name through the package: edit by hand")
+        unresolved.append(
+            f"line {line}: {m.group(0)} reaches a moved name through the package: edit by hand"
+        )
     return text, unresolved
+
+
+_REG_MODULE = re.compile(
+    r"databricks\.labs\.gbx\.(pyrx|pygx|pyvx|rasterx|vectorx|pmtiles|gridx\.\w+)(\.functions)?"
+)
+
+
+def _register_bindings(tree) -> Tuple[set, set, set]:
+    """(names bound to a functions module, names bound to ds.register's `register`, names bound to the manager)."""
+    import ast
+
+    mods, regs, mgrs = set(), set(), set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.ImportFrom) and not n.level:
+            mod = n.module or ""
+            for a in n.names:
+                if a.name == "functions" and re.fullmatch(_REG_MODULE, mod):
+                    mods.add(a.asname or a.name)
+                elif mod == "databricks.labs.gbx.ds.register" and a.name == "register":
+                    regs.add(a.asname or a.name)
+                elif mod == "databricks.labs.gbx" and a.name == "manager":
+                    mgrs.add(a.asname or a.name)
+        elif isinstance(n, ast.Import):
+            for a in n.names:
+                if a.asname and re.fullmatch(
+                    _REG_MODULE.pattern + r"|databricks\.labs\.gbx\.manager", a.name
+                ):
+                    (mgrs if a.name.endswith(".manager") else mods).add(a.asname)
+    return mods, regs, mgrs
+
+
+def _register_verdict(call, text: str, mods: set, regs: set, mgrs: set):
+    """('rewrite', args-source) | ('unresolved', why) | None when the call is not a registrar."""
+    import ast
+
+    f = call.func
+
+    def seg(n):
+        return ast.get_source_segment(text, n)
+
+    arg = seg(call.args[0]) if call.args else "spark"
+    if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
+        base, attr = f.value.id, f.attr
+        if attr == "register" and base in mods:
+            kws = {k.arg: k for k in call.keywords}
+            extra = [k for k in call.keywords if k.arg not in ("only",)]
+            if extra:
+                return (
+                    "unresolved",
+                    f"{base}.register( takes {extra[0].arg}=: check by hand",
+                )
+            only = f", only={seg(kws['only'].value)}" if "only" in kws else ""
+            return "rewrite", f"{arg}{only}"
+        if base in mgrs and attr in ("register_family", "register_sources"):
+            if any(k.arg == "only" for k in call.keywords):
+                return "unresolved", f"{base}.{attr}( with only=: check by hand"
+            return "rewrite", arg
+    if isinstance(f, ast.Name) and f.id in regs:
+        if call.keywords:
+            return "unresolved", f"{f.id}( takes keywords: check by hand"
+        return "rewrite", arg
+    return None
+
+
+def _register_edits(body, verdict, edits: list, issues: list) -> None:
+    """Collect the statement edits of one statement list and, recursively, of the lists inside it."""
+    import ast
+
+    seen = None
+    for st in body:
+        if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
+            v = verdict(st.value)
+            if v and v[0] == "rewrite":
+                new = f"{' ' * st.col_offset}gbx.register({v[1]})"
+                # a second call in the same statement list is dropped
+                edits.append((st.lineno, st.end_lineno, "" if seen == new else new))
+                seen = new
+                continue
+            if v:
+                issues.append(f"line {st.lineno}: {v[1]}")
+        for field in ("body", "orelse", "finalbody"):
+            sub = getattr(st, field, None)
+            if isinstance(sub, list) and sub and isinstance(sub[0], ast.stmt):
+                _register_edits(sub, verdict, edits, issues)
+        for h in getattr(st, "handlers", []):
+            _register_edits(h.body, verdict, edits, issues)
+
+
+def rewrite_registers(
+    text: str, context: str = "", keep_modules: bool = False, after: str = ""
+) -> Tuple[str, List[str]]:
+    """``--registers``: every legacy register call becomes ``gbx.register(spark)``."""
+    import ast
+
+    issues: List[str] = []
+    tree = _parse(text) if text.strip() else None
+    if tree is None:
+        return text, issues
+    ctree = _parse(context) if context.strip() else None
+    mods, regs, mgrs = _register_bindings(tree)
+    if ctree is not None:
+        cm, cr, cg = _register_bindings(ctree)
+        mods, regs, mgrs = mods | cm, regs | cr, mgrs | cg
+
+    def verdict(call):
+        return _register_verdict(call, text, mods, regs, mgrs)
+
+    edits: List[Tuple[int, int, str]] = (
+        []
+    )  # (first line, last line, replacement or ""), 1-based
+    _register_edits(tree.body, verdict, edits, issues)
+    if not edits:
+        return text, issues
+    # a call used as an expression (assigned, returned) is not a statement edit: report it
+    stmt_lines = {ln for a, b, _ in edits for ln in range(a, b + 1)}
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Call) and n.lineno not in stmt_lines and verdict(n):
+            issues.append(
+                f"line {n.lineno}: a register call used as a value: check by hand"
+            )
+    lines = text.split("\n")
+    for a, b, new in sorted(edits, reverse=True):
+        lines[a - 1 : b] = [new] if new else []
+    text = "\n".join(lines)
+    # gbx bound where it is used: replace the manager import in place, else add one before the first call
+    text = _bind_gbx(text, context)
+    text = _drop_unused_register_imports(text, context + "\n" + after, keep_modules)
+    return text, issues
+
+
+def _bind_gbx(text: str, context: str) -> str:
+    """Bind ``gbx`` in every scope that calls ``gbx.register``: the scope's manager import (when nothing else
+    uses the manager there) becomes ``from databricks.labs import gbx`` in place, else the import goes in just
+    before the scope's first call. A module-level binding, or one in the notebook's earlier cells, covers all.
+    """
+    import ast
+
+    if "gbx.register(" not in text:
+        return text
+    tree = _parse(text)
+    if tree is None:
+        return text
+
+    def is_gbx_import(n):
+        return (
+            isinstance(n, ast.ImportFrom)
+            and n.module == "databricks.labs"
+            and any(a.name == "gbx" and not a.asname for a in n.names)
+        )
+
+    def own(scope):
+        """The nodes of one scope (nested function bodies excluded)."""
+        out, stack = [], list(ast.iter_child_nodes(scope))
+        while stack:
+            n = stack.pop()
+            out.append(n)
+            if not isinstance(
+                n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+            ):
+                stack.extend(ast.iter_child_nodes(n))
+        return out
+
+    ctree = _parse(context) if context.strip() else None
+    outer = ctree is not None and any(is_gbx_import(n) for n in ast.walk(ctree))
+    module_bound = outer or any(is_gbx_import(n) for n in tree.body)
+    lines = text.split("\n")
+    edits = []  # (line, "replace"|"insert", text)
+    scopes = [tree] + [
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    for scope in scopes:
+        nodes = own(scope)
+        calls = sorted(
+            n.lineno
+            for n in nodes
+            if isinstance(n, ast.Expr)
+            and isinstance(n.value, ast.Call)
+            and ast.get_source_segment(text, n.value.func) == "gbx.register"
+        )
+        if not calls or any(is_gbx_import(n) for n in nodes):
+            continue
+        if module_bound and scope is not tree:
+            continue
+        mgr = [
+            n
+            for n in nodes
+            if isinstance(n, ast.ImportFrom)
+            and n.module == "databricks.labs.gbx"
+            and any(a.name == "manager" for a in n.names)
+            and len(n.names) == 1
+        ]
+        done = False
+        for n in mgr:
+            name = n.names[0].asname or "manager"
+            used = any(
+                isinstance(x, ast.Name) and x.id == name and isinstance(x.ctx, ast.Load)
+                for x in nodes
+            )
+            if not used:
+                indent = " " * n.col_offset
+                edits.append(
+                    (n.lineno, "replace", f"{indent}from databricks.labs import gbx")
+                )
+                done = True
+                break
+        if not done:
+            ln = lines[calls[0] - 1]
+            edits.append(
+                (
+                    calls[0],
+                    "insert",
+                    f"{ln[: len(ln) - len(ln.lstrip())]}from databricks.labs import gbx",
+                )
+            )
+    for line, kind, txt in sorted(edits, reverse=True):
+        if kind == "replace":
+            lines[line - 1] = txt
+        else:
+            lines.insert(line - 1, txt)
+    return "\n".join(lines)
+
+
+def _drop_unused_register_imports(text: str, context: str, keep_modules: bool) -> str:
+    """Remove `from ...ds.register import register [as x]` and (unless keep_modules) a legacy
+    `from databricks.labs.gbx.<pyrx|pygx|pyvx> import functions as x` when nothing loads the name.
+    """
+    import ast
+
+    tree = _parse(text)
+    if tree is None:
+        return text
+    loads = {
+        n.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+    }
+    ctree = _parse(context) if context.strip() else None
+    if ctree is not None:
+        loads |= {
+            n.id
+            for n in ast.walk(ctree)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load)
+        }
+    lines = text.split("\n")
+    drop = []
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.ImportFrom) or n.level or len(n.names) != 1:
+            continue
+        a = n.names[0]
+        name = a.asname or a.name
+        legacy_ds = (
+            n.module == "databricks.labs.gbx.ds.register" and a.name == "register"
+        )
+        legacy_fn = (
+            not keep_modules
+            and a.name == "functions"
+            and re.fullmatch(LIGHT, n.module or "")
+        )
+        if (legacy_ds or legacy_fn) and name not in loads:
+            drop.append((n.lineno, n.end_lineno))
+    for a, b in sorted(drop, reverse=True):
+        lines[a - 1 : b] = []
+    return "\n".join(lines)
 
 
 def _cell_text(cell) -> str:
@@ -530,15 +874,28 @@ def _cell_text(cell) -> str:
     return "".join(src) if isinstance(src, list) else src
 
 
-def _apply(src: str, targets, ctx: str, modules: bool) -> Tuple[str, List[str]]:
+def _apply(
+    src: str,
+    targets,
+    ctx: str,
+    modules: bool,
+    registers: bool = False,
+    keep_modules: bool = False,
+    after: str = "",
+) -> Tuple[str, List[str]]:
     issues: List[str] = []
     if modules:
         src, issues = rewrite_modules(src)
     new, un = rewrite(src, targets, ctx)
+    if registers:
+        new, more = rewrite_registers(new, ctx, keep_modules, after)
+        un = un + more
     return new, issues + un
 
 
-def _notebook(path: Path, targets, modules: bool = False) -> Tuple[str, str, List[str]]:
+def _notebook(
+    path: Path, targets, modules: bool = False, registers: bool = False
+) -> Tuple[str, str, List[str]]:
     raw = path.read_text()
     nb = json.loads(raw)
     issues, changed = [], False
@@ -549,8 +906,13 @@ def _notebook(path: Path, targets, modules: bool = False) -> Tuple[str, str, Lis
     for i, cell in enumerate(code):
         src = _cell_text(cell)
         # earlier cells (and their %run targets) bind names for this one; later cells bind nothing yet
-        ctx = "\n".join(_cell_text(c) + "\n" + r for c, r in zip(code[:i], runs[:i])) + "\n" + runs[i]
-        new, un = _apply(src, targets, ctx, modules)
+        ctx = (
+            "\n".join(_cell_text(c) + "\n" + r for c, r in zip(code[:i], runs[:i]))
+            + "\n"
+            + runs[i]
+        )
+        after = "\n".join(_cell_text(c) for c in code[i + 1 :])
+        new, un = _apply(src, targets, ctx, modules, registers, True, after)
         issues += un
         if new != src:
             bad = _compile_issue(new)
@@ -588,6 +950,11 @@ def main(argv=None) -> int:
         help="point callers at the modules and helpers that moved out of pyrx / pygx / pyvx",
     )
     ap.add_argument(
+        "--registers",
+        action="store_true",
+        help="rewrite every per-package register call to gbx.register(spark)",
+    )
+    ap.add_argument(
         "--dry-run", action="store_true", help="print what would change; write nothing"
     )
     ap.add_argument("paths", nargs="*")
@@ -615,11 +982,13 @@ def main(argv=None) -> int:
     ]
     for path in sorted(f for f in files if f.suffix in (".py", ".ipynb")):
         if path.suffix == ".ipynb":
-            old, new, issues = _notebook(path, targets, a.modules)
+            old, new, issues = _notebook(path, targets, a.modules, a.registers)
         else:
             old = path.read_text()
             issues = []
-            new, un = _apply(old, targets, _run_code(old, path, issues), a.modules)
+            new, un = _apply(
+                old, targets, _run_code(old, path, issues), a.modules, a.registers
+            )
             issues += un
             bad = _compile_issue(new) if new != old else None
             if bad:

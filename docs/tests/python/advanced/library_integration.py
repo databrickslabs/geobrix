@@ -46,7 +46,7 @@ def rasterio_compute_statistics(spark):
     
     Convert GeoBrix tiles to rasterio datasets for NumPy-based processing.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all rasterio examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
@@ -82,7 +82,7 @@ def rasterio_compute_statistics(spark):
                     "max": float(np.max(data))
                 }
     
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -106,7 +106,7 @@ def rasterio_extract_metadata(spark):
     
     Access raster data and metadata within UDFs.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all rasterio examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
@@ -155,7 +155,7 @@ def rasterio_extract_metadata(spark):
                 
                 return [valid_count, int(data.size)]
     
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     df = binary_df.select(
         "path",
@@ -181,7 +181,7 @@ def rasterio_normalize_raster(spark):
     """
     Normalize raster values using rasterio and NumPy. Uses sample-data Volumes path; runs UDF and shows results.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all rasterio examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
@@ -211,7 +211,7 @@ def rasterio_normalize_raster(spark):
                     dst.write(normalized)
                 return bytes(output.getbuffer())
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -236,7 +236,7 @@ def rasterio_compute_ndvi(spark):
     Compute NDVI from multispectral tile. Uses sample-data Volumes path; runs UDF and shows results.
     (Sample NYC sentinel2 red is single-band so NDVI may be null; use multiband data for non-null.)
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all rasterio examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
@@ -268,7 +268,7 @@ def rasterio_compute_ndvi(spark):
                     dst.write(ndvi.astype(np.float32), 1)
                 return bytes(output.getbuffer())
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -285,7 +285,7 @@ def rasterio_window_operations(spark):
     """
     Process large rasters in windows. Uses sample-data Volumes path; runs UDF and shows results.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all rasterio examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import rasterio
@@ -330,7 +330,7 @@ def rasterio_window_operations(spark):
                             return results
         return results
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -361,7 +361,7 @@ def xarray_integration_basic(spark):
     """
     Basic xarray integration with GeoBrix. Uses sample-data Volumes path; runs UDF and shows results.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all xarray examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     import json
@@ -389,7 +389,7 @@ def xarray_integration_basic(spark):
                 except ImportError:
                     return json.dumps({"error": "rioxarray not available"})
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -412,7 +412,7 @@ def xarray_multitemporal_analysis(spark):
     Multi-temporal analysis using xarray. Uses sample-data Volumes path; runs UDF and shows results.
     (Demo uses same raster as before/after; use two paths for real change detection.)
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all xarray examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     from databricks.labs.gbx.rasterx import functions as rx
@@ -428,7 +428,7 @@ def xarray_multitemporal_analysis(spark):
             return None
         return {"mean_change": 0.0, "max_change": 0.0, "min_change": 0.0}
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -453,7 +453,7 @@ def xarray_resampling_aggregation(spark):
     """
     Spatial resampling and aggregation with xarray. Uses sample-data Volumes path; runs UDF and shows results.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path (used by all xarray examples on this page)
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
     from rasterio.io import MemoryFile
@@ -476,7 +476,7 @@ def xarray_resampling_aggregation(spark):
         except Exception:
             return None
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",
@@ -503,7 +503,7 @@ def numpy_advanced_operations(spark):
 
     Load from sample path, apply convolution/gradient UDF via rasterio, show result.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     # Sample-data Volumes path
     raster_path = SAMPLE_RASTER_VOLUMES_PATH
 
@@ -543,7 +543,7 @@ def numpy_advanced_operations(spark):
 
                 return bytes(output.getbuffer())
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     binary_df = spark.read.format("binaryFile").load(raster_path)
     tiles_df = binary_df.select(
         "path",

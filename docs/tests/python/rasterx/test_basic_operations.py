@@ -42,7 +42,7 @@ def test_setup_rasterx_registers_functions(spark):
     try:
         result = basic_operations.setup_rasterx(spark)
         # When called without sample_data_path, returns None
-        # The important thing is that rx.register(spark) was called successfully
+        # The important thing is that gbx.register(spark) was called successfully
         assert result is None
         
         # Verify functions are registered by checking one exists

@@ -43,11 +43,6 @@ This is identical in behavior to the SQL tab; the Column API form is
 heavyweight-only for these generators.
 """
 
-try:
-    from databricks.labs.gbx.pyvx import functions as vx
-except ImportError:
-    vx = None
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers — imported from _fixtures.py
@@ -90,9 +85,9 @@ def vectorx_light_setup_example(spark):
     After this call, all ``gbx_st_*`` SQL functions and the ``pyvx``
     Python Column API are available in the current Spark session.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_family(spark, ('gbx_st_',), level="L3")
+    gbx.register(spark)
     return None
 
 

@@ -2,7 +2,7 @@
 
 L1Installer is the manager's primitive (the manager calls it over py4j and decides every name); nothing
 else in the JAR may put a function into a registry or run a registrar, and no product Python code may
-call a Scala registrar. Code only: the docs and examples get the same check once they are rewritten.
+call a Scala registrar. The docs and examples get the same check for the removed Python registrars.
 """
 
 import re
@@ -44,3 +44,24 @@ def test_no_scala_sql_registration():
 
 def test_no_product_python_runs_a_scala_registrar():
     assert _hits(_PYTHON, "*.py", _PYTHON_PATTERNS) == []
+
+
+def test_no_docs_or_example_calls_a_removed_registrar():
+    import subprocess
+
+    out = subprocess.run(
+        [
+            "git",
+            "grep",
+            "-nP",
+            r"register_ds|\b(rx|bx|qx|cx|hx|vx|pmx|prx|pgx|pvx|functions)\.register\(",
+            "--",
+            "docs/docs",
+            "docs/tests",
+            "examples",
+        ],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert out == "", out

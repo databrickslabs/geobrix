@@ -76,11 +76,6 @@ from databricks.labs.gbx.gridx.h3 import functions as hx
 from databricks.labs.gbx.gridx.quadbin import functions as qx
 from databricks.labs.gbx.gridx.bng import functions as bx
 
-try:
-    from databricks.labs.gbx.pygx import functions as gx
-except ImportError:
-    gx = None
-
 
 # ---------------------------------------------------------------------------
 # Shared helpers — imported from _fixtures.py
@@ -1263,7 +1258,7 @@ _BNG_POLY_WKT = (
 def custom_grid_python_example(spark):
     """Construct a custom regular grid descriptor (light pygx tier).
 
-    Calls ``gx.custom_grid`` directly on a one-row DataFrame to build the BNG-like
+    Calls ``cx.custom_grid`` directly on a one-row DataFrame to build the BNG-like
     grid spec: origin (0, 0), extent (1000000, 1000000), 2 splits per axis per level,
     1km root cells, EPSG:27700.  Returns the STRUCT descriptor passed to all other
     ``gbx_custom_*`` functions.  Identical to the heavyweight output (AGREE).
@@ -1723,7 +1718,7 @@ custom_geomkloopexplode_python_example_output = """
 # grid_disk), so they run anywhere (local + Databricks) with no dependency on
 # product h3_* functions.
 #
-# The Python Column wrappers (gx.h3_geomkring / gx.h3_geomkloop) call the
+# The Python Column wrappers (hx.h3_geomkring / hx.h3_geomkloop) call the
 # registered gbx_h3_geomkring / gbx_h3_geomkloop UDFs with a geom column
 # exactly like the other grids.
 #
@@ -1740,7 +1735,7 @@ def h3_geomkring_python_example(spark):
     """Geometry-aware H3 k-ring from a WKB geometry column (light pygx tier).
 
     Creates a single-row DataFrame with the NYC box as WKB, then calls
-    ``gx.h3_geomkring`` to return the k=1 covering ring at H3 resolution 9.
+    ``hx.h3_geomkring`` to return the k=1 covering ring at H3 resolution 9.
     Self-contained: no Databricks product functions required.
     Returns ``ARRAY<BIGINT>``.
     """

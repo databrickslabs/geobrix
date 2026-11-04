@@ -161,12 +161,8 @@ _SELF = {
 # Notebooks that still name a retired reader. Each file is listed on purpose, so the guard does not skip it
 # silently: the entry goes when the notebook is rewritten to a lightweight reader, and
 # ``test_deferred_notebooks_still_need_a_rewrite`` fails if a listed file is already clean.
-# Until the notebooks are rewritten (Task 27), the scan reports their references apart from the docs.
-DEFERRED_NOTEBOOKS = frozenset(
-    {
-        "examples/tests/classic_proj_grid_validation.ipynb",  # cell 5 reads with format("gdal")
-    }
-)
+# None is listed now: every notebook reads with a lightweight reader.
+DEFERRED_NOTEBOOKS = frozenset()
 
 
 def _arguments(text, call_start):
@@ -304,10 +300,10 @@ RETIRED_NAME_PATTERNS = (
     ("heavyweight reader", re.compile(r"\b(?:heavyweight|heavy)\s+(?:raster\s+|vector\s+)?readers?\b", re.IGNORECASE)),
 )
 
-# Docs pages that may name a retired reader. The release notes record the rename. ``DEFERRED_PAGES`` lists a page
+# Docs pages that may name a retired reader. The release notes and the migration guide record the rename. ``DEFERRED_PAGES`` lists a page
 # that still needs a rewrite (none today), and ``test_deferred_pages_still_need_a_rewrite`` fails when a listed page
 # is already clean.
-RETIRED_NAME_PAGES = ("docs/docs/release-notes",)
+RETIRED_NAME_PAGES = ("docs/docs/release-notes", "docs/docs/migration-0-6")
 DEFERRED_PAGES = frozenset()
 
 

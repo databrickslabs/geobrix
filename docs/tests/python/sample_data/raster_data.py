@@ -13,11 +13,12 @@ import pystac_client
 import planetary_computer
 import requests
 from pathlib import Path
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Configure
-rx.register(spark)
+gbx.register(spark)
 output_dir = Path(f"{sample_path}/nyc/sentinel2")
 output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -101,11 +102,12 @@ import pystac_client
 import planetary_computer
 import requests
 from pathlib import Path
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
 
 sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Configure
-rx.register(spark)
+gbx.register(spark)
 output_dir = Path(f"{sample_path}/london/sentinel2")
 output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -222,8 +224,9 @@ for tile in tiles:
 print(f"\\n✅ NYC elevation data ready at: {output_dir}")
 
 # Verify
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
+gbx.register(spark)
 
 elevation = spark.read.format("raster_gbx").load(f"{output_dir}/*.tif")
 elevation.select(
@@ -281,8 +284,9 @@ print(f"✅ Downloaded SRTM London ({file_size:.1f} MB GeoTIFF)")
 print(f"   Path: {tif_file}")
 
 # Verify
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
+gbx.register(spark)
 
 elevation = spark.read.format("raster_gbx").load(str(tif_file))
 elevation.select(
@@ -336,8 +340,9 @@ print(f"✅ Downloaded HRRR data ({file_size:.1f} MB)")
 print(f"   Path: {output_file}")
 
 # Verify with GDAL (HRRR uses GRIB2, readable by GDAL)
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
+gbx.register(spark)
 
 # GDAL can read GRIB2 files
 hrrr = spark.read.format("raster_gbx").load(str(output_file))

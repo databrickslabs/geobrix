@@ -42,7 +42,7 @@ from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
 from _config import cfg, paths, register_gbx  # correct under the pipeline root_path
-from databricks.labs.gbx.rasterx import functions as rx_api
+from databricks.labs.gbx.rasterx import functions as rx
 
 # Artifact ceiling for CHM max-canopy before gap-fill. CHM = DSM - DTM bins all
 # returns at max z, so towers read as canopy; SF's tallest structure (Salesforce
@@ -110,15 +110,13 @@ def _surface_to_h3_cells(
     isoband geometry -- the no-simplify baseline. Returns
     (cellid LONG, res INT, band_level INT, elev_lo DOUBLE, elev_hi DOUBLE).
     """
-    from databricks.labs.gbx.pyrx import functions as rx
-
     # One tile per task keeps Python-UDF worker memory bounded at full-SF scale
     # (Serverless fan-out is repartition(N, column), not sparkContext).
     surface_df = surface_df.repartition(512, "tx", "ty")
     t4326 = surface_df.select(
         "tx",
         "ty",
-        rx_api.rst_transform(tile_col, F.lit(4326)).alias("tile_4326"),
+        rx.rst_transform(tile_col, F.lit(4326)).alias("tile_4326"),
     )
     # clip=False skips the raster land-clip (rst_clip SIGABRTs natively on the TIN
     # DTM grid at full-SF scale); callers that skip it mask land in H3 space after
@@ -127,12 +125,12 @@ def _surface_to_h3_cells(
         clipped = t4326.select(
             "tx",
             "ty",
-            rx_api.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile"),
+            rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile"),
         )
     else:
         clipped = t4326.withColumnRenamed("tile_4326", "tile")
     patches = clipped.select(
-        F.explode(rx_api.rst_isoband("tile", breaks_array)).alias("p")
+        F.explode(rx.rst_isoband("tile", breaks_array)).alias("p")
     ).select(
         F.col("p.band").alias("band_level"),
         F.col("p.geom_wkb").alias("geom_wkb"),
@@ -209,10 +207,10 @@ def wc_dem_clipped():
     dtm = spark.read.table("wc_surface_dtm").repartition(512, "tx", "ty")
     land_wkb = _land_wkb(c["bbox"], p["water"])
     t4326 = dtm.select(
-        "tx", "ty", rx_api.rst_transform("dtm", F.lit(4326)).alias("tile_4326")
+        "tx", "ty", rx.rst_transform("dtm", F.lit(4326)).alias("tile_4326")
     )
     return t4326.select(
-        "tx", "ty", rx_api.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile")
+        "tx", "ty", rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile")
     )
 
 
@@ -223,13 +221,11 @@ def wc_dem_clipped():
 def wc_dem_isobands():
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
-
     c = cfg(spark)
     clipped = spark.read.table("wc_dem_clipped").repartition(512, "tx", "ty")
     breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
     patches = clipped.select(
-        F.explode(rx_api.rst_isoband("tile", breaks_arr)).alias("p")
+        F.explode(rx.rst_isoband("tile", breaks_arr)).alias("p")
     ).select(
         F.col("p.band").alias("band_level"),
         F.col("p.geom_wkb").alias("geom_wkb"),
@@ -331,7 +327,7 @@ def wc_h3_chm_res10():
     # fanned-out shuffle is merged back by the small inlined-raster row count). See
     # databricks.yml.
     chm_4326 = chm.repartition(512, "tx", "ty").select(
-        "tx", "ty", rx_api.rst_transform("chm", F.lit(4326)).alias("chm_4326")
+        "tx", "ty", rx.rst_transform("chm", F.lit(4326)).alias("chm_4326")
     )
     chm_4326.createOrReplaceTempView("_wc_chm_4326_tiles")
 

@@ -27,9 +27,9 @@ except ImportError:
 
 def vectorx_setup_example(spark):
     """Common setup: register VectorX (legacy geometry). Run once before examples."""
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     return None
 
 

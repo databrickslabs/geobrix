@@ -336,7 +336,7 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
   1..N GPUs, and stitches georeferenced object polygons back together. Used by
   `03_segment` to turn `orthomosaic_cog.tif` into a `label`/`geom`/`score` DataFrame. See
   [GeoSAM](../models/geosam).
-- **`pyrx.rst_land_cover`** — classifies an RGB(+NIR) tile into land-cover class ids
+- **`rasterx.functions.rst_land_cover`** — classifies an RGB(+NIR) tile into land-cover class ids
   (`method="spectral"` / `"kmeans"` / `"hybrid"`), returning a single-band Int32
   class-mask tile; each pixel is an index into `land_cover.DEFAULT_CLASSES`
   (`["vegetation", "bare", "impervious", "dark"]`). Used by `03_segment` together with
@@ -353,10 +353,10 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 
 `01a`'s SIFT extraction → GPS pair discovery → matching → mapping pipeline is, like the
 dense pass, not bespoke notebook code — it lives in `databricks.labs.gbx.rasterx.sfm`, a
-tested library module. The module imports on the light tier with **no optional
-dependency** at all; `pycolmap` is imported lazily, inside `run_sfm`'s master-DB-assembly
-and mapping stage only, and raises a clear `ImportError` there if missing — install the
-`photogrammetry` extra to actually run reconstruction.
+tested library module. The module imports with **no optional
+dependency** at all. `pycolmap` is imported lazily, inside `run_sfm`'s master-DB-assembly
+and mapping stage only. It raises a clear `ImportError` there if missing. Install the
+`photogrammetry` extra to run reconstruction.
 
 ### `run_sfm` — distributed sparse SfM for one group of images
 
@@ -439,7 +439,7 @@ paths) — plus `reused: True` when the result came from the `persist_dir` short
 Raises `RuntimeError` if feature extraction yields zero images or matching yields zero
 verified pairs.
 
-`run_sfm` imports cleanly on the light (`pyrx`) tier with no `pycolmap` installed — only
+`run_sfm` imports cleanly with no `pycolmap` installed — only
 reaching the master-DB-assembly/mapping stage requires it, and that import is lazy and
 gated. `01a` calls `run_sfm` once per GPS cluster with per-cluster `feature_table` /
 `match_table` names and a per-cluster `persist_dir` subdirectory, retrying with

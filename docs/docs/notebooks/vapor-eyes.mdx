@@ -37,8 +37,8 @@ This is the production counterpart to the notebook series (see the other tab) �
 **[examples/notebooks/vapor-eyes/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes/lakeflow)** — the bundle, pipeline transformations, dashboard, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes/lakeflow/README.md) for deploy/run steps, prerequisites, and good-citizen usage notes for Carbon Mapper.
 :::
 
-:::info Runs on the lightweight tier (Serverless)
-The pipeline installs `geobrix[stac,vizx]` from the env5 wheel (the wheel for its Lakeflow runtime channel, DBR 18 as of this example), and so does its `land` downloader task (Serverless environment version 5), each from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout. See [Execution Tiers](../api/execution-tiers).
+:::info Runs on Serverless
+The pipeline installs `geobrix[stac,vizx]` from the env5 wheel. That is the wheel for its Lakeflow runtime channel, DBR 18 as of this example. Its `land` downloader task (Serverless environment version 5) installs the same wheel. Each task takes the staged wheel as a single pip dependency entry. The pipeline uses the `rasterx` and `vectorx` Python API with no JAR, on Serverless throughout. See [Surfaces and levels](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard
@@ -71,7 +71,7 @@ Each stage reads only the one before it — declared as table-to-table dependenc
 
 ## Spatial functions used
 
-The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial SQL and H3** — RasterX for raster ops, VectorX + PMTiles for tiles, the light-tier readers (run over the bronze inventories by `read_paths`) for Serverless ingest, and native `st_*` / `h3_*` for geometry and gridding.
+The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial SQL and H3**. RasterX does the raster ops, VectorX + PMTiles the tiles, and native `st_*` / `h3_*` the geometry and gridding. The `*_gbx` readers, run over the bronze inventories by `read_paths`, ingest on Serverless.
 
 ![Spatial functions used across the Vapor-Eyes Lakeflow example — GeoBrix RasterX, VectorX + PMTiles, and light readers with read_paths, plus Databricks built-in ST and H3 functions](../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-functions.png)
 
@@ -136,8 +136,8 @@ A five-notebook series that takes one Permian (Delaware Basin) bounding box and 
 **[examples/notebooks/vapor-eyes](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes)** — the five notebooks, shared `config_nb`, and full prerequisites live here. This is an interactive, historical case study you step through cell by cell; the other tab is the scheduled production version.
 :::
 
-:::info Lightweight tier (Serverless) by default
-Pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`) plus the `geobrix[stac,vizx]` env6 wheel (with `earthaccess` as a separate step) — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Execution Tiers](../api/execution-tiers).
+:::info Runs on Serverless by default
+The `rasterx` and `vectorx` Python API plus the `geobrix[stac,vizx]` env6 wheel (with `earthaccess` as a separate step) — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Surfaces and levels](../api/execution-tiers).
 :::
 
 ### 01 — Wide-area screening (Sentinel-5P)

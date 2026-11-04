@@ -52,10 +52,10 @@ def rasterx_setup_example(spark):
     Assumes the geobrix JAR is on the cluster (see the Installation guide).
     The examples on this page read from four temp views; this builds all of them.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from ._fixtures import single_band_path, multiband_path, dem_path, netcdf_path
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
 
     GTIFF_SAMPLE_DIR = str(single_band_path())
     GTIFF_MULTI_DIR = str(multiband_path())

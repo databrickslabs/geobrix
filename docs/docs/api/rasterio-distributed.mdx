@@ -9,7 +9,7 @@ import rioDist from '!!raw-loader!../../tests/python/api/rasterio_distributed_ex
 
 # Rasterio Distributed
 
-[RasterX](./raster-functions)'s lightweight (`pyrx`) tier is, in large part, `rasterio` plus a best-of-breed Python raster stack — rio-tiler, scipy, scikit-image, shapely, pyproj, h3, quadbin — run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR and no native GDAL install separate from rasterio's bundled GDAL.
+[RasterX](./raster-functions)'s lightweight implementation is, in large part, `rasterio` plus a best-of-breed Python raster stack: rio-tiler, scipy, scikit-image, shapely, pyproj, h3 and quadbin. They run as Arrow-vectorized Spark UDFs and UDTFs across the cluster. It is not a single-node `rasterio.open` loop, and it is not a reimplementation. The same `rasterio` functions you would call locally run inside a vectorized Spark UDF, once per tile, on every executor in parallel. No JAR and no native GDAL install separate from rasterio's bundled GDAL.
 
 If you already know `rasterio`, you already understand what `pyrx` does. The coverage matrix below maps the surface, and the side-by-sides show each operation in rasterio next to its distributed `pyrx` form.
 
@@ -33,7 +33,7 @@ Register the lightweight data sources and SQL functions once per session before 
 
 ## Capability coverage
 
-The table below maps each RasterX capability to the `pyrx` function(s) that implement it and the backing Python library. Every `rst_*` function is available in both execution tiers (lightweight `pyrx` and heavyweight `rasterx`).
+The table below maps each RasterX capability to the `rasterx` function(s) whose lightweight implementation uses it, and the backing Python library. Every `rst_*` function runs on the lightweight implementation, on every compute.
 
 See the [RasterX Function Reference](./raster-functions) for runnable per-function code examples.
 
@@ -157,11 +157,11 @@ The test asserts `np.allclose` between the rasterio-computed NDVI array and the 
 
 ### Distributed in pyrx today
 
-Everything in the matrix above. Every `rst_*` function runs in both the lightweight (`pyrx`) and heavyweight (`rasterx`) tiers.
+Everything in the matrix above. Every `rst_*` function runs on the lightweight implementation. A dedicated cluster with the JAR adds the heavyweight one where it is faster.
 
 ### Heavyweight differences (minor)
 
-A small number of capabilities run only in the heavyweight tier:
+A small number of capabilities run only on the heavyweight implementation:
 
 - **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message.
 
@@ -177,15 +177,15 @@ Where the lightweight and heavyweight implementations use different underlying a
 | `rst_resample` | GDAL resampler | rasterio resampler | NoData and boundary pixels can differ |
 | `rst_contour` | `gdal.ContourGenerateEx` | `skimage.find_contours` | Contour tracing algorithm differs; vertex positions near NoData may diverge |
 
-See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both tiers.
+See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both implementations.
 
-With the plain GeoBrix wheel, `rasterio` brings the GDAL bundled in PyPI's `rasterio` wheels, which has a narrower driver set than the heavyweight build: for an obscure raster format (HDF4, GRIB2 with specific subtype handling, certain radar formats) the heavyweight tier is more likely to support it. The GeoBrix wheels for environment 5 and 6 give `rasterio` GeoBrix's own GDAL build instead, the one the heavyweight tier loads from the same wheel.
+With the plain GeoBrix wheel, `rasterio` brings the GDAL bundled in PyPI's `rasterio` wheels, which has a narrower driver set than GeoBrix's own GDAL build. The GeoBrix env wheels (environment 5 and 6) give `rasterio` that build instead, the one the JVM loads from the same wheel.
 
 ---
 
 ## How it is distributed
 
-The `pyrx` tier distributes rasterio and NumPy compute over Spark via three mechanisms, none of which require the Spark JVM internals:
+The lightweight implementation distributes rasterio and NumPy compute over Spark via three mechanisms, none of which require the Spark JVM internals:
 
 - **Arrow scalar UDFs** (per-tile functions): each scalar `rst_*` function invoked via the Python Column API is a `@pandas_udf` (`tile_scalar_udf` / `tile_scalar_udf2` in `pyrx/_udf.py`) — it receives a batch of tiles' raster bytes as a Pandas Series, calls rasterio/NumPy once per tile within the batch, and returns transformed bytes. The Arrow batch crosses the JVM↔Python boundary **once per batch**, not once per row. The same functions are also registered as plain `@f.udf` for SQL use (so `DESCRIBE FUNCTION` and SQL calls work), but the Python Column API always routes through the `pandas_udf` path.
 - **Grouped-aggregate pandas UDFs** (merges and combineavg): `rst_merge_agg`, `rst_combineavg_agg`, and similar grouped aggregators use `@pandas_udf(BinaryType())` — Spark 4 auto-detects the grouped-aggregate eval type. Each receives all tiles in a group as a Pandas Series and merges them in one Python call.

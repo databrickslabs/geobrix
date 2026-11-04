@@ -10,7 +10,7 @@ features need, so that it stays readable for training.
 
 ![Zarr weather features: register a cube in place, read and sample it, write a derived variable back, map it as tiles, tag the version](../../../resources/images/diagrams/zarr-weather-features/zarr-weather-features.png)
 
-> **Lightweight tier only.** Zarr runs in the lightweight tier, so there is no JAR:
+> **No JAR needed.** Zarr runs on the env wheel alone:
 > `geobrix[zarr,vizx]` from the env6 wheel on **Serverless environment 6** (the notebook's
 > target), or on a classic **Databricks Runtime 19** cluster. See [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr#what-you-need).
 

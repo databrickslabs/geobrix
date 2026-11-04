@@ -9,7 +9,7 @@ import VizXIcon from '../../../resources/images/brand/VizX.png';
 
 ## Overview
 
-`databricks.labs.gbx.vizx` renders rasters and turns Spark DataFrames into GeoDataFrames for interactive maps. It is **tier-agnostic** — the raster plotters take tile bytes (use them with `pyrx` *or* `rasterx` tiles), and the vector adapters take any Spark DataFrame.
+`databricks.labs.gbx.vizx` renders rasters and turns Spark DataFrames into GeoDataFrames for interactive maps. It works with any tile — the raster plotters take tile bytes (use them with `rasterx` tiles), and the vector adapters take any Spark DataFrame.
 
 These are driver-side, single-node helpers for inspecting results in a notebook — not distributed operations. They collect to the driver, so the vector adapters guard the collect with `max_rows`.
 
@@ -25,7 +25,7 @@ These are driver-side, single-node helpers for inspecting results in a notebook 
 - **Multi-layer compositor** — `plot_static` / `plot_interactive` overlay vector, raster, grid, and PMTiles layers in a single map
 - **3-D point-cloud viewer** — `plot_point_cloud` renders a LAS/LAZ or point DataFrame as a true-color 3-D view: an interactive deck.gl orbit in a notebook, a static matplotlib PNG for GitHub
 - **PMTiles & COG viewers** — `plot_pmtiles`, `plot_cog`, and `pmtiles_info` inspect and render archives inline
-- **Tier-agnostic, Python-only** — works with `pyrx` or `rasterx` tiles; a driver-side notebook helper, not a SQL/Spark package
+- **Python-only** — works with `rasterx` tiles; a driver-side notebook helper, not a SQL/Spark package
 
 ## Installation
 
@@ -33,7 +33,7 @@ These are driver-side, single-node helpers for inspecting results in a notebook 
 pip install "geobrix[vizx]"   # the plain wheel, off Databricks
 ```
 
-From a Databricks notebook (commonly alongside the lightweight tier):
+From a Databricks notebook (commonly on Serverless):
 
 ```python
 %pip install --quiet "geobrix[vizx] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"

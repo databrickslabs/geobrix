@@ -12,9 +12,9 @@ df.show()"""
 
 
 def read_gpkg_gbx(spark, path=None):
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_sources(spark)
+    gbx.register(spark)
     df = spark.read.format("gpkg_gbx").load(path or SAMPLE)
     # gpkg geometry column name matches the source layer column (e.g. shape/SHAPE)
     srid_cols = [c for c in df.columns if c.endswith("_srid") and not c.endswith("_srid_proj")]

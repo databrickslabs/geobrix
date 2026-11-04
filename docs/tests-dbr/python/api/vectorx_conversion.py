@@ -15,10 +15,11 @@ except ImportError:
 
 # Display constant for docs/docs/api/scala.mdx#conversion-functions
 VECTORX_CONVERSION_EXAMPLE = """# VectorX conversion: legacy → WKB → Databricks GEOMETRY (Python)
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+from databricks.labs import gbx
+from databricks.labs.gbx.vectorx import functions as vx
 from pyspark.sql.functions import col, expr
 
-vx.register(spark)
+gbx.register(spark)
 
 # Convert legacy geometries (e.g. from Mosaic) to WKB
 legacy = spark.table("legacy_mosaic_table")
@@ -61,10 +62,11 @@ SQL_VECTORX_LEGACY_CONVERSION_output = """
 
 # Display constant for docs/docs/api/scala.mdx#complete-example-2 (VectorX Complete Example)
 VECTORX_COMPLETE_EXAMPLE = """# VectorX full migration workflow (Python) - docs/docs/api/scala#complete-example-2
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+from databricks.labs import gbx
+from databricks.labs.gbx.vectorx import functions as vx
 from pyspark.sql.functions import col, expr
 
-vx.register(spark)
+gbx.register(spark)
 
 legacy_table = spark.table("legacy_mosaic_geometries")
 migrated = legacy_table
@@ -96,10 +98,10 @@ def vectorx_conversion_example(spark, table_name="legacy_mosaic_table"):
     Run VectorX conversion workflow (requires DBR).
     Skips if table does not exist or st_geomfromwkb not available.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     legacy = spark.table(table_name)
     from databricks.labs.gbx.vectorx import functions as vx
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     converted = legacy.select(
         col("feature_id"),
         vx.st_legacyaswkb(col("mosaic_geom")).alias("wkb_geom")
@@ -117,8 +119,8 @@ def vectorx_complete_example(spark, table_name="legacy_mosaic_geometries"):
     Run VectorX complete migration workflow (requires DBR).
     Skips if table does not exist or st_* not available.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     legacy_table = spark.table(table_name)
     migrated = legacy_table.select(
         col("*"),

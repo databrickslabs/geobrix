@@ -140,7 +140,7 @@ import sqlExamples from '!!raw-loader!../../tests/python/api/module_sql.py';
 test("example_name") {
   // Example code from docs
   import com.databricks.labs.gbx.rasterx.{functions => rx}
-  rx.register(spark)
+  spark.sql("SELECT gbx_rst_width(tile) FROM t") // registered from Python or SQL, not from Scala
   // ... rest of example
 }
 ```

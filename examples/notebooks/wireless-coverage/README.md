@@ -64,13 +64,13 @@ Finally — zooming to the Golden Gate Park demo, where the ranked sites are leg
 
 ## Runtime
 
-All notebooks run on the **lightweight tier** — `geobrix[vizx]` (the env6 wheel), pure
+All notebooks run on Serverless — `geobrix[vizx]` (the env6 wheel), pure
 Python/PySpark bindings with no JAR — targeting **Databricks Serverless
-environment 6** (`laspy`/`lazrs` for the LiDAR reader ship with the light base).
+environment 6** (`laspy`/`lazrs` for the LiDAR reader ship with the env wheel).
 `DECIMATE=1` keeps **every** return (~830 M over SF) — an honest big-data run; raise
 `DECIMATE` (e.g. 10) for a fast coarse pass while iterating. `DEMO=True` (default) limits
 computationally heavy cells to a Golden Gate Park sub-AOI; set `DEMO=False` for the full
-San Francisco AOI. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
+San Francisco AOI. See [Surfaces and levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
 ## Related
 

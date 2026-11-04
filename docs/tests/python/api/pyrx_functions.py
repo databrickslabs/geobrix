@@ -8,11 +8,6 @@ rasters under src/test/resources/binary/ (shown in the docs as GTIFF_SAMPLE_DIR
 etc.). No /Volumes mount or path_config import is needed.
 """
 
-try:
-    from databricks.labs.gbx.pyrx import functions as rx
-except ImportError:
-    rx = None
-
 # Committed sample rasters (resolved from the repo root) that the Setup example
 # loads. In the rendered docs these appear as GTIFF_SAMPLE_DIR / GTIFF_MULTI_DIR /
 # DTM_DIR / NETCDF_DIR placeholders — a reader points them at their own files.
@@ -203,7 +198,7 @@ def pyrx_polygonize_example(spark):
     with a SQL LATERAL table function — this avoids buffering all polygons in
     memory (unbounded fan-out OOM guard).
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     import numpy as np
     from pyspark.sql import functions as f
     from rasterio.io import MemoryFile
@@ -233,7 +228,7 @@ def pyrx_polygonize_example(spark):
     tile_df = df.select(rx_api.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
     # rst_polygonize is a streaming Python UDTF; invoke via SQL LATERAL.
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx.register(spark)
     tile_df.createOrReplaceTempView("_pyrx_poly_demo")
     rows = spark.sql(
         "SELECT t.value FROM _pyrx_poly_demo, LATERAL gbx_rst_polygonize(tile, 1, 4) t"
@@ -262,7 +257,7 @@ def pyrx_land_cover_example(spark):
     streaming Python UDTF) exactly like any other single-band tile --
     ``rst_land_cover`` is also registered as ``gbx_rst_land_cover`` in SQL.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     import numpy as np
     import shapely.wkb
     from pyspark.sql import functions as f
@@ -306,7 +301,7 @@ def pyrx_land_cover_example(spark):
     # rst_land_cover is also registered as gbx_rst_land_cover in SQL; the
     # resulting class-mask tile further composes with the registered streaming
     # UDTF gbx_rst_polygonize, invoked via SQL LATERAL.
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx.register(spark)
     lc_df.createOrReplaceTempView("_pyrx_land_cover_demo")
     rows = spark.sql(
         "SELECT t.geom_wkb AS g, t.value AS v FROM _pyrx_land_cover_demo, "
@@ -386,11 +381,11 @@ rst_land_cover_python_example_output = """
 
 def pyrx_sql_example(spark):
     """Register pyrx SQL functions and query them from Spark SQL."""
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from pyspark.sql import functions as f
     from databricks.labs.gbx.rasterx import functions as rx_api  # noqa: PLC0415
 
-    gbx_manager.register_family(spark, ('gbx_rst_', 'gbx_pmtiles_'), level="L3")
+    gbx.register(spark)
 
     raster_bytes = _make_geotiff_bytes(width=4, height=3, count=2, epsg=4326)
     df = spark.createDataFrame([(raster_bytes,)], ["raster"])

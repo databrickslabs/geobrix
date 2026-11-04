@@ -18,10 +18,9 @@ bringing merged footprints to the driver. Visualized throughout with the
 
 ![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/diagrams/h3-rasterize/h3-rasterize.png)
 
-> **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
-> tier — `geobrix[stac,vizx]` (the env5 wheel, with the Overture CLI as a separate step) — pure Python/PySpark bindings with no
+> **Runs on Serverless by default.** The notebook uses `geobrix[stac,vizx]` (the env5 wheel, with the Overture CLI as a separate step) with no
 > JAR required. It targets **Serverless environment 5**. See
-> [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
+> [Surfaces and levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
 > **Data source: USGS 3DEP seamless (10 m), San Francisco Bay Area.** `DemDownloader()`
 > fetches the finest seamless tier (10 m) for `BAY_BBOX = (-122.55, 37.45, -121.95, 37.95)` from
@@ -79,7 +78,7 @@ pair at the top restarts the Python kernel — subsequent cells import from the 
 wheel. Cells after the restart are safe to re-run individually once the wheel is installed.
 
 1. **Install and restart** — `%pip install "geobrix[stac,vizx] @ file://…/geobrix-0.6.0+env5-py3-none-any.whl"`, then `%pip install "overturemaps>=1.0.2,<2"` (the Overture CLI), + `%restart_python`.
-2. **Imports and registration** — `rx.register(spark)`, `gx.register(spark)`, and `register(spark)` install the SQL UDFs.
+2. **Imports and registration** — `gbx.register(spark)` installs the SQL functions and the readers.
 3. **Download DEM and land mask** — `DemDownloader().download(…)` fetches USGS 3DEP
    seamless (10 m) tiles (idempotent); `OvertureClient` fetches Overture Maps `base/water`
    features and builds the land multipolygon by subtracting water from the AOI box.

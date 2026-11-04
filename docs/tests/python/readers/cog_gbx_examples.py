@@ -87,9 +87,9 @@ cog_df.show()
 
 
 def _register(spark):
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_sources(spark)
+    gbx.register(spark)
 
 
 def list_files_file_gbx(spark, path=None):

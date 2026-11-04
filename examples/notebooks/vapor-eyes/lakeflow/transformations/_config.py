@@ -47,10 +47,6 @@ def paths(spark):
 
 
 def register_gbx(spark):
-    """Register GeoBrix light SQL functions + DS readers. Call from function bodies."""
-    from databricks.labs.gbx.pyrx import functions as rx
-    from databricks.labs.gbx.pyvx import functions as vx
-    from databricks.labs.gbx.ds.register import register as register_ds
-    rx.register(spark)
-    vx.register(spark)
-    register_ds(spark)
+    """Register the GeoBrix SQL functions and the *_gbx readers. Call from function bodies."""
+    from databricks.labs import gbx
+    gbx.register(spark)

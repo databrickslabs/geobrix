@@ -48,8 +48,9 @@ print(f"✅ Created synthetic 100x100 raster")
 print(f"   Path: {output_file}")
 
 # Verify
+from databricks.labs import gbx
 from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
+gbx.register(spark)
 
 synthetic = spark.read.format("raster_gbx").load(str(output_file))
 synthetic.select(

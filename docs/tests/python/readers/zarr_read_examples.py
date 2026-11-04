@@ -361,9 +361,9 @@ def stack_time_as_bands(spark, cube):
 
 def read_with_the_datasource(spark, cube):
     """A plain store read like any other source: no table, no manifest, no session call."""
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_sources(spark)  # once per session; it registers every GeoBrix DataSource without a JAR
+    gbx.register(spark)
     europe = (
         spark.read.format("zarr_gbx")
         .option("variables", "t2m")

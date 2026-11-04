@@ -37,7 +37,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
 from _config import cfg, paths, register_gbx  # correct under the pipeline root_path
-from databricks.labs.gbx.rasterx import functions as rx_api
+from databricks.labs.gbx.rasterx import functions as rx
 from databricks.labs.gbx.rasterx import helpers as rx_helpers
 
 # Tasks the .laz files are spread over when they are read: the same 512-way
@@ -158,12 +158,9 @@ def wc_surface_dsm():
 )
 @dp.expect("tile_present", "dtm IS NOT NULL")
 def wc_surface_dtm():
-    from databricks.labs.gbx.rasterx import functions as rasterx_api
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
     c = cfg(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
-
     pts = spark.read.table("wc_lidar_pts")
     tpx = int(c["tile_m"] / c["pixel_m"])
     srid = c["srid"]
@@ -185,8 +182,8 @@ def wc_surface_dtm():
     # One Delaunay-TIN DTM tile per (tx, ty) via the streaming rst_dtmfromgeoms_agg
     # aggregator -- a continuous, gap-free bare earth, the production DTM.
     return ground_s.groupBy("tx", "ty").agg(
-        rasterx_api.rst_fromcontent(
-            rasterx_api.rst_dtmfromgeoms_agg(
+        rx.rst_fromcontent(
+            rx.rst_dtmfromgeoms_agg(
             "pt",
             F.lit(None),
             F.lit(0.0),
@@ -212,8 +209,6 @@ def wc_surface_dtm():
 def wc_surface_chm():
     spark = SparkSession.getActiveSession()
     register_gbx(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
-
     dsm = spark.read.table("wc_surface_dsm")
     dtm = spark.read.table("wc_surface_dtm")
     # rst_chm warps the DSM onto the DTM grid, differences them (DSM - DTM), and
@@ -228,5 +223,5 @@ def wc_surface_chm():
     return (
         dsm.join(dtm, ["tx", "ty"])
         .repartition(512, "tx", "ty")
-        .select("tx", "ty", rx_api.rst_chm("dsm", "dtm").alias("chm"))
+        .select("tx", "ty", rx.rst_chm("dsm", "dtm").alias("chm"))
     )

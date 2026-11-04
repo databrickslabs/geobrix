@@ -41,9 +41,9 @@ PAGE = DOCS / "readers" / "zarr.mdx"
 
 
 def shown(capsys):
-    """What an example printed, without the progress lines register prints and the one-time 0.6.0 reminder."""
+    """What an example printed, without the progress lines register prints, the one-time 0.6.0 reminder and its fallback notes."""
     lines = capsys.readouterr().out.splitlines()
-    skip = ("[register] ", "geobrix 0.6.0: ")
+    skip = ("[register] ", "geobrix 0.6.0: ", "geobrix: ")
     return "\n".join(ln for ln in lines if not ln.startswith(skip)).strip()
 
 

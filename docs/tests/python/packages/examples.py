@@ -90,13 +90,13 @@ def rasterx_basic_usage(spark):
 
     Uses sample data path (Volumes). Displays width, height, bands, SRID.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
 
     # Sample data path (see Sample Data guide; use your Volume path if different)
     raster_path = SAMPLE_RASTER_PATH
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
 
     raster_df = spark.read.format("raster_gbx").load(raster_path)
     
@@ -124,10 +124,10 @@ def rasterx_clip_raster(spark):
     
     Shows how to use rst_clip function with a geometry.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     
     raster_df = spark.read.format("raster_gbx").load("/path/to/geotiffs")
     
@@ -145,9 +145,9 @@ def rasterx_cataloging_workflow(spark):
     
     Complete workflow for building a raster metadata catalog.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     
     # Read all rasters
     rasters = spark.read.format("raster_gbx").load("/data/satellite_imagery")
@@ -174,9 +174,9 @@ def rasterx_processing_pipeline(spark):
     
     Clip and extract metadata from rasters.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     
     # Read rasters
     rasters = spark.read.format("raster_gbx").load("/data/input")
@@ -202,9 +202,9 @@ def rasterx_multiband_analysis(spark):
     
     Separate and extract individual bands from multi-band raster.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     
     # Read multi-band raster (e.g., Landsat)
     landsat = spark.read.format("raster_gbx").load("/data/landsat")
@@ -235,9 +235,9 @@ def rasterx_tiling_performance(spark):
     
     Tessellate large rasters into smaller tiles for parallel processing.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     
     # Read large raster
     large_raster = spark.read.format("raster_gbx").option("sizeInMB", "16").load("/data/large.tif")
@@ -290,10 +290,10 @@ def vectorx_basic_migration(spark):
     
     Convert legacy Mosaic geometry to WKB for use with Databricks spatial functions.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     
     # Register VectorX functions
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     
     # Convert legacy Mosaic geometries
     legacy_table = spark.table("old_mosaic_features")
@@ -321,8 +321,8 @@ def vectorx_sql_migration(spark):
     
     SQL-based approach to converting Mosaic geometries.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     # Use SQL for migration
     result = spark.sql("""
@@ -343,9 +343,9 @@ def vectorx_transition_validation(spark):
     
     Keep both formats for validation during transition.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.vectorx import functions as vx
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     
     legacy_table = spark.table("legacy_table")
     
@@ -423,8 +423,8 @@ def vectorx_migration_convert(spark):
     
     Perform the actual conversion from Mosaic to WKB/GEOMETRY.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     converted = spark.sql("""
         SELECT
@@ -458,11 +458,11 @@ def vectorx_complete_migration_example(spark):
     
     Full example showing all steps of a Mosaic to modern format migration.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.vectorx import functions as vx
     
     # Register
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     
     # Read legacy data
     legacy = spark.table("production.legacy_mosaic_parcels")
@@ -513,9 +513,9 @@ def gridx_basic_usage(spark):
     The point must be in BNG coordinates (eastings, northings, EPSG:27700), not WGS84.
     Resolution can be given in metres (e.g. 1000 for 1 km). Register BNG functions first.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
 
-    gbx_manager.register_family(spark, ('gbx_bng_',))
+    gbx.register(spark)
 
     # London (TQ area) in BNG: easting 530000, northing 180000
     # Resolution: BNG resolution index (3 = 1 km) or string ('1km'). gbx_bng_cellarea returns km².
@@ -543,8 +543,8 @@ def gridx_spatial_aggregation(spark):
     
     Aggregate data points into BNG grid cells.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_bng_',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     # Aggregate points by BNG cell
     aggregated = spark.sql("""
@@ -567,8 +567,8 @@ def gridx_grid_based_joins(spark):
     
     Join datasets using BNG grid cells for efficient spatial joins.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_bng_',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     # Index both datasets with BNG
     locations_indexed = spark.sql("""
@@ -602,8 +602,8 @@ def gridx_multi_resolution_analysis(spark):
     
     Create and analyze data at different grid resolutions (10km, 1km, 100m).
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_bng_',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     # Create multi-resolution grid
     multi_res = spark.sql("""
@@ -631,8 +631,8 @@ def gridx_kring_analysis(spark):
     
     Use BNG k-ring to find all locations within a certain distance.
     """
-    from databricks.labs.gbx import manager as gbx_manager
-    gbx_manager.register_family(spark, ('gbx_bng_',))
+    from databricks.labs import gbx
+    gbx.register(spark)
     
     # Get all cells within k-ring
     nearby_cells = spark.sql("""
@@ -689,10 +689,9 @@ def gridx_rasterx_integration(spark):
     
     Aggregate raster values by BNG grid cells.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     
-    gbx_manager.register_family(spark, ('gbx_bng_',))
-    gbx_manager.register_family(spark, ('gbx_rst_',))
+    gbx.register(spark)
     
     # Aggregate raster values by BNG cells
     raster_by_bng = spark.sql("""
@@ -712,10 +711,9 @@ def gridx_vectorx_integration(spark):
     
     Index vector data with BNG grid cells.
     """
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     
-    gbx_manager.register_family(spark, ('gbx_bng_',))
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     
     # Index vector data with BNG
     indexed_vectors = spark.sql("""

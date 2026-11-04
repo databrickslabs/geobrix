@@ -103,3 +103,32 @@ def test_the_modules_pass_moves_paths_names_and_helpers_and_is_idempotent():
     # a moved name reached through the package alias is left for a hand edit
     _, issues = codemod_api.rewrite_modules("from databricks.labs.gbx import pyrx as p\n\nx = p.Manifest('a')\n")
     assert any("p.Manifest" in i for i in issues)
+
+
+def test_the_registers_pass_rewrites_every_registrar_to_one_call_and_is_idempotent():
+    targets = dict(codemod_api.HELPERS)
+    src = (
+        "from databricks.labs.gbx.pyrx import functions as rx\n"
+        "from databricks.labs.gbx.pyvx import functions as vx\n"
+        "from databricks.labs.gbx.ds.register import register as register_ds\n\n\n"
+        "def setup(spark):\n"
+        "    rx.register(spark)\n"
+        "    vx.register(spark)  # st_* functions\n"
+        "    register_ds(spark)\n"
+        "    return rx\n\n\n"
+        "def other(spark):\n"
+        "    from databricks.labs.gbx import manager as gbx_manager\n\n"
+        "    gbx_manager.register_family(spark, ('gbx_rst_',), level='L3')\n\n\n"
+        "def kept(spark):\n"
+        "    from databricks.labs.gbx import manager as gbx_manager\n\n"
+        "    gbx_manager.register_family(spark, ('gbx_rst_',), only=['gbx_rst_width'])\n"
+    )
+    new, issues = codemod_api._apply(src, targets, "", False, True)
+    assert "def setup(spark):\n    from databricks.labs import gbx\n    gbx.register(spark)\n    return rx\n" in new  # three calls, one
+    assert "import register as register_ds" not in new and "pyvx" not in new  # the unused imports go
+    assert "from databricks.labs.gbx.pyrx import functions as rx\n" in new  # a name still used stays
+    assert "def other(spark):\n    from databricks.labs import gbx\n\n    gbx.register(spark)\n" in new
+    assert "register_family(spark, ('gbx_rst_',), only=['gbx_rst_width'])" in new  # only= is left for a hand edit
+    assert any("register_family( with only=" in i for i in issues)
+    compile(new, "fixture", "exec")
+    assert codemod_api._apply(new, targets, "", False, True)[0] == new

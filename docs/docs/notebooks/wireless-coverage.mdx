@@ -49,7 +49,7 @@ Finally — zooming to the Golden Gate Park demo, where the ranked sites are leg
 
 **Requires GeoBrix 0.6.0 or newer.**
 
-A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, packaged as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
+A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task. A [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) packages it, and it runs entirely on **Serverless** compute with the GeoBrix Python API.
 
 This is the production counterpart to the notebook series (see the other tab) — same San Francisco AOI and USGS 3DEP LiDAR sources, but running as a scheduled medallion pipeline instead of one-off notebook outputs: a `land` downloader task stages the data, then the pipeline cascades bronze → silver → gold through declared table-to-table dependencies, a `siting` task runs the H3-native tower analysis, and a `validate` notebook confirms all outputs.
 
@@ -87,8 +87,8 @@ databricks bundle run wireless_coverage_lf_job
 **[examples/notebooks/wireless-coverage/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow)** — the bundle, pipeline transformations, siting task, validation notebook, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow/README.md) for deploy/run steps, prerequisites, and configuration notes.
 :::
 
-:::info Runs on the lightweight tier (Serverless)
-The pipeline and its `land` and `siting` tasks install the GeoBrix env wheel that matches the Lakeflow runtime — **as of this example DBR 18.3**, so `geobrix[vizx,stac]` from the env5 wheel (pipeline and serverless job tasks alike, with the Overture CLI as a separate entry) — as a single pip dependency entry; pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. Lakeflow pins compute by a runtime channel: check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch the wheel to match if it has moved (e.g. DBR 19 → the `+env6` wheel). The bundle **defaults to Serverless**; for heavier runs (notably full San Francisco) you can switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Execution Tiers](../api/execution-tiers).
+:::info Runs on Serverless
+The pipeline and its `land` and `siting` tasks install the GeoBrix env wheel that matches the Lakeflow runtime. As of this example that is DBR 18.3, so they use `geobrix[vizx,stac]` from the env5 wheel (with the Overture CLI as a separate entry). Each takes it as a single pip dependency entry. The code uses the `rasterx` and `gridx` Python API with no JAR, on Serverless throughout. Lakeflow pins compute by a runtime channel. Check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy, and switch the wheel if it has moved (for example DBR 19 uses the `+env6` wheel). The bundle **defaults to Serverless**. For heavier runs (notably full San Francisco) switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Surfaces and levels](../api/execution-tiers).
 :::
 
 ## How it works: from staged LiDAR to ranked tower sites
@@ -214,7 +214,7 @@ Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys i
 ## Prerequisites
 
 - **Unity Catalog**: a catalog and schema (defaults `geospatial_docs.wireless_coverage_lf`) and a Volume named `data` under it. The pipeline creates sub-directories inside the Volume, not the Volume itself.
-- **GeoBrix wheel** staged at the `gbx_wheel` path. See [Execution Tiers](../api/execution-tiers).
+- **GeoBrix wheel** staged at the `gbx_wheel` path. See [Surfaces and levels](../api/execution-tiers).
 - **Network access**: the `land` task fetches USGS 3DEP and Overture Maps data over HTTPS — Serverless has outbound internet by default.
 
 ## Validation notebook
@@ -236,8 +236,8 @@ The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (
 **[examples/notebooks/wireless-coverage](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage)** — download the folder and import the notebooks (Parts 1, 2a, 2b, 3a, 3b, and 4) into your Databricks workspace to run.
 :::
 
-:::info Runs on the lightweight tier (Serverless) by default
-The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
+:::info Runs on Serverless by default
+The series uses the `rasterx` Python API plus the `geobrix[vizx]` env6 wheel — so it runs on **Serverless environment 6** with no JAR. The `laspy` / `lazrs` readers the point cloud needs ship with the env wheel. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Surfaces and levels](../api/execution-tiers).
 :::
 
 :::note Big-data by default
@@ -363,7 +363,7 @@ of its buffer at that coarse resolution is ruled out immediately. In the Golden 
 reduces 176 candidates to 62 survivors (~65% discarded) before any fine-resolution work begins.
 
 **Exact H3 line-of-sight.** Each surviving candidate is evaluated with the library function
-`h3_los_visible` (from `databricks.labs.gbx.pygx`) — a pure-Python H3 primitive that runs an exact
+`h3_los_visible` (from `databricks.labs.gbx.gridx.helpers`). It is a pure-Python H3 primitive that runs an exact
 ray-march test for every cell in the buffer. The observer sits at the DSM surface height plus a 10 m
 antenna clearance; the target is the ground surface (DTM) plus a 1.6 m receiver height. The buffer
 radius is 2.5 km. The line-of-sight test uses the binned H3 surface as both the blocker map and the

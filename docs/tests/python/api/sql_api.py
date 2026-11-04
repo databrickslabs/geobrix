@@ -16,21 +16,13 @@ SAMPLE_NYC_GEOJSON = f"{SAMPLE_DATA_BASE}/nyc/taxi-zones/nyc_taxi_zones.geojson"
 # REGISTRATION (shown in docs)
 # =============================================================================
 
-REGISTER_PYTHON = """from databricks.labs.gbx.rasterx import functions as rx
-from databricks.labs.gbx.gridx.bng import functions as bx
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
+REGISTER_PYTHON = """from databricks.labs import gbx
 
-rx.register(spark)
-bx.register(spark)
-vx.register(spark)"""
+gbx.register(spark)"""
 
-REGISTER_SCALA = """import com.databricks.labs.gbx.rasterx.{functions => rx}
-import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-import com.databricks.labs.gbx.vectorx.jts.legacy.{functions => vx}
-
-rx.register(spark)
-bx.register(spark)
-vx.register(spark)"""
+REGISTER_SCALA = """// Scala registers no SQL. Register once from Python or SQL (databricks.labs.gbx.register(spark)),
+// then call the SQL functions from Scala.
+spark.sql("SELECT gbx_rst_width(tile) FROM tiles")"""
 
 # =============================================================================
 # SQL SNIPPETS (one constant per doc block)
@@ -333,14 +325,12 @@ SQL_READ_GEOPACKAGE_output = """
 
 def register_functions_python(spark):
     """Register GeoBrix functions via Python for SQL use."""
-    from databricks.labs.gbx import manager as gbx_manager
+    from databricks.labs import gbx
     from databricks.labs.gbx.rasterx import functions as rx
     from databricks.labs.gbx.gridx.bng import functions as bx
     from databricks.labs.gbx.vectorx import functions as vx
 
-    gbx_manager.register_family(spark, ('gbx_rst_',))
-    gbx_manager.register_family(spark, ('gbx_bng_',))
-    gbx_manager.register_family(spark, ('gbx_st_legacy',))
+    gbx.register(spark)
     return rx, bx, vx
 
 

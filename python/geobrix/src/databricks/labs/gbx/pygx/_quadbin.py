@@ -267,12 +267,12 @@ def resolution_vec(cells: np.ndarray) -> np.ndarray:
     return ((c >> np.uint64(52)) & np.uint64(0x1F)).astype(np.int64)
 
 
-def polyfill(geom, resolution: int) -> list:
-    """Quadbin cells covering the geometry's envelope (bbox) at `resolution`.
+MAX_POLYFILL_CELLS = 1_000_000  # mirrors Quadbin.polyfillBbox maxCells
 
-    Mirrors heavy Quadbin_Polyfill / Quadbin.polyfillBbox: derive the SW/NE
-    tile range from the bbox corners at `resolution` and enumerate every tile.
-    """
+
+def _polyfill_range(geom, resolution: int):
+    """``(x_lo, x_hi, y_lo, y_hi, z)`` of the tiles the geometry's bounding box covers at ``resolution``, or None for an
+    empty geometry; a resolution out of range raises."""
     z = int(resolution)
     if z < 0 or z > _MAX_POLYFILL_RES:
         raise ValueError(
@@ -280,16 +280,33 @@ def polyfill(geom, resolution: int) -> list:
         )
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
-        return []
+        return None
     w, s, e, n = parsed.bounds  # (minx, miny, maxx, maxy)
     x0, y0 = _lonlat_to_tile(w, n, z)  # upper-left
     x1, y1 = _lonlat_to_tile(e, s, z)  # lower-right
-    x_lo, x_hi = min(x0, x1), max(x0, x1)
-    y_lo, y_hi = min(y0, y1), max(y0, y1)
+    return min(x0, x1), max(x0, x1), min(y0, y1), max(y0, y1), z
+
+
+def polyfill_count(geom, resolution: int) -> int:
+    """How many cells :func:`polyfill` would return, without building them (0 for an empty geometry)."""
+    r = _polyfill_range(geom, resolution)
+    return 0 if r is None else (r[1] - r[0] + 1) * (r[3] - r[2] + 1)
+
+
+def polyfill(geom, resolution: int) -> list:
+    """Quadbin cells covering the geometry's envelope (bbox) at `resolution`.
+
+    Mirrors heavy Quadbin_Polyfill / Quadbin.polyfillBbox: derive the SW/NE
+    tile range from the bbox corners at `resolution` and enumerate every tile.
+    """
+    r = _polyfill_range(geom, resolution)
+    if r is None:
+        return []
+    x_lo, x_hi, y_lo, y_hi, z = r
     count = (x_hi - x_lo + 1) * (y_hi - y_lo + 1)
-    if count > 1_000_000:  # mirrors Quadbin.polyfillBbox maxCells
+    if count > MAX_POLYFILL_CELLS:
         raise ValueError(
-            f"polyfill would produce {count} cells (max=1000000); use a lower zoom"
+            f"polyfill would produce {count} cells (max={MAX_POLYFILL_CELLS}); use a lower zoom"
         )
     return [
         quadbin.tile_to_cell((x, y, z))

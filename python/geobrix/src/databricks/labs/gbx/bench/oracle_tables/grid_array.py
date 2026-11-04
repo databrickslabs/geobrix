@@ -388,6 +388,31 @@ GRID_ARRAY += (
     Case("uc_qb_tessellate_zoom_21", QTS, (QB_IN, 21), "raises", "21", ("uc",)),
 )
 
+# --- polyfill and tessellate on UC refuse a result they cannot return (the kernel's own limit of a million cells, the 64 MiB
+# an array may hold) with a Fix:, never NULL: NULL is for data a function cannot read, not for data it will not return.
+QB_WORLD = "POLYGON((-100 20, -50 20, -50 50, -100 50, -100 20))"  # tens of millions of tiles at zoom 20
+GRID_ARRAY += (
+    Case(
+        "uc_qb_polyfill_over_cap",
+        QPF,
+        (QB_WORLD, 20),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_qb_tessellate_over_cap",
+        QTS,
+        (QB_WORLD, 20),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case("uc_kring_over_cap", KR, ("TQ3080", 10_000_000), "uc_refused", None, ("uc",)),
+)
+
 # --- custom grid on UC: a cell that is no cell is NULL, a wrong k raises, a geometry in another SRID is refused, an array
 # over the cap is refused. A grid with no CRS takes a geometry with SRID 0.
 GRID_ARRAY += (

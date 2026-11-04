@@ -68,7 +68,7 @@ def h3_cell_bbox(
         kring_pad: How many rings of neighbours to include before taking the box; 0 is
             the cell alone. SQL default: ``0``.
         out_crs: The output coordinate system as `EPSG:<n>`, `ESRI:<n>` or WKT; when set
-            it wins over `srid`. SQL default: ``NULL``.
+            it wins over `srid`. On Unity Catalog WKT is refused. SQL default: ``NULL``.
 
     Returns:
         A struct of `xmin`, `ymin`, `xmax` and `ymax`, or NULL for a NULL cell.

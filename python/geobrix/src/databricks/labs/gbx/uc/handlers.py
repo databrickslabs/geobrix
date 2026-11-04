@@ -194,7 +194,7 @@ def bng_tessellate(geom, resolution, keep_core_geom):
         Exception
     ):  # noqa: BLE001 - a geometry that cannot be tessellated is NULL on UC
         return None
-    return [
+    out = [
         {
             "cellid": cell,
             "core": bool(core),
@@ -208,6 +208,13 @@ def bng_tessellate(geom, resolution, keep_core_geom):
         }
         for cell, core, chip in chips
     ]
+    _check_bytes(
+        fn,
+        sum(len(r["chip"] or b"") + ARRAY_ITEM_BYTES for r in out),
+        "the array of chips",
+        _FILL_LOWER,
+    )
+    return out
 
 
 def st_makevalid(geom, level):
@@ -387,11 +394,13 @@ def bng_polyfill(geom, resolution):
     if g is None:
         return None
     try:
-        return _bng.polyfill_str(g, res)
+        cells = _bng.polyfill_str(g, res)
     except (MemoryError, RecursionError, ImportError):
         raise
     except Exception:  # noqa: BLE001 - a geometry that cannot be filled is NULL on UC
         return None
+    _check_array(fn, len(cells), "the cells of the geometry", lower=_FILL_LOWER)
+    return cells
 
 
 def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
@@ -408,7 +417,7 @@ def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if g is None or not _finite(g):
         return None  # a non-finite coordinate has no cell
     try:
-        return sorted(
+        cells = sorted(
             _bng.geometry_k_ring_str(g, res, k, mode or "boundary-out", coverage)
         )
     except (MemoryError, RecursionError, ImportError):
@@ -417,6 +426,8 @@ def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         Exception
     ):  # noqa: BLE001 - the parameters are checked above: a geometry that cannot be dilated is NULL
         return None
+    _check_array(fn, len(cells))
+    return cells
 
 
 def bng_kring(cellid, k):
@@ -427,7 +438,11 @@ def bng_kring(cellid, k):
     cid = _bng_cell(cellid)
     if cid is None:
         return None  # a string that is no cell
-    return [_bng.format(c) for c in _bng.k_ring(cid, int(k))]
+    kk = int(k)
+    _check_array(
+        "gbx_bng_kring", (2 * max(kk, 0) + 1) ** 2
+    )  # a ring of distance k is (2k+1)^2 cells
+    return [_bng.format(c) for c in _bng.k_ring(cid, kk)]
 
 
 def bng_cellarea(cellid):
@@ -462,6 +477,18 @@ def quadbin_pointascell(longitude, latitude, resolution):
     return _quadbin.point_as_cell(lon, lat, z)
 
 
+def _check_quadbin_fill(fn: str, count: int) -> None:
+    """Refuse a quadbin fill of ``count`` tiles that the kernel will not build (a million) or the cap will not return."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    if count > _quadbin.MAX_POLYFILL_CELLS:
+        raise _Refusal(
+            f"{fn}: the geometry covers {count} tiles at this zoom, over the {_quadbin.MAX_POLYFILL_CELLS} a fill holds. "
+            "Fix: use a lower zoom, or split the geometry into smaller parts."
+        )
+    _check_array(fn, count, "the cells of the geometry", lower=_FILL_LOWER)
+
+
 def quadbin_polyfill(geom, resolution):
     from databricks.labs.gbx.pygx import _quadbin
 
@@ -473,12 +500,21 @@ def quadbin_polyfill(geom, resolution):
     if g is None:
         return None
     try:
+        count = _quadbin.polyfill_count(g, z)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - the zoom is checked above: a geometry that cannot be read is NULL
+        return None
+    _check_quadbin_fill(fn, count)
+    try:
         return _quadbin.polyfill(g, z)
     except (MemoryError, RecursionError, ImportError):
         raise
     except (
         Exception
-    ):  # noqa: BLE001 - the zoom is checked above: a geometry that cannot be filled (too many cells) is NULL
+    ):  # noqa: BLE001 - the zoom and the size are checked above: a geometry that cannot be filled is NULL
         return None
 
 
@@ -496,7 +532,7 @@ def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     if g is None or not _finite(g):
         return None
     try:
-        return sorted(
+        cells = sorted(
             _h3.geom_expand("ring", g, res, k, mode or "boundary-out", coverage)
         )
     except (MemoryError, RecursionError, ImportError):
@@ -505,6 +541,8 @@ def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         Exception
     ):  # noqa: BLE001 - the parameters are checked above: a geometry that cannot be dilated is NULL
         return None
+    _check_array(fn, len(cells))
+    return cells
 
 
 # --- array results are bounded, never truncated ---------------------------------------------------------------------
@@ -523,22 +561,31 @@ def _array_cap() -> int:
     return UC_DECODED_CAP
 
 
-def _check_bytes(fn: str, size: int, what: str) -> None:
-    """Refuse a result of ``size`` bytes over the cap, with a Fix that names the session function."""
+def _check_bytes(
+    fn: str,
+    size: int,
+    what: str,
+    lower: str = "lower k, or split the input into smaller groups",
+) -> None:
+    """Refuse a result of ``size`` bytes over the cap, with a Fix that names the session function. ``lower`` is the
+    first remedy (what to change to get a smaller result)."""
     cap = _array_cap()
     if size > cap:
         from databricks.labs.gbx.pyrx.core.budget import size_text
 
         raise _Refusal(
             f"{fn}: {what} is {size_text(size)}, over the {size_text(cap)} a Unity Catalog function returns. "
-            f"Fix: lower k, or split the input into smaller groups, or use the session function {fn} "
+            f"Fix: {lower}, or use the session function {fn} "
             "(after databricks.labs.gbx.register(spark)) or the Python API."
         )
 
 
-def _check_array(fn: str, count: int, what: str = "the array of cells") -> None:
+def _check_array(fn: str, count: int, what: str = "the array of cells", **kw) -> None:
     """Refuse an array of ``count`` cells over the cap (see :func:`_check_bytes`)."""
-    _check_bytes(fn, int(count) * ARRAY_ITEM_BYTES, what)
+    _check_bytes(fn, int(count) * ARRAY_ITEM_BYTES, what, **kw)
+
+
+_FILL_LOWER = "use a coarser resolution, or split the geometry into smaller parts"
 
 
 def _le(wkb: bytes) -> bytes:
@@ -711,18 +758,28 @@ def quadbin_tessellate(geom, resolution):
     if g is None:
         return None
     try:
+        count = _quadbin.polyfill_count(g, z)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - the zoom is checked above: a geometry that cannot be read is NULL
+        return None
+    _check_quadbin_fill(fn, count)
+    try:
         chips = _quadbin.tessellate(g, z)
     except (MemoryError, RecursionError, ImportError):
         raise
     except (
         Exception
-    ):  # noqa: BLE001 - the zoom is checked above: a geometry that cannot be cut (too many cells) is NULL
+    ):  # noqa: BLE001 - the zoom and the size are checked above: a geometry that cannot be cut is NULL
         return None
     out = [{"cell": int(c), "geom": _le(chip)} for c, chip in chips]
     _check_bytes(
         fn,
         sum(len(r["geom"]) + ARRAY_ITEM_BYTES for r in out),
         "the array of chips",
+        _FILL_LOWER,
     )
     return out
 

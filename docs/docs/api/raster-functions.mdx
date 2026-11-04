@@ -2648,7 +2648,7 @@ A NULL tile, an error tile and a tile that cannot be read give no rows. A resolu
 | `srid` | `INT` | `INT` | `4326` | The EPSG code of the output coordinates. |
 | `mode` | `STRING` | `STRING` | `'centroids'` | `'centroids'` wraps the cell centres, `'spatial_envelope'` the whole hexagons. |
 | `kring_pad` | `INT` | `INT` | `0` | How many rings of neighbours to include before taking the box; 0 is the cell alone. |
-| `out_crs` | `STRING` | `STRING` | `NULL` | The output coordinate system as `EPSG:<n>`, `ESRI:<n>` or WKT; when set it wins over `srid`. |
+| `out_crs` | `STRING` | `STRING` | `NULL` | The output coordinate system as `EPSG:<n>`, `ESRI:<n>` or WKT; when set it wins over `srid`. On Unity Catalog WKT is refused. |
 {/* END GENERATED gbx_h3_cell_bbox */}
 
 :::note Implementation

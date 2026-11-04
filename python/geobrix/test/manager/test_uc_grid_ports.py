@@ -39,6 +39,52 @@ def test_a_ring_too_large_to_build_is_refused_before_it_is_built():
         handlers.quadbin_kring(QB_Z26, 1000)
 
 
+BNG_SQ = shapely.from_wkt(
+    "POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))"
+)
+BNG_POINT = shapely.from_wkt("POINT(530500 180500)")
+H3_POINT = shapely.from_wkt("POINT(-122.4 37.8)")
+
+ARRAY_HANDLERS = [  # (handler, arguments, the session function a Fix names)
+    (handlers.bng_kring, ("TQ3080", 3), "gbx_bng_kring"),
+    (handlers.bng_polyfill, (_geom(BNG_SQ.wkt, 27700), 3), "gbx_bng_polyfill"),
+    (
+        handlers.bng_geomkring,
+        (_geom(BNG_POINT.wkt, 27700), 3, 2),
+        "gbx_bng_geomkring",
+    ),
+    (
+        handlers.bng_tessellate,
+        (_geom(BNG_SQ.wkt, 27700), 3, False),
+        "gbx_bng_tessellate",
+    ),
+    (handlers.h3_geomkring, (_geom(H3_POINT.wkt, 4326), 8, 2), "gbx_h3_geomkring"),
+    (handlers.quadbin_polyfill, (_geom(QB_SQUARE, 4326), 10), "gbx_quadbin_polyfill"),
+    (
+        handlers.quadbin_tessellate,
+        (_geom(QB_SQUARE, 4326), 10),
+        "gbx_quadbin_tessellate",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "handler,args,fn", ARRAY_HANDLERS, ids=[a[2] for a in ARRAY_HANDLERS]
+)
+def test_every_grid_array_handler_refuses_a_result_over_the_cap_and_never_truncates(
+    monkeypatch, handler, args, fn
+):
+    """The cap helper judges the ring, polyfill, geometry-ring and tessellate handlers alike: an array past it is a
+    refusal that names the session function, not NULL and not a cut array."""
+    whole = handler(*args)
+    assert whole and len(whole) > 2
+    monkeypatch.setattr(handlers, "_array_cap", lambda: 2 * handlers.ARRAY_ITEM_BYTES)
+    with pytest.raises(ValueError, match=rf"over the .*Fix: .*{fn}"):
+        handler(*args)
+    monkeypatch.undo()
+    assert handler(*args) == whole
+
+
 # --- what a UC result carries -----------------------------------------------------------------------------------------
 
 

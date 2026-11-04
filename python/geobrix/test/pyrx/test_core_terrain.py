@@ -43,9 +43,12 @@ def test_slope_45deg_ramp():
     ramp = np.tile(np.arange(5, dtype="float32"), (5, 1))  # value == column index
     with _serde.open_tile(_dem(ramp)) as ds:
         out = terrain.slope(ds, unit="degrees")
+        out_cased = terrain.slope(ds, unit="Degrees")
     with _serde.open_tile(out) as o:
         interior = o.read(1)[1:-1, 1:-1]
         assert np.allclose(interior, 45.0, atol=1.0)
+    # the unit is case-insensitive, as in the spec engine's enum binder
+    assert out_cased == out
 
 
 def test_aspect_ramp_faces_west_or_known():
@@ -383,7 +386,7 @@ def test_hillshade_auto_scale_geographic_realistic():
     assert np.array_equal(r[1:-1, 1:-1], expected[1:-1, 1:-1])
 
 
-@pytest.mark.parametrize("unit", ["radians", "Degrees", ""])
+@pytest.mark.parametrize("unit", ["radians", ""])
 def test_slope_refuses_a_unit_that_is_not_degrees_or_percent(unit):
     """Any other unit is a wrong argument that names the value, never a silent read as degrees."""
     with _serde.open_tile(_dem(np.zeros((4, 4)))) as ds:

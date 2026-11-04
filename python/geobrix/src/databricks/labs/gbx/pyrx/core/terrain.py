@@ -129,6 +129,17 @@ def slope_unit_refusal(unit) -> str:
     )
 
 
+def normalize_slope_unit(unit) -> str:
+    """The slope unit as a lower-case word, or ValueError for a unit that is neither degrees nor percent.
+
+    The case and the surrounding spaces do not matter, as in the spec engine's enum binder, so every level agrees.
+    """
+    word = str(unit).strip().lower()
+    if word not in SLOPE_UNITS:
+        raise ValueError(slope_unit_refusal(unit))
+    return word
+
+
 def _resolve_scale(ds, xscale, yscale) -> tuple:
     """Explicit (xscale, yscale) when BOTH given, else GDAL-normal auto-scale."""
     if xscale is not None and yscale is not None:
@@ -147,14 +158,13 @@ def slope(ds, unit: str = "degrees", xscale=None, yscale=None) -> bytes:
 
     Args:
         ds:    Open rasterio DatasetReader. Band 1 is the DEM.
-        unit:  ``"degrees"`` (default) or ``"percent"``; any other value raises.
+        unit:  ``"degrees"`` (default) or ``"percent"``, in any case; any other value raises.
         xscale, yscale: optional explicit scale overrides (both or neither).
 
     Returns:
         Single-band Float32 GTiff bytes; nodata = -9999.
     """
-    if str(unit) not in SLOPE_UNITS:
-        raise ValueError(slope_unit_refusal(unit))
+    unit = normalize_slope_unit(unit)
     if (xscale is None) != (yscale is None):
         raise ValueError(SLOPE_HALF_SCALE_REFUSAL)
     dzdx, dzdy, valid = _horn_gradients(ds)

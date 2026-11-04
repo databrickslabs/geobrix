@@ -750,8 +750,10 @@ rst_fillnodata = _tile_fn("gbx_rst_fillnodata", "features", "fill_nodata")
 # --- terrain: a DEM tile to a surface tile -------------------------------------------------------------------------
 def _slope_args(unit, xscale, yscale):
     """The wrong arguments of gbx_rst_slope: a unit that is not degrees or percent, one scale without the other."""
-    if str(unit) not in _kernel("terrain", "SLOPE_UNITS"):
-        raise _Parameter(_kernel("terrain", "slope_unit_refusal")(unit))
+    try:
+        _kernel("terrain", "normalize_slope_unit")(unit)
+    except ValueError as exc:
+        raise _Parameter(str(exc)) from exc
     if (xscale is None) != (yscale is None):
         raise _Parameter(_kernel("terrain", "SLOPE_HALF_SCALE_REFUSAL"))
 

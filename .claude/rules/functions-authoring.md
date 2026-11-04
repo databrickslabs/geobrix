@@ -37,6 +37,22 @@ SQL binds positionally, so an arity change is a manifest change, and a level who
 honour the signature is not selected (the manager says why). Per-surface names and signatures may differ:
 Python-only keywords (the force-output trio) are declared in the row's `python` block.
 
+## SQL kernels, stubs and shared deps (UC forms)
+
+- A function that needs no Python gets a SQL body in the manifest: L4 `sql` (the text after `RETURN`) plus `sql_helpers`
+  (private `gbx__<x>` SQL functions, called as `{q}gbx__<x>(...)` in a body). `gbx.uc.install` makes it a
+  `LANGUAGE SQL DETERMINISTIC` function ahead of a Scala or Python handler. The row keeps its `handler` as the oracle twin.
+- The session uses the same text as an L0 level (a temporary SQL function): put the body in `levels.L0.sql` and set
+  L4 `sql` to `"L0"`. L0 is never a default: add the name to `manager/levels.py` `PREFERENCE` only after a measurement.
+- A table function over a SQL kernel inlines the body (UC refuses a SQL function inside a generator). A body must not
+  use a parameter name as a lambda variable or alias: inlining renames identifiers outside quotes.
+- A session-only scalar gets a stub with an L4 spec holding only `stub` (the Fix sentence, without a `Fix:` prefix).
+  The row has no UC level; `gbx.uc.install(..., stubs=True)` creates the raising function. Aggregates and generators get none.
+- `_array`, `_partial` and `_finalize` names are scalars; a `_finalize` needs its `_partial`. The collision gate
+  (`scripts/manifest/check_surfaces.py` `form_findings`) enforces this and the helper names.
+- A UC form with another name or shape than its session row takes `twin()` rows (`bench/oracle_tables/_uc_tile.py`),
+  not `share()`.
+
 ## Functions not yet in the manifest (transition only; deleted when the last family migrates)
 
 Load-bearing rules for touching function expressions, bindings, signatures, and

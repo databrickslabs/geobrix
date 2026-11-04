@@ -386,6 +386,7 @@
       "description": "Trace contour lines of the first band at given values or at a regular interval.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -906,6 +907,7 @@
       "description": "Group the pixels of the first band into value bands and return one polygon per connected patch.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

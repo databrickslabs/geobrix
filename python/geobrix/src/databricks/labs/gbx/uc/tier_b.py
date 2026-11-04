@@ -1472,3 +1472,79 @@ def rst_dtmfromgeoms(
 
 
 HANDLERS["gbx_rst_dtmfromgeoms"] = rst_dtmfromgeoms
+
+
+# --- raster to vector: lines and patches as an array of structs ---------------------------------------------------------
+# The geometries come back as the session returns them: WKB in a BINARY field (little-endian, in the tile's CRS), in a
+# struct of the same field names. A tile with nothing to read (an error tile, corrupt bytes) is NULL.
+_ROW_OVERHEAD = 32  # the other fields of a row, an upper estimate
+
+
+def check_rows(fn: str, rows) -> None:
+    """Refuse a result whose geometries are over the cap: never truncated."""
+    size = sum(len(r["geom_wkb"]) + _ROW_OVERHEAD for r in rows)
+    if size > DECODED_CAP:
+        raise _Refusal(
+            f"{fn}: the result is {size_text(size)} of geometry, over the {size_text(DECODED_CAP)} a Unity Catalog "
+            f"function returns. Fix: trace fewer levels or bands, clip the tile first (gbx_rst_clip), or run {fn} in "
+            "a notebook or job session"
+        )
+
+
+def rst_contour(tile, levels, interval, base, attr_field):
+    """gbx_rst_contour: the contour lines of band 1 as `{geom_wkb, value}` (a WKB line in the tile's CRS) at the given
+    levels, or every `interval` from `base` when there are none."""
+    fn = "gbx_rst_contour"
+    if tile is None:
+        return None
+    lvls = [] if levels is None else [float(v) for v in levels if v is not None]
+    iv = 0.0 if interval is None else float(interval)
+    bs = 0.0 if base is None else float(base)
+    attr = "elev" if attr_field is None else str(attr_field)
+    try:
+        _kernel("analysis", "check_contour")(lvls, iv, attr)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: pass levels, or an interval above 0 and a non-empty attr_field"
+        ) from exc
+    rows = with_dataset(
+        fn, tile, lambda ds: _kernel("analysis", "contour")(ds, lvls, iv, bs, attr)
+    )
+    if rows is not None:
+        check_rows(fn, rows)
+    return rows
+
+
+HANDLERS["gbx_rst_contour"] = rst_contour
+
+
+def rst_isoband(tile, breaks):
+    """gbx_rst_isoband: the patches of band 1 whose value is in `[breaks[i], breaks[i+1])`, as `{geom_wkb, band, lower,
+    upper}` (a WKB polygon in the tile's CRS); NoData and out-of-range pixels are left out.
+    """
+    fn = "gbx_rst_isoband"
+    try:  # a parameter error, whatever the tile holds
+        if breaks is not None:
+            _kernel("features", "check_breaks")(breaks)
+            if len(breaks):
+                _kernel("features", "check_ascending")(breaks)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: pass breaks without NULL, in strictly ascending order"
+        ) from exc
+    if tile is None or not breaks:
+        return None
+    made = with_dataset(
+        fn, tile, lambda ds: _kernel("features", "isoband")(ds, list(breaks))
+    )
+    if made is None:
+        return None
+    rows = [
+        {"geom_wkb": wkb, "band": band, "lower": lower, "upper": upper}
+        for wkb, band, lower, upper in made
+    ]
+    check_rows(fn, rows)
+    return rows
+
+
+HANDLERS["gbx_rst_isoband"] = rst_isoband

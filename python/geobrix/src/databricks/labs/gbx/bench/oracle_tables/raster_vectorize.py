@@ -9,6 +9,7 @@ columns and its area is the number of pixels times 100 square metres.
 
 import os
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
 ISO = "gbx_rst_isoband"
@@ -43,7 +44,7 @@ def _vz_columns_virtual(tmpdir):
     return _tile(None, path)
 
 
-RASTER_VECTORIZE = (
+_SESSION_ROWS = (
     # [0, 2) holds columns 0 and 1, [2, 4) columns 2 and 3, [4, 6) columns 4 and 5: 12 pixels each, 1200 m2.
     Case(
         "isoband_three_bands",
@@ -101,3 +102,12 @@ RASTER_VECTORIZE = (
         ONLY,
     ),
 )
+
+# Unity Catalog: the surface of a materialized tile is the session's; a virtual tile is refused with a Fix, a corrupt
+# one is NULL, and breaks that are not ascending (or hold a NULL) are a wrong argument whatever the tile holds.
+RASTER_VECTORIZE = share(
+    _SESSION_ROWS,
+    "isoband_three_bands", "isoband_outside_dropped", "isoband_null_tile", "isoband_null_breaks",
+    "isoband_empty_breaks", "isoband_not_ascending", "isoband_null_element_break", "isoband_error_tile",
+    "isoband_corrupt",
+) + edges(isoband=([0.0, 1.0],))  # fmt: skip

@@ -2217,17 +2217,18 @@ buffers the whole cloud. See [Performance](./performance) and the [LiDAR reader]
 ### rst_isoband
 
 {/* BEGIN GENERATED gbx_rst_isoband: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_isoband(tile, breaks)` | `array<struct<geom_wkb:binary,band:int,lower:double,upper:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_isoband(tile, breaks)` | `array<struct<geom_wkb:binary,band:int,lower:double,upper:double>>` |
 | Python | `rasterx.functions.rst_isoband(tile, breaks)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to classify. |
-| `breaks` | `ARRAY<DOUBLE>` |  | The N+1 boundaries of N bands, strictly ascending. Band i holds the pixels from `breaks[i]` up to, not including, `breaks[i+1]`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to classify. |
+| `breaks` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The N+1 boundaries of N bands, strictly ascending. Band i holds the pixels from `breaks[i]` up to, not including, `breaks[i+1]`. |
 {/* END GENERATED gbx_rst_isoband */}
 
 Reclassify a raster band into value bins defined by a `breaks` array and return one
@@ -5940,20 +5941,21 @@ Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG
 ### rst_contour
 
 {/* BEGIN GENERATED gbx_rst_contour: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_contour(tile, levels, [interval], [base], [attr_field])` | `array<struct<geom_wkb:binary,value:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_contour(tile, levels, [interval], [base], [attr_field])` | `array<struct<geom_wkb:binary,value:double>>` |
 | Python | `rasterx.functions.rst_contour(tile, levels, interval=None, base=None, attr_field=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to trace. |
-| `levels` | `ARRAY<DOUBLE>` |  | The values to trace; NULL or empty to use `interval` and `base`. |
-| `interval` | `DOUBLE` | `0.0` | The spacing of the lines, used when `levels` is empty; above 0. |
-| `base` | `DOUBLE` | `0.0` | The value one line is drawn at, used with `interval`. |
-| `attr_field` | `STRING` | `'elev'` | Accepted for compatibility; the value is always the struct field `value`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to trace. |
+| `levels` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The values to trace; NULL or empty to use `interval` and `base`. |
+| `interval` | `DOUBLE` | `DOUBLE` | `0.0` | The spacing of the lines, used when `levels` is empty; above 0. |
+| `base` | `DOUBLE` | `DOUBLE` | `0.0` | The value one line is drawn at, used with `interval`. |
+| `attr_field` | `STRING` | `STRING` | `'elev'` | Accepted for compatibility; the value is always the struct field `value`. |
 {/* END GENERATED gbx_rst_contour */}
 
 :::note Implementation

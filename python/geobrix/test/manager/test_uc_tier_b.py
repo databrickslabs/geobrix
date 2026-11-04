@@ -347,3 +347,43 @@ def test_a_constructor_tile_is_built_like_every_other_uc_tile():
         "height": "10",
         "count": "1",
     }
+
+
+# --- raster to vector --------------------------------------------------------------------------------------------------
+def test_contour_and_isoband_return_dict_rows_of_little_endian_wkb(tmp_path):
+    tile = _built("vz_columns", tmp_path)
+    lines = tier_b.HANDLERS["gbx_rst_contour"](tile, [1.5], 0.0, 0.0, "elev")
+    assert (
+        lines
+        and set(lines[0]) == {"geom_wkb", "value"}
+        and lines[0]["geom_wkb"][0] == 1
+    )
+    patches = tier_b.HANDLERS["gbx_rst_isoband"](tile, [0.0, 2.0])
+    assert patches and set(patches[0]) == {"geom_wkb", "band", "lower", "upper"}
+    assert patches[0]["geom_wkb"][0] == 1 and patches[0]["band"] == 0
+
+
+def test_breaks_that_are_wrong_raise_whatever_the_tile_holds(tmp_path):
+    for tile in (
+        None,
+        _built("vz_columns", tmp_path),
+        _built("tile_corrupt", tmp_path),
+    ):
+        with pytest.raises(ValueError, match=r"ascending.*Fix: "):
+            tier_b.HANDLERS["gbx_rst_isoband"](tile, [0.0, 4.0, 2.0])
+        with pytest.raises(ValueError, match=r"element 1 is NULL.*Fix: "):
+            tier_b.HANDLERS["gbx_rst_isoband"](tile, [0.0, None, 2.0])
+
+
+def test_a_vector_result_over_the_cap_is_refused_not_truncated(tmp_path, monkeypatch):
+    tile = _built("vz_columns", tmp_path)
+    monkeypatch.setattr(
+        tier_b, "DECODED_CAP", 200
+    )  # the tile is 144 bytes; each line is more than the rest
+    with pytest.raises(
+        ValueError,
+        match=r"the result is 0 KiB of geometry, over the 0 KiB.*Fix: trace fewer levels",
+    ):
+        tier_b.HANDLERS["gbx_rst_contour"](
+            tile, [0.5, 1.5, 2.5, 3.5, 4.5], 0.0, 0.0, "elev"
+        )

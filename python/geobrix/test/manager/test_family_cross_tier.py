@@ -167,6 +167,7 @@ _UC_TABLES = (
     "RASTER_ARRAY_OP",
     "SPEC_SE",
     "RASTER_RASTERIZE",
+    "RASTER_VECTORIZE",
 )
 
 

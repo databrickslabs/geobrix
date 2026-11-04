@@ -237,8 +237,10 @@ SPEC_DEM = share(
     "aspect_null_param", "aspect_null_tile", "aspect_error_tile",
     "hillshade_default", "hillshade_params", "hillshade_scales", "hillshade_sql_defaults", "hillshade_half_scale",
     "hillshade_null_param", "tri", "tri_null_tile", "tri_error_tile", "tpi", "roughness",
+    "contour_levels", "contour_interval", "contour_null_tile", "contour_error_tile", "contour_corrupt",
 ) + edges(
     slope=("degrees",), aspect=(False, False), hillshade=(315.0, 45.0, 1.0), tpi=(), tri=(), roughness=(),
+    contour=([1.5],),
 ) + (
     Case("uc_slope_percent", SL, (DEM, "percent"), "ref", "slope", ("uc",)),
     Case("uc_slope_scales", SL, (DEM, "degrees", 2.0, 0.5), "ref", "slope", ("uc",)),
@@ -247,4 +249,7 @@ SPEC_DEM = share(
     Case("uc_slope_null_unit", SL, (DEM, None), "null", None, ("uc",)),
     Case("uc_slope_null_tile", SL, (None, "degrees"), "null", None, ("uc",)),
     Case("uc_slope_error_tile", SL, (ERR, "radians"), "error_tile", UPSTREAM_ERROR, ("uc",)),
+    # no levels and no interval makes no line; an empty value field is refused too (the session raises as well)
+    Case("uc_contour_no_interval", CT, (COLUMNS, [], 0.0, 0.0), "raises", "interval must be > 0", ("uc",)),
+    Case("uc_contour_empty_attr", CT, (COLUMNS, [1.5], 0.0, 0.0, " "), "raises", "attr_field must be non-empty", ("uc",)),
 )  # fmt: skip

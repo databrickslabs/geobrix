@@ -5023,6 +5023,9 @@ def run_sql_kernels(
     )
     mine = [c for c in cases if c.fn in names]
     # a body that calls a product built-in the local engine lacks runs against its stand-in (bench.product_stand_ins)
+    mine = [
+        replace(c, sql=product_stand_ins.rewrite(c.sql)) if c.sql else c for c in mine
+    ]
     texts = [c.sql for c in mine if c.sql] + [
         part for n in names for part in _source_texts(source(n))
     ]

@@ -16,7 +16,7 @@ over as float64 and round the ids to other cells).
 
 from dataclasses import replace
 
-from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, twin
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, recipe, twin
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
     CUSTOM_GRID,
     H3_CELL,
@@ -617,5 +617,109 @@ CELL_AGGREGATE += (
         "geom_equals",
         _box_wkt_xy(531000, 180000, 532000, 181000),
         ("session", "uc"),
+    ),
+)
+
+
+# ------------------------------------------------------------------------------------------------ recipes
+# The statements a user writes at table scale, where no function is needed: the native route is the fastest form and has
+# no 64 MiB array in it. Each is a recipe row (one whole statement, `{q}` the schema qualifier) judged against the same
+# expectation as the aggregate it replaces. Only the H3 fill can run on the host (through the ring table of
+# bench.product_stand_ins); the union recipes call the product geometry aggregate and a UC Python function, so the
+# workspace pass runs them and a host test parses their text.
+
+# C1: the H3 fill with no collect and no ceiling. `{ring}` is the number of rings (the distance cut), `{value}` the fill:
+# the mean of the valid neighbours, or the inverse-distance mean.
+_C1 = (
+    "SELECT sort_array(collect_list(struct(cellid, value))) AS out FROM ("
+    "WITH src AS (SELECT * FROM VALUES {rows} AS t(grp, cellid, value)), "
+    "g AS (SELECT grp, cellid, max(value) AS value FROM src GROUP BY grp, cellid), "
+    "holes AS (SELECT grp, cellid FROM g WHERE value IS NULL), "
+    "nb AS (SELECT h.grp, h.cellid, n.cellid AS nb, n.distance AS d FROM holes h "
+    "LATERAL VIEW inline(h3_kringdistances(h.cellid, {ring})) n WHERE n.distance >= 1), "
+    "f AS (SELECT nb.grp, nb.cellid, avg(g.value) AS mean_v, "
+    "sum(g.value * pow(nb.d, -2.0)) / sum(pow(nb.d, -2.0)) AS idw_v FROM nb "
+    "JOIN g ON g.grp = nb.grp AND g.cellid = nb.nb AND g.value IS NOT NULL GROUP BY nb.grp, nb.cellid) "
+    "SELECT g.grp, g.cellid, coalesce(g.value, f.{value}) AS value FROM g "
+    "LEFT JOIN f ON f.grp = g.grp AND f.cellid = g.cellid) WHERE grp = 'a'"
+)
+_H3_C, _H3_R1A, _H3_R1B = 613196570331971583, 613196570340360191, 613196570344554495
+_H3_R2 = 613196570401177599  # the first ring-2 cell of _H3_C, the one the builder h3_fill_idw uses
+
+
+def _h3_rows(*pairs):
+    return ", ".join(
+        f"('a', CAST({c} AS BIGINT), CAST({'NULL' if v is None else v} AS DOUBLE))"
+        for c, v in pairs
+    )
+
+
+CELL_AGGREGATE += (
+    recipe(
+        "recipe_h3_fill_mean",
+        H3FA,
+        _C1.format(
+            rows=_h3_rows((_H3_C, None), (_H3_R1A, 10.0), (_H3_R1B, 20.0)),
+            ring=1,
+            value="mean_v",
+        ),
+        "cellfill",
+        {_H3_C: 15.0, _H3_R1A: 10.0, _H3_R1B: 20.0},
+    ),
+    # two rings and the inverse-distance mean: (10 / 1 + 20 / 4) / (1 + 1 / 4) = 12
+    recipe(
+        "recipe_h3_fill_idw",
+        H3FA,
+        _C1.format(
+            rows=_h3_rows((_H3_C, None), (_H3_R1A, 10.0), (_H3_R2, 20.0)),
+            ring=2,
+            value="idw_v",
+        ),
+        "cellfill",
+        {_H3_C: 12.0, _H3_R1A: 10.0, _H3_R2: 20.0},
+    ),
+)
+
+# C2: the union of quadbin cells in a large group, native. The cell polygon is the one Python call per cell.
+_C2 = (
+    "SELECT st_asbinary(st_union_agg(st_geomfromewkb({{q}}gbx_quadbin_aswkb(c)))) AS out "
+    "FROM VALUES (CAST({a} AS BIGINT)), (CAST({b} AS BIGINT)) AS t(c)"
+)
+
+# C3: the union of the chips of each BNG cell, native; a core chip makes the answer the cell polygon.
+_WEST = "0103000000010000000500000000000000503120410000000000f905410000000050312041000000004018064100000000a02c2041000000004018064100000000a02c20410000000000f9054100000000503120410000000000f90541"
+_EAST = "0103000000010000000500000000000000703420410000000000f905410000000070342041000000004018064100000000c02f2041000000004018064100000000c02f20410000000000f9054100000000703420410000000000f90541"
+_C3 = (
+    "SELECT CASE WHEN bool_or(core) THEN st_asbinary(st_geomfromewkb({{q}}gbx_bng_aswkb(cellid))) "
+    "ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS out FROM VALUES "
+    "('TQ3080', false, X'{west}'), ('TQ3080', false, X'{east}') AS t(cellid, core, chip) GROUP BY cellid"
+)
+_C3_CORE = (
+    "SELECT CASE WHEN bool_or(core) THEN st_asbinary(st_geomfromewkb({{q}}gbx_bng_aswkb(cellid))) "
+    "ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS out FROM VALUES "
+    "('TQ3080', false, X'{west}'), ('TQ3080', true, CAST(NULL AS BINARY)) AS t(cellid, core, chip) GROUP BY cellid"
+)
+
+CELL_AGGREGATE += (
+    recipe(
+        "recipe_qb_union_native",
+        QUN,
+        _C2.format(a=QB_C, b=QB_E),
+        "geom_equals",
+        _qb_union_wkt(QB_C, QB_E),
+    ),
+    recipe(
+        "recipe_bng_chip_union_native",
+        BUN,
+        _C3.format(west=_WEST, east=_EAST),
+        "geom_equals",
+        _box_wkt(530000, 531000),
+    ),
+    recipe(
+        "recipe_bng_chip_union_core",
+        BUN,
+        _C3_CORE.format(west=_WEST),
+        "geom_equals",
+        _box_wkt(530000, 531000),
     ),
 )

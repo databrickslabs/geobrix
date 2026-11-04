@@ -178,3 +178,53 @@ def test_a_wrong_k_or_method_raises_whatever_the_cells_are():
             handler([], -1, "mean", 2.0)
         with pytest.raises(ValueError, match="'median'"):
             handler([], 1, "median", 2.0)
+
+
+# --- the recipes ----------------------------------------------------------------------------------------------------------------
+def _recipes():
+    from databricks.labs.gbx.bench import oracles
+
+    return [c for c in oracles.TABLES["CELL_AGGREGATE"] if c.sql is not None]
+
+
+def test_the_h3_fill_recipes_run_on_the_host_and_give_the_functions_answer(
+    spark, tmp_path
+):
+    from databricks.labs.gbx.bench import oracles
+
+    h3_recipes = [c for c in _recipes() if c.cid.startswith("recipe_h3_fill")]
+    assert {c.cid for c in h3_recipes} == {"recipe_h3_fill_mean", "recipe_h3_fill_idw"}
+    ran = oracles.run_sql_kernels(spark, h3_recipes, tmpdir=str(tmp_path))
+    assert [c.cid for c, _ in ran] == [c.cid for c in h3_recipes]  # each one ran
+    assert [m for _, m in ran if m] == []
+
+
+def test_the_union_recipes_are_statements_that_parse(spark):
+    """They call the product geometry aggregate and a UC Python function: the workspace runs them; here the text parses."""
+    union = [c for c in _recipes() if not c.cid.startswith("recipe_h3_fill")]
+    assert len(union) == 3
+    parser = spark._jsparkSession.sessionState().sqlParser()
+    for c in union:
+        parser.parsePlan(c.sql.replace("{q}", ""))
+        assert "st_union_agg(" in c.sql
+
+
+def test_the_python_twin_the_chip_union_is_timed_against_folds_like_the_session_kernel():
+    box = shapely.box
+    west = {
+        "cellid": "TQ3080",
+        "core": False,
+        "chip": shapely.to_wkb(box(530000, 180000, 530600, 181000)),
+    }
+    east = {
+        "cellid": "TQ3080",
+        "core": False,
+        "chip": shapely.to_wkb(box(530400, 180000, 531000, 181000)),
+    }
+    core = {"cellid": "TQ3080", "core": True, "chip": None}
+    got = shapely.from_wkb(forms.bng_chips_union_probe([west, None, east]))
+    assert got.equals(box(530000, 180000, 531000, 181000))
+    whole = shapely.from_wkb(forms.bng_chips_union_probe([west, core]))
+    assert whole.equals(box(530000, 180000, 531000, 181000))
+    assert forms.bng_chips_union_probe(None) is None
+    assert forms.bng_chips_union_probe([None]) is None

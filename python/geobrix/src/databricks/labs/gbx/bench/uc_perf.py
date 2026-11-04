@@ -666,6 +666,7 @@ def _m6(c: Ctx) -> Unit:
         "m6",
         "cell fill: the SQL array form vs the Python array form vs the native recipe; quadbin and BNG unions vs their native recipes",
     )
+    from databricks.labs.gbx.manifest import PrivateRoutine
     from databricks.labs.gbx.uc import ddl
 
     have_twin = "gbx__h3_cellfill_cells" in c.man.private
@@ -736,7 +737,7 @@ def _m6(c: Ctx) -> Unit:
                 ),
                 Leg(
                     f"b_c2_{_n(n)}",
-                    f"SELECT grp, st_area(st_union_agg(st_geomfromwkb({c.q}.gbx_quadbin_aswkb(cell), 4326))) FROM {table} GROUP BY grp",
+                    f"SELECT grp, st_area(st_union_agg(st_geomfromewkb({c.q}.gbx_quadbin_aswkb(cell)))) FROM {table} GROUP BY grp",
                 ),
             ]
     # M6c: BNG chips, recipe C3 vs the SQL fold
@@ -762,20 +763,40 @@ def _m6(c: Ctx) -> Unit:
             )
         )
         u.drops.append(("drop_chips", f"DROP TABLE IF EXISTS {chips}"))
+        twin = PrivateRoutine(
+            name="gbx_mvp_perf_bng_chips_union",
+            handler="databricks.labs.gbx.uc.forms:bng_chips_union_probe",
+            deps=("h3", "shapely"),
+            params=(
+                ("chips", "array<struct<cellid:string,core:boolean,chip:binary>>"),
+            ),
+            returns="BINARY",
+            summary="Probe: the chips of one cell folded by the session kernel in one Python call.",
+        )
+        twin_sql = ddl.private_ddl(
+            twin, c.catalog, c.schema, c.wheel_uri, c.man.uc_dependencies, c.version
+        )
+        u.setup.append(("create_chips_py_twin", twin_sql))
+        u.drops += _drops_for([twin_sql])
+        # a core chip's polygon is the UC Python function; the geometries are EWKB, the SQL fold reads EWKB or WKB
         u.legs += [
             Leg(
                 "c_c3",
-                f"SELECT count(*), sum(length(u)) FROM (SELECT cellid, CASE WHEN bool_or(core) THEN {c.q}.gbx_bng_aswkb(cellid) "
-                f"ELSE st_asbinary(st_union_agg(st_geomfromwkb(chip, 27700))) END AS u FROM {chips} GROUP BY cellid)",
+                f"SELECT count(*), sum(length(u)) FROM (SELECT cellid, CASE WHEN bool_or(core) THEN "
+                f"st_asbinary(st_geomfromewkb({c.q}.gbx_bng_aswkb(cellid))) "
+                f"ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS u FROM {chips} GROUP BY cellid)",
             ),
             Leg(
                 "c_fold",
-                f"SELECT count(*), sum(length(u.chip)) FROM (SELECT {c.q}.gbx_bng_cellunion_array(collect_list(struct(core, chip))) AS u "
-                f"FROM {chips} GROUP BY cellid)",
+                f"SELECT count(*), sum(length(u)) FROM (SELECT {c.q}.gbx_bng_cellunion_array("
+                f"collect_list(struct(cellid, core, chip))) AS u FROM {chips} GROUP BY cellid)",
+            ),
+            Leg(
+                "c_python_twin",
+                f"SELECT count(*), sum(length(u)) FROM (SELECT {c.q}.gbx_mvp_perf_bng_chips_union("
+                f"collect_list(struct(cellid, core, chip))) AS u FROM {chips} GROUP BY cellid)",
             ),
         ]
-    else:
-        u.skipped["c_python_twin"] = "no Python union twin of the chips yet"
     return u
 
 

@@ -58,14 +58,25 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     missing = uc_perf.skipped(plan)
     # the functions that other work adds are named, and the units that do not need them are whole
     assert "gbx_rst_h3_rastertogrid_partial" in missing["m5"]["m5"]
-    assert "gbx_h3_cellfill_array" in missing["m6"]["sql_array"]
+    assert (
+        "m6" not in missing
+    )  # the SQL fill, the quadbin union and the BNG chip union all exist
     assert "gbx_rst_binpoints_finalize" in missing["m7"]["d1"]
     assert "m8" not in missing  # both tree procedures exist, so the tree leg is built
     assert "gbx_rst_zonalstats_partial" in missing["m11"]["partial"]
     assert not {"m0", "m1", "m12", "m13"} & set(missing)
     # the legs that can run today do: the native recipe C1 and the Python twin of the fill, the array twin of binpoints
     labels = {u.id: [leg.label for leg in u.legs] for u in plan}
-    assert "c1_100k" in labels["m6"] and "py_twin_100k" in labels["m6"]
+    assert {"c1_100k", "py_twin_100k", "sql_array_100k"} <= set(labels["m6"])
+    # the chip union is timed three ways: the native recipe, the SQL fold and the Python twin (a probe-only routine)
+    assert {"c_c3", "c_fold", "c_python_twin"} <= set(labels["m6"])
+    m6 = {u.id: u for u in plan}["m6"]
+    assert any("gbx_mvp_perf_bng_chips_union" in sql for _, sql in m6.setup)
+    assert all(
+        "struct(cellid, core, chip)" in leg.sql
+        for leg in m6.legs
+        if leg.label in ("c_fold", "c_python_twin")
+    )
     assert "twin_1m" in labels["m7"] and "d1_1m" not in labels["m7"]
 
 

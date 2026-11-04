@@ -342,6 +342,36 @@ def custom_cellfill_array(cells, grid, k=1, method="mean", power=2.0):
     )
 
 
+# --- the Python twin of the chip union: a bench probe only -----------------------------------------------------------------
+def bng_chips_union_probe(chips):
+    """Probe copy (``gbx_mvp_perf_bng_chips_union``, made by the bench, never by an install): the chips of ONE cell
+    folded by the session kernel in one Python call, as plain WKB. It is what ``gbx_bng_cellunion_array`` (a SQL fold) is
+    timed against; it has no manifest row and no public name."""
+    import shapely
+
+    from databricks.labs.gbx.pygx import _bng
+    from databricks.labs.gbx.uc.handlers import _chip
+
+    fn = "gbx_bng_cellunion_array"
+    if chips is None:
+        return None
+    acc = None
+    for c in chips:
+        if c is None:
+            continue
+        cur = _chip(fn, c)
+        acc = cur if acc is None else _bng.cell_union(acc, cur)
+    if acc is None:
+        return None
+    cellid, core, geom = acc
+    if (geom is None or geom.is_empty) and core and cellid is not None:
+        cid = _bng.parse_safe(cellid)
+        geom = None if cid is None else _bng.cell_id_to_geometry(cid)
+    if geom is None or geom.is_empty:
+        return None
+    return shapely.to_wkb(shapely.set_srid(geom, 0))
+
+
 # --- vector tile merge: the array twin of the aggregate ------------------------------------------------------------
 def st_asmvt_features(tiles, layer_name, extent):
     """gbx__st_asmvt_features: the one-feature tiles of one tile (the ``mvt_bytes`` of ``gbx_st_asmvt_pyramid``, collected

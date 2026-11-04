@@ -684,6 +684,23 @@ RASTER_AGGREGATE += (
         "Fix: set one",
         ONLY,
     ),
+    # ... and the scalar twins refuse it the same way
+    Case(
+        "h3rt_out_srid_and_crs",
+        H3T,
+        (Build("h3rt_dup_max"), *_CELLS["h3"][3], "EPSG:3857"),
+        "raises",
+        "Fix: set one",
+        ONLY,
+    ),
+    Case(
+        "qbrt_out_srid_and_crs",
+        QBT,
+        (Build("qbrt_dup_max"), *_CELLS["qb"][3], "EPSG:3857"),
+        "raises",
+        "Fix: set one",
+        ONLY,
+    ),
     # No value given (an untyped NULL: SQL `NULL`, Python `None`) is the presence mask: every covered cell burns 1.0,
     # where a NULL in a typed column burns NaN (h3r_dup_max).
     Case(

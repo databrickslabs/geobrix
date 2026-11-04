@@ -121,7 +121,9 @@ class RST_TileXYZScalarTest extends PlanTest with SilentSparkSession {
     test("gbx_rst_tilexyz in SQL raises for a bad parameter and renders for a valid call") {
         TestL1.installAll(spark)
         val modis = getClass.getResource("/modis/").toString
-        spark.read.format("gdal").option("sizeInMB", "1").load(modis).limit(1).createOrReplaceTempView("tilexyz_scalar_src")
+        spark.read.format("binaryFile").option("pathGlobFilter", "*B01.TIF").load(modis).limit(1)
+            .selectExpr("gbx_rst_fromcontent(content, 'GTiff') AS tile")
+            .createOrReplaceTempView("tilexyz_scalar_src")
         try {
             val e = intercept[Exception](spark.sql("SELECT gbx_rst_tilexyz(tile, 2, 2, 1, 'GIF') FROM tilexyz_scalar_src").collect())
             withClue(s"the error chain ${messageChain(e)}: ") {

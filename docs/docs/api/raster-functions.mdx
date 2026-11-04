@@ -1506,7 +1506,7 @@ In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF byte
 Streaming aggregator that burns H3 cell centroid pixels (or spatial-envelope pixels) into one raster tile per group. This is the **inverse** of [`rst_h3_rastertogrid*`](#rst_h3_rastertogridavg): where those functions reduce raster pixels to per-cell statistics, `rst_h3_rasterize_agg` reconstructs a raster from per-cell values. Use [`rst_frombands_agg`](#rst_frombands_agg) to stack per-threshold rasters (each produced by one `rst_h3_rasterize_agg` call) into a single multi-band output.
 
 :::note Python-only `out_crs` parameter
-The aggregate accepts an optional trailing `out_crs` (string CRS) argument. When supplied it overrides the integer `out_srid` for the output CRS. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
+The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
 :::
 
 :::tip Worked example
@@ -1663,7 +1663,7 @@ In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF byte
 Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat; their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Python-only `out_crs` parameter
-The aggregate accepts an optional trailing `out_crs` (string CRS) argument. When supplied it overrides the integer `out_srid` for the output CRS. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
+The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
 :::
 
 _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._

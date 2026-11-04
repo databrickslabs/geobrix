@@ -1020,9 +1020,15 @@ RASTER_TILE_OP = share(
     "filter_error_tile_passes_bad_operation",
     "convolve_asymmetric", "convolve_identity", "convolve_float64", "convolve_even_kernel", "convolve_ragged_kernel",
     "convolve_null_tile", "convolve_null_kernel", "convolve_error_in",
+    "land_cover_spectral", "land_cover_kmeans", "land_cover_sql_defaults", "land_cover_bad_method",
+    "land_cover_zero_clusters", "land_cover_null_tile", "land_cover_null_method", "land_cover_error_in",
+    "percentile_stretch_2_98", "percentile_stretch_uint8", "percentile_stretch_low_not_below_high",
+    "percentile_stretch_out_of_range", "percentile_stretch_null_tile", "percentile_stretch_null_percentile",
+    "percentile_stretch_error_in", "percentile_stretch_error_tile_passes_bad_range",
 ) + edges(
     setsrid=(3857,), setcrs=("EPSG:3857",), updatetype=("Int32",), initnodata=(), band=(1,), asformat=("PNG",),
     getsubdataset=("Band2",), align_to=(Build("rto_coarse_ref"),), filter=(3, "min"), convolve=(IDENTITY,),
+    land_cover=("spectral", 6, 0), percentile_stretch=(2.0, 98.0),
 ) + (
     # a CRS definition (WKT, PROJ4) stays on the session function
     Case("uc_setcrs_wkt_refused", SC, (T4326, Build("wkt_3857")), "uc_refused", None, ("uc",)),
@@ -1034,4 +1040,6 @@ RASTER_TILE_OP = share(
     # the reference of align_to: a virtual one is refused, an unreadable one is NULL
     Case("uc_align_to_virtual_reference_refused", AL, (T4326, VIRT), "uc_refused", None, ("uc",)),
     Case("uc_align_to_corrupt_reference_null", AL, (T4326, CORRUPT), "null", None, ("uc",)),
+    # a tile of fewer than three bands has no colour to classify: refused with the Fix to stack the bands
+    Case("uc_land_cover_two_bands_refused", LC, (Build("rto_two_bands"), "spectral", 6, 0), "uc_refused", None, ("uc",)),
 )  # fmt: skip

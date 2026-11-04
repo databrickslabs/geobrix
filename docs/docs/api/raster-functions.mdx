@@ -2255,17 +2255,18 @@ Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL requi
 ### rst_chm
 
 {/* BEGIN GENERATED gbx_rst_chm: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_chm(dsm_tile, dem_tile)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_chm(dsm_tile, dem_tile)` | `TILE` |
 | Python | `rasterx.functions.rst_chm(dsm_tile, dem_tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `dsm_tile` | `TILE` |  | The Digital Surface Model tile. |
-| `dem_tile` | `TILE` |  | The Digital Elevation Model tile; it defines the output grid. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `dsm_tile` | `TILE` | `TILE` |  | The Digital Surface Model tile. |
+| `dem_tile` | `TILE` | `TILE` |  | The Digital Elevation Model tile; it defines the output grid. |
 {/* END GENERATED gbx_rst_chm */}
 
 Compute a **Canopy Height Model (CHM)** from a Digital Surface Model (DSM) tile and a
@@ -3857,18 +3858,19 @@ _Example clip geometry: a WKT polygon in the raster's native CRS (EPSG:32618, no
 ### rst_percentile_stretch
 
 {/* BEGIN GENERATED gbx_rst_percentile_stretch: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_percentile_stretch(tile, lo_pct, hi_pct)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_percentile_stretch(tile, lo_pct, hi_pct)` | `TILE` |
 | Python | `rasterx.functions.rst_percentile_stretch(tile, lo_pct, hi_pct, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to stretch. |
-| `lo_pct` | `DOUBLE` |  | The lower percentile, in `[0, 100]` and below `hi_pct`: the value at it becomes 0. |
-| `hi_pct` | `DOUBLE` |  | The upper percentile, in `[0, 100]`: the value at it becomes 255. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to stretch. |
+| `lo_pct` | `DOUBLE` | `DOUBLE` |  | The lower percentile, in `[0, 100]` and below `hi_pct`: the value at it becomes 0. |
+| `hi_pct` | `DOUBLE` | `DOUBLE` |  | The upper percentile, in `[0, 100]`: the value at it becomes 255. |
 {/* END GENERATED gbx_rst_percentile_stretch */}
 
 :::note Implementation
@@ -5424,19 +5426,20 @@ Generic dispatcher that picks a built-in formula by name and wires bands via a `
 ### rst_land_cover
 
 {/* BEGIN GENERATED gbx_rst_land_cover: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_land_cover(tile, [method], [n_clusters], [smooth])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_land_cover(tile, [method], [n_clusters], [smooth])` | `TILE` |
 | Python | `rasterx.functions.rst_land_cover(tile, method=None, n_clusters=None, smooth=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | A tile of 3 or more bands: red, green, blue (and optionally near-infrared). |
-| `method` | `STRING` | `'hybrid'` | `'spectral'` (thresholds on excess green and brightness), `'kmeans'` or `'hybrid'` (a k-means partition labelled by the same thresholds), in any case. Another word raises. |
-| `n_clusters` | `INT` | `6` | The k-means cluster count (`'kmeans'` and `'hybrid'`), 1 or more. |
-| `smooth` | `INT` | `3` | The de-speckle window in pixels: isolated specks of a class are dropped; 0 turns it off. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | A tile of 3 or more bands: red, green, blue (and optionally near-infrared). |
+| `method` | `STRING` | `STRING` | `'hybrid'` | `'spectral'` (thresholds on excess green and brightness), `'kmeans'` or `'hybrid'` (a k-means partition labelled by the same thresholds), in any case. Another word raises. |
+| `n_clusters` | `INT` | `INT` | `6` | The k-means cluster count (`'kmeans'` and `'hybrid'`), 1 or more. |
+| `smooth` | `INT` | `INT` | `3` | The de-speckle window in pixels: isolated specks of a class are dropped; 0 turns it off. |
 {/* END GENERATED gbx_rst_land_cover */}
 
 :::note Implementation
@@ -5956,19 +5959,20 @@ Generate contour LineString features via `gdal.ContourGenerateEx`. Pass a non-em
 ### rst_proximity
 
 {/* BEGIN GENERATED gbx_rst_proximity: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_proximity(tile, [target_values], [dist_units], [max_distance])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_proximity(tile, [target_values], [dist_units], [max_distance])` | `TILE` |
 | Python | `rasterx.functions.rst_proximity(tile, target_values=None, dist_units=None, max_distance=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to measure: its first band. |
-| `target_values` | `STRING` | `NULL` | The source pixel values as a comma-separated list, such as `'1,2'`. NULL makes every pixel that is not 0 a source. |
-| `dist_units` | `STRING` | `'GEO'` | `'GEO'` measures in the units of the tile's CRS; `'PIXEL'` counts pixels. NULL is `'GEO'`. |
-| `max_distance` | `DOUBLE` | `NULL` | The largest distance to compute, above 0: farther pixels are NoData. NULL for no limit. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to measure: its first band. |
+| `target_values` | `STRING` | `STRING` | `NULL` | The source pixel values as a comma-separated list, such as `'1,2'`. NULL makes every pixel that is not 0 a source. |
+| `dist_units` | `STRING` | `STRING` | `'GEO'` | `'GEO'` measures in the units of the tile's CRS; `'PIXEL'` counts pixels. NULL is `'GEO'`. |
+| `max_distance` | `DOUBLE` | `DOUBLE` | `NULL` | The largest distance to compute, above 0: farther pixels are NoData. NULL for no limit. |
 {/* END GENERATED gbx_rst_proximity */}
 
 :::note Implementation

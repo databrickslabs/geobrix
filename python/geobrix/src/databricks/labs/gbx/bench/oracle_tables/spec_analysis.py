@@ -289,12 +289,15 @@ SPEC_ANALYSIS += (
     Case("polygonize_corrupt", PG, (CORRUPT,), "no_rows", None, ONLY),
 )
 
-# Unity Catalog: the summary of a materialized tile and the fill of one are the session's
+# Unity Catalog: the summary, the fill and the proximity of a materialized tile are the session's
 SPEC_ANALYSIS = (
     share(
         SPEC_ANALYSIS, "summary", "summary_float32_precision", "summary_null_tile", "summary_error_tile",
         "fillnodata_default", "fillnodata_short_search", "fillnodata_smoothed", "fillnodata_null_tile",
         "fillnodata_null_distance", "fillnodata_error_in",
+        "proximity_targets", "proximity_default_sources", "proximity_pixel_capped", "proximity_bad_units",
+        "proximity_bad_cap", "proximity_null_tile", "proximity_null_units", "proximity_null_cap", "proximity_nan_cap",
+        "proximity_error_in",
     )
-    + edges(summary=(), fillnodata=())
+    + edges(summary=(), fillnodata=(), proximity=("1",))
 )  # fmt: skip

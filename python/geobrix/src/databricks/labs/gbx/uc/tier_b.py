@@ -844,3 +844,81 @@ def rst_index(tile, formula_name, band_map):
 
 
 HANDLERS["gbx_rst_index"] = rst_index
+
+
+# --- other tile to tile ------------------------------------------------------------------------------------------
+def rst_chm(dsm_tile, dem_tile):
+    """gbx_rst_chm: the canopy height model, the DSM aligned to the DEM's grid minus the DEM, negatives clamped to 0."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+
+    fn = "gbx_rst_chm"
+    if dsm_tile is None or dem_tile is None:
+        return None
+    done, early = gate(fn, dsm_tile, dem_tile)
+    if done:
+        return early
+    dsm, dem = raster_of(fn, dsm_tile), raster_of(fn, dem_tile)
+
+    def kernel(dsm_ds):
+        with MemoryFile(dem) as mf, open_bytes(mf) as dem_ds:
+            decoded = decoded_bytes(dem_ds)
+            if decoded > DECODED_CAP:
+                raise cap_refusal(fn, decoded, DECODED_CAP)
+            check_grows(fn, dem_ds.width, dem_ds.height, ["float32"])
+        return _kernel("chm", "chm")(dsm, dem)
+
+    return with_tile(fn, dsm_tile, kernel)
+
+
+HANDLERS["gbx_rst_chm"] = rst_chm
+
+
+def rst_land_cover(tile, method, n_clusters, smooth):
+    """gbx_rst_land_cover: Int32 class labels of a tile of 3 or more bands (red, green, blue, ...); a tile of fewer
+    bands is refused with a Fix."""
+    fn = "gbx_rst_land_cover"
+    if tile is None or method is None or n_clusters is None or smooth is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    _kernel("land_cover", "check_args")(method, n_clusters, smooth)
+
+    def kernel(ds):
+        check_grows(fn, *_surface("int32")(ds))
+        try:
+            return _kernel("land_cover", "classify_dataset")(
+                ds, method, n_clusters, smooth
+            )
+        except _kernel("land_cover", "TooFewBands") as exc:
+            raise _Refusal(str(exc)) from exc
+
+    return with_tile(fn, tile, kernel)
+
+
+HANDLERS["gbx_rst_land_cover"] = rst_land_cover
+
+rst_percentile_stretch = _tile_fn(
+    "gbx_rst_percentile_stretch",
+    "stretch",
+    "percentile_stretch",
+    check=_check("stretch", "check_percentiles"),
+    cast=lambda lo, hi: (float(lo), float(hi)),
+)
+rst_proximity = _tile_fn(
+    "gbx_rst_proximity",
+    "analysis",
+    "proximity",
+    optional=(0, 1, 2),
+    check=_check(
+        "analysis", "check_proximity", "target_values", "distunits", "max_distance"
+    ),
+    cast=lambda target_values, dist_units, max_distance: (
+        None if target_values is None else str(target_values),
+        "GEO" if dist_units is None else str(dist_units),
+        *_optional_float(max_distance),
+    ),
+    grows=_surface("float32"),
+)

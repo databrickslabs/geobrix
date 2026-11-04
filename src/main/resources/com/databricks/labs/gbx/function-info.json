@@ -246,6 +246,7 @@
       "description": "Compute the canopy height model: the surface aligned to the terrain, minus the terrain, no lower than 0.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.2"
@@ -905,6 +906,7 @@
       "description": "Classify an RGB tile into land-cover class ids.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.2"
@@ -1069,6 +1071,7 @@
       "description": "Stretch the contrast of each band between two percentiles, to 8 bits.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1126,6 +1129,7 @@
       "description": "Compute a proximity raster: each pixel's distance to the nearest source pixel.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

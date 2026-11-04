@@ -127,13 +127,18 @@ SPEC_CALC = share(
     "threshold", "threshold_le", "threshold_bad_operator",
     "ndvi", "ndvi_null_band", "ndvi_null_tile", "ndvi_error_tile", "ndvi_band_out_of_range", "ndwi", "nbr", "savi",
     "savi_sql_default", "evi", "evi_sql_defaults", "index_ndvi", "index_msavi", "index_unknown_formula",
+    "chm", "chm_null_dsm", "chm_error_tile",
 ) + edges(
     threshold=(">", 12.0), ndvi=(1, 2), ndwi=(3, 2), nbr=(2, 3), savi=(1, 2, 0.25), evi=(1, 2, 3, 2.0, 6.0, 7.5, 2.5),
-    index=("ndvi", {"red": 1, "nir": 2}),
+    index=("ndvi", {"red": 1, "nir": 2}), chm=(Build("calc_dem"),),
 ) + (
     Case("uc_threshold_null_tile", THR, (None, ">", 1.0), "null", None, ("uc",)),
     Case("uc_threshold_error_tile", THR, (ERR, "~", 1.0), "error_tile", UPSTREAM_ERROR, ("uc",)),
     Case("uc_index_band_out_of_range", IDX, (BANDS, "ndvi", {"red": 1, "nir": 7}), "raises", "7", ("uc",)),
     Case("uc_index_null_band_map", IDX, (BANDS, "ndvi", None), "null", None, ("uc",)),
     Case("uc_evi_band_out_of_range", EVI, (BANDS, 1, 2, 9), "raises", "9", ("uc",)),
+    # chm reads two tiles: a virtual or an unreadable DEM is as a virtual or an unreadable DSM
+    Case("uc_chm_virtual_dem_refused", CHM, (Build("calc_dsm"), Build("tile_virtual")), "uc_refused", None, ("uc",)),
+    Case("uc_chm_corrupt_dem_null", CHM, (Build("calc_dsm"), CORRUPT), "null", None, ("uc",)),
+    Case("uc_chm_null_dem", CHM, (Build("calc_dsm"), None), "null", None, ("uc",)),
 )  # fmt: skip

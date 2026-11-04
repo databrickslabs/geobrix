@@ -914,13 +914,31 @@ def _proc_call(name: str, args: dict) -> str:
     return f"CALL {name}(" + ", ".join(f"{k} => {v}" for k, v in args.items()) + ")"
 
 
-def _proc_tile_cases(spark, catalog: str, schema: str) -> list:
-    """The tile-input cases (mosaic by key, zonal statistics): their input tables are built from GeoTIFF bytes."""
+def _proc_tile_inputs():
+    """The tile inputs of the tile cases: ``([(tile_key, tile)], zone tile)``, each tile the v2 tile dict of a 4 x 4
+    GeoTIFF. Session and warehouse build the same bytes."""
     import numpy as np
 
     from databricks.labs.gbx.bench.oracles import _gtiff, _tile
+
+    def tile(origin_x, origin_y, base):
+        arr = (np.arange(16, dtype="float64").reshape(1, 4, 4)) + base
+        return _tile(_gtiff(arr, "EPSG:3857", origin=(origin_x, origin_y), px=10.0))
+
+    mosaic = [
+        ("a", tile(0.0, 40.0, 0)),
+        ("a", tile(40.0, 40.0, 100)),
+        ("b", tile(0.0, 40.0, 200)),
+    ]
+    return mosaic, tile(0.0, 100.0, 0)
+
+
+def _proc_tile_cases(spark, catalog: str, schema: str) -> list:
+    """The tile-input cases (mosaic by key, zonal statistics): their input tables are built from GeoTIFF bytes."""
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
+    tiles, zone_bytes = _proc_tile_inputs()
+    zone_tile = [(1, zone_bytes, "POLYGON((0 0,100 0,100 100,0 100,0 0))")]
     q = f"`{catalog}`.`{schema}`"
 
     def t(name):
@@ -929,20 +947,10 @@ def _proc_tile_cases(spark, catalog: str, schema: str) -> list:
     def lit(name):
         return "'" + t(name).replace("`", "") + "'"
 
-    def tile(origin_x, origin_y, base):
-        arr = (np.arange(16, dtype="float64").reshape(1, 4, 4)) + base
-        return _tile(_gtiff(arr, "EPSG:3857", origin=(origin_x, origin_y), px=10.0))
-
-    tiles = [
-        ("a", tile(0.0, 40.0, 0)),
-        ("a", tile(40.0, 40.0, 100)),
-        ("b", tile(0.0, 40.0, 200)),
-    ]
     spark.createDataFrame(
         tiles, "tile_key string, tile " + V2_TILE_SCHEMA.simpleString()
     ).write.mode("overwrite").saveAsTable(t("mos_src").replace("`", ""))
     spark.sql(f"DROP TABLE IF EXISTS {t('mos_tgt')}")
-    zone_tile = [(1, tile(0.0, 100.0, 0), "POLYGON((0 0,100 0,100 100,0 100,0 0))")]
     spark.createDataFrame(
         zone_tile,
         "tile_id int, tile " + V2_TILE_SCHEMA.simpleString() + ", bbox_wkt string",
@@ -1007,6 +1015,238 @@ def _proc_h3_reference(spark, source: str) -> list:
         f"SELECT 'probe' AS surface, gbx_rst_h3_rasterize_agg(cellid, value, 4326, {nulls}, 'centroids', 0) AS tile "
         "FROM gbxproc_h3_filled"
     ).collect()
+
+
+def _diff_sql(out: str, ref: str) -> str:
+    """One number: the rows in ``out`` or in ``ref`` but not in both (0: the same rows)."""
+    return (
+        f"SELECT (SELECT count(*) FROM (({out}) EXCEPT ({ref}))) + "
+        f"(SELECT count(*) FROM (({ref}) EXCEPT ({out}))) AS diff"
+    )
+
+
+def proc_warehouse_statements(
+    catalog: str, schema: str, tmpdir: str
+) -> List[Tuple[str, str]]:
+    """The procedure probe as ``(cid, sql)`` for ``gbx-uc-sql``: per recipe the input tables, the ``CALL``, the rows
+    the call wrote, and the ``diff`` against the same flow as plain SQL over the UC functions (0: equal). Then the
+    MVT tiles themselves, a struct ``attrs`` call, the DDL types and routine comments the Serverless leg cannot read
+    after its cleanup, the Zarr tag, history and untag on a synthetic manifest, and the DROPs.
+
+    The functions and procedures are installed in ``catalog.schema`` already; run the file with
+    ``--catalog``/``--schema`` set to them.
+    """
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.uc.ddl import quote_str
+    from databricks.labs.gbx.zarr import _manifest as M
+
+    q = f"`{catalog}`.`{schema}`"
+    out: List[Tuple[str, str]] = []
+
+    def t(name):
+        return f"{q}.{PROC_PREFIX}{name}"
+
+    def lit(name):
+        return "'" + t(name).replace("`", "") + "'"
+
+    def call(name, args):
+        return (
+            f"CALL {q}.{name}("
+            + ", ".join(f"{k} => {v}" for k, v in args.items())
+            + ")"
+        )
+
+    def case(name, setup, args, out_sql, ref_sql, also=None):
+        for i, stmt in enumerate(setup):
+            out.append((f"{name}:setup{i}", stmt))
+        out.append((f"{name}:call", call(name, args)))
+        out.append((f"{name}:rows", f"SELECT count(*) AS n FROM ({out_sql})"))
+        out.append((f"{name}:diff", _diff_sql(out_sql, ref_sql)))
+        if also:
+            out.append((f"{name}:diff_also", _diff_sql(*also)))
+
+    by_name = {c["name"]: c for c in proc_cases(catalog, schema)}
+    # polygons -> BNG
+    c = by_name["gbx_polygons_to_bng"]
+    case(
+        c["name"], c["setup"], c["args"],
+        f"SELECT id, cellid, core, chip FROM {t('bng_tgt')}",
+        f"SELECT s.id, c.cellid, c.core, c.chip FROM {t('bng_src')} AS s, "
+        f"LATERAL {q}.gbx_bng_tessellateexplode(CAST(s.geom AS GEOMETRY(ANY)), '100m', false) AS c",
+    )  # fmt: skip
+    # clean geometries: the repaired rows and the rejects
+    c = by_name["gbx_clean_geometries"]
+    case(
+        c["name"], c["setup"], c["args"],
+        f"SELECT id, st_astext(geom) AS wkt FROM {t('cg_tgt')}",
+        f"SELECT id, st_astext(g) AS wkt FROM (SELECT id, {q}.gbx_st_makevalid(geom, 'linework') AS g "
+        f"FROM {t('cg_src')} WHERE geom IS NOT NULL) WHERE g IS NOT NULL AND st_isvalid(g)",
+        also=(
+            f"SELECT id, reason FROM {t('cg_rej')}",
+            f"SELECT id, 'the geometry is NULL' AS reason FROM {t('cg_src')} WHERE geom IS NULL",
+        ),
+    )  # fmt: skip
+    out.append(
+        (
+            "gbx_clean_geometries:types",
+            "SELECT concat_ws('|', column_name, data_type) FROM "
+            f"`{catalog}`.information_schema.columns WHERE table_schema = {quote_str(schema)} "
+            f"AND table_name = '{PROC_PREFIX}cg_tgt' AND column_name = 'geom'",
+        )
+    )
+    # migrate Mosaic geometry
+    c = by_name["gbx_migrate_mosaic_geometry"]
+    case(
+        c["name"], c["setup"], c["args"],
+        f"SELECT id, st_astext(geom) AS wkt FROM {t('mig_tgt')}",
+        f"SELECT id, st_astext({q}.gbx_st_legacyaswkb(geom)) AS wkt FROM {t('mig_src')}",
+    )  # fmt: skip
+    # points -> H3 surface (the tile is BINARY on UC)
+    c = by_name["gbx_points_to_h3_surface"]
+    cells = f"SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM {t('h3_src')} GROUP BY 1"
+    case(
+        c["name"], c["setup"], c["args"],
+        f"SELECT surface, sha2(tile, 256) AS h FROM {t('h3_tgt')}",
+        f"SELECT 'probe' AS surface, sha2({q}.gbx_rst_h3_rasterize({q}.gbx__h3_cellfill_cells(g.cells, 1, 'mean', 2.0), "
+        "4326, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), "
+        "CAST(NULL AS DOUBLE), CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 0, CAST(NULL AS STRING)), 256) AS h "
+        f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM ({cells})) AS g",
+    )  # fmt: skip
+    # features -> MVT
+    c = by_name["gbx_features_to_mvt"]
+    case(
+        c["name"], c["setup"], c["args"],
+        f"SELECT z, x, y, sha2(mvt, 256) AS h FROM {t('mvt_tgt')}",
+        f"SELECT p.z, p.x, p.y, sha2({q}.gbx__st_asmvt_features(collect_list(p.mvt_bytes), 'layer', 4096), 256) AS h "
+        f"FROM {t('mvt_src')} AS s, LATERAL {q}.gbx_st_asmvt_pyramid(CAST(s.geom AS GEOMETRY(ANY)), to_json(s.attrs), "
+        "0, 1, 'layer', 4096) AS p GROUP BY p.z, p.x, p.y",
+    )  # fmt: skip
+    for z, x, y in ((0, 0, 0), (1, 1, 0)):
+        out.append(
+            (
+                f"gbx_features_to_mvt:tile_{z}_{x}_{y}",
+                f"SELECT mvt FROM {t('mvt_tgt')} WHERE z = {z} AND x = {x} AND y = {y}",
+            )
+        )
+    out.append(
+        (
+            "gbx_st_asmvt_pyramid:struct_attrs",
+            f"SELECT count(*) FROM {q}.gbx_st_asmvt_pyramid(st_geomfromwkt('POINT (100 45)', 4326), "
+            "named_struct('n', 1), 0, 1, 'layer', 4096)",
+        )
+    )
+    # tile inputs: the bytes of the session probe, as hex literals
+    mosaic, zone_bytes = _proc_tile_inputs()
+
+    def tile_sql(tile):
+        return (
+            "CAST(named_struct('cellid', CAST(0 AS BIGINT), "
+            f"'raster', X'{bytes(tile['raster']).hex()}', 'path', CAST(NULL AS STRING), 'path_mode', CAST(NULL AS STRING), "
+            "'window', NULL, 'clip_polygon', NULL, 'clip_crs', CAST(NULL AS STRING), 'crs', CAST(NULL AS STRING), "
+            f"'metadata', CAST(map() AS MAP<STRING, STRING>)) AS {TILE_SQL})"
+        )
+
+    values = ", ".join(f"('{k}', {tile_sql(v)})" for k, v in mosaic)
+    case(
+        "gbx_mosaic_by_key",
+        [
+            f"CREATE OR REPLACE TABLE {t('mos_src')} (tile_key STRING, tile {TILE_SQL})",
+            f"INSERT INTO {t('mos_src')} VALUES {values}",
+            f"DROP TABLE IF EXISTS {t('mos_tgt')}",
+        ],
+        {"source_table": lit("mos_src"), "target_table": lit("mos_tgt")},
+        f"SELECT tile_key, sha2(tile.raster, 256) AS h FROM {t('mos_tgt')}",
+        f"SELECT tile_key, sha2({q}.gbx_rst_merge(collect_list(tile)).raster, 256) AS h FROM {t('mos_src')} "
+        "GROUP BY tile_key",
+    )  # fmt: skip
+    case(
+        "gbx_zonal_stats",
+        [
+            f"CREATE OR REPLACE TABLE {t('zs_tiles')} (tile_id INT, tile {TILE_SQL}, bbox GEOMETRY(3857))",
+            f"INSERT INTO {t('zs_tiles')} VALUES (1, {tile_sql(zone_bytes)}, "
+            "st_geomfromwkt('POLYGON((0 0,100 0,100 100,0 100,0 0))', 3857))",
+            f"CREATE OR REPLACE TABLE {t('zs_zones')} (zone_id INT, geom GEOMETRY(3857))",
+            f"INSERT INTO {t('zs_zones')} VALUES (1, st_geomfromwkt('POLYGON((0 0,50 0,50 50,0 50,0 0))', 3857)), "
+            "(2, st_geomfromwkt('POLYGON((900 900,950 900,950 950,900 950,900 900))', 3857))",
+            f"DROP TABLE IF EXISTS {t('zs_tgt')}",
+        ],
+        {"zones_table": lit("zs_zones"), "source_table": lit("zs_tiles"), "target_table": lit("zs_tgt")},
+        f"SELECT zone_id, tile_id, summary FROM {t('zs_tgt')}",
+        f"SELECT z.zone_id, t.tile_id, {q}.gbx_rst_summary({q}.gbx_rst_clip(t.tile, CAST(z.geom AS GEOMETRY(ANY)), true, "
+        f"CAST(NULL AS STRING))) AS summary FROM {t('zs_zones')} AS z JOIN {t('zs_tiles')} AS t "
+        "ON st_intersects(z.geom, t.bbox)",
+    )  # fmt: skip
+    # the catalog's view of the procedures: name, type and comment
+    out.append(
+        (
+            "information_schema:procedures",
+            f"SELECT count(*) AS n FROM `{catalog}`.information_schema.routines WHERE routine_schema = "
+            f"{quote_str(schema)} AND routine_type = 'PROCEDURE' AND comment LIKE 'geobrix %'",
+        )
+    )
+    out.append(
+        (
+            "information_schema:one",
+            f"SELECT concat_ws('|', routine_name, routine_type, comment) FROM `{catalog}`.information_schema.routines "
+            f"WHERE routine_schema = {quote_str(schema)} AND routine_name = 'gbx_zonal_stats'",
+        )
+    )
+    # Zarr: a synthetic manifest of one group, one array and one commit
+
+    class _Recorder:
+        def __init__(self):
+            self.stmts = []
+
+        def sql(self, text):
+            self.stmts.append(text)
+
+    zm = f"{catalog}.{schema}.{PROC_PREFIX}zm_wh"
+    rec = _Recorder()
+    M.create_manifest(
+        rec, zm, M.StoreProps("managed", tmpdir, None, True, "fuse", "7 days")
+    )
+    zq = f"`{catalog}`.`{schema}`.{PROC_PREFIX}zm_wh"
+    out += [
+        ("zarr:drop_first", f"DROP TABLE IF EXISTS {zq}"),
+        ("zarr:create", rec.stmts[0].strip()),
+        (
+            "zarr:insert",
+            f"INSERT INTO {zq} (kind, array, key, write_id, meta) VALUES "
+            "('group', NULL, '.', 'w1', NULL), ('array', 'v', 'v/.zarray', 'w1', NULL), "
+            "('commit', NULL, 'w1', 'w1', '{\"mode\": \"create\"}')",
+        ),
+        (
+            "zarr:tag",
+            f"CALL {q}.gbx_zarr_tag_version('{zq.replace(chr(96), '')}', 'probe')",
+        ),
+        (
+            "zarr:tagged",
+            f"SELECT concat_ws(',', collect_list(concat(kind, ':', coalesce(array, '-'), ':', key, ':', write_id))) "
+            f"FROM (SELECT * FROM {zq} WHERE tag = 'probe' ORDER BY kind, array, key)",
+        ),
+        (
+            "zarr:tag_again",
+            f"CALL {q}.gbx_zarr_tag_version('{zq.replace(chr(96), '')}', 'probe')",
+        ),
+        (
+            "zarr:history",
+            f"CALL {q}.gbx_zarr_version_history('{zq.replace(chr(96), '')}')",
+        ),
+        (
+            "zarr:untag",
+            f"CALL {q}.gbx_zarr_untag_version('{zq.replace(chr(96), '')}', 'probe')",
+        ),
+        ("zarr:left", f"SELECT count(*) FROM {zq} WHERE tag = 'probe'"),
+    ]
+    tables = [
+        f"{PROC_PREFIX}{x}"
+        for x in (
+            "bng_src bng_tgt cg_src cg_tgt cg_rej mig_src mig_tgt h3_src h3_tgt mvt_src mvt_tgt "
+            "mos_src mos_tgt zs_tiles zs_zones zs_tgt zm_wh"
+        ).split()
+    ]
+    out += [(f"drop:{n}", f"DROP TABLE IF EXISTS {q}.{n}") for n in tables]
+    return out
 
 
 def _proc_rows(rows, case) -> list:

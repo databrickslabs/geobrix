@@ -119,3 +119,29 @@ def test_a_failed_call_is_recorded_and_the_run_goes_on(monkeypatch, capsys, tmp_
 )
 def test_cells_are_compared_by_digest_and_rounded_value(value, want):
     assert probes._proc_norm(value) == want
+
+
+def test_warehouse_statements_call_each_procedure_then_diff_it_against_plain_sql():
+    stmts = dict(probes.proc_warehouse_statements("c", "s", "/Volumes/c/s/v/scratch"))
+    ids = list(stmts)
+    for name in procedures.RECIPES:
+        if name.startswith("gbx_zarr_"):
+            continue
+        assert stmts[f"{name}:call"].startswith(f"CALL `c`.`s`.{name}("), name
+        assert ids.index(f"{name}:call") < ids.index(f"{name}:diff"), name
+    # every table a case makes is dropped at the end, and the zarr manifest is one of them
+    created = {
+        m.group(1)
+        for sql in stmts.values()
+        for m in [
+            re.match(r"CREATE (?:OR REPLACE )?TABLE `c`\.`s`\.(gbxproc_\w+)", sql)
+        ]
+        if m
+    }
+    dropped = {c.split(":", 1)[1] for c in ids if c.startswith("drop:")}
+    assert created <= dropped and "gbxproc_zm_wh" in dropped
+    # a statement is one line of SQL per cid: no semicolon, no blank line (gbx-uc-sql splits on the cid marks)
+    assert all(";" not in s and "\n\n" not in s for s in stmts.values())
+    assert (
+        "FILE" not in stmts["zarr:create"]
+    )  # the fuse manifest: a plain STRING file column

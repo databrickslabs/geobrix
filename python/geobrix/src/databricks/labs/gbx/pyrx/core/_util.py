@@ -66,3 +66,16 @@ def snap_bounds(bxmin, bymin, bxmax, bymax, pixel_size, anchor=(0.0, 0.0), tol=0
     xmax = xmin + width * rx
     ymin = ymax - height * ry
     return xmin, ymin, xmax, ymax, width, height
+
+
+def check_grid(fn, xmin, ymin, xmax, ymax, width_px, height_px):
+    """The extent and size of an output grid: a size above 0 and an extent with its far edge above its near one.
+    ValueError naming the value."""
+    if int(width_px) <= 0 or int(height_px) <= 0:
+        raise ValueError(
+            f"{fn}: width_px and height_px must be above 0 (got {width_px} x {height_px})"
+        )
+    if not float(xmax) > float(xmin) or not float(ymax) > float(ymin):
+        raise ValueError(
+            f"{fn}: the extent must have xmax above xmin and ymax above ymin (got x {xmin}..{xmax}, y {ymin}..{ymax})"
+        )

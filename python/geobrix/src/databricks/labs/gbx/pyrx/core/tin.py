@@ -150,6 +150,22 @@ def _idw_all_points(centers, pts, vals, power):
     return out
 
 
+def check_idw_args(power, max_pts) -> None:
+    """ValueError when the inverse-distance exponent or the neighbour count is not above 0."""
+    if float(power) <= 0.0:
+        raise ValueError("rst_gridfrompoints: power must be positive")
+    if int(max_pts) <= 0:
+        raise ValueError("rst_gridfrompoints: max_pts must be positive")
+
+
+def check_lengths(points, values) -> None:
+    """ValueError naming the lengths when the points and their values are not parallel."""
+    if len(points) != len(values):
+        raise ValueError(
+            f"rst_gridfrompoints: points ({len(points)}) and values ({len(values)}) length mismatch"
+        )
+
+
 def idw_grid(
     points_xy,
     values,
@@ -184,10 +200,7 @@ def idw_grid(
     height_px = int(height_px)
     if width_px <= 0 or height_px <= 0:
         raise ValueError("rst_gridfrompoints: width_px and height_px must be positive")
-    if float(power) <= 0.0:
-        raise ValueError("rst_gridfrompoints: power must be positive")
-    if int(max_pts) <= 0:
-        raise ValueError("rst_gridfrompoints: max_pts must be positive")
+    check_idw_args(power, max_pts)
     # Rule 2 output CRS (points are assumed already in it; label-only).
     crs_str = _resolve_out_crs(out_srid, out_crs)
 
@@ -251,6 +264,105 @@ def idw_grid(
     out = out.reshape(height_px, width_px)
     return _write_float64_grid(
         out, xmin, ymin, xmax, ymax, width_px, height_px, crs_str, _NODATA
+    )
+
+
+def idw_working_bytes(
+    width_px: int, height_px: int, n_points: int, max_pts: int
+) -> int:
+    """An upper estimate of the memory :func:`idw_grid` holds at its peak: the cell centres and their grid (64 bytes a
+    pixel), and with fewer neighbours than points the k-nearest query's distances, indices, values and weights
+    (56 bytes a pixel for each neighbour); the all-points path is chunked, so it holds the centres only.
+    """
+    pixels = int(width_px) * int(height_px)
+    k = min(int(max_pts), int(n_points))
+    per_pixel = 64 + (56 * k if k < int(n_points) else 0)
+    return pixels * per_pixel + int(n_points) * 32
+
+
+def dtm_working_bytes(width_px: int, height_px: int, n_points: int) -> int:
+    """An upper estimate of the memory :func:`delaunay_dtm` holds at its peak: the cell centres, the containing
+    triangle of each, and the barycentric gathers (192 bytes a pixel), and the triangulation (96 bytes a point).
+    """
+    return int(width_px) * int(height_px) * 192 + int(n_points) * 96
+
+
+def grid_from_points(
+    points,
+    values,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    srid=None,
+    power=None,
+    max_pts=None,
+    out_crs=None,
+):
+    """The IDW grid of ``points`` (WKB, EWKB, WKT or EWKT; a NULL or empty one is dropped with its value) and their
+    ``values`` (GTiff bytes): the session's ``rst_gridfrompoints``. The two arrays must be the same length.
+    """
+    check_lengths(points, values)
+    # Decode points and values together so a null/empty point drops its paired value too, keeping the two arrays
+    # parallel for the IDW solver.
+    xy, vals = [], []
+    for raw, v in zip(points, values):
+        if v is None:
+            continue
+        g = _parse_geom_elem(raw)
+        if g is None or g.is_empty:
+            continue
+        xy.append((g.x, g.y))
+        vals.append(float(v))
+    return idw_grid(
+        xy,
+        vals,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        int(width_px),
+        int(height_px),
+        out_srid=None if srid is None else int(srid),
+        power=2.0 if power is None else float(power),
+        max_pts=12 if max_pts is None else int(max_pts),
+        out_crs=out_crs,
+    )
+
+
+def dtm_from_geoms(
+    points,
+    breaklines,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    srid=None,
+    no_data=None,
+    out_crs=None,
+):
+    """The Delaunay DTM of Z-valued ``points`` (GTiff bytes), the break lines' vertices folded in as extra points: the
+    session's ``rst_dtmfromgeoms``."""
+    pts_xyz = points_xyz_from_wkb(points)
+    # breaklines may be WKB/EWKB/WKT/EWKT; pass through untouched so delaunay_dtm decodes each element via the shared
+    # geom parser.
+    bl = [b for b in breaklines if b is not None] if breaklines else None
+    return delaunay_dtm(
+        pts_xyz,
+        bl,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        int(width_px),
+        int(height_px),
+        out_srid=None if srid is None else int(srid),
+        no_data=-9999.0 if no_data is None else float(no_data),
+        out_crs=out_crs,
     )
 
 
@@ -414,6 +526,10 @@ def points_xyz_from_wkb(wkbs):
 # Re-export for symmetry with other core modules (struct unused here but keeps
 # the import set explicit for callers that build cellid envelopes elsewhere).
 __all__ = [
+    "grid_from_points",
+    "dtm_from_geoms",
+    "idw_working_bytes",
+    "dtm_working_bytes",
     "idw_grid",
     "delaunay_dtm",
     "points_xy_from_wkb",

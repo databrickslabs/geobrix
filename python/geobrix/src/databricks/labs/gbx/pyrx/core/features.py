@@ -15,6 +15,12 @@ from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 _NODATA = -9999.0
 
 
+def rasterize_working_bytes(width_px: int, height_px: int) -> int:
+    """An upper estimate of the memory :func:`rasterize_geom` holds at its peak: the burned grid, its copy for the
+    encoder and the encoded bytes (24 bytes a pixel)."""
+    return int(width_px) * int(height_px) * 24
+
+
 def rasterize_geom(
     geom_wkb: bytes,
     value,

@@ -53,6 +53,39 @@ def _cell_indices(
     return row[inb], col[inb], inb
 
 
+def check_lengths(x, y, z) -> None:
+    """The three coordinate arrays are parallel: ValueError naming the lengths when they are not."""
+    if not len(x) == len(y) == len(z):
+        raise ValueError(
+            "rst_binpoints: x_array, y_array and z_array must have the same length "
+            f"(got {len(x)}, {len(y)}, {len(z)})"
+        )
+
+
+_STATISTICS = ("max", "min", "count", "mean", "median")
+
+
+def _statistic_refusal(statistic) -> str:
+    return (
+        f"unknown statistic {statistic!r}; expected one of: "
+        "max, min, mean, median, count, percentile:<p>"
+    )
+
+
+def check_statistic(statistic) -> None:
+    """ValueError when ``statistic`` is not one :func:`bin_points` knows (the range of a percentile is judged there)."""
+    stat = str(statistic).lower()
+    if stat not in _STATISTICS and not stat.startswith("percentile:"):
+        raise ValueError(_statistic_refusal(statistic))
+
+
+def working_bytes(width_px: int, height_px: int, n_points: int) -> int:
+    """An upper estimate of the memory :func:`bin_points` holds at its peak: per output pixel the accumulators and
+    the NaN-to-NoData copies (64 bytes), per point the coordinate, index and sort arrays (96 bytes).
+    """
+    return int(width_px) * int(height_px) * 64 + int(n_points) * 96
+
+
 def bin_points(
     x,
     y,
@@ -136,10 +169,7 @@ def bin_points(
                 out[int(u)] = np.percentile(zs[a:b], p)
 
     else:
-        raise ValueError(
-            f"unknown statistic {statistic!r}; expected one of: "
-            "max, min, mean, median, count, percentile:<p>"
-        )
+        raise ValueError(_statistic_refusal(statistic))
 
     # Replace NaN sentinels with the NoData value and reshape to (h, w).
     band = np.where(np.isnan(out), _NODATA, out).astype("float32").reshape(h, w)

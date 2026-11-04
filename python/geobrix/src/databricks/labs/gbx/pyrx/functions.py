@@ -65,6 +65,7 @@ from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
 from databricks.labs.gbx.pyrx.core import warp, xyz
+from databricks.labs.gbx.pyrx.core._util import check_grid as _check_grid
 from databricks.labs.gbx.pyrx.core.compression import (
     internal_mask_env,
     match_alpha,
@@ -3513,19 +3514,6 @@ def _percentile_stretch_v2_udf(
 
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
-def _check_grid(fn, xmin, ymin, xmax, ymax, width_px, height_px):
-    """The extent and size of an output grid: a size above 0 and an extent with its far edge above its near one.
-    ValueError naming the value."""
-    if int(width_px) <= 0 or int(height_px) <= 0:
-        raise ValueError(
-            f"{fn}: width_px and height_px must be above 0 (got {width_px} x {height_px})"
-        )
-    if not float(xmax) > float(xmin) or not float(ymax) > float(ymin):
-        raise ValueError(
-            f"{fn}: the extent must have xmax above xmin and ymax above ymin (got x {xmin}..{xmax}, y {ymin}..{ymax})"
-        )
-
-
 @f.udf(V2_TILE_SCHEMA)
 def _rasterize_udf(
     geom_wkb,
@@ -3627,39 +3615,21 @@ def _gridfrompoints_udf(
     ):
         return None
     from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core.tin import _parse_geom_elem
 
     _env.configure_gdal_env()
     _check_grid("rst_gridfrompoints", xmin, ymin, xmax, ymax, width_px, height_px)
-    if len(points) != len(values):
-        raise ValueError(
-            f"rst_gridfrompoints: points ({len(points)}) and values ({len(values)}) length mismatch"
-        )
-    # Decode points and values together so a null/empty point drops its paired
-    # value too, keeping the two arrays parallel for the IDW solver. Each point
-    # may be WKB/EWKB/WKT/EWKT (routed through the shared decoder).
-    xy = []
-    vals = []
-    for raw, v in zip(points, values):
-        if v is None:
-            continue
-        g = _parse_geom_elem(raw)
-        if g is None or g.is_empty:
-            continue
-        xy.append((g.x, g.y))
-        vals.append(float(v))
-    new_bytes = tin_core.idw_grid(
-        xy,
-        vals,
+    new_bytes = tin_core.grid_from_points(
+        points,
+        values,
         xmin,
         ymin,
         xmax,
         ymax,
-        int(width_px),
-        int(height_px),
-        out_srid=None if srid is None else int(srid),
-        power=2.0 if power is None else float(power),
-        max_pts=12 if max_pts is None else int(max_pts),
+        width_px,
+        height_px,
+        srid=srid,
+        power=power,
+        max_pts=max_pts,
         out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
@@ -3680,11 +3650,7 @@ def _binpoints_udf(
     if not x_arr:
         return None
     _check_grid("rst_binpoints", xmin, ymin, xmax, ymax, w, h)
-    if not len(x_arr) == len(y_arr) == len(z_arr):
-        raise ValueError(
-            "rst_binpoints: x_array, y_array and z_array must have the same length "
-            f"(got {len(x_arr)}, {len(y_arr)}, {len(z_arr)})"
-        )
+    binning.check_lengths(x_arr, y_arr, z_arr)
     b = binning.bin_points(
         x_arr,
         y_arr,
@@ -3736,21 +3702,17 @@ def _dtmfromgeoms_udf(
 
     _env.configure_gdal_env()
     _check_grid("rst_dtmfromgeoms", xmin, ymin, xmax, ymax, width_px, height_px)
-    pts_xyz = tin_core.points_xyz_from_wkb(points)
-    # breaklines may be WKB/EWKB/WKT/EWKT; pass through untouched so
-    # delaunay_dtm decodes each element via the shared geom parser.
-    bl = [b for b in breaklines if b is not None] if breaklines else None
-    new_bytes = tin_core.delaunay_dtm(
-        pts_xyz,
-        bl,
+    new_bytes = tin_core.dtm_from_geoms(
+        points,
+        breaklines,
         xmin,
         ymin,
         xmax,
         ymax,
-        int(width_px),
-        int(height_px),
-        out_srid=None if srid is None else int(srid),
-        no_data=-9999.0 if no_data is None else float(no_data),
+        width_px,
+        height_px,
+        srid=srid,
+        no_data=no_data,
         out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)

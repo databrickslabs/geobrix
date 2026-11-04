@@ -886,17 +886,17 @@ def test_a_listed_probe_does_not_exempt_a_longer_exec_that_does_other_work(monke
 
 def test_the_guard_catches_an_unwrapped_pytest_exec_in_gbx_test_python():
     """Mutation: the main pytest exec of gbx:test:python loses its wrapper."""
-    wrapped = (
-        'docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"'
-    )
+    # The exec forwards the test-selection env (-e args) before the container name.
+    wrapped = 'docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"'
     text = _command_text("gbx-test-python.sh")
     assert wrapped in text
+    assert _unwrapped_execs("gbx-test-python.sh", text) == []
     mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
 
     bad = _unwrapped_execs("gbx-test-python.sh", mutated)
 
     assert [stmt for _, stmt in bad] == [
-        'docker exec "$GBX_DEV_CONTAINER" /bin/bash -c "$PYTEST_CMD"'
+        'docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" /bin/bash -c "$PYTEST_CMD"'
     ]
 
 

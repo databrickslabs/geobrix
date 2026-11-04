@@ -166,7 +166,6 @@ run_pass() {
         for hp in "$@"; do paths+=("/root/geobrix/${hp#/root/geobrix/}"); done
         pytest_cmd="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
             python3 -m pytest ${paths[*]} -v --tb=short --color=yes -m $markers_q"
-        [[ -n "${PYTEST_ADDOPTS:-}" ]] && env_args+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
         gbx_native_env_args
         gbx_test_env_args
         env_args+=(${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"})

@@ -492,6 +492,21 @@ def test_the_oracle_table_selection_reaches_the_container_pytest_runs(sandbox):
     assert "GBX_ORACLE_TABLES" not in pytest_env()
 
 
+def test_pytest_addopts_reaches_the_gbx_test_python_container_run(sandbox):
+    # The caller's PYTEST_ADDOPTS (--durations, --junitxml) is passed into the container's pytest, as gbx:test:pyrx does.
+    lib = sandbox.root / "python" / "geobrix" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "geobrix-0.0.0-jar-with-dependencies.jar").write_text("jar")
+    res = sandbox.run(
+        "gbx-test-python.sh",
+        *("--path", "python/geobrix/test/manager/test_x.py"),
+        PYTEST_ADDOPTS="--durations=5",
+    )
+    assert res.returncode == 0, res.output
+    env = [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "pytest" in c[-1]][-1]
+    assert env["PYTEST_ADDOPTS"] == "--durations=5"
+
+
 def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
     # The Scala run passes GBX_NATIVE_ROOT (as its /root/geobrix path) beside the locale; unset, nothing is passed.
     def maven_env():

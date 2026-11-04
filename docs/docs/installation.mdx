@@ -6,6 +6,7 @@ description: Install GeoBrix the way your compute needs — the env wheel for th
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
 import scalaApiExamples from '!!raw-loader!../tests/scala/api/ScalaApiExamples.scala';
+import jvmJobBody from '!!raw-loader!../tests/scala/api/JvmJobBody.scala';
 
 # Installation
 
@@ -298,11 +299,63 @@ Run it again after each upgrade. The [Unity Catalog functions](./api/uc-function
 
 ## SQL from a JVM job {#jvm-sql}
 
-GeoBrix registers its SQL functions from Python with `gbx.register(spark)`. The JAR adds faster implementations for many functions. It registers no SQL names.
+GeoBrix registers its SQL functions from Python with `gbx.register(spark)`. The registration lives in one Spark session. JVM code on the same session, in Scala or Java, calls the functions by SQL name. The JAR adds faster implementations for many functions. It registers no SQL names.
 
-A JVM job, in Scala or Java, reaches the functions in three ways.
+Choose the route by where the code runs:
 
-### Unity Catalog functions
+| Route | Compute | Functions |
+|---|---|---|
+| [Python entry point, Scala body](#jvm-python-entry) | A job task on a dedicated cluster | All of them |
+| [A notebook that mixes languages](#jvm-notebook) | A notebook on dedicated compute | All of them |
+| [Unity Catalog functions](#jvm-uc) | Any compute that reads Unity Catalog, including Serverless JAR tasks | The Unity Catalog slice |
+
+### Python entry point, Scala body {#jvm-python-entry}
+
+A job that has no notebook makes its first task a Python task. The task registers the functions, then calls your Scala object with the same session.
+
+1. Create the job cluster with **Dedicated** access mode.
+2. Install the env wheel, your JAR and the GeoBrix JAR as libraries of the task. Install the GeoBrix JAR only if you want the JVM implementations.
+3. Write the Python task:
+
+<CodeFromTest
+  code={verifyInstallation}
+  functionName="JVM_JOB_PYTHON"
+  language="python"
+  title="Register in Python, then run Scala on the same session"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+/>
+
+4. Write the Scala body. It calls the functions by name and registers nothing. Name the package and object as the Python task calls them:
+
+<CodeFromTest
+  code={jvmJobBody}
+  language="scala"
+  title="Call the registered functions from Scala"
+  source="docs/tests/scala/api/JvmJobBody.scala"
+  testFile="docs/tests/scala/api/JvmJobBodyDocTest.scala"
+/>
+
+What the Scala code can call, checked on a dedicated cluster on DBR 17.3:
+
+- A scalar function, with `spark.sql`, `functions.expr` or `call_function`.
+- An aggregate function, in a `GROUP BY`.
+- A table function, in `SELECT * FROM gbx_x(...)` and in `FROM t, LATERAL gbx_x(...)`.
+- A lightweight data source, such as `spark.read.format("raster_gbx")`.
+
+A lightweight table function does not resolve in a select list: `SELECT gbx_x(...)` and `call_function("gbx_x", ...)` fail with `UNRESOLVED_ROUTINE`. Use the `FROM` or `LATERAL` form. See [Surfaces and levels](./api/execution-tiers.mdx).
+
+:::note Dedicated clusters only
+`spark._jvm` and `spark._jsparkSession` exist only where Python and the JVM share a process. That is a dedicated cluster. Standard access mode and Serverless run Spark Connect, which gives Python no access to the JVM. Use the Unity Catalog route there.
+:::
+
+### A notebook that mixes languages {#jvm-notebook}
+
+On dedicated compute, run `gbx.register(spark)` in a Python cell. Cells in other languages use the same Spark session, so a `%sql` or `%scala` cell calls the functions by name.
+
+Serverless notebooks have no Scala cells.
+
+### Unity Catalog functions {#jvm-uc}
 
 Install the functions once with `gbx.uc.install`, as [above](#uc-functions). The job then calls a three-level name with `spark.sql`. This route needs no registration and no Python task.
 
@@ -321,7 +374,7 @@ Unity Catalog carries a slice of GeoBrix. See [Unity Catalog functions](./api/uc
 
 The `com.databricks.labs.gbx.<package>.functions` objects hold Column wrappers, such as `rasterx.functions.rst_avg`. The packages are `rasterx`, `gridx.bng`, `gridx.h3`, `gridx.custom`, `vectorx` and `pmtiles`.
 
-A wrapper calls the function by its SQL name, so the session must resolve that name. Run `gbx.register(spark)` in the same session first. Or put a schema that holds the Unity Catalog functions on the path. See [Names and the path](./api/uc-functions#names-and-the-path).
+A wrapper calls the function by its SQL name, so the session must resolve that name. Register in Python first, or put a schema that holds the Unity Catalog functions on the path. See [Names and the path](./api/uc-functions#names-and-the-path).
 
 <CodeFromTest
   code={scalaApiExamples}
@@ -334,15 +387,9 @@ A wrapper calls the function by its SQL name, so the session must resolve that n
 
 A function whose JVM implementation was removed has no wrapper. Call it with `call_function("gbx_<name>", …)`.
 
-### A notebook that mixes languages
-
-Run `gbx.register(spark)` in a Python cell. The `%sql` and `%scala` cells of the same notebook then see the functions, because the cells share one session.
-
 ### Tasks of a job do not share a session
 
-Each task of a job has its own session. Functions registered in a Python task are not visible to a later JAR task.
-
-A function with no Scala wrapper and no Unity Catalog form needs a Python task. Most aggregates and table functions are in this group. The Python task writes its result to a Delta table, and the JVM task reads that table.
+Each task of a job has its own session. Functions registered in a Python task are not visible to a later JAR task. Put the Scala call in the same Python task, as above.
 
 ## Next Steps
 

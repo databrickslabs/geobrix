@@ -16,6 +16,15 @@ STAGE_JAR_PYTHON = """from databricks.labs import gbx
 gbx.stage_jar("/Volumes/<catalog>/<schema>/<volume>/geobrix/0.6.0/jar")
 # Then add the printed path as a cluster library on a dedicated cluster and restart the cluster."""
 
+JVM_JOB_PYTHON = """from databricks.labs import gbx
+from pyspark.sql import SparkSession
+
+spark = SparkSession.builder.getOrCreate()
+
+# Register the functions in this session, then run the Scala code on the same session.
+gbx.register(spark)
+spark._jvm.com.example.geo.JvmJobBody.run(spark._jsparkSession, "main.geobrix.cells")"""
+
 UC_INSTALL_PYTHON = """from databricks.labs import gbx
 
 # Once, from a Serverless environment 6 or DBR 19 notebook.

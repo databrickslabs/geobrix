@@ -72,3 +72,15 @@ def test_uc_install_snippet_previews_its_statements():
     stmts = gbx.uc.install("main", "geobrix", "/Volumes/main/geobrix/artifacts/env6", dry_run=True)
     prefix = "CREATE OR REPLACE FUNCTION `main`.`geobrix`."
     assert stmts and all(s.startswith(prefix) for s in stmts)  # every statement targets main.geobrix
+
+
+def test_jvm_job_snippet_registers_then_hands_the_session_to_scala(spark):
+    """Installation doc: the Python entry registers first, so the Scala body finds the names on the same session."""
+    s = verify_installation.JVM_JOB_PYTHON
+    register, call = s.index("gbx.register(spark)"), s.index("spark._jvm.")
+    assert register < call and "spark._jsparkSession" in s[call:]
+    # run everything up to the Scala call; the JVM class is the user's own
+    head = s[:call].replace("spark = SparkSession.builder.getOrCreate()", "")
+    exec(compile(head, "JVM_JOB_PYTHON", "exec"), {"spark": spark})
+    assert spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_width'").count() >= 1
+    assert spark._jsparkSession is not None

@@ -1195,9 +1195,13 @@ def test_stage_wheel_exits_nonzero_when_the_upload_raises(sandbox, tmp_path, log
     (stub / "databricks" / "__init__.py").write_text("")
     (stub / "databricks" / "sdk" / "__init__.py").write_text(_FAILING_SDK)
     python, _ = _venv_python(sandbox, sdk=True)
+    # A venv python that has the stub SDK. The command probes a venv with `-c` (version, SDK import); this one
+    # answers those itself, so the run does not depend on the interpreter running pytest (a host python older
+    # than 3.11 fails the version probe and the command would layer the real SDK over it).
     python.write_text(
-        f'#!/bin/sh\nPYTHONPATH="{stub}" exec "{sys.executable}" "$@"\n'
-    )  # a venv python that has the stub SDK
+        f'#!/bin/sh\nif [ "$1" = "-c" ]; then exit 0; fi\n'
+        f'PYTHONPATH="{stub}" exec "{sys.executable}" "$@"\n'
+    )
     tests = sandbox.root / "examples" / "tests"
     tests.mkdir(parents=True)
     for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):

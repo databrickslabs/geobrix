@@ -16,6 +16,7 @@ show_help() {
     echo -e "  ${GREEN}-k <expr>${NC}              Pytest keyword filter (e.g. 'merge or fileName')"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     echo -e "  ${GREEN}--with-integration${NC}     Include ${YELLOW}@pytest.mark.integration${NC} tests (network downloads, slow); excluded by default"
+    echo -e "  ${GREEN}--heavy-ci-env${NC}         Run the heavy-dir tests as the heavy CI job sees them: packages ${YELLOW}requirements-ci.txt${NC} lacks (pandas, rasterio, ...) are made unimportable; no ${GREEN}--path${NC} runs only the heavy phase"
     echo -e "  ${GREEN}--markers <expr>${NC}        Override marker filter with a pytest expression (e.g. 'not slow'); disables the default 'not integration' filter"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
@@ -28,6 +29,10 @@ show_help() {
     echo -e "  ${YELLOW}heavy${NC}  test/ minus the light dirs (LIGHT_IGNORES in .github/actions/python_build/action.yml)"
     echo -e "  ${YELLOW}light${NC}  the light dirs (pytest list in .github/actions/pyrx_build/action.yml)"
     echo -e "  Exits non-zero if any phase fails. ${YELLOW}--path${NC} bypasses phasing (one process, as given)."
+    echo ""
+    echo -e "${CYAN}Heavy CI env (${GREEN}--heavy-ci-env${CYAN}):${NC} loads ${YELLOW}python/geobrix/test/_plugins/heavy_ci_env.py${NC} (${YELLOW}-p heavy_ci_env${NC}). It blocks the packages in the light CI lock"
+    echo -e "  that ${YELLOW}requirements-ci.txt${NC} lacks, so a heavy-dir test needing them fails here as it does in CI. The header of the run lists them."
+    echo -e "  With ${GREEN}--path${NC} it runs those paths as given; without, the heavy phase (${YELLOW}pytest test <LIGHT_IGNORES>${NC}) only. The JAR rules below apply."
     echo ""
     echo -e "${CYAN}Staged JAR (heavy tier only):${NC} the heavy tests load ${YELLOW}python/geobrix/lib/geobrix-*-jar-with-dependencies.jar${NC}."
     echo -e "  Before the heavy phase (or a ${YELLOW}--path${NC} that selects heavy tests) the newest JAR from ${YELLOW}target/${NC} is staged there"
@@ -49,6 +54,8 @@ show_help() {
     echo -e "  ${YELLOW}gbx:test:python${NC}                                     ${CYAN}# all tiers as CI-style phases (default)${NC}"
     echo -e "  ${YELLOW}gbx:test:python --with-integration${NC}                  ${CYAN}# unit + integration (network)${NC}"
     echo -e "  ${YELLOW}gbx:test:python --path python/geobrix/test/rasterx/${NC}"
+    echo -e "  ${YELLOW}gbx:test:python --heavy-ci-env${NC}                      ${CYAN}# the heavy CI selection, without the light packages${NC}"
+    echo -e "  ${YELLOW}gbx:test:python --heavy-ci-env --path python/geobrix/test/gridx/${NC}"
     echo -e "  ${YELLOW}gbx:test:python --markers 'not slow' --log python-tests.log${NC}"
     echo ""
 }
@@ -60,6 +67,7 @@ show_help() {
 TEST_PATH=""
 PATH_ARGS=()
 PATH_GIVEN=0
+HEAVY_CI_ENV=0
 LOG_PATH=""
 KEYWORD=""
 # Default: exclude integration tests (network downloads); matches CI's python_build action.
@@ -84,6 +92,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --with-integration)
             MARKERS=""
+            shift
+            ;;
+        --heavy-ci-env)
+            HEAVY_CI_ENV=1
             shift
             ;;
         --markers)
@@ -116,6 +128,16 @@ show_banner "🐍 GeoBrix: Python Tests (Non-Docs)"
 check_docker
 setup_log_file "$LOG_PATH"
 gbx_acquire_test_lock
+
+# --heavy-ci-env: pytest loads the plugin that blocks the light packages (see the help text). It lives in
+# test/_plugins, which is put on PYTHONPATH because -p resolves before pytest reads its own `pythonpath`.
+PLUGIN_ENV=""
+PLUGIN_ARGS=""
+if [ "$HEAVY_CI_ENV" -eq 1 ]; then
+    PLUGIN_ENV="PYTHONPATH=/root/geobrix/python/geobrix/test/_plugins:\${PYTHONPATH:-} "
+    PLUGIN_ARGS="-p heavy_ci_env"
+    echo -e "${CYAN}🧱 Heavy CI env: ${YELLOW}light packages blocked (python/geobrix/test/_plugins/heavy_ci_env.py)${NC}"
+fi
 
 # Python tests run against the assembly JAR (spark.jars); warn if it predates Scala sources.
 warn_if_jar_stale "$PROJECT_ROOT"
@@ -204,7 +226,7 @@ run_single() {
     # Build pytest command
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix && \
-        python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
+        ${PLUGIN_ENV}python3 -m pytest $PLUGIN_ARGS $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
     gbx_test_env_args
     docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
@@ -279,7 +301,7 @@ run_phase() {
     gbx_test_env_args
     docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix/python/geobrix && \
-        python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
+        ${PLUGIN_ENV}python3 -m pytest $PLUGIN_ARGS $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
     return "${PIPESTATUS[0]}"
 }
 
@@ -296,12 +318,15 @@ run_phased() {
 
     local names=() argsets=() needs_jar=() codes=() logs=()
     names+=("heavy");  argsets+=("test $LIGHT_IGNORES"); needs_jar+=(1)
-    names+=("light");  argsets+=("$LIGHT_DIRS");         needs_jar+=(0)
+    # --heavy-ci-env is the heavy job alone: the light phase needs the packages that run blocks.
+    if [ "$HEAVY_CI_ENV" -eq 0 ]; then
+        names+=("light");  argsets+=("$LIGHT_DIRS");     needs_jar+=(0)
+    fi
 
     echo -e "${CYAN}🧩 Phases (no --path; mirrors CI): ${YELLOW}${names[*]}${NC}"
 
     # The light phase includes test/zarr whenever the CI list does.
-    if [[ " $LIGHT_DIRS " == *" test/zarr "* ]]; then
+    if [ "$HEAVY_CI_ENV" -eq 0 ] && [[ " $LIGHT_DIRS " == *" test/zarr "* ]]; then
         ensure_zarr_test_env
     fi
 

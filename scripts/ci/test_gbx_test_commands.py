@@ -525,6 +525,37 @@ def test_pytest_addopts_reaches_the_gbx_test_python_container_run(sandbox):
     assert len(phases) == 2 and all("PYTEST_ADDOPTS" not in e for e in phases)
 
 
+def test_heavy_ci_env_loads_the_blocking_plugin_and_runs_only_the_heavy_phase(sandbox):
+    # --heavy-ci-env puts the plugin on pytest's command line (and its dir on PYTHONPATH, since -p resolves before
+    # pytest reads `pythonpath`), for --path and for the phased run, which then has no light phase.
+    lib = sandbox.root / "python" / "geobrix" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "geobrix-0.0.0-jar-with-dependencies.jar").write_text("jar")
+    for action in ("python_build", "pyrx_build"):
+        dest = sandbox.root / ".github" / "actions" / action / "action.yml"
+        dest.parent.mkdir(parents=True)
+        dest.write_text((REPO_ROOT / ".github" / "actions" / action / "action.yml").read_text())
+
+    def pytest_commands():
+        return [c[-1] for c in sandbox.execs() if "python3 -m pytest" in c[-1]]
+
+    plugin = REPO_ROOT / "python" / "geobrix" / "test" / "_plugins" / "heavy_ci_env.py"
+    assert plugin.is_file()
+    path = "python/geobrix/test/gridx/test_x.py"
+    res = sandbox.run("gbx-test-python.sh", "--heavy-ci-env", "--path", path)
+    assert res.returncode == 0, res.output
+    (single,) = pytest_commands()
+    assert "/root/geobrix/python/geobrix/test/_plugins" in single and "-p heavy_ci_env" in single
+    assert f"/root/geobrix/{path}" in single
+
+    sandbox.run("gbx-test-python.sh", "--heavy-ci-env")
+    phased = pytest_commands()[1:]
+    assert len(phased) == 1 and "-p heavy_ci_env" in phased[0] and "--ignore=test/pyrx" in phased[0]
+
+    sandbox.run("gbx-test-python.sh", "--path", path)  # off by default
+    assert "heavy_ci_env" not in pytest_commands()[-1]
+
+
 def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
     # The Scala run passes GBX_NATIVE_ROOT (as its /root/geobrix path) beside the locale; unset, nothing is passed.
     def maven_env():

@@ -18,6 +18,7 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 - `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--with-integration` - Include `@pytest.mark.integration` tests (network downloads, slow). Excluded by default.
 - `--markers <expr>` - Override marker filter with a custom pytest expression (e.g. `"not slow"`). Disables the default `not integration` filter.
+- `--heavy-ci-env` - Run the heavy-dir tests as the heavy CI job sees them (see "Heavy CI env"). Off by default.
 - `--help` - Display help message
 
 ## Oracle table filter
@@ -45,6 +46,19 @@ Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in 
 - After the last phase a summary prints each phase's pytest result line and, for failing phases, the FAILED/ERROR test ids (first 25; full list in the log).
 - Exit code is non-zero if **any** phase fails (a phase that selects no tests under `-k` is not a failure). A missing JAR fails the `heavy` phase before pytest starts (see below).
 - CI-only extras are not mirrored: heavy `--cov`, `python -m build`, the fresh hash-pinned install and the light sharding.
+
+## Heavy CI env (`--heavy-ci-env`)
+
+The heavy CI job installs only `requirements-ci.txt`: no pandas, rasterio, shapely, quadbin and the rest of the light stack. The dev container has them all, so a plain heavy run cannot see a failure that comes from a missing package. This flag makes those packages unimportable.
+
+- It loads `python/geobrix/test/_plugins/heavy_ci_env.py` with `-p heavy_ci_env`. The plugin sets `sys.modules[name] = None` for each blocked module, so `test/conftest.py` takes its CI path.
+- The blocked set is derived. It is every distribution in `requirements-light-env6-ci.txt` that `requirements-ci.txt` lacks, mapped to its installed top-level modules. The standard library, `osgeo` and modules shared with a kept package stay importable.
+- The header of the run lists the blocked modules.
+- With no `--path` it runs the heavy phase only (`pytest test <LIGHT_IGNORES>`, as in CI) and skips the light phase, which needs the blocked packages.
+- With `--path` it runs those paths as given, in one process.
+- The staged-JAR rules below apply.
+- Limit: only the pytest process is affected. Spark worker processes still import what is installed.
+- `scripts/ci/test_gbx_test_commands.py` checks the wiring. `scripts/ci/test_heavy_ci_env.py` fails when the blocked set stops matching `requirements-ci.txt`.
 
 ## Staged JAR (heavy tier only)
 
@@ -95,6 +109,9 @@ bash scripts/commands/gbx-test-python.sh --path python/geobrix/test/rasterx/test
 
 # Run with logging
 bash scripts/commands/gbx-test-python.sh --log python-tests.log
+
+# The heavy CI selection without the light packages (as the heavy CI job sees it)
+bash scripts/commands/gbx-test-python.sh --heavy-ci-env
 
 # Custom marker expression (overrides the default)
 bash scripts/commands/gbx-test-python.sh --markers "not slow"

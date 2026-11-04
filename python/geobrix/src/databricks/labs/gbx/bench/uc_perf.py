@@ -9,7 +9,8 @@ Rules the plan keeps:
 
 * Probe functions and tables are named ``gbx_mvp_perf_*`` (functions built from a product row use
   ``ddl.function_ddl(..., name=...)``), beside the product functions and never over them. Only ``gbx_mvp_`` routines and
-  ``gbx_mvp_perf_`` tables are dropped; the SQL helpers a probe copy shares with the product are left alone.
+  ``gbx_mvp_perf_`` tables are dropped. A probe copy of a SQL kernel creates its helpers as ``gbx_mvp_perf_`` routines of
+  its own, so no statement of a probe creates, replaces or drops a product routine.
 * A measurement whose product function does not exist in this wheel yet (the manifest holds no UC form of it) is not
   built: the plan records ``skipped`` with the missing name, and the same call builds it once the function lands.
 * Inputs are generated on Databricks (``range()``, tiles written to the Volume folder by ``perf_stage_tiles``), never
@@ -159,33 +160,63 @@ def _tiles_table(
     )
 
 
-_CREATED = re.compile(r"CREATE OR REPLACE FUNCTION (\S+?)\(")
+_CREATED = re.compile(r"CREATE OR REPLACE FUNCTION ((?:`[^`]*`|[^\s(`])+)\(")
+_HELPER_CALL = re.compile(r"\{q\}gbx__([a-z0-9_]+)\(")
 
 
 def _drops_for(stmts: Sequence[str]) -> List[Tuple[str, str]]:
-    """DROPs of the probe routines ``stmts`` create. A routine that is not ``gbx_mvp_`` is never dropped: a probe copy
-    of a SQL kernel creates the product's helper with the same text, and the product owns it.
-    """
+    """DROPs of the probe routines ``stmts`` create (only ``gbx_mvp_`` routines: a product routine is never dropped)."""
     out = []
     for s in stmts:
         m = _CREATED.match(s)
-        if m and m.group(1).split(".")[-1].startswith(("gbx_mvp_", "gbx__mvp_")):
+        if m and m.group(1).split(".")[-1].strip("`").startswith("gbx_mvp_"):
             out.append(
                 (
-                    f"drop_{m.group(1).split('.')[-1]}",
+                    f"drop_{m.group(1).split('.')[-1].strip('`')}",
                     f"DROP FUNCTION IF EXISTS {m.group(1)}",
                 )
             )
     return out
 
 
+def _probe_helpers(fn):
+    """``fn`` with its SQL kernel's helpers renamed ``gbx__<x>`` -> ``gbx_mvp_perf_<x>``: the probe copy creates (and
+    drops) helpers of its own and never replaces the product's. A row with no SQL kernel is returned as it is.
+    """
+    from databricks.labs.gbx.uc import sqlbody
+
+    src = sqlbody.l4_source(fn)
+    if src is None:
+        return fn
+
+    def rename(text: str) -> str:
+        return _HELPER_CALL.sub(lambda m: f"{{q}}{PERF}{m.group(1)}(", text)
+
+    body, helpers = src
+    helpers = tuple(
+        {
+            **h,
+            "name": f"{PERF}{h['name'][len('gbx__'):]}",
+            "sql": rename(h["sql"]),
+        }
+        for h in helpers
+    )
+    l4 = {**fn.levels["L4"], "sql": rename(body)}
+    if helpers:
+        l4["sql_helpers"] = helpers
+    return dataclasses.replace(fn, levels={**fn.levels, "L4": l4})
+
+
 def _copy(c: Ctx, u: Unit, product: str, short: str, **kw) -> Optional[str]:
     """Create the probe copy ``gbx_mvp_perf_<short>`` of a product scalar in the form ``kw`` names; its qualified name,
-    or None (recorded in ``u.skipped``) when the row cannot be that form."""
+    or None (recorded in ``u.skipped``) when the row cannot be that form. A SQL kernel's helpers are created as
+    ``gbx_mvp_perf_`` routines of the probe, never over the product's."""
     from databricks.labs.gbx.uc import ddl
 
     fn = c.man.functions[product]
     form = kw.get("form")
+    if form in (None, "sql"):
+        fn = _probe_helpers(fn)
     try:
         stmts = ddl.function_ddl(
             fn,
@@ -320,10 +351,15 @@ _GRID_FNS = {
 def _has_batch(fn) -> bool:
     import importlib
 
-    mod, _, attr = fn.levels["L4"].get("handler", ":").partition(":")
+    handler = fn.levels.get("L4", {}).get("handler")
+    if (
+        not handler
+    ):  # a SQL-kernel or table-function row has no Python handler, so no batch twin
+        return False
+    mod, _, attr = handler.partition(":")
     try:
         return hasattr(importlib.import_module(mod), f"{attr}_batch")
-    except ImportError:
+    except (ImportError, ValueError):
         return False
 
 
@@ -370,6 +406,8 @@ def _m2(c: Ctx) -> Unit:
         "SQL vs Scala vs Python vs batched Python for a grid scalar, plus equality of each form with the Python one",
     )
     for short, (product, gen, call, is_double) in _GRID_FNS.items():
+        if not _need(u, c, short, product):
+            continue
         forms = _forms(c, u, short, product)
         for n in _tail(c, "m2"):
             for form, f in forms.items():
@@ -379,6 +417,11 @@ def _m2(c: Ctx) -> Unit:
                         f"SELECT count(*), sum({_hash(call.format(f=f))}) FROM {gen.format(n=n)}",
                     )
                 )
+        if "py" not in forms:
+            u.skipped[f"diff_{short}"] = (
+                "no Python copy to compare the other forms with"
+            )
+            continue
         for n in _tail(c, "m2_diff"):
             for form, f in forms.items():
                 if form == "py":
@@ -391,7 +434,7 @@ def _m2(c: Ctx) -> Unit:
                 )
                 u.legs.append(
                     Leg(
-                        f"diff_{short}_{form}_vs_py",
+                        f"diff_{short}_{form}_vs_py_{_n(n)}",
                         f"SELECT count(*) FROM {gen.format(n=n)} WHERE {bad}",
                     )
                 )
@@ -405,25 +448,28 @@ def _m3(c: Ctx) -> Unit:
     )
     short = "bng_eastnorthasbng"
     product, gen, call, _is_double = _GRID_FNS[short]
-    py = _copy(c, u, product, f"m3_{short}_py", form="python")
-    fn = c.man.functions[product]
-    b = (
-        _copy(c, u, product, f"m3_{short}_batch", form="python", style="batch")
-        if _has_batch(fn)
-        else None
-    )
-    if not b:
-        u.skipped[f"{short}_batch"] = "the handler has no _batch twin"
     key = "m3_s6" if c.surface == "s6" else "m3"
-    for n in _tail(c, key):
-        for form, f in (("py", py), ("batch", b)):
-            if f:
-                u.legs.append(
-                    Leg(
-                        f"t_{short}_{form}_{_n(n)}",
-                        f"SELECT count(*), sum({_hash(call.format(f=f))}) FROM {gen.format(n=n)}",
+    if _need(u, c, short, product):
+        py = _copy(c, u, product, f"m3_{short}_py", form="python")
+        fn = c.man.functions[product]
+        b = (
+            _copy(c, u, product, f"m3_{short}_batch", form="python", style="batch")
+            if _has_batch(fn)
+            else None
+        )
+        if not b:
+            u.skipped[f"{short}_batch"] = "the handler has no _batch twin"
+        for n in _tail(c, key):
+            for form, f in (("py", py), ("batch", b)):
+                if f:
+                    u.legs.append(
+                        Leg(
+                            f"t_{short}_{form}_{_n(n)}",
+                            f"SELECT count(*), sum({_hash(call.format(f=f))}) FROM {gen.format(n=n)}",
+                        )
                     )
-                )
+    if not _need(u, c, "polyfill", "gbx_bng_polyfill"):
+        return u
     poly = c.man.functions["gbx_bng_polyfill"]
     if _has_batch(poly):
         pp = _copy(c, u, "gbx_bng_polyfill", "m3_polyfill_py", form="python")
@@ -498,7 +544,9 @@ def _m4(c: Ctx) -> Unit:
             return f"{tile_cte}SELECT sum({body}) FROM t CROSS JOIN (SELECT CAST(1 AS BIGINT) AS i)"
         return f"SELECT sum({body}) FROM (SELECT id AS i FROM range({rows}))"
 
-    for rows in (1, *_tail(c, "m4_rows")):
+    for rows in dict.fromkeys(
+        (1, *_tail(c, "m4_rows"))
+    ):  # 1 once, whatever m4_rows holds
         for count in (1, 3, 6):
             for variant in ("a", "b"):
                 s = stmt(variant, count, rows)
@@ -604,14 +652,20 @@ def _m6(c: Ctx) -> Unit:
     )
     from databricks.labs.gbx.uc import ddl
 
-    pf = dataclasses.replace(
-        c.man.private["gbx__h3_cellfill_cells"], name="gbx__mvp_perf_h3_cellfill"
-    )
-    twin_sql = ddl.private_ddl(
-        pf, c.catalog, c.schema, c.wheel_uri, c.man.uc_dependencies, c.version
-    )
-    u.setup.append(("create_py_twin", twin_sql))
-    u.drops += _drops_for([twin_sql])
+    have_twin = "gbx__h3_cellfill_cells" in c.man.private
+    if have_twin:
+        pf = dataclasses.replace(
+            c.man.private["gbx__h3_cellfill_cells"], name="gbx_mvp_perf_h3_cellfill"
+        )
+        twin_sql = ddl.private_ddl(
+            pf, c.catalog, c.schema, c.wheel_uri, c.man.uc_dependencies, c.version
+        )
+        u.setup.append(("create_py_twin", twin_sql))
+        u.drops += _drops_for([twin_sql])
+    else:
+        u.skipped["py_twin"] = (
+            "needs the private routine gbx__h3_cellfill_cells (not in this wheel)"
+        )
     have_sql = _need(u, c, "sql_array", "gbx_h3_cellfill_array")
     for n in _tail(c, "m6"):
         table = f"{c.q}.{PERF}cells_{n}"
@@ -632,13 +686,14 @@ def _m6(c: Ctx) -> Unit:
                     f"SELECT grp, size({c.q}.gbx_h3_cellfill_array({arr}, 1, 'mean', 2.0)) FROM {table} GROUP BY grp",
                 )
             )
-        u.legs += [
-            Leg(
-                f"py_twin_{_n(n)}",
-                f"SELECT grp, size({c.q}.gbx__mvp_perf_h3_cellfill({arr}, 1, 'mean', 2.0)) FROM {table} GROUP BY grp",
-            ),
-            Leg(f"c1_{_n(n)}", _c1(table)),
-        ]
+        if have_twin:
+            u.legs.append(
+                Leg(
+                    f"py_twin_{_n(n)}",
+                    f"SELECT grp, size({c.q}.gbx_mvp_perf_h3_cellfill({arr}, 1, 'mean', 2.0)) FROM {table} GROUP BY grp",
+                )
+            )
+        u.legs.append(Leg(f"c1_{_n(n)}", _c1(table)))
     # M6b: quadbin cells, the Python union twin vs a native union (recipe C2)
     if _need(
         u,
@@ -897,6 +952,8 @@ def _m12(c: Ctx) -> Unit:
         "m12",
         "the cost of a chain: clip then ndvi in one statement vs the steps apart (the GeoTIFF re-encode between calls)",
     )
+    if not _need(u, c, "m12", "gbx_rst_ndvi", "gbx_rst_clip", "gbx_rst_index"):
+        return u
     u.session_fns = ("gbx_rst_ndvi", "gbx_rst_clip")
     (n,) = _tail(c, "m12")[:1]
     table, label, create = _tiles_table(c, n, BIG_KEY_TILE, "tiles4")
@@ -944,6 +1001,8 @@ def _m13(c: Ctx) -> Unit:
         "m13",
         "MVT finalize: the share of the feature re-encode in gbx_features_to_mvt (call, pyramid alone, finalize alone)",
     )
+    if not _need(u, c, "m13", "gbx_st_asmvt_pyramid"):
+        return u
     (n,) = _tail(c, "m13")[:1]
     feats = f"{c.q}.{PERF}feats_{n}"
     tgt = f"{c.q}.{PERF}mvt_tgt"
@@ -968,22 +1027,36 @@ def _m13(c: Ctx) -> Unit:
         f"SELECT p.z, p.x, p.y, p.mvt_bytes FROM {feats} s, "
         f"LATERAL {c.q}.gbx_st_asmvt_pyramid(st_asbinary(s.geom), to_json(s.attrs), 0, 10, 'layer', 4096) AS p"
     )
-    u.legs += [
-        Leg("prep_call", f"DROP TABLE IF EXISTS {tgt}", timed=False),
-        Leg(
-            "call",
-            f"CALL {c.q}.gbx_features_to_mvt(source_table => '{feats.replace(chr(96), '')}', "
-            f"target_table => '{tgt.replace(chr(96), '')}', mvt_layer => 'layer', min_zoom => 0, max_zoom => 10)",
-        ),
-        Leg(
-            "pyramid_only", f"SELECT count(*), sum(length(mvt_bytes)) FROM ({pyramid})"
-        ),
-        Leg(
-            "finalize_only",
-            f"SELECT count(*), sum(length(m)) FROM (SELECT {c.q}.gbx__st_asmvt_features(collect_list(mvt_bytes), 'layer', 4096) AS m "
-            f"FROM ({pyramid}) GROUP BY z, x, y)",
-        ),
-    ]
+    # the CALL and the private finalize routine exist only where install(procedures=True) created them
+    procs = "gbx_features_to_mvt" in _procedure_names()
+    if procs:
+        u.legs += [
+            Leg("prep_call", f"DROP TABLE IF EXISTS {tgt}", timed=False),
+            Leg(
+                "call",
+                f"CALL {c.q}.gbx_features_to_mvt(source_table => '{feats.replace(chr(96), '')}', "
+                f"target_table => '{tgt.replace(chr(96), '')}', mvt_layer => 'layer', min_zoom => 0, max_zoom => 10)",
+            ),
+        ]
+    else:
+        u.skipped["call"] = (
+            "needs the procedure gbx_features_to_mvt (install(procedures=True))"
+        )
+    u.legs.append(
+        Leg("pyramid_only", f"SELECT count(*), sum(length(mvt_bytes)) FROM ({pyramid})")
+    )
+    if procs and "gbx__st_asmvt_features" in c.man.private:
+        u.legs.append(
+            Leg(
+                "finalize_only",
+                f"SELECT count(*), sum(length(m)) FROM (SELECT {c.q}.gbx__st_asmvt_features(collect_list(mvt_bytes), 'layer', 4096) AS m "
+                f"FROM ({pyramid}) GROUP BY z, x, y)",
+            )
+        )
+    else:
+        u.skipped["finalize_only"] = (
+            "needs the private gbx__st_asmvt_features that install(procedures=True) creates"
+        )
     return u
 
 
@@ -1275,11 +1348,17 @@ def run_uc_perf(
         only=only,
     )
     m10 = tuple((sizes or {}).get("m10", DEFAULT_SIZES["m10"]))
-    total = 1 + sum(
-        len(u.setup)
-        + sum(1 + (leg.timed and repeats > 1) * (repeats - 1) for leg in u.legs)
-        + len(u.drops)
-        for u in units
+    # the tile staging, per unit its register step (when it has session functions), setup and leg runs, and the one
+    # cleanup step that drops everything
+    total = (
+        1
+        + sum(
+            bool(u.session_fns)
+            + len(u.setup)
+            + sum(1 + (leg.timed and repeats > 1) * (repeats - 1) for leg in u.legs)
+            for u in units
+        )
+        + 1
     )
     run = _Run(TAG, "uc-perf", total, cap_s)
     out = {
@@ -1351,7 +1430,9 @@ def proc_warm_plan(
     """The statements of M9 by phase: ``setup``, ``call`` (the CALL, run cold, warm, and after an idle gap), ``create``
     (a target created from a ``WHERE false`` copy of a Python select vs from an explicit column list) and ``drops``.
     """
-    q = f"`{catalog}`.`{schema}`"
+    from databricks.labs.gbx.uc import ddl
+
+    q = f"{ddl.quote_ident('catalog', catalog)}.{ddl.quote_ident('schema', schema)}"
     src, tgt = f"{q}.{PERF}warm_src", f"{q}.{PERF}warm_tgt"
     old, new = f"{q}.{PERF}warm_old", f"{q}.{PERF}warm_new"
     side = 250
@@ -1464,8 +1545,13 @@ def run_proc_warm(
 
         def drop_all():
             for label, sql in plan["drops"]:
-                spark.sql(sql)
-                out["dropped"].append(label)
+                try:
+                    spark.sql(sql)
+                    out["dropped"].append(label)
+                except Exception as exc:  # noqa: BLE001 - keep dropping the rest
+                    err = f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}"
+                    out["errors"][f"drop:{label}"] = err
+                    out["dropped"].append(f"{label}: ERROR {type(exc).__name__}")
 
         run.step("m9:cleanup", drop_all)
         run.stop()

@@ -28,21 +28,24 @@ def test_the_warehouse_file_is_one_statement_per_cid_probes_only_and_round_trips
     for cid, s in pairs:
         assert ";" not in s and "\n\n" not in s, cid
         assert not any(ln.lstrip().startswith("--") for ln in s.splitlines()), cid
-        assert "`cat`.`sch`." in s or s.startswith(
-            ("SELECT 1", "EXPLAIN", "WITH t AS", "SELECT")
-        ), cid
+    # every statement is qualified with the 3-level `cat`.`sch`., except the floor and the inline-expression controls
+    unqualified = {cid for cid, s in pairs if "`cat`.`sch`." not in s}
+    assert unqualified == {
+        "m0:select1",
+        "m1:explain_inline",
+        "m1:t_inline_1m",
+        "m1:t_inline_10m",
+    }
     # the file the warehouse runner reads gives the same pairs back
     assert oracles.parse_uc_sql(oracles.uc_sql_text(pairs)) == pairs
     # only probe routines and tables are created or dropped: the product functions are never replaced
     for cid, s in pairs:
         m = re.match(r"CREATE OR REPLACE (?:FUNCTION|TABLE) (\S+?)[( ]", s)
         if m:
-            assert m.group(1).split(".")[-1].startswith(("gbx_mvp_", "gbx__")), cid
+            assert m.group(1).split(".")[-1].startswith("gbx_mvp_"), cid
         d = re.match(r"(?:DROP FUNCTION IF EXISTS|DROP TABLE IF EXISTS) (\S+)", s)
         if d:
-            assert (
-                d.group(1).split(".")[-1].startswith(("gbx_mvp_perf_", "gbx__mvp_"))
-            ), cid
+            assert d.group(1).split(".")[-1].startswith("gbx_mvp_perf_"), cid
 
 
 def test_every_measurement_is_built_or_says_what_it_needs():
@@ -194,19 +197,25 @@ def test_m4_compares_per_function_and_shared_dependency_lists_on_copies():
     )
 
 
-def test_the_product_helpers_of_a_sql_probe_are_never_dropped():
+def _kernel_manifest():
+    """The packaged manifest with a SQL kernel and a helper on the two grid scalars the probes copy."""
     raw = copy.deepcopy(RAW)
-    row = next(r for r in raw["functions"] if r["sql_name"] == "gbx_bng_cellarea")
-    row["levels"]["L4"]["sql"] = "{q}gbx__shared_helper(cellid)"
-    row["levels"]["L4"]["sql_helpers"] = [
-        {
-            "name": "gbx__shared_helper",
-            "params": [["cellid", "STRING"]],
-            "returns": "DOUBLE",
-            "sql": "1.0",
-        }
-    ]
-    man = manifest.parse(raw)
+    for name, arg in (("gbx_bng_cellarea", "cellid"), ("gbx_bng_eastnorthasbng", "e")):
+        row = next(r for r in raw["functions"] if r["sql_name"] == name)
+        row["levels"]["L4"]["sql"] = f"{{q}}gbx__shared_helper({arg})"
+        row["levels"]["L4"]["sql_helpers"] = [
+            {
+                "name": "gbx__shared_helper",
+                "params": [[arg, "STRING" if arg == "cellid" else "DOUBLE"]],
+                "returns": "DOUBLE",
+                "sql": "1.0",
+            }
+        ]
+    return manifest.parse(raw)
+
+
+def test_a_sql_probe_creates_its_own_helpers_and_drops_them_never_the_products():
+    man = _kernel_manifest()
     c = uc_perf.Ctx(
         "cat",
         "sch",
@@ -221,12 +230,41 @@ def test_the_product_helpers_of_a_sql_probe_are_never_dropped():
     )
     u = uc_perf.Unit("m2", "t")
     uc_perf._copy(c, u, "gbx_bng_cellarea", "bng_cellarea_sql", form="sql")
-    assert any(
-        "gbx__shared_helper(" in s for _, s in u.setup
-    )  # created beside the probe
-    assert [s for _, s in u.drops] == [
-        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_bng_cellarea_sql"
+    created = "\n".join(s for _, s in u.setup)
+    assert "gbx__shared_helper" not in created  # the product's helper is not touched
+    assert "FUNCTION `cat`.`sch`.gbx_mvp_perf_shared_helper(" in created
+    assert "RETURN `cat`.`sch`.gbx_mvp_perf_shared_helper(cellid)" in created
+    assert sorted(s for _, s in u.drops) == [
+        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_bng_cellarea_sql",
+        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_shared_helper",
     ]
+
+
+def test_every_routine_a_probe_creates_or_drops_is_a_gbx_mvp_routine(monkeypatch):
+    monkeypatch.setattr(manifest, "load", _kernel_manifest)
+    monkeypatch.setattr(uc_perf, "_has_uc", lambda c, *names: [])
+    monkeypatch.setattr(
+        uc_perf,
+        "_procedure_names",
+        lambda: ("gbx_mosaic_by_key", "gbx_combine_by_key", "gbx_features_to_mvt"),
+    )
+    plan = uc_perf.perf_plan("cat", "sch", jar_path=JAR, wheel_path=WHEEL, surface="s6")
+    stmts = [sql for _, sql in uc_perf.flatten(plan)]
+    made = [
+        m.group(1)
+        for sql in stmts
+        for m in [re.match(r"CREATE OR REPLACE (?:TEMPORARY )?FUNCTION (\S+?)\(", sql)]
+        if m
+    ]
+    dropped = [
+        m.group(1)
+        for sql in stmts
+        for m in [re.match(r"DROP FUNCTION IF EXISTS (\S+)", sql)]
+        if m
+    ]
+    assert any("shared_helper" in n for n in made)  # the kernels were exercised
+    for name in made + dropped:
+        assert name.split(".")[-1].startswith("gbx_mvp_"), name
 
 
 # ---- the runners on a session that records its SQL -----------------------------------------------------------
@@ -393,3 +431,161 @@ def test_the_staged_tiles_are_valid_georeferenced_geotiffs_of_the_decoded_size(
     )  # a file that is there is kept
     assert again["perf_1MiB.tif"]["bytes"] == out["perf_1MiB.tif"]["bytes"]
     assert uc_perf._side(64) == 4096 and uc_perf._side(256) == 8192
+
+
+# ---- a probe degrades to `skipped` and never crashes ---------------------------------------------------------
+
+
+def _manifest_without(*names, private=(), edit=None):
+    raw = copy.deepcopy(RAW)
+    raw["functions"] = [r for r in raw["functions"] if r["sql_name"] not in names]
+    raw["uc_private"] = [
+        r for r in raw.get("uc_private", []) if r["name"] not in private
+    ]
+    if edit:
+        edit(raw)
+    return manifest.parse(raw)
+
+
+def test_a_row_with_no_handler_has_no_batch_twin_and_a_missing_row_is_skipped(
+    monkeypatch,
+):
+    man = manifest.load()
+    bare = type(man.functions["gbx_bng_cellarea"])(
+        **{**man.functions["gbx_bng_cellarea"].__dict__, "levels": {"L3": {}}}
+    )
+    assert uc_perf._has_batch(bare) is False  # no L4 at all: no KeyError
+    handlerless = type(bare)(**{**bare.__dict__, "levels": {"L4": {"sql": "1.0"}}})
+    assert uc_perf._has_batch(handlerless) is False  # no handler: no ValueError
+
+    gone = _manifest_without(
+        "gbx_bng_cellarea",
+        "gbx_bng_eastnorthasbng",
+        "gbx_bng_polyfill",
+        "gbx_rst_clip",
+        "gbx_st_asmvt_pyramid",
+        private=("gbx__h3_cellfill_cells", "gbx__st_asmvt_features"),
+    )
+    monkeypatch.setattr(manifest, "load", lambda: gone)
+    plan = {
+        u.id: u for u in uc_perf.perf_plan("cat", "sch", jar_path=JAR, wheel_path=WHEEL)
+    }
+    missing = uc_perf.skipped(plan.values())
+    assert {"bng_cellarea", "bng_eastnorthasbng"} <= set(missing["m2"])
+    assert {"bng_eastnorthasbng", "polyfill"} <= set(missing["m3"])
+    assert "py_twin" in missing["m6"]
+    assert "gbx_rst_clip" in missing["m12"]["m12"] and not plan["m12"].legs
+    assert "gbx_st_asmvt_pyramid" in missing["m13"]["m13"] and not plan["m13"].legs
+
+
+def test_m13_needs_the_procedures_for_its_call_and_its_finalize_leg(monkeypatch):
+    monkeypatch.setattr(uc_perf, "_procedure_names", lambda: ())
+    (u,) = uc_perf.perf_plan("cat", "sch", wheel_path=WHEEL, only=["m13"])
+    assert [leg.label for leg in u.legs] == ["pyramid_only"]
+    assert {"call", "finalize_only"} <= set(u.skipped)
+    assert "procedures=True" in u.skipped["finalize_only"]
+    monkeypatch.undo()
+    (whole,) = uc_perf.perf_plan("cat", "sch", wheel_path=WHEEL, only=["m13"])
+    assert {"call", "pyramid_only", "finalize_only"} <= {
+        leg.label for leg in whole.legs
+    }
+
+
+def test_the_diff_legs_are_skipped_when_the_python_copy_is_not_there():
+    raw = copy.deepcopy(RAW)
+    row = next(r for r in raw["functions"] if r["sql_name"] == "gbx_bng_cellarea")
+    row["levels"]["L4"]["sql"] = "0.0 * length(cellid)"
+    del row["levels"]["L4"]["handler"]
+    man = manifest.parse(raw)
+    c = uc_perf.Ctx(
+        "cat",
+        "sch",
+        "`cat`.`sch`",
+        "file://" + WHEEL,
+        None,
+        "/t",
+        dict(uc_perf.DEFAULT_SIZES),
+        "w",
+        man,
+        "0.6.0",
+    )
+    u = uc_perf._m2(
+        c
+    )  # a row with no Python handler: the sql copy times, no diff leg reads forms["py"]
+    assert "diff_bng_cellarea" in u.skipped
+    assert not any(leg.label.startswith("diff_bng_cellarea") for leg in u.legs)
+    assert any(leg.label.startswith("t_bng_cellarea_sql") for leg in u.legs)
+
+
+def test_leg_labels_are_unique_per_unit_with_several_sizes_and_m4_has_no_repeated_rung():
+    raw = copy.deepcopy(RAW)
+    row = next(r for r in raw["functions"] if r["sql_name"] == "gbx_bng_cellarea")
+    row["levels"]["L4"]["sql"] = "0.0 * length(cellid)"
+    man = manifest.parse(raw)
+    import unittest.mock as mock
+
+    with mock.patch.object(manifest, "load", lambda: man):
+        plan = uc_perf.perf_plan(
+            "cat",
+            "sch",
+            jar_path=JAR,
+            wheel_path=WHEEL,
+            sizes={"m2_diff": (100, 200), "m4_rows": (1, 100)},
+        )
+    for u in plan:
+        labels = [leg.label for leg in u.legs]
+        assert len(labels) == len(set(labels)), u.id
+    m2 = [leg.label for leg in next(u for u in plan if u.id == "m2").legs]
+    assert (
+        "diff_bng_cellarea_sql_vs_py_100" in m2
+        and "diff_bng_cellarea_sql_vs_py_200" in m2
+    )
+
+
+def test_the_step_total_counts_the_register_and_cleanup_steps(no_volume, monkeypatch):
+    seen = []
+    real = uc_perf._Run
+
+    class Run(real):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            seen.append(self)
+
+    monkeypatch.setattr(uc_perf, "_Run", Run)
+    from databricks.labs import gbx
+
+    monkeypatch.setattr(gbx, "register", lambda spark, only=None, **kw: None)
+    probes.run_uc_perf(
+        _Spark(),
+        "cat",
+        "sch",
+        "/Volumes/c/s/v",
+        only=["m8"],
+        sizes={"m8": (10,)},
+        repeats=1,
+    )
+    (run,) = seen
+    assert (
+        run.n == run.total
+    )  # stage + register + setup + legs + one cleanup, no more and no fewer
+
+
+def test_run_proc_warm_drops_the_rest_when_one_drop_fails(capsys):
+    spark = _Spark(fail_on=("DROP TABLE IF EXISTS `cat`.`sch`.gbx_mvp_perf_warm_tgt",))
+    # the target drops before each CALL fail too; the final cleanup must still try every table
+    out = probes.run_proc_warm(spark, "cat", "sch", idle_s=0, calls=1, polygons=2)
+    cleanup = [e for e in out["errors"] if e.startswith("drop:")]
+    assert cleanup == ["drop:drop_gbx_mvp_perf_warm_tgt"]
+    assert len(out["dropped"]) == 4 and any("ERROR" in d for d in out["dropped"])
+    assert spark.stmts[-1].endswith(
+        "gbx_mvp_perf_warm_new"
+    )  # the drops after the failed one still ran
+
+
+def test_proc_warm_plan_quotes_both_names_and_refuses_a_backtick():
+    plan = uc_perf.proc_warm_plan("cat", "sch")
+    assert "`cat`.`sch`.gbx_mvp_perf_warm_src" in plan["setup"][0][1]
+    with pytest.raises(ValueError, match="schema"):
+        uc_perf.proc_warm_plan("cat", "sch`; DROP SCHEMA x")
+    with pytest.raises(ValueError, match="catalog"):
+        uc_perf.proc_warm_plan("ca`t", "sch")

@@ -60,6 +60,25 @@ UC_RASTER_MERGE_SQL = """SELECT main.geobrix.gbx_rst_merge(collect_list(tile)) A
 FROM rasters
 WHERE scene = 'T30UXC'"""
 
+# The statistics of a cell across the tiles of a table: the partial state of each tile, merged by a native GROUP BY.
+# The partial has default arguments, so call it in a subquery and explode the column (UC refuses a SQL function in a generator).
+UC_RASTER_TO_GRID_SQL = """WITH parts AS (
+  SELECT main.geobrix.gbx_rst_h3_rastertogrid_partial(tile, 7) AS cells FROM rasters
+),
+p AS (SELECT c.* FROM parts LATERAL VIEW inline(cells) c),
+w AS (
+  SELECT *, try_divide(sum(sum) OVER (PARTITION BY band, cellid),
+                       sum(count) OVER (PARTITION BY band, cellid)) AS mu
+  FROM p
+)
+SELECT band, cellid,
+       sum(count) AS count,
+       try_divide(sum(sum), sum(count)) AS avg,
+       try_divide(sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2)), sum(count)) AS variance,
+       min(min) AS min, max(max) AS max
+FROM w
+GROUP BY band, cellid"""
+
 # Install the functions and the procedures that call them.
 INSTALL_PROCEDURES_PYTHON = '''import databricks.labs.gbx as gbx
 

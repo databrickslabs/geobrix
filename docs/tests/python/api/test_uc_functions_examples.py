@@ -194,6 +194,36 @@ def test_raster_sql_examples_call_uc_functions_with_a_valid_argument_count(sql):
         assert fn.min_args <= len(_split_args(args)) <= len(fn.params)
 
 
+def test_the_raster_to_grid_example_is_the_oracle_recipe_called_in_a_subquery():
+    """The page merges the partial state of each tile as the oracle's recipe does (judged against the session statistic of
+    the whole tile), and calls the partial in a subquery: its public name is a SQL function, which UC refuses in a generator."""
+    from databricks.labs.gbx.bench.oracle_tables import raster_to_grid as rtg
+
+    flat = " ".join(ex.UC_RASTER_TO_GRID_SQL.replace("main.geobrix.", "").split())
+    recipe = next(c for c in rtg.RASTER_TO_GRID if c.cid == "recipe_h3_merge_variance").sql
+    assert (
+        "try_divide(sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2)), sum(count)) AS variance" in flat
+    )
+    assert "sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2))" in recipe
+    assert "FROM (SELECT" not in flat and "inline(cells)" in flat
+    assert "gbx_rst_h3_rastertogrid_partial(tile, 7) AS cells FROM rasters" in flat
+    man = manifest.load()
+    (name, args), = re.findall(r"main\.geobrix\.(gbx_\w+)\(([^()]*)\)", ex.UC_RASTER_TO_GRID_SQL)
+    assert name in _uc_names()
+    assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
+
+
+def test_the_seven_h3_statistics_are_table_functions_over_the_one_partial():
+    man = manifest.load()
+    tvfs = [n for n in _uc_names() if n.startswith("gbx_rst_h3_rastertogrid") and n != "gbx_rst_h3_rastertogrid_partial"]
+    assert sorted(t[len("gbx_rst_h3_rastertogrid"):] for t in tvfs) == [
+        "avg", "count", "max", "min", "stddev", "sum", "variance",
+    ]  # fmt: skip
+    assert all(man.functions[t].levels["L4"]["tvf_over"] == "gbx_rst_h3_rastertogrid_partial" for t in tvfs)
+    stmts = [s for s in ex.preview_install() if ".gbx_rst_h3_rastertogridvariance(" in s]
+    assert "try_divide(m2, count) AS measure" in stmts[0]
+
+
 def test_a_virtual_tile_is_refused_with_a_fix_naming_the_session_function():
     message = ex.virtual_tile_is_refused()
     assert "virtual tiles" in message

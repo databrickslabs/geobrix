@@ -9,6 +9,9 @@ plane is that plane. The grids are 10 x 10 map units in EPSG:3857, so a pixel ce
 geometries. The longitude/latitude row projects with the closed-form sphere formula, no CRS library.
 """
 
+from dataclasses import replace
+
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import share
 from databricks.labs.gbx.bench.oracles import Build, Case, builder
 
 RZ, GP, BP, DT = (
@@ -81,6 +84,13 @@ def _gp_centre_points_wkb(tmpdir):
     return [shapely.to_wkb(shapely.Point(x, y)) for x, y in CENTRE_PTS]
 
 
+@builder("dtm_points_2d_wkb")
+def _dtm_points_2d_wkb(tmpdir):
+    import shapely
+
+    return [shapely.to_wkb(shapely.Point(x, y)) for x, y in PLANE_PTS]
+
+
 @builder("dtm_points_wkb")
 def _dtm_points_wkb(tmpdir):
     import shapely
@@ -104,7 +114,7 @@ def _rz(geom, *rest, value=5.0, extent=BOX, size=(10, 10)):
     return (geom, value, *extent, *size, *rest)
 
 
-RASTER_RASTERIZE = (
+_SESSION_ROWS = (
     # --- rasterize: the pixels whose centre the geometry covers hold the value; the four geometry formats agree
     Case("rasterize_wkt", RZ, _rz(SQUARE_WKT, 3857), "ref", "rasterize", ONLY),
     Case("rasterize_wkb", RZ, _rz(SQ_WKB, 3857), "ref", "rasterize", ONLY),
@@ -477,3 +487,45 @@ RASTER_RASTERIZE = (
         ONLY,
     ),
 )
+
+
+def _srid(rows, srid, *cids):
+    """`rows` with the GEOMETRY arguments of the named rows built in `srid` (the session reads a bare WKT as the output
+    CRS; a UC GEOMETRY always has an SRID, and 0 is none)."""
+    return tuple(replace(c, geom_srid=srid) if c.cid in cids else c for c in rows)
+
+
+_SHARED = (
+    "rasterize_wkt", "rasterize_props", "rasterize_reprojects", "rasterize_out_crs", "rasterize_no_crs",
+    "rasterize_both_crs", "rasterize_unknown_srid", "rasterize_zero_width", "rasterize_inverted_extent",
+    "rasterize_null_geom", "rasterize_null_value", "rasterize_null_extent",
+    "gridfrompoints_wkb", "gridfrompoints_power", "gridfrompoints_nearest", "gridfrompoints_nearest_on_centre",
+    "gridfrompoints_no_points", "gridfrompoints_props", "gridfrompoints_out_crs", "gridfrompoints_no_crs",
+    "gridfrompoints_both_crs", "gridfrompoints_length_mismatch", "gridfrompoints_zero_power",
+    "gridfrompoints_zero_max_pts", "gridfrompoints_zero_height", "gridfrompoints_null_points",
+    "gridfrompoints_null_extent",
+    "binpoints_max", "binpoints_min", "binpoints_mean", "binpoints_median", "binpoints_count",
+    "binpoints_percentile:90", "binpoints_default_statistic", "binpoints_upper_case", "binpoints_props",
+    "binpoints_bad_statistic", "binpoints_length_mismatch", "binpoints_zero_width", "binpoints_empty",
+    "binpoints_null_x", "binpoints_null_srid",
+    "dtmfromgeoms_wkb", "dtmfromgeoms_outside_hull", "dtmfromgeoms_no_data", "dtmfromgeoms_props",
+    "dtmfromgeoms_both_crs", "dtmfromgeoms_no_points", "dtmfromgeoms_zero_width", "dtmfromgeoms_null_points",
+    "dtmfromgeoms_null_extent",
+)  # fmt: skip
+HUGE = 100000  # a 100000 x 100000 grid is 80 GB as Float64
+
+# The rows Unity Catalog shares with the session (WKT and WKT-array rows stay on the session: UC takes a GEOMETRY and
+# arrays of WKB), then its own: a grid over the cap is refused before it is allocated, a point with no Z is refused.
+RASTER_RASTERIZE = _srid(
+    share(_SESSION_ROWS, *_SHARED),
+    3857,
+    "rasterize_wkt", "rasterize_props", "rasterize_out_crs", "rasterize_both_crs", "rasterize_unknown_srid",
+    "rasterize_zero_width", "rasterize_inverted_extent",
+)  # fmt: skip
+RASTER_RASTERIZE = _srid(RASTER_RASTERIZE, 0, "rasterize_no_crs") + (
+    Case("uc_rasterize_over_cap_refused", RZ, _rz(SQUARE_WKT, 3857, size=(HUGE, HUGE)), "uc_refused", None, ("uc",), geom_srid=3857),
+    Case("uc_gridfrompoints_over_cap_refused", GP, (GP_WKB, VALS, *BOX, HUGE, HUGE, 3857), "uc_refused", None, ("uc",)),
+    Case("uc_binpoints_over_cap_refused", BP, (*_bin_args()[:7], HUGE, HUGE, 3857), "uc_refused", None, ("uc",)),
+    Case("uc_dtmfromgeoms_over_cap_refused", DT, (DTM_WKB, [], 0.0, 0.0, *BOX, HUGE, HUGE, 3857), "uc_refused", None, ("uc",)),
+    Case("uc_dtmfromgeoms_no_z", DT, (Build("dtm_points_2d_wkb"), [], 0.0, 0.0, *BOX, 5, 5, 3857), "raises", "Z coordinate", ("uc",)),
+)  # fmt: skip

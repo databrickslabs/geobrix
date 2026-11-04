@@ -166,6 +166,7 @@ _UC_TABLES = (
     "SPEC_DEM",
     "RASTER_ARRAY_OP",
     "SPEC_SE",
+    "RASTER_RASTERIZE",
 )
 
 

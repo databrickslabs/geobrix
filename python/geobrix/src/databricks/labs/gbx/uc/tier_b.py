@@ -28,7 +28,7 @@ from databricks.labs.gbx.pyrx.core.budget import (
     grid_bytes,
     size_text,
 )
-from databricks.labs.gbx.uc.handlers import _field, _Refusal, _refuse
+from databricks.labs.gbx.uc.handlers import _field, _geom_bytes, _Refusal, _refuse
 
 # The decoded size above which a tile is refused: one value for every handler (see the module doc).
 DECODED_CAP = UC_DECODED_CAP
@@ -1180,3 +1180,295 @@ def rst_mapalgebra(tiles, expression):
 
 
 HANDLERS["gbx_rst_mapalgebra"] = rst_mapalgebra
+
+
+# --- constructors: geometries or points to a tile (no input tile) ------------------------------------------------------
+# There is no tile to gate, so the order is: NULL in is NULL out, a wrong argument raises, the grid to be made is checked
+# against the cap before any of it is allocated (its working set, not only its pixels), then the kernel runs.
+def grid_refusal(
+    fn: str, width: int, height: int, decoded: int, working: int
+) -> _Refusal:
+    """A grid too big for a Unity Catalog function to make: never truncated, refused with a Fix."""
+    return _Refusal(
+        f"{fn}: the {int(width)} x {int(height)} grid is {size_text(decoded)} decoded and takes about "
+        f"{size_text(working)} to make, over the {size_text(DECODED_CAP)} a Unity Catalog function holds. "
+        f"Fix: ask for fewer pixels (a smaller width_px and height_px, or one call for each part of the extent), "
+        f"or run {fn} in a notebook or job session"
+    )
+
+
+def check_made(fn: str, width, height, dtypes, working: int) -> None:
+    """Refuse, before anything is allocated, a grid whose pixels or whose working set are over the cap."""
+    decoded = grid_bytes(width, height, dtypes)
+    if max(decoded, working) > DECODED_CAP:
+        raise grid_refusal(fn, width, height, decoded, working)
+
+
+def _grid_args(fn: str, xmin, ymin, xmax, ymax, width_px, height_px) -> None:
+    """The size and extent of the grid to make: a wrong one raises."""
+    try:
+        _kernel("_util", "check_grid")(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: pass a width_px and height_px above 0 and an extent with xmax above xmin and ymax above ymin"
+        ) from exc
+
+
+def _out_crs(fn: str, out_srid, out_crs):
+    """The authority code of the output CRS from ``out_srid`` or ``out_crs`` (not both), else None."""
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+
+    if out_srid is not None and out_crs is not None:
+        raise _Parameter(
+            f"{fn}: provide out_srid OR out_crs, not both. Fix: pass one of them, or neither for a tile with no CRS"
+        )
+    if out_crs is not None:
+        return parse_uc_crs(out_crs, fn=fn).code
+    if out_srid is not None:
+        return parse_uc_crs(int(out_srid), fn=fn).code
+    return None
+
+
+def _constructed(fn: str, made):
+    return tile_row(fn, {"cellid": 0}, made)
+
+
+def rst_rasterize(
+    geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, out_crs
+):
+    """gbx_rst_rasterize: a Float64 tile over the extent with `value` in the pixels whose centre the geometry covers (a
+    GEOMETRY in its own SRID, reprojected to the output CRS) and NoData elsewhere."""
+    fn = "gbx_rst_rasterize"
+    if any(
+        a is None for a in (geom, value, xmin, ymin, xmax, ymax, width_px, height_px)
+    ):
+        return None
+    _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    crs = _out_crs(fn, out_srid, out_crs)
+    ewkb = _geom_bytes(geom)
+    check_made(
+        fn,
+        width_px,
+        height_px,
+        ["float64"],
+        _kernel("features", "rasterize_working_bytes")(width_px, height_px),
+    )
+    made = run_array_kernel(
+        fn,
+        lambda: _kernel("features", "rasterize_geom")(
+            ewkb, value, xmin, ymin, xmax, ymax, width_px, height_px, out_crs=crs
+        ),
+    )
+    return _constructed(fn, made)
+
+
+HANDLERS["gbx_rst_rasterize"] = rst_rasterize
+
+
+def rst_binpoints(
+    x_array,
+    y_array,
+    z_array,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    srid,
+    statistic,
+):
+    """gbx_rst_binpoints: a Float32 tile of the statistic (max, min, mean, median, count, percentile:<p>) of the points in
+    each pixel; a point on the east or south edge is left out and an empty pixel is NoData.
+    """
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+
+    fn = "gbx_rst_binpoints"
+    if any(
+        a is None
+        for a in (y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid)
+    ):
+        return None
+    if not x_array:
+        return None
+    _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    try:
+        _kernel("binning", "check_lengths")(x_array, y_array, z_array)
+        _kernel("binning", "check_statistic")("max" if statistic is None else statistic)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: pass arrays of one length, and a statistic of max, min, mean, median, count or percentile:<p>"
+        ) from exc
+    code = parse_uc_crs(int(srid), fn=fn).srid
+    check_made(
+        fn,
+        width_px,
+        height_px,
+        ["float32"],
+        _kernel("binning", "working_bytes")(width_px, height_px, len(x_array)),
+    )
+    made = run_array_kernel(
+        fn,
+        lambda: _kernel("binning", "bin_points")(
+            x_array,
+            y_array,
+            z_array,
+            float(xmin),
+            float(ymin),
+            float(xmax),
+            float(ymax),
+            int(width_px),
+            int(height_px),
+            code,
+            "max" if statistic is None else str(statistic),
+        ),
+    )
+    return _constructed(fn, made)
+
+
+HANDLERS["gbx_rst_binpoints"] = rst_binpoints
+
+
+def rst_gridfrompoints(
+    points_array,
+    values_array,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    out_srid,
+    power,
+    max_pts,
+    out_crs,
+):
+    """gbx_rst_gridfrompoints: a Float64 tile of the inverse-distance-weighted mean of the nearest `max_pts` points (WKB or
+    EWKB POINTs, taken to be in the output CRS) in each pixel; NoData where there are none.
+    """
+    fn = "gbx_rst_gridfrompoints"
+    if any(
+        a is None
+        for a in (
+            points_array,
+            values_array,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width_px,
+            height_px,
+        )
+    ):
+        return None
+    _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    try:
+        _kernel("tin", "check_lengths")(points_array, values_array)
+        _kernel("tin", "check_idw_args")(
+            2.0 if power is None else power, 12 if max_pts is None else max_pts
+        )
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: pass as many values as points, a power above 0 and a max_pts above 0"
+        ) from exc
+    crs = _out_crs(fn, out_srid, out_crs)
+    check_made(
+        fn,
+        width_px,
+        height_px,
+        ["float64"],
+        _kernel("tin", "idw_working_bytes")(
+            width_px,
+            height_px,
+            len(points_array),
+            12 if max_pts is None else max_pts,
+        ),
+    )
+    made = run_array_kernel(
+        fn,
+        lambda: _kernel("tin", "grid_from_points")(
+            points_array,
+            values_array,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width_px,
+            height_px,
+            power=power,
+            max_pts=max_pts,
+            out_crs=crs,
+        ),
+    )
+    return _constructed(fn, made)
+
+
+HANDLERS["gbx_rst_gridfrompoints"] = rst_gridfrompoints
+
+
+def rst_dtmfromgeoms(
+    points_array,
+    breaklines_array,
+    merge_tolerance,
+    snap_tolerance,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    out_srid,
+    no_data,
+    out_crs,
+):
+    """gbx_rst_dtmfromgeoms: a Float64 tile of the height interpolated in the Delaunay triangle of each pixel (the points
+    are WKB or EWKB POINTs with a Z; the break lines' vertices are extra points), `no_data` outside their hull.
+    """
+    fn = "gbx_rst_dtmfromgeoms"
+    if any(
+        a is None
+        for a in (
+            points_array,
+            merge_tolerance,
+            snap_tolerance,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width_px,
+            height_px,
+        )
+    ):
+        return None
+    _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    crs = _out_crs(fn, out_srid, out_crs)
+    check_made(
+        fn,
+        width_px,
+        height_px,
+        ["float64"],
+        _kernel("tin", "dtm_working_bytes")(
+            width_px,
+            height_px,
+            len(points_array) + len(breaklines_array or ()),
+        ),
+    )
+    made = run_array_kernel(
+        fn,
+        lambda: _kernel("tin", "dtm_from_geoms")(
+            points_array,
+            breaklines_array,
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            width_px,
+            height_px,
+            no_data=no_data,
+            out_crs=crs,
+        ),
+    )
+    return _constructed(fn, made)
+
+
+HANDLERS["gbx_rst_dtmfromgeoms"] = rst_dtmfromgeoms

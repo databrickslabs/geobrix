@@ -262,3 +262,88 @@ def test_a_bad_map_algebra_expression_raises_and_a_virtual_member_refuses_the_ar
         ValueError, match=r"gbx_rst_mapalgebra: .*A_index=9 is out of range"
     ):
         tier_b.HANDLERS["gbx_rst_mapalgebra"](stack, '{"calc": "A", "A_index": 9}')
+
+
+# --- constructors: geometries or points to a tile --------------------------------------------------------------------
+def _square():
+    import shapely
+
+    return oracles.UcGeometry(shapely.to_wkb(shapely.box(2, 2, 6, 6)), 3857)
+
+
+def test_a_grid_over_the_cap_is_refused_before_the_kernel_is_asked_to_make_it(
+    monkeypatch,
+):
+    from databricks.labs.gbx.pyrx.core import binning, features, tin
+
+    def never(*_a, **_k):
+        raise AssertionError("the kernel ran for a grid over the cap")
+
+    for mod, attr in (
+        (features, "rasterize_geom"),
+        (binning, "bin_points"),
+        (tin, "idw_grid"),
+        (tin, "delaunay_dtm"),
+    ):
+        monkeypatch.setattr(mod, attr, never)
+    huge = (0.0, 0.0, 10.0, 10.0, 100000, 100000)
+    calls = {
+        "gbx_rst_rasterize": (_square(), 1.0, *huge, 3857, None),
+        "gbx_rst_binpoints": ([1.0], [1.0], [1.0], *huge, 3857, "max"),
+        "gbx_rst_gridfrompoints": ([b"\x01"], [1.0], *huge, 3857, 2.0, 12, None),
+        "gbx_rst_dtmfromgeoms": ([b"\x01"], [], 0.0, 0.0, *huge, 3857, -9999.0, None),
+    }
+    for name, args in calls.items():
+        with pytest.raises(
+            ValueError,
+            match=r"grid is .* decoded.*over the 64 MiB.*Fix: ask for fewer pixels",
+        ):
+            tier_b.HANDLERS[name](*args)
+
+
+def test_the_working_set_of_a_grid_not_only_its_pixels_is_held_to_the_cap():
+    # 1000 x 1000 Float64 is 7 MiB decoded, but the nearest-12-points interpolation holds several arrays of it
+    args = (
+        [b"\x01"] * 20,
+        [1.0] * 20,
+        0.0,
+        0.0,
+        10.0,
+        10.0,
+        1000,
+        1000,
+        3857,
+        2.0,
+        12,
+        None,
+    )
+    with pytest.raises(
+        ValueError, match=r"grid is 7 MiB decoded and takes about \d+ MiB to make"
+    ):
+        tier_b.HANDLERS["gbx_rst_gridfrompoints"](*args)
+
+
+def test_a_constructor_takes_one_output_crs_in_a_form_uc_accepts():
+    sq = _square()
+    base = (sq, 1.0, 0.0, 0.0, 10.0, 10.0, 5, 5)
+    with pytest.raises(
+        ValueError, match=r"provide out_srid OR out_crs, not both.*Fix: "
+    ):
+        tier_b.HANDLERS["gbx_rst_rasterize"](*base, 3857, "EPSG:3857")
+    with pytest.raises(ValueError, match=r"takes a CRS as .*Fix: "):
+        tier_b.HANDLERS["gbx_rst_rasterize"](*base, None, "+proj=longlat +datum=WGS84")
+    out = tier_b.HANDLERS["gbx_rst_rasterize"](*base, None, "ESRI:102003")
+    assert out["crs"] == "102003" and out["metadata"]["width"] == "5"
+
+
+def test_a_constructor_tile_is_built_like_every_other_uc_tile():
+    out = tier_b.HANDLERS["gbx_rst_binpoints"](
+        [1.5], [8.5], [10.0], 0.0, 0.0, 10.0, 10.0, 10, 10, 3857, None
+    )
+    assert set(out) == TILE_KEYS and out["cellid"] == 0 and out["crs"] == "3857"
+    assert out["metadata"] == {
+        "driver": "GTiff",
+        "width": "10",
+        "height": "10",
+        "count": "1",
+    }

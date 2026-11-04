@@ -1864,28 +1864,29 @@ Create or load rasters from path, binary content, or bands (4 total).
 ### rst_dtmfromgeoms
 
 {/* BEGIN GENERATED gbx_rst_dtmfromgeoms: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [no_data], [out_crs])` | `TILE` |
 | Python | `rasterx.functions.rst_dtmfromgeoms(points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, no_data=None, out_crs=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an array. |
-| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | Break lines, as an array; NULL or empty for none. The Python level uses their vertices as extra points and does not enforce them as edges. |
-| `merge_tolerance` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
-| `snap_tolerance` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
-| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
-| `ymin` | `DOUBLE` |  | The south edge of the output. |
-| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
-| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
-| `width_px` | `INT` |  | The output width in pixels, above 0. |
-| `height_px` | `INT` |  | The output height in pixels, above 0. |
-| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
-| `no_data` | `DOUBLE` | `-9999.0` | The value of a pixel outside the points' hull. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<BINARY>` |  | The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an array. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<BINARY>` |  | Break lines, as an array; NULL or empty for none. The Python level uses their vertices as extra points and does not enforce them as edges. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The output height in pixels, above 0. |
+| `out_srid` | `INT` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
+| `no_data` | `DOUBLE` | `DOUBLE` | `-9999.0` | The value of a pixel outside the points' hull. |
+| `out_crs` | `STRING` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_dtmfromgeoms */}
 
 :::note Implementation
@@ -2045,27 +2046,28 @@ df = (
 ### rst_gridfrompoints
 
 {/* BEGIN GENERATED gbx_rst_gridfrompoints: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [power], [max_pts], [out_crs])` | `TILE` |
 | Python | `rasterx.functions.rst_gridfrompoints(points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, power=None, max_pts=None, out_crs=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL element is dropped with its value. |
-| `values_array` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
-| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
-| `ymin` | `DOUBLE` |  | The south edge of the output. |
-| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
-| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
-| `width_px` | `INT` |  | The output width in pixels, above 0. |
-| `height_px` | `INT` |  | The output height in pixels, above 0. |
-| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
-| `power` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
-| `max_pts` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<BINARY>` |  | The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL element is dropped with its value. |
+| `values_array` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The output height in pixels, above 0. |
+| `out_srid` | `INT` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
+| `power` | `DOUBLE` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
+| `max_pts` | `INT` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
+| `out_crs` | `STRING` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_gridfrompoints */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
@@ -2099,26 +2101,27 @@ Four functions for building raster products from LiDAR point clouds. Available o
 ### rst_binpoints
 
 {/* BEGIN GENERATED gbx_rst_binpoints: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])` | `TILE` |
 | Python | `rasterx.functions.rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, statistic=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `x_array` | `ARRAY<DOUBLE>` |  | The x coordinate of each point. |
-| `y_array` | `ARRAY<DOUBLE>` |  | The y coordinate of each point, in the same order. |
-| `z_array` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
-| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
-| `ymin` | `DOUBLE` |  | The south edge of the output. |
-| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
-| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
-| `width_px` | `INT` |  | The output width in pixels, above 0. |
-| `height_px` | `INT` |  | The output height in pixels, above 0. |
-| `srid` | `INT` |  | The EPSG or ESRI code of the output CRS. |
-| `statistic` | `STRING` | `'max'` | How the points in a pixel combine: `max`, `min`, `mean`, `median`, `count` or `percentile:<p>` (for example `percentile:90`), in any case. Another word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `x_array` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The x coordinate of each point. |
+| `y_array` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The y coordinate of each point, in the same order. |
+| `z_array` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The output height in pixels, above 0. |
+| `srid` | `INT` | `INT` |  | The EPSG or ESRI code of the output CRS. |
+| `statistic` | `STRING` | `STRING` | `'max'` | How the points in a pixel combine: `max`, `min`, `mean`, `median`, `count` or `percentile:<p>` (for example `percentile:90`), in any case. Another word raises. |
 {/* END GENERATED gbx_rst_binpoints */}
 
 Bin a **per-row `ARRAY<DOUBLE>`** of (x, y, z) coordinate triples into a single-band
@@ -5062,25 +5065,26 @@ SELECT t.geom_wkb, t.value FROM <table>, LATERAL gbx_rst_polygonize(tile, band, 
 ### rst_rasterize
 
 {/* BEGIN GENERATED gbx_rst_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [out_crs])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, [out_srid], [out_crs])` | `TILE` |
 | Python | `rasterx.functions.rst_rasterize(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid=None, out_crs=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. A geometry with an SRID is reprojected into the output CRS first. |
-| `value` | `DOUBLE` |  | The value burned into the pixels the geometry covers. |
-| `xmin` | `DOUBLE` |  | The west edge of the output in the output CRS. |
-| `ymin` | `DOUBLE` |  | The south edge of the output. |
-| `xmax` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
-| `ymax` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
-| `width_px` | `INT` |  | The output width in pixels, above 0. |
-| `height_px` | `INT` |  | The output height in pixels, above 0. |
-| `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. A geometry with an SRID is reprojected into the output CRS first. |
+| `value` | `DOUBLE` | `DOUBLE` |  | The value burned into the pixels the geometry covers. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The output height in pixels, above 0. |
+| `out_srid` | `INT` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
+| `out_crs` | `STRING` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_rasterize */}
 
 :::note Implementation

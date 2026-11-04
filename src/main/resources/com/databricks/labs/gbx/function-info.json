@@ -79,6 +79,7 @@
       "description": "Bin scattered points into a raster by a statistic of their values.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -554,6 +555,7 @@
       "description": "Build a terrain model from Z-valued points by Delaunay triangulation.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -701,6 +703,7 @@
       "description": "Interpolate scattered point values to a grid by inverse-distance weighting.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1263,6 +1266,7 @@
       "description": "Burn a geometry into a new raster tile.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

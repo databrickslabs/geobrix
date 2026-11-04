@@ -555,11 +555,6 @@ def _ring_cells(k: int, side: int) -> int:
     return min(2 * k + 1, side) ** 2
 
 
-def _grid_distance(fn: str, a, b, kernel):
-    """``kernel(a, b)`` of two parsed cells; NULL when either is not a cell (the parsers answer None for that)."""
-    return None if a is None or b is None else kernel(a, b)
-
-
 def _dilation(fn: str, mode, coverage, k):
     """The checked dilation arguments of a geometry-aware ring: ``(mode, coverage, k)``; a wrong one is a PARAMETER error,
     raised before the geometry is read."""

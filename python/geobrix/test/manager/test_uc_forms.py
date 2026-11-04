@@ -55,6 +55,15 @@ def test_the_pyramid_refuses_other_srids_bad_attrs_and_an_oversized_result(monke
         forms.st_asmvt_pyramid_cells(_point(100, 45), None, 0, 1, None, None)
 
 
+def test_a_struct_cast_to_text_is_named_as_such_not_reported_as_bad_json():
+    for cast in ("{1}", "{a, 1}", " {name, 2} "):
+        with pytest.raises(ValueError, match="STRUCT cast to text.*Fix: pass to_json"):
+            forms.st_asmvt_pyramid_cells(_point(100, 45), cast, 0, 1, None, None)
+    # text that merely is not JSON keeps the parse message
+    with pytest.raises(ValueError, match="attrs is not JSON"):
+        forms.st_asmvt_pyramid_cells(_point(100, 45), "{not json", 0, 1, None, None)
+
+
 def test_tiles_of_one_tile_merge_into_one_layer_with_every_feature():
     a = forms.st_asmvt_pyramid_cells(_point(100, 45), '{"n": 1}', 0, 0, "roads", 4096)[
         0

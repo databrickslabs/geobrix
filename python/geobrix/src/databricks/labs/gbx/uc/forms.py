@@ -54,6 +54,14 @@ def _attrs(fn: str, attrs) -> dict:
     try:
         value = json.loads(attrs) if isinstance(attrs, (str, bytes)) else attrs
     except ValueError as exc:
+        text = attrs.decode("utf-8", "replace") if isinstance(attrs, bytes) else attrs
+        if text.strip().startswith("{") and text.strip().endswith("}"):
+            # A STRUCT passed as attrs is cast to text such as `{1, a}`: braces, but not JSON.
+            raise _parameter(
+                fn,
+                "attrs looks like a STRUCT cast to text; on Unity Catalog it takes a JSON object string. "
+                "Fix: pass to_json(struct(...))",
+            ) from exc
         raise _parameter(
             fn,
             f"attrs is not JSON ({exc}). Fix: pass the attributes as a JSON object text, for example "

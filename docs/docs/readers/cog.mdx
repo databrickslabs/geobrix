@@ -69,14 +69,14 @@ splitting the source into partitions.
 ## Register
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 
 ## Read a COG directory
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 df = spark.read.format("cog_gbx").load("/Volumes/main/.../cog-prepared/nyc-sentinel2")
@@ -131,7 +131,7 @@ set to the member, `window=NULL`). All downstream `rst_*` functions then run
 per-tile, exactly as for a directory of flat COGs:
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 # One virtual tile per member mini-COG

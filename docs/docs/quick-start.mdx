@@ -42,7 +42,7 @@ and ARM.
 </TabItem>
 <TabItem value="heavyweight" label="Heavyweight">
 
-JVM-native (Scala + GDAL/OGR), on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path). Covers everything the lightweight tier does **plus** the heavy-only deltas: the GDAL/OGR readers (`gtiff_gdal`, `gdal`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`). Choose this tier when your environment is already JVM/GDAL-based or when you need one of those deltas.
+JVM-native (Scala + GDAL/OGR), on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path). It covers everything the lightweight tier does. Choose this tier when your environment is already JVM/GDAL-based.
 
 ```python
 from databricks.labs.gbx.rasterx import functions as rx
@@ -159,13 +159,9 @@ Register GridX (BNG) and VectorX the same way:
 
 ## Reading Data
 
-Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle). The reader format string is the part that differs by tier: lightweight uses the pure-Python `*_gbx` readers (no GDAL/OGR install); heavyweight uses the GDAL/OGR readers.
-To keep a table in sync with a landing folder rather than read it once, see [Ingestion Pipelines](./ingestion/overview).
+Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle). Both tiers read with the pure-Python `*_gbx` readers (no GDAL/OGR install). To keep a table in sync with a landing folder rather than read it once, see [Ingestion Pipelines](./ingestion/overview).
 
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight">
-
-Register the lightweight readers once per session, then load by format string (`gtiff_gbx` / `raster_gbx` for rasters; `shapefile_gbx` / `geojson_gbx` / `gpkg_gbx` / `file_gdb_gbx` for vectors).
+Register the readers once per session, then load by format string (`gtiff_gbx` / `raster_gbx` for rasters; `shapefile_gbx` / `geojson_gbx` / `gpkg_gbx` / `file_gdb_gbx` for vectors).
 
 #### Read GeoTIFF
 
@@ -178,7 +174,7 @@ Register the lightweight readers once per session, then load by format string (`
 />
 
 :::note Virtual tiles by default
-The lightweight raster reader returns **[virtual tiles](./api/virtual-tiles)** by default — each row
+The raster reader returns **[virtual tiles](./api/virtual-tiles)** by default. Each row
 carries a bytes-free `(path, window)` reference instead of the raster pixels, so a large file fans
 into tiles without accumulating memory. Pass `.option("virtualTiles", "false")` (or use
 `materialize=True` on a downstream `rst_*` call) when you need the bytes in-row.
@@ -194,31 +190,6 @@ into tiles without accumulating memory. Pass `.option("virtualTiles", "false")` 
   outputConstant="READ_SHAPEFILE_LIGHT_output"
 />
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight">
-
-The heavyweight tier reads through the GDAL/OGR readers — `gdal` / `gtiff_gdal` for rasters; `shapefile_ogr` / `geojson_ogr` / `gpkg_ogr` / `file_gdb_ogr` for vectors.
-
-#### Read GeoTIFF
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="READ_GEOTIFF"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-  outputConstant="READ_GEOTIFF_output"
-/>
-
-#### Read Shapefile
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="READ_SHAPEFILE"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-  outputConstant="READ_SHAPEFILE_output"
-/>
-
 #### Read GeoJSON
 
 <CodeFromTest
@@ -228,9 +199,6 @@ The heavyweight tier reads through the GDAL/OGR readers — `gdal` / `gtiff_gdal
   testFile="docs/tests/python/quickstart/test_examples.py"
   outputConstant="READ_GEOJSON_output"
 />
-
-</TabItem>
-</Tabs>
 
 ## Using RasterX, GridX, and VectorX
 
@@ -293,7 +261,7 @@ Identical on both tiers — only the import/register differs (see the tier toggl
 
 ## Using SQL
 
-The `gbx_*` SQL names are identical on both tiers (only the reader format string differs — see [Reading Data](#reading-data)). This example uses a heavyweight reader; swap `shapefile_ogr` for `shapefile_gbx` on the lightweight tier.
+The `gbx_*` SQL names are identical on both tiers. Both tiers read with the same `*_gbx` readers (see [Reading Data](#reading-data)).
 
 <CodeFromTest
   code={quickstartCode}
@@ -306,6 +274,6 @@ The `gbx_*` SQL names are identical on both tiers (only the reader format string
 ## Next Steps
 
 - [Sample Data](./sample-data/overview) — Download and use sample data in examples
-- [Readers](./readers/overview) — Shapefile, GeoJSON, GDAL, and more
+- [Readers](./readers/overview) — Shapefile, GeoJSON, GeoTIFF, and more
 - [API Reference](./api/overview) — Function reference
 - [Raster Functions](./api/raster-functions) · [GridX](./api/gridx-functions) · [VectorX](./api/vectorx-functions)

@@ -156,7 +156,7 @@ as COG when you already have tiles in memory:
 :::note Register the readers and writers first
 The lightweight readers and writers are Python Data Source V2 sources. Python has no classpath
 discovery, so register them before you use `format("raster_gbx")` or `format("gtiff_gbx")`, for
-reads and for writes. Importing `databricks.labs.gbx.ds` registers nothing.
+reads and for writes. Importing `databricks.labs.gbx.ds` registers nothing. `databricks.labs.gbx.register(spark)` registers them.
 :::
 
 ## Read (catch-all)

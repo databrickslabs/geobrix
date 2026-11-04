@@ -13,7 +13,7 @@ from pathlib import Path
 
 EXIF_METADATA_MODE = """\
 # Register the lightweight DataSources (once per session).
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 telemetry = (

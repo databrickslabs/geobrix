@@ -5,7 +5,7 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
 
 READ_GPKG_GBX = """# Lightweight GeoPackage reader (pyogrio; no JAR)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df = spark.read.format("gpkg_gbx").load(SAMPLE)   # (attrs..., <geom>, <geom>_srid, <geom>_srid_proj)
 df.show()"""

@@ -7,7 +7,7 @@ title: NASA-NEX GDDP-CMIP6 Downloader
 
 `NasaNexDownloader` fetches **NASA-NEX GDDP-CMIP6** downscaled climate-projection granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the NetCDF-4 granules into a Unity Catalog Volume.
 
-NASA-NEX GDDP-CMIP6 provides daily downscaled climate variables (temperature, precipitation, humidity, radiation, …) on a **regular 0.25° global lat/lon grid**, one file per climate model, scenario, and year. Because these are true georeferenced grids — not swaths — they pair with the [NetCDF reader](../readers/netcdf)'s **raster mode**, and can be read by both the lightweight `netcdf_gbx` and the heavyweight `netcdf_gdal` readers.
+NASA-NEX GDDP-CMIP6 provides daily downscaled climate variables (temperature, precipitation, humidity, radiation, …) on a **regular 0.25° global lat/lon grid**, one file per climate model, scenario, and year. Because these are true georeferenced grids — not swaths — they pair with the [NetCDF reader](../readers/netcdf)'s **raster mode**, and can be read by the `netcdf_gbx` reader.
 
 :::note Prerequisites
 - GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)

@@ -1,7 +1,7 @@
 """netcdf_gbx (lightweight) Writer Examples — single source of truth.
 
 Code shown in docs/docs/writers/netcdf.mdx is imported from here. Pure-Python
-DataSource V2 writer; no JAR (registered via gbx.ds.register). It is the inverse
+DataSource V2 writer; no JAR (registered by databricks.labs.gbx.register). It is the inverse
 of the netcdf_gbx reader:
 
 - raster mode (default): each (source, tile) grid row -> one CF grid .nc.
@@ -19,7 +19,7 @@ round-trip read -> write -> re-read to assert real values.
 """
 
 REGISTER = """# Register the lightweight DataSources (once per session)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)"""
 
 WRITE_RASTER = """# Raster mode (default): each (source, tile) grid row -> one CF grid .nc.

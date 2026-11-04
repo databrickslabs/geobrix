@@ -49,14 +49,6 @@ register(spark)"""
 REGISTER_RASTERX_SCALA = """import com.databricks.labs.gbx.rasterx.{functions => rx}
 rx.register(spark)"""
 
-READ_GEOTIFF = """# Read GeoTIFF rasters (GDAL reader)
-rasters = spark.read.format("raster_gbx").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/sentinel2/nyc_sentinel2_red.tif")
-rasters.limit(3).show()"""
-
-READ_SHAPEFILE = """# Read shapefile (supports .zip)
-shapes = spark.read.format("shapefile_gbx").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/subway/nyc_subway.shp.zip")
-shapes.limit(3).show()"""
-
 READ_GEOJSON = """# Read GeoJSON
 geojson_df = spark.read.format("geojson_gbx").option("multi", "false").load(
     "/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/taxi-zones/nyc_taxi_zones.geojson"
@@ -135,22 +127,6 @@ SELECT * FROM my_shapes LIMIT 3;"""
 # EXAMPLE OUTPUT (for docs "Example output" block via CodeFromTest outputConstant)
 # Run snippets with sample data to capture; update when paths or output change.
 # =============================================================================
-
-READ_GEOTIFF_output = """
-+--------------------+----+-----+------+
-|source              |bbox|width|height|
-+--------------------+----+-----+------+
-|.../nyc/sentinel2/..|... |10980|10980 |
-+--------------------+----+-----+------+
-"""
-
-READ_SHAPEFILE_output = """
-+----+--------+-----+
-|path|geom_0  |...  |
-+----+--------+-----+
-|... |[BINARY]|...  |
-+----+--------+-----+
-"""
 
 READ_GEOJSON_output = """
 +----------+--------+-----+

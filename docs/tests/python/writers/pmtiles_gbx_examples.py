@@ -12,12 +12,12 @@ WRITE_PMTILES_SHARDED = """# Lightweight PMTiles writer - distributed spatial sh
 # Input is a tile pyramid: (z, x, y, bytes). shardZoom=6 emits one
 # tileset/{z}/{x}/{y}.pmtiles per populated parent + overview.pmtiles + a
 # STAC catalog.json.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df.write.format("pmtiles_gbx").mode("overwrite").option("shardZoom", "6").save(OUT_DIR)"""
 
 WRITE_PMTILES_SINGLE = """# Single-archive PMTiles: shardZoom=0 packs every tile into one .pmtiles file.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df.write.format("pmtiles_gbx").mode("overwrite").option("shardZoom", "0").save(OUT_FILE)"""
 

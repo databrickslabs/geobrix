@@ -128,10 +128,8 @@ names.
 | `netcdf_gbx` | [NetCDF](../readers/netcdf) | Set by the `mode` option: `"raster"` (default) gives one `(source, tile)` GeoTIFF tile per grid variable (and per slice with `fanout`); `"vector"` gives one point feature per observation or grid cell. |
 | `pmtiles_gbx` | [PMTiles](../readers/pmtiles) | Set by the `source` option, which is **required** here: `"archive"` gives one `(z, x, y, bytes)` row per tile stored in a `.pmtiles` file; `"raster"` renders `(z, x, y, bytes)` XYZ tiles from a GeoTIFF. Each file is rendered on its own, so a tile that covers two files appears once for each. |
 
-Two kinds of reader are not supported. `file_gbx` only lists files, and the `binaryFile` or Auto
-Loader listing that feeds `read_paths` already gives each file's path, size and modification time.
-The heavyweight readers (`gdal`, `gtiff_gdal`, `*_ogr`) run in the JVM, and ingestion is
-lightweight-tier only.
+`file_gbx` is not supported. It only lists files, and the `binaryFile` or Auto Loader listing that
+feeds `read_paths` already gives each file's path, size and modification time.
 
 ### Lineage columns
 
@@ -210,13 +208,7 @@ format its name says) depends on `on_error`:
 
 - **`on_error="fail"`**, the default of `read_paths`. The [Lakeflow connector](./lakeflow-connector)
   always reads this way. A read error fails the read, with an error that names the file. A few
-  readers handle some damage themselves, as the second column of the table below says. The
-  heavyweight vector readers (`ogr` and the named `*_ogr` readers) fail the same way: the read
-  names each file it cannot plan (unreadable, missing, or without the layer you asked for). In a
-  directory read they skip metadata files (`.shp.xml`, `.aux.xml`, `.txt`, `.md`). The named readers
-  (`shapefile_ogr`, `geojson_ogr`, ...), and `ogr` with a `driverName`, also skip files of another
-  vector format, with a warning in the driver log; a directory in which every file is skipped that
-  way fails the read.
+  readers handle some damage themselves, as the second column of the table below says.
 - **`on_error="skip"`** (`read_paths`) and **`on_error="quarantine"`** (the default of
   [`declare_ingest`](./auto-loader#unreadable-data)). Each file is read on its own, and so is each
   raster window or group of PMTiles tiles. What cannot be read is a **bad record**:

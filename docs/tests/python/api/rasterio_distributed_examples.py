@@ -12,10 +12,8 @@ page claims, not merely that pyrx runs.
 # ---------------------------------------------------------------------------
 
 REGISTER = """# Register the GeoBrix lightweight (pyrx) functions once per session
-import databricks.labs.gbx.pyrx.functions as rx
-import databricks.labs.gbx.ds.register as gbx_readers
-gbx_readers.register(spark)  # raster_gbx and other lightweight data sources
-rx.register(spark)            # gbx_rst_* SQL functions"""
+from databricks.labs.gbx import register
+register(spark)  # gbx_* SQL functions and the raster_gbx family of data sources"""
 
 WARP_RASTERIO = """# Single-node rasterio: reproject one file to EPSG:3857
 import rasterio

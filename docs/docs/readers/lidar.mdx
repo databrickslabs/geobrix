@@ -61,7 +61,7 @@ For big reads, request only the dimensions you need — e.g. `.option("dimension
 ## Register
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 
@@ -111,7 +111,7 @@ root
 ### Metadata mode
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 
 register(spark)
 
@@ -164,7 +164,7 @@ is the raster grid (W×H), not the point count. Same output for `max`/`min`/`mea
 ```python
 from pyspark.sql import functions as F
 from databricks.labs.gbx.pyrx import functions as prx
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 
 register(spark)
 prx.register(spark)

@@ -14,13 +14,13 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE_RASTER_PATH = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 WRITE_RASTER_GBX = """# Catch-all lightweight writer (output driver from tile.metadata; default GTiff)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df = spark.read.format("raster_gbx").load("{SAMPLE_RASTER_PATH}")
 df.write.format("raster_gbx").mode("overwrite").save(OUT_DIR)"""
 
 WRITE_GTIFF_GBX = """# Read then write GeoTIFF tiles (lightweight)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df = spark.read.format("raster_gbx").load("{SAMPLE_RASTER_PATH}")
 df.write.format("gtiff_gbx").mode("overwrite").save(OUT_DIR)"""

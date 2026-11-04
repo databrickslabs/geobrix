@@ -69,8 +69,8 @@ so `gpkg`, `GPKG` and `gpkg_gbx` are the same reader.
 | `netcdf` | [NetCDF](../readers/netcdf) | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
 | `pmtiles` | [PMTiles](../readers/pmtiles) | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`). Rendering tiles from GeoTIFFs is not a connector table; use [`read_paths`](./read-paths) or [`declare_ingest`](./auto-loader) with `source="raster"`. |
 
-Extensions match in any case (`.TIF` is `.tif`). The lightweight `file` reader (it lists files)
-and the heavyweight readers are not connector formats.
+Extensions match in any case (`.TIF` is `.tif`). The `file` reader (it lists files)
+is not a connector format.
 
 ## Set up
 

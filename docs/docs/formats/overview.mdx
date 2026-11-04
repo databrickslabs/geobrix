@@ -33,8 +33,8 @@ two are held to the same results; see [Choosing an Execution Tier](../api/execut
 
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
-| **GeoTIFF / COG** | Imagery, elevation models, any single raster. COG adds internal tiling and overviews, so a reader fetches only the pieces it needs. | Both | [`gtiff_gbx`](../readers/geotiff) and [`cog_gbx`](../readers/cog); heavyweight `gtiff_gdal` | [`gtiff_gbx`](../writers/geotiff) and [`cog_gbx`](../writers/cog) | [RasterX `rst_*`](../api/raster-functions) |
-| **JPEG 2000** | High-compression imagery. | Both | the [generic raster reader](../readers/raster): `raster_gbx` or `gdal` | the [generic raster writer](../writers/raster) | [RasterX `rst_*`](../api/raster-functions) |
+| **GeoTIFF / COG** | Imagery, elevation models, any single raster. COG adds internal tiling and overviews, so a reader fetches only the pieces it needs. | Both | [`gtiff_gbx`](../readers/geotiff) and [`cog_gbx`](../readers/cog) | [`gtiff_gbx`](../writers/geotiff) and [`cog_gbx`](../writers/cog) | [RasterX `rst_*`](../api/raster-functions) |
+| **JPEG 2000** | High-compression imagery. | Both | the [generic raster reader](../readers/raster): `raster_gbx` | the [generic raster writer](../writers/raster) | [RasterX `rst_*`](../api/raster-functions) |
 
 ## Array formats
 
@@ -44,7 +44,7 @@ longitude together.
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
 | **[Zarr](./zarr)** | Large cubes that many jobs read slices of in parallel and write back to, with versions, tags and concurrent writers. | Lightweight | [`gbx_zarr_read`](../readers/zarr), [`gbx_zarr_sample`](../readers/zarr#sampling-at-points), and the [`zarr_gbx`](../readers/zarr#the-zarr_gbx-datasource) DataSource for plain stores | [`gbx_zarr_write`](../writers/zarr) | `rst_*` on Zarr tiles; the [Zarr functions](../api/zarr-functions): `gbx_zarr_register`, `gbx_zarr_sync`, `gbx_zarr_optimize`, `gbx_zarr_vacuum`, `gbx_zarr_tag`, `gbx_zarr_untag`, `gbx_zarr_history`, `gbx_zarr_restore`, `gbx_zarr_export` |
-| **NetCDF / HDF5** | Self-describing scientific files from data providers. | Both | [`netcdf_gbx`](../readers/netcdf) (lightweight), `netcdf_gdal` and `netcdf_ogr` (heavyweight); HDF5 through the [generic raster reader](../readers/raster) | [`netcdf_gbx`](../writers/netcdf) | [RasterX `rst_*`](../api/raster-functions) |
+| **NetCDF / HDF5** | Self-describing scientific files from data providers. | Both | [`netcdf_gbx`](../readers/netcdf); HDF5 through the [generic raster reader](../readers/raster) | [`netcdf_gbx`](../writers/netcdf) | [RasterX `rst_*`](../api/raster-functions) |
 | **GRIB2** | Weather model output, such as NOAA HRRR or ECMWF. | Both | the [generic raster reader](../readers/raster) | | [RasterX `rst_*`](../api/raster-functions) |
 
 ## Vector formats
@@ -52,10 +52,10 @@ longitude together.
 | Format | Good for | Tiers | Read | Write | Functions |
 |---|---|---|---|---|---|
 | **Delta or Parquet with `GEOMETRY` / `GEOGRAPHY`** | Analytics at scale. The natural home for vector data in Databricks. | Built in | Spark, `spark.read.table` | Spark | Databricks [`ST_*` and H3 functions](../databricks-spatial); GeoBrix adds [`gbx_st_*`](../api/vectorx-functions) |
-| **GeoPackage** | Exchange of one or more layers in a single file. | Both | [`gpkg_gbx`](../readers/geopackage); heavyweight `gpkg_ogr` | [`gpkg_gbx`](../writers/geopackage) | [`gbx_st_*`](../api/vectorx-functions) |
-| **Shapefile** | Exchange with older tools. | Both | [`shapefile_gbx`](../readers/shapefile); heavyweight `shapefile_ogr` | [`shapefile_gbx`](../writers/shapefile) | [`gbx_st_*`](../api/vectorx-functions) |
-| **File Geodatabase** | Esri data. | Both | [`file_gdb_gbx`](../readers/filegdb); heavyweight `file_gdb_ogr` | [`file_gdb_gbx`](../writers/filegdb) | [`gbx_st_*`](../api/vectorx-functions) |
-| **GeoJSON / GeoJSONL** | Web exchange. GeoJSONL (one feature per line) shards and streams. | Both | [`geojson_gbx`](../readers/geojson) and [`geojsonl_gbx`](../writers/geojsonl); heavyweight `geojson_ogr` | [`geojson_gbx`](../writers/geojson); [`geojsonl_gbx`](../writers/geojsonl) | [`gbx_st_*`](../api/vectorx-functions) |
+| **GeoPackage** | Exchange of one or more layers in a single file. | Both | [`gpkg_gbx`](../readers/geopackage) | [`gpkg_gbx`](../writers/geopackage) | [`gbx_st_*`](../api/vectorx-functions) |
+| **Shapefile** | Exchange with older tools. | Both | [`shapefile_gbx`](../readers/shapefile) | [`shapefile_gbx`](../writers/shapefile) | [`gbx_st_*`](../api/vectorx-functions) |
+| **File Geodatabase** | Esri data. | Both | [`file_gdb_gbx`](../readers/filegdb) | [`file_gdb_gbx`](../writers/filegdb) | [`gbx_st_*`](../api/vectorx-functions) |
+| **GeoJSON / GeoJSONL** | Web exchange. GeoJSONL (one feature per line) shards and streams. | Both | [`geojson_gbx`](../readers/geojson) and [`geojsonl_gbx`](../writers/geojsonl) | [`geojson_gbx`](../writers/geojson); [`geojsonl_gbx`](../writers/geojsonl) | [`gbx_st_*`](../api/vectorx-functions) |
 
 ## Tile formats
 

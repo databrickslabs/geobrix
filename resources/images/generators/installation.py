@@ -341,7 +341,7 @@ def body_dcs():
         (LIGHT_TIER, "Lightweight", "pyrx · pyvx · pygx and the *_gbx readers",
          "No %pip step: the wheel is in the image"),
         (HEAVY_TIER, "Heavyweight", "rasterx · vectorx · gridx (gbx_* on the JVM)",
-         "gdal and *_ogr readers read /Volumes directly"),
+         "Reads /Volumes through the *_gbx readers"),
     ]
     th_h, th_gap, ty = 124, 14, top
     for th, name, l1, l2 in tiers:

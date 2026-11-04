@@ -5,39 +5,34 @@ title: Readers & Writers
 
 # Readers & Writers
 
-GeoBrix provides Spark DataSource V2 **readers** and **writers** for geospatial file formats,
-across both execution tiers — lightweight (`pyrx`, pure-Python, no JAR) and heavyweight
-(`rasterx`, GDAL/OGR-backed). Both tiers scale by partitioning work across the cluster rather
-than reading or writing sequentially on a single node.
-
-Each lightweight `*_gbx` format pairs with a heavyweight counterpart (`*_ogr` / `gdal` /
-`gtiff_gdal`), and the two tiers are held to **row-count / byte parity** as a hard gate in
-benchmarking.
+GeoBrix provides Spark DataSource V2 **readers** and **writers** for geospatial file formats.
+They are pure Python and need no JAR, so one set serves every compute. They scale by
+partitioning work across the cluster rather than reading or writing on a single node.
 
 ## Readers
 
-Load geospatial files into a distributed DataFrame. The lightweight raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) return **[virtual tiles](./api/virtual-tiles)** by default — bytes-free `(path, window)` references; pass `.option("virtualTiles", "false")` to get materialized bytes instead. See the **[Readers Overview](./readers/overview)**
-for the full list, tier differences, output schemas, and options.
+Load geospatial files into a distributed DataFrame. The raster readers (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) return **[virtual tiles](./api/virtual-tiles)** by default — bytes-free `(path, window)` references; pass `.option("virtualTiles", "false")` to get materialized bytes instead. See the **[Readers Overview](./readers/overview)**
+for the full list, output schemas, and options.
 
 _Parenthetical `(x.y.z)` is the GeoBrix release each reader/writer first shipped (its "since" version)._
 
-| Format | Lightweight | Heavyweight |
-|---|---|---|
-| [Raster (generic)](./readers/raster) | `raster_gbx` (0.4.0) | `gdal` (0.2.0) |
-| [GeoTIFF](./readers/geotiff) | `gtiff_gbx` (0.4.0) | `gtiff_gdal` (0.2.0) |
-| [COG](./readers/cog) | `cog_gbx` (0.5.0) | — (light-only) |
-| [NetCDF](./readers/netcdf) | `netcdf_gbx` (0.4.1) | `netcdf_gdal` / `netcdf_ogr` (0.4.3) |
-| [Zarr](./readers/zarr) | `zarr_gbx` (0.6.0) | — (light-only) |
-| [PMTiles](./readers/pmtiles) | `pmtiles_gbx` (0.4.0) | — (light-only) |
-| [File lister](./readers/file) | `file_gbx` (0.5.0) | — (light-only) |
-| [LiDAR (LAS/LAZ)](./readers/lidar) | `lidar_gbx` (0.5.2) | — (light-only) |
-| [EXIF/GPS (images)](./readers/exif) | `exif_gbx` (0.5.2) | — (light-only) |
-| [Vector (generic)](./readers/vector) | `vector_gbx` (0.4.0) | `ogr` (0.2.0) |
-| [Shapefile](./readers/shapefile) | `shapefile_gbx` (0.4.0) | `shapefile_ogr` (0.2.0) |
-| [GeoJSON](./readers/geojson) | `geojson_gbx` (0.4.0) | `geojson_ogr` (0.2.0) |
-| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` (0.4.0) | — (light-only reader) |
-| [GeoPackage](./readers/geopackage) | `gpkg_gbx` (0.4.0) | `gpkg_ogr` (0.2.0) |
-| [File Geodatabase](./readers/filegdb) | `file_gdb_gbx` (0.4.0) | `file_gdb_ogr` (0.2.0) |
+| Format | Reader |
+|---|---|
+| [Raster (generic)](./readers/raster) | `raster_gbx` (0.4.0) |
+| [GeoTIFF](./readers/geotiff) | `gtiff_gbx` (0.4.0) |
+| [COG](./readers/cog) | `cog_gbx` (0.5.0) |
+| [NetCDF](./readers/netcdf) | `netcdf_gbx` (0.4.1) |
+| [Zarr](./readers/zarr) | `zarr_gbx` (0.6.0) |
+| [PMTiles](./readers/pmtiles) | `pmtiles_gbx` (0.4.0) |
+| [File lister](./readers/file) | `file_gbx` (0.5.0) |
+| [LiDAR (LAS/LAZ)](./readers/lidar) | `lidar_gbx` (0.5.2) |
+| [EXIF/GPS (images)](./readers/exif) | `exif_gbx` (0.5.2) |
+| [Vector (generic)](./readers/vector) | `vector_gbx` (0.4.0) |
+| [Shapefile](./readers/shapefile) | `shapefile_gbx` (0.4.0) |
+| [GeoJSON](./readers/geojson) | `geojson_gbx` (0.4.0) |
+| [GeoJSONL](./writers/geojsonl) | `geojsonl_gbx` (0.4.0) |
+| [GeoPackage](./readers/geopackage) | `gpkg_gbx` (0.4.0) |
+| [File Geodatabase](./readers/filegdb) | `file_gdb_gbx` (0.4.0) |
 
 ## Writers
 
@@ -60,23 +55,21 @@ for the column contract, single-file vs sharded trade-offs, and per-format detai
 | [GeoPackage](./writers/geopackage) | `gpkg_gbx` (0.4.0) |
 | [File Geodatabase](./writers/filegdb) | `file_gdb_gbx` (0.4.0) |
 
-## Registering the lightweight tier
+## Registering the readers and writers
 
-Heavyweight readers are auto-discovered from the JAR. The lightweight Python
-DataSources are **not** auto-registered — call `register(spark)` once per session before using
-any `*_gbx` format:
+The Python DataSources are **not** auto-registered. Call `register(spark)` once per session
+before using any `*_gbx` format. The same call registers the `gbx_*` functions:
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 
 ## Shared file-access base {#file-gbx}
 
-All lightweight (`*_gbx`) readers and writers share a common **file-access base** — the
+All `*_gbx` readers and writers share a common **file-access base** — the
 `file_gbx` module — that centralises FILE and FUSE routing, directory enumeration, and
-write-mode selection. This is a light-tier concern; the heavyweight (JAR-backed) readers
-and writers use their own GDAL/OGR access paths.
+write-mode selection.
 
 ### Capability tiers
 

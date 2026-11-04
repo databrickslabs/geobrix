@@ -105,7 +105,7 @@ The same open-amortization benefit applies to vector: `vector_file_read(..., sou
 Ingest once, then read from the Delta table for all downstream jobs:
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 # Step 1 — read as virtual tiles (no bytes loaded yet)

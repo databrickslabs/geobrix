@@ -54,7 +54,7 @@ def test_quickstart_display_constants_exist():
         "REGISTER_RASTERX", "REGISTER_GRIDX", "REGISTER_VECTORX", "REGISTER_RASTERX_SCALA",
         "REGISTER_RASTERX_LIGHT", "REGISTER_VECTORX_LIGHT", "REGISTER_QUADBIN_LIGHT",
         "REGISTER_LIGHT_READERS",
-        "READ_GEOTIFF", "READ_SHAPEFILE", "READ_GEOJSON",
+        "READ_GEOJSON",
         "READ_GEOTIFF_LIGHT", "READ_SHAPEFILE_LIGHT", "USE_QUADBIN",
         "USE_RASTERX", "USE_BNG", "USE_VECTORX",
         "SQL_LIST_FUNCTIONS", "SQL_DESCRIBE", "SQL_READ_AND_USE",
@@ -67,7 +67,7 @@ def test_quickstart_display_constants_exist():
 def test_quickstart_output_constants_exist():
     """Output constants (for Example output blocks) must exist so docs can show results."""
     for name in (
-        "READ_GEOTIFF_output", "READ_SHAPEFILE_output", "READ_GEOJSON_output",
+        "READ_GEOJSON_output",
         "READ_GEOTIFF_LIGHT_output", "READ_SHAPEFILE_LIGHT_output", "USE_QUADBIN_output",
         "USE_RASTERX_output", "USE_BNG_output", "USE_VECTORX_output",
         "SQL_LIST_FUNCTIONS_output", "SQL_DESCRIBE_output", "SQL_READ_AND_USE_output",
@@ -98,20 +98,6 @@ def _exec_snippet(spark, snippet_str, description):
 def test_exec_register_rasterx_snippet(spark):
     """Quick-start snippet REGISTER_RASTERX runs without error (executes with real Spark)."""
     _exec_snippet(spark, examples.REGISTER_RASTERX, "REGISTER_RASTERX")
-
-
-def test_exec_read_geotiff_snippet(spark):
-    """Quick-start snippet READ_GEOTIFF runs with sample data path (executes and .show())."""
-    if not os.path.isfile(SAMPLE_NYC_RASTER):
-        pytest.skip("Minimal bundle has no nyc/sentinel2 raster; run gbx:data:generate-minimal-bundle or use full bundle")
-    _exec_snippet(spark, examples.READ_GEOTIFF, "READ_GEOTIFF")
-
-
-def test_exec_read_shapefile_snippet(spark):
-    """Quick-start snippet READ_SHAPEFILE runs with sample data path."""
-    if not os.path.isfile(SAMPLE_NYC_SUBWAY_SHP):
-        pytest.skip("Minimal bundle has no nyc/subway .shp.zip; run gbx:data:generate-minimal-bundle or use full bundle")
-    _exec_snippet(spark, examples.READ_SHAPEFILE, "READ_SHAPEFILE")
 
 
 def test_exec_read_geojson_snippet(spark):

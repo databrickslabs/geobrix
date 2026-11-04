@@ -292,6 +292,65 @@ def reader_references(text):
     return sorted(found)
 
 
+# --- retired reader names in prose and tables ------------------------------------
+
+# The Scala readers are gone. ``reader_references`` finds a name where a reader is *chosen*; these patterns find
+# one wherever it is *mentioned* (a table cell, a sentence, a code comment). ``gdal`` and ``ogr`` alone are the
+# libraries, so only an inline code span of exactly that name, or a name with the ``_gdal`` / ``_ogr`` suffix,
+# counts.
+RETIRED_NAME_PATTERNS = (
+    ("retired reader name", re.compile(r"\b[A-Za-z0-9]+(?:_[A-Za-z0-9]+)*_(?:gdal|ogr)\b|`\*_(?:gdal|ogr)`")),
+    ("retired reader name", re.compile(r"`(?:gdal|ogr)`")),
+    ("heavyweight reader", re.compile(r"\b(?:heavyweight|heavy)\s+(?:raster\s+|vector\s+)?readers?\b", re.IGNORECASE)),
+)
+
+# Docs pages that may name a retired reader. The release notes record the rename; ``api/benchmarking.mdx`` still
+# describes the retired benchmark forms until its rewrite, and ``test_deferred_pages_still_need_a_rewrite`` fails
+# when a listed page is already clean.
+RETIRED_NAME_PAGES = ("docs/docs/release-notes",)
+DEFERRED_PAGES = frozenset({"docs/docs/api/benchmarking.mdx"})
+
+
+def retired_name_mentions(text):
+    """``(line, kind, matched text)`` for each retired reader name ``text`` mentions."""
+    found = set()
+    for kind, pattern in RETIRED_NAME_PATTERNS:
+        for match in pattern.finditer(text):
+            found.add((text.count("\n", 0, match.start()) + 1, kind, match.group(0)))
+    return sorted(found)
+
+
+def docs_pages():
+    """Every page under ``docs/docs`` (markdown and MDX), as repo-relative paths."""
+    root = REPO_ROOT / "docs" / "docs"
+    return sorted(
+        p.relative_to(REPO_ROOT).as_posix()
+        for p in root.rglob("*")
+        if p.suffix in (".md", ".mdx") and not (set(p.parts) & _SKIP_DIRS)
+    )
+
+
+def retired_name_scan():
+    """``(file, line, kind, text)`` for every retired reader name in a docs page, leaving out
+    the pages that record the rename and the ``DEFERRED_PAGES``."""
+    return [e for e in _retired_scan() if e[0] not in DEFERRED_PAGES]
+
+
+def deferred_page_scan():
+    """The retired names still on the ``DEFERRED_PAGES``."""
+    return [e for e in _retired_scan() if e[0] in DEFERRED_PAGES]
+
+
+def _retired_scan():
+    found = []
+    for rel in docs_pages():
+        if rel.startswith(RETIRED_NAME_PAGES):
+            continue
+        text = (REPO_ROOT / rel).read_text(errors="replace")
+        found.extend((rel, line, kind, hit) for line, kind, hit in retired_name_mentions(text))
+    return found
+
+
 def _chunks(path):
     """``(place, text)`` units to scan. A notebook is scanned per cell, since JSON line
     numbers mean nothing to its author; any other file is one unit."""

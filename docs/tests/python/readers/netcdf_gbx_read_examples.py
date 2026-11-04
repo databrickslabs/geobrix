@@ -1,13 +1,13 @@
 """netcdf_gbx (lightweight) Reader Examples — single source of truth.
 
 Code shown in docs/docs/readers/netcdf.mdx is imported from here. Pure-Python
-DataSource V2 reader; no JAR (registered via gbx.ds.register). Two modes:
+DataSource V2 reader; no JAR (registered by databricks.labs.gbx.register). Two modes:
 raster (CF regular grid -> the shared (source, tile) schema) and vector
 (DSG points, or any 2-D field incl. swath -> one point per cell).
 """
 
 REGISTER = """# Register the lightweight DataSources (once per session)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)"""
 
 READ_RASTER = """# Raster mode (default): a CF regular lat/lon grid -> (source, tile).

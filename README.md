@@ -70,11 +70,10 @@ Stage the env wheel for your runtime (a [Releases](https://github.com/databricks
 > **Use the quoted `geobrix[<extras>] @ file://…` form** (PEP 508, one argument). Don't put an extra on the path (`'/Volumes/…/…whl[vizx]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[vizx]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
 
 ```python
-from databricks.labs.gbx.ds.register import register   # *_gbx readers/writers
+from databricks.labs.gbx import register   # *_gbx readers/writers
 from databricks.labs.gbx.pyrx import functions as rx   # gbx_rst_* functions
 
-register(spark)
-rx.register(spark)   # optional — only to call the gbx_rst_* SQL functions
+register(spark)   # gbx_* functions plus the *_gbx readers and writers
 
 # Read a GeoTIFF and compute with RasterX
 rasters = spark.read.format("gtiff_gbx").load("/Volumes/<catalog>/<schema>/<volume>/*.tif")

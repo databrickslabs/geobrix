@@ -7,7 +7,7 @@ exercise the mosaic lifecycle end to end against real sample data:
   mosaic.vrt  ->  raster_gbx reader  ->  one virtual tile row per member
   member tiles  ->  mint_vrt  ->  windowed rasterio read
 
-Light tier (pure Python, no JAR): readers register via ds.register.register,
+Light tier (pure Python, no JAR): readers register via databricks.labs.gbx.register,
 never rasterx.register.
 """
 
@@ -22,7 +22,7 @@ SAMPLE_RASTER_SINGLE = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 # Display constants (payload rendered in docs via raw-loader)
 # ---------------------------------------------------------------------------
 
-VRT_PREPARE = r"""from databricks.labs.gbx.ds.register import register
+VRT_PREPARE = r"""from databricks.labs.gbx import register
 register(spark)
 
 # file_gbx gives one path-reference row per source file
@@ -37,7 +37,7 @@ sources = spark.read.format("file_gbx").load("/Volumes/catalog/schema/volume/raw
     .save("/Volumes/catalog/schema/volume/mosaic/")
 )"""
 
-VRT_READ_EXPAND = r"""from databricks.labs.gbx.ds.register import register
+VRT_READ_EXPAND = r"""from databricks.labs.gbx import register
 from databricks.labs.gbx.rasterx.functions import rst_avg
 from pyspark.sql.functions import col
 
@@ -52,7 +52,7 @@ result = df.select(
     rst_avg(col("tile")).alias("avg"),
 )"""
 
-VRT_QUADBIN = r"""from databricks.labs.gbx.ds.register import register
+VRT_QUADBIN = r"""from databricks.labs.gbx import register
 from pyspark.sql.functions import col
 
 register(spark)
@@ -81,7 +81,7 @@ result = df.select(
     col("tile.metadata")["gridSystem"].alias("gridSystem"),
 )"""
 
-VRT_H3 = r"""from databricks.labs.gbx.ds.register import register
+VRT_H3 = r"""from databricks.labs.gbx import register
 from pyspark.sql.functions import col
 
 register(spark)
@@ -115,7 +115,7 @@ raster_cells = df.select(
 analytics = spark.table("catalog.schema.h3_metrics")  # h3-indexed DataFrame
 result = raster_cells.join(analytics, on="cellid", how="inner")"""
 
-VRT_BNG = r"""from databricks.labs.gbx.ds.register import register
+VRT_BNG = r"""from databricks.labs.gbx import register
 from pyspark.sql.functions import col
 
 register(spark)

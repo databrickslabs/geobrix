@@ -46,8 +46,7 @@ The one-line *import* swap is symmetric, but the *install* is not. The **lightwe
 
 Both tiers implement the **full raster set** — every `rst_*` function, including the BNG and quadbin
 raster-grid functions — so the tier choice is about *environment*, not *capability*. The remaining
-heavyweight-only surfaces are narrow: the vector **OGR readers** (`shapefile_ogr`, `geojson_ogr`, …),
-and the `conforming` triangulation mode. For the per-function
+heavyweight-only surface is narrow: the `conforming` triangulation mode. For the per-function
 breakdown see the [Raster Functions](./raster-functions) availability section; for the tier tile
 model (virtual vs. materialized), see [Virtual Tiles](./virtual-tiles).
 
@@ -64,14 +63,12 @@ rx.register(spark)                                   # all (default)
 
 Names are case-insensitive and accept either the SQL name (`gbx_rst_slope`) or the short form (`rst_slope`). An unrecognized name raises `ValueError` (typo guard). `only=[]` registers nothing.
 
-**Readers and writers** register through a separate entry point and take `only=` too — selected by **format name** (with or without the `_gbx` suffix):
+**Readers and writers** register with the functions. One call installs both:
 
 ```python
-from databricks.labs.gbx.ds import register as ds_register
+from databricks.labs.gbx import register
 
-ds_register.register(spark, only=["raster_gbx", "gtiff_gbx"])  # just these formats
-ds_register.register(spark, only=["shapefile"])               # 'shapefile' -> 'shapefile_gbx'
-ds_register.register(spark)                                    # all readers/writers (default)
+register(spark)   # every gbx_* function and every *_gbx reader and writer
 ```
 
 **Mixing tiers per function.** Because both tiers share the `gbx_*` names (last registration wins), you can register the heavyweight set and then override individual functions with the lightweight implementation:
@@ -101,20 +98,19 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 | Driver coverage | Full custom GDAL build | rasterio's bundled build (narrower) |
 | SQL default arguments | Supported | Pass all arguments explicitly |
 | Function coverage | Full raster set | Full raster set — every `rst_*` function, including the BNG/quadbin raster-grid functions |
-| Readers | `gtiff_gdal`, `gdal`, OGR readers | `raster_gbx` / `gtiff_gbx` native Python DataSource V2 readers (no JAR); vector OGR readers still heavy-only |
+| Readers | None (the Python readers serve every compute) | `raster_gbx`, `gtiff_gbx`, `vector_gbx` and the other `*_gbx` readers (no JAR) |
 | Writers | None (the Python writers serve every compute) | `raster_gbx` / `gtiff_gbx` and the other `*_gbx` writers (no JAR) |
 
 ## How to choose
 
 **Start with Lightweight (pyrx).** It installs as a single wheel (`%pip` or cluster library) with no GDAL and no JAR, runs everywhere — serverless, standard/shared clusters, ARM, and Lakeflow declarative pipelines — and covers the full raster set: every `rst_*` function, including the BNG and quadbin raster-grid functions. For most raster work it is the recommended default.
 
-Choose **Heavyweight (rasterx)** in three cases:
+Choose **Heavyweight (rasterx)** in two cases:
 
 1. **Your environment is already JVM/GDAL-based.** The wheel and JAR, or the DCS image, are in place. Or you want JVM-native execution on a dedicated cluster.
-2. **You need vector OGR readers or format-specific GDAL options** — the OGR vector readers (`shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, …) and the generic `gdal` reader with exotic driver options are heavy-only. For raster I/O, the lightweight tier ships native `raster_gbx` / `gtiff_gbx` readers (no JAR; see [Lightweight Raster Readers](../readers/raster)).
-3. **You need the heavy-only `conforming` triangulation mode** — GridX is now **fully lightweight**: the **quadbin** (`gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom-grid** (`gbx_custom_*`) functions all run in both tiers via the lightweight `pygx` package. The full **VectorX** function set is now available in the lightweight `pyvx` tier — vector-tile encoding (`gbx_st_asmvt`, `gbx_st_asmvt_pyramid`), TIN surface modeling (`gbx_st_triangulate`, `gbx_st_interpolateelevation*`), and legacy-geometry migration (`gbx_st_legacyaswkb`); only the Steiner-point `conforming` triangulation mode is heavyweight-only (the default `constrained` mode runs in both tiers). See [GridX](./gridx-functions) and [VectorX Function Reference](./vectorx-functions).
+2. **You need the heavy-only `conforming` triangulation mode** — GridX is now **fully lightweight**: the **quadbin** (`gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom-grid** (`gbx_custom_*`) functions all run in both tiers via the lightweight `pygx` package. The full **VectorX** function set is now available in the lightweight `pyvx` tier — vector-tile encoding (`gbx_st_asmvt`, `gbx_st_asmvt_pyramid`), TIN surface modeling (`gbx_st_triangulate`, `gbx_st_interpolateelevation*`), and legacy-geometry migration (`gbx_st_legacyaswkb`); only the Steiner-point `conforming` triangulation mode is heavyweight-only (the default `constrained` mode runs in both tiers). See [GridX](./gridx-functions) and [VectorX Function Reference](./vectorx-functions).
 
-The vector OGR readers and the `conforming` triangulation mode are the remaining heavyweight-only surfaces. These are now available in both tiers: raster I/O, the full VectorX function set, all of GridX (quadbin, BNG, and custom grids), and the `gbx_pmtiles_agg` aggregate. Heavyweight's unique surface is expected to keep narrowing.
+The `conforming` triangulation mode is the remaining heavyweight-only surface. These are available in both tiers: all readers and writers, the full VectorX function set, all of GridX (quadbin, BNG, and custom grids), and the `gbx_pmtiles_agg` aggregate. Heavyweight's unique surface is expected to keep narrowing.
 
 ## Performance
 

@@ -177,7 +177,7 @@ The Python DataSources are **not** auto-registered — call `register(spark)` on
 session before using any `*_gbx` format:
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 ```
 

@@ -1,7 +1,7 @@
 """pmtiles_gbx (lightweight) Reader Examples — single source of truth.
 
 Code shown in docs/docs/readers/pmtiles.mdx is imported from here. Pure-Python
-DataSource V2 reader; no JAR (registered via gbx.ds.register). Two sources,
+DataSource V2 reader; no JAR (registered by databricks.labs.gbx.register). Two sources,
 chosen by the `source` option:
 
 - source="raster" — build an XYZ tile mosaic pyramid from a directory of COGs /
@@ -14,7 +14,7 @@ write.
 """
 
 REGISTER = """# Register the lightweight DataSources (once per session)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)"""
 
 READ_RASTER = """# source="raster": tile a directory of COGs into an XYZ pyramid.

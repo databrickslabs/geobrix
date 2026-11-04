@@ -19,7 +19,7 @@ from path_config import SAMPLE_DATA_BASE
 # ---------------------------------------------------------------------------
 
 WRITE_VECTOR_GBX = """# Generic lightweight vector writer (pyogrio; no JAR)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 src = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
 df = spark.read.format("geojson_gbx").load(src)
@@ -31,7 +31,7 @@ back = spark.read.format("vector_gbx").option("driverName", "GeoJSON").load(out)
 assert back.count() == df.count()"""
 
 WRITE_SHAPEFILE_GBX = """# Lightweight Shapefile writer (pyogrio; OGR driver preset to "ESRI Shapefile")
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 src = f"{SAMPLE_DATA_BASE}/nyc/subway/nyc_subway.shp.zip"
 df = spark.read.format("shapefile_gbx").load(src)
@@ -41,7 +41,7 @@ back = spark.read.format("shapefile_gbx").load(out)
 assert back.count() == df.count()"""
 
 WRITE_GEOJSON_GBX = """# Lightweight GeoJSON writer (pyogrio; OGR driver preset to "GeoJSON")
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 src = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
 df = spark.read.format("geojson_gbx").load(src)
@@ -51,7 +51,7 @@ back = spark.read.format("geojson_gbx").load(out)
 assert back.count() == df.count()"""
 
 WRITE_GPKG_GBX = """# Lightweight GeoPackage writer (pyogrio; OGR driver preset to "GPKG")
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 src = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
 df = spark.read.format("gpkg_gbx").load(src)
@@ -61,7 +61,7 @@ back = spark.read.format("gpkg_gbx").load(out)
 assert back.count() == df.count()"""
 
 WRITE_FILE_GDB_GBX = """# Lightweight GeoDatabase writer (pyogrio; OGR driver preset to "OpenFileGDB")
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 src = f"{SAMPLE_DATA_BASE}/nyc/filegdb/NYC_Sample.gdb.zip"
 df = spark.read.format("file_gdb_gbx").load(src)

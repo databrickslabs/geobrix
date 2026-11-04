@@ -122,7 +122,7 @@ and `.save("roads.gdb.zip")` all land at `roads.gdb.zip`:
    .mode("overwrite").save("/Volumes/cat/sch/vol/parcels"))   # -> parcels.gdb.zip
 ```
 
-The [`file_gdb_gbx` / `file_gdb_ogr` reader](../readers/filegdb) opens a `.gdb.zip` directly
+The [`file_gdb_gbx` reader](../readers/filegdb) opens a `.gdb.zip` directly
 (via GDAL's `/vsizip/`), so the archive round-trips with no extra step.
 
 ## How it scales

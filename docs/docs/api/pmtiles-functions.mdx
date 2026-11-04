@@ -45,7 +45,7 @@ import com.databricks.labs.gbx.pmtiles.functions
 functions.register(spark)
 ```
 
-The `pmtiles_gbx` writer is a Python DataSource: install it with `databricks.labs.gbx.ds.register.register(spark)`.
+The `pmtiles_gbx` writer is a Python DataSource: install it with `databricks.labs.gbx.register(spark)`.
 
 On the lightweight tier, `gbx_pmtiles_agg` is installed automatically by `pyrx.register(spark)` **and** `pyvx.register(spark)` (PMTiles is format-agnostic, so it belongs to both). To install only the aggregate — without the rest of a tier — call the standalone helper:
 
@@ -85,7 +85,7 @@ FROM tiles_z2;
 ### DataSource: write a pyramid with `pmtiles_gbx`
 
 ```python
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 (

@@ -175,10 +175,10 @@ from databricks.labs.gbx.pyrx import functions as rx  # RasterX (rst_*)
 # optional — only needed to call the SQL functions:
 rx.register(spark)
 
-# Light DataSource readers (raster_gbx, gtiff_gbx, etc.) are Python DataSource
-# V2 and aren't auto-discovered — register them explicitly when you need them:
-# from databricks.labs.gbx.ds import register
-# register.register(spark)
+# Lightweight readers and writers (raster_gbx, gtiff_gbx, etc.) are Python Data Source
+# V2 sources and aren't auto-discovered. This call registers them with the functions:
+# from databricks.labs.gbx import register
+# register(spark)
 ```
 
 ### Verify the lightweight tier

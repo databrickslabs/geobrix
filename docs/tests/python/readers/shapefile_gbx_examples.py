@@ -5,7 +5,7 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE = f"{SAMPLE_DATA_BASE}/nyc/subway/nyc_subway.shp.zip"
 
 READ_SHAPEFILE_GBX = """# Lightweight Shapefile reader (pyogrio; no JAR)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df = spark.read.format("shapefile_gbx").load(SAMPLE)   # (attrs..., geom_0, geom_0_srid, geom_0_srid_proj)
 df.show()"""

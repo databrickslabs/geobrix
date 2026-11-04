@@ -81,7 +81,7 @@ RasterX exposes 129 SQL functions (registered as `gbx_rst_*`; available in Pytho
 
 ## Tile payload
 
-Every RasterX (heavyweight) function returns a **materialized** tile whose `raster` field is a **self-contained, in-memory raster** (GTiff by default) — safe to serialize between Spark stages and executors, persist to Delta, hand off to `rasterio` / `gdal`, or write back out via the `gdal` writer. The bytes are never an XML reference to a per-executor `/vsimem/` tempfile or to a path that only exists on the producing node.
+Every RasterX (heavyweight) function returns a **materialized** tile whose `raster` field is a **self-contained, in-memory raster** (GTiff by default) — safe to serialize between Spark stages and executors, persist to Delta, hand off to `rasterio` or GDAL, or write back out via the `raster_gbx` writer. The bytes are never an XML reference to a per-executor `/vsimem/` tempfile or to a path that only exists on the producing node.
 
 See **[Tile structure](./tile-structure)** for the full tile-struct schema (the shared `cellid` / `raster` / `path` / `window` / … struct), and **[Virtual Tiles](./virtual-tiles)** for the bytes-free lightweight-tier variant and how tiles move between materialized and virtual.
 
@@ -97,14 +97,14 @@ With the geobrix library already installed ([Installation](../installation)), pi
 
 The examples on this page read from **four temp views**, each a raster loaded as a `tile` column. Point the four path placeholders at your own rasters:
 
-| Placeholder | Sample file | Reader (light&nbsp;/&nbsp;heavy) — Temp view | Backs |
+| Placeholder | Sample file | Reader — Temp view | Backs |
 |---|---|---|---|
-| `GTIFF_SAMPLE_DIR` | single-band GeoTIFF | `gtiff_gbx` / `gtiff_gdal` — `rasters` | **Default** — most accessor, tile-ops, transform, and generator examples |
-| `GTIFF_MULTI_DIR` | multi-band GeoTIFF (red/NIR/green) | `gtiff_gbx` / `gtiff_gdal` — `multiband_rasters` | band-math and spectral-index examples, `rst_numbands`, `rst_bandmetadata` |
-| `DTM_DIR` | digital elevation model | `gtiff_gbx` / `gtiff_gdal` — `dem_rasters` | terrain examples (`rst_slope`, `rst_aspect`, …) |
-| `NETCDF_DIR` | NetCDF with subdatasets | `netcdf_gbx` / `netcdf_gdal` — `netcdf_rasters` | `rst_subdatasets`, `rst_getsubdataset` |
+| `GTIFF_SAMPLE_DIR` | single-band GeoTIFF | `gtiff_gbx` — `rasters` | **Default** — most accessor, tile-ops, transform, and generator examples |
+| `GTIFF_MULTI_DIR` | multi-band GeoTIFF (red/NIR/green) | `gtiff_gbx` — `multiband_rasters` | band-math and spectral-index examples, `rst_numbands`, `rst_bandmetadata` |
+| `DTM_DIR` | digital elevation model | `gtiff_gbx` — `dem_rasters` | terrain examples (`rst_slope`, `rst_aspect`, …) |
+| `NETCDF_DIR` | NetCDF with subdatasets | `netcdf_gbx` — `netcdf_rasters` | `rst_subdatasets`, `rst_getsubdataset` |
 
-Each format has a named reader in **both** tiers (light `*_gbx` / heavy `*_gdal`); the setup for each tier below uses its own. The generic readers (`raster_gbx` light, `gdal` heavy) also read any raster their tier's engine supports.
+Each format has a named `*_gbx` reader, and both tiers use it. The generic `raster_gbx` reader also reads any raster that GDAL supports.
 
 The four `*_DIR` placeholders in the code below are wired to small sample rasters **committed in the GeoBrix repo** under [`src/test/resources/binary/`](https://github.com/databrickslabs/geobrix/tree/main/src/test/resources/binary) (resolved by the `_SAMPLE_PATHS[...]` / `*_path()` helpers you'll see in the snippet). To run the examples yourself, stage those sample files — or your own rasters — in a Unity Catalog Volume directory and set each placeholder to its Volume path.
 
@@ -2018,7 +2018,7 @@ Reading a file larger than the connect-aware stream cap raises a `ValueError`. T
 />
 
 :::tip Loading rasters at scale? Use the [Raster Reader](../readers/raster)
-`rst_fromfile` pulls columnar raster paths into a tile column inline. To ingest rasters as a normal Spark job — partitioned parallel reads, optional tiling (`sizeInMB`), FUSE-safe Volume staging — use the **[Raster Reader](../readers/raster)** (`raster_gbx` / `gtiff_gbx`, or heavyweight `gdal` / `gtiff_gdal`): `spark.read.format("raster_gbx").load(path)`. It, too, emits virtual tiles by default.
+`rst_fromfile` pulls columnar raster paths into a tile column inline. To ingest rasters as a normal Spark job — partitioned parallel reads, optional tiling (`sizeInMB`), FUSE-safe Volume staging — use the **[Raster Reader](../readers/raster)** (`raster_gbx` / `gtiff_gbx`): `spark.read.format("raster_gbx").load(path)`. It, too, emits virtual tiles by default.
 :::
 
 :::note Have the bytes already, or need a materialized tile? Use `rst_fromcontent`

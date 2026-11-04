@@ -183,3 +183,47 @@ def test_deferred_notebooks_still_need_a_rewrite():
         "these listed notebooks name no retired reader any more; remove them from "
         f"registered_readers.DEFERRED_NOTEBOOKS: {sorted(set(rr.DEFERRED_NOTEBOOKS) - stale)}"
     )
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("| Shapefile | `shapefile_gbx` | `shapefile_ogr` (0.2.0) |", ["shapefile_ogr"]),
+        ("the `*_ogr` readers and `netcdf_gdal`", ["`*_ogr`", "netcdf_gdal"]),
+        ("Use the `gdal` reader or `ogr`.", ["`gdal`", "`ogr`"]),
+        ("The heavyweight readers run in the JVM.", ["heavyweight readers"]),
+        ("Heavy vector reader", ["Heavy vector reader"]),
+        # the libraries and their calls are not readers
+        ("GDAL and OGR read it; run `gdal.Warp` or `from osgeo import gdal`.", []),
+        ("`gdalinfo` and `gdal_calc` are CLIs; see docs/tests-dbr/python/readers/ogr/examples.py", []),
+        ("`gtiff_gbx`, `raster_gbx` and `vector_gbx`", []),
+    ],
+)
+def test_the_retired_name_scan_finds_what_a_page_mentions(text, expected):
+    assert [hit for _, _, hit in rr.retired_name_mentions(text)] == expected
+
+
+def test_no_docs_page_names_a_retired_reader():
+    """The Scala readers (``gdal``, ``*_gdal``, ``ogr``, ``*_ogr``) are retired: no page under docs/docs teaches them.
+
+    The scan covers all of ``docs/docs`` (prose, tables and code), not only the places a reader is chosen. The release
+    notes record the rename and are the one exception."""
+    report = [f"{file}:{line}: {kind} {hit!r}" for file, line, kind, hit in rr.retired_name_scan()]
+    assert not report, "docs pages name retired readers (use the *_gbx reader):\n  " + "\n  ".join(report)
+
+
+def test_the_retired_name_scan_covers_the_docs():
+    """A moved directory must not turn the scan into a no-op."""
+    pages = rr.docs_pages()
+    assert len(pages) > 100, f"only {len(pages)} pages scanned"
+    assert "docs/docs/readers/raster.mdx" in pages and "docs/docs/quick-start.mdx" in pages
+    assert any(p.startswith("docs/docs/release-notes") for p in pages)  # skipped on purpose, still listed
+
+
+def test_deferred_pages_still_need_a_rewrite():
+    """A page on the allowlist names a retired reader; a clean one must leave the list."""
+    stale = {file for file, *_ in rr.deferred_page_scan()}
+    assert stale == set(rr.DEFERRED_PAGES), (
+        "these listed pages name no retired reader any more; remove them from "
+        f"registered_readers.DEFERRED_PAGES: {sorted(set(rr.DEFERRED_PAGES) - stale)}"
+    )

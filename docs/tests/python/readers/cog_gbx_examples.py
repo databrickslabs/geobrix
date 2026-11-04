@@ -19,7 +19,7 @@ SAMPLE_RASTER_SINGLE = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 # ---------------------------------------------------------------------------
 
 FILE_GBX_LIST = """# List raster files in a directory — no content loaded.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 refs = spark.read.format("file_gbx").load(
@@ -44,7 +44,7 @@ refs = (
 )"""
 
 COG_PREPARE = r"""# Step 1 — list source files.
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 
 refs = spark.read.format("file_gbx").load(

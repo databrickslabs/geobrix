@@ -247,7 +247,7 @@ Run steps 1 to 4 once per architecture. `--arch` selects it on both commands: om
 
 1. Build the JAR and wheel for the release, then build the image with `bash scripts/commands/gbx-dcs-build.sh` (add `--arch amd64` for x86). If the build network blocks public PyPI, export `PIP_INDEX_URL` before the build; the command passes it as a BuildKit secret, so it never enters the image. The image gets its `-rc` tag (`<ver>-env6-<arm|x86>-rc`) only after every check passes; a failed check leaves no new tag. An architecture different from the build machine's compiles GDAL under emulation, which takes hours.
 2. Push the release candidate with `bash scripts/commands/gbx-dcs-publish.sh --candidate` (add `--arch amd64` for x86). Note the printed `DIGEST=<repo>@sha256:<hex>` line: it identifies the exact image you are about to verify.
-3. Verify the `-rc` image on a dedicated DCS test cluster of the matching instance architecture that has no GeoBrix JAR library attached (a cluster uses one GeoBrix JAR, and the image already carries it): both tiers, and the heavyweight readers on `/Volumes`.
+3. Verify the `-rc` image on a dedicated DCS test cluster of the matching instance architecture that has no GeoBrix JAR library attached (a cluster uses one GeoBrix JAR, and the image already carries it): both tiers, and the `*_gbx` readers on `/Volumes`.
 4. Push the release tags, passing the version and the digest from step 2 for that architecture:
 
    ```bash

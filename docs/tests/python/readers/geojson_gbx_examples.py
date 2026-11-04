@@ -5,7 +5,7 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
 
 READ_GEOJSON_GBX = """# Lightweight GeoJSON reader (pyogrio; no JAR)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)
 df = spark.read.format("geojson_gbx").load(SAMPLE)   # (attrs..., geom_0, geom_0_srid, geom_0_srid_proj)
 df.show()"""

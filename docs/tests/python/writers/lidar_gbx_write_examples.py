@@ -1,7 +1,7 @@
 """lidar_gbx Writer Examples — single source of truth.
 
 Code shown in docs/docs/writers/lidar.mdx is imported from here. Pure-Python
-DataSource V2 writer (JAR-free, registered via gbx.ds.register). It is the
+DataSource V2 writer (JAR-free, registered by databricks.labs.gbx.register). It is the
 inverse of the lidar_gbx points reader:
 
 - parts (default): one .laz per Spark partition, named *_<group>_<cluster>.laz
@@ -16,7 +16,7 @@ The writer requires columns x, y, z (float64) and accepts optional r, g, b
 """
 
 REGISTER = """# Register the lightweight DataSources (once per session)
-from databricks.labs.gbx.ds.register import register
+from databricks.labs.gbx import register
 register(spark)"""
 
 WRITE_SHARDED = """# Parts mode (default): one .laz per Spark partition.

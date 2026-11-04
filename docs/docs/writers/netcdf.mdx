@@ -17,11 +17,8 @@ Write CF-convention NetCDF (`.nc`) — the inverse of the
 raster tile DataFrames as CF grids (the default raster mode) or point DataFrames
 as CF Discrete Sampling Geometry (DSG) files (vector mode).
 
-`netcdf_gbx` is **light-only**: there is **no heavyweight NetCDF writer**. Unlike
-GeoTIFF or the catch-all raster writer (which ship in both tiers), NetCDF writing
-is the pure-Python (`netcdf4`-backed, JAR-free) writer only — it runs on
-**Serverless, standard (shared), ARM, and classic** compute. This mirrors the
-read side, where the swath-flattening vector leg is a lightweight-only capability.
+`netcdf_gbx` is a pure-Python (`netcdf4`-backed, JAR-free) writer. It runs on
+**Serverless, standard (shared), ARM, and classic** compute.
 
 :::note Register first
 The lightweight Python DataSources are **not** auto-registered — call
@@ -198,7 +195,7 @@ would be mislabeled as degrees.
 The writer stores the tile CRS in two CF grid-mapping attributes: `crs_wkt` (the full WKT, authoritative for any CRS) and `spatial_epsg` (the numeric EPSG code for EPSG CRSes). For a non-EPSG CRS — such as `ESRI:54008` — the writer stores the ESRI code in `spatial_epsg` as its integer value (the attribute name implies EPSG, but the value is the ESRI code). Readers should always prefer `crs_canonical` or `crs_wkt` as the authoritative source; `spatial_epsg` is a legacy interoperability field and may carry an ESRI code for non-EPSG CRSes. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
-- [NetCDF Reader](../readers/netcdf) — the corresponding read paths (raster, vector, heavyweight).
+- [NetCDF Reader](../readers/netcdf) — the corresponding read paths (raster and vector).
 - [GeoTIFF Writer](./geotiff) — for COG/GeoTIFF raster output.
 - [Writers Overview](./overview) — all writer formats and the tier split.
 - [Raster Functions](../api/raster-functions) — tessellation, band math, tiling, `gbx_rst_merge_agg`.

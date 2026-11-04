@@ -1579,3 +1579,20 @@ def test_the_smoke_keeps_the_head_of_a_failure_not_its_tail():
         )["cells"]
     )  # fmt: skip
     assert "failure=_r.failure_mode[:700]" in src and "failure_mode[-400:]" not in src
+
+
+def test_the_replicated_dem_input_has_n_rows_and_its_cache_is_released_with_its_rung(
+    spark_session_local,
+):
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    spark = spark_session_local
+    name = lf.INPUTS["se_dem_1024_mem"](spark, 16, None, None)
+    try:
+        assert spark.table(name).count() == 16  # n rows from four distinct tiles
+        assert name in lf._CACHED_INPUTS and lf._CACHED_INPUTS[name].is_cached
+    finally:
+        frame = lf._CACHED_INPUTS.get(name)
+        lf.release_cached_inputs(spark)
+    assert not frame.is_cached and not lf._CACHED_INPUTS
+    assert not spark.catalog.tableExists(name)  # the next rung builds its own

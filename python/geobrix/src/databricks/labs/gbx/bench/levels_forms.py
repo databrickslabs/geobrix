@@ -1259,9 +1259,23 @@ INPUTS.update({f"se_dem_{s}": _se_dems(s) for s in _SE_SIZES})
 INPUTS["se_pair_512"] = _se_pairs(512)
 
 
+# The cached frames of the replicated inputs by view name: a rung that has run releases them (`release_cached_inputs`).
+_CACHED_INPUTS: Dict[str, object] = {}
+
+
+def release_cached_inputs(spark) -> None:
+    """Unpersist the cached frames of the replicated inputs and drop their views, so the next rung builds its own. A
+    view left behind would be found by the next build and serve its rows uncached."""
+    for name, df in list(_CACHED_INPUTS.items()):
+        df.unpersist()
+        spark.catalog.dropTempView(name)
+    _CACHED_INPUTS.clear()
+
+
 def _se_dems_replicated(size: int):
     """`size` px DEM tiles, n rows: four distinct tiles built once on the client and replicated on the executors, then
-    cached (the rows are not rebuilt by each timed query, and no client cap applies to n).
+    cached (the rows are not rebuilt by each timed query, and no client cap applies to n). The cache lasts one rung:
+    `release_cached_inputs` frees it.
     """
 
     def build(spark, n, corpus, schema):
@@ -1290,6 +1304,7 @@ def _se_dems_replicated(size: int):
             if schema is None:
                 df = df.cache()
                 df.count()
+                _CACHED_INPUTS[name] = df
             return df
 
         return _table(spark, schema, name, rows)

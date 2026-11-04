@@ -108,6 +108,8 @@ class Ctx:
     surface: str
     man: object
     version: str
+    # the procedures the run installed (names); None: not known, so the plan assumes the wheel's own
+    procedures: Optional[Tuple[str, ...]] = None
 
 
 # ---- building blocks -------------------------------------------------------------------------------------------
@@ -812,10 +814,10 @@ def _m8(c: Ctx) -> Unit:
         "merge by key: the tree procedure vs the 10-tile array twin vs the session aggregate (Serverless only)",
     )
     u.session_fns = ("gbx_rst_merge_agg",)
-    tree = "gbx_combine_by_key" in _procedure_names()
+    tree = "gbx_combine_by_key" in _procs(c)
     if not tree:
         u.skipped["tree"] = (
-            "needs the tree procedures (gbx_combine_by_key is not in this wheel yet)"
+            "needs the tree procedures (gbx_combine_by_key is not installed)"
         )
     for n in _tail(c, "m8"):
         table = f"{c.q}.{PERF}keyed_{n}"
@@ -869,6 +871,34 @@ def _procedure_names() -> Tuple[str, ...]:
     from databricks.labs.gbx.uc import procedures
 
     return tuple(procedures.RECIPES)
+
+
+def _procs(c: Ctx) -> Tuple[str, ...]:
+    """The procedures the plan may call: the ones the run installed, else (not known) every one this wheel defines."""
+    return _procedure_names() if c.procedures is None else tuple(c.procedures)
+
+
+def _installed_procedures(
+    spark, catalog: str, schema: str
+) -> Optional[Tuple[str, ...]]:
+    """The procedures of this wheel that exist in ``catalog.schema``; None when the schema cannot be read."""
+    from databricks.labs.gbx.uc import ddl
+
+    try:
+        rows = spark.sql(
+            f"SELECT routine_name FROM {ddl.quote_ident('catalog', catalog)}.information_schema.routines "
+            f"WHERE lower(routine_schema) = {ddl.quote_str(schema.lower())}"
+        ).collect()
+        have = {r["routine_name"].lower() for r in rows}
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - an unreadable schema leaves the plan as the wheel defines it
+        print(
+            f"[T28 uc-perf] procedures: schema not read ({type(exc).__name__}); the plan assumes this wheel's own",
+            flush=True,
+        )
+        return None
+    return tuple(n for n in _procedure_names() if n.lower() in have)
 
 
 # ---- M10 decode cap ----------------------------------------------------------------------------------------------
@@ -1027,8 +1057,9 @@ def _m13(c: Ctx) -> Unit:
         f"SELECT p.z, p.x, p.y, p.mvt_bytes FROM {feats} s, "
         f"LATERAL {c.q}.gbx_st_asmvt_pyramid(st_asbinary(s.geom), to_json(s.attrs), 0, 10, 'layer', 4096) AS p"
     )
-    # the CALL and the private finalize routine exist only where install(procedures=True) created them
-    procs = "gbx_features_to_mvt" in _procedure_names()
+    # the CALL and the private finalize routine exist only where install(procedures=True) created them: the gate reads
+    # the procedures the run installed (`Ctx.procedures`), not the ones this wheel defines
+    procs = "gbx_features_to_mvt" in _procs(c)
     if procs:
         u.legs += [
             Leg("prep_call", f"DROP TABLE IF EXISTS {tgt}", timed=False),
@@ -1090,9 +1121,12 @@ def perf_plan(
     surface: str = "w",
     sizes: Optional[Dict[str, Sequence[int]]] = None,
     only: Optional[Sequence[str]] = None,
+    procedures: Optional[Sequence[str]] = None,
 ) -> List[Unit]:
     """The measurements as units, in order (m9 is ``run_proc_warm``). ``surface`` is ``w`` (a warehouse) or ``s6``
     (Serverless env 6): it picks the legs that run there and m3's scale. ``only`` names units (``["m0", "m4"]``).
+    ``procedures`` names the procedures the run installed: the legs that call one are skipped without it (default: the
+    wheel's own, all installed).
     """
     from databricks.labs.gbx import manifest, uc
     from databricks.labs.gbx.uc import ddl
@@ -1121,6 +1155,7 @@ def perf_plan(
         surface,
         manifest.load(),
         uc._public_version(),
+        None if procedures is None else tuple(procedures),
     )
     units = []
     for uid in UNITS:
@@ -1316,6 +1351,7 @@ def run_uc_perf(
     sizes: Optional[Dict[str, Sequence[int]]] = None,
     repeats: int = 3,
     cap_s: float = 1800.0,
+    procedures: Optional[Sequence[str]] = None,
 ) -> dict:
     """Run the measurements M0-M8 and M10-M13 on Serverless env 6 (the Python/SQL statements of ``uc_perf_sql``, plus the
     session legs). ``volume_dir`` holds the one env 6 wheel; the tiles go to ``<volume_dir>/perf_tiles``. The product UC
@@ -1323,7 +1359,8 @@ def run_uc_perf(
 
     Each statement runs ``repeats`` times (a preparation once) and its wall times are recorded. Prints
     ``[T28 uc-perf] <unit>:<step> START (cap <s>)`` and ``DONE <s>s ok|ERROR ...`` per step, and a RUNNING line every 60 s
-    through ``liveness.Heartbeat``. The probes are dropped at the end, also after an error.
+    through ``liveness.Heartbeat``. The probes are dropped at the end, also after an error. A leg that calls a procedure
+    runs only if the procedure exists in ``catalog.schema`` (``procedures`` names them; default: read from the schema).
 
     Returns ``{"wheel", "wheel_sha256", "jar", "tiles", "units": {id: {"title", "setup": {label: {...}}, "legs": {label:
     {"wall_s": [...], "value", "error"}}, "skipped"}}, "dropped"}``.
@@ -1338,6 +1375,8 @@ def run_uc_perf(
         except RuntimeError:
             jar_path = None
     tile_dir = f"{volume_dir.rstrip('/')}/perf_tiles"
+    if procedures is None:
+        procedures = _installed_procedures(spark, catalog, schema)
     units = perf_plan(
         catalog,
         schema,
@@ -1347,6 +1386,7 @@ def run_uc_perf(
         surface="s6",
         sizes=sizes,
         only=only,
+        procedures=procedures,
     )
     m10 = tuple((sizes or {}).get("m10", DEFAULT_SIZES["m10"]))
     # the tile staging, per unit its register step (when it has session functions), setup and leg runs, and the one

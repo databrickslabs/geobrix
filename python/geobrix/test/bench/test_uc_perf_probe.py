@@ -491,6 +491,41 @@ def test_m13_needs_the_procedures_for_its_call_and_its_finalize_leg(monkeypatch)
     }
 
 
+def test_m13_gates_on_the_procedures_the_run_installed_not_the_ones_the_wheel_defines():
+    assert "gbx_features_to_mvt" in uc_perf._procedure_names()  # the wheel defines it
+    (none,) = uc_perf.perf_plan(
+        "cat", "sch", wheel_path=WHEEL, only=["m13"], procedures=()
+    )
+    assert {"call", "finalize_only"} <= set(none.skipped)
+    assert "call" not in {leg.label for leg in none.legs}
+    (some,) = uc_perf.perf_plan(
+        "cat",
+        "sch",
+        wheel_path=WHEEL,
+        only=["m13"],
+        procedures=("gbx_features_to_mvt",),
+    )
+    assert "call" in {leg.label for leg in some.legs}
+
+
+def test_the_installed_procedures_are_read_from_the_schema_and_an_unreadable_schema_is_unknown(
+    capsys,
+):
+    from types import SimpleNamespace as NS
+
+    rows = [{"routine_name": n} for n in ("GBX_FEATURES_TO_MVT", "gbx_bng_kring")]
+    spark = NS(sql=lambda q: NS(collect=lambda: rows))
+    assert uc_perf._installed_procedures(spark, "cat", "sch") == (
+        "gbx_features_to_mvt",
+    )
+
+    def boom(q):
+        raise RuntimeError("no information_schema")
+
+    assert uc_perf._installed_procedures(NS(sql=boom), "cat", "sch") is None
+    assert "schema not read" in capsys.readouterr().out
+
+
 def test_the_diff_legs_are_skipped_when_the_python_copy_is_not_there():
     raw = copy.deepcopy(RAW)
     row = next(r for r in raw["functions"] if r["sql_name"] == "gbx_bng_cellarea")

@@ -183,6 +183,10 @@ def run_mvp(
                         failure=failure_text(exc),
                     )
                 )
+            finally:
+                lf.release_cached_inputs(
+                    spark
+                )  # the rung is over: its cached inputs go
             if heartbeat:
                 done = rows[-1]
                 measured = (

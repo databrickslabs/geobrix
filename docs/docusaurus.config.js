@@ -29,7 +29,7 @@ const config = {
   // Re-scroll to the URL hash after fonts/layout settle, so deep anchors on very
   // long reference pages (e.g. api/raster-functions) land on their section instead
   // of short. See the module for details.
-  clientModules: ['./src/clientModules/scrollToHashOnLoad.js'],
+  clientModules: ['./src/clientModules/scrollToHashOnLoad.js', './src/clientModules/zarrOldAnchors.js'],
 
   // Markdown configuration
   markdown: {
@@ -77,6 +77,11 @@ const config = {
         redirects: [
           { from: '/docs/beta-release-notes', to: '/docs/release-notes' },
           { from: '/docs/api/h3-raster-tessellation', to: '/docs/api/grid-raster-tessellation' },
+          // The Zarr Stores page became a set of topic pages under the Zarr function reference.
+          // Old #anchors are re-pointed by src/clientModules/zarrOldAnchors.js.
+          { from: '/docs/formats/zarr', to: '/docs/api/zarr-stores' },
+          // The format selection guide moved under Readers & Writers.
+          { from: '/docs/formats/overview', to: '/docs/choosing-a-format' },
         ],
       },
     ],

@@ -193,8 +193,8 @@ input that keeps its blocks in few partitions (a single one, say) is first sprea
 tasks write at once. A block of several shards writes their chunks in its own order, so one shard's
 chunks do not sit side by side in the data file and a read of that shard takes more, smaller reads; a
 block of one shard keeps them together. A 1 GB create of blocks of one shard each wrote its data
-files at a median 119 MB/s through the Volume and 80 MB/s direct to storage on Databricks Runtime 19.
-Direct runs ranged from 39 to 139 MB/s. On Serverless the median was 122 MB/s. See
+files at a median 119 MB/s through the Volume on Runtime 19. Direct to storage the median was
+80 MB/s. Direct runs ranged from 39 to 139 MB/s. On Serverless the median was 122 MB/s. See
 [Zarr performance](../api/zarr-performance).
 
 An `xarray.Dataset` and a DataFrame of tiles are planned on the driver from what they hold, so neither
@@ -273,10 +273,13 @@ tile that does not fit is refused on the driver, before any file is written.
 
 ## When writers meet
 
-[Zarr transactions](../api/zarr-transactions#concurrent-writers) explains the rules row by row. In short, writers
-that touch **different chunks** both land, writers that only change the **shape or a shared coordinate
-chunk** are rebased, and a write that meets another's **chunk** raises `ZarrWriteConflict` and commits
-nothing. The limits of the rebase are worth knowing before many jobs append to one array:
+[Zarr transactions](../api/zarr-transactions#concurrent-writers) explains the rules row by row. In short:
+
+- writers that touch **different chunks** both land;
+- writers that only change the **shape or a shared coordinate chunk** are rebased;
+- a write that meets another's **chunk** raises `ZarrWriteConflict` and commits nothing.
+
+The limits of the rebase are worth knowing before many jobs append to one array:
 
 - **A write retries up to 20 attempts**, waiting between them with a jittered pause that doubles up to
   16 seconds. Its data files are never rewritten.

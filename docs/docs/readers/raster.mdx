@@ -261,7 +261,7 @@ hrrr = spark.read.format("raster_gbx").load(f"{sample_path}/nyc/hrrr-weather/hrr
 
 See [Choosing a Format](../choosing-a-format) for the selection guide: how raster, array, vector and
 tile formats compare, and the reader, writer and functions for each. In short, start with GeoTIFF
-(COG for cloud storage), use NetCDF, HDF5 or GRIB2 when a data provider publishes them, and use
+(COG for cloud storage). Use NetCDF, HDF5 or GRIB2 when a data provider publishes them. Use
 [Zarr](../api/zarr-stores) for large cubes that you read in slices and write back to.
 
 ## Common functions: used vs excluded

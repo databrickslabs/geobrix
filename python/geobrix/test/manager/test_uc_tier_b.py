@@ -83,6 +83,22 @@ def test_a_tile_function_returns_the_dict_tile_with_the_srid_and_the_header_meta
     }
 
 
+def test_transformcrs_builds_its_tile_like_the_other_tile_functions(tmp_path):
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.uc import handlers
+
+    out = handlers.rst_transformcrs(_tile(tmp_path), "EPSG:3857")
+    assert set(out) == TILE_KEYS and out["crs"] == "3857"
+    with MemoryFile(bytes(out["raster"])) as mf, mf.open() as ds:
+        assert out["metadata"] == {
+            "driver": "GTiff",
+            "width": str(ds.width),
+            "height": str(ds.height),
+            "count": str(ds.count),
+        }
+
+
 def test_an_error_tile_goes_through_a_tile_function_unchanged_whatever_the_arguments_are():
     err = {
         "cellid": 7,

@@ -98,6 +98,7 @@ def _warp(raster: bytes, crs, fn: str) -> bytes:
 
 def rst_transformcrs(tile, target_crs):
     from databricks.labs.gbx.core.crs import parse_uc_crs
+    from databricks.labs.gbx.uc.tier_b import tile_row  # tier_b imports this module
 
     fn = "gbx_rst_transformcrs"
     if tile is None or target_crs is None:
@@ -116,18 +117,8 @@ def rst_transformcrs(tile, target_crs):
         raise  # resource exhaustion, a missing dependency and a refusal are never "bad data"
     except Exception:  # noqa: BLE001 - unreadable data is NULL on UC (no error tile)
         return None
-    # The tile's crs field carries the integer SRID; the raster itself embeds the authority.
-    return {
-        "cellid": int(_field(tile, "cellid") or 0),
-        "raster": out,
-        "path": None,
-        "path_mode": None,
-        "window": None,
-        "clip_polygon": None,
-        "clip_crs": None,
-        "crs": str(crs.srid),
-        "metadata": {},
-    }
+    # tile_row is the canonical UC tile builder: driver, size and band count in the metadata, the integer SRID in crs.
+    return tile_row(fn, tile, out)
 
 
 def _geom_bytes(geom):

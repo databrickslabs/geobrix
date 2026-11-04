@@ -16,7 +16,7 @@ import tempfile
 import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data
 from databricks.labs.gbx.uc.ddl import UC_GEOMETRY, sql_type
@@ -91,6 +91,10 @@ class Case:
     # The cid of the session row this UC row is a twin of (see oracle_tables._uc_tile.twin): the UC form has another
     # name or shape, and its expected value is the session row's, adapted.
     twin_of: Optional[str] = None
+    # A recipe row: one whole SQL statement that projects its answer as `out` (see oracle_tables._uc_tile.recipe).
+    # `{q}` marks where a function's qualifier goes (the 3-level schema prefix on UC, nothing in a session); `fn` names
+    # the manifest function it exercises, `args` is empty, and `kind`/`expect` judge the one row `out` comes from.
+    sql: Optional[str] = None
 
 
 def uc_view(
@@ -198,6 +202,9 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "avg_virtual",
             "summary_virtual",
         )
+    },
+    "cg_grid_null_arg": {
+        "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
     },
     "summary": {"L1": _SUMMARY_L1},
     "summary_float32_precision": {"L1": _SUMMARY_L1},
@@ -4155,6 +4162,24 @@ def _projection(case: Case, params, rows, surface: str) -> str:
     return ", ".join(cols)
 
 
+def render_recipe(sql: str, prefix: str = "") -> str:
+    """A recipe row's statement with every ``{q}`` replaced by ``prefix`` (the 3-level schema prefix on UC, "" in a session)."""
+    return sql.replace("{q}", prefix)
+
+
+def run_recipe(spark, case: Case, prefix: str = "") -> Optional[str]:
+    """Run a recipe row's statement and check the one row it answers (its ``out`` column); None when it meets the case."""
+    try:
+        got = spark.sql(render_recipe(case.sql, prefix)).collect()
+        if len(got) != 1:
+            return f"{case.cid}: the recipe gave {len(got)} rows, want one"
+        return check(case, got[0]["out"], [])
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+        return check_error(case, exc)
+
+
 def run_session(
     spark,
     cases: Sequence[Case],
@@ -4179,6 +4204,11 @@ def run_session(
         if surface not in case.surfaces and not (
             column_of is not None and "python" in case.surfaces
         ):
+            continue
+        if (
+            case.sql is not None
+        ):  # a recipe: one statement, `{q}` the qualifier name_of gives a bare name
+            results.append((case, run_recipe(spark, case, name_of(""))))
             continue
         rows = _argument_rows(case, tmpdir)
         args = rows[0]
@@ -4919,8 +4949,12 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
     out = []
     for case in cases:
         fn = man.functions[case.fn]
-        if "uc" not in case.surfaces or "handler" not in fn.levels.get("L4", {}):
-            continue  # not on UC, or a table function (run_handlers_rows runs the function behind it)
+        if (
+            "uc" not in case.surfaces
+            or case.sql is not None
+            or "handler" not in fn.levels.get("L4", {})
+        ):
+            continue  # not on UC, a recipe, or a table function (run_handlers_rows runs the function behind it)
         handler = manifest.resolve_ref(fn.levels["L4"]["handler"])
         try:
             msgs = []
@@ -4941,6 +4975,45 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
             out.append((case, check_error(case, exc)))
     return out
+
+
+def run_sql_kernels(
+    spark,
+    cases: Sequence[Case],
+    sources: Optional[Dict[str, Tuple[str, Sequence[Mapping]]]] = None,
+    tmpdir: Optional[str] = None,
+) -> List[Tuple[Case, Optional[str]]]:
+    """The UC rows of every function that is a SQL kernel, run on a local Spark session (no Unity Catalog).
+
+    Each kernel (the row's L4 ``sql``, or ``sources[name]`` = ``(body, helpers)`` in its place, which is how a candidate
+    body is judged before it is a manifest key) is installed as a temporary function under its manifest name with the UC
+    signature, the UC rows (recipes included) run through :func:`run_session` on the UC surface, and the functions are
+    dropped again. A row of a function with no kernel is not run. A body that calls a built-in the local engine lacks
+    fails its rows; the host has no ``h3_*`` or ``st_*`` (see the SQL kernel notes), so such a body is judged on the
+    workspace.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.uc import ddl, sqlbody
+
+    man = manifest.load()
+    sources = dict(sources or {})
+
+    def source(name):
+        return sources.get(name) or sqlbody.l4_source(man.functions[name])
+
+    names = sorted(
+        {c.fn for c in cases if "uc" in c.surfaces and source(c.fn) is not None}
+    )
+    mine = [c for c in cases if c.fn in names]
+    try:
+        for name in names:
+            # a UDF of this name from an earlier test in the session cannot be replaced by a SQL function
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
+            spark.sql(ddl.local_function_ddl(man.functions[name], source(name)))
+        return run_session(spark, mine, tmpdir=tmpdir, surface="uc")
+    finally:
+        for name in names:
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
 
 
 def run_handlers_rows(cases, tmpdir: Optional[str] = None):
@@ -5108,6 +5181,11 @@ def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str
     for case in cases:
         if "uc" not in case.surfaces:
             continue
+        if case.sql is not None:
+            stmts.append(
+                (case.cid, render_recipe(case.sql, f"`{catalog}`.`{schema}`."))
+            )
+            continue
         fn = man.functions[case.fn]
         lits = [
             _sql_literal(resolve_arg(a, tmpdir), p, case)
@@ -5246,7 +5324,7 @@ def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
         fn = man.functions[case.fn]
         if "error" in r:
             msg = check_error(case, RuntimeError(r["error"]))
-        elif fn.kind == "generator":
+        elif fn.kind == "generator" and case.sql is None:
             msg = _check_rows(case, _uc_rows(fn, r["value"]), args)
         else:
             msg = check(case, r["value"], args)

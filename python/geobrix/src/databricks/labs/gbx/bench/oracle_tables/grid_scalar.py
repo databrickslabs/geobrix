@@ -12,6 +12,7 @@ from the `h3` library.
 import math
 import struct
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import recipe
 from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
 
 TQ3080 = "POLYGON((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))"
@@ -265,6 +266,8 @@ QB_C5 = 5211447621146640383  # the zoom-5 tile that holds the same point, (5, 12
 QB_LON, QB_LAT = -122.4194, 37.7749
 QB_PT = f"POINT({QB_LON} {QB_LAT})"
 QB_D2 = 5233961788172664831  # two steps from QB_C
+QB_Z0 = 5192650370358181887  # the one zoom-0 tile, (0, 0)
+QB_Z26 = 5305923650554237558  # the zoom-26 tile (12345678, 23456789): the finest zoom
 
 QPAC, QAWKB, QCENT, QRES = (
     "gbx_quadbin_pointascell",
@@ -360,6 +363,11 @@ GRID_SCALAR += (
     Case("qb_resolution", QRES, (QB_C,), "exact", 10),
     Case("qb_resolution_z5", QRES, (QB_C5,), "exact", 5),
     Case("qb_resolution_null", QRES, (None,), "null"),
+    # The zoom is the 5-bit field of the id, read as it is: from 0 (the world tile) to 26 (the finest). An id that is no
+    # cell is not checked (id 0 has a zero field), on every level.
+    Case("qb_resolution_z0", QRES, (QB_Z0,), "exact", 0),
+    Case("qb_resolution_z26", QRES, (QB_Z26,), "exact", 26),
+    Case("qb_resolution_not_a_cell", QRES, (0,), "exact", 0),
     Case("qb_distance_1", QDIST, (QB_C, QB_E), "exact", 1),
     Case("qb_distance_2", QDIST, (QB_C, QB_D2), "exact", 2),
     Case("qb_distance_same", QDIST, (QB_C, QB_C), "exact", 0),
@@ -405,6 +413,43 @@ GRID_SCALAR += (
         (1000000, 0, 0, 1000000, 2, 1000, 1000, 27700),
         "raises",
         "bound_x_max",
+    ),
+    # Each refusal names its argument and the value it got, on every surface.
+    Case(
+        "cg_grid_bad_y_bounds",
+        CGRID,
+        (0, 1000000, 5, 5, 2, 1000, 1000, 27700),
+        "raises",
+        "bound_y_max (5) must be greater than bound_y_min (5)",
+    ),
+    Case(
+        "cg_grid_bad_splits",
+        CGRID,
+        (0, 1000000, 0, 1000000, 1, 1000, 1000, 27700),
+        "raises",
+        "cell_splits must be >= 2; got 1",
+    ),
+    Case(
+        "cg_grid_bad_root_x",
+        CGRID,
+        (0, 1000000, 0, 1000000, 2, 0, 1000, 27700),
+        "raises",
+        "root_cell_size_x must be > 0; got 0",
+    ),
+    Case(
+        "cg_grid_bad_root_y",
+        CGRID,
+        (0, 1000000, 0, 1000000, 2, 1000, -5, 27700),
+        "raises",
+        "root_cell_size_y must be > 0; got -5",
+    ),
+    # A NULL argument gives a NULL grid, not an error (the JVM constructor raises where the lightweight one answers).
+    Case(
+        "cg_grid_null_arg",
+        CGRID,
+        (0, None, 0, 1000000, 2, 1000, 1000, 27700),
+        "null",
+        variants=((0, 1000000, 0, 1000000, None, 1000, 1000, 27700),),
     ),
     Case("cg_pac_res1", CPAC, (CG_PT, G, 1), "exact", CG_CELL),
     Case("cg_pac_res0", CPAC, (CG_PT, G, 0), "exact", cg_id(530, 180, 0)),
@@ -513,6 +558,14 @@ GRID_SCALAR += (
         None,
         ("uc",),
         geom_srid=4326,
+    ),
+    # A recipe row (one whole statement, `{q}` the schema qualifier): the finest zoom of a column of cells, in plain SQL.
+    recipe(
+        "recipe_qb_finest_zoom",
+        QRES,
+        f"SELECT max({{q}}gbx_quadbin_resolution(c)) AS out FROM VALUES ({QB_C}), ({QB_C5}), (CAST(NULL AS BIGINT)) AS t(c)",
+        "exact",
+        10,
     ),
     # A UC BINARY result carries the integer SRID: EWKB with 27700 (the session's WKB carries none).
     Case("uc_bng_aswkb_srid", AWKB, ("TQ3080",), "geom_srid", (TQ3080, 27700), ("uc",)),

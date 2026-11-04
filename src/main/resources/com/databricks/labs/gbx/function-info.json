@@ -977,6 +977,7 @@
       "description": "Return the in-memory size of a tile in bytes.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2214,6 +2215,7 @@
       "description": "Define a custom grid and return the grid struct the other `gbx_custom_*` functions take.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2648,6 +2650,7 @@
       "description": "Return the zoom level of a quadbin cell.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

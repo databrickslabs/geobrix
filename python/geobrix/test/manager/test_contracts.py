@@ -72,6 +72,11 @@ def test_oracle_rows_fit_signature(fn):
     # an aggregate's first argument is the group's rows: one row fills 1 parameter (a tile) or 2 (cellid, value)
     extra = oracles.group_width(fn) - 1 if fn.kind == "aggregate" else 0
     for c in rows:
+        if (
+            c.sql is not None
+        ):  # a recipe row is one whole statement: no arguments to fit
+            assert not c.args and not c.variants and "uc" in c.surfaces, c.cid
+            continue
         arg_rows = (
             c.args
             if c.kind in ("exact_rows", "windows_batch")
@@ -637,6 +642,8 @@ def test_bad_target():
 
 UC_FNS = [f for f in FNS if "L4" in f.levels]
 UC_SCALA_FNS = [f for f in UC_FNS if "scala" in f.levels["L4"]]
+# rows whose UC form is a SQL kernel (L4 sql): LANGUAGE SQL, no sandbox, no Python dependency
+UC_SQL_FNS = [f for f in UC_FNS if "sql" in f.levels["L4"]]
 
 
 def tvf_inner(fn):
@@ -658,6 +665,23 @@ def test_uc_ddl_contract(fn):
     )
     impl = stmts[0]
     assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only
+    if fn in UC_SQL_FNS:
+        (text,) = (
+            stmts  # a SQL kernel's DEFAULTs are declared on the function itself; a helper-less body is one statement
+        )
+        assert (
+            "LANGUAGE SQL\nDETERMINISTIC" in text
+            and "PYTHON" not in text
+            and "ENVIRONMENT" not in text
+        )
+        assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + fn.doc.summary)}" in text
+        for p in fn.params:
+            assert (
+                f"{p.name} {ddl.sql_type(p.uc)}"
+                + (f" DEFAULT {p.default}" if p.default else "")
+                in text
+            )
+        return
     if "tvf_over" in fn.levels["L4"]:
         # A generator is a SQL table function over the array function: no Python, no environment.
         (tvf,) = stmts
@@ -921,6 +945,8 @@ def _uc_handler_groups():
     groups = {}
     for f in UC_FNS:
         l4 = f.levels["L4"]
+        if f in UC_SQL_FNS:
+            continue  # no Python, so no import to hold
         deps = (
             l4["deps"]
             if "deps" in l4
@@ -1112,7 +1138,9 @@ def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
         f.sql_name for f in UC_SCALA_FNS
     }
     # every other function stays on the wheel
-    python = [f for f in UC_FNS if "tvf_over" not in f.levels["L4"]]
+    python = [
+        f for f in UC_FNS if "tvf_over" not in f.levels["L4"] and f not in UC_SQL_FNS
+    ]
     assert sum("LANGUAGE PYTHON" in s for s in stmts) == len(python) - len(
         UC_SCALA_FNS
     ) + len(PRIV_TVF)
@@ -1192,7 +1220,7 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
     assert len(everything) == sum(
         (
             1
-            if "tvf_over" in f.levels["L4"]
+            if "tvf_over" in f.levels["L4"] or f in UC_SQL_FNS
             else 2 if any(p.default for p in f.params) else 1
         )
         for f in UC_FNS

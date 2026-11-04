@@ -288,16 +288,17 @@ Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mea
 ### quadbin_resolution
 
 {/* BEGIN GENERATED gbx_quadbin_resolution: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_resolution(cell)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_resolution(cell)` | `INT` |
 | Python | `gridx.quadbin.functions.quadbin_resolution(cell)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The quadbin cell id. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The quadbin cell id. |
 {/* END GENERATED gbx_quadbin_resolution */}
 
 Return the resolution (zoom) of a quadbin cell.
@@ -1802,23 +1803,24 @@ A custom grid is a user-defined regular rectangular grid specified by its spatia
 ### custom_grid
 
 {/* BEGIN GENERATED gbx_custom_grid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_grid(bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, [srid])` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_grid(bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, [srid])` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |
 | Python | `gridx.custom.functions.custom_grid(bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `bound_x_min` | `BIGINT` |  | The west edge of the grid. |
-| `bound_x_max` | `BIGINT` |  | The east edge of the grid; it must be greater than the west edge. |
-| `bound_y_min` | `BIGINT` |  | The south edge of the grid. |
-| `bound_y_max` | `BIGINT` |  | The north edge of the grid; it must be greater than the south edge. |
-| `cell_splits` | `INT` |  | How many parts each cell splits into along each axis at the next resolution; at least 2. |
-| `root_cell_size_x` | `INT` |  | The width of a resolution-0 cell; greater than 0. |
-| `root_cell_size_y` | `INT` |  | The height of a resolution-0 cell; greater than 0. |
-| `srid` | `INT` | `-1` | The coordinate system of the grid, as an EPSG code; -1 for none. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `bound_x_min` | `BIGINT` | `BIGINT` |  | The west edge of the grid. |
+| `bound_x_max` | `BIGINT` | `BIGINT` |  | The east edge of the grid; it must be greater than the west edge. |
+| `bound_y_min` | `BIGINT` | `BIGINT` |  | The south edge of the grid. |
+| `bound_y_max` | `BIGINT` | `BIGINT` |  | The north edge of the grid; it must be greater than the south edge. |
+| `cell_splits` | `INT` | `INT` |  | How many parts each cell splits into along each axis at the next resolution; at least 2. |
+| `root_cell_size_x` | `INT` | `INT` |  | The width of a resolution-0 cell; greater than 0. |
+| `root_cell_size_y` | `INT` | `INT` |  | The height of a resolution-0 cell; greater than 0. |
+| `srid` | `INT` | `INT` | `-1` | The coordinate system of the grid, as an EPSG code; -1 for none. |
 {/* END GENERATED gbx_custom_grid */}
 
 Define a user-specified regular grid from an origin, extent, cell size, split factor, and SRID.

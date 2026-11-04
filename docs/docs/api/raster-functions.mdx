@@ -559,16 +559,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 ### rst_memsize
 
 {/* BEGIN GENERATED gbx_rst_memsize: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_memsize(tile)` | `BIGINT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_memsize(tile)` | `BIGINT` |
 | Python | `rasterx.functions.rst_memsize(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_memsize */}
 
 :::note Implementation

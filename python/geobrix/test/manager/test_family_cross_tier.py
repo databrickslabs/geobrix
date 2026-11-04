@@ -51,6 +51,12 @@ def _rows():
                     marks=marks,
                     id=f"{fn.sql_name}-L3{variant}-{api}",
                 )
+        if (
+            "L0" in fn.levels
+        ):  # the session's SQL kernel, a temporary SQL function: no JVM, no import
+            yield pytest.param(
+                fn.sql_name, "L0", "-", "sql", id=f"{fn.sql_name}-L0-sql"
+            )
         l1 = fn.levels.get("L1", {})
         for variant in (["-"] if "companion" in l1 else []) + (
             ["engine"] if l1.get("engine") else []
@@ -97,7 +103,7 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
         if level == "L3" and run.unavailable_reason():
             pytest.skip(run.unavailable_reason())
     fn = manifest.load().functions[sql_name]
-    jvm = level != "L3" or variant.startswith("engine")
+    jvm = level in ("L1", "L2") or variant.startswith("engine")
     spark = request.getfixturevalue("jvm_spark" if jvm else "spark")
     register(spark, only=[sql_name], _levels={sql_name: (level, variant)})
     cases = [
@@ -181,7 +187,12 @@ def _uc_fns(table):
         {
             c.fn
             for c in oracles.TABLES[table]
-            if "uc" in c.surfaces and "L4" in man.functions[c.fn].levels
+            if "uc" in c.surfaces
+            and "L4" in man.functions[c.fn].levels
+            and "sql"
+            not in man.functions[c.fn].levels[
+                "L4"
+            ]  # a SQL kernel is judged by run_sql_kernels
         }
     )
 
@@ -208,13 +219,41 @@ def test_family_oracle_uc_handlers(tmp_path, table, sql_name):
     assert [m for _, m in ran if m] == []
 
 
+SQL_KERNEL_ROWS = [
+    pytest.param(t, fn, id=f"{fn}-L4-sql")
+    for t in _UC_TABLES
+    if not _ONLY or t in _ONLY
+    for fn in sorted(
+        {
+            c.fn
+            for c in oracles.TABLES[t]
+            if "uc" in c.surfaces
+            and "sql" in manifest.load().functions[c.fn].levels.get("L4", {})
+        }
+    )
+]
+
+
+@pytest.mark.parametrize("table,sql_name", SQL_KERNEL_ROWS)
+def test_family_oracle_uc_sql_kernels(spark, tmp_path, table, sql_name):
+    """The UC rows of a function whose UC form is a SQL kernel, on the local Spark: the kernel is created as a temporary
+    function with the UC signature (the warehouse runs the same text in bench.probes.run_uc_slice).
+    """
+    cases = [c for c in oracles.TABLES[table] if c.fn == sql_name]
+    ran = oracles.run_sql_kernels(spark, cases, tmpdir=str(tmp_path))
+    assert ran and sum("uc" in c.surfaces for c in cases) == len(ran)
+    assert [m for _, m in ran if m] == []
+
+
 def test_every_uc_function_of_the_slice_has_its_uc_rows():
     """Each L4 function of the grid and vector tables has UC rows: a value, a NULL, and (for a geometry argument) a
     refusal or SRID row; the refusal of a BINARY for a GEOMETRY and the SRID of the BNG cell geometry are named rows.
     """
     man = manifest.load()
     for t in _UC_TABLES:
-        for name in _uc_fns(t):
+        for name in _uc_fns(t) + [
+            p.values[1] for p in SQL_KERNEL_ROWS if p.values[0] == t
+        ]:
             rows = [c for c in oracles.TABLES[t] if c.fn == name and "uc" in c.surfaces]
             kinds = {c.kind for c in rows}
             assert "null" in kinds or any(c.kind in ("no_rows",) for c in rows), name

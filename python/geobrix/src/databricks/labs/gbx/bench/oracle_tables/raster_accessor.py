@@ -449,13 +449,23 @@ RASTER_ACCESSOR = share(
     "getnodata_none", "metadata", "bandmetadata", "bandmetadata_none", "subdatasets", "rastertoworldcoord",
     "rastertoworldcoordx", "rastertoworldcoordy", "worldtorastercoord", "worldtorastercoordx",
     "worldtorastercoordy", "worldtorastercoord_edge", "worldtorastercoord_outside", "width_null_tile",
-    "width_error_tile", "width_corrupt_tile", "bandmetadata_null_band",
+    "width_error_tile", "width_corrupt_tile", "bandmetadata_null_band", "memsize",
 ) + edges(
     width=(), height=(), numbands=(), srid=(), crs=(), pixelwidth=(), pixelheight=(), scalex=(), scaley=(),
     upperleftx=(), upperlefty=(), skewx=(), skewy=(), rotation=(), georeference=(), boundingbox=(), format=(),
     type=(), getnodata=(), metadata=(), bandmetadata=(1,), subdatasets=(), rastertoworldcoord=(1, 2),
     rastertoworldcoordx=(1, 2), rastertoworldcoordy=(1, 2), worldtorastercoord=(400015.0, 5759975.0),
     worldtorastercoordx=(400015.0, 5759975.0), worldtorastercoordy=(400015.0, 5759975.0),
+) + edges(("memsize",), memsize=()) + (
+    # memsize is the raster buffer's length, a SQL expression with no GDAL open: a virtual tile is refused (above), a NULL
+    # tile and an error tile give NULL, and bytes that are no raster are still that many bytes (the other accessors
+    # give NULL for them).
+    Case("uc_memsize_null_tile", "gbx_rst_memsize", (None,), "null", None, ("uc",)),
+    Case("uc_memsize_error_tile", "gbx_rst_memsize", (ERR,), "null", None, ("uc",)),
+    Case(
+        "uc_memsize_corrupt_tile_is_its_length", "gbx_rst_memsize", (CORRUPT,), "exact", len(b"II*\x00not-a-real-tiff"),
+        ("uc",),
+    ),
 )  # fmt: skip
 
 POINT_UTM = "POINT(400015 5759995)"

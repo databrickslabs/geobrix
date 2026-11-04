@@ -2,6 +2,7 @@
 shares, and the two rows every one adds (a virtual tile is refused with a Fix, a corrupt tile is NULL).
 """
 
+import re
 from dataclasses import dataclass, replace
 from typing import Any, Callable, Optional
 
@@ -97,6 +98,25 @@ def twin(rows, uc_fn: str, adapt: Adapt, *cids):
             )
         )
     return tuple(out)
+
+
+def recipe(
+    cid: str, fn: str, sql: str, kind: str, expect: Any = None, surfaces=("uc",), **kw
+) -> Case:
+    """A recipe row: the whole SQL statement a user writes (or a procedure embeds), run on the UC surface, with the
+    session's value as the expectation. ``sql`` projects one row and names its answer ``out``; ``{q}`` is where a
+    function's qualifier goes (the 3-level schema prefix on UC, nothing on a local session), so the statement reads
+    ``SELECT {q}gbx_x(c) AS out FROM ...``. ``fn`` is the manifest function it exercises (the function the row is
+    filed under; a recipe over several names the one that carries the claim), and ``kind``/``expect`` are the usual
+    check on the one value. A ``twin`` row adapts a session row to another function; a recipe replaces the call itself.
+    """
+    from databricks.labs.gbx import manifest
+
+    if fn not in manifest.load().functions:
+        raise ValueError(f"recipe {cid}: {fn} is no manifest function")
+    if not re.search(r"\bAS\s+`?out`?\b", sql, re.IGNORECASE):
+        raise ValueError(f"recipe {cid}: the statement must name its answer `AS out`")
+    return Case(cid, fn, (), kind, expect, tuple(surfaces), sql=sql, **kw)
 
 
 def edges(_not_null=(), **extra):

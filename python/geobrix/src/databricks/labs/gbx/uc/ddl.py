@@ -139,6 +139,21 @@ def sql_helper_names(fn) -> List[str]:
     return [] if src is None else [h["name"] for h in src[1]]
 
 
+def local_function_ddl(fn, src=None, name: Optional[str] = None) -> str:
+    """The UC SQL kernel of ``fn`` as a TEMPORARY function with the UC signature and its helpers inlined, for a Spark
+    session that has no Unity Catalog (the host oracle runs the UC rows through it). ``src`` is a ``(body, helpers)``
+    pair that replaces the row's own kernel (a candidate body); ``name`` replaces ``fn.sql_name``.
+    """
+    src = src or sqlbody.l4_source(fn)
+    if src is None:
+        raise ValueError(f"{fn.sql_name} has no SQL kernel")
+    body, hs = src
+    return (
+        f"CREATE OR REPLACE TEMPORARY FUNCTION {name or fn.sql_name}({_params_sig(fn)}) "
+        f"RETURNS {sql_type(fn.returns_uc)} RETURN {sqlbody.inlined(body, hs)}"
+    )
+
+
 def function_ddl(
     fn,
     catalog: str,

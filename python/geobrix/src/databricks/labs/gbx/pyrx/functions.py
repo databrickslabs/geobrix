@@ -44,8 +44,6 @@ from databricks.labs.gbx._gdal_policy import (
     open_bytes,
     open_data,
 )
-
-# The tile checks live in the engine's own module so a worker that only runs the engine need not import this one
 from databricks.labs.gbx.engine._tile import cellid as _tile_cellid  # noqa: F401
 from databricks.labs.gbx.engine._tile import (  # noqa: F401
     error_tile_of as _error_tile_of,
@@ -85,7 +83,8 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import (
     VirtualTile,
 )
 
-# --- Virtual-aware tile helpers ---------------------------------------------
+# --- Virtual-aware tile helpers (the empty / cell id / error checks come from engine/_tile.py, so a worker that
+# only runs the engine need not import this module) ---------------------------------------------
 # These let a UDF body consume a v1 tile struct, a v2 tile struct, a virtual
 # (bytes-free) tile, or raw bytes uniformly, and shape a tile-returning result
 # via the shared ``open_tile.shape_output`` force-output helper. The operation

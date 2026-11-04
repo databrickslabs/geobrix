@@ -3721,7 +3721,7 @@ def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> Li
 
     from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
     tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
     path = resolve_arg(case.args[0], tmpdir)["path"]
@@ -3743,7 +3743,7 @@ def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> Li
     elif form == "d-py":
         df = virt.mapInArrow(
             functools.partial(
-                _mvp_forms.materialize_batches,
+                tile_batches.materialize_batches,
                 cap_bytes=report_detected_cap(
                     spark
                 ),  # the driver's cap: a worker cannot measure it

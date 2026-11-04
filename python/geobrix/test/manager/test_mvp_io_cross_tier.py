@@ -60,9 +60,9 @@ def _tif(path, bands=1, size=64, dtype="float32", crs="EPSG:4326"):
 
 
 def _decoded_rows(batch, cap_bytes=None):
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
-    (out,) = _mvp_forms.materialize_batches([batch], cap_bytes=cap_bytes)
+    (out,) = tile_batches.materialize_batches([batch], cap_bytes=cap_bytes)
     return [r["tile"] for r in out.to_pylist()]
 
 
@@ -78,12 +78,12 @@ def test_the_batch_decode_returns_an_error_tile_for_a_refused_location():
 def test_resource_exhaustion_fails_the_task_it_is_not_an_error_tile(
     tmp_path, monkeypatch, exc
 ):
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
     def boom(*a, **k):
         raise exc("while decoding")
 
-    monkeypatch.setattr(_mvp_forms, "_decode_py", boom)
+    monkeypatch.setattr(tile_batches, "decode_py", boom)
     with pytest.raises(exc):
         _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")))
 
@@ -130,17 +130,17 @@ def test_a_tile_with_pending_instructions_decodes_as_the_row_udf_decodes_it(tmp_
 )
 def test_the_gate_sizes_the_tile_as_it_will_be_decoded(tmp_path, md, crs, fits):
     """3 bands x 64 x 64 float32 = 48 KiB; the cap is 20000 bytes: a band select and a warp change what is held."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     tile = VirtualTile(
         cellid=1, path=_tif(tmp_path / "f.tif", bands=3), metadata=md, crs=crs
     ).to_row()
     if fits:
-        _mvp_forms._gate(tile, 20000)
+        tile_batches.gate(tile, 20000)
     else:
         with pytest.raises(ValueError, match="retile it first"):
-            _mvp_forms._gate(tile, 20000)
+            tile_batches.gate(tile, 20000)
 
 
 def test_the_gate_sizes_a_zarr_tile_from_its_own_header(tmp_path):
@@ -148,16 +148,16 @@ def test_the_gate_sizes_a_zarr_tile_from_its_own_header(tmp_path):
     pytest.importorskip("zarr")
     from test.zarr.test_tiles import cube, one_plan, virtual
 
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
     cube(tmp_path / "s.zarr")
     tile, *_ = virtual(one_plan(tmp_path / "s.zarr", variables=("v",)))
     row = tile.to_row()
     assert (
-        _mvp_forms._decoded_bytes(row) == 6 * 6 * 1 * 4
+        tile_batches.decoded_bytes(row) == 6 * 6 * 1 * 4
     )  # window 6 x 6, one plane (one time step), float32
     with pytest.raises(ValueError, match="retile it first"):
-        _mvp_forms._gate(row, 100)
+        tile_batches.gate(row, 100)
 
 
 def _window_tile(src_path, col, row, size, **override):
@@ -261,12 +261,12 @@ def test_the_reader_oracle_treats_nan_as_equal_to_nan_in_pixels_and_nodata(tmp_p
 
 
 def test_a_rewritten_file_is_not_served_the_header_of_the_old_one(tmp_path):
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
     path = _tif(tmp_path / "f.tif", size=64, dtype="float32")
-    assert _mvp_forms._source_header(path)[:4] == (64, 64, 1, "float32")
+    assert tile_batches.source_header(path)[:4] == (64, 64, 1, "float32")
     _tif(tmp_path / "f.tif", size=32, dtype="uint8")
-    assert _mvp_forms._source_header(path)[:4] == (32, 32, 1, "uint8")
+    assert tile_batches.source_header(path)[:4] == (32, 32, 1, "uint8")
 
 
 def test_plain_register_leaves_a_probe_out_and_a_named_one_installs_it():
@@ -323,19 +323,19 @@ def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):
     Serverless UDF holds 1 GiB), with every row kept, in order."""
     import pyarrow as pa
 
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
     paths = [_tif(tmp_path / f"f{i}.tif") for i in range(5)]
     batches = [_batch_of(p) for p in paths]
     one = pa.RecordBatch.from_pylist(
         [r for b in batches for r in b.to_pylist()], schema=batches[0].schema
     )
-    monkeypatch.setattr(_mvp_forms, "_OUT_CHUNK_BYTES", 1)  # a slice per decoded tile
-    out = list(_mvp_forms.materialize_batches([one]))
+    monkeypatch.setattr(tile_batches, "_OUT_CHUNK_BYTES", 1)  # a slice per decoded tile
+    out = list(tile_batches.materialize_batches([one]))
     assert [b.num_rows for b in out] == [1] * 5
     assert all(b.to_pylist()[0]["tile"]["raster"] for b in out)
-    monkeypatch.setattr(_mvp_forms, "_OUT_CHUNK_BYTES", 1 << 30)
-    (whole,) = _mvp_forms.materialize_batches([one])
+    monkeypatch.setattr(tile_batches, "_OUT_CHUNK_BYTES", 1 << 30)
+    (whole,) = tile_batches.materialize_batches([one])
     assert whole.num_rows == 5
     assert [b.to_pylist()[0] for b in out] == whole.to_pylist()
 
@@ -343,11 +343,11 @@ def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):
 def test_the_batch_decode_of_an_empty_batch_is_one_empty_batch_with_the_same_schema():
     import pyarrow as pa
 
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
 
     one = _batch_of("/nowhere.tif")
     empty = pa.RecordBatch.from_pylist([], schema=one.schema)
-    (out,) = _mvp_forms.materialize_batches([empty])
+    (out,) = tile_batches.materialize_batches([empty])
     assert out.num_rows == 0 and out.schema == one.schema
 
 
@@ -358,7 +358,7 @@ def test_the_batch_decode_passes_skipped_rows_through_and_keeps_every_row_in_ord
     them are, and slicing at the byte bound loses and reorders nothing."""
     import pyarrow as pa
 
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import tile_batches
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     a, b = _tif(tmp_path / "a.tif"), _tif(tmp_path / "b.tif")
@@ -377,9 +377,11 @@ def test_the_batch_decode_passes_skipped_rows_through_and_keeps_every_row_in_ord
     ]
     batch = pa.RecordBatch.from_pylist(rows, schema=base.schema)
     for chunk in (1 << 30, 1):  # one output batch, then a slice per decoded tile
-        monkeypatch.setattr(_mvp_forms, "_OUT_CHUNK_BYTES", chunk)
+        monkeypatch.setattr(tile_batches, "_OUT_CHUNK_BYTES", chunk)
         out = [
-            r for ob in _mvp_forms.materialize_batches([batch]) for r in ob.to_pylist()
+            r
+            for ob in tile_batches.materialize_batches([batch])
+            for r in ob.to_pylist()
         ]
         assert len(out) == 6
         assert [None if r["tile"] is None else r["tile"]["cellid"] for r in out] == [

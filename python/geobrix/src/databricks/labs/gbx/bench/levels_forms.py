@@ -1667,7 +1667,7 @@ def _io_read(spark, rows_dir, n, kind, only=None):
     import functools
 
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    from databricks.labs.gbx.pyrx import _mvp_forms, tile_batches
 
     only = only or _only_files_regex(_first_files(rows_dir, n))
     if kind == "b":
@@ -1683,7 +1683,7 @@ def _io_read(spark, rows_dir, n, kind, only=None):
     if kind in ("d-py", "floor"):
         # the floor is d-py's shell with the decode skipped (`keep_virtual`): same read, same Arrow round trip
         decode = functools.partial(
-            _mvp_forms.materialize_batches,
+            tile_batches.materialize_batches,
             cap_bytes=report_detected_cap(spark),
             **({"decode": _mvp_forms.keep_virtual} if kind == "floor" else {}),
         )

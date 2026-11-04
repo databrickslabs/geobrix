@@ -10,10 +10,8 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 # isort: split
 
 import hashlib
-import os
 from collections import OrderedDict
 from contextlib import contextmanager
-from types import SimpleNamespace
 
 import numpy as np
 from pyspark.sql import functions as f
@@ -22,7 +20,7 @@ from pyspark.sql.types import ArrayType, BinaryType, IntegerType
 
 from databricks.labs.gbx._gdal_policy import open_bytes
 from databricks.labs.gbx.pygx.functions import _BngTessellateExplode
-from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx import _serde, tile_batches
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import tiling
@@ -221,100 +219,7 @@ bng_tessellateexplode_udtf_arrow = udtf(
 #
 # The light reader's virtual tiles carry a path and a window, not bytes. Three ways to turn them into tiles with bytes
 # are held to one answer (`oracles.MVP_IO`): the reader with bytes (`b`), this row-wise UDF (L3), and the same decode in
-# one Python call per Arrow batch, through pyrx (`d-py`).
-
-_HEADERS: dict = (
-    {}
-)  # (path, size, mtime) -> (width, height, count, dtype, crs): one header read per file version per worker
-_HEADERS_MAX = 4096
-
-
-def _stamp(path: str):
-    """The key of a file's version: a rewritten file is another key, so it is never served another file's header."""
-    from databricks.labs.gbx.ds._listing import to_local_path
-
-    try:
-        st = os.stat(to_local_path(path))
-    except OSError:  # not a local file (the gate judges it when the header is opened)
-        return (path, None, None)
-    return (path, st.st_size, st.st_mtime_ns)
-
-
-def _source_header(path: str):
-    """(width, height, count, dtype, crs) of the file at `path`, opened as every light read is (the driver policy and
-    the remote-path gate). Cached per worker: the many windows of one file read its header once.
-    """
-    key = _stamp(path)
-    hit = _HEADERS.get(key)
-    if hit is None:
-        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
-
-        with ot.open_header(VirtualTile(cellid=0, path=path)) as h:
-            hit = (h.width, h.height, h.count, str(h.dtypes[0]), h.crs)
-        if len(_HEADERS) >= _HEADERS_MAX:
-            _HEADERS.clear()
-        _HEADERS[key] = hit
-    return hit
-
-
-def _decoded_bytes(tile) -> int:
-    """What decoding `tile` holds in memory: the pixels of its window, of the bands it keeps (a pending band select),
-    doubled when a pending reprojection holds the window it reads and the warped copy of it. A Zarr-backed tile has no
-    file header: its own header view (window and bands applied) is what `open_header` gives.
-    """
-    vt = ot._to_virtual_tile(tile)
-    if ot._zarr_tiles.is_zarr_tile(vt):
-        with ot.open_header(vt) as h:
-            return h.width * h.height * h.count * int(np.dtype(h.dtypes[0]).itemsize)
-    width, height, count, dtype, crs = _source_header(vt.path)
-    if vt.window is not None:
-        _, _, width, height = vt.window
-    bands = ot._parse_pending(vt.metadata)[0]
-    size = width * height * (len(bands) if bands else count)
-    size *= int(np.dtype(dtype).itemsize)
-    return (
-        size * 2 if vt.crs and ot._warp_pending(vt, SimpleNamespace(crs=crs)) else size
-    )
-
-
-def _gate(tile, cap_bytes) -> None:
-    """The materialize gate of a worker (`materialize_decision`, kind `ingest`): a tile decoded over this compute's cap
-    fails fast with its fix, never an OOM. `cap_bytes` is the driver's connect-aware cap (a worker cannot measure it).
-    """
-    from databricks.labs.gbx.ds.file_gbx import materialize_decision
-
-    size = _decoded_bytes(tile)
-    if materialize_decision(size, "ingest", cap_bytes=cap_bytes) == "error":
-        raise ValueError(
-            f"gbx_mvp_rst_materialize: the virtual tile is {size // 2**20} MiB decoded, over this compute's read cap. "
-            "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
-        )
-
-
-def _decode_py(tile, cap_bytes) -> dict:
-    """The materialized row of a virtual tile through pyrx (`open_tile`: the driver policy, the remote-path gate, FUSE
-    staging): the bytes, the pending instructions consumed, and `path` cleared, as the JVM's decode leaves the tile.
-    """
-    _gate(tile, cap_bytes)
-    row = ot.materialize_to_bytes(ot._to_virtual_tile(tile)).to_row()
-    row["path"] = None
-    return row
-
-
-def _materialized(tile, cap_bytes) -> dict:
-    """The row for a virtual tile: decoded, or an error tile when it cannot be (a bad file, a refused location, a tile over
-    the cap). That is the convention of the light `rst_*` functions (`RST_TransformCrs` and the rest): a bad input is a
-    row of data, the reason under `metadata["last_error"]`, as the JVM's `safeEval` gives; resource exhaustion still
-    fails the task.
-    """
-    try:
-        return _decode_py(tile, cap_bytes)
-    except (MemoryError, RecursionError):
-        raise
-    except Exception as e:  # noqa: BLE001
-        return _serde.build_error_tile(
-            f"gbx_mvp_rst_materialize: {e}", _tile_cellid(tile)
-        )
+# one Python call per Arrow batch, through pyrx (`d-py`, `tile_batches.materialize_batches`).
 
 
 def _build_materialize_udf(read_cap=None):
@@ -325,7 +230,7 @@ def _build_materialize_udf(read_cap=None):
     def materialize_udf(tile):
         if tile is None or tile["raster"] is not None or tile["path"] is None:
             return tile
-        return _materialized(tile, read_cap)
+        return tile_batches.materialized(tile, read_cap, who="gbx_mvp_rst_materialize")
 
     return materialize_udf
 
@@ -334,49 +239,10 @@ materialize_udf = _build_materialize_udf()
 
 
 def keep_virtual(tile, cap_bytes) -> dict:
-    """The decode of the IO floor form: the tile as it came, still virtual. `materialize_batches(decode=keep_virtual)`
-    is the d-py shell (Arrow rows to Python and back, the metadata made a dict) with the decode skipped.
+    """The decode of the IO floor form: the tile as it came, still virtual. `tile_batches.materialize_batches(decode=
+    keep_virtual)` is the d-py shell (Arrow rows to Python and back, the metadata made a dict) with the decode skipped.
     """
     return tile
-
-
-# The decoded bytes one output batch may hold. A batch of every tile of an Arrow batch (1000 tiles of 4 MiB) is a
-# 4 GiB column: Arrow cannot build a binary column past 2 GiB ("Cannot convert ChunkedArray to Array"), and a
-# Serverless UDF is limited to 1 GiB.
-_OUT_CHUNK_BYTES = 64 << 20
-
-
-def materialize_batches(batches, cap_bytes=None, decode=None):
-    """d-py: decode every virtual tile of an Arrow batch in one Python call (no per-row UDF hop): the `mapInArrow`
-    body over a one-column `tile` DataFrame. `cap_bytes` is the driver's read cap (`report_detected_cap(spark)`).
-    `decode` (default `_materialized`) is the per-tile step; the bench's floor form passes `keep_virtual` to time the shell.
-
-    A map column is a list of (key, value) pairs in `to_pylist()`: each tile's metadata is made a dict once for the
-    decode, and written back in the schema's form.
-    """
-    import pyarrow as pa
-
-    for b in batches:
-        rows = b.to_pylist()
-        start, held = 0, 0
-        for i, r in enumerate(rows):
-            t = r["tile"]
-            if t is None or t["raster"] is not None or t["path"] is None:
-                continue
-            t["metadata"] = dict(t["metadata"] or ())
-            out = (decode or _materialized)(t, cap_bytes)
-            out["metadata"] = list((out["metadata"] or {}).items())
-            r["tile"] = out
-            held += len(out["raster"] or b"")
-            if (
-                held >= _OUT_CHUNK_BYTES
-            ):  # a bounded slice out, not one batch of every decoded tile
-                yield pa.RecordBatch.from_pylist(rows[start : i + 1], schema=b.schema)
-                for done in rows[start : i + 1]:
-                    done["tile"] = None  # let the decoded bytes go
-                start, held = i + 1, 0
-        if start < len(rows) or not rows:
-            yield pa.RecordBatch.from_pylist(rows[start:], schema=b.schema)
 
 
 # --- Aggregates as a finalize over collect_list and a tree of finalizes ------------------------------------

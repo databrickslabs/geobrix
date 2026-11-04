@@ -153,6 +153,9 @@ def test_every_staging_procedure_builds_a_quoted_three_level_scratch_name_and_dr
             "regexp_replace(try_element_at(p, -1), '[^A-Za-z0-9_]', '_')" in name_stmt
         )
         assert name_stmt.count("concat('`'") == 3, name
+        # a NULL target (no table part) gives a NULL name: concat_ws skips NULL parts, so without the CASE the
+        # name would be the non-NULL two-part `cat`.`schema` and the exit handler would DROP it
+        assert "CASE WHEN try_element_at(p, -1) IS NULL THEN NULL" in name_stmt, name
         # one name, set before any statement uses it, and the exit handler drops that same variable
         assert text.count("SET v_scratch") == 1, name
         handler = text[text.index("DECLARE EXIT HANDLER") : text.index("SET v_scratch")]
@@ -190,3 +193,21 @@ def test_the_scratch_name_stays_in_the_target_schema_for_backticked_and_odd_targ
         short.endswith(".`tab_scratch_" + short.split("_scratch_")[1])
         and short.count("`") == 6
     )
+
+
+def test_the_scratch_name_is_null_for_a_null_target_so_the_handler_drops_nothing(spark):
+    """concat_ws skips a NULL part: a NULL target must give a NULL name, not a two-part one the handler would DROP."""
+    _, name_stmt = _scratch_statements("gbx_clean_geometries")
+    query = name_stmt.rstrip(";")[len("SET v_scratch = (") : -1]
+    assert (
+        spark.sql(query.replace("target_table", "CAST(NULL AS STRING)")).first()[0]
+        is None
+    )
+    # a named target still gives a name
+    assert (
+        spark.sql(query.replace("target_table", "'c.s.t'"))
+        .first()[0]
+        .startswith("`c`.`s`.`t_scratch_")
+    )
+    # the exit handler's guard is what the NULL name relies on
+    assert "IF v_scratch IS NOT NULL THEN DROP TABLE" in _text("gbx_clean_geometries")

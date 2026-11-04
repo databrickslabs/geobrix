@@ -176,15 +176,16 @@ WHEN NOT MATCHED THEN INSERT *;"""
 # A staged table sits beside the target (the caller can create tables there) and is named once per call. The name is
 # built from the parts of the target's name with the backticks stripped, in the target's catalog and schema (the current
 # ones when the target is named with fewer parts), and always 3-level and quoted, so a target written with backticks or a
-# table name with a dash gives a name that parses (a dot inside the backticks is not supported). The handler drops it when any statement fails, whether a refusal of the
+# table name with a dash gives a name that parses (a dot inside the backticks is not supported). A NULL target (or one with
+# no table part) gives a NULL name, so the handler's IS NOT NULL guard drops nothing. The handler drops it when any statement fails, whether a refusal of the
 # procedure or an error of a function; the last statement drops it when the call succeeds.
 _SCRATCH_DECLARE = "DECLARE v_scratch STRING;"
 _SCRATCH_NAME = (
-    "SET v_scratch = (SELECT concat_ws('.',\n"
+    "SET v_scratch = (SELECT CASE WHEN try_element_at(p, -1) IS NULL THEN NULL ELSE concat_ws('.',\n"
     "  concat('`', coalesce(try_element_at(p, -3), current_catalog()), '`'),\n"
     "  concat('`', coalesce(try_element_at(p, -2), current_schema()), '`'),\n"
     "  concat('`', regexp_replace(try_element_at(p, -1), '[^A-Za-z0-9_]', '_'), '_scratch_', "
-    "replace(uuid(), '-', ''), '`'))\n"
+    "replace(uuid(), '-', ''), '`')) END\n"
     "  FROM (SELECT split(replace(target_table, '`', ''), '[.]') AS p));"
 )
 _SCRATCH_HANDLER = (

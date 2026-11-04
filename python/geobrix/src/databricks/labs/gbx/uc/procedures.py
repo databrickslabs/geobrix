@@ -325,16 +325,28 @@ def points_to_h3_surface(catalog: str, schema: str) -> str:
         "SELECT h3_longlatash3(longitude, latitude, h3_resolution) AS cellid, avg(value) AS value\n"
         "FROM IDENTIFIER(source_table) GROUP BY 1"
     )
+    # The fill only changes the cells it is given: a neighbour that no point fell in is not a cell of the set and
+    # would never get a value. So every cell within fill_rings of a cell is added with no value (the product
+    # h3_kring); max() keeps the value of a cell that has one, as the NULL of its own padding row never wins.
+    padded = (
+        "WITH c AS (\n" + cells + "\n)\n"
+        "SELECT cellid, max(value) AS value FROM (\n"
+        "  SELECT cellid, value FROM c\n"
+        "  UNION ALL\n"
+        "  SELECT explode(h3_kring(cellid, greatest(fill_rings, 0))) AS cellid, CAST(NULL AS DOUBLE) AS value FROM c\n"
+        ") GROUP BY cellid"
+    )
     sel = (
         f"SELECT surface_name AS surface,\n"
         f"  {q}.gbx_rst_h3_rasterize(\n"
         f"    {q}.gbx__h3_cellfill_cells(g.cells, fill_rings, 'mean', 2.0),\n"
         f"    4326, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),\n"
         f"    CAST(NULL AS DOUBLE), CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 0, CAST(NULL AS STRING)) AS tile\n"
-        f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM ({cells})) AS g"
+        f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM (\n{padded}\n)) AS g"
     )
+    create = _create_like(sel)
     body = f"""
-{_create_like(sel)}
+{create}
 MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
@@ -346,9 +358,9 @@ WHEN NOT MATCHED THEN INSERT *;"""
         catalog,
         schema,
         "gbx_points_to_h3_surface",
-        "Average the values of a table of points (columns longitude, latitude, value) per H3 cell, fill the "
-        "empty neighbours and merge the surface, one GeoTIFF, into a table of (surface, tile). "
-        + _UPSERTS,
+        "Average the values of a table of points (columns longitude, latitude, value) per H3 cell, add the "
+        "empty cells within fill_rings of a cell, fill them from their neighbours and merge the surface, one "
+        "GeoTIFF, into a table of (surface, tile). " + _UPSERTS,
         [
             SRC,
             TGT,
@@ -363,7 +375,7 @@ WHEN NOT MATCHED THEN INSERT *;"""
             Param(
                 "fill_rings",
                 "INT",
-                "The rings of neighbours a cell without a value is filled from.",
+                "The rings of neighbours around a cell that are filled from the cells that have a value.",
                 "1",
             ),
         ],

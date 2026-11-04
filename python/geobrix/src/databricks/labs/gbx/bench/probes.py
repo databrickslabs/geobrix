@@ -863,10 +863,20 @@ def proc_cases(catalog: str, schema: str) -> list:
             "compare": "rows",
         }
     )
-    # points -> H3 surface: a cell with no value among cells that have one
+    # points -> H3 surface: a cell with no value among cells that have one, and cells no point fell in. The ring around
+    # the centre in order: every other cell has a value, so each absent one sits between two that do and is filled
+    # only when the procedure adds the absent cells (fill_rings).
     centre = h3.latlng_to_cell(37.77, -122.42, 8)
-    ring = sorted(h3.grid_ring(centre, 1))[:3]
-    pts = [(centre, None)] + [(c, float(i + 1)) for i, c in enumerate(ring)]
+    around = [sorted(h3.grid_ring(centre, 1))[0]]
+    while len(around) < 6:
+        around.append(
+            next(
+                c
+                for c in sorted(h3.grid_ring(centre, 1))
+                if c not in around and h3.are_neighbor_cells(c, around[-1])
+            )
+        )
+    pts = [(centre, None)] + [(c, float(i + 1)) for i, c in enumerate(around[::2])]
     values = ", ".join(
         f"({h3.cell_to_latlng(c)[1]!r}, {h3.cell_to_latlng(c)[0]!r}, "
         f"{'NULL' if v is None else repr(v)})"
@@ -1104,13 +1114,30 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
 
 
 def _proc_h3_reference(spark, source: str) -> list:
-    """The session flow of the H3 surface: the session cell-fill aggregate, then the session rasterize aggregate."""
+    """The session flow of the H3 surface: the cells within one ring of a cell added with no value (the h3 library, not
+    the product function the procedure calls), the session cell-fill aggregate, then the session rasterize aggregate.
+    """
+    import h3
+
     from databricks.labs.gbx.bench.clientcap import client_dataframe
     from databricks.labs.gbx.pygx import _cellfill
 
-    cells = f"SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM {source} GROUP BY 1"
+    base = spark.sql(
+        f"SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM {source} GROUP BY 1"
+    ).collect()
+    cells = {r["cellid"]: r["value"] for r in base}
+    padded = dict(cells)
+    for cell in cells:
+        for nb in h3.grid_disk(h3.int_to_str(cell), 1):
+            padded.setdefault(h3.str_to_int(nb), None)
+    client_dataframe(
+        spark,
+        sorted(padded.items()),
+        "cellid bigint, value double",
+        what="H3 padded cells",
+    ).createOrReplaceTempView("gbxproc_h3_padded")
     payload = spark.sql(
-        f"SELECT gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) FROM ({cells})"
+        "SELECT gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) FROM gbxproc_h3_padded"
     ).first()[0]
     filled = _cellfill.decode(bytes(payload))
     client_dataframe(
@@ -1213,16 +1240,20 @@ def proc_warehouse_statements(
         f"SELECT id, st_astext(geom) AS wkt FROM {t('mig_tgt')}",
         f"SELECT id, st_astext({q}.gbx_st_legacyaswkb(geom)) AS wkt FROM {t('mig_src')}",
     )  # fmt: skip
-    # points -> H3 surface (the tile is BINARY on UC)
+    # points -> H3 surface (the tile is BINARY on UC): the plain SQL flow pads the cells with the product h3_kring too
     c = by_name["gbx_points_to_h3_surface"]
     cells = f"SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM {t('h3_src')} GROUP BY 1"
+    padded = (
+        f"WITH c AS ({cells}) SELECT cellid, max(value) AS value FROM (SELECT cellid, value FROM c UNION ALL "
+        "SELECT explode(h3_kring(cellid, 1)) AS cellid, CAST(NULL AS DOUBLE) AS value FROM c) GROUP BY cellid"
+    )
     case(
         c["name"], c["setup"], c["args"],
         f"SELECT surface, sha2(tile, 256) AS h FROM {t('h3_tgt')}",
         f"SELECT 'probe' AS surface, sha2({q}.gbx_rst_h3_rasterize({q}.gbx__h3_cellfill_cells(g.cells, 1, 'mean', 2.0), "
         "4326, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), "
         "CAST(NULL AS DOUBLE), CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 0, CAST(NULL AS STRING)), 256) AS h "
-        f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM ({cells})) AS g",
+        f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM ({padded})) AS g",
     )  # fmt: skip
     # features -> MVT
     c = by_name["gbx_features_to_mvt"]

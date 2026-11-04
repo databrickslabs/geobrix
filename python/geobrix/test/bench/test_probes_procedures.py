@@ -425,3 +425,77 @@ def test_the_pixel_compare_rounds_and_treats_a_pixel_with_no_data_as_none():
     assert probes._proc_pixels(None) is None
 
 
+def test_the_h3_case_has_valued_cells_and_absent_cells_between_them():
+    import h3
+
+    case = next(
+        c
+        for c in probes.proc_cases("c", "s")
+        if c["name"] == "gbx_points_to_h3_surface"
+    )
+    values = re.search(r"VALUES (.*)$", case["setup"][1]).group(1)
+    points = re.findall(r"\(([-\d.e]+), ([-\d.e]+), (NULL|[\d.]+)\)", values)
+    assert len(points) == 4  # the empty centre and three cells of the ring around it
+    cells = {h3.latlng_to_cell(float(lat), float(lon), 8): v for lon, lat, v in points}
+    centre = next(c for c, v in cells.items() if v == "NULL")
+    ring = set(h3.grid_ring(centre, 1))
+    valued = [c for c, v in cells.items() if v != "NULL"]
+    absent = ring - set(valued)
+    assert len(valued) == 3 and len(absent) == 3 and set(valued) <= ring
+    # each absent cell touches two valued ones: the padded fill gives it a value
+    for a in absent:
+        assert sum(h3.are_neighbor_cells(a, v) for v in valued) == 2
+
+
+def test_the_h3_reference_pads_the_session_fill_input_with_the_h3_library():
+    import h3
+
+    class Spark(_Spark):
+        def __init__(self):
+            super().__init__()
+            self.views = {}
+
+        def createDataFrame(self, rows, schema=None):  # noqa: N802 - the Spark API name
+            return type(
+                "DF",
+                (),
+                {
+                    "createOrReplaceTempView": lambda _s, name: self.views.__setitem__(
+                        name, list(rows)
+                    )
+                },
+            )()
+
+        def sql(self, text):
+            self.stmts.append(text)
+            centre = h3.str_to_int(h3.latlng_to_cell(37.77, -122.42, 8))
+            if "GROUP BY 1" in text:
+                rows = [{"cellid": centre, "value": 1.0}]
+            else:
+                rows = []
+            return type(
+                "R",
+                (),
+                {"collect": lambda _s: rows, "first": lambda _s: [b"\x00\x00\x00\x00"]},
+            )()
+
+    import databricks.labs.gbx.bench.clientcap as clientcap
+
+    spark = Spark()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(
+        clientcap,
+        "client_dataframe",
+        lambda sp, rows, schema, what=None: sp.createDataFrame(rows, schema),
+    )
+    try:
+        probes._proc_h3_reference(spark, "src")
+    finally:
+        monkey.undo()
+    padded = spark.views["gbxproc_h3_padded"]
+    assert (
+        len(padded) == 7
+    )  # the cell and its six neighbours, the neighbours with no value
+    assert sum(1 for _c, v in padded if v is not None) == 1
+
+

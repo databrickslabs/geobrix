@@ -934,8 +934,11 @@ def _proc_tile_inputs():
     return mosaic, tile(0.0, 100.0, 0)
 
 
-def _proc_tile_cases(spark, catalog: str, schema: str) -> list:
-    """The tile-input cases (mosaic by key, zonal statistics): their input tables are built from GeoTIFF bytes."""
+def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> list:
+    """The tile-input cases (mosaic by key, zonal statistics): their input tables are built from GeoTIFF bytes.
+
+    Each table is added to ``tables`` (when given) before it is created, so a failure part-way still drops it.
+    """
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     tiles, zone_bytes = _proc_tile_inputs()
@@ -948,6 +951,12 @@ def _proc_tile_cases(spark, catalog: str, schema: str) -> list:
     def lit(name):
         return "'" + t(name).replace("`", "") + "'"
 
+    def made(*names):
+        for name in names:
+            if tables is not None and t(name) not in tables:
+                tables.append(t(name))
+
+    made("mos_src", "mos_tgt", "zs_tiles", "zs_zones", "zs_tgt")
     spark.createDataFrame(
         tiles, "tile_key string, tile " + V2_TILE_SCHEMA.simpleString()
     ).write.mode("overwrite").saveAsTable(t("mos_src").replace("`", ""))
@@ -1292,6 +1301,14 @@ def _proc_rows(rows, case) -> list:
     return out
 
 
+def _proc_status(got, want) -> str:
+    """``match``, ``mismatch``, or ``empty`` when the two sides agree only because both are empty (nothing was
+    compared, so nothing was proven)."""
+    if got != want:
+        return "mismatch"
+    return "match" if want else "empty"
+
+
 def run_procedures(
     spark,
     catalog: str,
@@ -1312,8 +1329,9 @@ def run_procedures(
     and per surface (``call``: the procedure; ``session``: the session flow), and a RUNNING line every 60 s through
     ``liveness.Heartbeat`` (begun with ``set_name="PROC"``).
 
-    Returns ``{"installed", "skipped", "recipes": {procedure: {"call_s", "session_s", "rows", "match", "diff",
-    "error"}}, "dropped"}``.
+    Returns ``{"installed", "skipped", "recipes": {procedure: {"call_s", "session_s", "rows", "match", "status",
+    "diff", "error"}}, "dropped"}``. ``match`` is True only for a ``status`` of ``match``: equal and not empty; two
+    empty results give ``empty``, and a rejects table compared the same way gives ``also_status``.
     """
     import os
     import tempfile
@@ -1376,12 +1394,18 @@ def run_procedures(
                 "gbx_rst_merge", "gbx_rst_clip", "gbx_rst_summary", "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg",
             ],
         )  # fmt: skip
-        cases = proc_cases(catalog, schema) + _proc_tile_cases(spark, catalog, schema)
+        cases = proc_cases(catalog, schema) + _proc_tile_cases(
+            spark, catalog, schema, tables
+        )
         for case in cases:
             name = case["name"]
             rec = out["recipes"].setdefault(name, {})
             tables += [
-                f"`{catalog}`.`{schema}`.{PROC_PREFIX}{x}" for x in case["tables"]
+                tbl
+                for tbl in (
+                    f"`{catalog}`.`{schema}`.{PROC_PREFIX}{x}" for x in case["tables"]
+                )
+                if tbl not in tables
             ]
             for stmt in case.get("setup", ()):
                 spark.sql(stmt)
@@ -1410,8 +1434,9 @@ def run_procedures(
                 rec["error"] = rerr
                 continue
             want = _proc_rows(ref_rows, case)
-            rec["match"] = got == want
-            if got != want:
+            rec["status"] = _proc_status(got, want)
+            rec["match"] = rec["status"] == "match"
+            if rec["status"] == "mismatch":
                 rec["diff"] = {"procedure": got[:3], "session": want[:3]}
             if "also" in case:  # a second output table of the same call (the rejects)
                 extra_got = _proc_rows(
@@ -1420,7 +1445,8 @@ def run_procedures(
                 extra_want = _proc_rows(
                     spark.sql(case["also"][1]).collect(), {"compare": "rows"}
                 )
-                rec["match_also"] = extra_got == extra_want
+                rec["also_status"] = _proc_status(extra_got, extra_want)
+                rec["match_also"] = rec["also_status"] == "match"
         out["recipes"]["zarr"] = _proc_zarr(
             spark, catalog, schema, tmpdir, step, tables
         )
@@ -1472,7 +1498,9 @@ def _proc_zarr(
             lambda: spark.sql(f"CALL `{catalog}`.`{schema}`.gbx_zarr_tag_version('{a.replace(chr(96), '')}', 'probe')").collect(),
         )  # fmt: skip
         _maint.gbx_zarr_tag(spark, b.replace("`", ""), "probe")
-        rec["tag_match"] = err is None and tag_rows(a) == tag_rows(b)
+        tagged, twin = tag_rows(a), tag_rows(b)
+        rec["tag_status"] = "error" if err else _proc_status(tagged, twin)
+        rec["tag_match"] = rec["tag_status"] == "match"
         rec["error"] = err
         _, err, _ = step(
             "gbx_zarr_tag_version", "call (existing tag)",

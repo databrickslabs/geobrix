@@ -164,6 +164,55 @@ def test_inlining_leaves_quoted_text_and_field_names_alone_and_refuses_an_undecl
     assert sqlbody.inlined("{q}gbx__g(3)", nested) == "((((3)) * 2) + 1)"
 
 
+def test_render_substitutes_only_in_code_and_inlined_agrees():
+    body = "concat('{q}x', {q}gbx__h(1), `{q}y`)"
+    assert (
+        sqlbody.render(body, "`c`.`s`.") == "concat('{q}x', `c`.`s`.gbx__h(1), `{q}y`)"
+    )
+    # a {q} inside a string is text for inlining too: it is no leftover
+    assert sqlbody.inlined("concat('{q}x', 1)", []) == "concat('{q}x', 1)"
+
+
+def test_rename_is_case_sensitive_whole_word_and_leaves_types_alone():
+    # a parameter that spells a type never rewrites a CAST target, in either case
+    assert sqlbody.rename("CAST(x AS STRING)", {"string": "(1)"}) == "CAST(x AS STRING)"
+    assert sqlbody.rename("cast(x as string)", {"string": "(1)"}) == "cast(x as string)"
+    assert sqlbody.rename("string + 1", {"string": "(2)"}) == "(2) + 1"
+    # case-sensitive and word-bounded: K and kk are other names
+    assert sqlbody.rename("K + k + kk + k2", {"k": "(1)"}) == "K + (1) + kk + k2"
+    # a backtick-quoted parameter is the parameter; any other quoted text is not
+    assert sqlbody.rename("`k` + 'k' + `other`", {"k": "(5)"}) == "(5) + 'k' + `other`"
+
+
+def test_helper_calls_nested_in_an_argument_inline_like_they_render():
+    h = [
+        {"name": "gbx__h", "params": [["k", "INT"]], "returns": "INT", "sql": "k * 2"},
+        {"name": "gbx__g", "params": [["a", "INT"]], "returns": "INT", "sql": "a + 1"},
+    ]
+    body = "{q}gbx__g({q}gbx__h(3))"
+    assert sqlbody.inlined(body, h) == "((((3) * 2)) + 1)"
+    assert (
+        sqlbody.render(body, "`c`.`s`.") == "`c`.`s`.gbx__g(`c`.`s`.gbx__h(3))"
+    )  # the UC call keeps the nesting
+
+
+def test_the_inlining_guards_name_a_cycle_an_unbalanced_call_and_a_leftover_qualifier():
+    loop = [
+        {
+            "name": "gbx__h",
+            "params": [["k", "INT"]],
+            "returns": "INT",
+            "sql": "{q}gbx__h(k)",
+        }
+    ]
+    with pytest.raises(ValueError, match="nest too deeply"):
+        sqlbody.inlined("{q}gbx__h(1)", loop)
+    with pytest.raises(ValueError, match="unbalanced"):
+        sqlbody.inlined("{q}gbx__h(1", loop)
+    with pytest.raises(ValueError, match="not a declared helper call"):
+        sqlbody.inlined("{q}x", loop)
+
+
 def test_the_session_and_uc_share_one_l0_body():
     def edit(raw):
         r = _row(raw, "gbx_quadbin_resolution")
@@ -203,6 +252,20 @@ def test_the_sql_keys_have_rules_a_load_enforces():
     def tvf_with_body(raw):
         _row(raw, "gbx_bng_kringexplode")["levels"]["L4"]["sql"] = "1"
 
+    def aggregate_with_body(raw):
+        _row(raw, "gbx_h3_cellfill")["levels"]["L4"] = {"sql": "1"}
+
+    def generator_with_body(raw):
+        _row(raw, "gbx_bng_kloopexplode")["levels"]["L4"] = {"sql": "1"}
+
+    def one_l0_body_two_signatures(raw):
+        # the session takes BINARY (or STRING) and UC takes GEOMETRY: one body cannot serve both
+        levels = _row(raw, "gbx_st_crs")["levels"]
+        levels["L0"], levels["L4"] = {"sql": "'x'"}, {"sql": "L0"}
+
+    fails(aggregate_with_body, "scalar SQL function.*aggregate")
+    fails(generator_with_body, "scalar SQL function.*generator")
+    fails(one_l0_body_two_signatures, "types differ.*geom: BINARY in the session")
     fails(l4_from_l0_without_l0, "no L0 sql")
     fails(helpers_without_body, "sql_helpers without sql")
     fails(bad_helper_name, "must be gbx__<name>")
@@ -257,6 +320,51 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
         ddl.stub_ddl(
             man.functions["gbx_h3_cellfill"], "c", "s", "0.6.0"
         )  # an aggregate
+
+
+def test_only_may_be_a_generator_and_an_aggregate_stub_hint_names_its_session_route(
+    monkeypatch,
+):
+    _stub_manifest(monkeypatch)
+    names = (n for n in ["st_crs", "bng_kring"])  # used up by one pass
+    stmts = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True, only=names)
+    assert (
+        len(stmts) == 2 and "gbx_bng_kring(" in stmts[0] and "raise_error" in stmts[1]
+    )
+    # an aggregate gets no stub: the message points at its session route, not at stubs=True
+    with pytest.raises(ValueError) as exc:
+        uc.install(
+            "c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True, only=["h3_cellfill"]
+        )
+    text = str(exc.value)
+    assert "no stub" in text and "use gbx_h3_cellfill_array." in text
+    assert "install(stubs=True) creates" not in text
+
+
+def test_verify_checks_the_helpers_and_the_stubs_that_install_created(monkeypatch):
+    def edit(raw):
+        _kring_sql(raw)
+        _row(raw, "gbx_st_crs")["levels"]["L4"] = {"stub": "use st_srid(geom)."}
+
+    man = perf_manifest(edit)
+    monkeypatch.setattr(manifest, "load", lambda: man)
+    monkeypatch.setattr(uc, "_require_env6", lambda: None)
+    monkeypatch.setattr(uc, "_single_wheel", lambda d: "/Volumes/c/s/v/w.whl")
+    verified, ran = [], []
+    monkeypatch.setattr(
+        uc, "verify", lambda spark, c, s, names: verified.append(list(names))
+    )
+    spark = type("S", (), {"sql": lambda self, text: ran.append(text)})()
+    uc.install(
+        "c",
+        "s",
+        "/Volumes/c/s/v",
+        spark=spark,
+        only=["bng_kring", "st_crs"],
+        stubs=True,
+    )
+    assert len(ran) == 3  # the helper, the function, the stub
+    assert verified == [["gbx_bng_kring", "gbx__ring_width", "gbx_st_crs"]]
 
 
 def test_shared_deps_gives_every_python_function_the_whole_list():
@@ -407,6 +515,34 @@ def test_an_l0_only_function_is_served_and_a_failed_l0_install_names_the_reason(
         )
 
 
+def test_an_unforced_l0_failure_falls_back_to_l3_and_records_the_reason(monkeypatch):
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.manager import l3, levels
+
+    fn = _l0_manifest().functions["gbx_quadbin_resolution"]
+    registered = []
+    monkeypatch.setattr(
+        l3,
+        "register_l3",
+        lambda spark, f, variant, name=None: registered.append(variant),
+    )
+    monkeypatch.setattr(l3, "l3_variant", lambda f: ("c0", None))
+    lines = []
+    got = manager._install(
+        _RecordingSpark(fail=True),
+        fn,
+        levels.Choice("L0", "-", ()),
+        _caps(),
+        forced=False,
+        lines=lines,
+    )
+    assert (got.level, got.variant) == ("L3", "c0") and registered == ["c0"]
+    assert any(
+        "unavailable: RuntimeError" in text and "using" in text for _, text in lines
+    )
+    assert any("unavailable: RuntimeError" in r for r in got.reasons)
+
+
 # ---- twin(): an oracle row for a UC form that is not the session's shape --------------------------------------
 
 
@@ -458,6 +594,13 @@ def test_twin_copies_a_session_row_to_the_uc_form_with_adapted_arguments_and_out
     assert c.kind == "approx" and c.args == rows[0].args
     # nothing else is copied: the originals are untouched and the python-only row is not a candidate
     assert rows[0].surfaces == ("session", "uc") and rows[0].twin_of is None
+
+
+def test_twin_without_names_copies_every_session_row_and_skips_python_only_rows():
+    from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, twin
+
+    out = twin(_agg_rows(), "gbx_rst_merge", Adapt())  # agg_py has no session surface
+    assert [c.cid for c in out] == ["agg_a__rst_merge", "agg_b__rst_merge"]
 
 
 def test_twin_refuses_a_row_that_is_not_there_a_python_only_row_a_same_name_form_and_a_missing_uc_form():
@@ -540,3 +683,18 @@ def test_the_collision_gate_covers_suffixed_names_sql_helpers_and_stubs():
     # a stub's Fix text is the sentence after "Fix:", not a second "Fix:"
     stub = rename(man.functions["gbx_st_crs"], "gbx_st_crs", stub="Fix: use st_srid.")
     assert any("Fix:" in f for f in findings(stub))
+    # `gbx__<name>` is reserved only by a row that creates that wrapper (a Python or Scala function with a DEFAULT)
+    withdefault = dataclasses.replace(base.params[1], default="1")
+    wrapper = rename(base, "gbx_w", params=(base.params[0], withdefault))
+    kernel = rename(
+        base,
+        "gbx_w",
+        params=(base.params[0], withdefault),
+        levels={**base.levels, "L4": {"sql": "1"}},
+    )
+    h = {"name": "gbx__w", "params": (), "returns": "INT", "sql": "1"}
+    holder = rename(
+        base, "gbx_h", levels={**base.levels, "L4": {"sql": "1", "sql_helpers": (h,)}}
+    )
+    assert any("is a function name" in f for f in findings(wrapper, holder))
+    assert findings(kernel, holder) == []  # a SQL kernel creates no gbx__k wrapper

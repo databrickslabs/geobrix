@@ -123,14 +123,16 @@ def _l4_names(only: Optional[Iterable[str]]) -> List[str]:
     want = [_full_name(n) for n in only]
     unknown = [n for n in want if n not in uc_names]
     if unknown:
-        stub_only = [
-            n for n in unknown if man.functions.get(n) and man.functions[n].stub
-        ]
-        hint = (
-            f" ({stub_only} run in a session only: install(stubs=True) creates their stubs)"
-            if stub_only
-            else ""
-        )
+        stubbed = [n for n in unknown if man.functions.get(n) and man.functions[n].stub]
+        scalars = [n for n in stubbed if man.functions[n].kind == "scalar"]
+        others = [n for n in stubbed if man.functions[n].kind != "scalar"]
+        hint = ""
+        if scalars:
+            hint += f" ({scalars} run in a session only: install(stubs=True) creates their stubs)"
+        if others:
+            # an aggregate or a generator gets no stub: its Fix text names the session route
+            routes = "; ".join(f"{n}: {man.functions[n].stub}" for n in others)
+            hint += f" ({others} run in a session only and have no stub. Fix: {routes})"
         raise ValueError(
             f"install(only=...) got name(s) with no UC function: {unknown}{hint}"
         )
@@ -190,6 +192,8 @@ def install(
         )
     shared = deps == "shared"
     man = manifest.load()
+    if only is not None:
+        only = list(only)  # a generator would be used up by the first pass below
     stub_names: List[str] = []
     if stubs:
         every = [n for n, f in man.functions.items() if f.kind == "scalar" and f.stub]

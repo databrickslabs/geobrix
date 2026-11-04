@@ -120,15 +120,20 @@ def decoded_budget_bytes(strategy: str) -> int:
 _COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
 
 
-def decoded_bytes(ds) -> int:
-    """The decoded size of an open raster, from its header: width x height x the type size of each band."""
+def grid_bytes(width: int, height: int, dtypes) -> int:
+    """The decoded size of a raster of this grid, one entry of ``dtypes`` per band: width x height x the type size."""
     import numpy as np
 
-    pixels = ds.width * ds.height
+    pixels = int(width) * int(height)
     return sum(
         pixels * (_COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize)
-        for name in ds.dtypes
+        for name in dtypes
     )
+
+
+def decoded_bytes(ds) -> int:
+    """The decoded size of an open raster, from its header: width x height x the type size of each band."""
+    return grid_bytes(ds.width, ds.height, ds.dtypes)
 
 
 def size_text(n: int) -> str:

@@ -111,6 +111,11 @@ def gdal_type(new_type) -> str:
     return key
 
 
+def numpy_type(new_type) -> str:
+    """The numpy name of the data type ``new_type`` names (see :func:`gdal_type`)."""
+    return str(np.dtype(_GDAL_TO_NP[gdal_type(new_type)]))
+
+
 def update_type(ds, new_type: str) -> bytes:
     """Cast all bands to a new GDAL data type name (e.g. 'Int32', any case); return GTiff bytes.
 
@@ -188,6 +193,16 @@ _THRESHOLD_OPS = {
 }
 
 
+def check_threshold_op(op) -> str:
+    """The comparison operator of ``rst_threshold`` (``>`` for NULL); a ``ValueError`` that lists the known ones when
+    it names none."""
+    op = ">" if op is None else str(op)
+    if op not in _THRESHOLD_OPS:
+        known = ", ".join(sorted(_THRESHOLD_OPS))
+        raise ValueError(f"rst_threshold: unknown operator {op!r}. Known: {known}")
+    return op
+
+
 def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
     """Keep pixels satisfying ``op value``; set others to NoData.
 
@@ -202,11 +217,8 @@ def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
         the comparison are replaced with the raster's NoData value (the
         dtype's fallback no-data value when not set, as the heavyweight tier).
     """
-    op = ">" if op is None else str(op)
+    op = check_threshold_op(op)
     value = 0.0 if value is None else float(value)
-    if op not in _THRESHOLD_OPS:
-        known = ", ".join(sorted(_THRESHOLD_OPS))
-        raise ValueError(f"rst_threshold: unknown operator {op!r}. Known: {known}")
     fn = _THRESHOLD_OPS[op]
     data = ds.read()
     nd = ds.nodata if ds.nodata is not None else _nd.fallback_nodata(data.dtype.name)

@@ -202,6 +202,12 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
         return mf.read()
 
 
+def target_grid(ds, dst_crs) -> tuple:
+    """The ``(width, height)`` a reprojection of ``ds`` to ``dst_crs`` makes, from the header alone."""
+    _, width, height = _default_transform(ds, dst_crs)
+    return width, height
+
+
 def _identity(ds) -> bytes:
     """``ds`` re-encoded as it is: its alpha band and its own mask band come with it."""
     mask = ds.read_masks(1) if has_own_mask(ds) else None

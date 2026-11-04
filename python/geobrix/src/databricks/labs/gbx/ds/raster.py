@@ -1176,16 +1176,17 @@ class RasterGbxReader(DataSourceReader):
     def _read_cap(self) -> Optional[int]:
         """The read cap of a task that decodes at read (64 MiB on Serverless / Spark Connect, 256 MiB classic; None
         when the read keeps virtual tiles). A worker cannot measure it: it is the cap the driver carried, else (a reader
-        used with no registration) what this process resolves."""
+        used with no registration) what this process resolves; with no session, as on a worker, the smaller Serverless cap.
+        """
         if self._read_cap_set is not None:
             return self._read_cap_set
         if self.emit_virtual:
             return None
         if self._gbx_read_cap is not None:
             return self._gbx_read_cap
-        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+        from databricks.labs.gbx.ds.file_gbx import lazy_read_cap
 
-        return report_detected_cap()
+        return lazy_read_cap()
 
     @_read_cap.setter
     def _read_cap(self, value: Optional[int]) -> None:

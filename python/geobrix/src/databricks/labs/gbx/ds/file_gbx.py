@@ -78,6 +78,7 @@ __all__ = [
     "_resolve_session_for_cap",
     "materialize_decision",
     "report_detected_cap",
+    "lazy_read_cap",
     # FILE-column table helpers (moved from rasterx/file_table.py for DRY shared core)
     "_table_props",
     "_describe_cols",
@@ -1051,6 +1052,15 @@ def _process_read_cap() -> int:
     from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
 
     return decoded_budget_bytes("auto")
+
+
+def lazy_read_cap() -> int:
+    """The read cap of a reader no registration carried one into, resolved where it runs. With a session (the driver)
+    it is :func:`report_detected_cap`. With none (a Spark task on a worker) the process cannot tell Serverless from
+    classic, so it takes the smaller Serverless cap, never the classic 256 MiB that would decode an over-cap file on a
+    Serverless task. ``GBX_STREAM_MAX_BYTES`` still wins."""
+    sess = _resolve_session_for_cap()
+    return report_detected_cap(sess) if sess is not None else _lru_sizing(True)[0]
 
 
 def read_cap_refusal(decoded: int, cap: int) -> str:

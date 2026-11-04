@@ -437,6 +437,23 @@ def test_plan_stage_flushes_at_the_row_cap(spark, tmp_path, monkeypatch):
     assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want, cols)).count() == 0
 
 
+def test_read_paths_carries_the_drivers_read_cap_to_every_per_file_reader(
+    spark, tmp_path, monkeypatch
+):
+    """The driver measures the read cap (64 MiB on Serverless) and ``read_paths`` hands it to the readers it builds on
+    the workers; a dropped argument would leave them the lazy cap, and an over-cap file would decode.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+
+    a = _tif(str(tmp_path / "a.tif"), w=64, h=64)  # 4 KiB decoded
+    opts = {"virtualTiles": "false"}
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda *a: 1000)
+    with pytest.raises(Exception, match="retile it first"):
+        P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts).collect()
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda *a: 1 << 20)
+    assert P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts).count() == 1
+
+
 def test_read_paths_raster_lineage_survives_the_shuffle(spark, tmp_path):
     a = _tif(str(tmp_path / "a.tif"), value=1)
     b = _tif(str(tmp_path / "b.tif"), value=2)

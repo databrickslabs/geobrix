@@ -141,12 +141,15 @@ def test_a_tile_over_the_read_cap_fails_the_read_with_its_fix(tmp_path):
 
 
 def test_the_read_cap_is_the_drivers_connect_aware_cap(tmp_path, monkeypatch):
+    from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
 
     monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
     _folder(tmp_path, 1)
-    # classic here (256 MiB); Serverless is 64 MiB
-    assert _reader(tmp_path)._read_cap == report_detected_cap()
+    # with a session (the driver): classic here (256 MiB); Serverless is 64 MiB
+    session = object()
+    monkeypatch.setattr(file_gbx, "_resolve_session_for_cap", lambda: session)
+    assert _reader(tmp_path)._read_cap == report_detected_cap(session)
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
     assert _reader(tmp_path)._read_cap == 12345
     assert (
@@ -181,6 +184,46 @@ def test_a_reader_with_no_session_enforces_the_cap_the_driver_carried(
     with pytest.raises(ValueError, match="retile it first"):
         tile_batches.refuse_over_cap(65 << 20, reader._read_cap, "the tile")
     tile_batches.refuse_over_cap(63 << 20, reader._read_cap, "the tile")
+
+
+def test_registering_the_sources_carries_the_session_cap_into_the_reader(
+    tmp_path, monkeypatch
+):
+    """``register_sources`` resolves the session's cap and hands it to each registered source: a dropped argument
+    would leave the readers to resolve it where there is no session."""
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.ds import file_gbx
+
+    _folder(tmp_path, 1)
+    seen = []
+    monkeypatch.setattr(file_gbx, "report_detected_cap", lambda *a: 12345)
+
+    class FakeSpark:
+        class dataSource:  # noqa: N801
+            register = staticmethod(seen.append)
+
+    assert manager.register_sources(FakeSpark, only=["raster_gbx"]) == ["raster_gbx"]
+    (registered,) = seen
+    source = registered({"path": str(tmp_path), "virtualTiles": "false"})
+    assert source.reader(source.schema())._read_cap == 12345
+
+
+def test_a_reader_with_no_carried_cap_and_no_session_fails_safe_to_the_serverless_cap(
+    tmp_path, monkeypatch
+):
+    """A reader built outside registration and ``read_paths`` resolves its cap lazily; on a worker there is no
+    session, which cannot tell Serverless from classic: it must take the 64 MiB, not the classic 256 MiB.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+
+    _folder(tmp_path, 1)
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.setattr(file_gbx, "_resolve_session_for_cap", lambda: None)
+    assert _reader(tmp_path)._read_cap == 64 << 20
+    monkeypatch.setenv(
+        "GBX_STREAM_MAX_BYTES", "12345"
+    )  # an explicit override still wins
+    assert _reader(tmp_path)._read_cap == 12345
 
 
 def test_a_corrupt_file_among_good_ones_fails_the_read(tmp_path, monkeypatch):
@@ -258,6 +301,26 @@ def test_a_transient_miss_reading_a_header_is_retried_and_a_bad_file_is_not(
     monkeypatch.setattr(R, "open_raster", real)
     with pytest.raises(rasterio.errors.RasterioIOError):
         R._whole_file_header(str(bad))
+
+
+def test_a_gdal_worded_missing_file_with_no_errno_is_retried(tmp_path, monkeypatch):
+    # GDAL words a file a Serverless Volume does not show yet as an IO error with no errno.
+    from databricks.labs.gbx.core import _retry
+
+    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    (path,) = _folder(tmp_path, 1)
+    real, calls = R.open_raster, []
+
+    def flaky(p, *a, **k):
+        calls.append(p)
+        if len(calls) == 1:
+            raise rasterio.errors.RasterioIOError(
+                f"{p} does not exist in the file system, and is not recognized as a supported dataset name."
+            )
+        return real(p, *a, **k)
+
+    monkeypatch.setattr(R, "open_raster", flaky)
+    assert R._whole_file_header(path)[2] == 32 and len(calls) == 2
 
 
 def test_a_non_gtiff_file_is_re_encoded_to_the_row_of_the_per_file_plan(tmp_path):

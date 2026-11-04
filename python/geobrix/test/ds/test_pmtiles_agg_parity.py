@@ -56,10 +56,22 @@ def _archive(spark, register_fn, tmp_path, name):
     return _decode(p)
 
 
-def test_decoded_tile_parity(spark_with_jar, tmp_path):
-    from databricks.labs.gbx.pmtiles import functions as heavy_pt
-    from databricks.labs.gbx.pmtiles._agg_light import register_pmtiles_agg
+def _register_at(level):
+    """Register gbx_pmtiles_agg through the manager at `level` (a session that carries the JAR would otherwise pick
+    the JVM level for both runs) and check the manager gave that level."""
 
-    light_tiles = _archive(spark_with_jar, register_pmtiles_agg, tmp_path, "light")
-    heavy_tiles = _archive(spark_with_jar, heavy_pt.register, tmp_path, "heavy")
+    def register_it(spark):
+        from databricks.labs.gbx import register
+
+        chosen = register(
+            spark, only=["gbx_pmtiles_agg"], _prefer={"gbx_pmtiles_agg": level}
+        )
+        assert chosen["gbx_pmtiles_agg"].level == level, chosen
+
+    return register_it
+
+
+def test_decoded_tile_parity(spark_with_jar, tmp_path):
+    light_tiles = _archive(spark_with_jar, _register_at("L3"), tmp_path, "light")
+    heavy_tiles = _archive(spark_with_jar, _register_at("L1"), tmp_path, "heavy")
     assert light_tiles == heavy_tiles

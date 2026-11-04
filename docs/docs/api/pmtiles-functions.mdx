@@ -8,13 +8,12 @@ import pmtilesSqlCode from '!!raw-loader!../../tests/python/api/pmtiles_function
 import pmtilesLightCode from '!!raw-loader!../../tests/python/api/pmtiles_functions_python_light.py';
 import rasterxCode from '!!raw-loader!../../tests/python/api/rasterx_functions.py';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
-import Tier from '@site/src/components/Tier';
 import Surfaces from '@site/src/components/Surfaces';
-import { Impl } from '@site/src/components/Tier';
+import { Impl } from '@site/src/components/Impl';
 
 # PMTiles Function Reference
 
-The `gbx_pmtiles_agg` aggregate is available in **both tiers** (see the per-function badge below). The `pmtiles_gbx` DataSource writer is a pure-Python writer that runs on every compute (see the [PMTiles Writer](../writers/pmtiles) page). See [Choosing an Execution Tier](./execution-tiers) for the lightweight vs heavyweight comparison.
+The `gbx_pmtiles_agg` aggregate runs on every compute. The `pmtiles_gbx` DataSource writer is a pure-Python writer that also runs on every compute. See the [PMTiles Writer](../writers/pmtiles) page. See [Surfaces and levels](./execution-tiers) for how GeoBrix picks the implementation.
 
 GeoBrix encodes tile pyramids (raster or vector) into the [PMTiles v3](https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md) single-file archive format. PMTiles replaces the "directory of tiles" pattern with one compact, hash-deduplicated, range-readable file servable directly from cloud object storage. Tile content bytes (PNG / JPEG / WebP / MVT) pass through verbatim — PMTiles is container-only.
 
@@ -40,14 +39,9 @@ from databricks.labs.gbx import register
 register(spark, only=["gbx_pmtiles_agg"])
 ```
 
-```scala
-import com.databricks.labs.gbx.pmtiles.functions
-functions.register(spark)
-```
+`register(spark)` also installs the `pmtiles_gbx` writer, which is a Python DataSource. Scala registers nothing, so a Scala caller relies on the Python call.
 
-The `pmtiles_gbx` writer is a Python DataSource: install it with `databricks.labs.gbx.register(spark)`.
-
-On the lightweight tier, `gbx_pmtiles_agg` is installed automatically by `pyrx.register(spark)` **and** `pyvx.register(spark)` (PMTiles is format-agnostic, so it belongs to both). To install only the aggregate — without the rest of a tier — call the standalone helper:
+`register(spark)` installs `gbx_pmtiles_agg` with every other function. To install only the aggregate, call the standalone helper:
 
 ```python
 from databricks.labs.gbx.pmtiles import register_pmtiles_agg
@@ -171,8 +165,8 @@ Examples below use **SQL**. PMTiles functions are prefixed with **`gbx_`** (e.g.
 
 <Impl groupedAgg/>
 
-:::note Lightweight tier (pyrx/pyvx)
-Powered by the **pmtiles** package. Grouped aggregate — `groupBy(...).agg(px.pmtiles_agg("bytes", "z", "x", "y"))` folds a group's `(bytes, z, x, y)` map tiles into one PMTiles v3 archive (`BINARY`). Registered by both `pyrx.register` and `pyvx.register` — accepts raster tiles (PNG / JPEG / WebP) or vector tiles (MVT) in either tier.
+:::note Implementation
+Powered by the **pmtiles** package. Grouped aggregate: `groupBy(...).agg(px.pmtiles_agg("bytes", "z", "x", "y"))` folds a group's `(bytes, z, x, y)` map tiles into one PMTiles v3 archive (`BINARY`). It accepts raster tiles (PNG / JPEG / WebP) or vector tiles (MVT).
 :::
 
 Aggregate a per-tile `(z, x, y, bytes)` row set into a single PMTile v3 archive blob.

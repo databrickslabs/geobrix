@@ -3,22 +3,19 @@ sidebar_position: 6
 title: GridX Function Reference
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import gridxFunctionsExamples from '!!raw-loader!../../tests/python/api/gridx_functions.py';
 import gridxFunctionsSqlExamples from '!!raw-loader!../../tests/python/api/gridx_functions_sql.py';
 import gridxLightCode from '!!raw-loader!../../tests/python/api/gridx_functions_python_light.py';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
-import Tier from '@site/src/components/Tier';
 import Surfaces from '@site/src/components/Surfaces';
-import { Impl } from '@site/src/components/Tier';
+import { Impl } from '@site/src/components/Impl';
 import GridXIcon from '../../../resources/images/brand/GridX.png';
 
 # <img src={GridXIcon} alt="GridX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
-GridX is **fully lightweight** as of v0.4.0: the **quadbin** (`gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom-grid** (`gbx_custom_*`) functions all run in both tiers <Tier both/>. Each section below is marked with its tier. See [Choosing an Execution Tier](./execution-tiers) for the lightweight vs heavyweight comparison.
+Every GridX function runs on every compute. GeoBrix picks the implementation level for the compute. See [Surfaces and levels](./execution-tiers). Each function section shows the surfaces it runs on.
 
 Complete reference for all GridX discrete-global-grid functions — CARTO Quadbin v0 and British National Grid (BNG).
 
@@ -30,11 +27,14 @@ GridX is GeoBrix's discrete-global-grid indexing package. It ships **CARTO quadb
 - **BNG (British National Grid)** — the Ordnance Survey National Grid (OSGB36) used in Great Britain for spatial indexing and location-based services. Specialized for UK-based spatial data.
 - **Custom user-defined grids** — define a regional or equal-area grid and get cell math, polyfill, and tessellation on it.
 
-:::note Registration and import paths
-- Quadbin: `databricks.labs.gbx.gridx.quadbin` (Python) / `com.databricks.labs.gbx.gridx.quadbin` (Scala)
-- BNG: `databricks.labs.gbx.gridx.bng` (Python) / `com.databricks.labs.gbx.gridx.bng` (Scala)
+:::note Import paths
+- Quadbin: `databricks.labs.gbx.gridx.quadbin`
+- BNG: `databricks.labs.gbx.gridx.bng`
+- Custom grids: `databricks.labs.gbx.gridx.custom`
+- H3: `databricks.labs.gbx.gridx.h3`
+- Helpers: `databricks.labs.gbx.gridx.helpers`
 
-Use `RegisterBatch` with `functions=gridx.quadbin` or `functions=gridx.bng` to register just one subpackage, or `functions=all` for everything.
+Scala has the BNG functions in `com.databricks.labs.gbx.gridx.bng`. For other names, use `call_function("gbx_...", ...)`. One call registers all grids: `register(spark)`.
 :::
 
 ## Key Features
@@ -54,35 +54,15 @@ GridX functions operate in their grid's fixed native CRS and do not take an expl
 
 ## Setup {#setup}
 
-With GeoBrix already [installed](../installation), register GridX in your session before running any example.
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pygx)">
+With GeoBrix already [installed](../installation), register the functions once per session. One call registers every GridX grid:
 
 ```python
-from databricks.labs.gbx.pygx import functions as gx
-gx.register(spark)  # registers all gbx_bng_*, gbx_quadbin_*, gbx_custom_* SQL functions
+from databricks.labs.gbx import register
+
+register(spark)  # every gbx_bng_*, gbx_quadbin_*, gbx_custom_* and gbx_h3_* SQL function
 ```
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight">
-
-```python
-# BNG
-from databricks.labs.gbx.gridx.bng import functions as bx
-bx.register(spark)
-
-# Quadbin
-from databricks.labs.gbx.gridx.quadbin import functions as qx
-qx.register(spark)
-
-# Custom grid
-from databricks.labs.gbx.gridx.custom import functions as cx
-cx.register(spark)
-```
-
-</TabItem>
-</Tabs>
+The Python API also registers a function on its first call.
 
 The examples on this page read from **ten canonical DataFrames**, one per fixture group. Each is available as a temp view for SQL examples. Point the placeholders at your own data to reproduce the examples:
 
@@ -109,18 +89,18 @@ All ten views are built from inline literals in the doc-test fixture helpers (no
 
 ## Examples — Conventions {#conventions}
 
-### How to read the four tabs
+### How to read the tabs
 
-Every function on this page shows **one example**, expressed identically across four tabs:
+Every function on this page shows **one example** on each surface it runs on:
 
-| Tab | Tier | Badge |
-|---|---|---|
-| **SQL** | Both (default) | — |
-| **Python (light)** | `pygx` lightweight tier | — |
-| **Python (heavy)** | heavyweight tier | Blue |
-| **Scala** | heavyweight tier | Blue |
+| Tab | Surface |
+|---|---|
+| **SQL** | Session SQL, after `register(spark)` |
+| **Unity Catalog SQL** | A `<catalog>.<schema>.gbx_*` function, where the function exists in Unity Catalog |
+| **Python** | The `gridx.<grid>` Python API |
+| **Scala** | The `gridx` Scala functions |
 
-All four tabs operate on the **same input fixture** with the **same arguments**. Where a genuine tier difference exists — a diverging output schema or a behavior available only in one tier — the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
+The tabs operate on the **same input fixture** with the **same arguments**. Where the output differs in form, the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
 
 In each Python example, `df = spark.table("<view>")` or an equivalent inline `spark.sql(...)` call loads the canonical fixture. Each SQL example reads `FROM <view>` or uses an inline literal — no separate `CREATE TEMP VIEW` step is shown.
 
@@ -154,7 +134,7 @@ POLYGON (... (WKT)
 
 **Cell width** — output cells are capped at approximately 60 characters. A longer value is truncated with `...` and annotated with its type.
 
-**Identical-across-tier values** — when all four tabs produce the same result (e.g. `'TQ3080'` from `bng_pointascell`), each tab shows that value identically with the same annotation. Genuine tier differences are called out in a labeled `:::note`.
+**Identical values** — when all tabs produce the same result (e.g. `'TQ3080'` from `bng_pointascell`), each tab shows that value identically with the same annotation. Real differences are called out in a labeled `:::note`.
 
 ### BNG domain rules
 
@@ -189,15 +169,15 @@ The cell ids stay `BIGINT` (quadbin, custom grid, H3) or `STRING` (BNG) end to e
 
 ## Quadbin (CARTO v0)
 
-<Tier both/> Quadbin runs in both tiers. The lightweight tier is the `pygx` quadbin package — powered by the **quadbin** library + shapely; `quadbin_distance` / `quadbin_polyfill` cell math mirrors the heavyweight `Quadbin.scala`, and geometry outputs are EWKB SRID 4326 — identical `gbx_quadbin_*` SQL names, so it is a drop-in swap.
+Quadbin runs on the Python level, with identical `gbx_quadbin_*` SQL names on every compute. It uses the **quadbin** library and shapely. Geometry outputs are EWKB with SRID 4326.
 
 GeoBrix v0.4.0 adds a `gridx/quadbin` subpackage implementing the [CARTO quadbin v0](https://github.com/CartoDB/quadbin) 64-bit packed `(z, x, y)` tile encoding used by Snowflake, dbt, Felt, and CARTO. Coordinates are EPSG:4326 lon/lat on the user-facing API; cells are encoded as web-mercator XYZ tiles internally. Resolutions range from `0` (whole world) to `26` (sub-metre).
 
 :::note Registration
-Quadbin functions are under **gridx.quadbin** — independent of `gridx.bng`. Call `functions.register(spark)` once per session to install the `gbx_quadbin_*` SQL functions.
+Quadbin functions are under **gridx.quadbin**, independent of `gridx.bng`. `register(spark)` installs the `gbx_quadbin_*` SQL functions.
 :::
 
-CARTO Quadbin v0 cells encode `(z, x, y)` web-mercator tile coordinates as a single `BIGINT`. Cell IDs are interoperable with CARTO's CDB_QuadKey and align with the slippy-map tile grid used by `gbx_rst_xyzpyramid` and `gbx_st_asmvt_pyramid`. Exact cell-set parity between the lightweight and heavyweight tiers is enforced by the cross-tier parity suite.
+CARTO Quadbin v0 cells encode `(z, x, y)` web-mercator tile coordinates as a single `BIGINT`. Cell IDs are interoperable with CARTO's CDB_QuadKey and align with the slippy-map tile grid used by `gbx_rst_xyzpyramid` and `gbx_st_asmvt_pyramid`.
 
 Resolution (zoom) range:
 - `gbx_quadbin_pointascell`, `gbx_quadbin_resolution`, `gbx_quadbin_kring`, `gbx_quadbin_distance` accept zoom `0..26`.
@@ -223,8 +203,8 @@ Resolution (zoom) range:
 
 Convert a lon/lat coordinate (EPSG:4326) to the quadbin cell containing it at the given zoom.
 
-:::note Lightweight tier (pygx)
-Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon/lat to a quadbin cell at the given zoom; bit-identical to the heavyweight `Quadbin.scala` (incl. the antimeridian/pole tile clamp).
+:::note Implementation
+Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon/lat to a quadbin cell at the given zoom; includes the antimeridian and pole tile clamp.
 :::
 
 **Returns:**
@@ -256,7 +236,7 @@ Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon
 
 Return the quadbin cell footprint as EWKB (SRID=4326) — the four-corner polygon of the tile in lon/lat.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **quadbin** package + **shapely**. Cell boundary polygon as EWKB (SRID 4326).
 :::
 
@@ -289,8 +269,8 @@ Powered by the **quadbin** package + **shapely**. Cell boundary polygon as EWKB 
 
 Return the quadbin cell centroid as an EWKB POINT (SRID=4326).
 
-:::note Lightweight tier (pygx)
-Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mean, matching `Quadbin.scala`) as EWKB point (SRID 4326).
+:::note Implementation
+Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mean) as EWKB point (SRID 4326).
 :::
 
 **Returns:**
@@ -322,7 +302,7 @@ Powered by the **quadbin** package + **shapely**. Cell centroid (bbox-corner mea
 
 Return the resolution (zoom) of a quadbin cell.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **quadbin** package (numpy-vectorized). Extracts the zoom level from a cell id.
 :::
 
@@ -357,8 +337,8 @@ Powered by the **quadbin** package (numpy-vectorized). Extracts the zoom level f
 
 Polyfill a geometry's bounding box with all quadbin cells at the given zoom.
 
-:::note Lightweight tier (pygx)
-Powered by the **quadbin** package + **shapely**. Enumerates the cells covering the geometry's bounding box at the resolution, mirroring `Quadbin.scala`'s envelope semantics.
+:::note Implementation
+Powered by the **quadbin** package + **shapely**. Enumerates the cells covering the geometry's bounding box at the resolution.
 :::
 
 **Returns:**
@@ -391,7 +371,7 @@ Powered by the **quadbin** package + **shapely**. Enumerates the cells covering 
 
 Return all cells within Chebyshev distance `k` of a quadbin cell (inclusive of the center cell).
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **quadbin** package. All cells within Chebyshev distance `k` (inclusive).
 :::
 
@@ -425,8 +405,8 @@ Powered by the **quadbin** package. All cells within Chebyshev distance `k` (inc
 
 Return the hollow ring of quadbin cells at exactly Chebyshev distance `k` from the center cell. At `k=1` the ring contains the 8 surrounding cells (center excluded); at `k=0` the result is a single-element array containing the center cell.
 
-:::note Lightweight tier (pygx)
-Powered by the **quadbin** package. The cells at exactly Chebyshev distance `k` (center excluded for `k ≥ 1`). Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **quadbin** package. The cells at exactly Chebyshev distance `k` (center excluded for `k ≥ 1`).
 :::
 
 **Returns:**
@@ -459,7 +439,7 @@ Powered by the **quadbin** package. The cells at exactly Chebyshev distance `k` 
 
 Tessellate a geometry into quadbin cells. Like `quadbin_polyfill` but returns the per-cell geometry chip alongside the cell ID, suitable for chip-based join patterns.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **quadbin** package + **shapely**. Bbox polyfill then per-cell intersection with the input geometry; one `STRUCT<cell, geom>` per chip (EWKB, SRID 4326).
 :::
 
@@ -492,7 +472,7 @@ Powered by the **quadbin** package + **shapely**. Bbox polyfill then per-cell in
 
 Union an `ARRAY<BIGINT>` of quadbin cells into a single MultiPolygon EWKB.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by **shapely** (`union_all` of the cell polygons). Dissolves an `ARRAY<LONG>` of cells into one EWKB MultiPolygon (SRID 4326).
 :::
 
@@ -527,7 +507,7 @@ Powered by **shapely** (`union_all` of the cell polygons). Dissolves an `ARRAY<L
 
 Aggregate-level union: dissolve a column of quadbin cell IDs (grouped per partition) into a single MultiPolygon EWKB. Use this instead of `gbx_quadbin_cellunion` when your cell IDs are spread across rows rather than already collected into an array.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by **shapely**. Grouped aggregate — `groupBy(...).agg(gx.quadbin_cellunion_agg("cell"))` dissolves a group's cell ids into one EWKB MultiPolygon (SRID 4326).
 :::
 
@@ -561,8 +541,8 @@ Powered by **shapely**. Grouped aggregate — `groupBy(...).agg(gx.quadbin_cellu
 
 Chebyshev (king-move) distance between two quadbin cells at the same resolution.
 
-:::note Lightweight tier (pygx)
-Powered by the **quadbin** package. Chebyshev distance on tile coordinates; mirrors `Quadbin.scala` (errors if the two cells differ in resolution).
+:::note Implementation
+Powered by the **quadbin** package. Chebyshev distance on tile coordinates. It raises if the two cells differ in resolution.
 :::
 
 **Returns:**
@@ -602,17 +582,15 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Fill NULL quadbin cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
-:::warning Lightweight and heavyweight return different types
-`gbx_quadbin_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+:::warning The cell-fill aggregate returns BINARY
+`gbx_quadbin_cellfill` returns `BINARY` in Python and SQL at every level. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python quadbin interpolation port**. Cell-set and value parity with the heavyweight tier for mean interpolation.
+:::note Implementation
+Powered by the **pure-Python quadbin interpolation port**. Cell-set and value parity with the JVM level for mean interpolation.
 :::
 
-**Returns:**
-- Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
-- Lightweight: `BINARY`
+**Returns:** `BINARY`, the serialized fill described above.
 
 <FunctionExamples
   name="quadbin_cellfill"
@@ -794,7 +772,7 @@ Streaming version of `quadbin_geomkloop` — one row per cell at exactly `k` ste
 
 ## British National Grid (BNG)
 
-<Tier both/> BNG runs in both tiers. The lightweight tier is the `pygx` BNG package — powered by a **pure-Python port of `BNG.scala`** + **shapely** for geometry; identical `gbx_bng_*` SQL names, so it is a drop-in swap. Cell IDs are `STRING` references; geometry outputs are plain WKB in **EPSG:27700** coordinates with **no SRID** (unlike quadbin's EWKB SRID 4326). Cell-id math (`bng_eastnorthasbng`, `bng_pointascell`, `bng_distance`, `bng_kring`, `bng_polyfill`, …) is exact-parity with the heavyweight tier; exact cell-set parity is enforced by the cross-tier parity suite.
+BNG runs on every compute with identical `gbx_bng_*` SQL names. The Python level is a **pure-Python port of `BNG.scala`** plus **shapely**. Cell IDs are `STRING` references. Geometry outputs are plain WKB in **EPSG:27700** coordinates with **no SRID**, unlike quadbin's EWKB SRID 4326. Cell-id math has exact parity with the JVM level.
 
 The British National Grid is the national coordinate system for Great Britain, based on the Ordnance Survey National Grid (OSGB36). It divides Great Britain into grid squares identified by letter-based prefixes and numeric coordinates.
 
@@ -856,7 +834,7 @@ Functions to convert BNG cell IDs to standard geometry formats.
 
 Convert a BNG cell ID to Well-Known Binary (WKB) format.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footprint polygon as plain WKB in EPSG:27700 (no SRID).
 :::
 
@@ -890,7 +868,7 @@ Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footpri
 
 Convert a BNG cell ID to Well-Known Text (WKT) format.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by a **pure-Python port of `BNG.scala`** + **shapely**. The cell footprint as WKT in EPSG:27700 coordinates.
 :::
 
@@ -929,8 +907,8 @@ Fundamental operations on BNG cells.
 
 Calculate the area of a BNG grid cell.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **square kilometres**, matching the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **square kilometres**, matching the JVM level.
 :::
 
 **Returns:**
@@ -964,7 +942,7 @@ Powered by the **pure-Python port of `BNG.scala`**. Returns the cell area in **s
 
 Get the centroid (center point) of a BNG cell.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center POINT as WKB in EPSG:27700 (no SRID).
 :::
 
@@ -999,8 +977,8 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Cell-center PO
 
 Return the grid-step distance between two BNG cells.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count between two cells, exact-parity with the heavyweight tier.  Returns **LONG** (grid steps, not metres).
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count between two cells, exact-parity with the JVM level.  Returns **LONG** (grid steps, not metres).
 :::
 
 **Returns:**
@@ -1034,8 +1012,8 @@ Powered by the **pure-Python port of `BNG.scala`** — Chebyshev grid-step count
 
 Return the Chebyshev grid-unit distance between two BNG cells.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** — Chebyshev distance in grid units, exact-parity with the heavyweight tier.  Returns **LONG** (grid units, not metres).
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** — Chebyshev distance in grid units, exact-parity with the JVM level.  Returns **LONG** (grid units, not metres).
 :::
 
 **Returns:**
@@ -1077,8 +1055,8 @@ Operations combining multiple BNG chip structs.
 
 Intersect two BNG chip structs and return the dissolved intersection chip.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the heavyweight tier (AGREE).
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the JVM level (AGREE).
 :::
 
 **Returns:**
@@ -1112,8 +1090,8 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the sa
 
 Union two BNG chip structs and return the dissolved union chip.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the heavyweight tier (AGREE).
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Returns the same `STRUCT<cellid, core, chip>` as the JVM level (AGREE).
 :::
 
 **Returns:**
@@ -1153,8 +1131,8 @@ Convert coordinates or geometries to BNG cells.
 
 Convert easting/northing coordinates to a BNG cell reference.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London). Bit-identical cell IDs to the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London). Bit-identical cell IDs to the JVM level.
 :::
 
 **Returns:**
@@ -1189,8 +1167,8 @@ Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). E
 
 Convert a point geometry to a BNG grid cell. The point must be supplied as **WKT or WKB** (GeoBrix does not accept native Databricks geometry types).
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. The point coordinates must be **EPSG:27700** eastings/northings (e.g. `POINT(530000 180000)` for London), **not** WGS84 lon/lat. Exact-parity cell IDs with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. The point coordinates must be **EPSG:27700** eastings/northings (e.g. `POINT(530000 180000)` for London), **not** WGS84 lon/lat. Exact-parity cell IDs with the JVM level.
 :::
 
 **Returns:**
@@ -1229,8 +1207,8 @@ Generate neighboring cells using k-ring patterns.
 
 Generate a k-ring of cells around a center cell (filled disk).
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distance `k` (inclusive of the center). Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distance `k` (inclusive of the center). Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1264,8 +1242,8 @@ Powered by the **pure-Python port of `BNG.scala`**. All cells within ring distan
 
 Generate a k-loop of cells around a center cell (hollow ring).
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring distance `k`. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring distance `k`. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1303,8 +1281,8 @@ Powered by the **pure-Python port of `BNG.scala`**. The cells at exactly ring di
 
 Generate a k-ring of cells around a geometry at specified resolution.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then expands by ring distance `k`. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then expands by ring distance `k`. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1341,8 +1319,8 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the 
 
 Generate a k-loop of cells around a geometry at specified resolution. The loop is the hollow outer ring: cells in `kring(k)` but not in `kring(k-1)`.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then returns only the cells at exactly ring distance `k`. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then returns only the cells at exactly ring distance `k`. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1381,8 +1359,8 @@ Fill geometries with grid cells.
 
 Fill a geometry with BNG cells at specified resolution.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the cells covering the geometry, mirroring the heavyweight seed-and-flood-fill. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the cells covering the geometry, mirroring the JVM level's seed-and-flood-fill. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1418,8 +1396,8 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the
 
 Tessellate a geometry into BNG cells with their geometries.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry's dimension, matching the heavyweight tier: a Polygon can yield MultiPolygon chips (and the reverse), a clip that is a mixed collection keeps its polygonal part, and the boundary-only points and lines of a grid-aligned input are dropped.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry's dimension, matching the JVM level. A Polygon can yield MultiPolygon chips, and the reverse. A clip that is a mixed collection keeps its polygonal part. The boundary-only points and lines of a grid-aligned input are dropped.
 :::
 
 **Returns:**
@@ -1458,15 +1436,17 @@ Aggregate multiple cells into a single result.
 
 Aggregate intersection of multiple BNG cells.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. A grouped aggregate — `groupBy(cellid).agg(gx.bng_cellintersection_agg("chip"))` intersects a group's chips (all belonging to one cell) into the dissolved chip geometry.
 :::
 
-:::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_bng_cellintersection_agg` returns a chip **`STRUCT<cellid, core, chip>`**; the lightweight function returns **`BINARY`** (the dissolved chip geometry, WKB in EPSG:27700) in **both Python and SQL**. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits the chip geometry — the one meaningful payload of a dissolved aggregate. The aggregate only ever combines chips from a single cell, so the heavyweight struct's `cellid` is exactly the group key you `GROUP BY`, and `core` is recoverable from whether the chip equals the full cell — neither carries information beyond the BINARY chip. To reconstruct the heavyweight `STRUCT` shape in SQL, project the group key as `cellid`:
+:::warning The aggregate returns BINARY
+`gbx_bng_cellintersection_agg` returns **`BINARY`**: the dissolved chip geometry, as WKB in EPSG:27700. It does this in both Python and SQL. A grouped aggregate cannot return a `STRUCT`.
+
+The aggregate combines chips from a single cell. The `cellid` is the group key you `GROUP BY`. The `core` flag is recoverable from whether the chip equals the full cell. To rebuild the `(cellid, chip)` pair in SQL, project the group key as `cellid`:
 
 ```sql
--- Lightweight SQL: rebuild the (cellid, chip) the heavyweight struct would carry
+-- Rebuild the (cellid, chip) pair
 SELECT
   group_key AS cellid,
   gbx_bng_cellintersection_agg(chip) AS chip
@@ -1506,15 +1486,17 @@ GROUP BY group_key
 
 Aggregate union of multiple BNG cells.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. A grouped aggregate — `groupBy(cellid).agg(gx.bng_cellunion_agg("chip"))` dissolves a group's chips (all belonging to one cell) into the unioned chip geometry.
 :::
 
-:::warning Lightweight and heavyweight return different types
-Heavyweight `gbx_bng_cellunion_agg` returns a chip **`STRUCT<cellid, core, chip>`**; the lightweight function returns **`BINARY`** (the dissolved chip geometry, WKB in EPSG:27700) in **both Python and SQL**. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits the chip geometry — the one meaningful payload of a dissolved aggregate. The aggregate only ever combines chips from a single cell, so the heavyweight struct's `cellid` is exactly the group key you `GROUP BY`, and `core` is recoverable from whether the chip equals the full cell — neither carries information beyond the BINARY chip. To reconstruct the heavyweight `STRUCT` shape in SQL, project the group key as `cellid`:
+:::warning The aggregate returns BINARY
+`gbx_bng_cellunion_agg` returns **`BINARY`**: the dissolved chip geometry, as WKB in EPSG:27700. It does this in both Python and SQL. A grouped aggregate cannot return a `STRUCT`.
+
+The aggregate combines chips from a single cell. The `cellid` is the group key you `GROUP BY`. The `core` flag is recoverable from whether the chip equals the full cell. To rebuild the `(cellid, chip)` pair in SQL, project the group key as `cellid`:
 
 ```sql
--- Lightweight SQL: rebuild the (cellid, chip) the heavyweight struct would carry
+-- Rebuild the (cellid, chip) pair
 SELECT
   group_key AS cellid,
   gbx_bng_cellunion_agg(chip) AS chip
@@ -1560,17 +1542,15 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Fill NULL BNG cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. BNG cell IDs are `STRING`. With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
-:::warning Lightweight and heavyweight return different types
-`gbx_bng_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+:::warning The cell-fill aggregate returns BINARY
+`gbx_bng_cellfill` returns `BINARY` in Python and SQL at every level. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity with the heavyweight tier for mean interpolation.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`**. Cell-set and value parity with the JVM level for mean interpolation.
 :::
 
-**Returns:**
-- Heavyweight: `ARRAY<STRUCT<cellid STRING, value DOUBLE>>`
-- Lightweight: `BINARY`
+**Returns:** `BINARY`, the serialized fill described above.
 
 <FunctionExamples
   name="bng_cellfill"
@@ -1609,8 +1589,8 @@ Rows: `cellid` `STRING`.
 
 Explode k-ring cells into separate rows.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one output row per k-ring cell. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one output row per k-ring cell. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1647,8 +1627,8 @@ Rows: `cellid` `STRING`.
 
 Explode k-loop cells into separate rows.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one output row per k-loop cell. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** as a streaming UDTF — one output row per k-loop cell. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1689,8 +1669,8 @@ Rows: `cellid` `STRING`.
 
 Explode geometry k-ring cells into separate rows.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-ring cell. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-ring cell. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1730,8 +1710,8 @@ Rows: `cellid` `STRING`.
 
 Explode geometry k-loop cells into separate rows.
 
-:::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-loop cell. Exact cell-set parity with the heavyweight tier.
+:::note Implementation
+Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-loop cell. Exact cell-set parity with the JVM level.
 :::
 
 **Returns:**
@@ -1770,12 +1750,12 @@ Rows: `cellid` `STRING`, `core` `BOOLEAN`, `chip` `BINARY`.
 
 Explode tessellated cells into separate rows.
 
-:::note Lightweight tier (pygx)
+:::note Implementation
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per tessellated cell, each carrying the cell ID and chip geometry (WKB in EPSG:27700, no SRID).
 :::
 
 **Returns:**
-- One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB in EPSG:27700), in both tiers and for WKB or WKT input
+- One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB in EPSG:27700), at every level and for WKB or WKT input
 
 <FunctionExamples
   name="bng_tessellateexplode"
@@ -1815,7 +1795,7 @@ Major 100km grid squares in Great Britain:
 
 ## Custom Grid Functions
 
-<Tier both/> Custom-grid functions run in both tiers. The lightweight tier is the `pygx` custom-grid package — powered by a **pure-Python port of the custom-grid system** + **shapely** for geometry; identical `gbx_custom_*` SQL names, so it is a drop-in swap (no external grid library, unlike quadbin's `quadbin` package). Cell IDs are `BIGINT` values; geometry outputs are plain WKB with **no SRID** — the grid's `srid` is metadata only. Geometry inputs accept **WKB, EWKB, WKT, or EWKT** in both tiers. Cell-id math and cell sets are exact-parity with the heavyweight tier, enforced by the cross-tier parity suite. `gbx_custom_grid` returns the **same** descriptor struct in both tiers.
+Custom-grid functions run on every compute with identical `gbx_custom_*` SQL names. The Python level is a **pure-Python port of the custom-grid system** plus **shapely**. It needs no external grid library. Cell IDs are `BIGINT` values. Geometry outputs are plain WKB with **no SRID**, and the grid's `srid` is metadata only. Geometry inputs accept **WKB, EWKB, WKT, or EWKT**. Cell sets have exact parity with the JVM level. `gbx_custom_grid` returns the same descriptor struct at every level.
 
 A custom grid is a user-defined regular rectangular grid specified by its spatial extent, root cell size, and a recursive split factor. Cell IDs are `BIGINT` values; hierarchy is controlled by `cell_splits` (each level subdivides root cells into `cell_splits x cell_splits` sub-cells). Use custom grids when neither BNG nor quadbin matches your coordinate reference system or cell-size requirements — for example, a national grid in EPSG:27700 with non-standard tile sizes.
 
@@ -2287,13 +2267,11 @@ See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / as
 
 Fill NULL custom grid cells from valid neighbours within `k` rings using nearest-neighbour interpolation. A grouped aggregator: the call must appear inside a `GROUP BY` query. Cell IDs are `BIGINT`. The grid spec is passed as the third argument (unlike the BNG/quadbin/h3 variants where the grid identity is implicit). With `k=1` and `method='mean'`, each NULL cell receives the unweighted mean of its ring-1 neighbours.
 
-:::warning Lightweight and heavyweight return different types
-`gbx_custom_cellfill` returns `BINARY` in Python and SQL on every compute. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
+:::warning The cell-fill aggregate returns BINARY
+`gbx_custom_cellfill` returns `BINARY` in Python and SQL at every level. The payload is the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order). A cell id that repeats in a group is filled from its largest non-null value, whatever order the rows arrive in.
 :::
 
-**Returns:**
-- Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
-- Lightweight: `BINARY`
+**Returns:** `BINARY`, the serialized fill described above.
 
 <FunctionExamples
   name="custom_cellfill"
@@ -2306,8 +2284,6 @@ Fill NULL custom grid cells from valid neighbours within `k` rings using nearest
 ---
 
 ## H3 Cell Fill
-
-<Tier both/>
 
 `gbx_h3_cellfill` is the grouped aggregator that interpolates missing H3 cell values from valid ring-neighbours, using the same fill algorithm as the BNG, quadbin, and custom-grid variants.
 
@@ -2336,9 +2312,7 @@ Fill NULL custom grid cells from valid neighbours within `k` rings using nearest
 
 Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed to work with data produced by `h3_pointash3` (Databricks product built-in) or any other source of H3 cell IDs at a fixed resolution.
 
-**Returns:**
-- Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
-- Lightweight: `BINARY`
+**Returns:** `BINARY`, the serialized fill: a 4-byte count, then per cell its id, a present flag and the value (big-endian, ascending id order).
 
 <FunctionExamples
   name="h3_cellfill"
@@ -2350,11 +2324,9 @@ Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed 
 
 ---
 
-## H3 Geometry-Aware Expansion (Light-Only)
+## H3 Geometry-Aware Expansion (Python Level Only)
 
-<Tier light/>
-
-H3 geometry-aware kring/kloop are **light-tier only** (no Scala/heavy implementation), but they work exactly like the other grids: a single **geometry-taking** function does the whole job in pure Python via the `h3` library — the performant `polygon_to_cells_experimental` polyfill for the covering set and `grid_disk` for the neighbour walk. They run anywhere (local, Serverless, and classic clusters) and are called identically from SQL and PySpark:
+H3 geometry-aware kring/kloop run on the Python level only. They have no JVM implementation. They work like the other grids: one **geometry-taking** function does the whole job in pure Python with the `h3` library. It uses the `polygon_to_cells_experimental` polyfill for the covering set and `grid_disk` for the neighbour walk. They run on every compute, and SQL and PySpark call them the same way:
 
 ```python
 from databricks.labs.gbx import register
@@ -2508,19 +2480,13 @@ Streaming version of `h3_geomkloop` — one row per cell at exactly `k` steps. C
 
 ---
 
-## H3 Viewshed (Light-Only)
+## H3 Viewshed (Python Helper)
 
-<Tier light/>
-
-:::note Lightweight (pygx) Python helper only
-`h3_viewshed_towers` is **not registered as a SQL function** and is **not available in the
-heavyweight tier**. It is a pure-Python / PySpark DataFrame function in the `pygx` package.
-Light tier; Serverless-safe; no JAR required.
+:::note Python helper only
+`h3_viewshed_towers` is **not registered as a SQL function**. It is a PySpark DataFrame function in `databricks.labs.gbx.gridx.helpers`. It runs on Serverless and needs no JAR.
 :::
 
 ### h3_viewshed_towers
-
-<Tier light/>
 
 `h3_viewshed_towers` runs a per-tower line-of-sight viewshed entirely in H3 cell space and
 returns one row per `(tower, visible cell)`. It is the H3-native sibling of the raster

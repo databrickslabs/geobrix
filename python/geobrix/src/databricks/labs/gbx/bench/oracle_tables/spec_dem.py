@@ -243,6 +243,7 @@ SPEC_DEM = share(
     contour=([1.5],),
 ) + (
     Case("uc_slope_percent", SL, (DEM, "percent"), "ref", "slope", ("uc",)),
+    Case("uc_slope_percent_cased", SL, (DEM, "Percent"), "ref", "slope", ("uc",)),
     Case("uc_slope_scales", SL, (DEM, "degrees", 2.0, 0.5), "ref", "slope", ("uc",)),
     Case("uc_slope_half_scale", SL, (DEM, "degrees", 2.0, None), "raises", "xscale and yscale must be supplied together", ("uc",)),
     Case("uc_slope_bad_unit", SL, (DEM, "radians"), "uc_refused", None, ("uc",)),

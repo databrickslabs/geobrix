@@ -397,6 +397,15 @@ def test_slope_refuses_a_unit_that_is_not_degrees_or_percent(unit):
     )
 
 
+@pytest.mark.parametrize("unit", ["Percent", "PERCENT", " percent "])
+def test_slope_unit_is_read_as_the_spec_engines_enum_binder_reads_it(unit):
+    """The binder lower-cases AND strips a choice (argv.py, GdalSpecArgv.scala), so the core does the same."""
+    with _serde.open_tile(_dem(np.arange(16.0).reshape(4, 4))) as ds:
+        want = terrain.slope(ds, unit="percent")
+        got = terrain.slope(ds, unit=unit)
+    assert got == want
+
+
 @pytest.mark.parametrize("scales", [{"xscale": 2.0}, {"yscale": 2.0}])
 def test_slope_refuses_one_scale_without_the_other(scales):
     """The legacy kernel (and the force-output path that runs it) refuses half a scale, as the engine does."""

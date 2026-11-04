@@ -330,6 +330,28 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
                     f"geobrix: {fn.sql_name} runs without the GDAL spec engine at {levels.NAMES[level]} ({why})",
                 )
             )
+    if level == "L0":
+        from databricks.labs.gbx.manager import sqlwrap
+
+        try:
+            spark.sql(sqlwrap.sql_kernel(fn))
+            why = None
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the engine's refusal is the reason a lower level serves
+            why = f"{type(exc).__name__}: {str(exc).splitlines()[0][:160] if str(exc) else ''}"
+        if why is None:
+            for r in reasons:
+                lines.append((fn.sql_name, f"{r}; using {levels.NAMES[level]}"))
+            return choice
+        if forced:
+            raise RuntimeError(f"{fn.sql_name}: forced {level} failed: {why}")
+        if "L3" not in fn.levels:
+            raise RuntimeError(
+                f"{fn.sql_name}: the SQL level failed and there is no other level: {why}"
+            )
+        reasons.append(f"geobrix: {levels.NAMES[level]} unavailable: {why}")
+        level = "L3"
     if level in ("L1", "L2"):
         from databricks.labs.gbx.manager import jvm
 

@@ -7,6 +7,7 @@ went in, on every level.
 """
 
 from databricks.labs.gbx.manifest import TILE_SQL, sql_type
+from databricks.labs.gbx.uc import sqlbody
 
 _WINDOW = "struct<col_off:int,row_off:int,width:int,height:int>"
 
@@ -16,6 +17,17 @@ def _sig(fn) -> str:
         f"{p.name} {sql_type(p.session[0])}"
         + (f" DEFAULT {p.default}" if p.default is not None else "")
         for p in fn.params
+    )
+
+
+def sql_kernel(fn) -> str:
+    """CREATE FUNCTION text for a function whose session level is its SQL kernel (L0): the manifest's body, its helpers
+    inlined (the session holds no helper function), under the session signature. The same body is the UC function.
+    """
+    body, helpers = sqlbody.l0_source(fn)
+    return (
+        f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({_sig(fn)}) "
+        f"RETURNS {sql_type(fn.returns_session)} RETURN {sqlbody.inlined(body, helpers)}"
     )
 
 

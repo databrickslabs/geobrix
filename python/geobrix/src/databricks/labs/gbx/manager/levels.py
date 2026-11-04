@@ -15,6 +15,8 @@ from databricks.labs.gbx.manager.capabilities import Capabilities
 
 LEVEL_TABLE_VERSION = manifest.load().level_table_version  # one source: the manifest
 # A function with no measured row below tries every level it has, highest first.
+# L0 (a SQL kernel the session installs as a temporary SQL function) is never a default: a name takes it only where a
+# row here lists it first, after a measurement; a function whose only level is L0 is served by it.
 PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_bng_eastnorthasbng": ("L1", "L2", "L3"),
     # transformcrs: the JVM level is 1.6x slower than light (47.7 s against 29.7 s over 1000 tiles) and the Java UDF
@@ -96,7 +98,12 @@ FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "raster-file-op": ("L3",),
 }
 L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
-NAMES = {"L1": "heavy (Catalyst)", "L2": "heavy (Java UDF)", "L3": "light"}
+NAMES = {
+    "L0": "SQL",
+    "L1": "heavy (Catalyst)",
+    "L2": "heavy (Java UDF)",
+    "L3": "light",
+}
 # The variant of a level that runs the row's `gdal` block on the GDAL spec engine. A forced L3 may name the
 # engine's row-wise UDF alone ("engine-c0") or its batch UDF behind the wrapper ("engine-c1", the default).
 ENGINE = "engine"
@@ -218,6 +225,8 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
         if wrapper and not caps.sql_functions:
             return no_sql_functions(fn)
         return None
+    if level == "L0":  # a temporary SQL function: nothing to import, no JVM
+        return None if caps.sql_functions else no_sql_functions(fn)
     if level == "L3":
         missing = [
             m for m in spec.get("needs", ()) if importlib.util.find_spec(m) is None
@@ -252,7 +261,11 @@ def select(
     if prefer in fn.levels:
         order_ = (prefer,) + tuple(lv for lv in order_ if lv != prefer)
     if not any(lv in fn.levels for lv in order_):
-        order_ = ("L3",)
+        order_ = (
+            ("L3",)
+            if "L3" in fn.levels
+            else tuple(lv for lv in ("L0", "L1", "L2") if lv in fn.levels)
+        )
     reasons = []
     for level in order_:
         if level not in fn.levels:

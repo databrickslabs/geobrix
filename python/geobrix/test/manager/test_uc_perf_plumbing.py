@@ -302,3 +302,106 @@ def test_the_default_install_is_unchanged_for_every_function_without_a_sql_kerne
         if fn is not None and "sql" in fn.levels.get("L4", {}):
             continue  # a row moved to a SQL kernel is a deliberate change
         assert got.get(name) == digest, name
+
+
+# ---- L0: the session's SQL kernel level ------------------------------------------------------------------------
+
+
+def _caps(**kw):
+    from databricks.labs.gbx.manager import capabilities as caps_mod
+
+    base = dict(
+        connect=False,
+        serverless=False,
+        jar=None,
+        jar_reason="no JAR",
+        gdal_reason="",
+        sql_functions=True,
+    )
+    base.update(kw)
+    return caps_mod.Capabilities(**base)
+
+
+class _RecordingSpark:
+    def __init__(self, fail=False):
+        self.stmts, self.fail = [], fail
+
+    def sql(self, text):
+        if self.fail:
+            raise RuntimeError("temporary SQL functions are not allowed here")
+        self.stmts.append(text)
+
+
+def _l0_manifest(helpers=False):
+    def edit(raw):
+        r = _row(raw, "gbx_quadbin_resolution")
+        r["levels"]["L0"] = {
+            "sql": (
+                "{q}gbx__res_bits(cell)"
+                if helpers
+                else "bit_and(shiftright(cell, 52), 31)"
+            )
+        }
+        if helpers:
+            r["levels"]["L0"]["sql_helpers"] = [
+                {
+                    "name": "gbx__res_bits",
+                    "params": [["c", "BIGINT"]],
+                    "returns": "INT",
+                    "sql": "bit_and(shiftright(c, 52), 31)",
+                }
+            ]
+        r["levels"]["L4"] = {"sql": "L0"}
+
+    return perf_manifest(edit)
+
+
+def test_l0_is_chosen_only_where_the_level_table_prefers_it_and_installs_a_temporary_sql_function(
+    monkeypatch,
+):
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.manager import levels
+
+    fn = _l0_manifest(helpers=True).functions["gbx_quadbin_resolution"]
+    # unpreferred: the level exists in the manifest, yet the session keeps its measured level
+    assert levels.select(fn, _caps()).level == "L3"
+    monkeypatch.setitem(levels.PREFERENCE, "gbx_quadbin_resolution", ("L0", "L3"))
+    choice = levels.select(fn, _caps())
+    assert (choice.level, choice.variant) == ("L0", "-")
+    # where SQL functions cannot be created the next level serves, and says why
+    no_sql = levels.select(fn, _caps(sql_functions=False))
+    assert no_sql.level == "L3" and "SQL functions are unavailable" in no_sql.reasons[0]
+    # install: one temporary function, the session signature, the helper inlined (no helper function in the session)
+    spark, lines = _RecordingSpark(), []
+    manager._install(spark, fn, choice, _caps(), forced=False, lines=lines)
+    assert spark.stmts == [
+        "CREATE OR REPLACE TEMPORARY FUNCTION gbx_quadbin_resolution(cell BIGINT) "
+        "RETURNS INT RETURN (bit_and(shiftright((cell), 52), 31))"
+    ]
+    assert not lines
+
+
+def test_an_l0_only_function_is_served_and_a_failed_l0_install_names_the_reason(
+    monkeypatch,
+):
+    from databricks.labs.gbx import manager
+    from databricks.labs.gbx.manager import levels
+
+    base = _l0_manifest().functions["gbx_quadbin_resolution"]
+    only_l0 = type(base)(**{**base.__dict__, "levels": {"L0": base.levels["L0"]}})
+    assert levels.select(only_l0, _caps()).level == "L0"  # no other level to prefer
+    # the SQL engine refuses the statement: forced, the error says so; unforced with an L3 behind it, the L3 serves
+    spark = _RecordingSpark(fail=True)
+    with pytest.raises(RuntimeError, match="forced L0 failed"):
+        manager._install(
+            spark, base, levels.Choice("L0", "-", ()), _caps(), forced=True, lines=[]
+        )
+    with pytest.raises(RuntimeError, match="no other level"):
+        manager._install(
+            spark,
+            only_l0,
+            levels.Choice("L0", "-", ()),
+            _caps(),
+            forced=False,
+            lines=[],
+        )

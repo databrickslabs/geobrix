@@ -21,6 +21,8 @@ bash scripts/commands/gbx-lint-python.sh [OPTIONS]
 - `--log <path>` - Write output to log file.
 - `--help` - Display help.
 
+`--path` refuses `docs/tests/**` and `scripts/ci/**` on purpose: CI does not lint them (its step lints only `src test` and `sources`), so the local gate matches CI.
+
 An unscoped `--fix` reformats the whole tree, including files someone else (an agent working in parallel, or your own uncommitted edits elsewhere) is editing. Pass `--path` for each file you changed and use the unscoped form only on purpose.
 
 ## Examples

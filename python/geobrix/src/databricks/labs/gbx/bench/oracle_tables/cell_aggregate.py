@@ -621,6 +621,32 @@ CELL_AGGREGATE += (
 )
 
 
+def _ewkb_on_uc(row):
+    """The array forms write their geometry as plain WKB in a session and as EWKB with SRID 27700 on UC (the SQL kernel
+    ends in st_asewkb, as the UC chip functions write their chips). A geometry row becomes two: the session keeps the
+    vertex check, the UC row also pins the SRID."""
+    if (
+        row.fn not in (BUA, BIA)
+        or row.kind != "geom_equals"
+        or row.surfaces != ("session", "uc")
+    ):
+        return (row,)
+    want = row.expect
+    return (
+        replace(row, surfaces=("session",)),
+        replace(
+            row,
+            cid=f"{row.cid}_ewkb",
+            kind="geom_srid",
+            expect=lambda: (want() if callable(want) else want, 27700),
+            surfaces=("uc",),
+        ),
+    )
+
+
+CELL_AGGREGATE = tuple(r for row in CELL_AGGREGATE for r in _ewkb_on_uc(row))
+
+
 # ------------------------------------------------------------------------------------------------ recipes
 # The statements a user writes at table scale, where no function is needed: the native route is the fastest form and has
 # no 64 MiB array in it. Each is a recipe row (one whole statement, `{q}` the schema qualifier) judged against the same

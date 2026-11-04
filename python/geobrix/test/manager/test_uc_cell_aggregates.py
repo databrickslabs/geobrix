@@ -63,6 +63,21 @@ def test_the_bng_chip_arrays_fold_with_the_product_geometry_functions(name, op):
     )  # judged on the workspace, said once
 
 
+@pytest.mark.parametrize("name", [BUA, BIA])
+def test_the_bng_chip_arrays_write_ewkb_with_srid_27700_like_the_uc_chip_functions(
+    name,
+):
+    """The scalars write EWKB with SRID 27700; so do the array kernels (st_asewkb, a core chip's polygon with the SRID,
+    the empty test counting the SRID's four bytes). Plain st_asbinary would drop the SRID.
+    """
+    body, helpers = sqlbody.l0_source(MAN.functions[name])
+    text = body + " ".join(h["sql"] for h in helpers)
+    assert "st_asbinary" not in text
+    assert body.count("st_asewkb(") == 1 and "27700" in text
+    wkbornull = next(h for h in helpers if h["name"] == "gbx__bng_wkbornull")
+    assert "length(w) <= 13" in wkbornull["sql"]  # an empty EWKB is 13 bytes
+
+
 # --- the BNG cell polygon helper: pure SQL, judged against the kernel -----------------------------------------------------
 def _cell_ids():
     import random
@@ -226,5 +241,6 @@ def test_the_python_twin_the_chip_union_is_timed_against_folds_like_the_session_
     assert got.equals(box(530000, 180000, 531000, 181000))
     whole = shapely.from_wkb(forms.bng_chips_union_probe([west, core]))
     assert whole.equals(box(530000, 180000, 531000, 181000))
+    assert shapely.get_srid(whole) == 27700  # as the SQL fold writes it
     assert forms.bng_chips_union_probe(None) is None
     assert forms.bng_chips_union_probe([None]) is None

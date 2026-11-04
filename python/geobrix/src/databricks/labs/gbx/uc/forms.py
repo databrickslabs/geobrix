@@ -345,7 +345,7 @@ def custom_cellfill_array(cells, grid, k=1, method="mean", power=2.0):
 # --- the Python twin of the chip union: a bench probe only -----------------------------------------------------------------
 def bng_chips_union_probe(chips):
     """Probe copy (``gbx_mvp_perf_bng_chips_union``, made by the bench, never by an install): the chips of ONE cell
-    folded by the session kernel in one Python call, as plain WKB. It is what ``gbx_bng_cellunion_array`` (a SQL fold) is
+    folded by the session kernel in one Python call, as EWKB with SRID 27700 (as the SQL fold writes it). It is what ``gbx_bng_cellunion_array`` (a SQL fold) is
     timed against; it has no manifest row and no public name."""
     import shapely
 
@@ -369,7 +369,7 @@ def bng_chips_union_probe(chips):
         geom = None if cid is None else _bng.cell_id_to_geometry(cid)
     if geom is None or geom.is_empty:
         return None
-    return shapely.to_wkb(shapely.set_srid(geom, 0))
+    return shapely.to_wkb(shapely.set_srid(geom, 27700), include_srid=True)
 
 
 # --- vector tile merge: the array twin of the aggregate ------------------------------------------------------------

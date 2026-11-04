@@ -138,6 +138,10 @@ def _geometry_functions(spark):
     def st_asbinary(a):
         return None if a is None else shapely.to_wkb(load(a))
 
+    @f.udf(returnType=BinaryType())
+    def st_asewkb(a):
+        return None if a is None else ewkb(load(a), shapely.get_srid(load(a)))
+
     @f.udf(returnType=StringType())
     def st_astext(a):
         return None if a is None else shapely.to_wkt(load(a))
@@ -150,6 +154,7 @@ def _geometry_functions(spark):
         st_intersection,
         st_isempty,
         st_asbinary,
+        st_asewkb,
         st_astext,
     ):
         spark.udf.register(u.func.__name__, u)
@@ -183,6 +188,7 @@ _GEOMETRY = (
     "st_intersection",
     "st_isempty",
     "st_asbinary",
+    "st_asewkb",
     "st_astext",
 )
 # name -> the registrar that installs it (and every name it installs together)

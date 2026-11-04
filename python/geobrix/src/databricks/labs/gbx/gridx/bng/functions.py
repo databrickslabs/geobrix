@@ -225,8 +225,8 @@ def bng_cellintersection_agg(
             geometry (NULL for a core chip).
 
     Returns:
-        The intersection as WKB (no SRID), or NULL when it is empty or the group has no
-        chip. A core chip stands for the whole cell.
+        The intersection as WKB (EWKB with SRID 27700 on Unity Catalog), or NULL when it
+        is empty or the group has no chip. A core chip stands for the whole cell.
 
     SQL: ``gbx_bng_cellintersection_agg(input_chip)``
     """
@@ -247,9 +247,10 @@ def bng_cellintersection_array(
             and stands for the whole cell; a NULL element is skipped.
 
     Returns:
-        The intersection as WKB (no SRID), or NULL when it is empty or the array has no
-        chip. A core chip stands for the whole cell, and the answer is then the cell
-        polygon, as in the aggregate. Chips of more than one cell give NULL.
+        The intersection as WKB (EWKB with SRID 27700 on Unity Catalog), or NULL when it
+        is empty or the array has no chip. A core chip stands for the whole cell, and
+        the answer is then the cell polygon, as in the aggregate. Chips of more than one
+        cell give NULL.
 
     SQL: ``gbx_bng_cellintersection_array(chips)``
     """
@@ -293,8 +294,8 @@ def bng_cellunion_agg(
             geometry (NULL for a core chip).
 
     Returns:
-        The union as WKB (no SRID), or NULL when it is empty or the group has no chip. A
-        core chip stands for the whole cell.
+        The union as WKB (EWKB with SRID 27700 on Unity Catalog), or NULL when it is
+        empty or the group has no chip. A core chip stands for the whole cell.
 
     SQL: ``gbx_bng_cellunion_agg(input_chip)``
     """
@@ -315,9 +316,9 @@ def bng_cellunion_array(
             and stands for the whole cell; a NULL element is skipped.
 
     Returns:
-        The union as WKB (no SRID), or NULL when it is empty or the array has no chip. A
-        core chip stands for the whole cell, and the answer is then the cell polygon.
-        Chips of more than one cell give NULL.
+        The union as WKB (EWKB with SRID 27700 on Unity Catalog), or NULL when it is
+        empty or the array has no chip. A core chip stands for the whole cell, and the
+        answer is then the cell polygon. Chips of more than one cell give NULL.
 
     SQL: ``gbx_bng_cellunion_array(chips)``
     """

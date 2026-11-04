@@ -103,6 +103,22 @@ def test_binpoints_percentile():
     assert arr[0, 0] == pytest.approx(2.25, abs=1e-4)
 
 
+@pytest.mark.parametrize(
+    "statistic", ["percentile:abc", "percentile:150", "percentile:-1", "percentile:"]
+)
+def test_a_percentile_that_is_not_a_number_from_0_to_100_is_refused_by_both_the_check_and_the_binning(
+    statistic,
+):
+    from databricks.labs.gbx.pyrx.core.binning import bin_points, check_statistic
+
+    with pytest.raises(ValueError, match="needs a number from 0 to 100"):
+        check_statistic(statistic)
+    with pytest.raises(ValueError, match="needs a number from 0 to 100"):
+        bin_points([0.5], [1.5], [1.0], 0, 0, 2, 2, 2, 2, 4326, statistic)
+    check_statistic("percentile:0")
+    check_statistic("PERCENTILE:100")
+
+
 # ---------------------------------------------------------------------------
 # Phase 3 – georeference-alignment
 # ---------------------------------------------------------------------------

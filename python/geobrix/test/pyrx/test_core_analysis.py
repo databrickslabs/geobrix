@@ -102,6 +102,18 @@ def test_proximity_preserves_georef():
         assert (o.width, o.height) == (5, 5)
 
 
+def test_proximity_targets_that_are_not_numbers_are_a_checked_argument():
+    with pytest.raises(
+        ValueError, match="target_values must be comma-separated numbers"
+    ):
+        analysis.check_proximity(target_values="a,b")
+    analysis.check_proximity(target_values=None)
+    analysis.check_proximity(target_values="1, 2,")
+    with _serde.open_tile(_single_source_bytes()) as ds:
+        with pytest.raises(ValueError, match="target_values must be"):
+            analysis.proximity(ds, "x", "PIXEL", None)
+
+
 def test_proximity_max_distance_marks_far_pixels_nodata():
     src = _single_source_bytes(width=5, height=5, src_row=0, src_col=0)
     with _serde.open_tile(src) as ds:

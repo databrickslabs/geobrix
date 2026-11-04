@@ -45,8 +45,29 @@ from databricks.labs.gbx.pyrx.core.local_temp import (
 _PROXIMITY_NODATA = -1.0
 
 
-def check_proximity(*, distunits=None, max_distance=None, **_) -> None:
+def _target_values(target_values) -> list:
+    """The source pixel values of a comma-separated ``target_values`` (empty when there are none); a ValueError that
+    names the argument when an entry is not a number."""
+    if target_values is None or str(target_values).strip() == "":
+        return []
+    vals = []
+    for v in str(target_values).split(","):
+        if v.strip() == "":
+            continue
+        try:
+            vals.append(int(round(float(v))))
+        except (ValueError, OverflowError):
+            raise ValueError(
+                f"rst_proximity: target_values must be comma-separated numbers; got '{target_values}'"
+            ) from None
+    return vals
+
+
+def check_proximity(
+    *, target_values=None, distunits=None, max_distance=None, **_
+) -> None:
     """The arguments of ``rst_proximity``: a wrong one raises a ``ValueError`` that names it."""
+    _target_values(target_values)
     distunits = "GEO" if distunits is None else str(distunits)
     if distunits not in ("GEO", "PIXEL"):
         raise ValueError(
@@ -91,7 +112,9 @@ def proximity(ds, target_values, distunits, max_distance):
     Returns:
         Single-band Float32 GTiff bytes (nodata = -1.0).
     """
-    check_proximity(distunits=distunits, max_distance=max_distance)
+    check_proximity(
+        target_values=target_values, distunits=distunits, max_distance=max_distance
+    )
     if max_distance is not None:
         max_distance = float(max_distance)
         if math.isnan(max_distance):
@@ -114,11 +137,7 @@ def proximity(ds, target_values, distunits, max_distance):
 
     # Build the source mask in the integer domain.
     if target_values is not None and str(target_values).strip() != "":
-        vals = [
-            int(round(float(v)))
-            for v in str(target_values).split(",")
-            if v.strip() != ""
-        ]
+        vals = _target_values(target_values)
         source_mask = np.isin(band1_int, np.array(vals, dtype=np.int64))
     else:
         # GDAL default: any pixel whose rounded value is non-zero is a source.

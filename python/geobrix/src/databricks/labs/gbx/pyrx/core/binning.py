@@ -72,10 +72,27 @@ def _statistic_refusal(statistic) -> str:
     )
 
 
+def _percentile_of(statistic) -> float:
+    """The ``p`` of ``percentile:<p>``: a number from 0 to 100, else a ValueError."""
+    text = str(statistic).split(":", 1)[1]
+    try:
+        p = float(text)
+    except ValueError:
+        p = float("nan")
+    if not 0.0 <= p <= 100.0:
+        raise ValueError(
+            f"percentile statistic {statistic!r} needs a number from 0 to 100 after 'percentile:'"
+        )
+    return p
+
+
 def check_statistic(statistic) -> None:
-    """ValueError when ``statistic`` is not one :func:`bin_points` knows (the range of a percentile is judged there)."""
+    """ValueError when ``statistic`` is not one :func:`bin_points` knows, or is a ``percentile:<p>`` whose ``p`` is not
+    a number from 0 to 100."""
     stat = str(statistic).lower()
-    if stat not in _STATISTICS and not stat.startswith("percentile:"):
+    if stat.startswith("percentile:"):
+        _percentile_of(stat)
+    elif stat not in _STATISTICS:
         raise ValueError(_statistic_refusal(statistic))
 
 
@@ -155,7 +172,7 @@ def bin_points(
             out = np.where(c > 0, s / c, np.nan)
 
     elif stat == "median" or stat.startswith("percentile:"):
-        p = 50.0 if stat == "median" else float(stat.split(":", 1)[1])
+        p = 50.0 if stat == "median" else _percentile_of(stat)
         out = np.full(w * h, np.nan, dtype="float64")
         if len(flat):
             # Group by flat cell index using sorted order — avoids a Python

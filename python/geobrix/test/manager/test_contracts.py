@@ -813,6 +813,42 @@ def test_uc_crs_parser_contract(value, want):
             gcrs.parse_uc_crs(value, fn="gbx_x")
 
 
+class _UcGeometry:
+    """A UC GEOMETRY argument as the handlers read it: WKB bytes and an SRID."""
+
+    def __init__(self, wkt, srid):
+        import shapely
+
+        self._wkb, self._srid = shapely.from_wkt(wkt).wkb, srid
+
+    def getBytes(self):
+        return self._wkb
+
+    def getSrid(self):
+        return self._srid
+
+
+@pytest.mark.parametrize(
+    "name,wkt,srid,res",
+    [
+        ("bng_geomkring", "POINT(530500 180500)", 27700, 3),
+        ("h3_geomkring", "POINT(-0.1 51.5)", 4326, 5),
+    ],
+)
+def test_uc_geomkring_empty_coverage_is_the_default_and_a_bad_k_is_a_parameter_error(
+    name, wkt, srid, res
+):
+    """An empty coverage means the default, as an empty mode does; k below 0 or not whole raises with a Fix, not NULL."""
+    from databricks.labs.gbx.uc import handlers
+
+    fn, geom = getattr(handlers, name), _UcGeometry(wkt, srid)
+    default = fn(geom, res, 1)
+    assert default and fn(geom, res, 1, "boundary-out", "") == default
+    for bad in (-1, 1.5):
+        with pytest.raises(ValueError, match=r"k must be a whole number.*Fix: "):
+            fn(geom, res, bad)
+
+
 def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
     """A UC Python sandbox holds the declared deps only: no pyspark, and none of the light tier's own extras."""
     import os
@@ -1026,16 +1062,38 @@ def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
     assert spark.stmts[: len(stmts)] == stmts
 
 
+def test_uc_install_takes_the_exact_jar_beside_other_geobrix_jars(volume, monkeypatch):
+    """A sources JAR or a rollback copy in the folder does not stop the install: the exact JAR is the one used."""
+    from databricks.labs.gbx import uc
+
+    volume.files = [
+        ENV6_WHEEL,
+        "geobrix-0.6.0.jar",
+        "geobrix-0.6.0-sources.jar",
+        "geobrix-0.5.3-jar-with-dependencies.jar",
+        "geobrix-0.6.0-jar-with-dependencies.jar",
+    ]
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    stmts = uc.install("cat", "sch", VOLUME_DIR, spark=_UcSpark(UC_NAMES))
+    jar = f"{VOLUME_DIR}/geobrix-0.6.0-jar-with-dependencies.jar"
+    scala = [s for s in stmts if "LANGUAGE SCALA" in s]
+    assert len(scala) == len(UC_SCALA_FNS) and all(jar in s for s in scala)
+    # the exact JAR twice is refused
+    volume.files = [ENV6_WHEEL, *(["geobrix-0.6.0-jar-with-dependencies.jar"] * 2)]
+    with pytest.raises(RuntimeError, match=r"more than once.*Fix: keep one copy"):
+        uc.install("cat", "sch", VOLUME_DIR, spark=_UcSpark(UC_NAMES))
+
+
 @pytest.mark.parametrize(
     "jars",
     [
-        ["geobrix-0.6.0.jar", "geobrix-0.6.0-jar-with-dependencies.jar"],
         ["geobrix-0.6.0.jar"],
         ["geobrix-0.5.3-jar-with-dependencies.jar"],
+        ["geobrix-0.6.0.jar", "geobrix-0.5.3-jar-with-dependencies.jar"],
     ],
-    ids=["thin-beside-the-right-one", "thin-only", "other-version"],
+    ids=["thin-only", "other-version", "two-others"],
 )
-def test_uc_install_takes_only_the_jar_with_dependencies_of_this_wheel(
+def test_uc_install_refuses_a_folder_without_the_jar_with_dependencies_of_this_wheel(
     volume, monkeypatch, jars
 ):
     from databricks.labs.gbx import uc

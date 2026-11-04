@@ -524,18 +524,19 @@ def st_transformcrs(
     # target_crs is a PARAMETER — resolve_crs raises ValueError if invalid.
     tgt = resolve_crs(target_crs)
     # Make any user-registered PROJ grid dirs findable before building the transformer.
-    # On the driver this reads the grid-dir registry (extra_proj_dirs=None); it pushes
+    # On the driver this passes the grid-dir registry; it pushes
     # the dirs into pyproj's search path (a PROJ_DATA env var alone never reaches
     # pyproj), so a CRS string that references a grid by filename (e.g. +nadgrids=..)
     # actually resolves it. Idempotent and cheap when nothing new is registered.
-    # Only when the registry holds dirs: it is driver-side state, so a worker's is empty
-    # and a call here would read that as "no grids" and undo the dirs the UDF closure
-    # just put on the worker's search path (_build_transformcrs_udf).
+    # The env setup (GDAL_DATA / PROJ_DATA / readdir) always runs. The registry is driver-side
+    # state, so a worker's is empty: there the dirs already on the search path (put there by the
+    # UDF closure, _build_transformcrs_udf) are passed on, not read as "no grids" and removed.
     from databricks.labs.gbx.core import proj_grids
-    from databricks.labs.gbx.pyrx._env import configure_gdal_env
+    from databricks.labs.gbx.pyrx import _env
 
-    if proj_grids.get_registered_dirs():
-        configure_gdal_env()
+    _env.configure_gdal_env(
+        extra_proj_dirs=proj_grids.get_registered_dirs() or _env.pyproj_grid_dirs()
+    )
     tr = get_transformer(src, tgt)
     g_proj = transform(tr.transform, g)
 

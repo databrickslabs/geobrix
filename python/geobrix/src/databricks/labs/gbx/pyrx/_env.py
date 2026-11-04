@@ -361,6 +361,15 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
     ]
 
 
+def pyproj_grid_dirs() -> list:
+    """The PROJ grid dirs now on pyproj's search path because ``configure_gdal_env`` put them there.
+
+    A worker holds no driver registry; its UDF closure adds the grid dirs it carries, and this is
+    how code that runs after that finds them again.
+    """
+    return list(_PYPROJ_ADDED)
+
+
 # To find the sidecar files of a raster it opens (external overviews .ovr, masks .msk,
 # .aux.xml, world files), GDAL lists the file's folder by default. Over a Volume's FUSE
 # mount that listing is slow and grows with the folder: 0.3 s to 10 s for one open in a

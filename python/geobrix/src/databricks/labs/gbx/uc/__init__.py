@@ -84,7 +84,8 @@ def _single_jar(volume_dir: str) -> Optional[str]:
     """The geobrix JAR in ``volume_dir`` (the UC Scala handlers load it), or None when the folder holds none.
 
     Only the JAR with dependencies of THIS wheel's version is a candidate: a thin JAR has no JTS, and a JAR of another
-    version answers with other code. Any other geobrix JAR in the folder is refused, with the name to stage.
+    version answers with other code. The exact JAR is used when it is there, whatever else the folder holds (a sources
+    JAR, a rollback copy). A folder with other geobrix JARs and not that one is refused, with the name to stage.
     """
     from databricks.labs.gbx.ds._listing import list_files
 
@@ -95,8 +96,12 @@ def _single_jar(volume_dir: str) -> Optional[str]:
         raise_on_empty=False,
     )
     ok = [p for p in found if os.path.basename(p) == _jar_name()]
-    other = [os.path.basename(p) for p in found if os.path.basename(p) != _jar_name()]
-    if other:
+    if len(ok) > 1:
+        raise RuntimeError(
+            f"{volume_dir} holds {_jar_name()} more than once ({', '.join(ok)}). Fix: keep one copy in the folder."
+        )
+    if not ok and found:
+        other = sorted(os.path.basename(p) for p in found)
         raise RuntimeError(
             f"{volume_dir} holds {', '.join(other)}, not {_jar_name()} (the JAR with dependencies built with this "
             f"wheel). Fix: stage {_jar_name()} there and remove the others, or keep no geobrix JAR in the folder "

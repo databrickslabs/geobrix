@@ -295,10 +295,11 @@ def _mode(fn: str, mode):
 
 
 def _coverage(fn: str, coverage) -> str:
-    """The coverage basis (``None`` is the default); an unknown one is a PARAMETER error, before the kernel runs."""
+    """The coverage basis (NULL or ``''`` is the default, as for ``mode``); an unknown one is a PARAMETER error, before
+    the kernel runs."""
     from databricks.labs.gbx.pygx import _dilate
 
-    if coverage is None:
+    if not coverage:
         return _dilate.DEFAULT_COVERAGE
     if coverage not in _dilate.COVERAGE:
         raise _parameter(
@@ -308,6 +309,21 @@ def _coverage(fn: str, coverage) -> str:
             ),
         )
     return coverage
+
+
+def _ring_k(fn: str, k) -> int:
+    """The ring distance of a geometry dilation: a whole number of at least 0; anything else is a PARAMETER error, before
+    the kernel runs (the kernel would otherwise raise inside a handler that turns every failure into NULL).
+    """
+    try:
+        whole = int(k)
+    except (TypeError, ValueError, OverflowError):
+        whole = None
+    if whole is None or whole != k or whole < 0:
+        raise _parameter(
+            fn, ValueError(f"k must be a whole number of at least 0; got {k!r}")
+        )
+    return whole
 
 
 def _range(fn: str, name: str, value: int, lo: int, hi: int) -> int:
@@ -394,7 +410,7 @@ def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     res = _bng_res(fn, resolution)
     _mode(fn, mode)
     coverage = _coverage(fn, coverage)
-    k = int(k)  # a UC INT
+    k = _ring_k(fn, k)
     g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
     if g is None or not _finite(g):
         return None  # a non-finite coordinate has no cell
@@ -482,7 +498,7 @@ def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     _mode(fn, mode)
     coverage = _coverage(fn, coverage)
     res = _range(fn, "resolution", _whole(fn, resolution), 0, H3_MAX_RES)
-    k = int(k)  # a UC INT
+    k = _ring_k(fn, k)
     g = _grid_geometry(fn, geom, WGS84_SRID, "H3")
     if g is None or not _finite(g):
         return None

@@ -185,6 +185,19 @@ def test_worker_grid_dirs_survive_the_transform_itself():
     assert lat == pytest.approx(EXPECT_LAT, abs=1e-6)
 
 
+def test_transform_sets_the_gdal_and_proj_env_with_an_empty_registry(monkeypatch):
+    """The env setup is not skipped when no grid is registered: a call with GDAL_DATA and PROJ_DATA unset sets both."""
+    monkeypatch.delenv("GDAL_DATA", raising=False)
+    monkeypatch.delenv("PROJ_DATA", raising=False)
+    monkeypatch.delenv("PROJ_LIB", raising=False)
+    assert proj_grids.get_registered_dirs() == []
+
+    assert _crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS) is not None
+
+    assert os.environ.get("GDAL_DATA")
+    assert os.environ.get("PROJ_DATA")
+
+
 _SERVERLESS_ORDER_PROBE = """
 import sys
 from pyspark.sql import SparkSession

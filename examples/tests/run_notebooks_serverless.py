@@ -639,7 +639,8 @@ def run_jar_task(
             break
         time.sleep(poll_secs)
     result = r.state.result_state if r.state else None
-    print(f"=== RESULT: {main_class}  result_state={result}  ({(r.state.state_message or '')[:500]})", flush=True)
+    message = (r.state.state_message or "") if r.state else ""
+    print(f"=== RESULT: {main_class}  result_state={result}  ({message[:500]})", flush=True)
     for t in r.tasks or []:
         try:
             out = w.jobs.get_run_output(run_id=t.run_id)
@@ -721,7 +722,8 @@ def run_python_task(
     print(f"    run_id={run_id}  run_page_url={w.jobs.get_run(run_id=run_id).run_page_url}", flush=True)
     r = _poll_run(w, run_id, poll_secs)
     result = r.state.result_state if r.state else None
-    print(f"=== RESULT: {local_path.name}  result_state={result}  ({(r.state.state_message or '')[:500]})", flush=True)
+    message = (r.state.state_message or "") if r.state else ""
+    print(f"=== RESULT: {local_path.name}  result_state={result}  ({message[:500]})", flush=True)
     for t in r.tasks or []:
         cluster_id = getattr(getattr(t, "cluster_instance", None), "cluster_id", None)
         if cluster_id:
@@ -743,6 +745,35 @@ def run_python_task(
 # CLI
 # ---------------------------------------------------------------------------
 
+def runtime_env(spark_version: str) -> Optional[int]:
+    """The wheel environment a classic runtime takes: 5 for DBR 17.3 and 18, 6 for DBR 19 and later, else None."""
+    m = re.match(r"(\d+)\.", spark_version or "")
+    if not m:
+        return None
+    major = int(m.group(1))
+    return 5 if major in (17, 18) else 6 if major >= 19 else None
+
+
+def _check_wheel_env(wheel: str, env_version: Optional[str], runtime: Optional[str] = None) -> None:
+    """Refuse an env wheel built for another environment than the run's: it refuses to import there.
+
+    ``runtime`` names the classic cluster runtime that fixed ``env_version`` (--python-task); without it the
+    environment is the --env-version of a Serverless run."""
+    env = wheel_env(wheel)
+    if env is None or env_version is None or str(env_version) == str(env):
+        return
+    if runtime:
+        raise SystemExit(
+            f"--wheel {wheel} is the env{env} wheel, runtime {runtime} takes the env{env_version} wheel: the wheel "
+            f"refuses to import on another environment. Fix: pass the +env{env_version} wheel, or a runtime that "
+            f"takes env{env} (DBR 17.3 and 18: env5, DBR 19: env6)"
+        )
+    raise SystemExit(
+        f"--wheel {wheel} is the env{env} wheel, --env-version is {env_version}: the wheel refuses to import "
+        f"on another environment. Fix: pass --env-version {env}, or the +env{env_version} wheel"
+    )
+
+
 def _build_dep_list(
     wheel: str,
     extras: list[str],
@@ -750,11 +781,7 @@ def _build_dep_list(
     env_version: Optional[str] = None,
 ) -> list[str]:
     env = wheel_env(wheel)
-    if env is not None and env_version is not None and str(env_version) != str(env):
-        raise SystemExit(
-            f"--wheel {wheel} is the env{env} wheel, --env-version is {env_version}: the wheel refuses to import "
-            f"on another environment. Fix: pass --env-version {env}, or the +env{env_version} wheel"
-        )
+    _check_wheel_env(wheel, env_version)
     deps: list[str] = [wheel]
     deps.extend(_env_extras_deps(env, extras) if env else _load_extras_deps(extras))
     deps.extend(extra_deps)
@@ -1027,6 +1054,9 @@ def main() -> int:
         if not sep or not name.strip().isidentifier():
             parser.error(f"--set-var must be NAME=VALUE with NAME a valid identifier; got {sv!r}")
 
+    if args.jar_task and args.extra_jars:
+        parser.error("--extra-jar goes with --python-task (--jar-task runs the one --jar)")
+
     if args.jar_task:
         if not args.jar or args.notebooks or args.dirs or args.existing_cluster_id or args.new_cluster:
             parser.error("--jar-task needs --jar and runs alone (no --notebook/--dir/--existing-cluster-id/--new-cluster)")
@@ -1050,6 +1080,11 @@ def main() -> int:
         local = pathlib.Path(args.python_task).resolve()
         if not local.is_file() or local.suffix != ".py":
             parser.error(f"--python-task {args.python_task}: not a .py file")
+        runtime = args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version
+        try:
+            _check_wheel_env(args.wheel, runtime_env(runtime), runtime)
+        except SystemExit as exc:
+            parser.error(str(exc.code))
         from databricks.sdk import WorkspaceClient
 
         w = WorkspaceClient(profile=args.profile)

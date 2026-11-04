@@ -2375,6 +2375,83 @@ def test_the_serverless_runner_submits_one_python_task_on_a_new_cluster_with_the
     ]  # fmt: skip
 
 
+def _run_main_to_the_workspace_client(runner, monkeypatch, argv):
+    """Run the launcher's main() with a stub client: True when it got as far as the workspace client."""
+
+    def stop(**kw):
+        raise RuntimeError("workspace client reached")
+
+    sdk = type(sys)("databricks.sdk")
+    sdk.WorkspaceClient = stop
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", *argv])
+    try:
+        runner.main()
+    except RuntimeError as exc:
+        assert "workspace client reached" in str(exc)
+        return True
+    return False
+
+
+@pytest.mark.parametrize(
+    "runtime, wheel, want",
+    [
+        ("17.3.x-scala2.13", ENV6, "takes the env5 wheel"),
+        ("18.0.x-scala2.13", ENV6, "takes the env5 wheel"),
+        ("19.x-scala2.13", ENV6.replace("env6", "env5"), "takes the env6 wheel"),
+        ("17.3.x-scala2.13", ENV6.replace("env6", "env5"), None),
+        ("19.x-scala2.13", ENV6, None),
+        ("19.x-scala2.13", "/Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl", None),  # the plain wheel has no env
+    ],
+)  # fmt: skip
+def test_the_serverless_python_task_checks_the_wheel_against_the_cluster_runtime(
+    monkeypatch, tmp_path, capsys, runtime, wheel, want
+):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    py = tmp_path / "entry.py"
+    py.write_text("print('x')\n")
+    argv = ["--python-task", str(py), "--new-cluster", runtime, "--wheel", wheel]
+    if want is None:
+        assert _run_main_to_the_workspace_client(runner, monkeypatch, argv)
+        return
+    monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", *argv])
+    with pytest.raises(SystemExit):
+        runner.main()
+    assert want in capsys.readouterr().err
+
+
+def test_the_serverless_runner_refuses_an_extra_jar_on_a_jar_task(monkeypatch, capsys):
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["run_notebooks_serverless.py", "--jar-task", "a.b.Job",
+                                      "--jar", "/Volumes/c/s/v/j.jar", "--extra-jar", "/Volumes/c/s/v/t.jar"])  # fmt: skip
+    with pytest.raises(SystemExit):
+        runner.main()
+    assert "--extra-jar goes with --python-task" in capsys.readouterr().err
+
+
+def test_the_serverless_python_task_reports_a_run_that_has_no_state(monkeypatch, tmp_path, capsys):
+    from types import SimpleNamespace
+
+    jobs = pytest.importorskip("databricks.sdk.service.jobs")
+    workspace = pytest.importorskip("databricks.sdk.service.workspace")
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    w = SimpleNamespace(
+        jobs=SimpleNamespace(get_run=lambda run_id: SimpleNamespace(run_page_url="u", state=None, tasks=[])),
+        workspace=SimpleNamespace(
+            mkdirs=lambda d: None,
+            import_=lambda path, **kw: None,
+            get_status=lambda path: SimpleNamespace(object_type=workspace.ObjectType.FILE),
+        ),
+    )  # fmt: skip
+    monkeypatch.setattr(runner, "submit_once", lambda w, **kw: SimpleNamespace(run_id=7))
+    monkeypatch.setattr(runner, "_poll_run", lambda w, run_id, secs: w.jobs.get_run(run_id=run_id))
+    py = tmp_path / "entry.py"
+    py.write_text("print('x')\n")
+    cluster = runner.JobCluster(user_name="me@x.com")
+    assert not runner.run_python_task(w, py, "/Users/me@x.com/d", [], cluster, 0)
+    assert "result_state=None" in capsys.readouterr().out
+
+
 def test_the_serverless_command_forwards_a_python_task_and_adds_no_default_notebooks(sandbox):
     env, _stub_log, uv_log = _stage_sample_sandbox(sandbox)
     (sandbox.bin / "uv").write_text('#!/bin/sh\nfor a in "$@"; do echo "$a"; done >> "$UV_LOG"\nexit 0\n')

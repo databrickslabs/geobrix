@@ -96,6 +96,28 @@
       ],
       "since": "0.5.2"
     },
+    "gbx_rst_binpoints_finalize": {
+      "examples": "Examples:\n      > SELECT gbx_rst_binpoints_finalize(c0, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326) AS out FROM gbx_example;",
+      "usage_args": "cells, xmin, ymin, xmax, ymax, width_px, height_px, srid",
+      "description": "Write the per-pixel values of a points group into one single-band tile.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
+    "gbx_rst_binpoints_partial": {
+      "examples": "Examples:\n      > SELECT gbx_rst_binpoints_partial(1.5D, 8.5D, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10) AS out;",
+      "usage_args": "x, y, xmin, ymin, xmax, ymax, width_px, height_px",
+      "description": "Give the canvas pixel a point falls in, as the key to group points by.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_bng_rasterize": {
       "examples": "Examples:\n      > SELECT gbx_rst_bng_rasterize(c0, 27700, CAST(NULL AS DOUBLE), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2, 'centroids', 0) AS out FROM gbx_example;",
       "usage_args": "cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs]",

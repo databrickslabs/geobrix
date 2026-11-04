@@ -3619,6 +3619,51 @@ def _binpoints_udf(
     return _serde.build_tile(b, "GTiff", 0)
 
 
+@f.udf(
+    StructType(
+        [
+            StructField("col", IntegerType(), True),
+            StructField("row", IntegerType(), True),
+        ]
+    )
+)
+def _binpoints_partial_udf(x, y, xmin, ymin, xmax, ymax, w, h):
+    """Scalar: the ``(col, row)`` pixel a point falls in (the key ``rst_binpoints_agg`` bins by), NULL for a point in no
+    pixel. NULL when the extent or size is NULL; a wrong extent or size raises. The SQL level of the same name does this
+    as one expression.
+    """
+    if any(a is None for a in (xmin, ymin, xmax, ymax, w, h)):
+        return None
+    _check_grid("rst_binpoints_partial", xmin, ymin, xmax, ymax, w, h)
+    return binning.pixel_key(x, y, xmin, ymin, xmax, ymax, w, h)
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _binpoints_finalize_udf(cells, xmin, ymin, xmax, ymax, w, h, srid):
+    """Scalar: write an array of per-pixel ``(col, row, value)`` structs (the reduced output of a GROUP BY over the
+    ``rst_binpoints_partial`` keys) as the single-band GTiff tile ``rst_binpoints_agg`` makes for the same points.
+
+    NULL cells or any NULL argument return None.
+    """
+    if any(a is None for a in (cells, xmin, ymin, xmax, ymax, w, h, srid)):
+        return None
+    _check_grid("rst_binpoints_finalize", xmin, ymin, xmax, ymax, w, h)
+    cols, rows, values = binning.cell_arrays(cells)
+    b = binning.bin_cells(
+        cols,
+        rows,
+        values,
+        float(xmin),
+        float(ymin),
+        float(xmax),
+        float(ymax),
+        int(w),
+        int(h),
+        int(srid),
+    )
+    return _serde.build_tile(b, "GTiff", 0)
+
+
 @f.udf(V2_TILE_SCHEMA)
 def _dtmfromgeoms_udf(
     points,

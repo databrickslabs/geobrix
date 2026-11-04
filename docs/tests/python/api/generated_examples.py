@@ -379,6 +379,16 @@ EXAMPLES = {
         "bp_agg_max",
         "SELECT gbx_rst_binpoints_agg(c0, c1, c2, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326, 'max') AS out FROM gbx_example",
     ),
+    "gbx_rst_binpoints_finalize": (
+        "RASTER_AGGREGATE",
+        "bp_agg_max__rst_binpoints_finalize",
+        "SELECT gbx_rst_binpoints_finalize(c0, 0.0D, 0.0D, 2.0D, 1.0D, 2, 1, 4326) AS out FROM gbx_example",
+    ),
+    "gbx_rst_binpoints_partial": (
+        "RASTER_AGGREGATE",
+        "bp_partial_cells",
+        "SELECT gbx_rst_binpoints_partial(1.5D, 8.5D, 0.0D, 0.0D, 10.0D, 10.0D, 10, 10) AS out",
+    ),
     "gbx_rst_bng_rasterize": (
         "RASTER_AGGREGATE",
         "brt_dup_max",

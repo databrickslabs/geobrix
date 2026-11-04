@@ -2935,6 +2935,25 @@ def _ref_binpoints(args):
     )
 
 
+def _ref_binpoints_cells(args):
+    """rst_binpoints_finalize: the tile of per-pixel values written out. args = [cells (col, row, value), xmin, ymin, xmax,
+    ymax, width_px, height_px, srid]; a NULL or NaN value, and a pixel in no cell, is NoData; a pixel given twice keeps its
+    largest value."""
+    import numpy as np
+
+    cells, w, h = args[0], args[5], args[6]
+    out = np.full((h, w), -9999.0)
+    mask = np.ones((h, w), bool)
+    for c in cells:
+        if c is None or c[0] is None or c[1] is None or c[2] is None or c[2] != c[2]:
+            continue
+        col, row, value = c
+        if mask[row, col] or value > out[row, col]:
+            out[row, col] = value
+            mask[row, col] = False
+    return out, mask
+
+
 def _ref_plane(coeffs, hull):
     """rst_dtmfromgeoms of points on the plane z = a x + b y that fill the rectangle `hull`: every triangle of any
     triangulation of them holds the plane, so the height is the plane's (oracle_refs.plane).
@@ -3071,6 +3090,7 @@ def _ref_agg_frombands(args):
 _REFS = {
     "agg_gridfrompoints": _ref_agg_gridfrompoints,
     "agg_binpoints": _ref_agg_binpoints,
+    "binpoints_cells": _ref_binpoints_cells,
     "agg_dtm_plane": _ref_agg_dtm_plane((1.0, 2.0), (0.0, 0.0, 10.0, 10.0)),
     "agg_rasterize": _ref_agg_rasterize,
     "agg_derived_sum": _ref_agg_derived_sum,
@@ -4184,7 +4204,7 @@ def run_recipe(spark, case: Case, prefix: str = "") -> Optional[str]:
         got = spark.sql(render_recipe(case.sql, prefix)).collect()
         if len(got) != 1:
             return f"{case.cid}: the recipe gave {len(got)} rows, want one"
-        return check(case, got[0]["out"], [])
+        return check(case, got[0]["out"], list(case.args))
     except (
         Exception
     ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

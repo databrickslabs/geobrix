@@ -74,8 +74,9 @@ def test_oracle_rows_fit_signature(fn):
     for c in rows:
         if (
             c.sql is not None
-        ):  # a recipe row is one whole statement: no arguments to fit
-            assert not c.args and not c.variants and "uc" in c.surfaces, c.cid
+        ):  # a recipe row is one whole statement: no arguments to fit (`args` is only the data of its reference)
+            assert not c.variants and "uc" in c.surfaces, c.cid
+            assert c.kind == "ref" or not c.args, c.cid
             continue
         arg_rows = (
             c.args

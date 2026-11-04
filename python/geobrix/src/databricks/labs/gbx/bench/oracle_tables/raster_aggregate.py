@@ -18,6 +18,9 @@ BIGINT id column holding a NULL reaches an aggregate as float64, so ids past 2**
 raises. The scalar twins take the group as an array, where a NULL cell id is simply skipped.
 """
 
+from dataclasses import replace
+
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, recipe, twin
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
     CUSTOM_GRID,
     H3_CELL,
@@ -25,6 +28,7 @@ from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
     cg_id,
 )
 from databricks.labs.gbx.bench.oracles import (
+    BUILDERS,
     CANVAS,
     MVP_A,
     NAN,
@@ -421,6 +425,226 @@ RASTER_AGGREGATE += (
         "agg_binpoints",
         ONLY,
     ),
+)
+
+
+# --- binpoints as partial / finalize --------------------------------------------------------------------------------
+# `gbx_rst_binpoints_partial` gives the pixel a point falls in (a SQL expression, the session's half-open floor rule);
+# a native GROUP BY reduces the points of each pixel; `gbx_rst_binpoints_finalize` writes the reduced pixels as the tile
+# `gbx_rst_binpoints_agg` makes for the same points. The partial's rows pin the floor rule (the east and south edges are
+# left out, the north and west edges are in); the finalize rows are the session aggregate's rows with the group reduced
+# (twin) plus its own; the recipe rows are the whole statement against the session's reference over the same points.
+BPP, BPF = "gbx_rst_binpoints_partial", "gbx_rst_binpoints_finalize"
+BOTH = ("session", "uc")
+_P10 = (0.0, 0.0, 10.0, 10.0, 10, 10)  # extent and size: ten 1 x 1 pixels each way
+
+
+def _partial(cid, args, expect, kind="exact"):
+    return Case(cid, BPP, args, kind, expect, BOTH)
+
+
+RASTER_AGGREGATE += (
+    # a point in a pixel: the column counts from the west, the row from the north
+    _partial("bp_partial_cells", (1.5, 8.5, *_P10), (1, 1)),
+    _partial("bp_partial_south_west_pixel", (0.5, 0.5, *_P10), (0, 9)),
+    # the west and north edges belong to their pixel
+    _partial("bp_partial_west_edge", (0.0, 5.0, *_P10), (0, 5)),
+    _partial("bp_partial_north_edge", (5.0, 10.0, *_P10), (5, 0)),
+    _partial("bp_partial_north_west_corner", (0.0, 10.0, *_P10), (0, 0)),
+    # the east and south edges are in no pixel (half-open): never clamped into the last one
+    _partial("bp_partial_east_edge", (10.0, 5.0, *_P10), None, "null"),
+    _partial("bp_partial_south_edge", (5.0, 0.0, *_P10), None, "null"),
+    _partial("bp_partial_south_east_corner", (10.0, 0.0, *_P10), None, "null"),
+    # just inside the east edge is the last column
+    _partial("bp_partial_inside_east_edge", (9.999999, 5.0, *_P10), (9, 5)),
+    _partial("bp_partial_just_west_of_canvas", (-1e-9, 5.0, *_P10), None, "null"),
+    _partial("bp_partial_outside_x", (11.0, 5.0, *_P10), None, "null"),
+    _partial("bp_partial_outside_y", (5.0, 11.0, *_P10), None, "null"),
+    _partial("bp_partial_negative", (-0.5, 5.0, *_P10), None, "null"),
+    # a canvas away from the origin, with negative coordinates
+    _partial(
+        "bp_partial_negative_canvas",
+        (-4.5, 4.5, -5.0, -5.0, 5.0, 5.0, 10, 10),
+        (0, 0),
+    ),
+    # one pixel: any point inside is (0, 0), the far edges are out
+    _partial("bp_partial_one_pixel", (0.5, 0.5, 0.0, 0.0, 1.0, 1.0, 1, 1), (0, 0)),
+    _partial(
+        "bp_partial_one_pixel_east_edge",
+        (1.0, 0.5, 0.0, 0.0, 1.0, 1.0, 1, 1),
+        None,
+        "null",
+    ),
+    # pixels that are not square: 8 x 2 over 4 x 2 pixels
+    _partial("bp_partial_oblong", (5.0, 0.5, 0.0, 0.0, 8.0, 2.0, 4, 2), (2, 1)),
+    # a coordinate that is no number is in no pixel, as in the session (a NaN floors to 0 in SQL: it must not)
+    _partial("bp_partial_nan_x", (NAN, 5.0, *_P10), None, "null"),
+    _partial("bp_partial_nan_y", (5.0, NAN, *_P10), None, "null"),
+    _partial("bp_partial_infinite_x", (float("inf"), 5.0, *_P10), None, "null"),
+    _partial("bp_partial_negative_infinite_y", (5.0, -float("inf"), *_P10), None, "null"),
+    _partial("bp_partial_null_x", (None, 5.0, *_P10), None, "null"),
+    _partial("bp_partial_null_y", (5.0, None, *_P10), None, "null"),
+    _partial("bp_partial_null_extent", (5.0, 5.0, None, 0.0, 10.0, 10.0, 10, 10), None, "null"),
+    _partial("bp_partial_null_size", (5.0, 5.0, 0.0, 0.0, 10.0, 10.0, 10, None), None, "null"),
+    # a wrong canvas raises with a Fix, whatever the point is
+    _partial("bp_partial_zero_width", (5.0, 5.0, 0.0, 0.0, 10.0, 10.0, 0, 10), "above 0", "raises"),
+    _partial("bp_partial_inverted_extent", (5.0, 5.0, 10.0, 0.0, 0.0, 10.0, 10, 10), "xmax above xmin", "raises"),
+    _partial("bp_partial_empty_extent", (5.0, 5.0, 0.0, 10.0, 10.0, 10.0, 10, 10), "ymax above ymin", "raises"),
+)  # fmt: skip
+
+
+# the finalize rows of the session aggregate's rows: the group is reduced to its pixels first (the numpy reference
+# `oracle_refs.bin_statistic`), then written; the reference is the pixels written out
+def _register_cells(points, stat, grid):
+    """The builder name of the reduced pixels (col, row, value) of a points builder under a statistic, on the grid
+    (xmin, ymin, xmax, ymax, width_px, height_px)."""
+    name = f"bpc_{points}_{stat}_{'_'.join(str(g) for g in grid)}"
+    if name not in BUILDERS:
+
+        def reduce(tmpdir, points=points, stat=stat, grid=grid):
+            from databricks.labs.gbx.bench import oracle_refs
+
+            pts = BUILDERS[points](tmpdir)
+            out, mask = oracle_refs.bin_statistic(
+                [p[0] for p in pts],
+                [p[1] for p in pts],
+                [p[2] for p in pts],
+                grid,
+                stat,
+            )
+            return [
+                (int(c), int(r), float(out[r, c])) for r, c in zip(*(~mask).nonzero())
+            ]
+
+        BUILDERS[name] = reduce
+    return name
+
+
+def _finalize_args(args):
+    points, canvas = args[0].name, args[1:8]
+    stat = args[8] if len(args) > 8 else "max"
+    return (Build(_register_cells(points, stat, tuple(canvas[:6]))), *canvas)
+
+
+RASTER_AGGREGATE += tuple(
+    replace(c, surfaces=BOTH)
+    for c in twin(
+        tuple(r for r in RASTER_AGGREGATE if r.cid.startswith("bp_agg_")),
+        BPF,
+        Adapt(args=_finalize_args, expect=lambda e: "binpoints_cells"),
+    )
+)
+
+_F2 = (0.0, 0.0, 2.0, 1.0, 2, 1, 4326)  # two 1 x 1 pixels
+
+
+def _fin(cid, cells, kind, expect, *canvas):
+    return Case(cid, BPF, (cells, *(canvas or _F2)), kind, expect, BOTH)
+
+
+RASTER_AGGREGATE += (
+    _fin("bp_fin_pixels", [(0, 0, 1.5), (1, 0, 2.5)], "ref", "binpoints_cells"),
+    # a pixel in no struct is NoData
+    _fin("bp_fin_one_pixel", [(1, 0, 2.5)], "ref", "binpoints_cells"),
+    # nothing reduced (the points were all outside the canvas): an all-NoData tile, as the aggregate gives
+    _fin("bp_fin_empty", [], "ref", "binpoints_cells"),
+    # a NULL or NaN value leaves the pixel NoData; a NULL element and one with a NULL key are skipped
+    _fin("bp_fin_null_value", [(0, 0, None), (1, 0, 3.0)], "ref", "binpoints_cells"),
+    _fin("bp_fin_nan_value", [(0, 0, NAN), (1, 0, 3.0)], "ref", "binpoints_cells"),
+    _fin("bp_fin_null_element", [None, (1, 0, 3.0)], "ref", "binpoints_cells"),
+    _fin("bp_fin_null_key", [(None, 0, 9.0), (0, None, 9.0), (1, 0, 3.0)], "ref", "binpoints_cells"),
+    # a pixel given twice keeps its largest value, whatever the order
+    _fin("bp_fin_repeated_pixel", [(0, 0, 1.0), (0, 0, 4.0), (0, 0, 2.0)], "ref", "binpoints_cells"),
+    _fin("bp_fin_negative_value", [(0, 0, -3.5), (1, 0, 0.0)], "ref", "binpoints_cells"),
+    _fin(
+        "bp_fin_props",
+        [(0, 0, 1.0)],
+        "tile_meta",
+        {"crs": "EPSG:4326", "dtype": "float32", "width": 2, "height": 1, "count": 1, "nodata": -9999.0, "materialized": True},
+    ),
+    # cells from another canvas raise with a Fix naming the partial, never drop quietly
+    _fin("bp_fin_cell_outside_canvas", [(2, 0, 1.0)], "raises", "outside the 2 x 1 canvas"),
+    _fin("bp_fin_row_outside_canvas", [(0, 1, 1.0)], "raises", "outside the 2 x 1 canvas"),
+    _fin("bp_fin_negative_cell", [(-1, 0, 1.0)], "raises", "outside the 2 x 1 canvas"),
+    _fin("bp_fin_zero_width", [(0, 0, 1.0)], "raises", "above 0", 0.0, 0.0, 2.0, 1.0, 0, 1, 4326),
+    _fin("bp_fin_inverted_extent", [(0, 0, 1.0)], "raises", "xmax above xmin", 2.0, 0.0, 0.0, 1.0, 2, 1, 4326),
+    Case("bp_fin_null_cells", BPF, (None, *_F2), "null", None, BOTH),
+    Case("bp_fin_null_extent", BPF, ([(0, 0, 1.0)], None, 0.0, 2.0, 1.0, 2, 1, 4326), "null", None, BOTH),
+    Case("bp_fin_null_srid", BPF, ([(0, 0, 1.0)], 0.0, 0.0, 2.0, 1.0, 2, 1, None), "null", None, BOTH),
+    # a canvas over the cap is refused before it is allocated, with the Fix that names the session aggregate
+    Case("uc_bp_fin_over_cap_refused", BPF, ([(0, 0, 1.0)], 0.0, 0.0, 1.0, 1.0, 100000, 100000, 4326), "uc_refused", None, ("uc",)),
+)  # fmt: skip
+
+
+# --- recipe D1: partial -> native GROUP BY -> finalize, against the session's reference over the same points -------------
+# Ten points on a 10 x 10 canvas of 1 x 1 pixels. Pixel (2, 7) holds four (1, 2, 4, 10: an even count, so the median is
+# between two values, and p90 is between the two largest), pixel (9, 0) two, pixel (5, 5) one. The rest are left out: the
+# east edge, the south edge, west of the canvas.
+_D1_POINTS = [
+    (2.5, 2.5, 1.0), (2.1, 2.9, 2.0), (2.9, 2.1, 4.0), (2.5, 2.5, 10.0),
+    (9.5, 9.5, 3.0), (9.9, 9.1, 5.0),
+    (5.5, 4.5, 7.0),
+    (10.0, 5.0, 99.0), (5.0, 0.0, 99.0), (-1.0, 5.0, 99.0),
+]  # fmt: skip
+_D1_CANVAS = "0D, 0D, 10D, 10D, 10, 10"
+
+
+def _d1_value(v):
+    if v is None:
+        return "CAST(NULL AS DOUBLE)"
+    if v != v:
+        return "CAST('NaN' AS DOUBLE)"
+    return f"{v!r}D"
+
+
+def _d1_values(points):
+    return ", ".join(
+        f"({_d1_value(x)}, {_d1_value(y)}, {_d1_value(z)})" for x, y, z in points
+    )
+
+
+# the reduction of each statistic; a NULL or NaN z is dropped, as a NULL is by the aggregate (the NaN rule is pinned in
+# test_uc_binpoints.py: it differs from the session's for count, mean, median and percentile)
+D1_REDUCE = {
+    "max": "max(z)",
+    "min": "min(z)",
+    "mean": "avg(z)",
+    "count": "CAST(count(*) AS DOUBLE)",
+    "median": "median(z)",
+    "percentile:90": "percentile(z, 0.9)",
+}
+D1 = (
+    "WITH b AS (SELECT {{q}}gbx_rst_binpoints_partial(x, y, {canvas}) AS px, z FROM {source}), "
+    "c AS (SELECT px.col AS col, px.row AS row, {reduce} AS value FROM b "
+    "WHERE px IS NOT NULL AND z IS NOT NULL AND NOT isnan(z) GROUP BY px.col, px.row) "
+    "SELECT {{q}}gbx_rst_binpoints_finalize(collect_list(struct(col, row, value)), {canvas}, 4326) AS out FROM c"
+)
+
+
+def d1_sql(statistic, points=_D1_POINTS, source=None, canvas=_D1_CANVAS, srid=4326):
+    """The recipe's statement for a statistic over ``points`` (or over ``source``, a table or view of x, y, z)."""
+    return D1.format(
+        canvas=canvas,
+        source=source or f"VALUES {_d1_values(points)} AS t(x, y, z)",
+        reduce=D1_REDUCE[statistic],
+    ).replace("4326) AS out", f"{srid}) AS out")
+
+
+def _d1(cid, statistic, points=_D1_POINTS):
+    kept = [p for p in points if p[2] is not None and p[2] == p[2]]
+    return recipe(
+        cid,
+        BP,
+        d1_sql(statistic, points),
+        "ref",
+        "agg_binpoints",
+        args=(kept, 0.0, 0.0, 10.0, 10.0, 10, 10, 4326, statistic),
+    )
+
+
+RASTER_AGGREGATE += tuple(
+    _d1(f"recipe_d1_{stat.split(':')[0]}{'_90' if ':' in stat else ''}", stat)
+    for stat in D1_REDUCE
 )
 
 

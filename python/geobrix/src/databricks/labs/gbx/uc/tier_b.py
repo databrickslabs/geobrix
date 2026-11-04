@@ -1423,6 +1423,50 @@ def rst_binpoints(
 HANDLERS["gbx_rst_binpoints"] = rst_binpoints
 
 
+def rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, srid):
+    """gbx_rst_binpoints_finalize: the Float32 tile of per-pixel values ``(col, row, value)`` (the reduced output of a
+    GROUP BY over ``gbx_rst_binpoints_partial``) that ``gbx_rst_binpoints_agg`` makes for the same points; a pixel in no
+    cell is NoData. A cell outside the canvas raises: its keys came from another canvas.
+    """
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+
+    fn = "gbx_rst_binpoints_finalize"
+    if any(
+        a is None for a in (cells, xmin, ymin, xmax, ymax, width_px, height_px, srid)
+    ):
+        return None
+    _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    code = parse_uc_crs(int(srid), fn=fn).srid
+    check_made(
+        fn,
+        width_px,
+        height_px,
+        ["float32"],
+        _kernel("binning", "cells_working_bytes")(width_px, height_px, len(cells)),
+        session_fn="gbx_rst_binpoints_agg",
+    )
+    cols, rows, values = _kernel("binning", "cell_arrays")(cells)
+    made = run_array_kernel(
+        fn,
+        lambda: _kernel("binning", "bin_cells")(
+            cols,
+            rows,
+            values,
+            float(xmin),
+            float(ymin),
+            float(xmax),
+            float(ymax),
+            int(width_px),
+            int(height_px),
+            code,
+        ),
+    )
+    return _constructed(fn, made)
+
+
+HANDLERS["gbx_rst_binpoints_finalize"] = rst_binpoints_finalize
+
+
 def rst_gridfrompoints(
     points_array,
     values_array,

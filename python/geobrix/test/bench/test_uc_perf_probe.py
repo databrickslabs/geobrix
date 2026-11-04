@@ -61,7 +61,7 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     assert (
         "m6" not in missing
     )  # the SQL fill, the quadbin union and the BNG chip union all exist
-    assert "gbx_rst_binpoints_finalize" in missing["m7"]["d1"]
+    assert "m7" not in missing  # the partial and the finalize exist, so the recipe legs are built
     assert "m8" not in missing  # both tree procedures exist, so the tree leg is built
     assert "gbx_rst_zonalstats_partial" in missing["m11"]["partial"]
     assert not {"m0", "m1", "m12", "m13"} & set(missing)
@@ -77,7 +77,7 @@ def test_every_measurement_is_built_or_says_what_it_needs():
         for leg in m6.legs
         if leg.label in ("c_fold", "c_python_twin")
     )
-    assert "twin_1m" in labels["m7"] and "d1_1m" not in labels["m7"]
+    assert {"twin_1m", "d1_1m"} <= set(labels["m7"])
 
 
 def test_a_unit_whose_function_arrives_builds_with_no_change_to_the_probe(monkeypatch):

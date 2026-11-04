@@ -27,8 +27,9 @@ def _cell_indices(
 
     Raster convention: row 0 is the TOP (max y), so the row index flips y.
 
-    Half-open interval: a point at exactly x==xmax (or y==ymax) computes
-    col==w (or row==h) and is DROPPED — not clamped into the last cell. This
+    Half-open interval: a point at exactly x==xmax (or y==ymin, the south edge:
+    row 0 is the top) computes col==w (or row==h) and is DROPPED — not clamped
+    into the last cell. This
     matches the brief's reference code and prevents cross-tile double-counting
     when DSMs are tiled on shared boundaries.
 
@@ -42,15 +43,37 @@ def _cell_indices(
     ya = np.asarray(y, dtype="float64")
 
     # Fractional position then multiply by grid dimensions.
-    # Flip y: raster row 0 = top (max y).
-    col = np.floor((xa - xmin) / (xmax - xmin) * w).astype("int64")
-    row = np.floor((ymax - ya) / (ymax - ymin) * h).astype("int64")
+    # Flip y: raster row 0 = top (max y). A NaN or infinite coordinate casts to a value far outside the grid.
+    with np.errstate(invalid="ignore", over="ignore"):
+        col = np.floor((xa - xmin) / (xmax - xmin) * w).astype("int64")
+        row = np.floor((ymax - ya) / (ymax - ymin) * h).astype("int64")
 
     # Strict half-open interval: col in [0, w), row in [0, h).
     # A point exactly on xmax yields col==w and is excluded.
-    # A point exactly on ymax yields row==h and is excluded.
-    inb = (col >= 0) & (col < w) & (row >= 0) & (row < h)
+    # A point exactly on ymin (the south edge) yields row==h and is excluded.
+    # A NaN or infinite coordinate is in no pixel. The explicit test matters: casting NaN to int64 is platform
+    # dependent (x86 gives the minimum, arm64 gives 0, which is a real column).
+    inb = (
+        np.isfinite(xa)
+        & np.isfinite(ya)
+        & (col >= 0)
+        & (col < w)
+        & (row >= 0)
+        & (row < h)
+    )
     return row[inb], col[inb], inb
+
+
+def pixel_key(x, y, xmin, ymin, xmax, ymax, w, h):
+    """The ``(col, row)`` pixel of one point, or None when it is in no pixel (outside, on the east or south edge, or a
+    NULL or NaN coordinate). The lightweight form of ``gbx_rst_binpoints_partial``: the same rule as
+    :func:`_cell_indices`, which :func:`bin_points` bins by."""
+    if x is None or y is None:
+        return None
+    row, col, inb = _cell_indices(
+        [x], [y], float(xmin), float(ymin), float(xmax), float(ymax), int(w), int(h)
+    )
+    return (int(col[0]), int(row[0])) if len(col) else None
 
 
 def check_lengths(x, y, z) -> None:
@@ -188,6 +211,13 @@ def bin_points(
     else:
         raise ValueError(_statistic_refusal(statistic))
 
+    return _gtiff_of(out, xmin, ymin, xmax, ymax, w, h, srid)
+
+
+def _gtiff_of(out, xmin, ymin, xmax, ymax, w: int, h: int, srid: int) -> bytes:
+    """The Float32 GTiff of a flat ``(h*w,)`` float64 array of per-pixel values: NaN is NoData. The one place the tile is
+    written, so :func:`bin_points` and :func:`bin_cells` write the same bytes for the same values.
+    """
     # Replace NaN sentinels with the NoData value and reshape to (h, w).
     band = np.where(np.isnan(out), _NODATA, out).astype("float32").reshape(h, w)
 
@@ -204,3 +234,71 @@ def bin_points(
     )
 
     return write_gtiff(profile, band[np.newaxis, ...])
+
+
+def cells_working_bytes(width_px: int, height_px: int, n_cells: int) -> int:
+    """An upper estimate of the memory :func:`bin_cells` holds at its peak: per output pixel the accumulator, the
+    NoData copy and the Float32 band (24 bytes), per cell its two indices, flat index and value (32 bytes).
+    """
+    return int(width_px) * int(height_px) * 24 + int(n_cells) * 32
+
+
+def cell_arrays(cells):
+    """The ``(col, row, value)`` arrays of an array of structs ``(col, row, value)`` (dicts or Rows).
+
+    A NULL element, and one with a NULL ``col`` or ``row``, is dropped; a NULL value stays as NaN, which is NoData.
+    Returns ``(cols int64, rows int64, values float64)``.
+    """
+    cols, rows, vals = [], [], []
+    for c in cells:
+        if c is None or c["col"] is None or c["row"] is None:
+            continue
+        cols.append(c["col"])
+        rows.append(c["row"])
+        v = c["value"]
+        vals.append(np.nan if v is None else v)
+    return (
+        np.asarray(cols, dtype="int64"),
+        np.asarray(rows, dtype="int64"),
+        np.asarray(vals, dtype="float64"),
+    )
+
+
+def bin_cells(
+    cols,
+    rows,
+    values,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    width_px: int,
+    height_px: int,
+    srid: int,
+) -> bytes:
+    """Write per-pixel values (already reduced, one per ``(col, row)``) as the tile :func:`bin_points` makes.
+
+    ``col`` counts from the west and ``row`` from the north, as the pixel keys of ``gbx_rst_binpoints_partial`` do.
+    A pixel given twice keeps its largest value; a NaN value, and a pixel in no cell, is NoData. A ``col`` or ``row``
+    outside the canvas is a ValueError (the keys came from another canvas).
+    """
+    w, h = int(width_px), int(height_px)
+    cols = np.asarray(cols, dtype="int64")
+    rows = np.asarray(rows, dtype="int64")
+    values = np.asarray(values, dtype="float64")
+    if not len(cols) == len(rows) == len(values):
+        raise ValueError(
+            "rst_binpoints_finalize: col, row and value must have the same length "
+            f"(got {len(cols)}, {len(rows)}, {len(values)})"
+        )
+    bad = (cols < 0) | (cols >= w) | (rows < 0) | (rows >= h)
+    if bad.any():
+        i = int(np.argmax(bad))
+        raise ValueError(
+            f"rst_binpoints_finalize: the cell (col {int(cols[i])}, row {int(rows[i])}) is outside the {w} x {h} canvas. "
+            "Fix: group the pixel keys of gbx_rst_binpoints_partial called with this same extent, width_px and height_px"
+        )
+    out = np.full(w * h, np.nan, dtype="float64")
+    # fmax skips NaN operands, so a NaN value leaves the pixel NoData and a repeated pixel keeps its largest value
+    np.fmax.at(out, rows * w + cols, values)
+    return _gtiff_of(out, xmin, ymin, xmax, ymax, w, h, srid)

@@ -2217,6 +2217,85 @@ buffers the whole cloud. See [Performance](./performance) and the [LiDAR reader]
 
 ---
 
+### rst_binpoints_partial
+
+{/* BEGIN GENERATED gbx_rst_binpoints_partial: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_binpoints_partial(x, y, xmin, ymin, xmax, ymax, width_px, height_px)` | `struct<col:int,row:int>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_binpoints_partial(x, y, xmin, ymin, xmax, ymax, width_px, height_px)` | `struct<col:int,row:int>` |
+| Python | `rasterx.functions.rst_binpoints_partial(x, y, xmin, ymin, xmax, ymax, width_px, height_px)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `x` | `DOUBLE` | `DOUBLE` |  | The point's x in the canvas CRS. |
+| `y` | `DOUBLE` | `DOUBLE` |  | The point's y in the canvas CRS. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the canvas in its CRS. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the canvas, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the canvas, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The canvas width in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The canvas height in pixels, above 0. |
+{/* END GENERATED gbx_rst_binpoints_partial */}
+
+Give the canvas pixel a point falls in, as a `(col, row)` key to group by. The column counts from the west and the row from the north.
+The rule is the one `rst_binpoints` uses: a point on the east or south edge is in no pixel.
+The function is a SQL expression, so a query runs it with no Python call.
+Use it with `rst_binpoints_finalize` to bin any number of points: the points never leave SQL, and only one value per occupied pixel reaches Python.
+
+```sql
+WITH b AS (
+  SELECT gbx_rst_binpoints_partial(x, y, 0D, 0D, 1024D, 1024D, 1024, 1024) AS px, z FROM points
+),
+c AS (
+  SELECT px.col AS col, px.row AS row, max(z) AS value   -- min, avg, count, median, percentile(z, 0.9)
+  FROM b WHERE px IS NOT NULL AND z IS NOT NULL AND NOT isnan(z)
+  GROUP BY px.col, px.row
+)
+SELECT gbx_rst_binpoints_finalize(collect_list(struct(col, row, value)), 0D, 0D, 1024D, 1024D, 1024, 1024, 32633) AS tile
+FROM c
+```
+
+The statement writes the tile that `rst_binpoints_agg` writes for the same points. Two differences hold when a `z` is NULL or NaN.
+The statement drops that point. The aggregate counts a NaN point in `count`, and gives NoData for `mean` and `median` when a pixel holds a NaN.
+Use `count(*)` for `count`, and cast the result to `DOUBLE`.
+
+---
+
+### rst_binpoints_finalize
+
+{/* BEGIN GENERATED gbx_rst_binpoints_finalize: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, srid)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, srid)` | `TILE` |
+| Python | `rasterx.functions.rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, srid)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `array<struct<col:int,row:int,value:double>>` | `array<struct<col:int,row:int,value:double>>` |  | The reduced pixels as an array of structs `(col, row, value)`, for example `collect_list(struct(col, row, value))` over a `GROUP BY` of the `gbx_rst_binpoints_partial` keys. A NULL element or a NULL or NaN value leaves the pixel NoData; a pixel given twice keeps its largest value; a `col` or `row` outside the canvas raises. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in its CRS. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the output, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the output, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The output width in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The output height in pixels, above 0. |
+| `srid` | `INT` | `INT` |  | The EPSG or ESRI code of the output CRS. |
+{/* END GENERATED gbx_rst_binpoints_finalize */}
+
+Write the reduced pixels of a points group into one single-band Float32 tile.
+Pass `collect_list(struct(col, row, value))` over the pixels you grouped with `rst_binpoints_partial`.
+The input has one struct per occupied pixel, so its size follows the canvas and not the number of points.
+A pixel in no struct is NoData (-9999), and so is a pixel whose value is NULL or NaN.
+A `col` or `row` outside the canvas raises, because the keys came from another canvas.
+On Unity Catalog, a canvas that is too large for one function call is refused. The error names `rst_binpoints_agg`, which runs in a notebook or job session.
+
+---
+
 ### rst_isoband
 
 {/* BEGIN GENERATED gbx_rst_isoband: edit manifest/functions.json, then run gbx:manifest:gen */}

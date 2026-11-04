@@ -429,6 +429,94 @@ def rst_binpoints_agg(
     )
 
 
+def rst_binpoints_finalize(
+    cells: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+) -> Column:
+    """Write the per-pixel values of a points group into one single-band tile.
+
+    Args:
+        cells: The reduced pixels as an array of structs `(col, row, value)`, for
+            example `collect_list(struct(col, row, value))` over a `GROUP BY` of the
+            `gbx_rst_binpoints_partial` keys. A NULL element or a NULL or NaN value leaves
+            the pixel NoData; a pixel given twice keeps its largest value; a `col` or `row`
+            outside the canvas raises.
+        xmin: The west edge of the output in its CRS.
+        ymin: The south edge of the output.
+        xmax: The east edge of the output, above `xmin`.
+        ymax: The north edge of the output, above `ymin`.
+        width_px: The output width in pixels, above 0.
+        height_px: The output height in pixels, above 0.
+        srid: The EPSG or ESRI code of the output CRS.
+
+    Returns:
+        A single-band Float32 tile over the extent, the tile `gbx_rst_binpoints_agg`
+        makes for the same points: a pixel in no struct is NoData (-9999). An array with
+        no pixel gives an all-NoData tile.
+
+    SQL: ``gbx_rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, srid)``
+    """
+    return _api.call(
+        "gbx_rst_binpoints_finalize",
+        cells,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+        srid,
+    )
+
+
+def rst_binpoints_partial(
+    x: ColLike,
+    y: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+) -> Column:
+    """Give the canvas pixel a point falls in, as the key to group points by.
+
+    Args:
+        x: The point's x in the canvas CRS.
+        y: The point's y in the canvas CRS.
+        xmin: The west edge of the canvas in its CRS.
+        ymin: The south edge of the canvas.
+        xmax: The east edge of the canvas, above `xmin`.
+        ymax: The north edge of the canvas, above `ymin`.
+        width_px: The canvas width in pixels, above 0.
+        height_px: The canvas height in pixels, above 0.
+
+    Returns:
+        A struct `(col, row)`, counted from the top-left pixel. NULL for a point outside
+        the canvas, on its east or south edge, or with a NULL or NaN coordinate. It is a
+        SQL expression, so it runs in the query with no Python.
+
+    SQL: ``gbx_rst_binpoints_partial(x, y, xmin, ymin, xmax, ymax, width_px, height_px)``
+    """
+    return _api.call(
+        "gbx_rst_binpoints_partial",
+        x,
+        y,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width_px,
+        height_px,
+    )
+
+
 def rst_bng_rasterize(
     cells: ColLike,
     out_srid: ColLike,

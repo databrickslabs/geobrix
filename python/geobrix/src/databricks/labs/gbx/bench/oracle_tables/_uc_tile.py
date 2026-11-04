@@ -101,7 +101,14 @@ def twin(rows, uc_fn: str, adapt: Adapt, *cids):
 
 
 def recipe(
-    cid: str, fn: str, sql: str, kind: str, expect: Any = None, surfaces=("uc",), **kw
+    cid: str,
+    fn: str,
+    sql: str,
+    kind: str,
+    expect: Any = None,
+    surfaces=("uc",),
+    args=(),
+    **kw,
 ) -> Case:
     """A recipe row: the whole SQL statement a user writes (or a procedure embeds), run on the UC surface, with the
     session's value as the expectation. ``sql`` projects one row and names its answer ``out``; ``{q}`` is where a
@@ -109,6 +116,8 @@ def recipe(
     ``SELECT {q}gbx_x(c) AS out FROM ...``. ``fn`` is the manifest function it exercises (the function the row is
     filed under; a recipe over several names the one that carries the claim), and ``kind``/``expect`` are the usual
     check on the one value. A ``twin`` row adapts a session row to another function; a recipe replaces the call itself.
+    ``args`` are not the statement's arguments (it has none): they are what a reference kind (``ref``) computes its
+    expected value from, so a recipe can share the session row's reference and its data.
     """
     from databricks.labs.gbx import manifest
 
@@ -116,7 +125,7 @@ def recipe(
         raise ValueError(f"recipe {cid}: {fn} is no manifest function")
     if not re.search(r"\bAS\s+`?out`?\b", sql, re.IGNORECASE):
         raise ValueError(f"recipe {cid}: the statement must name its answer `AS out`")
-    return Case(cid, fn, (), kind, expect, tuple(surfaces), sql=sql, **kw)
+    return Case(cid, fn, tuple(args), kind, expect, tuple(surfaces), sql=sql, **kw)
 
 
 def edges(_not_null=(), **extra):

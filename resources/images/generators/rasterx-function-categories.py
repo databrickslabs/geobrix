@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 158 functions, organized by category --------------------------------
+# --- Data: 161 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -86,6 +86,7 @@ CARDS_LEFT = [
             "rst_combineavg_agg", "rst_derivedband_agg", "rst_merge_agg",
             "rst_frombands_agg", "rst_rasterize_agg",
             "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg", "rst_binpoints_agg",
+            "rst_binpoints_partial", "rst_binpoints_finalize",
             "rst_h3_rasterize_agg",
             "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg",
             "rst_custom_rasterize_agg",
@@ -117,6 +118,7 @@ CARDS_LEFT = [
             "rst_h3_rastertogridmax", "rst_h3_rastertogridmin",
             "rst_h3_rastertogridmedian", "rst_h3_rastertogridstddev",
             "rst_h3_rastertogridsum", "rst_h3_rastertogridvariance",
+            "rst_h3_rastertogrid_partial",
         ],
     ),
 ]
@@ -410,7 +412,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'158 SQL functions for raster data on Spark &#8212; registered as '
+        f'161 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -519,7 +521,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'158 SQL functions for raster data on Spark &#8212; registered as '
+        f'161 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '

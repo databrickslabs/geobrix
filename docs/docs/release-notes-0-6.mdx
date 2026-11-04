@@ -730,6 +730,7 @@ Every raster function follows the same order of checks on both implementations.
 - **`rst_setsrid(tile, 0)` clears the CRS.** A raster georeferenced by ground control points counts as having a CRS.
 - **A merge too big to build is that group's error tile** with a `Fix:`. The aggregate raises.
 - **A duplicate cell's maximum ignores NaN.** A NaN never beats a number in the rasterize aggregates and the cell fills.
+- **`gbx_rst_binpoints` and its aggregate skip points with a NaN or infinite coordinate.** On some platforms such a point used to land in the first column.
 - **`out_srid` and `out_crs` together raise,** in every rasterizer: `Fix: set one`. This includes the H3 and quadbin rasterizers, where `out_crs` used to win.
 - **`rst_fromfile(vrt, materialize=True)` gives a GeoTIFF tile,** or an error tile with the reason, instead of NULL. A file the driver policy refuses is an error tile. A missing path stays NULL.
 - **Remote paths need a switch.** `gbx_rst_fromfile('https://...')` reads the URL through GDAL's `/vsicurl/` when you set `GBX_ALLOW_REMOTE_PATHS=true` before `register()`. The same size cap applies as for a local file. A URL that cannot be opened gives NULL. With the switch off the call raises with the location and a `Fix:`. A VRT served at a URL is refused, whatever its name.

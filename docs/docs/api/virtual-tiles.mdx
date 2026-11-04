@@ -88,10 +88,10 @@ The diagram above traces the four stages:
    [`prepare_cogs`](./large-rasters#prepare_cogs--driver-orchestrated-preparation),
    which makes windowed reads cheap (a striped source can inflate a single window
    ~570× versus a clean tiled block). Optimization is a choice, not a gate.
-2. **Distributed load.** A reader (`cog_gbx`, `raster_gbx`, `netcdf_gbx`, `gbx_zarr_read`, …) partitions
-   the source across executors and emits tile rows — the lightweight raster readers
-   (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) emit **virtual tiles by default**;
-   pass `.option("virtualTiles", "false")` to get materialized bytes instead (for
+2. **Distributed load.** A reader (`cog_gbx`, `raster_gbx`, `netcdf_gbx`, `gbx_zarr_read`, …) splits
+   the source across executors and emits tile rows. The raster readers
+   (`raster_gbx`, `gtiff_gbx`, `cog_gbx`) emit **virtual tiles by default**.
+   Pass `.option("virtualTiles", "false")` to get materialized bytes instead (for
    `gbx_zarr_read`, `virtual_tiles=False`). Selection
    options (`tileSize`, `overlapPercent`, `clipPolygons`, …) shape the windowing.
 3. **Operate.** Any `rst_*` function accepts either a virtual or a materialized

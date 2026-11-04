@@ -172,3 +172,78 @@ def rst_bandmetadata(tile, band):
 
 
 HANDLERS["gbx_rst_bandmetadata"] = rst_bandmetadata
+
+
+# --- pixel statistics ----------------------------------------------------------------------------------------
+rst_avg = _scalar("gbx_rst_avg", "accessors", "avg")
+rst_min = _scalar("gbx_rst_min", "accessors", "minimum")
+rst_max = _scalar("gbx_rst_max", "accessors", "maximum")
+rst_median = _scalar("gbx_rst_median", "accessors", "median")
+rst_pixelcount = _scalar("gbx_rst_pixelcount", "accessors", "pixelcount")
+rst_summary = _scalar("gbx_rst_summary", "accessors", "summary")
+# an error tile has no valid pixel: it is empty
+rst_isempty = _scalar("gbx_rst_isempty", "accessors", "isempty", on_empty=True)
+
+
+def rst_histogram(tile, n_buckets, min_val, max_val, include_nodata):
+    """gbx_rst_histogram: per-band bucket counts; a NULL n_buckets is 256, a NULL range is the band's own."""
+    fn = "gbx_rst_histogram"
+    if n_buckets is not None and int(n_buckets) < 1:
+        raise _Parameter(
+            f"{fn}: n_buckets must be >= 1; got {n_buckets}. Fix: pass a bucket count of at least 1"
+        )
+    if tile is None:
+        return None
+    return with_dataset(
+        fn,
+        tile,
+        lambda ds: _kernel("accessors", "histogram")(
+            ds,
+            256 if n_buckets is None else int(n_buckets),
+            None if min_val is None else float(min_val),
+            None if max_val is None else float(max_val),
+            bool(include_nodata) if include_nodata is not None else False,
+        ),
+    )
+
+
+HANDLERS["gbx_rst_histogram"] = rst_histogram
+
+
+def rst_sample(tile, geom, crs):
+    """gbx_rst_sample: the value of each band at a POINT (a GEOMETRY, in its own SRID; `crs` names the SRID of a
+    point that has none); a point outside the tile is NULL."""
+    import shapely
+
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+    from databricks.labs.gbx.uc.handlers import _geom_bytes
+
+    fn = "gbx_rst_sample"
+    if tile is None or geom is None:
+        return None
+    source = None if crs is None else parse_uc_crs(crs, fn=fn).code
+    point = shapely.from_wkb(_geom_bytes(geom))
+    if point.geom_type != "Point":
+        raise _Parameter(
+            f"{fn}: needs a POINT geometry; got {point.geom_type.upper()}. "
+            "Fix: pass the point to sample, for example st_point(x, y)"
+        )
+    return with_dataset(
+        fn, tile, lambda ds: _kernel("ops", "sample")(ds, point, geom_crs=source)
+    )
+
+
+HANDLERS["gbx_rst_sample"] = rst_sample
+
+
+def rst_tryopen(tile):
+    """gbx_rst_tryopen: whether the tile's bytes open as a raster. Bytes that do not open, and an error tile, are
+    false (the answer, not a missing value); a NULL tile is NULL."""
+    fn = "gbx_rst_tryopen"
+    if tile is None:
+        return None
+    # opening is the test (as ops.try_open): bytes that do not open come back from with_dataset as None
+    return bool(with_dataset(fn, tile, lambda ds: ds.count is not None, on_empty=False))
+
+
+HANDLERS["gbx_rst_tryopen"] = rst_tryopen

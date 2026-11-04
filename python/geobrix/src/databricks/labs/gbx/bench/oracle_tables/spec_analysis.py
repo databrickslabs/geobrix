@@ -5,6 +5,7 @@ The expected values come from the fixtures' definitions (see raster_accessor.py)
 first pixel NoData has the valid values 2..12, so its minimum is 2, its maximum 12 and its mean 7.
 """
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -287,3 +288,11 @@ SPEC_ANALYSIS += (
     Case("polygonize_error_tile", PG, (ERR,), "no_rows", None, ONLY),
     Case("polygonize_corrupt", PG, (CORRUPT,), "no_rows", None, ONLY),
 )
+
+# Unity Catalog: the summary of a materialized tile is the session's
+SPEC_ANALYSIS = (
+    share(
+        SPEC_ANALYSIS, "summary", "summary_float32_precision", "summary_null_tile", "summary_error_tile"
+    )
+    + edges(summary=())
+)  # fmt: skip

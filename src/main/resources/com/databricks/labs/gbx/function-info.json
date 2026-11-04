@@ -40,6 +40,7 @@
       "description": "Return the mean of the valid pixels of each band.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -836,6 +837,7 @@
       "description": "Return the histogram of each band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -867,6 +869,7 @@
       "description": "Test whether a raster holds no valid pixel.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -920,6 +923,7 @@
       "description": "Return the maximum of the valid pixels of each band.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -931,6 +935,7 @@
       "description": "Return the median of the valid pixels of each band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -994,6 +999,7 @@
       "description": "Return the minimum of the valid pixels of each band.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1058,6 +1064,7 @@
       "description": "Return the number of valid pixels of each band.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1349,6 +1356,7 @@
       "description": "Return the pixel value of each band at a point.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1485,6 +1493,7 @@
       "description": "Return a JSON summary of the raster with per-band statistics.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1584,6 +1593,7 @@
       "description": "Test whether tile bytes open as a raster.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

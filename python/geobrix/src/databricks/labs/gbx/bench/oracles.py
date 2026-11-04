@@ -4826,6 +4826,21 @@ def _uc_geometry_type():
         handlers._geometry_type = saved
 
 
+def _uc_default(param):
+    """A parameter's DEFAULT as the SQL wrapper hands it to the handler: typed by the UC type, NULL as None."""
+    raw = param.default
+    if raw is None or raw.strip().upper() == "NULL":
+        return None
+    raw = raw.strip()
+    if param.uc == "BOOLEAN":
+        return raw.lower() == "true"
+    if param.uc in ("INT", "BIGINT"):
+        return int(raw)
+    if param.uc == "DOUBLE":
+        return float(raw)
+    return raw.strip("'")
+
+
 def run_handlers(cases, tmpdir: Optional[str] = None):
     """L4 without Spark: call the UC handlers with Python values. GEOMETRY params get :class:`UcGeometry` values."""
     from databricks.labs.gbx import manifest
@@ -4843,8 +4858,7 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
             for row in (case.args, *case.variants):
                 args = [resolve_arg(a, tmpdir) for a in row]
                 args += [  # the SQL wrapper supplies the DEFAULTs
-                    None if p.default is None else p.default.strip("'")
-                    for p in fn.params[len(args) :]
+                    _uc_default(p) for p in fn.params[len(args) :]
                 ]
                 uc_args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
                 with _uc_geometry_type():

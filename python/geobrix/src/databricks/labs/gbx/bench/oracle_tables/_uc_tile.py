@@ -23,9 +23,10 @@ def share(rows, *cids):
     return tuple(out)
 
 
-def edges(**extra):
+def edges(_not_null=(), **extra):
     """The UC refusal and corrupt-tile rows of each function: `edges(width=(), bandmetadata=(1,))` takes the function's
-    short name and the arguments after the tile."""
+    short name and the arguments after the tile. A function named in `_not_null` has no corrupt-tile row here (its own
+    answer for a corrupt tile is a value, not NULL)."""
     rows = []
     for short, args in extra.items():
         fn = f"gbx_rst_{short}"
@@ -39,6 +40,8 @@ def edges(**extra):
                 ("uc",),
             )
         )
+        if short in _not_null:
+            continue
         rows.append(
             Case(
                 f"uc_{short}_corrupt_null",

@@ -314,7 +314,7 @@ _session_accessor_rows = (
     _c("bandmetadata_null_band", "bandmetadata", (TWO, None), "null"),
 )
 
-RASTER_STAT = (
+_session_stat_rows = (
     # one band: valid values are 2..12 (the first pixel is NoData)
     _c("avg", "avg", (STATS,), "approx", [7.0]),
     _c("min", "min", (STATS,), "exact", [2.0]),
@@ -456,4 +456,45 @@ RASTER_ACCESSOR = share(
     type=(), getnodata=(), metadata=(), bandmetadata=(1,), subdatasets=(), rastertoworldcoord=(1, 2),
     rastertoworldcoordx=(1, 2), rastertoworldcoordy=(1, 2), worldtorastercoord=(400015.0, 5759975.0),
     worldtorastercoordx=(400015.0, 5759975.0), worldtorastercoordy=(400015.0, 5759975.0),
+)  # fmt: skip
+
+POINT_UTM = "POINT(400015 5759995)"
+RASTER_STAT = share(
+    _session_stat_rows,
+    "avg", "min", "max", "median", "pixelcount", "avg_two_band", "min_two_band", "max_two_band", "median_two_band",
+    "pixelcount_two_band", "avg_float32_precision", "avg_all_nodata", "min_all_nodata", "max_all_nodata",
+    "median_all_nodata", "pixelcount_all_nodata", "isempty", "isempty_all_nodata", "histogram", "histogram_range",
+    "histogram_top_edge", "histogram_null_min", "histogram_null_max", "histogram_two_band",
+    "histogram_include_nodata", "histogram_zero_buckets", "tryopen", "tryopen_corrupt", "tryopen_error_tile",
+    "avg_null_tile", "avg_error_tile", "avg_corrupt_tile", "isempty_error_tile", "sample_two_band",
+    "sample_not_a_point",
+) + edges(
+    ("tryopen",), avg=(), min=(), max=(), median=(), pixelcount=(), isempty=(), histogram=(2,),
+    sample=(POINT_UTM,), tryopen=(),
+) + (
+    # sample: the point is a GEOMETRY carrying its SRID (the `geom_srid` of the row); `crs` names the SRID of one that
+    # carries none, and only as an SRID integer, EPSG:<n> or ESRI:<n>
+    Case("uc_sample", "gbx_rst_sample", (STATS, POINT_UTM), "exact", [2.0], ("uc",), geom_srid=32633),
+    Case(
+        "uc_sample_reprojected", "gbx_rst_sample", (STATS, "POINT(%.9f %.9f)" % LONLAT), "exact", [2.0], ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_sample_crs_argument", "gbx_rst_sample", (STATS, "POINT(%.9f %.9f)" % LONLAT, "EPSG:4326"), "exact", [2.0],
+        ("uc",), geom_srid=0,
+    ),
+    Case(
+        "uc_sample_wkt_crs_refused", "gbx_rst_sample", (STATS, POINT_UTM, "+proj=longlat +datum=WGS84"), "uc_refused",
+        None, ("uc",), geom_srid=0,
+    ),
+    Case(
+        "uc_sample_wkb_into_geometry_refused", "gbx_rst_sample", (STATS, Build("acc_point_wkb")), "uc_refused", None,
+        ("uc",),
+    ),
+    Case(
+        "uc_sample_outside", "gbx_rst_sample", (STATS, "POINT(500000 5760000)"), "null", None, ("uc",), geom_srid=32633
+    ),
+    # a NULL tile is NULL, a tile with nothing in it is false (as an unreadable one)
+    Case("uc_tryopen_null_tile", "gbx_rst_tryopen", (None,), "null", None, ("uc",)),
+    Case("uc_sample_null_geom", "gbx_rst_sample", (STATS, None), "null", None, ("uc",)),
 )  # fmt: skip

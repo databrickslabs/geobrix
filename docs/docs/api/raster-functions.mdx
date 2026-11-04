@@ -191,16 +191,17 @@ Functions to read raster properties and metadata (29 total).
 ### rst_avg
 
 {/* BEGIN GENERATED gbx_rst_avg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_avg(tile)` | `array<double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_avg(tile)` | `array<double>` |
 | Python | `rasterx.functions.rst_avg(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_avg */}
 
 :::note Implementation
@@ -490,16 +491,17 @@ Height in pixels.
 ### rst_max
 
 {/* BEGIN GENERATED gbx_rst_max: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_max(tile)` | `array<double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_max(tile)` | `array<double>` |
 | Python | `rasterx.functions.rst_max(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_max */}
 
 :::note Implementation
@@ -523,16 +525,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 ### rst_median
 
 {/* BEGIN GENERATED gbx_rst_median: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_median(tile)` | `array<double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_median(tile)` | `array<double>` |
 | Python | `rasterx.functions.rst_median(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_median */}
 
 :::note Implementation
@@ -613,16 +616,17 @@ Metadata map.
 ### rst_min
 
 {/* BEGIN GENERATED gbx_rst_min: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_min(tile)` | `array<double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_min(tile)` | `array<double>` |
 | Python | `rasterx.functions.rst_min(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_min */}
 
 :::note Implementation
@@ -678,16 +682,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, gre
 ### rst_pixelcount
 
 {/* BEGIN GENERATED gbx_rst_pixelcount: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_pixelcount(tile)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_pixelcount(tile)` | `array<bigint>` |
 | Python | `rasterx.functions.rst_pixelcount(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_pixelcount */}
 
 :::note Implementation
@@ -981,16 +986,17 @@ _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which ha
 ### rst_summary
 
 {/* BEGIN GENERATED gbx_rst_summary: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_summary(tile)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_summary(tile)` | `STRING` |
 | Python | `rasterx.functions.rst_summary(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_summary */}
 
 :::note Implementation
@@ -4246,16 +4252,17 @@ Initialize NoData values.
 ### rst_isempty
 
 {/* BEGIN GENERATED gbx_rst_isempty: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_isempty(tile)` | `BOOLEAN` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_isempty(tile)` | `BOOLEAN` |
 | Python | `rasterx.functions.rst_isempty(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_isempty */}
 
 :::note Implementation
@@ -4696,16 +4703,17 @@ Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts an
 ### rst_tryopen
 
 {/* BEGIN GENERATED gbx_rst_tryopen: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_tryopen(tile)` | `BOOLEAN` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_tryopen(tile)` | `BOOLEAN` |
 | Python | `rasterx.functions.rst_tryopen(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_tryopen */}
 
 :::note Implementation
@@ -5671,20 +5679,21 @@ Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation fr
 ### rst_histogram
 
 {/* BEGIN GENERATED gbx_rst_histogram: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_histogram(tile, [n_buckets], [min_val], [max_val], [include_nodata])` | `map<string,array<bigint>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_histogram(tile, [n_buckets], [min_val], [max_val], [include_nodata])` | `map<string,array<bigint>>` |
 | Python | `rasterx.functions.rst_histogram(tile, n_buckets=None, min_val=None, max_val=None, include_nodata=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `n_buckets` | `INT` | `256` | The number of equal-width buckets across the range. |
-| `min_val` | `DOUBLE` | `NULL` | The lower bound of the range; the band's smallest valid value when NULL. |
-| `max_val` | `DOUBLE` | `NULL` | The upper bound of the range; the band's largest valid value when NULL. |
-| `include_nodata` | `BOOLEAN` | `false` | Whether NoData pixels are binned too; the default leaves them out. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `n_buckets` | `INT` | `INT` | `256` | The number of equal-width buckets across the range. |
+| `min_val` | `DOUBLE` | `DOUBLE` | `NULL` | The lower bound of the range; the band's smallest valid value when NULL. |
+| `max_val` | `DOUBLE` | `DOUBLE` | `NULL` | The upper bound of the range; the band's largest valid value when NULL. |
+| `include_nodata` | `BOOLEAN` | `BOOLEAN` | `false` | Whether NoData pixels are binned too; the default leaves them out. |
 {/* END GENERATED gbx_rst_histogram */}
 
 :::note Implementation
@@ -5705,18 +5714,19 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) so the histog
 ### rst_sample
 
 {/* BEGIN GENERATED gbx_rst_sample: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_sample(tile, geom, [crs])` | `array<double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_sample(tile, geom, [crs])` | `array<double>` |
 | Python | `rasterx.functions.rst_sample(tile, geom, crs=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `geom` | `BINARY` or `STRING` |  | A POINT as WKB, EWKB, WKT or EWKT. |
-| `crs` | `STRING` | `NULL` | The CRS of a point with no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The raster CRS when NULL. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | A POINT as WKB, EWKB, WKT or EWKT. |
+| `crs` | `STRING` | `STRING` | `NULL` | The CRS of a point with no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The raster CRS when NULL. |
 {/* END GENERATED gbx_rst_sample */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.

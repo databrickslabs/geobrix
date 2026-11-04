@@ -237,9 +237,10 @@ def _parameter(fn: str, exc: Exception) -> ValueError:
     )
 
 
-def _grid_geometry(fn: str, geom, srid: int, grid: str):
+def _grid_geometry(fn: str, geom, srid: int, grid: str, hint: str = ""):
     """A GEOMETRY(ANY) argument as a shapely geometry, or None when it cannot be read; a geometry in an SRID other than
-    the grid's is refused (a UC GEOMETRY always carries an integer SRID)."""
+    the grid's is refused (a UC GEOMETRY always carries an integer SRID). ``hint`` replaces the parenthesis after the
+    refusal (the default names ``st_transform``)."""
     import shapely
 
     raw = _geom_bytes(geom)
@@ -253,7 +254,8 @@ def _grid_geometry(fn: str, geom, srid: int, grid: str):
     if got != srid:
         raise _refuse(
             fn,
-            f"{grid} needs geometry in SRID {srid}; got SRID {got} (st_transform(geom, {srid}) first)",
+            f"{grid} needs geometry in SRID {srid}; got SRID {got} "
+            f"({hint or f'st_transform(geom, {srid}) first'})",
         )
     return g
 
@@ -503,6 +505,252 @@ def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         Exception
     ):  # noqa: BLE001 - the parameters are checked above: a geometry that cannot be dilated is NULL
         return None
+
+
+# --- array results are bounded, never truncated ---------------------------------------------------------------------
+# A Unity Catalog function returns at most UC_DECODED_CAP (64 MiB) per result. A cell array past it is refused with a Fix
+# before the kernel builds it where its size is known up front (a ring of k), and after it where it is not (a geometry's
+# cells). One helper judges every grid array, so the rule has one place.
+
+ARRAY_ITEM_BYTES = (
+    40  # one element of a cell array: the id and the row's overhead, an upper estimate
+)
+
+
+def _array_cap() -> int:
+    from databricks.labs.gbx.pyrx.core.budget import UC_DECODED_CAP
+
+    return UC_DECODED_CAP
+
+
+def _check_bytes(fn: str, size: int, what: str) -> None:
+    """Refuse a result of ``size`` bytes over the cap, with a Fix that names the session function."""
+    cap = _array_cap()
+    if size > cap:
+        from databricks.labs.gbx.pyrx.core.budget import size_text
+
+        raise _Refusal(
+            f"{fn}: {what} is {size_text(size)}, over the {size_text(cap)} a Unity Catalog function returns. "
+            f"Fix: lower k, or split the input into smaller groups, or use the session function {fn} "
+            "(after databricks.labs.gbx.register(spark)) or the Python API."
+        )
+
+
+def _check_array(fn: str, count: int, what: str = "the array of cells") -> None:
+    """Refuse an array of ``count`` cells over the cap (see :func:`_check_bytes`)."""
+    _check_bytes(fn, int(count) * ARRAY_ITEM_BYTES, what)
+
+
+def _le(wkb: bytes) -> bytes:
+    """A WKB or EWKB as little-endian bytes (the byte order the UC Scala handlers write); little-endian input is as is."""
+    if wkb[:1] == b"\x01":
+        return wkb
+    import shapely
+
+    return shapely.to_wkb(shapely.from_wkb(wkb), include_srid=True, byte_order=1)
+
+
+def _ring_cells(k: int, side: int) -> int:
+    """The most cells a square ring of distance k holds on a grid ``side`` cells wide: the square, cut to the grid."""
+    return min(2 * k + 1, side) ** 2
+
+
+def _grid_distance(fn: str, a, b, kernel):
+    """``kernel(a, b)`` of two parsed cells; NULL when either is not a cell (the parsers answer None for that)."""
+    return None if a is None or b is None else kernel(a, b)
+
+
+def _dilation(fn: str, mode, coverage, k):
+    """The checked dilation arguments of a geometry-aware ring: ``(mode, coverage, k)``; a wrong one is a PARAMETER error,
+    raised before the geometry is read."""
+    _mode(fn, mode)
+    return mode or "boundary-out", _coverage(fn, coverage), _ring_k(fn, k)
+
+
+def _cells_of(fn: str, g, run):
+    """``run(g)`` as a cell array: NULL for a NULL, non-finite or unreadable geometry (data), else bounded by the cap."""
+    if g is None or not _finite(g):
+        return None  # a non-finite coordinate has no cell
+    try:
+        cells = run(g)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - the parameters are checked: a geometry that cannot be dilated is NULL
+        return None
+    _check_array(fn, len(cells))
+    return cells
+
+
+# --- quadbin --------------------------------------------------------------------------------------------------------
+
+
+def _qb_cell(cell):
+    """A quadbin cell id as an int, or None when it is no cell (data)."""
+    if cell is None:
+        return None
+    import quadbin
+
+    try:
+        c = int(cell)
+        return c if quadbin.is_valid_cell(c) else None
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+def _qb_zoom(cell: int) -> int:
+    import quadbin
+
+    return quadbin.get_resolution(cell)
+
+
+def quadbin_aswkb(cell):
+    """The cell polygon as EWKB with SRID 4326."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    c = _qb_cell(cell)
+    return None if c is None else _le(_quadbin.as_wkb(c))
+
+
+def quadbin_centroid(cell):
+    """The cell centre as EWKB with SRID 4326."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    c = _qb_cell(cell)
+    return None if c is None else _le(_quadbin.centroid(c))
+
+
+def quadbin_distance(cellid1, cellid2):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    fn = "gbx_quadbin_distance"
+    if cellid1 is None or cellid2 is None:
+        return None
+    a, b = _qb_cell(cellid1), _qb_cell(cellid2)
+    if a is None or b is None:
+        return None
+    za, zb = _qb_zoom(a), _qb_zoom(b)
+    if za != zb:
+        raise ValueError(
+            f"{fn}: the cells are at different zooms ({za} and {zb}). "
+            "Fix: compare cells of one zoom; gbx_quadbin_resolution(cell) gives a cell's zoom."
+        )
+    return _quadbin.distance(a, b)
+
+
+def _qb_ring(fn: str, cell, k, kernel):
+    """kring and kloop of a cell: the arguments checked, the ring's size bounded before the kernel builds it."""
+    if cell is None or k is None:
+        return None
+    kk = _ring_k(fn, k)
+    c = _qb_cell(cell)
+    if c is None:
+        return None  # an id that is no cell
+    _check_array(
+        fn, _ring_cells(kk, 2 ** _qb_zoom(c))
+    )  # a loop is built as the ring minus the one inside it
+    return kernel(c, kk)
+
+
+def quadbin_kring(cell, k):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    return _qb_ring("gbx_quadbin_kring", cell, k, _quadbin.k_ring)
+
+
+def quadbin_kloop(cell, k):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    return _qb_ring("gbx_quadbin_kloop", cell, k, _quadbin.k_loop)
+
+
+def _qb_geom_ring(fn: str, geom, resolution, k, mode, coverage, kernel):
+    if geom is None or resolution is None or k is None:
+        return None
+    mode, coverage, kk = _dilation(fn, mode, coverage, k)
+    from databricks.labs.gbx.pygx import _quadbin
+
+    z = _range(fn, "zoom", _whole(fn, resolution), 0, _quadbin._MAX_RES)
+    g = _grid_geometry(fn, geom, WGS84_SRID, "quadbin")
+    return _cells_of(fn, g, lambda g: kernel(g, z, kk, mode, coverage))
+
+
+def quadbin_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    return _qb_geom_ring(
+        "gbx_quadbin_geomkring",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+        _quadbin.geometry_k_ring,
+    )
+
+
+def quadbin_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
+    from databricks.labs.gbx.pygx import _quadbin
+
+    return _qb_geom_ring(
+        "gbx_quadbin_geomkloop",
+        geom,
+        resolution,
+        k,
+        mode,
+        coverage,
+        _quadbin.geometry_k_loop,
+    )
+
+
+def quadbin_tessellate(geom, resolution):
+    """The chips of a geometry: ``(cell, geom)`` with the chip as EWKB with SRID 4326."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    fn = "gbx_quadbin_tessellate"
+    if geom is None or resolution is None:
+        return None
+    z = _range(fn, "zoom", _whole(fn, resolution), 0, _quadbin._MAX_POLYFILL_RES)
+    g = _grid_geometry(fn, geom, WGS84_SRID, "quadbin")
+    if g is None:
+        return None
+    try:
+        chips = _quadbin.tessellate(g, z)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - the zoom is checked above: a geometry that cannot be cut (too many cells) is NULL
+        return None
+    out = [{"cell": int(c), "geom": _le(chip)} for c, chip in chips]
+    _check_bytes(
+        fn,
+        sum(len(r["geom"]) + ARRAY_ITEM_BYTES for r in out),
+        "the array of chips",
+    )
+    return out
+
+
+def quadbin_cellunion(cells):
+    """The union of the cells' polygons as EWKB with SRID 4326; NULL for no cell, or for an id that is no cell."""
+    from databricks.labs.gbx.pygx import _quadbin
+
+    fn = "gbx_quadbin_cellunion"
+    if cells is None:
+        return None
+    ids = []
+    for cell in cells:
+        if cell is None:
+            continue  # a NULL beside cells is no cell
+        c = _qb_cell(cell)
+        if c is None:
+            return None
+        ids.append(c)
+    if not ids:
+        return None
+    _check_array(fn, len(ids))
+    return _le(_quadbin.cell_union(ids))
 
 
 def st_explainvalidity(geom):

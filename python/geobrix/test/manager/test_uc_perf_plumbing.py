@@ -661,7 +661,7 @@ def test_twin_refuses_a_row_that_is_not_there_a_python_only_row_a_same_name_form
         twin(rows, "gbx_does_not_exist", Adapt(), "agg_a")
     with pytest.raises(ValueError, match="no UC function"):
         twin(
-            rows, "gbx_quadbin_cellunion", Adapt(), "agg_a"
+            rows, "gbx_bng_cellunion_agg", Adapt(), "agg_a"
         )  # a session function, no L4
 
 

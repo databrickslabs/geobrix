@@ -222,16 +222,17 @@ Powered by the **quadbin** package (numpy-vectorized encoder). Encodes WGS84 lon
 ### quadbin_aswkb
 
 {/* BEGIN GENERATED gbx_quadbin_aswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_aswkb(cell)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_aswkb(cell)` | `BINARY` |
 | Python | `gridx.quadbin.functions.quadbin_aswkb(cell)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The quadbin cell id. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The quadbin cell id. |
 {/* END GENERATED gbx_quadbin_aswkb */}
 
 Return the quadbin cell footprint as EWKB (SRID=4326) — the four-corner polygon of the tile in lon/lat.
@@ -255,16 +256,17 @@ Powered by the **quadbin** package + **shapely**. Cell boundary polygon as EWKB 
 ### quadbin_centroid
 
 {/* BEGIN GENERATED gbx_quadbin_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_centroid(cell)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_centroid(cell)` | `BINARY` |
 | Python | `gridx.quadbin.functions.quadbin_centroid(cell)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The quadbin cell id. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The quadbin cell id. |
 {/* END GENERATED gbx_quadbin_centroid */}
 
 Return the quadbin cell centroid as an EWKB POINT (SRID=4326).
@@ -357,17 +359,18 @@ Powered by the **quadbin** package + **shapely**. Enumerates the cells covering 
 ### quadbin_kring
 
 {/* BEGIN GENERATED gbx_quadbin_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_kring(cell, k)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_kring(cell, k)` | `array<bigint>` |
 | Python | `gridx.quadbin.functions.quadbin_kring(cell, k)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The quadbin cell id. |
-| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The quadbin cell id. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
 {/* END GENERATED gbx_quadbin_kring */}
 
 Return all cells within Chebyshev distance `k` of a quadbin cell (inclusive of the center cell).
@@ -391,17 +394,18 @@ Powered by the **quadbin** package. All cells within Chebyshev distance `k` (inc
 ### quadbin_kloop
 
 {/* BEGIN GENERATED gbx_quadbin_kloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_kloop(cell, k)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_kloop(cell, k)` | `array<bigint>` |
 | Python | `gridx.quadbin.functions.quadbin_kloop(cell, k)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The quadbin cell id. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this distance are returned. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The quadbin cell id. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this distance are returned. |
 {/* END GENERATED gbx_quadbin_kloop */}
 
 Return the hollow ring of quadbin cells at exactly Chebyshev distance `k` from the center cell. At `k=1` the ring contains the 8 surrounding cells (center excluded); at `k=0` the result is a single-element array containing the center cell.
@@ -425,17 +429,18 @@ Powered by the **quadbin** package. The cells at exactly Chebyshev distance `k` 
 ### quadbin_tessellate
 
 {/* BEGIN GENERATED gbx_quadbin_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_tessellate(geom, resolution)` | `array<struct<cell:bigint,geom:binary>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_tessellate(geom, resolution)` | `array<struct<cell:bigint,geom:binary>>` |
 | Python | `gridx.quadbin.functions.quadbin_tessellate(geom, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
 {/* END GENERATED gbx_quadbin_tessellate */}
 
 Tessellate a geometry into quadbin cells. Like `quadbin_polyfill` but returns the per-cell geometry chip alongside the cell ID, suitable for chip-based join patterns.
@@ -459,16 +464,17 @@ Powered by the **quadbin** package + **shapely**. Bbox polyfill then per-cell in
 ### quadbin_cellunion
 
 {/* BEGIN GENERATED gbx_quadbin_cellunion: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_cellunion(cells)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_cellunion(cells)` | `BINARY` |
 | Python | `gridx.quadbin.functions.quadbin_cellunion(cells)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cells` | `ARRAY<BIGINT>` |  | The quadbin cell ids to merge. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `ARRAY<BIGINT>` | `ARRAY<BIGINT>` |  | The quadbin cell ids to merge. |
 {/* END GENERATED gbx_quadbin_cellunion */}
 
 Union an `ARRAY<BIGINT>` of quadbin cells into a single MultiPolygon EWKB.
@@ -527,17 +533,18 @@ Powered by **shapely**. Grouped aggregate — `groupBy(...).agg(gx.quadbin_cellu
 ### quadbin_distance
 
 {/* BEGIN GENERATED gbx_quadbin_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_distance(cellid1, cellid2)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_distance(cellid1, cellid2)` | `INT` |
 | Python | `gridx.quadbin.functions.quadbin_distance(cellid1, cellid2)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid1` | `BIGINT` |  | The first quadbin cell id. |
-| `cellid2` | `BIGINT` |  | The second quadbin cell id, at the same zoom level. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid1` | `BIGINT` | `BIGINT` |  | The first quadbin cell id. |
+| `cellid2` | `BIGINT` | `BIGINT` |  | The second quadbin cell id, at the same zoom level. |
 {/* END GENERATED gbx_quadbin_distance */}
 
 Chebyshev (king-move) distance between two quadbin cells at the same resolution.
@@ -634,20 +641,21 @@ Nesting: `coveras ⊇ polyfill ⊇ core`. Point and line geometries are covered 
 ### quadbin_geomkring
 
 {/* BEGIN GENERATED gbx_quadbin_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_geomkring(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_geomkring(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
 | Python | `gridx.quadbin.functions.quadbin_geomkring(geom, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
-| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_quadbin_geomkring */}
 
 Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps. Returns all cells within Chebyshev distance `k` of the covering set.
@@ -667,20 +675,21 @@ Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps.
 ### quadbin_geomkloop
 
 {/* BEGIN GENERATED gbx_quadbin_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_quadbin_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_quadbin_geomkloop(geom, resolution, k, [mode], [coverage])` | `array<bigint>` |
 | Python | `gridx.quadbin.functions.quadbin_geomkloop(geom, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
-| `resolution` | `INT` or `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in EPSG:4326 degrees. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | Quadbin zoom level, a whole number from 0 to 20. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_quadbin_geomkloop */}
 
 Polyfill a geometry at a given quadbin zoom level then return only the hollow outer ring at exactly `k` steps.

@@ -2508,6 +2508,7 @@
       "description": "Return the footprint of a quadbin cell as an EWKB polygon in EPSG:4326.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -2528,6 +2529,7 @@
       "description": "Return the union of an array of quadbin cells as an EWKB polygon in EPSG:4326.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -2548,6 +2550,7 @@
       "description": "Return the centre of a quadbin cell as an EWKB point in EPSG:4326.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -2558,6 +2561,7 @@
       "description": "Return the distance in cells between two quadbin cells of the same zoom level.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -2568,6 +2572,7 @@
       "description": "Return the quadbin cells at exactly k rings from a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -2588,6 +2593,7 @@
       "description": "Return the quadbin cells of a geometry dilated by k rings.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -2608,6 +2614,7 @@
       "description": "Return the quadbin cells at exactly ring distance k from a cell.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -2618,6 +2625,7 @@
       "description": "Return the quadbin cells within ring distance k of a cell, the cell included.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -2661,6 +2669,7 @@
       "description": "Cut a geometry into quadbin cells, one chip per cell it touches.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

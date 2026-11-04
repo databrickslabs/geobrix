@@ -567,6 +567,49 @@ GRID_SCALAR += (
         "exact",
         10,
     ),
+    # A quadbin cell id that is no cell is a data error: NULL. (The zoom function reads the id's bits as they are.)
+    Case("uc_qb_aswkb_not_a_cell", QAWKB, (0,), "null", None, ("uc",)),
+    Case("uc_qb_centroid_not_a_cell", QCENT, (0,), "null", None, ("uc",)),
+    Case(
+        "uc_qb_distance_not_a_cell",
+        QDIST,
+        (0, QB_C),
+        "null",
+        None,
+        ("uc",),
+        variants=((QB_C, 0),),
+    ),
+    # A UC BINARY result carries the integer SRID: EWKB with 4326 for a quadbin cell, as the session's quadbin bytes.
+    Case(
+        "uc_qb_aswkb_srid",
+        QAWKB,
+        (QB_C,),
+        "geom_srid",
+        (qb_tiles(163, 395, 163, 395, 10), 4326),
+        ("uc",),
+    ),
+    Case(
+        "uc_qb_centroid_srid",
+        QCENT,
+        (QB_C,),
+        "geom_srid",
+        (
+            f"POINT({(qb_lon(163, 10) + qb_lon(164, 10)) / 2} {(qb_lat(395, 10) + qb_lat(396, 10)) / 2})",
+            4326,
+        ),
+        ("uc",),
+    ),
+    # The union of a NULL beside two cells is the union of the two; a cell that is no cell, or no cell at all, is NULL.
+    Case(
+        "uc_qb_cellunion_srid",
+        QUNI,
+        ([QB_C, None, QB_E],),
+        "geom_srid",
+        (qb_tiles(163, 395, 164, 395, 10), 4326),
+        ("uc",),
+    ),
+    Case("uc_qb_cellunion_not_a_cell", QUNI, ([QB_C, 0],), "null", None, ("uc",)),
+    Case("uc_qb_cellunion_empty", QUNI, ([],), "null", None, ("uc",)),
     # A UC BINARY result carries the integer SRID: EWKB with 27700 (the session's WKB carries none).
     Case("uc_bng_aswkb_srid", AWKB, ("TQ3080",), "geom_srid", (TQ3080, 27700), ("uc",)),
     Case(

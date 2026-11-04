@@ -12,6 +12,7 @@ from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
     QB_C,
     QB_E,
     QB_PT,
+    QB_Z26,
     G,
     cg_id,
 )
@@ -291,6 +292,7 @@ GRID_ARRAY = uc_view(
         "qb_polyfill_bad_geom",
         "bng_inf_point_array",
         "h3_inf_point",
+        "quadbin_inf_point_geomk",
     ),
 )
 
@@ -334,4 +336,42 @@ GRID_ARRAY += (
         ("uc",),
         geom_srid=27700,
     ),
+)
+
+# --- quadbin on UC: a cell that is no cell is NULL, a geometry in another SRID is refused, an array over the cap is refused.
+GRID_ARRAY += (
+    Case("uc_qb_kring_not_a_cell", QKR, (0, 1), "null", None, ("uc",)),
+    Case("uc_qb_kloop_not_a_cell", QKL, (0, 1), "null", None, ("uc",)),
+    # 2001 x 2001 tiles at zoom 26 is 4M cells, past the 64 MiB an array may hold
+    Case("uc_qb_kring_over_cap", QKR, (QB_Z26, 1000), "uc_refused", None, ("uc",)),
+    Case("uc_qb_kloop_over_cap", QKL, (QB_Z26, 1000), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_qb_geomkring_wrong_srid",
+        QGKR,
+        (QB_PT, 10, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_qb_geomkloop_wrong_srid",
+        QGKL,
+        (QB_PT, 10, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_qb_tessellate_wrong_srid",
+        QTS,
+        (QB_TRIANGLE, 10),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    # a zoom the quadbin tessellation does not serve is a parameter error
+    Case("uc_qb_tessellate_zoom_21", QTS, (QB_IN, 21), "raises", "21", ("uc",)),
 )

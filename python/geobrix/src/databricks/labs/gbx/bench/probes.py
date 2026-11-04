@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import List, Sequence, Tuple
 
@@ -393,3 +394,321 @@ def uc_smallagg_sql(
             )
         )
     return stmts
+
+
+# ---- P2: the tile sizes a Unity Catalog Python function accepts (Task 23, D-P2) ----
+
+P2_FN = "gbx_mvp_p2_tile_echo"
+P2_TMP_FN = "gbx_mvp_p2_tmp_write"
+P2_PYSPARK_FN = "gbx_mvp_p2_import_pyspark"
+P2_SIZES = (
+    ("64KiB", 64 << 10),
+    ("1MiB", 1 << 20),  # the reference tile: a 512 x 512 Float32 ZSTD GeoTIFF
+    ("16MiB", 16 << 20),
+    ("64MiB", 64 << 20),
+    ("256MiB", 256 << 20),
+)
+
+# The handler returns the tile it got with one metadata key set; the key's value says what arrived.
+_P2_ECHO = (
+    "d = t.asDict(recursive=True) if hasattr(t, 'asDict') else dict(t)\n"
+    "raster = d.get('raster')\n"
+    "md = dict(d.get('metadata') or {})\n"
+    "md['p2'] = (f'{type(t).__module__}.{type(t).__name__}|raster={type(raster).__name__}:'\n"
+    "            f'{-1 if raster is None else len(raster)}|metadata={type(d.get(\"metadata\")).__name__}')\n"
+    "d['metadata'] = md\n"
+    "return d"
+)
+_P2_TMP = (
+    "import os\n"
+    "try:\n"
+    "    p = '/tmp/gbx_p2_probe.bin'\n"
+    "    data = os.urandom(n)\n"
+    "    with open(p, 'wb') as fh:\n"
+    "        fh.write(data)\n"
+    "    with open(p, 'rb') as fh:\n"
+    "        back = fh.read()\n"
+    "    os.remove(p)\n"
+    "    return f'ok {len(back)} {back == data}'\n"
+    "except Exception as exc:\n"
+    "    return f'ERROR {type(exc).__name__}: {str(exc)[:200]}'"
+)
+_P2_PYSPARK = (
+    "try:\n"
+    "    import pyspark\n"
+    "    return f'importable {pyspark.__version__}'\n"
+    "except ImportError as exc:\n"
+    "    return f'not importable: {str(exc)[:200]}'"
+)
+
+
+def p2_error_class(message: str) -> str:
+    """The class of a failed P2 call: ``row_size``, ``memory``, ``timeout``, ``type`` or ``other``."""
+    m = (message or "").lower()
+    if any(
+        k in m
+        for k in (
+            "row size",
+            "too large",
+            "exceeds the limit",
+            "2147483647",
+            "message_too_large",
+            "payload",
+            "size limit",
+            "maximum size",
+        )
+    ):
+        return "row_size"
+    if any(
+        k in m for k in ("outofmemory", "out of memory", "memoryerror")
+    ) or re.search(r"\boom", m):
+        return "memory"
+    if any(k in m for k in ("timeout", "timed out", "deadline", "exceeded the time")):
+        return "timeout"
+    if any(
+        k in m
+        for k in ("unsupported", "not supported", "datatype", "return type", "struct")
+    ):
+        return "type"
+    return "other"
+
+
+def p2_parse_call(value: str, want_bytes: int) -> dict:
+    """The cell a P2 tile call answers (``<out bytes>|<what the handler received>|<in == out>``) as fields.
+
+    What the handler received has ``|`` in it, so the first and last parts are the byte count and the equality.
+    """
+    parts = str(value).split("|")
+    out_bytes, same = parts[0], parts[-1]
+    return {
+        "received": "|".join(parts[1:-1]),
+        "out_bytes": int(out_bytes) if out_bytes.isdigit() else out_bytes,
+        "roundtrip": same == "true" and out_bytes == str(want_bytes),
+        "raw": str(value)[:300],
+    }
+
+
+def p2_tile_bytes(label: str, n: int) -> bytes:
+    """The raster bytes of one P2 tile: the 1 MiB reference is a 512 x 512 Float32 ZSTD GeoTIFF, the rest are opaque bytes."""
+    import numpy as np
+
+    rng = np.random.default_rng(2)
+    if label != "1MiB":
+        return rng.bytes(n)
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    with MemoryFile() as mem:
+        with mem.open(
+            driver="GTiff",
+            width=512,
+            height=512,
+            count=1,
+            dtype="float32",
+            crs="EPSG:32633",
+            transform=from_origin(500000.0, 5000000.0, 10.0, 10.0),
+            compress="zstd",
+        ) as dst:
+            dst.write(rng.random((512, 512), dtype=np.float32), 1)
+        return mem.read()
+
+
+def p2_stage_tiles(tile_dir: str, sizes=P2_SIZES) -> dict:
+    """Write each tile's raster bytes to ``<tile_dir>/p2_<label>.bin`` (kept when it already holds the same bytes)."""
+    import os
+
+    os.makedirs(tile_dir, exist_ok=True)
+    out = {}
+    for label, n in sizes:
+        path = f"{tile_dir}/p2_{label}.bin"
+        data = p2_tile_bytes(label, n)
+        have = os.path.getsize(path) if os.path.exists(path) else -1
+        if have != len(data):
+            with open(path + ".part", "wb") as fh:
+                fh.write(data)
+            os.replace(path + ".part", path)
+        out[label] = {"path": path, "bytes": len(data)}
+    return out
+
+
+def p2_statements(
+    catalog: str,
+    schema: str,
+    tile_dir: str,
+    wheel_uri: str,
+    deps: dict,
+    sizes=P2_SIZES,
+) -> List[Tuple[str, str]]:
+    """The P2 statements as ``(cid, sql)``: the three CREATEs, one call per tile size (the tile is read from its
+    file with ``read_files`` and wrapped in the v2 tile struct), the ``/tmp`` call, the ``import pyspark`` call
+    and the DROPs. The Serverless notebook and the warehouse run the same text.
+    """
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.uc.ddl import quote_ident, quote_str
+
+    q = f"{quote_ident('catalog', catalog)}.{quote_ident('schema', schema)}"
+    env = quote_str(
+        json.dumps(
+            [f"geobrix @ {wheel_uri}"]
+            + [f"{k}=={deps[k]}" for k in ("rasterio", "pyproj", "shapely")]
+        )
+    )
+    spec = f"ENVIRONMENT (dependencies = {env}, environment_version = '6')"
+
+    def create(name, params, returns, body):
+        return (
+            f"CREATE OR REPLACE FUNCTION {q}.{name}({params}) RETURNS {returns} LANGUAGE PYTHON\n"
+            f"{spec}\nAS $$\n{body}\n$$"
+        )
+
+    out = [
+        ("p2_create_echo", create(P2_FN, f"t {TILE_SQL}", TILE_SQL, _P2_ECHO)),
+        ("p2_create_tmp", create(P2_TMP_FN, "n INT", "STRING", _P2_TMP)),
+        ("p2_create_pyspark", create(P2_PYSPARK_FN, "d INT", "STRING", _P2_PYSPARK)),
+    ]
+    for label, _n in sizes:
+        tile = (
+            "CAST(named_struct('cellid', CAST(0 AS BIGINT), 'raster', content, 'path', NULL, 'path_mode', NULL, "
+            "'window', NULL, 'clip_polygon', NULL, 'clip_crs', NULL, 'crs', 'EPSG:32633', "
+            f"'metadata', map('src', 'p2')) AS {TILE_SQL})"
+        )
+        src = f"read_files({quote_str(f'{tile_dir}/p2_{label}.bin')}, format => 'binaryFile')"
+        out.append(
+            (
+                f"p2_call_{label}",
+                "SELECT concat_ws('|', CAST(length(r.t.raster) AS STRING), r.t.metadata['p2'], "
+                "CAST(r.t.raster = r.content AS STRING)) AS out "
+                f"FROM (SELECT content, {q}.{P2_FN}({tile}) AS t FROM {src}) r",
+            )
+        )
+    out += [
+        ("p2_call_tmp", f"SELECT {q}.{P2_TMP_FN}(1048576) AS out"),
+        ("p2_call_pyspark", f"SELECT {q}.{P2_PYSPARK_FN}(0) AS out"),
+    ]
+    out += [
+        (f"p2_drop_{n}", f"DROP FUNCTION IF EXISTS {q}.{n}")
+        for n in (P2_FN, P2_TMP_FN, P2_PYSPARK_FN)
+    ]
+    return out
+
+
+def run_p2_tiles(spark, catalog: str, schema: str, volume_dir: str) -> dict:
+    """P2 (D-P2): which tile sizes a UC Python function takes and returns, whether it can write ``/tmp``, and
+    whether ``pyspark`` imports there. Run it on Serverless env 6; the warehouse runs the same statements
+    (``p2_statements``) through ``gbx-uc-sql``. ``volume_dir`` holds the one env 6 wheel (the functions'
+    dependency) and gets a ``p2_tiles/`` folder with the tile files. The probe functions are dropped at the end.
+
+    Prints ``[P2] <step> START`` and ``[P2] <step> DONE <s>s ok|<error class>`` per step, and a RUNNING line every
+    60 s through ``liveness.Heartbeat``.
+
+    Returns ``{"wheel", "sizes": {label: {"bytes", "create_ok", "call_ok", "received", "out_bytes", "roundtrip",
+    "wall_s", "error_class", "error"}}, "tmp_writable", "tmp", "pyspark_importable", "pyspark", "dropped"}``.
+    """
+    import os
+    import tempfile
+
+    from databricks.labs.gbx import manifest, uc
+    from databricks.labs.gbx.bench import liveness
+
+    wheel = uc._single_wheel(volume_dir)
+    stmts = dict(
+        p2_statements(
+            catalog,
+            schema,
+            f"{volume_dir.rstrip('/')}/p2_tiles",
+            "file://" + wheel,
+            manifest.load().uc_dependencies,
+        )
+    )
+    hb = liveness.Heartbeat(
+        os.path.join(tempfile.gettempdir(), "p2-heartbeat.json"),
+        interval=30,
+        phase="p2",
+        print_every=60,
+    ).start()
+    steps = (
+        ["stage"]
+        + ["create"]
+        + [lab for lab, _ in P2_SIZES]
+        + ["tmp", "pyspark", "drop"]
+    )
+
+    def step(name, fn):
+        hb.begin(name, steps.index(name), len(steps), set_name="P2")
+        print(f"[P2] {name} START", flush=True)
+        t = time.time()
+        err = None
+        try:
+            val = fn()
+        except Exception as exc:  # noqa: BLE001 - the error is the measurement
+            val, err = None, f"{type(exc).__name__}: {str(exc)[:600]}"
+        wall = time.time() - t
+        cls = p2_error_class(err) if err else None
+        print(
+            f"[P2] {name} DONE {wall:.1f}s {'ok' if err is None else cls}", flush=True
+        )
+        hb.end(status=None if err is None else cls)
+        return val, err, wall, cls
+
+    out = {"wheel": wheel, "sizes": {}}
+    try:
+        staged, err, _, _ = step(
+            "stage",
+            lambda: p2_stage_tiles(f"{volume_dir.rstrip('/')}/p2_tiles"),
+        )
+        out["staged"] = staged if err is None else err
+
+        def create_echo():
+            spark.sql(stmts["p2_create_echo"])
+
+        _, create_err, _, _ = step("create", create_echo)
+        for label, n in P2_SIZES:
+            if create_err:
+                out["sizes"][label] = {
+                    "bytes": n,
+                    "create_ok": False,
+                    "call_ok": False,
+                    "error": create_err,
+                    "error_class": p2_error_class(create_err),
+                }
+                continue
+            val, err, wall, cls = step(
+                label, lambda: spark.sql(stmts[f"p2_call_{label}"]).first()[0]
+            )
+            rec = {
+                "bytes": (
+                    (staged.get(label) or {}).get("bytes", n)
+                    if isinstance(staged, dict)
+                    else n
+                ),
+                "create_ok": True,
+                "call_ok": err is None,
+                "wall_s": round(wall, 2),
+                "error_class": cls,
+                "error": err,
+            }
+            if err is None:
+                rec.update(p2_parse_call(val, rec["bytes"]))
+            out["sizes"][label] = rec
+        for key, name in (("tmp", "p2_create_tmp"), ("pyspark", "p2_create_pyspark")):
+
+            def probe(key=key, name=name):
+                spark.sql(stmts[name])
+                return spark.sql(stmts[f"p2_call_{key}"]).first()[0]
+
+            val, err, _, _ = step(key, probe)
+            out[key] = val if err is None else f"ERROR {err}"
+        out["tmp_writable"] = str(out.get("tmp", "")).startswith("ok 1048576 True")
+        out["pyspark_importable"] = str(out.get("pyspark", "")).startswith("importable")
+    finally:
+        dropped = []
+
+        def drop():
+            for n in (P2_FN, P2_TMP_FN, P2_PYSPARK_FN):
+                spark.sql(stmts[f"p2_drop_{n}"])
+                dropped.append(n)
+
+        step("drop", drop)
+        out["dropped"] = dropped
+        hb.stop()
+    return out

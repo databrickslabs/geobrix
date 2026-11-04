@@ -35,11 +35,13 @@ object RasterizeBurn {
     def nullBurn(valueExpr: Expression): Double =
         if (valueExpr.dataType == NullType) 1.0 else Double.NaN
 
-    /** The output SRID of a cell rasterizer: `out_crs` wins over `out_srid` (the lightweight rule), a missing one is
-     *  `default`. `out_crs` is `EPSG:<n>` or a bare integer; any other CRS text is refused with a `Fix:` (this level
-     *  reads integer codes only), so a value never burns into the wrong CRS. */
+    /** The output SRID of a cell rasterizer: `out_srid` or `out_crs`, never both (the rule of every rasterizer; both
+     *  set raises), a missing one is `default`. `out_crs` is `EPSG:<n>` or a bare integer; any other CRS text is
+     *  refused with a `Fix:` (this level reads integer codes only), so a value never burns into the wrong CRS. */
     def outSrid(fn: String, outCrs: Option[String], outSrid: Option[Int], default: => Int): Int =
         outCrs.map(_.trim).filter(_.nonEmpty) match {
+            case Some(_) if outSrid.isDefined =>
+                throw new IllegalArgumentException(bothSetRefusal(fn))
             case Some(crs) =>
                 val m = """(?i)^(?:EPSG:)?(\d+)$""".r
                 // a digit string past the Int range is no EPSG code either: the same Fix, never a NumberFormatException
@@ -51,6 +53,10 @@ object RasterizeBurn {
                 }
             case None => outSrid.getOrElse(default)
         }
+
+    /** The refusal of `out_srid` and `out_crs` set together; the light tier raises the same text. */
+    def bothSetRefusal(fn: String): String =
+        s"$fn: out_srid and out_crs are both set. Fix: set one."
 
     /** Resolution of a BNG cell set (read from each cell's Long id); raises on a mixed-resolution set.
      *

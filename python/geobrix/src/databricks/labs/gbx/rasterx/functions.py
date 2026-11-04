@@ -2188,8 +2188,8 @@ def rst_dtmfromgeoms(
             default: ``NULL``.
         no_data: The value of a pixel outside the points' hull. SQL default:
             ``-9999.0``.
-        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`; setting both raises. SQL default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
         A single-band Float64 tile over the extent; each pixel holds the height
@@ -2247,8 +2247,8 @@ def rst_dtmfromgeoms_agg(
         out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
             without a CRS. SQL default: ``NULL``.
         no_data: The NoData value. SQL default: ``-9999.0``.
-        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`; setting both raises. SQL default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
         GeoTIFF bytes, Float64: the points' Z interpolated over an unconstrained
@@ -2659,8 +2659,8 @@ def rst_gridfrompoints(
         power: The inverse-distance exponent, above 0. SQL default: ``2.0``.
         max_pts: The number of nearest points used per pixel, above 0. SQL default:
             ``12``.
-        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`; setting both raises. SQL default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
         A single-band Float64 tile over the extent; each pixel holds the
@@ -2717,8 +2717,8 @@ def rst_gridfrompoints_agg(
         power: The inverse-distance exponent, above 0. SQL default: ``2.0``.
         max_pts: The number of nearest points used per pixel, above 0. SQL default:
             ``12``.
-        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`; setting both raises. SQL default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
         GeoTIFF bytes, Float64 with NoData -9999 where a pixel has no point; NULL for a
@@ -2775,8 +2775,8 @@ def rst_h3_rasterize(
         mode: How the canvas is derived when no extent is given: `'centroids'` or
             `'spatial_envelope'`.
         kring_pad: Rings of padding around the derived canvas.
-        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
-            default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
 
     Returns:
         The same bytes as the aggregate `gbx_rst_h3_rasterize_agg` over the same cells:
@@ -2836,8 +2836,8 @@ def rst_h3_rasterize_agg(
         mode: How the canvas is derived when no extent is given: `'centroids'` or
             `'spatial_envelope'`.
         kring_pad: Rings of padding around the derived canvas.
-        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
-            default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
 
     Returns:
         GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
@@ -4130,8 +4130,8 @@ def rst_quadbin_rasterize(
         mode: How the canvas is derived when no extent is given: `'centroids'` or
             `'spatial_envelope'`.
         kring_pad: Rings of padding around the derived canvas.
-        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
-            default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
 
     Returns:
         The same bytes as the aggregate `gbx_rst_quadbin_rasterize_agg` over the same
@@ -4191,8 +4191,8 @@ def rst_quadbin_rasterize_agg(
         mode: How the canvas is derived when no extent is given: `'centroids'` or
             `'spatial_envelope'`.
         kring_pad: Rings of padding around the derived canvas.
-        out_crs: The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. SQL
-            default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both:
+            setting both raises. SQL default: ``NULL``.
 
     Returns:
         GeoTIFF bytes, Float64 with NoData -9999, over the canvas; NULL for a group with
@@ -4613,8 +4613,8 @@ def rst_rasterize(
         out_srid: The EPSG or ESRI code of the output CRS. NULL leaves the output
             without a CRS, or with the geometry's own when `out_crs` is NULL too. SQL
             default: ``NULL``.
-        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over
-            `out_srid`; setting both raises. SQL default: ``NULL``.
+        out_crs: The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or
+            `out_crs`, not both: setting both raises. SQL default: ``NULL``.
 
     Returns:
         A single-band Float64 tile over the extent; the pixels whose centre the geometry

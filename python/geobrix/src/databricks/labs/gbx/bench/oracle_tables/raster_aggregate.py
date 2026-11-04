@@ -649,7 +649,7 @@ def _cells_cases(prefix):
 for _p in _CELLS:
     RASTER_AGGREGATE += _cells_cases(_p)
 
-# out_crs: the output CRS asked for by its name, also when out_srid is NULL (the trailing 13th argument of H3 and quadbin)
+# out_crs: the output CRS asked for by its name when out_srid is NULL (the trailing 13th argument of H3 and quadbin)
 RASTER_AGGREGATE += (
     Case(
         "h3r_out_crs",
@@ -665,6 +665,23 @@ RASTER_AGGREGATE += (
         (Build("qbr_dup_max"), None, *_CELLS["qb"][3][1:], "EPSG:4326"),
         "pixels",
         _pixels("qb", "dup_max"),
+        ONLY,
+    ),
+    # out_srid and out_crs set together raise, as in every rasterizer (the canvas row carries an out_srid of 4326)
+    Case(
+        "h3r_out_srid_and_crs",
+        H3A,
+        (Build("h3r_dup_max"), *_CELLS["h3"][3], "EPSG:3857"),
+        "raises",
+        "Fix: set one",
+        ONLY,
+    ),
+    Case(
+        "qbr_out_srid_and_crs",
+        QBA,
+        (Build("qbr_dup_max"), *_CELLS["qb"][3], "EPSG:3857"),
+        "raises",
+        "Fix: set one",
         ONLY,
     ),
     # No value given (an untyped NULL: SQL `NULL`, Python `None`) is the presence mask: every covered cell burns 1.0,

@@ -115,7 +115,12 @@ A reader fails the read when it cannot open a file. Set `on_error` to `skip` or 
 
 ### Setting both `out_srid` and `out_crs`
 
-`gbx_rst_rasterize`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms` and their `_agg` forms raise when you set both. The H3, quadbin and custom-grid cell rasterizers use `out_crs` when you set both.
+Set `out_srid` or `out_crs`, never both. A function that takes both raises, naming both, with the fix: set one. The rule holds at every level for these functions and their `_agg` forms:
+
+- `gbx_rst_rasterize`
+- `gbx_rst_gridfrompoints`
+- `gbx_rst_dtmfromgeoms`
+- `gbx_rst_h3_rasterize` and `gbx_rst_quadbin_rasterize` (the cell rasterizers)
 
 ### Flipping data errors to hard failures for debugging
 

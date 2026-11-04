@@ -247,4 +247,16 @@ class RST_GridRasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         RasterizeBurn.outSrid("f", Some("EPSG:3857"), None, 4326) shouldBe 3857
         RasterizeBurn.outSrid("f", None, None, 4326) shouldBe 4326
     }
+
+    test("out_srid and out_crs set together raise, naming both, with the Fix: set one") {
+        for (crs <- Seq("EPSG:3857", "3857")) {
+            val e = intercept[IllegalArgumentException](
+                RasterizeBurn.outSrid("gbx_rst_h3_rasterize_agg", Some(crs), Some(4326), 4326))
+            e.getMessage should include("out_srid")
+            e.getMessage should include("out_crs")
+            e.getMessage should include("Fix: set one")
+        }
+        // a blank out_crs is unset, so the out_srid alone is the answer
+        RasterizeBurn.outSrid("f", Some("  "), Some(3857), 4326) shouldBe 3857
+    }
 }

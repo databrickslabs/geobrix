@@ -5723,14 +5723,11 @@ def _rst_h3_rasterize_agg_udf(
     cell_values = _max_value_per_cell(
         cells, vals, cr._adapter("h3").to_key, typed=value.dtype != object
     )
-    # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
-    # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
-    if out_crs is not None and out_crs.iloc[0] is not None:
-        _srid = out_crs.iloc[0]
-    elif srid is not None and srid.iloc[0] is not None:
-        _srid = int(srid.iloc[0])
-    else:
-        _srid = 4326
+    _srid = _cell_out_srid(
+        "gbx_rst_h3_rasterize_agg",
+        None if srid is None else srid.iloc[0],
+        None if out_crs is None else out_crs.iloc[0],
+    )
     return _rasterize_agg_body(
         cell_values,
         cells,
@@ -5800,14 +5797,11 @@ def _rst_quadbin_rasterize_agg_udf(
     cell_values = _max_value_per_cell(
         cells, vals, cr._adapter("quadbin").to_key, typed=value.dtype != object
     )
-    # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
-    # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
-    if out_crs is not None and out_crs.iloc[0] is not None:
-        _srid = out_crs.iloc[0]
-    elif srid is not None and srid.iloc[0] is not None:
-        _srid = int(srid.iloc[0])
-    else:
-        _srid = 4326
+    _srid = _cell_out_srid(
+        "gbx_rst_quadbin_rasterize_agg",
+        None if srid is None else srid.iloc[0],
+        None if out_crs is None else out_crs.iloc[0],
+    )
     return _rasterize_agg_body(
         cell_values,
         cells,
@@ -6085,6 +6079,20 @@ def _rst_bng_rasterize_udf(
     )  # fmt: skip
 
 
+def _cell_out_srid(fn, out_srid, out_crs):
+    """The output CRS of an H3 or quadbin rasterizer: `out_srid` or `out_crs`, never both (the rule of every
+    rasterizer: both set raises, and a blank `out_crs` is unset); neither is the grid-native EPSG:4326. The result is
+    an int SRID or a CRS string, which `cellraster` accepts interchangeably. The heavy tier raises the same text.
+    """
+    crs_set = out_crs is not None and pd.notna(out_crs) and bool(str(out_crs).strip())
+    srid_set = out_srid is not None and pd.notna(out_srid)
+    if crs_set and srid_set:
+        raise ValueError(f"{fn}: out_srid and out_crs are both set. Fix: set one.")
+    if crs_set:
+        return out_crs
+    return int(out_srid) if srid_set else 4326
+
+
 def _twin_lonlat(
     grid,
     cells,
@@ -6106,12 +6114,7 @@ def _twin_lonlat(
     if not ids:
         return None
     ad = cr._adapter(grid)
-    # out_crs (a string) wins over the int out_srid; neither: the grid-native EPSG:4326
-    srid = (
-        out_crs
-        if out_crs is not None
-        else (int(out_srid) if out_srid is not None else 4326)
-    )
+    srid = _cell_out_srid(f"gbx_rst_{grid}_rasterize", out_srid, out_crs)
     return _twin_burn(
         grid, ad, ad.to_key, [int(c) for c in ids], values, srid, pixel_size,
         xmin, ymin, xmax, ymax, width, height, mode, kring_pad,

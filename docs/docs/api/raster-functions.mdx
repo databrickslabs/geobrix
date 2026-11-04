@@ -1340,13 +1340,13 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 | `height_px` | `INT` |  | The output height in pixels. |
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS. |
 | `no_data` | `DOUBLE` | `-9999.0` | The NoData value. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_dtmfromgeoms_agg */}
 
 <Impl groupedAgg/>
 
 :::note Implementation
-Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — builds one TIN DTM tile per group from the group's Z-valued points. It uses barycentric interpolation over an **unconstrained** Delaunay triangulation. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted but not enforced. The JVM level builds a constrained TIN. The Python function also takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only. `out_crs` wins over `out_srid` when both are given.
+Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — builds one TIN DTM tile per group from the group's Z-valued points. It uses barycentric interpolation over an **unconstrained** Delaunay triangulation. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted but not enforced. The JVM level builds a constrained TIN. The Python function also takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only.
 :::
 
 :::note The aggregate returns BINARY
@@ -1440,13 +1440,13 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS. |
 | `power` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
 | `max_pts` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_gridfrompoints_agg */}
 
 <Impl groupedAgg/>
 
 :::note Implementation
-Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Aggregate — `groupBy(...).agg(rx.rst_gridfrompoints_agg(...))` inverse-distance-interpolates the group's points into one Float64 grid tile (NoData −9999). The Python function also takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only. `out_crs` wins over `out_srid` when both are given.
+Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Aggregate — `groupBy(...).agg(rx.rst_gridfrompoints_agg(...))` inverse-distance-interpolates the group's points into one Float64 grid tile (NoData −9999). The Python function also takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only.
 :::
 
 :::note The aggregate returns BINARY
@@ -1488,7 +1488,7 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 | `height` | `INT` |  | The canvas height in pixels. |
 | `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
 | `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_h3_rasterize_agg */}
 
 <Impl groupedAgg/>
@@ -1547,7 +1547,7 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 | `height` | `INT` |  | The canvas height in pixels. |
 | `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
 | `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_h3_rasterize */}
 
 Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg). Collect the group's cells first, for example `gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.
@@ -1641,7 +1641,7 @@ Use it instead of [`rst_merge_agg`](#rst_merge_agg) for large groups: `SELECT * 
 | `height` | `INT` |  | The canvas height in pixels. |
 | `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
 | `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_quadbin_rasterize_agg */}
 
 <Impl groupedAgg/>
@@ -1700,7 +1700,7 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
 | `height` | `INT` |  | The canvas height in pixels. |
 | `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
 | `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`; when set it wins over `out_srid`. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_quadbin_rasterize */}
 
 Rasterize an array of quadbin cells into one tile, the scalar twin of [`rst_quadbin_rasterize_agg`](#rst_quadbin_rasterize_agg). Collect the group's cells first, for example `gbx_rst_quadbin_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.
@@ -1856,7 +1856,7 @@ Create or load rasters from path, binary content, or bands (4 total).
 | `height_px` | `INT` |  | The output height in pixels, above 0. |
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
 | `no_data` | `DOUBLE` | `-9999.0` | The value of a pixel outside the points' hull. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_dtmfromgeoms */}
 
 :::note Implementation
@@ -1866,7 +1866,7 @@ Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric inte
 Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
 
 :::note Python-only `out_crs` parameter
-The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL does not. `out_crs` (string) wins over the int `out_srid`.
+The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL does not.
 :::
 
 Output CRS via `out_srid` (int); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
@@ -2035,7 +2035,7 @@ df = (
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
 | `power` | `DOUBLE` | `2.0` | The inverse-distance exponent, above 0. |
 | `max_pts` | `INT` | `12` | The number of nearest points used per pixel, above 0. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_gridfrompoints */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
@@ -2047,7 +2047,7 @@ Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Inverse-distance interpolat
 IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile covering an explicit bounding box and pixel grid. Supply the points and their scalar values as arrays in a single row; use `rst_gridfrompoints_agg` when points arrive one per row.
 
 :::note Python-only `out_crs` parameter
-The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL and Scala do not. The JVM builder takes at most 11 arguments (`…, out_srid, [power, [max_pts]]`). In Python, `out_crs` wins over the integer `out_srid`.
+The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL and Scala do not. The JVM builder takes at most 11 arguments (`…, out_srid, [power, [max_pts]]`).
 :::
 
 Output CRS via `out_srid` (int); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
@@ -5018,7 +5018,7 @@ SELECT t.geom_wkb, t.value FROM <table>, LATERAL gbx_rst_polygonize(tile, band, 
 | `width_px` | `INT` |  | The output width in pixels, above 0. |
 | `height_px` | `INT` |  | The output height in pixels, above 0. |
 | `out_srid` | `INT` | `NULL` | The EPSG or ESRI code of the output CRS. NULL leaves the output without a CRS, or with the geometry's own when `out_crs` is NULL too. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. When set it wins over `out_srid`; setting both raises. |
+| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`, `ESRI:<n>` or WKT. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_rasterize */}
 
 :::note Implementation
@@ -5026,7 +5026,7 @@ Powered by **rasterio** (`rasterio.features`).
 :::
 
 :::note Python-only `out_crs` parameter
-The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL does not. `out_crs` (string) wins over the int `out_srid`; both → error; neither → the geometry's carried source CRS.
+The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL does not. Neither → the geometry's carried source CRS.
 :::
 
 Burn a polygon (WKB) into a fresh GeoTIFF tile at the given extent and pixel dimensions. Pixels inside the polygon carry `burnValue`; pixels outside are NoData. The output CRS is `out_srid` (integer EPSG code); the geometry is reprojected from its source CRS into the output CRS before burning. When `out_srid` is omitted the geometry's carried source CRS is used. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).

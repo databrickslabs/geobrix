@@ -150,7 +150,7 @@ See [Raster Reader performance](../readers/raster#loading-many-small-files) and
 ## Zarr tiles
 
 A [Zarr](./zarr-stores) store is the first **N-dimensional** format with virtual tiles. A GeoTIFF is one
-picture; a Zarr variable is a cube (`time` by `latitude` by `longitude`, say), so a tile is a window of one
+picture. A Zarr variable is a cube (`time` by `latitude` by `longitude`, say), so a tile is a window of one
 2-D plane of it. [`gbx_zarr_read(..., output="tiles")`](../readers/zarr#output-geobrix-tiles) cuts every
 selected latitude-longitude plane of a variable into windows (one inner chunk each by default), and each
 position along the other dimensions makes its own tile, named in the tile's `sliceDims` metadata as the

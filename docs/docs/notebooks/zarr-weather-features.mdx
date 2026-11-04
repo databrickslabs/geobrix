@@ -10,7 +10,7 @@ import ZarrNav from '@site/src/components/ZarrNav';
 
 <ZarrNav current="notebook" />
 
-An end-to-end example showing how to run a feature workflow on a weather cube stored as Zarr, with GeoBrix's [transactional Zarr stores](../api/zarr-stores): every write is all-or-nothing, every version of the store stays readable, and the cube itself is never copied.
+An end-to-end example showing how to run a feature workflow on a weather cube stored as Zarr, with GeoBrix's [transactional Zarr stores](../api/zarr-stores). Every write is all-or-nothing. Every version of the store stays readable. The cube itself is never copied.
 
 The notebook uses the GeoBrix sample cube: two days of synthetic, ERA5-like hourly weather on a global one-degree grid.
 
@@ -101,7 +101,7 @@ Tagged version: outlives retain and vacuum; the 4,800 feature rows reproduce fro
 
 ## Key GeoBrix functions shown
 
-- **[`gbx_zarr_register`](../api/zarr-functions#gbx_zarr_register)** — registers an existing Zarr store in place as a manifest table: one row per array document and per chunk or shard object, each pointing at the store's own file. `writable=True` with an `overlay_root` lets GeoBrix write to the registration without touching the store. See [Register a store in place](../api/zarr-registered-stores#register-a-store-in-place).
+- **[`gbx_zarr_register`](../api/zarr-functions#gbx_zarr_register)** — registers an existing Zarr store in place as a manifest table. It has one row per array document and per chunk or shard object, each pointing at the store's own file. `writable=True` with an `overlay_root` lets GeoBrix write to the registration without touching the store. See [Register a store in place](../api/zarr-registered-stores#register-a-store-in-place).
 - **[`gbx_zarr_read`](../api/zarr-functions#gbx_zarr_read)** — reads a store by label (`sel`) or position (`isel`), at any readable version (`version_as_of`), as blocks, a table of cells, or GeoBrix raster tiles. `block_to_numpy` turns a block into a NumPy array. See the [Zarr Reader](../readers/zarr).
 - **[`gbx_zarr_sample`](../api/zarr-functions#gbx_zarr_sample)** — reads a store at the points of a DataFrame (WKT, WKB, EWKT or EWKB), at the nearest cell, repeating each point for every step of the dimensions left in. See [Sampling at points](../readers/zarr#sampling-at-points).
 - **[`gbx_zarr_write`](../api/zarr-functions#gbx_zarr_write)** — writes blocks to a store as one transaction; `mode="update"` with `variables=` creates a variable the store lacks. See the [Zarr Writer](../writers/zarr).

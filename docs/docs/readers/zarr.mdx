@@ -31,7 +31,7 @@ what is yours:
 
 <CodeFromTest code={zarrRead} language="python" functionName="SETUP" />
 
-The sample cube is the one [Zarr Stores](../api/zarr-stores#what-you-need) generates: two days of
+The sample cube is the one [Zarr Stores](../api/zarr-stores#what-you-need) generates. It is two days of
 made-up hourly weather on a one-degree global grid, `time` (48) by `latitude` (181) by
 `longitude` (360), with the variables `t2m`, `u10`, `v10` and `msl`. Every code block on this
 page is run by the documentation tests.
@@ -56,8 +56,8 @@ the path of a plain store, and anything else as the name of a manifest table. Pa
 
 A version older than the store's `retain` period raises `ZarrVersionUnavailable`; see
 [Lifecycle and retention](../api/zarr-lifecycle#time-travel-stops-at-retain). A store made
-with `file_mode="external"` holds `FILE` values in its manifest and must be read on compute that
-supports them; other compute refuses with a `ZarrUnsupported` whose `Fix:` names the options (see
+with `file_mode="external"` holds `FILE` values in its manifest. It must be read on compute that
+supports them. Other compute refuses with a `ZarrUnsupported` whose `Fix:` names the options (see
 [File modes](../api/zarr-stores#file-modes)).
 
 ## Choosing what to read
@@ -328,9 +328,9 @@ small, the driver reads them and no Spark job runs; otherwise Spark reads each c
 points. Within a chunk, scattered points are read cell by cell. When a chunk's points need a tenth or
 more of the cells of the box around them, and the box fits in half of a task's decoded-data budget
 (32 MiB on Serverless and 768 MiB on Databricks Runtime 19 in these measurements), the box is read once
-and every point takes its cells from it; a chunk whose box is larger is read cell by cell. On the ERA5 store
-of the [Zarr performance figures](../api/zarr-performance) (one 90 x 90 chunk of 2-metre
-temperature, all 744 hours) on Serverless, points on a quarter of the chunk's cells took 0.44 s this way
+and every point takes its cells from it; a chunk whose box is larger is read cell by cell. Take the ERA5 store
+of the [Zarr performance figures](../api/zarr-performance): one 90 x 90 chunk of 2-metre
+temperature, all 744 hours, on Serverless. Points on a quarter of the chunk's cells took 0.44 s this way
 against 1.7 s cell by cell, and points on every cell 0.55 s against 6.7 s; at one point in 81 cells
 (100 points), reading cell by cell was the faster (0.26 s against 0.40 s).
 **Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because

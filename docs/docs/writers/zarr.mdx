@@ -103,15 +103,15 @@ The layout is in the array's document, which is a row of the manifest table:
   testFile="docs/tests/python/writers/test_zarr_write_examples.py"
   outputConstant="DESCRIBE_THE_LAYOUT_output" />
 
-`create` needs `root` not to exist, or to be empty. It gets an ownership ledger (the small Delta table
-`_gbx_owner`, which decides which table owns the root even when several claim it at once) and the
-`_gbx_store.json` marker; see [One owner per root](../api/zarr-registered-stores#one-owner-per-root). `file_mode`
-(`"fuse"` by default; `"auto"` or `"external"` keep `FILE` references; `"managed"` is not
-available in this release) and `retain` (how long superseded versions stay readable,
-`"7 days"` by default) are the store's from then on; see
-[File modes](../api/zarr-stores#file-modes). A store in `external` mode keeps `FILE` values in its manifest,
-so it can be written, read and maintained only on compute that supports them; other compute refuses
-before it writes anything.
+`create` needs `root` not to exist, or to be empty. It gets an ownership ledger and the
+`_gbx_store.json` marker. The ledger is the small Delta table `_gbx_owner`. It decides which table owns
+the root even when several claim it at once. See [One owner per root](../api/zarr-registered-stores#one-owner-per-root).
+
+Two settings are the store's from then on. `file_mode` is `"fuse"` by default; `"auto"` or `"external"`
+keep `FILE` references; `"managed"` is not available in this release. `retain` is how long superseded
+versions stay readable, `"7 days"` by default. See [File modes](../api/zarr-stores#file-modes).
+A store in `external` mode keeps `FILE` values in its manifest. It can be written, read and maintained
+only on compute that supports them. Other compute refuses before it writes anything.
 
 If a `create` fails after it made the table but before anything committed, run it again with the same
 arguments: a `create` on a manifest you own that has no commit yet adopts it. Two `create` calls that claim
@@ -193,8 +193,8 @@ input that keeps its blocks in few partitions (a single one, say) is first sprea
 tasks write at once. A block of several shards writes their chunks in its own order, so one shard's
 chunks do not sit side by side in the data file and a read of that shard takes more, smaller reads; a
 block of one shard keeps them together. A 1 GB create of blocks of one shard each wrote its data
-files at a median 119 MB/s through the Volume and 80 MB/s direct to storage on Databricks Runtime 19
-(direct runs from 39 to 139 MB/s), and at 122 MB/s on Serverless; see
+files at a median 119 MB/s through the Volume and 80 MB/s direct to storage on Databricks Runtime 19.
+Direct runs ranged from 39 to 139 MB/s. On Serverless the median was 122 MB/s. See
 [Zarr performance](../api/zarr-performance).
 
 An `xarray.Dataset` and a DataFrame of tiles are planned on the driver from what they hold, so neither
@@ -273,7 +273,7 @@ tile that does not fit is refused on the driver, before any file is written.
 
 ## When writers meet
 
-[Zarr transactions](../api/zarr-transactions#concurrent-writers) explains the rules row by row; in short, writers
+[Zarr transactions](../api/zarr-transactions#concurrent-writers) explains the rules row by row. In short, writers
 that touch **different chunks** both land, writers that only change the **shape or a shared coordinate
 chunk** are rebased, and a write that meets another's **chunk** raises `ZarrWriteConflict` and commits
 nothing. The limits of the rebase are worth knowing before many jobs append to one array:

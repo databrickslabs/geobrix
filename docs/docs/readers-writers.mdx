@@ -179,8 +179,8 @@ the files:
   string where FILE is not available). The `*_gbx` writers make one through `file_gbx` and readers scan it
   (see [Read-options matrix](#read-options-matrix)). A **tile index** (`tilesTable`) is the same idea with an
   optional pixel window on each row, read with [`read_tiles_table`](./readers/raster#read-tiles-table);
-- the **manifest table of a [Zarr store](./api/zarr-stores)** has one row per chunk or shard (the file, offset and
-  length that hold it), per array and group document, and one `commit` row for each write.
+- the **manifest table of a [Zarr store](./api/zarr-stores)** has one row per chunk or shard, per array and group
+  document, and one `commit` row for each write. A row records the file, offset and length that hold it.
 
 It is one pattern, and in both the collection is a table. SQL, Unity Catalog grants and Delta's own tools work
 on it. A reader plans from the table rather than from a directory listing, so it never walks the files to find

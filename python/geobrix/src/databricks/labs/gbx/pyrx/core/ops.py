@@ -16,9 +16,9 @@ from rasterio.io import MemoryFile
 from databricks.labs.gbx._gdal_policy import (
     activate,
     bytes_refused_light_names,
+    open_bytes,
     open_data,
 )
-from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
@@ -50,7 +50,7 @@ def try_open(raster_bytes: bytes) -> bool:
         return False
     try:
         # an open, not a read: a tile too large to decode still opens
-        with _serde.open_tile(bytes(raster_bytes), gate=False) as ds:
+        with MemoryFile(bytes(raster_bytes)) as mf, open_bytes(mf) as ds:
             # Touch a property so a lazily-opened-but-invalid dataset still trips.
             _ = ds.count
         return True

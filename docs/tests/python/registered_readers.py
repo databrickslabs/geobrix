@@ -304,11 +304,11 @@ RETIRED_NAME_PATTERNS = (
     ("heavyweight reader", re.compile(r"\b(?:heavyweight|heavy)\s+(?:raster\s+|vector\s+)?readers?\b", re.IGNORECASE)),
 )
 
-# Docs pages that may name a retired reader. The release notes record the rename; ``api/benchmarking.mdx`` still
-# describes the retired benchmark forms until its rewrite, and ``test_deferred_pages_still_need_a_rewrite`` fails
-# when a listed page is already clean.
+# Docs pages that may name a retired reader. The release notes record the rename. ``DEFERRED_PAGES`` lists a page
+# that still needs a rewrite (none today), and ``test_deferred_pages_still_need_a_rewrite`` fails when a listed page
+# is already clean.
 RETIRED_NAME_PAGES = ("docs/docs/release-notes",)
-DEFERRED_PAGES = frozenset({"docs/docs/api/benchmarking.mdx"})
+DEFERRED_PAGES = frozenset()
 
 
 def retired_name_mentions(text):

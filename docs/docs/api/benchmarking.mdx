@@ -2,236 +2,211 @@
 sidebar_position: 2
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-
 # Benchmarking
 
-GeoBrix ships a benchmark suite that compares the two [execution tiers](./execution-tiers) — **Heavyweight (rasterx)** and **Lightweight (pyrx)** — on the **same inputs**, reporting both **performance** (per-function timing) and **output consistency** (do the two tiers produce the same result?).
+GeoBrix ships a benchmark suite. It times each function at every implementation level a compute offers, on the same inputs. It also checks that the levels give the same output.
 
-This page leads with the headline results (**[At a glance](#at-a-glance)**), then full tables of representative results by function family — both the **pure-core** (algorithm-in-isolation) view and the **spark-path at scale** view from a cluster. How the benchmark works, and how to run it yourself on a Databricks cluster or locally, is covered at the end.
+This page is the method and the measured matrix. For guidance on which compute and surface to use, see [Performance](./performance).
 
-:::note Runtime support vs. benchmark environment
-GeoBrix is [supported on DBR 17.3 LTS, 18 LTS, and — for the lightweight tier — 19 LTS](../installation#supported-databricks-runtimes). The per-result **Environment** stamps below record the specific runtime each benchmark actually ran on; the results on this page span **DBR 17.3 LTS and 18.x**. Those stamps are factual records of each run, not a statement that any supported runtime is faster, slower, or unsupported — re-running the suite on another supported runtime is expected to land within noise. FILE-capability benchmarks run on a FILE-enabled runtime and are stamped accordingly.
+:::note Runtime support and benchmark environment
+GeoBrix is [supported on DBR 17.3 LTS, 18 LTS and 19 LTS](../installation#supported-databricks-runtimes). Each result below states the runtime it ran on. The stamp records the run. It does not say that another supported runtime is faster or slower.
 :::
 
-## At a glance
+## What the suite measures
 
-**Key performance stories — link through for full data and methodology:**
+**Levels.** A function can run at up to four levels.
 
-- **[Virtual tiles defer pixel I/O](#virtual-vs-materialized)** — metadata-only operations (set-CRS, set-SRID, nodata, band-select) run **1.5–12× faster** on virtual tiles and complete without reading pixels. Chain deferred edits before a terminal step to pay pixel I/O cost **once at the end**.
-- **[Grouping amortizes open cost](../api/performance#virtual-tile-read-performance)** — windowed COG reads from the same source open once per partition (grouped executor). With `ORDER BY path` or repartitioning, byte-range stream reads are **10–290× faster** than FUSE per window; without amortization, per-tile opens grow prohibitive with file size.
-- **[FILE-on ≈ FILE-off on dedicated clusters](#file-capability-cog-multiwindow)** — FILE is governed file access, not a per-tile read optimization. Grouping (open amortization) is the performance lever. Serverless: the FILE-column Delta-table read path is **~16–17× faster** than a directory scan (~2 s vs. ~30 s per 1,000 tiles, verified on environment v6); the directory `raster_gbx` DataSource path is slower there — see [capability tiers](../readers-writers#capability-tiers) and [Serverless & Memory](../serverless-and-memory).
-- **[Band math: 60–130× lightweight win](#pure-core)** — spectral indices run 60–130× faster on the lightweight tier (NumPy in-process vs. heavyweight subprocess `gdal_calc` per call). This is the single largest advantage and sustains at scale.
-- **[Lightweight at parity for aggregators and geometry](#results)** — `st_asmvt` MVT encoding (~6% gap), `pmtiles_agg` archive folding (~7% gap), and quadbin/BNG grid math (±20% variance) all run within or very near parity on a cluster, with decoded output matching exactly. The BNG `*explode` generators are the exception: the heavyweight tier is about 1.5–2.7× faster there.
-- **[Geometry-aware expansion scales linearly](#results)** — `geomkring`/`geomkloop` grow grid rings from a geometry: on Serverless, 10,000 notional building footprints expand to h3 res-10 rings (`k=10`) in ~7.9 s (~1,260 buildings/s), and 100,000 footprints reach 35.7M cells in ~72 s. h3 leads the four grids; see the Grid tab.
+| Level | Implementation |
+|---|---|
+| L1 | JVM Catalyst expression (needs the JAR) |
+| L2 | JVM Java UDF (needs the JAR) |
+| L3 | Python, the light level (no JAR) |
+| L4 | Unity Catalog function |
 
-## Measurement modes
+**Timing models.** Each function runs under two models.
 
-Every function is benchmarked two ways. The full result tables by function family are in [Results](#results) below; this section explains the two measurement modes and the consistency check they share.
+- **Pure-core.** The operation in isolation. It opens one tile, calls the function and measures. There is no Spark and no serialization in the path.
+- **Spark-path.** The registered function over a DataFrame of *N* rows. It includes the per-row overhead of the level. It sweeps a row ladder, for example 10, 100, 1,000 and 10,000 rows.
 
-Each function is timed under two independent models:
+Both models run `--warmup` untimed passes, then `--measured` timed passes. The reported figure is the median of the timed passes. Locally the defaults are 2 and 5. On a cluster they are 1 and 3 for pure-core, and 1 and 1 for spark-path.
 
-- **Pure-core** — the raster operation in isolation: open **a single tile**, call the function, measure. It is always one tile per measurement (repeated once for each tile *shape* in the corpus — each tile-size / band-count / dtype / SRID combination), and it ignores `--row-counts` entirely. This is the fairest apples-to-apples view of the algorithm itself, with no Spark or serialization in the path.
-- **Spark-path** — the registered function (`rst_*`) applied to a Spark DataFrame of *N* rows (the only model that uses `--row-counts`). This includes the realistic per-row overhead (UDF dispatch, serialization, Python-worker round-trips for the lightweight tier), and is swept across a **row ladder** (e.g. 10 → 100 → 1,000 → 10,000 rows).
+**Consistency.** Every pure-core result carries an output fingerprint of per-band statistics. The levels are then compared:
 
-Both models run the function `--warmup` times **untimed** (to absorb cold caches, JIT, and worker spin-up) and then `--measured` times **timed**; the reported figure is the **median over the measured passes**. Locally the defaults are `2` warmup / `5` measured; on a cluster they are `1` / `3` for pure-core and `1` / `1` for spark-path (one full *N*-tile iteration is already substantial).
+- **exact.** Every statistic is bitwise equal.
+- **within_tol.** Every statistic agrees to a relative or absolute tolerance of `1e-3`.
+- **divergent.** Neither tolerance holds.
 
-Alongside timing, every pure-core result carries an **output fingerprint** (per-band statistics) so the two tiers can be checked for **consistency**:
+**Computes.** Compare times within one compute. The suite runs on:
 
-- **exact** — every statistic is bitwise-equal across tiers.
-- **within_tol** — every statistic agrees to a relative tolerance of `1e-3` **or** an absolute tolerance of `1e-3` (the absolute floor handles near-zero values where a relative comparison is meaningless).
-- **divergent** — neither tolerance is met.
+- **Dedicated** and **standard** clusters, where a fixed set of workers gives repeatable seconds.
+- **Serverless**, where workers scale with the job. Read a Serverless result as per-task behavior: a ratio to a floor or to a peer form, the shape across scales, and any per-task failure. Do not compare it with seconds from a fixed cluster.
+- A **SQL warehouse**, for Unity Catalog functions.
 
-The goal of the [one-line tier swap](./execution-tiers#the-one-line-swap) is that results stay consistent; the benchmark is how that guarantee is verified.
+**Corpus.** The suite generates a seeded corpus of GeoTIFF tiles, with a manifest. `--tile-px`, `--bands`, `--dtypes`, `--srids` and `--nodata-frac` shape it. The row pool is generated once and reused by every level, so the levels compare fairly. Generate it on Databricks with `gbx:bench:gen-data --on-databricks`.
 
 :::note
-The benchmark is run **from the GeoBrix source repository** (it uses the repo's `gbx:bench:*` commands and a job notebook). A wheel-only install does not include these tools — the cluster benchmark *submits a job to your own provisioned cluster* from a checkout of the repo.
+The benchmark runs from the GeoBrix source repository. It uses the repository's `gbx:bench:*` commands and a job notebook. A wheel-only install does not include these tools.
 :::
 
 ## Running on a cluster
 
-Running on a provisioned cluster is the **true comparison**: both tiers execute on the same hardware, against the same corpus, and the full row ladder and larger tiles are within reach. Results append to a `bench_results` Delta table and a `comparison.csv` / `summary.md` land on the configured Volume.
+A cluster run executes every level on the same hardware, against the same corpus. Results append to a `bench_results` Delta table. A `comparison.csv` and a `summary.md` land on the configured Volume.
 
 ### Prerequisites
 
-Provision a cluster and stage the artifacts per the [installation guide](../installation):
+Provision a compute and stage the artifacts as the [installation guide](../installation) describes.
 
-| Tier | Cluster | Artifacts |
-|---|---|---|
-| Heavyweight (rasterx) | Dedicated · DBR 17.3 / 18 / 19 | The env wheel + the GeoBrix JAR + the bench tests JAR (`geobrix-*-tests.jar`), all as cluster libraries |
-| Lightweight (pyrx) | x86 **or ARM** | The env wheel for the runtime (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3 / 18) |
+| Compute | Artifacts |
+|---|---|
+| Dedicated, DBR 17.3, 18 or 19 | The env wheel, the GeoBrix JAR and the bench tests JAR (`geobrix-*-tests.jar`), all as cluster libraries |
+| Standard, ARM, or Serverless | The env wheel for the runtime (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3 and 18) |
 
-Then fill in the cluster configuration file (`examples/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
+Then fill in `examples/tests/databricks_cluster_config.env` with your cluster ID and Volume paths.
 
 ### Run
 
 ```bash
-# Both tiers, same cluster, full row ladder, all functions
+# Spark-path ladder on a provisioned cluster
 bash scripts/commands/gbx-bench-cluster.sh \
   --cluster-id <your-cluster-id> \
-  --run-id cluster-2026-06 \
+  --run-id cluster-2026-11 \
   --modes both \
   --row-counts 10,100,1000,10000
 ```
 
-Scale the run with the options below. `--cluster-id` and `--run-id` identify the run; the rest are optional. `--row-counts` and `--functions` take a **comma-separated list**; `--modes` and `--set` take a **single value**.
+The levels leg times each form of one function set at every level the compute offers. It runs without the tests JAR:
+
+```bash
+# The raster read forms on a dedicated cluster, at the set's own scales
+bash scripts/commands/gbx-bench-cluster.sh --profile <name> \
+  --existing-cluster-id <cluster-id> --levels IO --levels-only \
+  --run-id levels-io-ded
+
+# The same forms on Serverless environment 6
+bash scripts/commands/gbx-bench-cluster.sh --profile <name> --serverless \
+  --env-version 6 --levels IO --levels-only --run-id levels-io-s6
+```
 
 | Option | Purpose |
 |---|---|
-| `--modes pure-core \| spark-path \| both` | Timing model — pick only one mode (default `both`, which runs both models). |
-| `--row-counts 10,100,1000,10000` | Spark-path row ladder — each value is the number of **distinct tiles processed in one timed iteration** (the main scale dimension); one iteration is measured per rung. The largest value must be **≤ the corpus row-pool size** (the bench refuses to under-fill). Default `10,100,1000,10000`. |
-| `--set core \| full` | Which function set to benchmark — the representative `core` set or every benchmarked function (`full`). Default `core`. |
-| `--functions rst_slope,rst_ndvi` | Comma-separated list restricting the run to specific functions; overrides `--set`. Default: unset (benchmarks the `--set`). |
-| `--warmup` / `--measured` | Warmup and measured iteration counts. Defaults: pure-core `1` / `3`, spark-path `1` / `1`. |
-| `--lightweight-only` / `--heavyweight-only` | Run a single tier (mutually exclusive). `--lightweight-only` skips the heavyweight leg, for a cluster with no GeoBrix JAR; `--heavyweight-only` skips the lightweight leg. Default: both tiers run. |
-| `--no-wait` | Submit the job without blocking on completion. Default: waits for the run to finish. |
+| `--modes pure-core \| spark-path \| both` | The timing model. Default `both`. |
+| `--row-counts 10,100,1000,10000` | The spark-path row ladder. Each value is the number of distinct tiles in one timed iteration. The largest value must not exceed the corpus row pool. |
+| `--set core \| full` | The representative set, or every benchmarked function. Default `core`. |
+| `--functions rst_slope,rst_ndvi` | Restrict the run to these functions. It overrides `--set`. |
+| `--levels S\|G\|A\|H\|SE\|IO` | Add the levels leg for one set: session functions, generators, aggregates, helpers, the GDAL spec engine rows, or the raster read forms. |
+| `--levels-scales 1,4,16` | The multiples of each form's base row count. Each set has its own default ladder. |
+| `--levels-forms b,d-py,floor` | Time only these forms. |
+| `--levels-uc <catalog.schema>` | Where the Unity Catalog functions live. Without it, the L4 forms record a skipped row. |
+| `--serverless`, `--env-version <N>` | Submit to Serverless, pinned to environment version *N*. |
+| `--warmup` / `--measured` | Warmup and measured iteration counts. |
+| `--no-wait` | Submit the job and return. |
 
-```bash
-# A cluster with no GeoBrix JAR: lightweight leg only
-bash scripts/commands/gbx-bench-cluster.sh --cluster-id <cluster-id> --lightweight-only
-```
+A spark-path iteration processes `max(--row-counts)` distinct tiles. If the corpus pool is smaller, the run refuses rather than under-fill. Generate a larger pool or lower the ladder.
 
-Tile sizes, band counts, data types, and projections are set when the corpus is generated (see the local section's scale knobs); the same corpus is reused for both tiers so the comparison is fair.
-
-:::note
-A spark-path iteration processes `max(--row-counts)` **distinct** tiles drawn from the corpus row pool — it does not recycle a small pool to reach the row count. The largest `--row-counts` value must therefore be **≤ the corpus row-pool size**; if it isn't, the bench **refuses to run** rather than silently under-fill (which would report a row count it never actually processed). Generate a larger pool or lower the row ladder.
-:::
+Every levels form prints START, DONE and RUNNING lines in the job notebook, so a long run shows its progress.
 
 ### Output
 
-- **`bench_results` Delta table** — every measured row (tagged with environment + run ID), so runs accumulate and can be queried/visualized over time.
-- **`summary.md` / `comparison.csv`** on the Volume — the human-readable speedup + consistency report (see [Reading the output](#reading-the-output)), also rendered inline in the run notebook.
+- **`bench_results` Delta table.** Every measured row, tagged with environment and run ID.
+- **`summary.md` and `comparison.csv`** on the Volume. The speedup and consistency report.
+
+Each levels row also records the compute and the bytes sent to and from Python workers. It records Python-worker task-seconds, shuffle and spill bytes, peak execution memory and the Python workers' peak memory.
 
 ## Running locally
 
-The local pipeline runs the heavyweight tier in the `geobrix-dev` Docker container and the lightweight tier in an isolated Python virtual environment, then compares them. Local runs are intentionally **single-tile** for pure-core (the algorithm cost in isolation); the full row ladder and at-scale spark-path numbers belong on a cluster, but can still be exercised in the local Docker environment at a modest scale.
+The local pipeline generates the corpus, runs the JVM level in the `geobrix-dev` container and the Python level in an isolated virtual environment, then compares them. Local runs time one tile for pure-core. Row ladders at scale belong on a cluster.
 
 ```bash
-# Full local pipeline: generate corpus -> heavyweight -> lightweight -> compare
+# Generate the corpus, run both levels, compare
 bash scripts/commands/gbx-bench-all.sh --run-id local-1 --modes pure-core
 ```
 
-The heavyweight and lightweight legs run **one after the other** (never concurrently) so they don't contend for CPU and skew each other's timings. Outputs land in `test-logs/bench/<run-id>/`.
+The two legs run one after the other, so they do not contend for CPU. Outputs land in `test-logs/bench/<run-id>/`.
 
-### Set (core vs full)
+`--set core` runs a small set that covers each family. `--set full` runs every benchmarked function. The set controls how many functions run. Pure-core is the timing model. They are independent.
 
-`--set` selects **how many functions** the run benchmarks:
-
-- `--set core` (the default) runs a small, representative set covering each function family — accessors, terrain, band math, warps. It's fast and is the right choice for a routine check.
-- `--set full` runs every benchmarked function. It takes longer but gives the complete coverage and parity picture.
-
-:::note
-The **`core`** here is the *function set* (`--set`) — how many functions run. Don't confuse it with **pure-core**, the *timing model* (`--modes`) that times one tile in isolation. They are independent: you can run `--set core --modes pure-core`, `--set full --modes spark-path`, or any other combination.
-:::
-
-An explicit `--functions` list overrides `--set`.
+For the raster read forms, time them locally before a cluster round:
 
 ```bash
-# Routine check (default): the representative core set
-bash scripts/commands/gbx-bench-all.sh --modes pure-core
-
-# Complete coverage: every benchmarked function
-bash scripts/commands/gbx-bench-all.sh --set full --modes pure-core
+# Three sizes on local[8]; exits 1 when a form does not scale with n
+bash scripts/commands/gbx-bench-local-timing.sh --set IO
 ```
 
-Scale and shape the corpus with the options below. Each takes a **comma-separated list to sweep several values** (e.g. `--tile-px 256,512,1024`) **or a single value** (e.g. `--tile-px 1024`); the corpus is the combination across the options you set.
-
-| Option | Purpose |
+| Corpus option | Purpose |
 |---|---|
-| `--tile-px 256,512,1024,2048` | Tile sizes (pixels per side) — any size; larger tiles (1024², 2048², …) make the per-tile algorithm cost dominate the fixed overhead. Default `256,512`. |
-| `--bands 1,4` | Band counts — any positive integer count. Default `2`. |
-| `--dtypes uint8,int16,float32` | Pixel data types — these three are the full supported set (closed; other dtypes are not generated). Default `float32`. |
-| `--srids 4326,3857,32618,27700` | Projections — the full supported set (closed): `4326` (WGS84 geographic), `3857` (WebMercator), `32618` (UTM 18N), `27700` (British National Grid); other SRIDs are not generated. Default `4326,32618`. Pick at least one geographic (lat/long) **and** one projected (metre) CRS to exercise both. |
-| `--nodata-frac 0.0,0.25` | Fraction of pixels set to NoData — **any value in `0.0`–`1.0`** (0% to 100%; continuous, not a fixed set). Default `0.0`. Pass a comma-separated list to sweep several fractions. |
-| `--row-counts 10,100,1000,10000` | Spark-path row ladder — each value is the number of **distinct tiles processed in one timed iteration** (the scale dimension); the bench measures one iteration per rung. The largest value must be **≤ the corpus row-pool size** (the bench refuses to under-fill). Default `2,4` (laptop-modest); run the full ladder on a cluster. |
-| `--modes pure-core \| spark-path \| both` | Timing model — pick only one mode. Default `both` (runs both models). |
-| `--warmup` / `--measured` | Untimed warmup passes / timed passes per measurement (median of the timed passes is reported). Defaults `2` / `5` locally. |
+| `--tile-px 256,512,1024,2048` | Tile sizes in pixels per side. Default `256,512`. |
+| `--bands 1,4` | Band counts. Default `2`. |
+| `--dtypes uint8,int16,float32` | Pixel types. These three are the full set. Default `float32`. |
+| `--srids 4326,3857,32618,27700` | Projections. These four are the full set. Default `4326,32618`. |
+| `--nodata-frac 0.0,0.25` | Fraction of NoData pixels, from `0.0` to `1.0`. Default `0.0`. |
+| `--row-counts` | The spark-path row ladder. Default `2,4` locally. |
 
-The individual stages are also available as standalone commands — `gbx:bench:gen-data`, `gbx:bench:heavyweight`, `gbx:bench:lightweight`, and `gbx:bench:compare` — if you want to regenerate just one part of the pipeline.
+The stages are also standalone commands: `gbx:bench:gen-data`, `gbx:bench:heavyweight`, `gbx:bench:lightweight` and `gbx:bench:compare`.
 
 ## Reading the output
 
-The comparison `summary.md` opens with **insights** — the biggest wins and a consistency tally (e.g. *7 compared cells: 0 exact, 7 within-tol, 0 divergent*) and the tile scale (*1,000 tiles/iteration, spark-path — every tile processed each timed iteration*) — followed by a per-function table. For a spark-path run it looks like:
+The comparison `summary.md` opens with insights: the biggest differences, a consistency tally and the tile scale. A per-function table follows.
 
 | fn | hw_iter_s | lw_iter_s | hw_per_tile_s | lw_per_tile_s | speedup | consistency |
 |---|---|---|---|---|---|---|
 | `rst_dtmfromgeoms_agg` | 175.10 | 9.94 | 0.17510 | 0.00994 | 17.61 | within_tol |
 | `rst_slope` | 7.31 | 7.57 | 0.00731 | 0.00757 | 0.97 | timing-only |
-| `rst_proximity` | 0.52 | 8.12 | 0.00052 | 0.00812 | 0.06 | timing-only |
 
-- **`hw_iter_s` / `lw_iter_s`** are the median wall-clock of **one full iteration over all *N* tiles** (the whole distributed job). **`hw_per_tile_s` / `lw_per_tile_s`** are that ÷ *N* — the amortized per-tile cost. (A pure-core summary uses `hw_ms` / `lw_ms` and `hw_mpix/s` / `lw_mpix/s` for the single-tile algorithm cost instead.)
-- **`speedup`** is `heavy / light` — greater than 1 means the lightweight tier is faster.
-- **`consistency`** is the `exact` / `within_tol` / `divergent` label defined above (`timing-only` where the output can't be fingerprinted for a direct comparison — readers, metadata accessors, and most non-aggregator spark-path cells). Per-cell deltas are in `comparison.csv` (the `max_rel_delta` column).
+- **`hw_iter_s`, `lw_iter_s`.** The median wall-clock of one full iteration over all *N* tiles. `hw` is the JVM level and `lw` is the Python level.
+- **`hw_per_tile_s`, `lw_per_tile_s`.** The iteration time divided by *N*.
+- **`speedup`.** The JVM time divided by the Python time. A value above 1 means the Python level is faster.
+- **`consistency`.** The label defined above. `timing-only` means the output cannot be fingerprinted for a direct comparison, as with readers and metadata accessors.
 
-A per-engine summary is also written for each tier (`heavyweight.summary.md`, `lightweight.summary.md`) with that tier's own timing and throughput in isolation.
+A pure-core summary uses `hw_ms`, `lw_ms` and megapixels per second instead. Each level also writes its own summary.
 
-## Results
+## Results {#results}
 
-Representative results across the benchmark families, organized by function group.
+{/* refresh: Task 29 */}
 
-<Tabs groupId="bench-results" className="gbx-bench-tabs">
+The per-family matrix comes from the benchmark redo. Its rows are functions or families. Its columns are the levels each compute offers. Each cell holds a measured time or a ratio to a peer form. Until the redo lands, the sections below show the figures of the last full run. A function not listed is not yet measured.
 
-<TabItem value="io" label="Readers & Writers">
+### Raster read
 
-### Raster readers & writers
+The raster reader returns virtual tiles by default. With `virtualTiles=false` it decodes whole files in bounded batches of at most 64 MiB. A file over the worker read cap fails the read with a retile `Fix:`.
 
-The raster reader is benchmarked the same way on both tiers: read **1,000 ×
-1024² GeoTIFF tiles** from a UC Volume (count). Lightweight uses `raster_gbx` (rasterio);
-heavyweight uses `gdal` (native GDAL in the JVM). The GeoTIFF writer, `gtiff_gbx`, writes the
-same 1,000 tiles back out (4.7 s); it has no heavyweight counterpart. Run with
-`gbx:bench:cluster --readers-only --spark-warmup 0 --spark-measured 1`.
+The table shows the last full ladder on a dedicated cluster. The tiles are 1024 by 1024 GeoTIFF. The unit is seconds. Lower is faster.
 
-:::note Large-raster benchmark profile (coming)
-A dedicated benchmark profile for large-raster splitting is planned and will land in a
-follow-on update. It will measure the split-and-COG-encode throughput for files that exceed
-the decoded-memory budget when splitting is opted into with `splitStrategy=serverless` or
-`splitStrategy=classic`, and will verify COG-output parity (band values and overview level
-count) against the no-split whole-image path (the default). Results will be added to this
-section once the profile lands.
-:::
+{/* refresh: Task 29 */}
 
-> **Environment:** Databricks · DBR 17.3 LTS · 1,000 × 1024² GeoTIFF tiles · whole-job
-> wall-clock median, one measured iteration (I/O, not JIT-sensitive — no warm-up).
+| Form | 1,000 tiles | 4,000 tiles | 10,000 tiles |
+|---|---|---|---|
+| The retired Scala reader | 103.90 | 335.87 | 866.09 |
+| `raster_gbx` reader | 40.61 | 178.73 | 400.85 |
+| Bytes-free decode (`d-py`) | 29.58 | 122.35 | 329.67 |
+| Floor (read the files, decode nothing) | 7.39 | 22.27 | 53.07 |
 
-| Operation | rows | light | heavy | ratio |
-|---|---|---|---|---|
-| **Read** GeoTIFF (`raster_gbx` / `gdal`) | 1,000 | 22.7 s | **9.5 s** | **2.4×** (heavy faster) |
+The Scala reader was 2.6x to 3.5x slower than the bytes-free Python decode at every scale, so 0.6.0 retired it. The `raster_gbx` figures come from before the reader decoded in bounded batches. The batched reader is not yet re-measured at this scale. A local ladder shows it at 0.4x to 0.6x of the bytes-free form.
 
-Both tiers emit the **same tile schema**, so the readers are drop-in swaps. The **reader trails ~2.4×** — the cost is moving each
-decoded tile's bytes across the Spark Python DataSource boundary (JVM↔Python ser/de),
-not the decode itself. That boundary is the structural tax of the pure-Python tier, and
-it is the trade for running where the heavyweight tier can't (Serverless, ARM, no JAR). At scale the read still parallelizes across the cluster (~23 ms/tile here,
-spread over the workers).
+The rows are one compute. Do not put Serverless seconds beside them.
 
-### Reader plan-time listing
+### Reader plan-time listing {#reader-plan-time-listing}
 
-For a comparison of the full read paths — Delta-scan FILE-column-table (~2 s, ~16–17× faster than directory on Serverless), directory enumeration (~10 s/10k files), and DataSource per-tile directory scan (~20 s classic / ~30 s Serverless per 1k tiles) — see the [capability tiers & read-options matrix](../readers-writers#capability-tiers) and [Serverless & Memory](../serverless-and-memory). The fast Serverless path is reading from a FILE-column table (Delta scan).
+Before it reads a tile, the reader lists the source directory to plan the tile windows. The default listing is a walk without file stats. It plans about 10,000 files in 1.5 s on a Volume. It runs once at plan time, even with `virtualTiles=true`.
 
-Before any tile is read, the reader **enumerates the source directory** to determine tile windows. The default listing is fast — a stat-free walk that plans ~10k files in ~1.5 s on a UC Volume — and it runs once at plan time even when `virtualTiles=true` (only the per-file `rasterio.open` is skipped by virtual-tile planning; the directory walk still happens).
+Measured on a 10,002-file corpus on a dogfood workspace, driver side, warm run:
 
-Measured on a **10,002-file corpus** on a dogfood workspace (driver-side microbenchmark,
-warm run):
-
-| Method | Median (s) | vs. baseline |
+| Method | Median (s) | Compared with the default |
 |---|---|---|
-| Default directory listing (stat-free) | ~1.5 | — |
-| Pre-computed manifest / tile table | **0.037** | **~37× faster** |
+| Default directory listing | About 1.5 | Baseline |
+| Pre-computed manifest or tile table | 0.037 | About 37x faster |
 
-The manifest path skips the directory walk and header opens entirely — planning reduces to a single file or table read regardless of tile count. Because the default listing is already fast, supplying a manifest or tile table is an **optional** optimization rather than a critical remedy; it is most useful when you already maintain a pre-computed tile index, or when the listing cost accumulates across a very large number of repeated job runs.
+A manifest or tile table skips the walk and the header opens. Planning becomes one file or table read, whatever the tile count. This is an optional gain. It helps most when you already keep a tile index, or when a job repeats very many times.
 
-:::tip Pre-computed tile inputs (`manifest` / tile table)
-Supply a pre-computed tile list to skip the directory walk entirely:
+A Delta table with a FILE column reads in about 2 s per 1,000 tiles on Serverless. That is 16x to 17x faster than a directory scan. See the [capability tiers](../readers-writers#capability-tiers) and [Serverless & Memory](../serverless-and-memory).
 
 ```python
-# Option 1 — manifest (JSON or Parquet: path + window per tile)
+# Option 1: a manifest (JSON or Parquet) with a path and window per tile
 df = spark.read.format("raster_gbx") \
     .option("manifest", "/Volumes/catalog/schema/vol/tiles.json") \
     .option("virtualTiles", "true") \
     .load("/Volumes/catalog/schema/vol/rasters")
 
-# Option 2 — tile INDEX in a Delta table: path (+ optional window) per tile —
-#            a saved file listing, NOT tile pixels; the reader still reads the files
+# Option 2: a tile index in a Delta table. It is a saved file listing, not tile pixels.
 from databricks.labs.gbx.ds.raster import read_tiles_table
 
 df = read_tiles_table(
@@ -239,1004 +214,157 @@ df = read_tiles_table(
 )
 ```
 
-Both options reduce planning to a single file or table read (**~37× faster** than the
-directory walk at 10k files). The benefit is purely at plan time and is independent of
-which functions run on the tiles.
-:::
+### Virtual and materialized input tiles {#virtual-vs-materialized}
+
+A virtual tile saves work when an operation is deferred. Metadata reads and edits (set CRS, set SRID, NoData, band select) finish from the header, without reading pixels. Chain deferred edits before a materializing step to pay the pixel cost once.
+
+> **Environment:** Databricks · DBR 18.x · 20 workers · 512 by 512, 4-band `float32` tiles · 1,000 tiles per iteration.
+
+| Disposition | Result for a virtual tile |
+|---|---|
+| Deferred | About 1.5x faster on average. The edits that carry no pixel work (`rst_setsrid`, `rst_setcrs`, `rst_initnodata`, `rst_band`) run 4.7x to 12.5x faster. |
+| Materialized | About 2x slower. Every pixel is read, so the path and window indirection is overhead. |
+| Not a single-tile operation | The grouped aggregates sit at parity. The byte constructors swing with how the bytes arrive: `rst_fromcontent` 2.8x faster, `rst_tryopen` about 4x slower. |
+
+| Function | Materialized (ms per tile) | Virtual (ms per tile) | Virtual is faster by |
+|---|---|---|---|
+| `rst_initnodata` | 12.49 | 1.00 | 12.5x |
+| `rst_setsrid` | 11.25 | 0.95 | 11.8x |
+| `rst_setcrs` | 11.51 | 1.04 | 11.1x |
+| `rst_band` | 4.77 | 1.00 | 4.7x |
+| `rst_scalex` | 3.24 | 1.75 | 1.9x |
+| `rst_srid` | 2.92 | 2.22 | 1.3x |
+| `rst_slope` | 3.83 | 12.96 | 0.30x (slower) |
+| `rst_ndvi` | 3.57 | 12.75 | 0.28x (slower) |
+
+#### FILE versus FUSE: large-COG multi-window results {#file-capability-cog-multiwindow}
+
+Without open amortization, FILE is not a throughput gain. FUSE's flat open cost and block-level I/O beat the per-tile HTTP stream setup. With amortization (the grouped executor and `ORDER BY path`), byte-range stream reads win by 10x to 290x. See [Virtual tile read performance](./performance#virtual-tile-read-performance).
+
+| Leg | Setup | FILE on | FUSE (FILE off) | FUSE advantage |
+|---|---|---|---|---|
+| High reuse | 1 COG of 648 MB, 1,000 windows | 27.4 s | 13.1 s | 2.1x |
+| High reuse, misaligned window | 1 COG of 648 MB, about 840 by 384 px windows | 26.7 s | 18.9 s | 1.42x |
+| High reuse, 2.5 GB COG | 1 COG of 2.58 GB, 1,000 windows of 256 px | 22.8 s | 16.7 s | 1.37x |
+| Low reuse | 25 COG copies of 648 MB, 1 window each | 16.2 s | 1.4 s | 11.4x |
+| Real COG, NAIP (DEFLATE, 512 px blocks) | 324 MB, 1,000 windows of 256 px | 23.4 s | 16.2 s | 1.44x |
+| Real COG, Sentinel-2 (DEFLATE, 1024 px blocks) | 22 MB, 1,000 windows of 256 px | 19.4 s | 17.7 s | 0.91x (a wash) |
 
 ### NetCDF readers
 
-The NetCDF reader benchmark has **two legs**, matching the two data shapes each reader supports:
+The `netcdf_gbx` benchmark has two legs, one for each data shape.
 
-- **Raster leg (heavy vs. light):** `netcdf_gdal` and `netcdf_gbx` (raster mode) are both
-  pointed at the **same directory of regular-grid `.nc` granules**, and the benchmark counts
-  how many `(source, tile)` rows each reader emits. `netcdf_gdal` enumerates only
-  georeferenced regular grids (a real CRS or a non-identity geotransform); swath files
-  produce zero rows from `netcdf_gdal` in raster mode. Both readers now decode CF
-  `scale_factor` / `add_offset` to physical values, so on a scaled regular-grid variable
-  the two tiers produce matching physical measurements (verified within 1e-4). Run with
-  `gbx:bench:cluster --netcdf-only --row-counts 1000`.
+- **Raster leg.** `netcdf_gbx` in raster mode reads a directory of regular-grid `.nc` granules. The benchmark counts the `(source, tile)` rows it emits. It decodes CF `scale_factor` and `add_offset` to physical values.
+- **Vector leg.** `netcdf_gbx` in vector mode reads a directory of Sentinel-5P L2 CH4 swath granules. It measures how fast the reader turns swath cells into points.
 
-- **Vector leg (light only):** `netcdf_gbx` in **vector mode** is pointed at a directory
-  of Sentinel-5P L2 CH4 swath granules. `netcdf_gdal` has no swath path — swaths enumerate
-  to nothing in its raster mode — so this leg measures light-only throughput: how fast
-  `netcdf_gbx` vector mode converts swath cells to per-cell points.
-
-Each leg is staged separately and independently from the benchmark run itself:
-
-**Raster corpus (NASA-NEX GDDP-CMIP6 regular grids):**
+Stage each corpus once, apart from the read:
 
 ```python
 from databricks.labs.gbx.bench import readers
-# NASA-NEX GDDP-CMIP6 regular 0.25-degree grids, anonymously accessible on Planetary Computer
-# (no token). AOI + window are the knobs; the default covers a US Southwest box.
+# NASA-NEX GDDP-CMIP6 regular 0.25-degree grids, anonymous on Planetary Computer.
 readers.stage_nasanex_corpus(spark, f"{CORPUS}/netcdf",
                              bbox=[-104.5, 31.0, -101.5, 33.0],
                              temporal="2021-01-01/2021-01-08",
                              variables=("tas",))
-```
 
-**Vector (swath) corpus (Sentinel-5P L2 CH4):**
-
-```python
-from databricks.labs.gbx.bench import readers
-# S5P L2 CH4 is anonymously accessible on Planetary Computer (no token). AOI + window
-# are the knobs; the default is a short window over a CH4 hotspot region.
+# Sentinel-5P L2 CH4 swaths, anonymous on Planetary Computer.
 readers.stage_netcdf_corpus(spark, f"{CORPUS}/netcdf-swath",
                             bbox=[-104.5, 31.0, -101.5, 33.0],
                             temporal="2021-01-01/2021-01-08")
 ```
 
-Staging is **decoupled from the read** — the download happens once, at stage time; the
-benchmark itself just globs the staged pool. If a pool is empty or missing (staging not
-yet run), that leg **skips cleanly** with a clear message rather than failing the run.
+If a pool is empty or missing, that leg skips with a message and the run goes on. Run the leg with `gbx:bench:cluster --netcdf-only --row-counts 1000`.
 
 ### NetCDF writer
 
-The `netcdf_gbx` writer is **lightweight-only** — there is no heavyweight NetCDF writer
-tier. The writer benchmark has **two legs** matching the two write modes:
+The `netcdf_gbx` writer has two legs for its two write modes. Run both with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
 
-- **Raster leg:** `netcdf_gbx` raster mode is pointed at the same regular-grid corpus
-  used by the reader raster leg (NASA-NEX GDDP-CMIP6 granules). Each `(source, tile)`
-  row is written as one CF grid `.nc` file. The leg measures whole-job wall-clock over
-  1,000 rows. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
+- **Raster leg.** Each `(source, tile)` row becomes one CF grid `.nc` file. It measures whole-job wall-clock over 1,000 rows.
+- **Vector leg.** Each Spark partition becomes one CF `.nc` file. The input is points derived from the Sentinel-5P swaths.
 
-- **Vector leg:** `netcdf_gbx` vector mode is pointed at a Sentinel-5P swath-derived
-  points corpus (one point per ground pixel, emitted by the reader vector leg). Each
-  Spark partition is written as one CF DSG `.nc` file. The leg measures whole-job
-  wall-clock. Run with `gbx:bench:cluster --netcdf-writer-only --row-counts 1000`.
+Each mode runs three write shapes, recorded as separate rows:
 
-Each mode runs **three times**, once per write shape:
+- **parts** (default). One `.nc` file per row or per partition.
+- **singleFile** (`singleFile=true`). The partition fragments merge into one `.nc` on the driver.
+- **merge** (`merge=true keepParts=true`). A fold of the parts already on disk, without re-running the DataFrame.
 
-- **parts** (default) — one `.nc` file per row (raster) or per partition (vector).
-- **singleFile** (`singleFile=true`) — the partition fragments are merged into a single
-  `.nc` on the driver via a two-phase scratch-then-merge.
-- **merge** (`merge=true keepParts=true`) — a *post-hoc* fold of the `.nc` parts already
-  on disk into one file, without re-running the DataFrame; the bench seeds the output
-  directory with a one-shot parts write before timing the merge, and `keepParts=true`
-  retains the parts so the merge stays idempotent across warmup and measured iterations.
+### Tiled output (PMTiles writer) {#tiled-output-pmtiles-writer}
 
-The three shapes are recorded as distinct rows (each leg is tagged in its note —
-`[singleFile]` and `[merge]` — and written to a separate output directory) so a run
-carries a real parts-vs-single-vs-merge throughput comparison. The raster legs read a
-distinct-variable single-grid corpus so the singleFile and merge shapes can fold several
-data variables that share one grid into one CF `.nc`.
+The PMTiles writer packages a tile pyramid into one `.pmtiles` archive. The `pmtiles_gbx` writer takes a `(z, x, y, bytes)` input. The benchmark writes 1,000 tiles to one archive. Run it with `gbx:bench:cluster --pmtiles-only --row-counts 1000`.
 
-Each leg is staged from the same corpora as the corresponding reader leg (see
-[NetCDF readers](#netcdf-readers) above). If a corpus pool is absent, that writer leg
-skips cleanly with a clear message rather than failing the run.
-
-### Tiled output (PMTiles writer)
-
-The PMTiles writer is benchmarked separately from the `rst_*` functions: it is a
-**write** that packages a tile pyramid into a `.pmtiles` archive, not a per-tile
-transform. The `pmtiles_gbx` writer takes a `(z, x, y, bytes)` input; the benchmark writes
-**1,000 tiles to a single archive**. Run it with `gbx:bench:cluster --pmtiles-only --row-counts 1000`.
-
-> **Environment:** Databricks · DBR 17.3 LTS · 1,000 synthetic PNG tiles → one
-> `.pmtiles` archive · whole-job wall-clock median.
+> **Environment:** Databricks · DBR 17.3 LTS · 1,000 synthetic PNG tiles to one archive · whole-job wall-clock median.
 
 | Writer | Whole-job median (1,000 tiles) |
 |---|---|
 | `pmtiles_gbx` | 18.4 s |
 
-> The writer is two-phase: executors write intermediates, then the driver assembles
-> the archive. The benchmark stages intermediates on a **shared filesystem**,
-> not node-local disk. The sharded and mosaic output use the same model at scale.
+The writer has two phases. Executors write intermediates, then the driver assembles the archive. The intermediates sit on a shared filesystem, not on node-local disk.
 
-### Tiled output aggregate (`pmtiles_agg`)
-
-`pmtiles_agg` is the grouped-aggregate companion to the PMTiles writer: it
-folds a group of `(tile, z, x, y)` rows into **one PMTiles archive per group key**
-inside a `groupBy(...).agg(pmtiles_agg(...))` job. It is format-agnostic — the same
-function archives raster *or* vector tiles — and is registered from both lightweight
-tiers (`pyrx` and `pyvx`), reusing the same archive assembler as the PMTiles writer.
-The benchmark folds **1,000 tiles into a single archive** on each tier and verifies
-that every group emits a non-empty archive before timing. Run it with
-`gbx:bench:cluster --pmtiles-agg-only --row-counts 1000`.
-
-> **Environment:** Databricks · DBR 17.3 LTS · 1,000 synthetic tiles → one
-> `.pmtiles` archive per tier · `groupBy().agg()` whole-job wall-clock · 5 measured
-> iterations, median reported.
-
-| Aggregator | Tier | Whole-job median (1,000 tiles) | Per-tile | Speedup |
-|---|---|---|---|---|
-| `pmtiles_agg` | lightweight | 0.74 s | 0.74 ms | **~1.07×** (≈ parity) |
-| `pmtiles_agg` | heavyweight | 0.70 s | 0.70 ms | — |
-
-The lightweight tier runs at the heavyweight median **×1.07** (0.742 s vs 0.695 s).
-The distributions overlap — light min 0.654 s sits below the heavyweight p90 of
-0.758 s — so the gap is inside the run-to-run noise band for a grouped aggregate of
-this size; the two tiers are effectively at parity. Both produce **spec-valid PMTiles
-v3 archives** that decode to the **same tile set**. The archives are *not*
-byte-identical: the lightweight writer GZIP-compresses the internal directories while
-the heavyweight writer leaves them uncompressed (`none`) — both are spec-valid and
-decode identically. Decoded-tile parity (light == heavy) is checked separately by the
-JAR-gated `test/ds/test_pmtiles_agg_parity.py`. The lightweight aggregator is a
-grouped-aggregate Arrow UDF (`pandas_udf`) folding each group's tiles into an
-in-memory archive — the same execution shape as `st_asmvt`.
+The `pmtiles_agg` aggregate folds a group of `(tile, z, x, y)` rows into one archive per key. It runs at about 1.07x the JVM aggregate's time (0.74 s against 0.70 s for 1,000 tiles), inside run-to-run noise. Both produce spec-valid PMTiles v3 archives that decode to the same tile set. The bytes differ: the Python archive GZIP-compresses its directories.
 
 ### Vector readers
 
-The vector readers are benchmarked on a scaled corpus: **5 × 1,000,000-feature** files
-(≈5M polygons) per format, read from a UC Volume **into a Delta table** — the realistic
-"ingest vector files into Delta" pipeline. Each format runs light (`*_gbx`) vs heavy
-(`*_ogr`) as its own isolated job, one measured iteration (I/O is not JIT-sensitive).
-Cluster: DBR 17.3 LTS. Run with `gbx:bench:cluster --vector-only --vector-scale`.
+The vector readers run on a scaled corpus. It holds five files of 1,000,000 features each, about 5 million polygons per format. The benchmark reads them from a Volume into a Delta table, one measured iteration per format. Cluster: DBR 17.3 LTS. Run it with `gbx:bench:cluster --vector-only --vector-scale`.
 
-| Format | rows | light (`*_gbx`) | heavy (`*_ogr`) | light edge |
-|---|---|---|---|---|
-| GeoJSON — FeatureCollection (`multi=false`) | 5M | **29.6 s** | 130.6 s | **4.4×** |
-| GeoJSON — GeoJSONSeq (`multi=true`) | 5M | **31.9 s** | 113.9 s | **3.6×** |
-| Shapefile | 5M | 27.8 s | **26.3 s** | ~par |
-| GeoPackage | 5M | **23.5 s** | 62.1 s | **2.6×** |
-| FileGDB | 1M | **13.8 s** | — | light-only on Volumes¹ |
+{/* refresh: Task 29 */}
 
-The lightweight readers are Arrow-native (columnar `pyogrio` batches — no per-row Python) and
-stage GeoPackage/FileGDB to worker-local temp for random-access reads; they **win or tie**
-every format. GeoJSON is read one partition per file in both tiers (the GeoJSON driver
-re-parses the whole `FeatureCollection` on each open, so feature-offset chunking is
-counterproductive); heavy GeoJSON's per-feature OGR→row construction is what puts it behind.
+| Format | Rows | `*_gbx` reader |
+|---|---|---|
+| GeoJSON, FeatureCollection (`multi=false`) | 5M | 29.6 s |
+| GeoJSON, GeoJSONSeq (`multi=true`) | 5M | 31.9 s |
+| Shapefile | 5M | 27.8 s |
+| GeoPackage | 5M | 23.5 s |
+| FileGDB | 1M | 13.8 s |
 
-¹ **FileGDB on a Volume:** the heavy OGR FileGDB reader opens a native `.gdb`/`.gdb.zip` from
-local/cluster storage but does not read one directly from a UC Volume (FileGDB's seeked
-multi-file I/O does not serve well over object storage); the lightweight reader stages it
-locally and reads it from the Volume. So FileGDB reads are light-only at Volume/directory
-scale (a single 1M archive is shown).
-
-**Parity:** for each format both tiers ingest the same files and the row counts must match
-(checked inline; the run flags any divergence).
+The readers are Arrow-native: columnar `pyogrio` batches, with no per-row Python. They stage GeoPackage and FileGDB to worker-local temp for random-access reads. GeoJSON reads one partition per file, because the driver parses the whole `FeatureCollection` on each open. For each format the benchmark checks that the row counts match the source.
 
 ### Vector writers
 
-The vector writers are all `*_gbx` writers. Each single-file writer writes a **14,000,000-feature** Delta table to a **single
-file** (the two-phase writer merges the partition fragments on the driver). Run with
-`gbx:bench:cluster --vector-only --vector-scale --vector-legs writer --writer-rows 14000000`.
+The vector writers are all `*_gbx` writers. Each single-file writer writes a 14,000,000-feature Delta table to one file. The two-phase writer merges the partition fragments on the driver. Run it with `gbx:bench:cluster --vector-only --vector-scale --vector-legs writer --writer-rows 14000000`.
 
-| Format | rows | time | throughput |
+{/* refresh: Task 29 */}
+
+| Format | Rows | Time | Throughput |
 |---|---|---|---|
-| GeoJSON (single file) | 14M | 279.1 s | ~50k rows/s |
-| Shapefile (single file) | 14M | 152.6 s | ~92k rows/s |
-| GeoPackage (single file) | 14M | 155.9 s | ~90k rows/s |
-| FileGDB (single file) | 14M | 97.2 s | ~144k rows/s |
-| **GeoJSONL (sharded)** — `geojsonl_gbx` | 14M | **16.4 s** (80 shards) | **~855k rows/s** |
+| GeoJSON (single file) | 14M | 279.1 s | About 50k rows/s |
+| Shapefile (single file) | 14M | 152.6 s | About 92k rows/s |
+| GeoPackage (single file) | 14M | 155.9 s | About 90k rows/s |
+| FileGDB (single file) | 14M | 97.2 s | About 144k rows/s |
+| GeoJSONL (sharded, `geojsonl_gbx`) | 14M | 16.4 s (80 shards) | About 855k rows/s |
 
-The single-file writers are **driver-bound** — the partition fragments are merged into one
-file on the driver (GeoJSON is slowest: text encoding). The **sharded GeoJSONL** writer skips the merge entirely. It writes one newline-delimited
-shard per partition, in parallel. It is **~17× faster** than the single-file
-GeoJSON writer at 14M (~16 s vs 279 s) and scales with partitions. It's the recommended writer for large
-output; `maxRecordsPerFile` caps features per shard.
+The single-file writers are driver-bound, because the merge runs on the driver. GeoJSON is slowest, because of text encoding. The sharded GeoJSONL writer skips the merge. It writes one shard per partition, in parallel, and runs about 17x faster than the single-file GeoJSON writer at 14M rows. It is the recommended writer for large output. `maxRecordsPerFile` caps the features per shard.
 
-**FileGDB driver memory.** The FileGDB commit is the one single-file writer whose driver memory is
-not flat: it streams the fragments one record batch at a time, but GDAL's FileGDB writer keeps
-per-feature index state in memory until the file is closed. For the 14M polygons above, the
-driver's Python worker peaked at 1.9 GB of resident memory, 1.7 GB of it heap — about 120 bytes
-per feature on a 4-vCPU driver — so size the driver for the feature count.
+The FileGDB commit is the one single-file writer whose driver memory grows. GDAL's FileGDB writer keeps per-feature index state until the file closes. For the 14M polygons above, the driver's Python worker peaked at 1.9 GB of resident memory, about 120 bytes per feature. Size the driver for the feature count.
 
-**Format capacity — the limit is the *format's*, not GeoBrix's.** 14M box polygons sits
-Shapefile near its 2 GB `.shp` ceiling; the other formats carry it easily and are specified
-far higher:
+The format sets the limit, not GeoBrix. 14M box polygons sits near the Shapefile ceiling.
 
 | Format | Ceiling | Cause |
 |---|---|---|
-| Shapefile | **2 GB** per `.shp`/`.dbf` (~15.8M box polygons) | 32-bit record offsets |
-| GeoPackage | **~17.6 TB** (billions of rows) | SQLite `page_size × max_page_count` |
-| FileGDB | **2.1 B rows** / 1 TB+ per feature class | OBJECTID is signed int32 |
-| GeoJSON | **none** (RFC 7946) | text; bounded only by disk / parse memory |
+| Shapefile | 2 GB per `.shp` or `.dbf` (about 15.8M box polygons) | 32-bit record offsets |
+| GeoPackage | About 17.6 TB | SQLite `page_size × max_page_count` |
+| FileGDB | 2.1 billion rows, 1 TB or more per feature class | OBJECTID is a signed 32-bit integer |
+| GeoJSON | None (RFC 7946) | Text, bounded by disk and parse memory |
 
-</TabItem>
+### Geometry-aware expansion at scale (`geomkring`, `geomkloop`) {#geomk-at-scale}
 
-<TabItem value="raster" label="Raster">
+The geometry-aware functions grow grid rings outward from a geometry's covering set. This benchmark measures how the cost grows with the number of geometries *N* and the ring distance *k*. The inputs are synthetic building footprints. They come in five shapes (rectangle, L, U, courtyard with a hole, irregular) and three sizes (about 15, 50 and 200 m). They are scattered over a city-scale extent, so each building lands on its own cells.
 
-### Virtual vs materialized input tiles (lightweight, 512²/4326) {#virtual-vs-materialized}
+> **Environment:** Databricks Serverless, environment 6 · `geomkring` and `geomkloop`, `boundary-out` · best of 3 warm runs of a full distributed aggregate (`sum(size(cells))`). Target cell size about 65 m: H3 resolution 10, quadbin 19, custom 65 m root cell, BNG resolution 4 (100 m, the nearest BNG step). H3 and quadbin use WGS84. Custom and BNG use EPSG:27700. Serverless wall-clock varies with autoscaling, so read the order and the size, not the last digit.
 
-Virtual tiles save I/O when operations are deferred — metadata reads and edits (set-CRS, set-SRID, nodata, band-select) complete from the header without pixels. Chain deferred edits before a materializing step to pay pixel I/O once, at the end.
+**Headline.** 10,000 footprints, H3 resolution 10, `geomkring` with `boundary-out` and `k=10` took about 7.9 s. It produced 3,573,051 cells, about 1,260 buildings/s.
 
-> **Environment:** Databricks · DBR 18.x · 20 workers · 512² 4-band `float32` tiles · 1,000 tiles per iteration.
+Across grids (10,000 buildings, `k=10`, `geomkring`):
 
-The result splits cleanly along the `Disposition`:
-
-- **`deferred` — virtual is ~1.5× faster on average.** The pending-instruction edits that carry no pixel work at all — `rst_setsrid`, `rst_setcrs`, `rst_initnodata`, `rst_band` — run **4.7–12.5× faster** on a virtual tile: it carries no pixel bytes to move across the cluster and never opens the raster, so the edit is almost free.
-- **`materialized` — virtual is ~2× slower.** When every pixel is needed, the virtual tile is opened and read in full, so the `path` + `window` indirection is pure overhead on top of the same compute.
-- **`na` — read the marker as "not a single-tile op," not "unaffected."** The grouped aggregators (multi-tile and geometry reducers) do sit at parity — the input form barely moves them. But the two byte constructors, `rst_fromcontent` and `rst_tryopen`, are also `na` (the marker only classifies a single input tile) *and yet consume the tile bytes*, so their timing still swings — `rst_fromcontent` 2.77× faster, `rst_tryopen` ~4× slower — driven by how the bytes reach them, not by a deferred/materialized decision.
-
-| Function | Light materialized/tile (ms) | Light virtual/tile (ms) | Disposition | Virtual speedup |
-|---|---|---|---|---|
-| `rst_initnodata` | 12.49 | 1.0 | deferred | 12.53× |
-| `rst_setsrid` | 11.25 | 0.95 | deferred | 11.83× |
-| `rst_setcrs` | 11.51 | 1.04 | deferred | 11.1× |
-| `rst_band` | 4.77 | 1.0 | deferred | 4.74× |
-| `rst_fromcontent` | 3.08 | 1.11 | na | 2.77× |
-| `rst_scalex` | 3.24 | 1.75 | deferred | 1.85× |
-| `rst_skewy` | 3.07 | 1.72 | deferred | 1.79× |
-| `rst_rastertoworldcoordx` | 2.91 | 1.74 | deferred | 1.67× |
-| `rst_crs` | 3.42 | 2.05 | deferred | 1.67× |
-| `rst_upperlefty` | 3.18 | 1.91 | deferred | 1.66× |
-| `rst_rastertoworldcoordy` | 3.64 | 2.23 | deferred | 1.63× |
-| `rst_upperleftx` | 3.15 | 1.94 | deferred | 1.62× |
-| `rst_rotation` | 2.9 | 1.88 | deferred | 1.54× |
-| `rst_pixelheight` | 2.9 | 1.95 | deferred | 1.49× |
-| `rst_pixelwidth` | 2.96 | 2.03 | deferred | 1.46× |
-| `rst_scaley` | 2.99 | 2.07 | deferred | 1.44× |
-| `rst_format` | 3.01 | 2.09 | deferred | 1.44× |
-| `rst_numbands` | 3.51 | 2.52 | deferred | 1.39× |
-| `rst_srid` | 2.92 | 2.22 | deferred | 1.32× |
-| `rst_getnodata` | 2.85 | 2.25 | deferred | 1.27× |
-| `rst_skewx` | 2.83 | 2.29 | deferred | 1.23× |
-| `rst_height` | 3.44 | 3.09 | deferred | 1.11× |
-| `rst_gridfrompoints_agg` | 10.24 | 10.33 | na | 0.99× |
-| `rst_merge` | 34.5 | 35.24 | na | 0.98× |
-| `rst_combineavg_agg` | 26.97 | 27.59 | na | 0.98× |
-| `rst_frombands_agg` | 22.54 | 23.11 | na | 0.98× |
-| `rst_width` | 3.92 | 4.06 | deferred | 0.97× |
-| `rst_derivedband_agg` | 11.37 | 11.77 | na | 0.97× |
-| `rst_combineavg` | 23.19 | 24.26 | na | 0.96× |
-| `rst_merge_agg` | 41.42 | 42.97 | na | 0.96× |
-| `rst_frombands` | 19.46 | 20.45 | na | 0.95× |
-| `rst_dtmfromgeoms_agg` | 4.13 | 4.33 | na | 0.95× |
-| `rst_contour` | 47.68 | 54.62 | materialized | 0.87× |
-| `rst_tooverlappingtiles` | 28.06 | 37.0 | materialized | 0.76× |
-| `rst_polygonize` | 15.77 | 23.08 | materialized | 0.68× |
-| `rst_to_webmercator` | 15.61 | 24.11 | materialized | 0.65× |
-| `rst_resample` | 15.96 | 24.56 | materialized | 0.65× |
-| `rst_filter` | 16.39 | 26.41 | materialized | 0.62× |
-| `rst_buildoverviews` | 13.01 | 21.13 | materialized | 0.62× |
-| `rst_retile` | 15.8 | 25.75 | materialized | 0.61× |
-| `rst_transformcrs` | 11.32 | 19.14 | materialized | 0.59× |
-| `rst_transform` | 12.13 | 20.88 | materialized | 0.58× |
-| `rst_separatebands` | 10.72 | 19.41 | materialized | 0.55× |
-| `rst_threshold` | 8.6 | 16.83 | materialized | 0.51× |
-| `rst_maketiles` | 16.24 | 31.8 | materialized | 0.51× |
-| `rst_updatetype` | 7.03 | 15.56 | materialized | 0.45× |
-| `rst_derivedband` | 5.49 | 13.74 | materialized | 0.4× |
-| `rst_cog_convert` | 5.29 | 13.65 | materialized | 0.39× |
-| `rst_resample_to_size` | 4.17 | 12.07 | materialized | 0.35× |
-| `rst_proximity` | 4.67 | 13.59 | materialized | 0.34× |
-| `rst_avg` | 4.1 | 12.37 | materialized | 0.33× |
-| `rst_min` | 3.5 | 11.37 | materialized | 0.31× |
-| `rst_max` | 3.24 | 10.59 | materialized | 0.31× |
-| `rst_rastertoworldcoord` | 3.11 | 10.14 | deferred | 0.31× |
-| `rst_slope` | 3.83 | 12.96 | materialized | 0.3× |
-| `rst_median` | 3.5 | 11.52 | materialized | 0.3× |
-| `rst_pixelcount` | 3.38 | 11.16 | materialized | 0.3× |
-| `rst_hillshade` | 3.77 | 12.82 | materialized | 0.29× |
-| `rst_roughness` | 3.43 | 11.7 | materialized | 0.29× |
-| `rst_fillnodata` | 3.57 | 12.44 | materialized | 0.29× |
-| `rst_evi` | 3.38 | 11.66 | materialized | 0.29× |
-| `rst_index` | 3.29 | 11.3 | materialized | 0.29× |
-| `rst_ndvi` | 3.57 | 12.75 | materialized | 0.28× |
-| `rst_aspect` | 3.79 | 13.51 | materialized | 0.28× |
-| `rst_ndwi` | 3.41 | 12.2 | materialized | 0.28× |
-| `rst_nbr` | 3.45 | 12.23 | materialized | 0.28× |
-| `rst_savi` | 3.13 | 11.34 | materialized | 0.28× |
-| `rst_tri` | 3.55 | 12.92 | materialized | 0.27× |
-| `rst_tpi` | 3.29 | 12.33 | materialized | 0.27× |
-| `rst_isempty` | 3.19 | 12.04 | materialized | 0.27× |
-| `rst_asformat` | 3.12 | 11.73 | materialized | 0.27× |
-| `rst_convolve` | 4.48 | 17.24 | materialized | 0.26× |
-| `rst_tryopen` | 2.96 | 11.43 | na | 0.26× |
-| `rst_mapalgebra` | 3.44 | 19.98 | materialized | 0.17× |
-
-#### FILE vs FUSE: large-COG multi-window results {#file-capability-cog-multiwindow}
-
-In the per-tile-open (non-amortized) regime, FILE is not a throughput win — FUSE's flat open cost and block-level I/O beat per-tile HTTP stream setup. With amortization (grouped executor, `ORDER BY path`), byte-range stream reads win 10–290× — see [Virtual tile read performance](../api/performance#virtual-tile-read-performance).
-
-| Leg | Setup | FILE-on | FUSE (FILE-off) | FUSE advantage |
-|---|---|---|---|---|
-| High reuse | 1 × 648 MB COG, 1 000 windows | 27.4 s | 13.1 s | **2.1×** |
-| High reuse, misaligned window | 1 × 648 MB COG, ~840 × 384 px windows (straddle 256px blocks) | 26.7 s | 18.9 s | **1.42×** |
-| High reuse, 2.5 GB COG | 1 × 2.58 GB COG, 1 000 × 256 px windows | 22.8 s | 16.7 s | **1.37×** |
-| Low reuse | 25 × 648 MB COG copies, 1 window each | 16.2 s | 1.4 s | **11.4×** |
-| Real COG — NAIP (DEFLATE, 512px blocks) | 324 MB, 1 000 × 256 px windows | 23.4 s | 16.2 s | **1.44×** |
-| Real COG — Sentinel-2 (DEFLATE, 1024px blocks) | 22 MB, 1 000 × 256 px windows | 19.4 s | 17.7 s | **0.91× (wash)** |
-
----
-
-:::note Mode coverage (of the 107 RasterX functions)
-Not every function appears in both timing models — the gaps are deliberate measurement choices, not functional gaps (the lightweight tier implements all 107):
-- **Pure-core: 100 / 107.** The 7 absent are the grouped aggregators (`rst_*_agg`) — a UDAF has no single-tile, single-row form to time in isolation, so they appear only in spark-path.
-- **Spark-path: 83 / 107.** The 24 absent are pure-core-only because their call shape doesn't fit the spark-path tile-DataFrame model: geometry-input constructors (`rst_rasterize`, `rst_gridfrompoints`, `rst_dtmfromgeoms` — the tile DataFrame carries no geometry column), the path reader (`rst_fromfile`), functions needing an in-extent coordinate/geometry literal valid across the multi-CRS corpus (`rst_clip`, `rst_sample`, `rst_viewshed`, `rst_worldtorastercoord*`, `rst_resample_to_res`), render-engine-divergent tiles (`rst_tilexyz`, `rst_xyzpyramid`, `rst_color_relief`), and metadata/scalar accessors (`rst_metadata`, `rst_type`, `rst_summary`, …) whose spark-path cell would be an uncomparable timing-only result.
-:::
-
-### Pure-core (local, 1024²) {#pure-core}
-
-The pure-core table is the **algorithm in isolation**: open one tile, call the function, measure — no Spark, no serialization. It is the fairest view of the raw implementation. It is one snapshot — absolute timings are environment-dependent — but the **relative** picture and the consistency outcome are stable. Per-tile timing is shown in **milliseconds**; cells whose output cannot be fingerprinted for a direct comparison (readers, metadata accessors) are timed and labelled `timing-only`.
-
-> **Environment:** amd64 · Linux · GeoBrix 0.4.0 · GDAL 3.11.4 · 2-band `float32` tiles at **1024²** (EPSG:32618) with **2% NoData**. All rows are pure-core (single tile).
->
-> **Consistency:** of 100 functions — **26 exact**, **47 within-tolerance**, **23 timing-only** (no fingerprint), and **4 divergent**. The four divergences are all **NoData / edge handling**, where the bulk of the raster matches but the boundary or masked pixels differ:
-> - **`rst_convolve`** — a one-pixel edge ring (GDAL applies a block-halo convolution that no single lightweight boundary mode reproduces exactly); interior pixels match.
-> - **`rst_derivedband`** and **`rst_resample`** — differ in how NoData is masked/propagated through the operation; valid-pixel values agree within tolerance.
-> - **`rst_contour`** — a vector output whose feature count differs (a segmentation artifact at NoData boundaries), not a pixel value.
->
-> These boundary behaviors are tracked for alignment to the heavyweight (GDAL) semantics; they do not affect interior/valid-pixel results.
-
-> The table is ordered by **Speedup = `Heavy / Light`** (highest first). **> 1× means the lightweight tier is faster**; **< 1× means the heavyweight tier is faster.**
-
-| Function | Heavy (ms) | Light (ms) | Speedup | Consistency |
-|---|---|---|---|---|
-| `rst_fromcontent` | 114 | 0.0002 | 684,479× | within_tol |
-| `rst_threshold` | 718 | 5.63 | 127× | timing-only |
-| `rst_index` | 762 | 7.00 | 109× | within_tol |
-| `rst_ndwi` | 747 | 7.33 | 102× | within_tol |
-| `rst_savi` | 769 | 7.55 | 102× | within_tol |
-| `rst_nbr` | 743 | 7.43 | 100× | within_tol |
-| `rst_ndvi` | 768 | 7.77 | 99× | within_tol |
-| `rst_dtmfromgeoms` | 4915 | 58.4 | 84× | within_tol |
-| `rst_evi` | 771 | 9.33 | 83× | within_tol |
-| `rst_mapalgebra` | 735 | 11.2 | 66× | within_tol |
-| `rst_separatebands` | 220 | 4.53 | 49× | within_tol |
-| `rst_convolve` | 788 | 21.4 | 37× | divergent |
-| `rst_initnodata` | 159 | 4.32 | 37× | within_tol |
-| `rst_fillnodata` | 417 | 12.9 | 32× | within_tol |
-| `rst_setsrid` | 133 | 4.48 | 30× | within_tol |
-| `rst_band` | 76.9 | 2.76 | 28× | within_tol |
-| `rst_maketiles` | 227 | 9.78 | 23× | within_tol |
-| `rst_updatetype` | 162 | 7.54 | 22× | within_tol |
-| `rst_asformat` | 94.5 | 4.47 | 21× | within_tol |
-| `rst_frombands` | 184 | 8.81 | 21× | within_tol |
-| `rst_derivedband` | 108 | 6.15 | 18× | divergent |
-| `rst_retile` | 280 | 17.9 | 16× | within_tol |
-| `rst_rasterize` | 49.3 | 3.22 | 15× | within_tol |
-| `rst_h3_tessellate` | 495 | 35.3 | 14× | exact |
-| `rst_tooverlappingtiles` | 423 | 31.7 | 13× | within_tol |
-| `rst_resample` | 659 | 54.8 | 12× | divergent |
-| `rst_resample_to_size` | 65.3 | 5.83 | 11× | within_tol |
-| `rst_pixelcount` | 47.9 | 4.53 | 11× | exact |
-| `rst_avg` | 46.5 | 4.75 | 9.80× | within_tol |
-| `rst_median` | 168 | 17.1 | 9.79× | within_tol |
-| `rst_clip` | 34.3 | 3.55 | 9.66× | timing-only |
-| `rst_merge` | 309 | 32.0 | 9.65× | within_tol |
-| `rst_buildoverviews` | 174 | 18.1 | 9.61× | within_tol |
-| `rst_combineavg` | 220 | 27.5 | 8.00× | within_tol |
-| `rst_quadbin_rastertogridmedian` | 647 | 94.3 | 6.86× | within_tol |
-| `rst_tryopen` | 1.54 | 0.230 | 6.67× | exact |
-| `rst_h3_rastertogridmax` | 7370 | 1241 | 5.94× | exact |
-| `rst_h3_rastertogridavg` | 7356 | 1243 | 5.92× | within_tol |
-| `rst_h3_rastertogridcount` | 7312 | 1239 | 5.90× | within_tol |
-| `rst_h3_rastertogridmin` | 7320 | 1244 | 5.88× | within_tol |
-| `rst_transform` | 181 | 31.1 | 5.82× | within_tol |
-| `rst_h3_rastertogridmedian` | 7627 | 1376 | 5.54× | exact |
-| `rst_tilexyz` | 12.7 | 2.40 | 5.27× | timing-only |
-| `rst_resample_to_res` | 254 | 53.9 | 4.71× | timing-only |
-| `rst_slope` | 86.1 | 24.0 | 3.59× | within_tol |
-| `rst_tpi` | 57.7 | 16.7 | 3.45× | within_tol |
-| `rst_roughness` | 61.0 | 18.3 | 3.33× | within_tol |
-| `rst_to_webmercator` | 201 | 69.0 | 2.91× | within_tol |
-| `rst_hillshade` | 62.6 | 21.7 | 2.89× | within_tol |
-| `rst_tri` | 58.3 | 23.4 | 2.50× | within_tol |
-| `rst_filter` | 891 | 435 | 2.05× | within_tol |
-| `rst_aspect` | 88.5 | 44.6 | 1.98× | within_tol |
-| `rst_quadbin_rastertogridmax` | 152 | 79.9 | 1.90× | within_tol |
-| `rst_quadbin_rastertogridavg` | 154 | 82.9 | 1.85× | within_tol |
-| `rst_quadbin_rastertogridcount` | 137 | 78.2 | 1.75× | within_tol |
-| `rst_quadbin_rastertogridmin` | 144 | 84.1 | 1.71× | within_tol |
-| `rst_max` | 7.65 | 4.56 | 1.68× | exact |
-| `rst_min` | 7.60 | 4.59 | 1.66× | exact |
-| `rst_xyzpyramid` | 204 | 141 | 1.45× | timing-only |
-| `rst_proximity` | 74.4 | 56.0 | 1.33× | within_tol |
-| **heavyweight faster below (&lt; 1×)** | **━━━** | **━━━** | **━━━** | **━━━** |
-| `rst_getsubdataset` | 0.232 | 0.237 | 0.98× | timing-only |
-| `rst_boundingbox` | 0.234 | 0.242 | 0.97× | timing-only |
-| `rst_color_relief` | 16.3 | 22.4 | 0.73× | timing-only |
-| `rst_metadata` | 0.145 | 0.241 | 0.60× | timing-only |
-| `rst_rastertoworldcoord` | 0.142 | 0.249 | 0.57× | exact |
-| `rst_srid` | 0.133 | 0.243 | 0.55× | exact |
-| `rst_scalex` | 0.087 | 0.223 | 0.39× | exact |
-| `rst_gridfrompoints` | 87.5 | 242 | 0.36× | within_tol |
-| `rst_scaley` | 0.079 | 0.224 | 0.35× | exact |
-| `rst_pixelheight` | 0.079 | 0.228 | 0.35× | exact |
-| `rst_type` | 0.076 | 0.225 | 0.34× | timing-only |
-| `rst_getnodata` | 0.058 | 0.223 | 0.26× | exact |
-| `rst_contour` | 362 | 1414 | 0.26× | divergent |
-| `rst_isempty` | 0.054 | 0.224 | 0.24× | exact |
-| `rst_polygonize` | 152 | 640 | 0.24× | within_tol |
-| `rst_height` | 0.051 | 0.236 | 0.22× | exact |
-| `rst_numbands` | 0.050 | 0.232 | 0.22× | exact |
-| `rst_width` | 0.047 | 0.252 | 0.19× | exact |
-| `rst_upperleftx` | 0.040 | 0.226 | 0.18× | exact |
-| `rst_upperlefty` | 0.039 | 0.224 | 0.17× | exact |
-| `rst_rastertoworldcoordx` | 0.041 | 0.242 | 0.17× | exact |
-| `rst_rastertoworldcoordy` | 0.038 | 0.236 | 0.16× | exact |
-| `rst_skewy` | 0.034 | 0.224 | 0.15× | exact |
-| `rst_pixelwidth` | 0.035 | 0.234 | 0.15× | exact |
-| `rst_format` | 0.029 | 0.225 | 0.13× | exact |
-| `rst_skewx` | 0.029 | 0.225 | 0.13× | exact |
-| `rst_rotation` | 0.028 | 0.226 | 0.13× | exact |
-| `rst_bandmetadata` | 0.025 | 0.224 | 0.11× | timing-only |
-| `rst_georeference` | 0.024 | 0.222 | 0.11× | timing-only |
-| `rst_subdatasets` | 0.024 | 0.244 | 0.10× | timing-only |
-| `rst_summary` | 0.478 | 5.89 | 0.08× | timing-only |
-| `rst_worldtorastercoordx` | 0.019 | 0.247 | 0.08× | timing-only |
-| `rst_worldtorastercoord` | 0.015 | 0.248 | 0.06× | timing-only |
-| `rst_worldtorastercoordy` | 0.014 | 0.242 | 0.06× | timing-only |
-| `rst_sample` | 0.011 | 0.276 | 0.04× | timing-only |
-| `rst_histogram` | 0.308 | 16.0 | 0.02× | timing-only |
-| `rst_memsize` | 0.019 | 1.67 | 0.01× | timing-only |
-| `rst_viewshed` | 16.7 | 4047 | 0.004× | timing-only |
-| `rst_cog_convert` | —* | 342 | — | timing-only |
-| `rst_fromfile` | —* | 0.732 | — | timing-only |
-
-<sub>\* `rst_cog_convert` and `rst_fromfile` are not measured on the local heavyweight tier (a container-specific GDAL driver quirk returns immediately). They run normally on a cluster — see `rst_cog_convert` in the spark-path table below.</sub>
-
-#### How to read the pure-core numbers
-
-- **Band math (`rst_ndvi`/`ndwi`/`nbr`/`evi`/`savi`/`index`/`mapalgebra`/`threshold`)** shows the largest lightweight wins (roughly 65–130×). The heavyweight tier computes these by shelling out to a `gdal_calc` subprocess per call, which dominates its time; the lightweight tier evaluates the expression in-process with NumPy.
-- **Tiling and warps (`rst_maketiles`/`retile`/`tooverlappingtiles`/`merge`/`transform`)** favor the lightweight tier by roughly 9–23×. The retile family reads only the output window per tile rather than translating the whole raster, so it stays fast even at 1024².
-- **Terrain (`rst_slope`/`aspect`/`hillshade`/`tri`/`tpi`/`roughness`)** is a steadier ~2–3.6× lightweight win, all within tolerance — including on geographic rasters, where both tiers auto-derive the horizontal scale from the CRS.
-- **Discrete-grid aggregation (`rst_h3_*`/`rst_quadbin_*`)** is a ~1.7–6× lightweight win and matches within tolerance.
-
-  > **British National Grid + quadbin raster-grid functions — cluster-measured.** The raster→grid family gained five British National Grid reducers — `rst_bng_rastertogridavg`, `rst_bng_rastertogridcount`, `rst_bng_rastertogridmax`, `rst_bng_rastertogridmin`, `rst_bng_rastertogridmedian` — alongside two more tessellation generators (`rst_quadbin_tessellate`, `rst_bng_tessellate`) and two grid rasterize aggregators (`rst_quadbin_rasterize_agg`, `rst_bng_rasterize_agg`). All nine were benchmarked on the 20-worker cluster with the same light-vs-heavy fingerprint parity check as their `rst_h3_*` / `rst_quadbin_*` siblings (a fixed deterministic cell set for the two aggregators). Because the BNG functions reproject the tile to EPSG:27700 internally and drop pixels outside Great Britain, they are measured on a **British-National-Grid tile** (EPSG:27700 over central London) so they bin **real cells**. On that tile the five BNG reducers agree **within tolerance** across tiers (identical cell sets; per-cell aggregate values agree to rel ≤ 0.001), and all three tessellation generators (`rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`) plus both `*_rasterize_agg` aggregators agree **exactly** (decoded-pixel parity: cell sets + rasterized pixels identical across tiers). The tessellators use a **positive-area covering keep-test** on both tiers: a cell is emitted iff its geometry has greater-than-zero area overlap with the raster, so a cell that merely touches the tile along its exact edge (a shared boundary line, zero pixel overlap) is excluded on both tiers, while a within-extent cell whose pixels are all NoData is still emitted (NoData renders in place, not as a gap). On the measured British-National-Grid tile this yields identical `rst_bng_tessellate` cell sets across tiers — the earlier heavy-only edge-touch fringe (previously 48 vs 36 cells) is gone.
-  >
-  > Representative pure-core timings (512² · 4-band · `float32`; the BNG functions on an EPSG:27700 British-National-Grid tile, quadbin on EPSG:4326): `rst_bng_tessellate` is a **14.6× lightweight win** (heavy 1.56 s vs light 0.11 s, exact) and `rst_quadbin_tessellate` a **12.9× win** (1.23 s vs 0.10 s, exact). The BNG reducers, now binning real cells, are also **lightweight-favored — roughly 3–7×** (heavy ~1.1–1.6 s vs light ~0.22–0.37 s). This followed a rewrite of the lightweight BNG encoder from a pure-Python per-pixel loop into a single vectorized NumPy kernel (bit-identical cell IDs): before that change the same reducers were heavyweight-favored (~0.12–0.15×), with the per-pixel Python encode dominating; once vectorized, the encode is array math and the EPSG:27700 reprojection each BNG tile still carries is a minor residual term. (The **BNG reducers and `rst_bng_tessellate` reproject the tile to EPSG:27700 internally**, unlike the 4326-native H3 and quadbin functions.) The reducers and tessellators are registered on the lightweight tier as table functions (invoked with SQL `LATERAL`); their at-scale spark-path timings are in the [raster→grid family subsection below](#raster-grid-family-at-scale).
-- **Trivial metadata accessors (`rst_width`/`height`/`numbands` and the world↔raster coordinate helpers)** are microseconds on both tiers; here the JVM-native heavyweight path edges out the Python-worker call, so speedup dips below 1×. At this scale the absolute difference is a fraction of a millisecond.
-- **Algorithm-bound outliers** — `rst_viewshed`, `rst_contour`, and `rst_polygonize` — are slower on the lightweight tier (the heavyweight GDAL implementations are hard to beat). The `rst_viewshed` figures above were measured when its lightweight form ran on xarray-spatial; it now runs GDAL's viewshed, as the heavyweight tier does. These remain correct (within tolerance, where comparable) but are the cases where the heavyweight tier is the better choice.
-
-### Spark-path at scale (cluster, 1000 tiles, 1024²)
-
-Pure-core measures the algorithm; **spark-path measures the job**. Each function runs as a registered `rst_*` UDF over a DataFrame of **1,000 distinct 1024² tiles** on a cluster, so the timing includes the realistic per-tile overhead — UDF dispatch, and for the lightweight tier the JVM↔Python serialization of tile bytes on every row.
-
-> **Environment:** Databricks · DBR 17.3 LTS · 2-band `float32` tiles at **1024²** (EPSG:32618) · **1,000 tiles per iteration** (every tile processed each iteration, not sampled). `Heavy/tile` and `Light/tile` are the whole-job wall-clock amortized over the 1,000 tiles. (At 1,000 tiles, the per-tile figure in ms equals the whole-iteration time in seconds.)
->
-> This table covers the general `rst_*` functions; the raster→grid family (`rst_{h3,quadbin,bng}_rastertogrid*`, tessellation, and grid rasterize aggregators) has its **[own subsection below](#raster-grid-family-at-scale)**. Across the spark-path cells the lightweight tier is at least as fast for roughly two-thirds of functions and the heavyweight tier is faster for the rest. Only the aggregators produce a comparable fingerprint here (all **within tolerance**); the rest are `timing-only` in spark-path.
-
-**The headline:** the pure-core wins do not all survive at scale. Operations that win 3–6× in isolation — terrain (`rst_slope`/`aspect`/`tri`/`tpi`) — collapse to **parity or slightly heavyweight-favored** once every tile's bytes cross the Python boundary. The serialization cost, not the compute, dominates byte-heavy operations at scale. Band math and the largest reductions still favor the lightweight tier (~2–4×) because their compute saving outweighs the boundary tax; algorithm-bound GDAL operations (`rst_proximity`, `rst_contour`, `rst_polygonize`, `rst_gridfrompoints`) favor the heavyweight tier by 5–16×.
-
-> Ordered by **Speedup = `Heavy / Light`** (highest first).
-
-| Function | Heavy/tile (ms) | Light/tile (ms) | Speedup | Consistency |
-|---|---|---|---|---|
-| `rst_dtmfromgeoms_agg` | 175.10 | 9.94 | 18× | within_tol |
-| `rst_fillnodata` | 32.71 | 6.98 | 4.69× | timing-only |
-| `rst_convolve` | 35.98 | 7.87 | 4.57× | timing-only |
-| `rst_resample` | 45.82 | 10.92 | 4.20× | timing-only |
-| `rst_evi` | 24.31 | 6.19 | 3.93× | timing-only |
-| `rst_nbr` | 22.59 | 5.96 | 3.79× | timing-only |
-| `rst_mapalgebra` | 20.90 | 5.67 | 3.68× | timing-only |
-| `rst_index` | 22.04 | 6.02 | 3.66× | timing-only |
-| `rst_ndwi` | 21.98 | 6.08 | 3.62× | timing-only |
-| `rst_savi` | 21.55 | 6.24 | 3.45× | timing-only |
-| `rst_ndvi` | 22.31 | 6.55 | 3.40× | timing-only |
-| `rst_threshold` | 19.28 | 6.29 | 3.07× | timing-only |
-| `rst_median` | 9.73 | 3.24 | 3.01× | timing-only |
-| `rst_separatebands` | 15.04 | 6.11 | 2.46× | timing-only |
-| `rst_transform` | 18.76 | 7.84 | 2.39× | timing-only |
-| `rst_updatetype` | 16.78 | 7.04 | 2.38× | timing-only |
-| `rst_buildoverviews` | 15.60 | 7.02 | 2.22× | timing-only |
-| `rst_avg` | 7.06 | 3.25 | 2.17× | timing-only |
-| `rst_initnodata` | 13.39 | 6.24 | 2.15× | timing-only |
-| `rst_setsrid` | 13.15 | 6.17 | 2.13× | timing-only |
-| `rst_pixelcount` | 6.71 | 3.19 | 2.10× | timing-only |
-| `rst_to_webmercator` | 20.83 | 9.91 | 2.10× | timing-only |
-| `rst_tooverlappingtiles` | 22.57 | 10.75 | 2.10× | timing-only |
-| `rst_retile` | 15.66 | 8.53 | 1.84× | timing-only |
-| `rst_filter` | 51.09 | 29.78 | 1.72× | timing-only |
-| `rst_isempty` | 4.58 | 2.71 | 1.69× | timing-only |
-| `rst_skewy` | 4.08 | 2.43 | 1.68× | timing-only |
-| `rst_frombands_agg` | 12.63 | 7.52 | 1.68× | within_tol |
-| `rst_format` | 4.07 | 2.42 | 1.68× | timing-only |
-| `rst_combineavg_agg` | 16.69 | 9.96 | 1.68× | within_tol |
-| `rst_skewx` | 4.04 | 2.44 | 1.66× | timing-only |
-| `rst_rastertoworldcoordx` | 4.08 | 2.48 | 1.65× | timing-only |
-| `rst_upperlefty` | 4.15 | 2.52 | 1.64× | timing-only |
-| `rst_width` | 5.14 | 3.14 | 1.64× | timing-only |
-| `rst_pixelheight` | 4.23 | 2.58 | 1.64× | timing-only |
-| `rst_derivedband` | 10.27 | 6.28 | 1.63× | timing-only |
-| `rst_upperleftx` | 4.10 | 2.57 | 1.59× | timing-only |
-| `rst_scalex` | 3.98 | 2.50 | 1.59× | timing-only |
-| `rst_rastertoworldcoordy` | 4.07 | 2.57 | 1.58× | timing-only |
-| `rst_numbands` | 4.11 | 2.61 | 1.57× | timing-only |
-| `rst_getnodata` | 3.94 | 2.52 | 1.56× | timing-only |
-| `rst_rotation` | 4.09 | 2.63 | 1.56× | timing-only |
-| `rst_pixelwidth` | 4.16 | 2.73 | 1.52× | timing-only |
-| `rst_scaley` | 4.00 | 2.63 | 1.52× | timing-only |
-| `rst_maketiles` | 10.10 | 6.74 | 1.50× | timing-only |
-| `rst_band` | 8.56 | 5.81 | 1.47× | timing-only |
-| `rst_max` | 4.51 | 3.06 | 1.47× | timing-only |
-| `rst_min` | 4.47 | 3.04 | 1.47× | timing-only |
-| `rst_height` | 4.56 | 3.10 | 1.47× | timing-only |
-| `rst_srid` | 4.12 | 2.83 | 1.46× | timing-only |
-| `rst_merge_agg` | 23.13 | 16.48 | 1.40× | within_tol |
-| `rst_resample_to_size` | 7.30 | 5.34 | 1.37× | timing-only |
-| `rst_derivedband_agg` | 9.43 | 7.61 | 1.24× | within_tol |
-| `rst_aspect` | 7.66 | 7.60 | 1.01× | timing-only |
-| **heavyweight faster below (&lt; 1×)** | **━━━** | **━━━** | **━━━** | **━━━** |
-| `rst_roughness` | 7.42 | 7.46 | 0.99× | timing-only |
-| `rst_slope` | 7.31 | 7.57 | 0.97× | timing-only |
-| `rst_tpi` | 6.87 | 7.40 | 0.93× | timing-only |
-| `rst_tri` | 7.05 | 7.70 | 0.92× | timing-only |
-| `rst_rastertoworldcoord` | 4.17 | 4.99 | 0.84× | timing-only |
-| `rst_hillshade` | 5.79 | 7.02 | 0.82× | timing-only |
-| `rst_tryopen` | 3.99 | 5.59 | 0.71× | timing-only |
-| `rst_fromcontent` | 4.03 | 5.90 | 0.68× | timing-only |
-| `rst_asformat` | 4.00 | 6.04 | 0.66× | timing-only |
-| `rst_frombands` | 2.31 | 4.94 | 0.47× | timing-only |
-| `rst_cog_convert` | 4.23 | 11.13 | 0.38× | timing-only |
-| `rst_rasterize_agg` | 2.00 | 6.16 | 0.32× | within_tol |
-| `rst_merge` | 2.30 | 8.42 | 0.27× | timing-only |
-| `rst_combineavg` | 1.91 | 7.73 | 0.25× | timing-only |
-| `rst_polygonize` | 10.90 | 54.88 | 0.20× | timing-only |
-| `rst_contour` | 13.91 | 127.62 | 0.11× | timing-only |
-| `rst_gridfrompoints_agg` | 2.66 | 33.75 | 0.08× | within_tol |
-| `rst_proximity` | 0.52 | 8.12 | 0.06× | timing-only |
-
-The raster→grid family (`rst_{h3,quadbin,bng}_rastertogrid*`, the three tessellation generators, and the three grid rasterize aggregators) is measured in its [own subsection below](#raster-grid-family-at-scale) — it ran on a separate cluster configuration (20 workers, 512² 4-band tiles), and the lightweight tier invokes those functions as **table functions via SQL `LATERAL`**, not scalar columns, so a like-for-like comparison belongs in a dedicated table.
-
-#### Combine family (`rst_combinemin`, `rst_combinemax`, `rst_combinemedian`, `rst_combinesum`, `rst_combinestddev`, `rst_combinecount`)
-
-The six raster-reduction functions that reduce an aligned stack of tiles to a single output tile (min/max/median/sum/stddev/count across the stack) ran in a separate cluster run alongside `rst_align_to`:
-
-> **Environment:** Databricks · DBR 18.x · 20 workers · 1,000 tiles per iteration · lightweight tier with ZSTD-L6 default.
-
-**Consistency:** All compared cells were **exact or within tolerance (0 divergent)**.
-
-The combine family's ~9–12× light gap is dominated by per-tile Python GDAL decode and encode; the ZSTD-L6 default reduced it from the previous ~15–18× by cutting encode time. Setting `GBX_ZSTD_LEVEL=fast` (L1) trades a ~1–2% size increase for additional encode speed.
-
-| Function | Heavy/tile (ms) | Light/tile (ms) | Speedup | Consistency |
-|---|---|---|---|---|
-| `rst_combinemin` | 3.10 | 34.0 | 0.09× | within_tol† |
-| `rst_combinemax` | 3.47 | 30.1 | 0.12× | within_tol† |
-| `rst_combinemedian` | 3.74 | 44.5 | 0.08× | within_tol† |
-| `rst_combinesum` | 3.25 | 28.3 | 0.11× | within_tol† |
-| `rst_combinestddev` | 3.01 | 33.1 | 0.09× | within_tol† |
-| `rst_combinecount` | 2.76 | 24.3 | 0.11× | within_tol† |
-
-<sub>† Aggregate result — 0 divergent across the six functions; per-function exact-vs-within-tolerance breakdown not available for this run.</sub>
-
-`rst_align_to` was benchmarked in the same run (timing-only; no cross-tier output fingerprint — the output geometry varies by reference tile and CRS).
-
-#### `rst_percentile_stretch` — per-band 2–98% contrast stretch (both tiers) {#percentile-stretch-bench}
-
-`rst_percentile_stretch` clips each band's histogram to its 2nd and 98th percentiles and rescales the valid range to uint8. The lightweight tier computes percentile bounds and the linear rescale in-process with NumPy; the heavyweight tier shells to GDAL.
-
-> **Environment:** Databricks · DBR 18.x (Photon) · classic cluster · bench-corpus 1024² tiles · run `v052-ps-c3`.
-
-*Pure-core (single tile, algorithm in isolation):*
-
-| Tier | ms/tile | Speedup |
-|---|---|---|
-| Lightweight | 22.1 | **~18× faster** |
-| Heavyweight | 406 | — |
-
-*Spark-path amortized per tile (median of one N-tile iteration ÷ N):*
-
-| N tiles | Light/tile (ms) | Heavy/tile (ms) | Light speedup |
-|---|---|---|---|
-| 10 | 163.9 | 1,334.5 | ~8× |
-| 100 | 34.6 | 135.0 | ~3.9× |
-| **1,000** | **4.08** | **14.03** | **~3.4×** |
-
-**Lightweight wins on both axes.** Unlike terrain and warp functions — where the serialization boundary tax at scale erodes a pure-core win — `rst_percentile_stretch` retains a ~3.4× lightweight edge at 1,000 tiles: NumPy percentile in-process is fast enough that the Python path beats GDAL both at the algorithm level and after amortizing the byte-boundary cost.
-
-#### Repartition strategy
-
-The spark-path numbers above are wall-clock for a whole distributed job, so they're sensitive to how evenly the 1,000 tiles spread across the cluster's task slots. The benchmark harness tunes the partitioning so the comparison reflects the engines, not a straggler tail:
-
-- **Repartition the *N*-row DataFrame to ~`slots × 4` partitions** (oversubscribe ~4×) so a slot that finishes early picks up a pending tile instead of idling while one long tile finishes.
-- **Set `spark.sql.shuffle.partitions` to match**, and **disable AQE** for the measured run so Adaptive Query Execution can't coalesce that repartition back toward `defaultParallelism` and reintroduce the idle tail.
-
-:::warning Serverless: no Spark-config tuning
-This repartitioning is **benchmark-harness tuning** — it lives in the bench code that runs from a repo checkout, **not** in the GeoBrix product. The lightweight **pyrx** tier never mutates Spark configuration: it only registers UDFs and builds Column expressions, so it is safe on **Serverless / Spark Connect**, where runtime `spark.conf.set(...)` and JVM-bridge access are not permitted. On Serverless you therefore can't hand-tune partitions; you rely on the platform's managed AQE and default partitioning. Treat the tuned figures above as the controlled, like-for-like comparison number — not as what a Serverless user sets by hand.
-:::
-
-### Raster→grid family at scale (cluster, 1000 tiles, 512²) {#raster-grid-family-at-scale}
-
-The discrete-global-grid functions — the `rst_{h3,quadbin,bng}_rastertogrid*` reducers, the three tessellation generators, and the three grid rasterize aggregators — are measured in their own table because they don't share the general table's shape. On the **lightweight tier the reducers and tessellators are registered as Python table functions**, so their spark-path form is a SQL `LATERAL` table-function join over the tile DataFrame (`SELECT t.* FROM tiles, LATERAL gbx_rst_h3_rastertogridavg(tile, resolution) t`), not a scalar column — the realistic distributed per-tile cost of the row fan-out. The heavyweight tier's equivalent expressions return an array from a scalar column; both tiers are timed on the **same 1,000-tile job** so the per-tile wall-clock is comparable. The three grid rasterize aggregators run as grouped `groupBy().agg(...)` on both tiers and are the only members with a comparable fingerprint (all **exact**); the reducers and tessellators are `timing-only` in spark-path (a `LATERAL` row stream emits no single-value fingerprint — cross-tier parity for these is enforced in the pure-core comparison and by the dedicated parity tests instead).
-
-> **Environment:** Databricks · DBR 18.x · **20 workers** · 512² 4-band `float32` tiles · **1,000 tiles per iteration** (every tile processed each iteration). H3 and quadbin read the tile as EPSG:4326 lon/lat; the **BNG reducers and `rst_bng_tessellate` reproject each tile to EPSG:27700 internally**, so their timing includes that per-pixel warp — a like-for-like reading against the 4326-native H3/quadbin functions should account for it. `Heavy/tile` and `Light/tile` are the whole-job wall-clock amortized over the 1,000 tiles. `Light virtual/tile` repeats the lightweight timing when the function is fed a **virtual** input tile (a path + window, carrying no pixel bytes); `Disposition` marks whether the function read pixels (`materialized`) or stayed lazy (`deferred`) — `na` for the grouped aggregators, which take no single input tile.
->
-> Ordered by **Speedup = `Heavy / Light`** (highest first). The three `*_rasterize_agg` aggregators burn a fixed deterministic cell set onto one small canvas per group (a different, smaller workload than a 512² tile), so read their **cross-tier ratio and `exact` parity** as the comparable result, not the absolute ms against the reducer rows.
-
-| Function | Heavy/tile (ms) | Light/tile (ms) | Light virtual/tile (ms) | Disposition | Speedup | Consistency |
-|---|---|---|---|---|---|---|
-| `rst_quadbin_tessellate` | 58.55 | 6.16 | 34.66 | materialized | 9.50× | timing-only |
-| `rst_h3_tessellate` | 27.47 | 4.53 | 26.87 | materialized | 6.07× | timing-only |
-| `rst_bng_rastertogridmin` | 39.53 | 7.85 | 16.49 | materialized | 5.04× | timing-only |
-| `rst_bng_rastertogridstddev` | 38.29 | 7.68 | 16.93 | materialized | 4.99× | timing-only |
-| `rst_bng_rastertogridsum` | 39.51 | 7.98 | 17.44 | materialized | 4.95× | timing-only |
-| `rst_bng_rastertogridvariance` | 39.19 | 8.01 | 16.15 | materialized | 4.89× | timing-only |
-| `rst_bng_rastertogridmax` | 39.52 | 8.14 | 16.13 | materialized | 4.86× | timing-only |
-| `rst_bng_rastertogridcount` | 39.24 | 8.17 | 16.44 | materialized | 4.80× | timing-only |
-| `rst_bng_rastertogridmedian` | 38.10 | 8.14 | 17.89 | materialized | 4.68× | timing-only |
-| `rst_bng_rastertogridavg` | 37.00 | 8.43 | 17.05 | materialized | 4.39× | timing-only |
-| `rst_quadbin_rastertogridmedian` | 10.78 | 5.91 | 14.14 | materialized | 1.82× | timing-only |
-| `rst_quadbin_rastertogridavg` | 6.79 | 5.37 | 13.03 | materialized | 1.27× | timing-only |
-| `rst_quadbin_rastertogridvariance` | 7.48 | 5.96 | 13.07 | materialized | 1.26× | timing-only |
-| `rst_quadbin_rastertogridstddev` | 7.87 | 6.32 | 13.96 | materialized | 1.24× | timing-only |
-| `rst_quadbin_rastertogridmax` | 6.81 | 5.56 | 12.93 | materialized | 1.23× | timing-only |
-| `rst_quadbin_rastertogridsum` | 6.84 | 5.61 | 13.97 | materialized | 1.22× | timing-only |
-| `rst_quadbin_rastertogridmin` | 6.58 | 5.66 | 14.52 | materialized | 1.16× | timing-only |
-| `rst_quadbin_rastertogridcount` | 6.43 | 5.62 | 13.90 | materialized | 1.14× | timing-only |
-| `rst_h3_rastertogridmedian` | 31.87 | 39.39 | 47.44 | materialized | 0.81× | timing-only |
-| `rst_h3_rastertogridvariance` | 28.60 | 39.56 | 49.37 | materialized | 0.72× | timing-only |
-| `rst_quadbin_rasterize_agg` | 1.58 | 2.24 | 2.65 | na | 0.70× | exact |
-| `rst_h3_rastertogridmax` | 26.28 | 38.64 | 48.77 | materialized | 0.68× | timing-only |
-| `rst_h3_rastertogridmin` | 26.26 | 39.61 | 45.62 | materialized | 0.66× | timing-only |
-| `rst_bng_rasterize_agg` | 1.54 | 2.34 | 2.79 | na | 0.66× | exact |
-| `rst_h3_rastertogridstddev` | 27.35 | 42.79 | 52.01 | materialized | 0.64× | timing-only |
-| `rst_h3_rastertogridavg` | 26.33 | 41.88 | 48.78 | materialized | 0.63× | timing-only |
-| `rst_h3_rastertogridcount` | 25.05 | 39.91 | 48.08 | materialized | 0.63× | timing-only |
-| `rst_h3_rasterize_agg` | 1.58 | 2.51 | 2.62 | na | 0.63× | exact |
-| `rst_h3_rastertogridsum` | 25.86 | 42.92 | 48.06 | materialized | 0.60× | timing-only |
-| `rst_bng_tessellate` | 8.53 | 26.76 | 35.60 | materialized | 0.32× | timing-only |
-
-The tessellators split by projection. `rst_quadbin_tessellate` (9.5×) and `rst_h3_tessellate` (6.1×) are strong lightweight wins — they read the tile as native EPSG:4326, so the covering-cell walk is cheap in Python and the `LATERAL` fan-out amortizes the JVM↔Python boundary once per input tile. `rst_bng_tessellate` is the opposite (0.32×, heavyweight-favored): it reprojects each tile to EPSG:27700 before walking cells, and that per-pixel warp plus the cell walk runs slower in Python than in the JVM.
-
-The **BNG reducers are the table's largest lightweight wins (~4.4–5.0×)**. The lightweight BNG encoder is a single vectorized NumPy kernel (bit-identical cell IDs), so binning a full 512² tile is array math rather than one interpreted `point_to_cell_id` call per pixel, and the EPSG:27700 reprojection each BNG tile carries is a minor term next to the encode. Every BNG row bins **real Great Britain cells** on a 27700-native tile over central London; the lightweight spark-path had been measuring these against the general EPSG:4326 corpus tile, which falls outside Great Britain and yields an empty grid — that is now fixed, so the BNG rows (including `rst_bng_tessellate`) reflect real cells. The quadbin reducers sit at slight lightweight advantage to parity (~1.1–1.8×), while the H3 reducers are modestly heavyweight-favored (~0.6–0.8×) — resolution 7 bins more cells per tile and H3's C-backed encoder is already fast, so the per-cell Python grouping outweighs the compute saving at scale. The three grid rasterize aggregators are heavyweight-favored on their small burned canvas (~0.63–0.70×) and match **exactly** across tiers.
-
-The **Light virtual/tile** column times the lightweight tier fed a *virtual* input tile — a path plus a window, carrying no pixel bytes — and **Disposition** records whether the function ended up reading pixels. Every raster→grid function here is `materialized`: it must read every pixel to bin cells, so the virtual input is opened and read in full and the column runs **1.1–5.9× slower** than the materialized `Light/tile` — with nothing to defer, the virtual tile is pure open overhead. Virtual tiles pay off for header- and metadata-only functions, which stay `deferred` and never touch pixels, not for the pixel-reading work in this table. The rasterize aggregators show `na` because they reduce a group of cell IDs, not a single input tile, so the marker does not apply.
-
-### Fan-out generators (streaming UDTFs)
-
-These functions are streaming Python UDTFs on the lightweight tier (one input tile → many output rows via `LATERAL`); the benchmark times the lightweight UDTF against the equivalent heavyweight Scala generator at matched fan-out and asserts that both tiers produce the **same flat row count** — decoded-feature parity as a hard gate.
-
-> **Environment:** Databricks · DBR 17.3 LTS · 20 workers · synthetic fan-out corpus · whole-job
-> wall-clock, 1 measured iteration. **Parity gate:** all functions listed passed — light and heavy
-> produced the same flat row count. Run with `gbx:bench:cluster --fanout-only`.
-
-| Function | rows (fan-out) | light (s) | heavy (s) | light edge |
-|---|---|---|---|---|
-| `rst_polygonize` | 256 | 0.262 | 0.196 | heavy faster |
-| `rst_h3_rastertogridcount` | 58,123 | 0.46 | 0.35 | heavy faster |
-| `rst_xyzpyramid` | 78 | 0.774 | 0.674 | heavy faster |
-| `rst_maketiles` | 16 | 0.341 | 0.254 | heavy faster |
-| `rst_retile` | 256 | 0.528 | **0.549** | **light faster** |
-| `rst_separatebands` | 64 | **0.292** | 0.372 | **light faster** |
-| `rst_tooverlappingtiles` | 324 | 0.633 | **0.608** | heavy ~parity |
-
-Across the converted fan-out functions, light runs **at parity or faster** than the heavyweight JVM generators for `rst_retile` and `rst_separatebands` — with decoded-row parity as a hard gate for every result in the table. The streaming-UDTF model amortizes the JVM↔Python boundary across the full fan-out (the boundary is paid once per input tile, not once per output row), which is why the at-scale cost difference is smaller than for scalar transforms. See the [Performance page](./execution-tiers) for the streaming-UDTF architecture.
-
-> **`rst_h3_tessellate` numbers are pending a cluster re-bench.** The covering/centroid `mode` work has
-> landed — light and heavy now agree on cell assignment for both modes (test-enforced cross-tier parity;
-> see the [grid raster tessellation explainer](./grid-raster-tessellation)) — and timings will be added on the next
-> cluster run.
-
-</TabItem>
-
-<TabItem value="vector" label="Vector">
-
-### MVT encoding (`st_asmvt`)
-
-The `st_asmvt` aggregator encodes a group of tile-local features into one Mapbox Vector Tile (MVT)
-protobuf blob. The benchmark groups **500 synthetic features into 10 tiles** and times the
-`groupBy("z","x","y").agg(st_asmvt(geom, attrs, "layer"))` whole-job wall-clock on each tier, then
-**decodes both tiers' tiles and asserts feature-level parity** (geometry + native-typed attributes
-match). Run it with `gbx:bench:cluster --mvt-only`.
-
-> **Environment:** Databricks · DBR 17.3 LTS · 20 workers · 500 features → 10 tiles · whole-job
-> wall-clock median, one measured iteration.
-
-| Tier | Function | Median (500 feat → 10 tiles) | Ratio |
-|---|---|---|---|
-| lightweight | `pyvx.st_asmvt` | 0.589 s | **~1.06×** (≈ parity) |
-| heavyweight | `vectorx.st_asmvt` | 0.555 s | — |
-
-The pure-Python lightweight aggregator (a grouped-aggregate pandas UDF over `mapbox-vector-tile`)
-runs **at parity with the heavyweight JVM/OGR aggregator** (~6% apart). Both encode attributes with
-**native protobuf value types** and take features in tile-local `[0, extent]` coordinates, so the
-decoded tiles are **feature-equivalent** — a hard parity gate; the benchmark fails if the tiers
-diverge. Tiles compose with `pmtiles_agg` for end-to-end publishing.
-
-### MVT pyramid tiling (`st_asmvt_pyramid`)
-
-`st_asmvt_pyramid` is a per-feature MVT tiling **UDTF**: each input geometry fans out to one
-`(z, x, y, mvt)` row per tile it intersects across a zoom range. The benchmark drives it in the
-same distributed shape it runs in production — a SQL `LATERAL` table-function join over a WKB
-geometry column — timing `SELECT t.* FROM geoms AS d, LATERAL gbx_st_asmvt_pyramid(d.geom, NULL,
-0, 5, 'layer') AS t` whole-job. It is **light-only** (no heavyweight counterpart), so this is an
-absolute lightweight number rather than a ratio.
-
-> **Environment:** Databricks · DBR 18 · 20 workers · 1000 input geometries → z 0–5 pyramid ·
-> whole-job wall-clock median.
-
-| Tier | Function | Input | Median | Throughput |
-|---|---|---|---|---|
-| lightweight | `pyvx.st_asmvt_pyramid` | 1000 geoms → z 0–5 tiles | ~2.4 s | **~420 geoms/s** |
-
-At **~2.4 ms per input geometry**, the per-geometry cost covers the full zoom-pyramid fan-out (each
-feature emitting a tile at every intersecting level z 0–5) plus MVT-encoding every output tile — so
-it runs higher than the scalar per-feature encoders, as expected for a one-to-many tiling operation.
-
-### TIN & legacy migration (`st_triangulate`, `st_interpolateelevation*`, `st_legacyaswkb`)
-
-The constrained-Delaunay TIN generators (`st_triangulate`, `st_interpolateelevationbbox`,
-`st_interpolateelevationgeom`) and the legacy-geometry migration function (`st_legacyaswkb`)
-are benchmarked light (pyvx) vs heavy (vectorx) with decoded-output parity. Light invokes the TIN
-generators as PySpark UDTFs (SQL `LATERAL`); heavy invokes the JVM generator expressions. Parity is
-asserted on decoded output, per the established posture: **triangle count + centroid match within
-1e-6** for triangulation (not triangle identity — no-Steiner constrained recovery may pick different
-non-constraint diagonals), **per-cell surface closeness within 1e-6** for elevation interpolation, and
-**decoded-geometry equality** for legacy migration. Run it with `gbx:bench:cluster --vector-tin-only`.
-
-Cluster spark-path results (DBR 17.3 LTS; median wall-clock of one full distributed iteration over
-*N* tiles; same corpus both tiers):
-
-| Function | Geoms/iter | Heavy (s) | Light (s) | Light speedup |
-|---|---|---|---|---|
-| `st_interpolateelevationgeom` | 125 | 0.49 | 0.56 | 0.88× |
-| `st_legacyaswkb` | 1,000 | 0.39 | 0.48 | 0.82× |
-| `st_interpolateelevationbbox` | 245 | 0.40 | 0.53 | 0.75× |
-| `st_triangulate` | 220 | 0.41 | 0.70 | 0.60× |
-
-The heavyweight JVM/JTS tier is modestly faster across all four. The lightweight tier is competitive
-on legacy migration and elevation interpolation (~0.75–0.88×) and ~1.7× behind on `st_triangulate`:
-the gap is the JVM↔Python serialization of the geometry arrays crossing the UDTF boundary (the same
-boundary cost seen for other byte-heavy lightweight UDTFs), not the triangulation compute itself.
-Decoded-output parity holds across both tiers (enforced by the cross-tier parity test suite, above).
-
-### Geometry validity & cleaning — scalar ST functions (lightweight tier only)
-
-The validity-checking and geometry-cleaning functions — `st_removeRepeatedPoints`, `st_snap`,
-`st_makeValid`, `st_node`, `st_simplifyPreserveTopology`, `st_reducePrecision`, `st_explainValidity`,
-`st_shiftLongitude`, `st_wrapX`, and `st_split` — are
-lightweight-tier scalar operations with no heavyweight equivalent. `st_transformCrs`, `st_setCrs`, and `st_crs`
-have heavyweight companions too, but the figures below time only the lightweight tier. The benchmark measures **per-geometry latency** on a
-distributed job (1,000 geometries per function) and reports **absolute throughput** (geometries/sec)
-rather than a heavy-vs-light ratio. All are pure-Python using `shapely` for geometry validation,
-transformation, and cleaning.
-
-> **Environment:** Databricks · DBR 18.x · lightweight tier only · 1,000 geometries per function
-> · 20 workers · spark-path whole-job wall-clock median, one measured iteration. **Unit: per-geometry
-> latency (milliseconds) and throughput (geometries/second).**
-
-| Function | ms/geometry | geoms/sec |
-|---|---|---|
-| `st_removerepeatedpoints` | 0.90 | 1106 |
-| `st_snap` | 0.91 | 1096 |
-| `st_makevalid` | 0.91 | 1095 |
-| `st_node` | 0.93 | 1074 |
-| `st_simplifypreservetopology` | 0.95 | 1048 |
-| `st_reduceprecision` | 0.97 | 1034 |
-| `st_explainvalidity` | 1.02 | 982 |
-| `st_transformcrs` | 1.06 | 942 |
-| `st_shiftlongitude` | 1.08 | 923 |
-| `st_wrapx` | 1.08 | 923 |
-| `st_setcrs` | 1.12 | 895 |
-| `st_crs` | 1.24 | 810 |
-| `st_split` | 1.77 | 565 |
-
-These lightweight-tier functions reach **~800–1100 geometries/second per-core** (at 20 workers),
-covering the common validity repair and coordinate-transform use cases for vector-data pipelines.
-The UDF boundary cost is amortized across a batch in the Arrow `pandas_udf` path, so throughput is
-roughly uniform across the set.
-
-### Coverage validity — grouped aggregates (`st_coverageisvalid`, `st_coverageinvalidedges`)
-
-`st_coverageisvalid` and `st_coverageinvalidedges` are **grouped-aggregates**: they validate a whole
-polygon *coverage* (overlaps and gaps between polygons) rather than one geometry per row. The
-benchmark aggregates a coverage of overlapping polygons and times it per group, so the unit is a
-**coverage group**, not a single geometry. Lightweight tier only (no heavyweight equivalent).
-
-> **Environment:** Databricks · DBR 18.x · lightweight tier only · 1,000 coverage groups · 20 workers
-> · spark-path whole-job wall-clock median, one measured iteration. **Unit: per coverage group.**
-
-| Function | ms/group | groups/sec |
-|---|---|---|
-| `st_coverageinvalidedges` | 1.56 | 639 |
-| `st_coverageisvalid` | 2.41 | 415 |
-
-</TabItem>
-
-<TabItem value="grid" label="Grid">
-
-### Quadbin
-
-The quadbin grid functions are benchmarked light (pygx) vs heavy (gridx.quadbin) with exact-output
-parity across four representative shapes: a scalar encode (`quadbin_pointascell`, lon/lat → cell),
-a geometry → cell-array fill (`quadbin_polyfill`), a geometry → cell-clip struct array
-(`quadbin_tessellate`), and a grouped aggregate (`quadbin_cellunion_agg`, cell ids → unioned
-coverage geometry). Both tiers expose the same `quadbin_*` SQL names, so the light tier is
-collected before the heavy tier re-registers. Parity is asserted on decoded output: **exact cell-id
-equality** for `pointascell` and `polyfill`, **exact cells with centroid match within 1e-6** for
-`tessellate`, and **decoded union-geometry equality (1e-6)** per group for `cellunion_agg`. Run it
-with `gbx:bench:cluster --grid-quadbin-only`.
-
-**The quadbin cell-math functions were benchmarked on a cluster** (DBR 17.3 LTS, x86, spark-path, 1,000
-tiles/iteration, 5 measured iterations, both tiers). **Exact cell-set parity holds across the suite**
-(test-enforced in-cell).
-
-On *timing*, these are **sub-millisecond cell-math** operations, so the spark-path wall-clock is
-dominated by per-row JVM↔Python dispatch, not by the work itself. The 5-measured-iteration medians put
-the lightweight `pygx` tier **roughly at parity** with the heavyweight JVM tier across the suite
-(0.89×–1.33×): the small gaps are fixed UDF-boundary/dispatch cost on top of very cheap per-row cell
-math, not an algorithmic deficiency. (One honest caveat: at sub-millisecond per-tile work, these
-numbers still carry some run-to-run variance, so read the relative ordering rather than the last digit.)
-
-Cluster spark-path results (median wall-clock of one full distributed iteration over 1,000 tiles;
-speedup = heavy ÷ light, ≥1.0 → light faster):
-
-| Function | Heavy (s) | Light (s) | Light speedup |
-|---|---|---|---|
-| `quadbin_resolution` | 0.28 | 0.21 | 1.33× |
-| `quadbin_cellunion_agg` | 0.38 | 0.29 | 1.32× |
-| `quadbin_tessellate` | 0.20 | 0.18 | 1.11× |
-| `quadbin_polyfill` | 0.24 | 0.23 | 1.06× |
-| `quadbin_kring` | 0.23 | 0.22 | 1.05× |
-| `quadbin_distance` | 0.19 | 0.18 | 1.04× |
-| `quadbin_cellunion` | 0.23 | 0.22 | 1.04× |
-| `quadbin_aswkb` | 0.15 | 0.15 | 0.98× |
-| `quadbin_pointascell` | 0.21 | 0.22 | 0.96× |
-| `quadbin_centroid` | 0.17 | 0.19 | 0.89× |
-
-`quadbin_cellunion_agg` is a grouped aggregate over 8 groups; the other nine are 1,000-row
-scalar/array operations.
-
-The implementation is **scale-aware**: scalar/bounded-output ops (`pointascell`, `resolution`,
-`distance`, `aswkb`, `centroid`, `cellunion`) use vectorized/batched `pandas_udf`s, while
-**array-returning** ops (`kring`, `polyfill`, `tessellate`) use plain row-at-a-time UDFs so a single
-batch never buffers many large variable-length outputs (a memory-safety choice for large
-geometries/zoom levels). The lightweight `pygx` tier's decisive advantage here is **Serverless/ARM
-reach and no-JVM/JAR install**, with timing competitive with the heavyweight tier.
-
-> Geometry-aware `quadbin_geomkring`/`geomkloop`(+explode) are benchmarked separately in [Geometry-aware expansion at scale](#geomk-at-scale).
-
-### BNG
-
-The British National Grid functions are available in both tiers — light (pygx, a pure-Python
-codec port of `BNG.scala`) vs heavy (gridx.bng) — with the same exact-output parity contract as
-quadbin: **exact cell-set equality** for `eastnorthasbng`/`pointascell`/`polyfill`/`kring`,
-**exact cells with chip-geometry match** for `tessellate`, and **decoded chip-geometry equality**
-per group for the aggregates (asserted by the `test_parity_bng` cross-tier suite). The execution
-shape mirrors quadbin (numpy-vectorized scalar `pandas_udf`s for cell-id math, plain UDFs for
-array-returning ops, UDTFs for the explodes, grouped aggregates for the chip aggregators), so the
-timing expectation is the same: sub-millisecond STRING cell-id math dominated by the per-row
-JVM↔Python boundary, with WKB-geometry ops additionally carrying the geometry-bytes serialization
-cost. Run the BNG legs with `gbx:bench:cluster --grid-bng-only`.
-
-**The `bng_*` functions were benchmarked on a cluster** (DBR 17.3 LTS, spark-path, 1,000
-tiles/iteration, 5 measured iterations, both tiers). **Exact cell-set / decoded-geometry parity
-holds across the suite** — light output equals heavy output, enforced by the in-cell parity gate and the
-`test_parity_bng` cross-tier suite (all parity gates passed; 0 errors).
-
-On *timing*, the pure-Python `pygx` BNG tier runs at **near-parity** with the heavyweight JVM tier
-for the scalar, array and aggregate functions: there the lightweight tier is within **~±20% of heavy
-(0.82×–1.18×)**, all sub-millisecond per tile at 1,000 tiles/iteration. Roughly a third of them are
-light-faster (best `bng_kring` 1.18×); the rest are marginally heavy-faster (most
-`bng_cellintersection` 0.82×). These deltas sit within the run-to-run noise band for sub-second
-distributed jobs at this scale — effectively at parity. (Note BNG WKB carries no SRID for
-EPSG:27700, unlike quadbin's EWKB.)
-
-The five **`*explode` generators are heavyweight-faster (0.37×–0.67×)**. The lightweight explodes are
-Python table functions that send every output row back across the JVM↔Python boundary — from 8,000
-rows per iteration (`bng_kloopexplode`) to 26,000 (`bng_geomkringexplode`) — while the heavyweight
-generators emit their rows inside the JVM. The gap likely grows with the fan-out: the geometry k-ring
-and k-loop explodes, which emit the most rows, trail the most. Each tier is timed in its own SQL form
-(the lightweight `FROM t, LATERAL` table function, the heavyweight generator in the select list), and
-the bench checks each query's plan before timing it. These five rows (marked † in the table) were measured in a
-later run on the same cluster, by then on DBR 18.x, with the same settings (1,000 rows per
-iteration, 1 warm-up and 5 measured iterations, both tiers, all parity gates passed).
-
-Cluster spark-path results (median wall-clock of one full distributed iteration over 1,000 tiles;
-speedup = heavy ÷ light, ≥1.0 → light faster):
-
-| Function | Heavy (s) | Light (s) | Light speedup |
-|---|---|---|---|
-| `bng_kring` | 0.20 | 0.17 | 1.18× |
-| `bng_geomkring` | 0.15 | 0.13 | 1.11× |
-| `bng_cellunion_agg` | 0.29 | 0.27 | 1.07× |
-| `bng_aswkt` | 0.18 | 0.17 | 1.06× |
-| `bng_centroid` | 0.14 | 0.14 | 1.06× |
-| `bng_kloop` | 0.13 | 0.13 | 1.01× |
-| `bng_tessellate` † | 0.16 | 0.16 | 1.01× |
-| `bng_cellunion` | 0.14 | 0.15 | 0.97× |
-| `bng_aswkb` | 0.14 | 0.14 | 0.96× |
-| `bng_cellarea` | 0.15 | 0.16 | 0.94× |
-| `bng_euclideandistance` | 0.14 | 0.15 | 0.91× |
-| `bng_geomkloop` | 0.15 | 0.16 | 0.90× |
-| `bng_polyfill` | 0.14 | 0.16 | 0.89× |
-| `bng_cellintersection_agg` | 0.25 | 0.28 | 0.89× |
-| `bng_eastnorthasbng` | 0.14 | 0.16 | 0.88× |
-| `bng_pointascell` | 0.15 | 0.17 | 0.86× |
-| `bng_distance` | 0.13 | 0.16 | 0.86× |
-| `bng_cellintersection` | 0.14 | 0.17 | 0.82× |
-| `bng_kringexplode` † | 0.21 | 0.32 | 0.67× |
-| `bng_kloopexplode` † | 0.18 | 0.32 | 0.58× |
-| `bng_tessellateexplode` † | 0.25 | 0.52 | 0.47× |
-| `bng_geomkringexplode` † | 0.23 | 0.57 | 0.39× |
-| `bng_geomkloopexplode` † | 0.20 | 0.54 | 0.37× |
-
-† Measured in a later run on the same cluster, by then on DBR 18.x, with the same settings; the other rows are from the DBR 17.3 LTS run. The `bng_tessellate` row was re-measured after its `keep_core_geom` default became false in every tier (the lightweight tier no longer returns core-cell geometry by default).
-
-> Geometry-aware `bng_geomkring`/`geomkloop`(+explode) appear in the table above (cluster parity); their geometry-throughput/scaling numbers are in [Geometry-aware expansion at scale](#geomk-at-scale).
-
-### Custom grid
-
-The custom equal-area grid functions are available in both tiers — light (pygx) vs heavy
-(gridx.custom) — with the same exact-output parity contract as quadbin and BNG: **exact cell-id /
-cell-set equality** for `pointascell`/`polyfill`/`kring` and the `grid` struct, **decoded geometry
-match within 1e-6** for `centroid`/`cellaswkb`/`cellaswkt`, and an **identical grid struct** for
-`grid` (asserted by the JAR-gated cross-tier parity suite and the in-cell hard-assert gates on the
-cluster run). The execution shape mirrors the other grids (vectorized scalar `pandas_udf`s for the
-cell-id math, plain UDFs for the geometry/array-returning ops), so the timing expectation is the
-same: sub-millisecond cell math dominated by the per-row JVM↔Python boundary, with WKB/WKT-geometry
-ops additionally carrying the geometry-bytes serialization cost. Run the custom legs with
-`gbx:bench:cluster --grid-custom-only`.
-
-**The `custom_*` functions were benchmarked on a cluster** (DBR 17.3 LTS, x86, spark-path,
-1,000 tiles/iteration, 5 measured iterations, both tiers). **Exact cell-id/cell-set parity holds across the suite** — light output equals heavy output (cell ids/sets exact; geometry within 1e-6; grid struct
-identical), enforced by the JAR-gated cross-tier parity suite and the in-cell hard-assert gates on the
-cluster run.
-
-On *timing*, the 5-measured-iteration medians put the pure-Python `pygx` custom-grid tier **roughly at
-parity** with the heavyweight Scala tier across the suite (0.87×–1.34×): it is faster on the cheapest ops
-(`custom_centroid` 1.34×, `custom_kring` 1.33×) and marginally slower on a few. Absolute times are all
-sub-second at 1,000 tiles (sub-millisecond per tile), so the gaps are the fixed Python UDF-boundary /
-Arrow serialization cost on top of very cheap per-row grid math, not an algorithmic deficiency.
-
-Cluster spark-path results (median wall-clock of one full distributed iteration over 1,000 tiles;
-speedup = heavy ÷ light, ≥1.0 → light faster):
-
-| Function | Heavy (s) | Light (s) | Light speedup |
-|---|---|---|---|
-| `custom_centroid` | 0.19 | 0.14 | 1.34× |
-| `custom_kring` | 0.17 | 0.13 | 1.33× |
-| `custom_cellaswkt` | 0.18 | 0.15 | 1.20× |
-| `custom_grid` | 0.15 | 0.15 | 0.97× |
-| `custom_pointascell` | 0.16 | 0.18 | 0.89× |
-| `custom_cellaswkb` | 0.14 | 0.16 | 0.89× |
-| `custom_polyfill` | 0.13 | 0.15 | 0.87× |
-
-> Geometry-aware `custom_geomkring`/`geomkloop`(+explode) are benchmarked separately in [Geometry-aware expansion at scale](#geomk-at-scale).
-
-### Cellfill (`bng_cellfill`, `quadbin_cellfill`, `h3_cellfill`, `custom_cellfill`)
-
-The cellfill functions are grouped aggregators that fill cells whose value is `NULL` by interpolating from their neighbours in the same group — an unweighted mean or inverse-distance weighting over k-ring neighbours — as a `GROUP BY` aggregate over `(cellid, value)` rows. Because the work is cell-space math — no raster tile bytes cross the JVM↔Python boundary — the lightweight tier runs at or near parity with the heavyweight tier.
-
-> **Environment:** Databricks · DBR 18.x · 20 workers · 1,000 cell groups per iteration. `gbx_custom_cellfill` is **lightweight-only** (the heavyweight tier does not have a streamable grid-struct path for this function, so no cross-tier ratio is available).
-
-**Consistency:** All compared cells were **exact or within tolerance (0 divergent)**.
-
-Speedup = heavy ÷ light, ≥ 1× → light faster:
-
-| Function | Heavy (s) | Light (s) | Light speedup |
-|---|---|---|---|
-| `gbx_quadbin_cellfill` | 2.12 | 1.58 | 1.34× |
-| `gbx_bng_cellfill` | 1.70 | 1.65 | 1.03× |
-| `gbx_h3_cellfill` | 2.02 | 3.56 | 0.57× |
-| `gbx_custom_cellfill` | — (heavy N/A) | 1.95 | — |
-
-The quadbin and BNG functions run at or faster than parity: cell-space geometry is cheap and there are no tile bytes to move across the Python boundary. The H3 gap (0.57×) reflects H3's already-fast C-backed encoder, which leaves less room for the Python advantage. All three comparable pairs are within tolerance or exact.
-
-### Geometry-aware expansion at scale (`geomkring` / `geomkloop`) {#geomk-at-scale}
-
-The geometry-aware expansion functions grow grid rings outward from a *geometry's* covering set (not a single cell). This is a **throughput/scaling** benchmark — how expansion cost grows with the number of input geometries `N` and the ring distance `k` — rather than a light-vs-heavy parity table. Inputs are synthetic **notional building footprints** across five shapes (rectangle, L, U, courtyard-with-hole, irregular) and three sizes (~15 / 50 / 200 m), scattered over a city-scale extent so each building lands on a distinct cell set.
-
-> **Environment:** Databricks **Serverless** (environment 6) · the 0.5.x `light_env6` wheel · `geomkring`/`geomkloop`, `boundary-out` · best-of-3 warm timing of a full distributed aggregate (`sum(size(cells))` over all rows). Target cell size ≈ 65 m: **h3** res 10, **quadbin** res 19, **custom** 65 m root cell, **BNG** res 4 (100 m — the nearest discrete BNG step). h3 and quadbin run on WGS84; custom and BNG on EPSG:27700. Footprints come from the `bench/buildings.py` generator. Cell counts are the total emitted across all input geometries. (Serverless wall-clock carries run-to-run variance from autoscaling — read the ordering and magnitudes, not the last digit.)
-
-**Headline** — 10,000 building footprints, h3 res 10, `geomkring` `boundary-out`, `k=10`: **≈ 7.9 s** producing **3,573,051 cells** — about **1,260 buildings/s** and **450k cells/s** on Serverless.
-
-**Across grids** (10,000 buildings, `k=10`, `geomkring`):
-
-| Grid | Resolution (≈65 m cell) | Wall (s) | Cells | Buildings/s | Cells/s |
+| Grid | Resolution (about 65 m cell) | Wall (s) | Cells | Buildings/s | Cells/s |
 |---|---|---|---|---|---|
-| h3 | res 10 | **7.9** | 3,573,051 | 1,264 | 452k |
-| custom | 65 m root (EPSG:27700) | 14.6 | 3,651,174 | 685 | 250k |
-| quadbin | res 19 | 41.5 | 4,951,123 | 241 | 119k |
-| bng | res 4 (100 m) | 52.3 | 4,762,643 | 191 | 91k |
+| H3 | Resolution 10 | 7.9 | 3,573,051 | 1,264 | 452k |
+| Custom | 65 m root (EPSG:27700) | 14.6 | 3,651,174 | 685 | 250k |
+| Quadbin | Resolution 19 | 41.5 | 4,951,123 | 241 | 119k |
+| BNG | Resolution 4 (100 m) | 52.3 | 4,762,643 | 191 | 91k |
 
-h3 is fastest — its polyfill uses the h3 library's performant `polygon_to_cells_experimental` (C-backed) and its neighbour step is pure integer index math (`grid_disk`). custom is next (a pure-Python lattice walk). quadbin (web-mercator `(z,x,y)` math + EWKB) and BNG (STRING cell ids + chip geometry) carry more per-cell work; BNG's res 4 also emits coarser 100 m cells. Cell sizes and CRS differ per grid, so read the ordering rather than a direct cell-for-cell comparison.
+H3 is fastest. Its polyfill uses the C-backed `polygon_to_cells_experimental`, and its neighbor step is integer index math. Custom is a pure-Python lattice walk. Quadbin and BNG carry more work per cell. Cell sizes and CRS differ per grid, so compare the order, not each cell.
 
-**Ring distance `k`** (h3, 10,000 buildings; `geomkring` filled disk vs `geomkloop` hollow shell):
+Ring distance *k* (H3, 10,000 buildings):
 
 | k | `geomkring` (s) | Ring cells | `geomkloop` (s) | Loop cells |
 |---|---|---|---|---|
@@ -1244,9 +372,9 @@ h3 is fastest — its polyfill uses the h3 library's performant `polygon_to_cell
 | 5 | 4.25 | 1,050,901 | 4.48 | 324,430 |
 | 10 | 7.9 | 3,573,051 | 7.88 | 624,430 |
 
-The filled ring's cell count grows ~`k²` (disk area) while the hollow loop grows ~`k` (perimeter), so at `k=10` the loop emits ~6× fewer cells. Wall-clock tracks the covering-set frontier work (similar for ring and loop) plus a per-building polyfill cost that dominates at small `k` — hence `k=1` and `k=5` are closer together than the cell counts suggest.
+The filled ring grows with about *k* squared. The hollow loop grows with about *k*. At *k*=10 the loop emits about 6x fewer cells. Wall-clock follows the frontier work, plus a per-building polyfill cost that dominates at small *k*.
 
-**Number of geometries `N`** (h3 res 10, `geomkring` `boundary-out`, `k=10`):
+Number of geometries *N* (H3 resolution 10, `boundary-out`, *k*=10):
 
 | Buildings (N) | Wall (s) | Cells | Buildings/s |
 |---|---|---|---|
@@ -1255,241 +383,47 @@ The filled ring's cell count grows ~`k²` (disk area) while the hollow loop grow
 | 10,000 | 7.9 | 3,573,051 | 1,264 |
 | 100,000 | 71.5 | 35,733,305 | 1,400 |
 
-Throughput scales ~linearly at volume: **100,000 building footprints expand to 35.7M cells in ≈ 72 s**. Buildings/s climbs with `N` as the fixed job overhead amortizes, plateauing around 1,400 buildings/s.
+Throughput scales about linearly. 100,000 footprints expand to 35.7M cells in about 72 s. Buildings/s rises with *N* as the fixed job overhead amortizes, and plateaus near 1,400.
 
-**Hole modes at scale** — on courtyard footprints (buildings with an interior hole), `hole-in` `k=5` over 1,000 buildings emits 1,796 cells, expanding inward from each hole's edge — the hole-fill traversals work on holed geometries at scale, not just in unit tests.
+On courtyard footprints (buildings with an interior hole), `hole-in` with *k*=5 over 1,000 buildings emits 1,796 cells. They expand inward from each hole's edge.
 
-</TabItem>
+### LiDAR and EXIF readers and the LiDAR writer {#lidar-exif-io}
 
-</Tabs>
+The `lidar_gbx` (LAS and LAZ point clouds) and `exif_gbx` (image EXIF and GPS) readers have one implementation each. These are single-level spark-path timings: read cost per file (header-only `metadata`), per point (`lidar_gbx points`), and with pixel decode (`exif_gbx qc`). The `lidar_gbx` writer is timed in its two output modes.
 
-### LiDAR DSM — `rst_binpoints` / `rst_binpoints_agg` / `rst_isoband` / `rst_chm` {#lidar-dsm}
-
-These four functions ship in **both tiers** (lightweight `pyrx` and heavyweight RasterX),
-so they take part in the same heavy-vs-light parity comparison as the rest of the raster
-family. They belong to the **point-cloud-to-raster** shape family: binning scattered xyz
-points onto a pixel grid (`rst_binpoints`/`rst_binpoints_agg`), polygon-extraction per value
-band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
-
-> **Shape** (performance.mdx taxonomy): `rst_binpoints*` are geometry-input constructors
-> (no tile DataFrame input — similar to `rst_gridfrompoints`); `rst_isoband` is a
-> tile-to-feature-array transformer (similar to `rst_polygonize` and `rst_contour`);
-> `rst_chm` is a two-tile combiner (similar to `rst_combineavg`).
-
-**Heavy vs light, cluster-measured** (DBR 18 · 512²·4-band·`float32`·EPSG:4326 tile · corpus pool 1,000 tiles).
-
-*Pure-core — one tile, algorithm in isolation:*
-
-| Function | Heavy | Light | Result | Consistency |
-|---|---|---|---|---|
-| `rst_chm` | 601 ms | 108 ms | **5.6× lightweight** | exact |
-| `rst_isoband` | 108 ms | 1,114 ms | **10× heavyweight** | within_tol |
-| `rst_binpoints` | 0.04 ms † | 5.9 ms | — | timing-only |
-
-<sub>† Heavy `rst_binpoints` pure-core hit a NoData short-circuit on the corpus tile, so its single-tile time is not a representative binning cost — read its at-scale spark-path row below instead. `rst_binpoints_agg` is an aggregator and has no single-tile pure-core form.</sub>
-
-*Spark-path at scale — amortized per-tile cost (ms) over an N-tile distributed job:*
-
-| Function | Heavy @1,000 | Light @1,000 | @100 (hw / lw) | @10 (hw / lw) |
-|---|---|---|---|---|
-| `rst_binpoints_agg` | **0.46** | 3.14 | 2.54 / 14.4 | 26.0 / 196 |
-| `rst_isoband` | **6.76** | 30.0 | 83.1 / 68.7 | 597 / 456 |
-| `rst_chm` | **4.20** | 30.6 | 31.5 / 60.6 | 382 / 404 |
-| `rst_binpoints` (light-only ‡) | — | 1.16 | — / 9.39 | — / 136 |
-
-<sub>‡ `rst_binpoints` is a geometry-input constructor (like `rst_gridfrompoints`): the spark-path tile DataFrame carries no geometry column, so only the lightweight tier — which streams points through its own path — has a spark-path form here; the heavyweight tier is pure-core-only for it.</sub>
-
-**How to read these.** `rst_chm` is the textbook pure-core-vs-scale crossover: the lightweight NumPy subtract-and-clip wins **5.6×** on a single tile, but serializing every tile's bytes across the JVM↔Python boundary on each row flips it at scale — the heavyweight tier is **~7.3× faster over a 1,000-tile job**. `rst_isoband` favors the heavyweight tier both in isolation (**10×** — GDAL's C-backed polygon extraction) and at the largest scale (**~4.4×**); the two tiers trade places only at small row counts, where fixed job overhead dominates the per-tile average. `rst_binpoints_agg` favors the heavyweight tier at every scale (**up to ~6.8×**): accumulating one `(x, y, z)` triple per row in the JVM beats collecting a Python array per group. Output stays consistent across tiers where it can be fingerprinted — `rst_chm` **exact**, `rst_isoband` **within tolerance**; `rst_binpoints_agg` returns an aggregate tile that is timing-only in this run. The numbers are one cluster snapshot (absolute timings are environment-dependent); the relative picture and the consistency outcome are the stable takeaways. See [How the benchmark works](#how-the-benchmark-works--how-to-run-it).
-
-### LiDAR & EXIF readers and the LiDAR writer (lightweight) {#lidar-exif-io}
-
-The `lidar_gbx` (LAS/LAZ point clouds) and `exif_gbx` (image EXIF/GPS) Spark DataSources are
-**lightweight-only** — there is no heavyweight tier — so these are single-tier spark-path
-timings: read cost per file (header-only `metadata`), per point (`lidar_gbx points`), and with
-pixel decode (`exif_gbx qc`). The `lidar_gbx` writer is timed in its two output modes.
-
-> **Environment:** Databricks · DBR 18.x · classic (rd-fleet.xlarge) · lightweight tier ·
-> synthetic corpus (100 `.laz` × 50,000 points; 100 JPEGs). Spark-path median of the measured
-> iterations after warmup. Run with `gbx:bench:cluster --benchmark-lidar --benchmark-exif`.
+> **Environment:** Databricks · DBR 18.x · classic (rd-fleet.xlarge) · synthetic corpus of 100 `.laz` files × 50,000 points and 100 JPEGs · median of the measured iterations after warmup. Run with `gbx:bench:cluster --benchmark-lidar --benchmark-exif`.
 
 | Reader | Mode | Items | Median | Per item |
 |---|---|---|---|---|
-| `lidar_gbx` | `metadata` (header-only) | 100 files | 0.84 s | 8.4 ms / file |
-| `lidar_gbx` | `points` | 5,000,000 points | 1.09 s | ~0.22 µs / point |
-| `exif_gbx` | `metadata` (header-only) | 100 files | 0.79 s | 7.9 ms / file |
-| `exif_gbx` | `qc` (decodes pixels) | 100 files | 1.66 s | 16.6 ms / file |
+| `lidar_gbx` | `metadata` (header only) | 100 files | 0.84 s | 8.4 ms per file |
+| `lidar_gbx` | `points` | 5,000,000 points | 1.09 s | About 0.22 µs per point |
+| `exif_gbx` | `metadata` (header only) | 100 files | 0.79 s | 7.9 ms per file |
+| `exif_gbx` | `qc` (decodes pixels) | 100 files | 1.66 s | 16.6 ms per file |
 
-Header-only `metadata` is the fast path for both readers (no point/pixel decode), and the two
-sit at parity per file (~8 ms). `lidar_gbx points` streams point rows columnar (Arrow), so 5M
-points read in ~1.1 s; `exif_gbx qc` adds Laplacian-variance sharpness and brightness from the
-decoded image, ~2× the metadata cost.
+Header-only `metadata` is the fast path for both readers. `lidar_gbx points` streams point rows in Arrow batches, so 5 million points read in about 1.1 s. `exif_gbx qc` adds sharpness and brightness from the decoded image, at about twice the metadata cost.
 
-| Writer (`lidar_gbx`, light-only) | Points | Median |
+| `lidar_gbx` writer mode | Points | Median |
 |---|---|---|
 | `parts` (one `.laz` per partition) | 5,000,000 | 6.3 s |
-| `singleFile` (driver-merged to one `.laz`) | 5,000,000 | 31.6 s |
+| `singleFile` (merged on the driver to one `.laz`) | 5,000,000 | 31.6 s |
 
-Sharded **`parts`** is **~5× faster** than **`singleFile`** at 5M points: `singleFile` funnels
-every partition through a driver-side merge, so prefer `parts` for large point clouds and
-reserve `singleFile` for small outputs that must land as one file.
+`parts` is about 5x faster than `singleFile` at 5 million points, because `singleFile` funnels every partition through a driver merge. Use `parts` for large point clouds. Keep `singleFile` for small outputs that must land as one file.
 
-### Land-cover classification — `rst_land_cover` (lightweight) {#land-cover-bench}
+### Land-cover classification (`rst_land_cover`) {#land-cover-bench}
 
-`rst_land_cover` classifies a ≥3-band RGB tile into per-pixel land-cover class IDs. It is **lightweight-only** — there is no heavyweight tier — so the numbers below are single-tier absolute throughputs rather than a cross-tier ratio.
+`rst_land_cover` classifies a tile of three or more bands into per-pixel land-cover class IDs. It has one implementation, so these are absolute throughputs.
 
-> **Environment:** lightweight pure-core, synthetic RGB tile, `n_clusters=6`, `smooth=3`, measured locally in the pyrx venv.
+> **Environment:** Python level, pure-core, synthetic RGB tile, `n_clusters=6`, `smooth=3`, measured locally.
 
-| Method | 256² (ms) | 512² (ms) | 1024² (ms) | Throughput |
+| Method | 256 by 256 (ms) | 512 by 512 (ms) | 1024 by 1024 (ms) | Throughput |
 |---|---|---|---|---|
-| `spectral` | 5.3 | 19.3 | 74.1 | ~14 Mpix/s |
-| `hybrid` (default) | 64.6 | 276.6 | 1,238.7 | ~1 Mpix/s |
+| `spectral` | 5.3 | 19.3 | 74.1 | About 14 Mpix/s |
+| `hybrid` (default) | 64.6 | 276.6 | 1,238.7 | About 1 Mpix/s |
 
-**Cost is strongly method-dependent.** `spectral` — a fast threshold-based deterministic pass — runs ~15× faster than the default `hybrid` at 1024² (74 ms vs 1,239 ms): `hybrid` adds a k-means refinement step that improves class boundary quality at the cost of speed. Choose `spectral` when throughput matters; choose `hybrid` when class quality takes priority.
-
----
-
-## How the benchmark works & how to run it
-
-### What it measures
-
-Each function is timed under two independent models:
-
-- **Pure-core** — the raster operation in isolation: open **a single tile**, call the function, measure. It is always one tile per measurement (repeated once for each tile *shape* in the corpus — each tile-size / band-count / dtype / SRID combination), and it ignores `--row-counts` entirely. This is the fairest apples-to-apples view of the algorithm itself, with no Spark or serialization in the path.
-- **Spark-path** — the registered function (`rst_*`) applied to a Spark DataFrame of *N* rows (the only model that uses `--row-counts`). This includes the realistic per-row overhead (UDF dispatch, serialization, Python-worker round-trips for the lightweight tier), and is swept across a **row ladder** (e.g. 10 → 100 → 1,000 → 10,000 rows).
-
-Both models run the function `--warmup` times **untimed** (to absorb cold caches, JIT, and worker spin-up) and then `--measured` times **timed**; the reported figure is the **median over the measured passes**. Locally the defaults are `2` warmup / `5` measured; on a cluster they are `1` / `3` for pure-core and `1` / `1` for spark-path (one full *N*-tile iteration is already substantial).
-
-Alongside timing, every pure-core result carries an **output fingerprint** (per-band statistics) so the two tiers can be checked for **consistency**:
-
-- **exact** — every statistic is bitwise-equal across tiers.
-- **within_tol** — every statistic agrees to a relative tolerance of `1e-3` **or** an absolute tolerance of `1e-3` (the absolute floor handles near-zero values where a relative comparison is meaningless).
-- **divergent** — neither tolerance is met.
-
-The goal of the [one-line tier swap](./execution-tiers#the-one-line-swap) is that results stay consistent; the benchmark is how that guarantee is verified.
-
-:::note
-The benchmark is run **from the GeoBrix source repository** (it uses the repo's `gbx:bench:*` commands and a job notebook). A wheel-only install does not include these tools — the cluster benchmark *submits a job to your own provisioned cluster* from a checkout of the repo.
-:::
-
-### Running on a cluster
-
-Running on a provisioned cluster is the **true comparison**: both tiers execute on the same hardware, against the same corpus, and the full row ladder and larger tiles are within reach. Results append to a `bench_results` Delta table and a `comparison.csv` / `summary.md` land on the configured Volume.
-
-#### Prerequisites
-
-Provision a cluster and stage the artifacts per the [installation guide](../installation):
-
-| Tier | Cluster | Artifacts |
-|---|---|---|
-| Heavyweight (rasterx) | Dedicated · DBR 17.3 / 18 / 19 | The env wheel + the GeoBrix JAR + the bench tests JAR (`geobrix-*-tests.jar`), all as cluster libraries |
-| Lightweight (pyrx) | x86 **or ARM** | The env wheel for the runtime (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3 / 18) |
-
-Then fill in the cluster configuration file (`examples/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
-
-#### Run
-
-```bash
-# Both tiers, same cluster, full row ladder, all functions
-bash scripts/commands/gbx-bench-cluster.sh \
-  --cluster-id <your-cluster-id> \
-  --run-id cluster-2026-06 \
-  --modes both \
-  --row-counts 10,100,1000,10000
-```
-
-Scale the run with the options below. `--cluster-id` and `--run-id` identify the run; the rest are optional. `--row-counts` and `--functions` take a **comma-separated list**; `--modes` and `--set` take a **single value**.
-
-| Option | Purpose |
-|---|---|
-| `--modes pure-core \| spark-path \| both` | Timing model — pick only one mode (default `both`, which runs both models). |
-| `--row-counts 10,100,1000,10000` | Spark-path row ladder — each value is the number of **distinct tiles processed in one timed iteration** (the main scale dimension); one iteration is measured per rung. The largest value must be **≤ the corpus row-pool size** (the bench refuses to under-fill). Default `10,100,1000,10000`. |
-| `--set core \| full` | Which function set to benchmark — the representative `core` set or every benchmarked function (`full`). Default `core`. |
-| `--functions rst_slope,rst_ndvi` | Comma-separated list restricting the run to specific functions; overrides `--set`. Default: unset (benchmarks the `--set`). |
-| `--warmup` / `--measured` | Warmup and measured iteration counts. Defaults: pure-core `1` / `3`, spark-path `1` / `1`. |
-| `--lightweight-only` / `--heavyweight-only` | Run a single tier (mutually exclusive). `--lightweight-only` skips the heavyweight leg, for a cluster with no GeoBrix JAR; `--heavyweight-only` skips the lightweight leg. Default: both tiers run. |
-| `--no-wait` | Submit the job without blocking on completion. Default: waits for the run to finish. |
-
-```bash
-# A cluster with no GeoBrix JAR: lightweight leg only
-bash scripts/commands/gbx-bench-cluster.sh --cluster-id <cluster-id> --lightweight-only
-```
-
-Tile sizes, band counts, data types, and projections are set when the corpus is generated (see the local section's scale knobs); the same corpus is reused for both tiers so the comparison is fair.
-
-:::note
-A spark-path iteration processes `max(--row-counts)` **distinct** tiles drawn from the corpus row pool — it does not recycle a small pool to reach the row count. The largest `--row-counts` value must therefore be **≤ the corpus row-pool size**; if it isn't, the bench **refuses to run** rather than silently under-fill (which would report a row count it never actually processed). Generate a larger pool or lower the row ladder.
-:::
-
-#### Output
-
-- **`bench_results` Delta table** — every measured row (tagged with environment + run ID), so runs accumulate and can be queried/visualized over time.
-- **`summary.md` / `comparison.csv`** on the Volume — the human-readable speedup + consistency report (see [Reading the output](#reading-the-output)), also rendered inline in the run notebook.
-
-### Running locally
-
-The local pipeline runs the heavyweight tier in the `geobrix-dev` Docker container and the lightweight tier in an isolated Python virtual environment, then compares them. Local runs are intentionally **single-tile** for pure-core (the algorithm cost in isolation); the full row ladder and at-scale spark-path numbers belong on a cluster, but can still be exercised in the local Docker environment at a modest scale.
-
-```bash
-# Full local pipeline: generate corpus -> heavyweight -> lightweight -> compare
-bash scripts/commands/gbx-bench-all.sh --run-id local-1 --modes pure-core
-```
-
-The heavyweight and lightweight legs run **one after the other** (never concurrently) so they don't contend for CPU and skew each other's timings. Outputs land in `test-logs/bench/<run-id>/`.
-
-#### Set (core vs full)
-
-`--set` selects **how many functions** the run benchmarks:
-
-- `--set core` (the default) runs a small, representative set covering each function family — accessors, terrain, band math, warps. It's fast and is the right choice for a routine check.
-- `--set full` runs every benchmarked function. It takes longer but gives the complete coverage and parity picture.
-
-:::note
-The **`core`** here is the *function set* (`--set`) — how many functions run. Don't confuse it with **pure-core**, the *timing model* (`--modes`) that times one tile in isolation. They are independent: you can run `--set core --modes pure-core`, `--set full --modes spark-path`, or any other combination.
-:::
-
-An explicit `--functions` list overrides `--set`.
-
-```bash
-# Routine check (default): the representative core set
-bash scripts/commands/gbx-bench-all.sh --modes pure-core
-
-# Complete coverage: every benchmarked function
-bash scripts/commands/gbx-bench-all.sh --set full --modes pure-core
-```
-
-Scale and shape the corpus with the options below. Each takes a **comma-separated list to sweep several values** (e.g. `--tile-px 256,512,1024`) **or a single value** (e.g. `--tile-px 1024`); the corpus is the combination across the options you set.
-
-| Option | Purpose |
-|---|---|
-| `--tile-px 256,512,1024,2048` | Tile sizes (pixels per side) — any size; larger tiles (1024², 2048², …) make the per-tile algorithm cost dominate the fixed overhead. Default `256,512`. |
-| `--bands 1,4` | Band counts — any positive integer count. Default `2`. |
-| `--dtypes uint8,int16,float32` | Pixel data types — these three are the full supported set (closed; other dtypes are not generated). Default `float32`. |
-| `--srids 4326,3857,32618,27700` | Projections — the full supported set (closed): `4326` (WGS84 geographic), `3857` (WebMercator), `32618` (UTM 18N), `27700` (British National Grid); other SRIDs are not generated. Default `4326,32618`. Pick at least one geographic (lat/long) **and** one projected (metre) CRS to exercise both. |
-| `--nodata-frac 0.0,0.25` | Fraction of pixels set to NoData — **any value in `0.0`–`1.0`** (0% to 100%; continuous, not a fixed set). Default `0.0`. Pass a comma-separated list to sweep several fractions. |
-| `--row-counts 10,100,1000,10000` | Spark-path row ladder — each value is the number of **distinct tiles processed in one timed iteration** (the scale dimension); the bench measures one iteration per rung. The largest value must be **≤ the corpus row-pool size** (the bench refuses to under-fill). Default `2,4` (laptop-modest); run the full ladder on a cluster. |
-| `--modes pure-core \| spark-path \| both` | Timing model — pick only one mode. Default `both` (runs both models). |
-| `--warmup` / `--measured` | Untimed warmup passes / timed passes per measurement (median of the timed passes is reported). Defaults `2` / `5` locally. |
-
-The individual stages are also available as standalone commands — `gbx:bench:gen-data`, `gbx:bench:heavyweight`, `gbx:bench:lightweight`, and `gbx:bench:compare` — if you want to regenerate just one part of the pipeline.
-
-### Reading the output
-
-The comparison `summary.md` opens with **insights** — the biggest wins and a consistency tally (e.g. *7 compared cells: 0 exact, 7 within-tol, 0 divergent*) and the tile scale (*1,000 tiles/iteration, spark-path — every tile processed each timed iteration*) — followed by a per-function table. For a spark-path run it looks like:
-
-| fn | hw_iter_s | lw_iter_s | hw_per_tile_s | lw_per_tile_s | speedup | consistency |
-|---|---|---|---|---|---|---|
-| `rst_dtmfromgeoms_agg` | 175.10 | 9.94 | 0.17510 | 0.00994 | 17.61 | within_tol |
-| `rst_slope` | 7.31 | 7.57 | 0.00731 | 0.00757 | 0.97 | timing-only |
-| `rst_proximity` | 0.52 | 8.12 | 0.00052 | 0.00812 | 0.06 | timing-only |
-
-- **`hw_iter_s` / `lw_iter_s`** are the median wall-clock of **one full iteration over all *N* tiles** (the whole distributed job). **`hw_per_tile_s` / `lw_per_tile_s`** are that ÷ *N* — the amortized per-tile cost. (A pure-core summary uses `hw_ms` / `lw_ms` and `hw_mpix/s` / `lw_mpix/s` for the single-tile algorithm cost instead.)
-- **`speedup`** is `heavy / light` — greater than 1 means the lightweight tier is faster.
-- **`consistency`** is the `exact` / `within_tol` / `divergent` label defined above (`timing-only` where the output can't be fingerprinted for a direct comparison — readers, metadata accessors, and most non-aggregator spark-path cells). Per-cell deltas are in `comparison.csv` (the `max_rel_delta` column).
-
-A per-engine summary is also written for each tier (`heavyweight.summary.md`, `lightweight.summary.md`) with that tier's own timing and throughput in isolation.
+`spectral` is a fast threshold pass. It runs about 15x faster than the default `hybrid` at 1024 by 1024. `hybrid` adds a k-means refinement that improves class boundaries. Choose `spectral` for throughput and `hybrid` for class quality.
 
 ## Caveats
 
-- Absolute timings depend on the machine, the corpus, and the tier's install; treat the **relative** speedup and the **consistency** outcome as the durable signal, not the millisecond values.
-- The two tables answer different questions. **Pure-core** isolates the algorithm and is where the lightweight tier's biggest wins show; **spark-path at scale** adds the per-row UDF and serialization overhead and is the better predictor of end-to-end job cost — and the better place to decide which tier to run a given operation on.
-- Consistency is checked on output statistics with tolerance, not byte-equality: GDAL and NumPy can differ in the last bits, and neighborhood / NoData-boundary operations legitimately differ on the one-pixel kernel border or in how masked pixels propagate. The benchmark surfaces those as `divergent` so they're visible, not hidden.
+- Absolute timings depend on the machine, the corpus and the install. Treat the ratio and the consistency label as the durable signal.
+- Pure-core isolates the algorithm. Spark-path adds the per-row overhead of the level and predicts end-to-end job cost better. Use spark-path to decide which level a workload should run at.
+- Consistency is checked on output statistics with a tolerance, not on bytes. GDAL and NumPy can differ in the last bits. Neighborhood and NoData-boundary operations can differ on the one-pixel kernel border. The benchmark labels those `divergent` so they stay visible.

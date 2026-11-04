@@ -45,7 +45,7 @@ import com.databricks.labs.gbx.gridx.bng.{functions => bx}
 //   from databricks.labs.gbx import register; register(spark)
 
 // Use functions
-val df = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000)")
+val df = spark.sql("SELECT gbx_bng_cellarea('TQ3080')")
 """.trim
 
   val RegisterVectorX: String =
@@ -135,8 +135,8 @@ import org.apache.spark.sql.functions._
 // Registration is a Python step:
 //   from databricks.labs.gbx import register; register(spark)
 
-// Calculate cell area
-val area = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area_sqm")
+// Calculate cell area (square kilometres)
+val area = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2")
 area.show()
 
 // Convert points to BNG cells (point as WKT; GeoBrix does not accept st_point)
@@ -189,7 +189,7 @@ df: DataFrame with bbox column from tile
 
   val RegisterGridX_output: String =
     """
-df: DataFrame with area_sqm (e.g. 1000000.0)
+df: DataFrame with area_km2 (e.g. 1.0)
 """.trim
 
   val RegisterVectorX_output: String =
@@ -223,9 +223,9 @@ Table raster_catalog created with path, bbox, width, height, bands, metadata
   val GridXBNGFunctions_output: String =
     """
 +---------+
-|area_sqm |
+|area_km2 |
 +---------+
-|1000000.0|
+|1.0      |
 +---------+
 
 +-----------+----------+

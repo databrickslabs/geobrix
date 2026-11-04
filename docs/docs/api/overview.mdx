@@ -165,7 +165,7 @@ Pass `only=` to register a few functions. GeoBrix still picks the implementation
 
 ### SQL
 
-SQL functions are registered via Python or Scala. Once registered, they are available in any SQL context:
+Call `gbx.register(spark)` from Python to register the SQL functions. Scala registers no SQL names; the Scala wrappers call the registered names. A JVM job can call them too: see [SQL from a JVM job](/docs/installation#jvm-sql). Once registered, the functions are available in any SQL context:
 
 <CodeFromTest code={overviewExamples} functionName="SQL_SHOW_FUNCTIONS" language="sql" source="docs/tests/python/api/overview.py" testFile="docs/tests/python/api/test_overview.py" outputConstant="SQL_SHOW_FUNCTIONS_output" />
 

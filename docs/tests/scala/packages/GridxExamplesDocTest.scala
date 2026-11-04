@@ -51,12 +51,12 @@ class GridxExamplesDocTest extends AnyFunSuite with BeforeAndAfterAll {
         TestL1.installAll(spark)
 
         // Calculate cell area (from docs example)
-        val areaDf = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area")
+        val areaDf = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area")
         areaDf.show()
 
         val result = areaDf.collect()
         result.length should be(1)
-        result(0).getAs[Double]("area") should be > 0.0
+        result(0).getAs[Double]("area") should be(1.0 +- 1e-9)
 
         // Note: The .toDF pattern in documentation requires user's implicit imports
         // We verify the function registration works which is the key pattern

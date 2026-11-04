@@ -68,7 +68,7 @@ def import_pattern_gridx(spark):
     gbx.register(spark)
     
     # Use functions (gbx_bng_cellarea returns square kilometres)
-    df = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area_km2")
+    df = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2")
     df.show()
     return df
 
@@ -215,7 +215,7 @@ def bng_cellarea_example(spark):
     gbx.register(spark)
     
     # Calculate cell area (result in km²)
-    area = spark.sql("SELECT gbx_bng_cellarea('TQ', 1000) as area_km2")
+    area = spark.sql("SELECT gbx_bng_cellarea('TQ3080') as area_km2")
     area.show()
     return area
 

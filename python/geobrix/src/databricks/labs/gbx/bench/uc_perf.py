@@ -783,8 +783,8 @@ def _m6(c: Ctx) -> Unit:
             Leg(
                 "c_c3",
                 f"SELECT count(*), sum(length(u)) FROM (SELECT cellid, CASE WHEN bool_or(core) THEN "
-                f"st_asbinary(st_geomfromewkb({c.q}.gbx_bng_aswkb(cellid))) "
-                f"ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS u FROM {chips} GROUP BY cellid)",
+                f"st_asewkb(st_geomfromewkb({c.q}.gbx_bng_aswkb(cellid))) "
+                f"ELSE st_asewkb(st_union_agg(st_geomfromewkb(chip))) END AS u FROM {chips} GROUP BY cellid)",
             ),
             Leg(
                 "c_fold",
@@ -1090,7 +1090,7 @@ def _m13(c: Ctx) -> Unit:
     ]
     pyramid = (
         f"SELECT p.z, p.x, p.y, p.mvt_bytes FROM {feats} s, "
-        f"LATERAL {c.q}.gbx_st_asmvt_pyramid(st_asbinary(s.geom), to_json(s.attrs), 0, 10, 'layer', 4096) AS p"
+        f"LATERAL {c.q}.gbx_st_asmvt_pyramid(s.geom, to_json(s.attrs), 0, 10, 'layer', 4096) AS p"
     )
     # the CALL and the private finalize routine exist only where install(procedures=True) created them: the gate reads
     # the procedures the run installed (`Ctx.procedures`), not the ones this wheel defines

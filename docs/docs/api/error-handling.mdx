@@ -222,7 +222,7 @@ A Unity Catalog function follows a stricter rule than the session function. It c
 - **Non-conforming input is refused with a `Fix:`.** Examples are a geometry with the wrong SRID, a CRS form UC does not accept, and a `BINARY` value where a `GEOMETRY` belongs. The error names the session function to use.
 - **Parameters are checked first.** A bad `mode`, `coverage`, resolution, zoom or `k` raises with a `Fix:`.
 
-Unity Catalog gives `NULL` where the session raises for a data limit. For example, `gbx_quadbin_polyfill` of a geometry over 1,000,000 cells raises in a session and gives `NULL` on UC. See [Unity Catalog functions](./uc-functions).
+A Unity Catalog function refuses a result over its size limit with a `Fix:`. For example, `gbx_quadbin_polyfill` of a geometry over 1,000,000 cells raises in a session. On UC it is refused, and the `Fix:` says to use a lower zoom. See [Unity Catalog functions](./uc-functions).
 
 ## Catching degraded rows
 

@@ -1010,7 +1010,7 @@ def custom_polyfill(geom, grid, resolution):
         Exception
     ):  # noqa: BLE001 - the resolution is checked above: a geometry that cannot be filled is NULL
         return None
-    _check_array(fn, len(cells))
+    _check_array(fn, len(cells), "the cells of the geometry", lower=_FILL_LOWER)
     return cells
 
 

@@ -6,7 +6,10 @@ a mechanism of its own, and the bytes a UC result carries.
 import pytest
 import shapely
 
-from databricks.labs.gbx.bench.oracles import UcGeometry
+from databricks.labs.gbx.bench.oracle_tables import (  # noqa: F401 - registers the builders
+    grid_scalar,
+)
+from databricks.labs.gbx.bench.oracles import BUILDERS, UcGeometry
 from databricks.labs.gbx.uc import handlers
 
 QB_C = 5233961839712272383  # tile (163, 395) at zoom 10
@@ -59,6 +62,11 @@ ARRAY_HANDLERS = [  # (handler, arguments, the session function a Fix names)
         "gbx_bng_tessellate",
     ),
     (handlers.h3_geomkring, (_geom(H3_POINT.wkt, 4326), 8, 2), "gbx_h3_geomkring"),
+    (
+        handlers.custom_polyfill,
+        (_geom(BNG_SQ.wkt, 27700), BUILDERS["custom_grid_27700"](None), 0),
+        "gbx_custom_polyfill",
+    ),
     (handlers.quadbin_polyfill, (_geom(QB_SQUARE, 4326), 10), "gbx_quadbin_polyfill"),
     (
         handlers.quadbin_tessellate,
@@ -79,8 +87,13 @@ def test_every_grid_array_handler_refuses_a_result_over_the_cap_and_never_trunca
     whole = handler(*args)
     assert whole and len(whole) > 2
     monkeypatch.setattr(handlers, "_array_cap", lambda: 2 * handlers.ARRAY_ITEM_BYTES)
-    with pytest.raises(ValueError, match=rf"over the .*Fix: .*{fn}"):
+    with pytest.raises(ValueError, match=rf"over the .*Fix: .*{fn}") as err:
         handler(*args)
+    # a fill of a geometry names the geometry's size as the thing to lower, not k
+    if "polyfill" in fn:
+        assert "lower k" not in str(err.value) and "coarser resolution" in str(
+            err.value
+        )
     monkeypatch.undo()
     assert handler(*args) == whole
 

@@ -3390,7 +3390,7 @@ def test_register_sources_registers_the_named_formats_and_refuses_an_unknown_one
         "gtiff_gbx",
     ]
     assert _Spark.dataSource.registered == ["raster_gbx", "gtiff_gbx"]
-    with pytest.raises(ValueError, match="raster_gpx"):
+    with pytest.raises(ValueError, match=r"raster_gpx.*did you mean: .*raster_gbx"):
         manager.register_sources(_Spark, only=["raster_gpx"])
     assert manager.register_sources(_Spark, only=[]) == []
     assert {s.name() for s in manifest.datasource_classes()} >= {

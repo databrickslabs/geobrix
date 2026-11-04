@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conftest import REPO_ROOT
+from conftest import REPO_ROOT, gbx_packages
 
 TEST_ROOT = REPO_ROOT / "python" / "geobrix" / "test"
 PARITY_RE = re.compile(r"python3 -m pytest /root/geobrix/(\S+) ")
@@ -293,10 +293,21 @@ def test_scala_runs_pass_a_utf8_locale_to_the_container(sandbox):
         for c, e in zip(sandbox.execs(), sandbox.exec_envs())
         if "mvn test" in c[-1]
     ]
-    assert len(maven) == 1 + 6  # the single run, then one per package
+    assert len(maven) == 1 + len(gbx_packages())  # the single run, then one per package
     # The JVM derives sun.jnu.encoding from the locale; without one, non-ASCII file names
     # cannot be encoded and the tests that use them are cancelled.
     assert all(e.get("LC_ALL") == "C.UTF-8" for _, e in maven), [e for _, e in maven]
+
+
+def test_the_scala_package_list_is_one_list_in_the_scripts_and_the_ci_matrices():
+    # A package added or dropped in one place and not the others leaves a package untested in CI
+    # (or a matrix shard with no tests); the scripts and both Scala matrices name the same set.
+    packages = gbx_packages("gbx-test-scala.sh")
+    assert gbx_packages("gbx-coverage-scala.sh") == packages
+    for wf in ("build_scala_by_package.yml", "codecov-scala-parallel.yml"):
+        text = (REPO_ROOT / ".github" / "workflows" / wf).read_text()
+        matrix = re.search(r"^\s*package: \[([^\]]+)\]", text, re.M).group(1)
+        assert [p.strip() for p in matrix.split(",")] == packages, wf
 
 
 @pytest.mark.parametrize(
@@ -493,8 +504,10 @@ def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
     assert "GBX_NATIVE_ROOT" not in maven_env()
     # the per-package loop passes it to every Maven run
     sandbox.run("gbx-test-scala.sh", "--by-package", GBX_NATIVE_ROOT="build/env-wheel/env6/payload")
-    by_package = [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "mvn test" in c[-1]][-6:]
-    assert [e.get("GBX_NATIVE_ROOT") for e in by_package] == ["/root/geobrix/build/env-wheel/env6/payload"] * 6
+    by_package = [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "mvn test" in c[-1]][-len(gbx_packages()) :]
+    assert [e.get("GBX_NATIVE_ROOT") for e in by_package] == ["/root/geobrix/build/env-wheel/env6/payload"] * len(
+        gbx_packages()
+    )
 
 
 def _markers_of_calls(log):

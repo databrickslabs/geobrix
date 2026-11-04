@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -23,6 +24,12 @@ from types import SimpleNamespace
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def gbx_packages(script: str = "gbx-test-scala.sh") -> list:
+    """The Scala packages a by-package run loops over, read from the script's own GBX_PACKAGES."""
+    text = (REPO_ROOT / "scripts" / "commands" / script).read_text()
+    return re.search(r'^GBX_PACKAGES="([^"]+)"', text, re.M).group(1).split()
 TEST_REPO = "gbx-test/none"
 
 

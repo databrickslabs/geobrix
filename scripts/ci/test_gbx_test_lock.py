@@ -21,7 +21,7 @@ import time
 from pathlib import Path
 
 import pytest
-from conftest import REPO_ROOT
+from conftest import REPO_ROOT, gbx_packages
 
 DEMO = """#!/bin/bash
 # A trivial locked command: take the lock, record start/end, hold for --hold seconds.
@@ -539,19 +539,24 @@ def test_a_signalled_waiter_exits_with_its_signals_status_and_cleans_up(
 ):
     # Waiting for the lock, the script stops its container-side helper and removes its status dir
     # (under $TMPDIR), and exits 128 + the signal number, not a fixed 143.
+    # Generous bounds, because a loaded CI host (or a full-suite run) stretches process start-up and
+    # teardown from well under a second to tens of seconds. The first run holds the lock far longer
+    # than any wait here, so the waiter is still waiting when it is signalled. A real hang still
+    # fails: the waiter never exits (the 120 s bound), or the first holder's lock runs out and the
+    # waiter completes with status 0 instead of the signal's.
     scratch = tmp_path / "tmp"
     scratch.mkdir()
-    first = demo.popen("lockdemo.sh", "--hold", "30")
-    _wait_for(lambda: "start" in _events(demo))
+    first = demo.popen("lockdemo.sh", "--hold", "300")
+    _wait_for(lambda: "start" in _events(demo), timeout=60)
     second = demo.popen("lockdemo.sh", TMPDIR=str(scratch))
-    _wait_for(lambda: len(_holds(demo)) == 2)  # the second one is waiting
+    _wait_for(lambda: len(_holds(demo)) == 2, timeout=60)  # the second one is waiting
 
     second.send_signal(sig)
-    second.communicate(timeout=30)
+    second.communicate(timeout=120)
 
     assert second.returncode == code
     assert list(scratch.glob("gbx-lock.*")) == []
-    _wait_for(lambda: len(_holds(demo)) == 1)  # its helper went with it
+    _wait_for(lambda: len(_holds(demo)) == 1, timeout=60)  # its helper went with it
     first.kill()
     first.communicate()
 
@@ -928,7 +933,7 @@ def test_coverage_by_package_sends_each_maven_run_through_the_work_lock(sandbox)
     sandbox.run("gbx-coverage-scala.sh", "--by-package")
 
     maven = [c for c in sandbox.execs() if "scoverage:test" in c[-1]]
-    assert len(maven) >= 6  # one per package
+    assert len(maven) >= len(gbx_packages("gbx-coverage-scala.sh"))  # one per package
     assert all(_under_work_lock(c) for c in maven), maven
 
 

@@ -106,17 +106,25 @@ if [ -n "${GBX_NATIVE_ROOT:-}" ] || [ -d "$NATIVE_ROOT_DIR/_native" ]; then
 fi
 gbx_native_env_args
 
-# The same docker exec environment for the --needs probe and the timed pass.
+# The same docker exec environment for the --needs probe and the timed pass. Both run through $LOCK_PREFIX: the work
+# lock in a real run (the lock is taken first, so a held lock refuses before anything reaches the container); empty in a
+# --dry-run, which takes no lock and runs only the read-only probe.
 # GBX_NATIVE_PTH=0: the image's startup .pth puts /opt/gbx-native's rasterio ahead of the payload's, while the per-open
 # sidecar mode (pyrx readdir_option) reaches the payload's libgdal: the two differ and the mode is silently off.
 timing_exec() {
     docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src -e GBX_NATIVE_PTH=0 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
-        "$GBX_DEV_CONTAINER" "$@"
+        "$GBX_DEV_CONTAINER" $LOCK_PREFIX "$@"
 }
+LOCK_PREFIX=""
+if [ "$DRY_RUN" != true ]; then
+    gbx_acquire_test_lock
+    LOCK_PREFIX="$GBX_LOCK_RUN"
+fi
 
-# What the set's forms need (the module knows: an L1/L2 form the JAR, the L3 d form the Rust payload). Read-only, so
-# before the lock. An unknown set ends here with the module's own usage error (exit 2). A probe that fails otherwise
-# (the module does not import, the container is broken) is a broken pass, exit 3, not a missing precondition.
+# What the set's forms need (the module knows: an L1/L2 form the JAR, the L3 d form the Rust payload). Read-only (it
+# runs no Maven or pytest), so a --dry-run takes no lock for it. An unknown set ends here with the module's own usage
+# error (exit 2). A probe that fails otherwise (the module does not import, the container is broken) is a broken pass,
+# exit 3, not a missing precondition.
 NEEDS=$(timing_exec python3 -m databricks.labs.gbx.bench.local_timing --set "$SET" --needs)
 PROBE_RC=$?
 if [ $PROBE_RC -eq 2 ]; then
@@ -154,11 +162,10 @@ if [ "$DRY_RUN" = true ]; then
     echo -e "${GREEN}Dry run: the preconditions for the $SET set hold; no lock taken, no pass run.${NC}"
     exit 0
 fi
-gbx_acquire_test_lock
 check_preconditions
 
 echo -e "${CYAN}Timing the $SET forms on local[8] in $GBX_DEV_CONTAINER (a few minutes)...${NC}"
-timing_exec $GBX_LOCK_RUN /bin/bash -c "$CMD"
+timing_exec /bin/bash -c "$CMD"
 EXIT=$?
 
 if [ $EXIT -eq 0 ]; then

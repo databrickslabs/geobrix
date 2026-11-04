@@ -70,4 +70,5 @@ def test_uc_install_snippet_previews_its_statements():
 
     assert "gbx.uc.install(" in verify_installation.UC_INSTALL_PYTHON
     stmts = gbx.uc.install("main", "geobrix", "/Volumes/main/geobrix/artifacts/env6", dry_run=True)
-    assert stmts and all("main" in s for s in stmts[:1])
+    prefix = "CREATE OR REPLACE FUNCTION `main`.`geobrix`."
+    assert stmts and all(s.startswith(prefix) for s in stmts)  # every statement targets main.geobrix

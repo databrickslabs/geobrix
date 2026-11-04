@@ -49,12 +49,12 @@ def test_no_product_python_runs_a_scala_registrar():
 def test_no_docs_or_example_calls_a_removed_registrar():
     import subprocess
 
-    out = subprocess.run(
+    run = subprocess.run(
         [
             "git",
             "grep",
             "-nP",
-            r"register_ds|\b(rx|bx|qx|cx|hx|vx|pmx|prx|pgx|pvx|functions)\.register\(",
+            r"register_ds|\b(rx|bx|gx|qx|cx|hx|vx|pmx|prx|pgx|pvx|rx_api|h3_api|functions)\.register\(",
             "--",
             "docs/docs",
             "docs/tests",
@@ -63,5 +63,7 @@ def test_no_docs_or_example_calls_a_removed_registrar():
         cwd=REPO,
         capture_output=True,
         text=True,
-    ).stdout
-    assert out == "", out
+    )
+    # git grep exits 0 on a hit and 1 on none; anything else is git failing, not a clean tree
+    assert run.returncode in (0, 1), run.stderr
+    assert run.stdout == "", run.stdout

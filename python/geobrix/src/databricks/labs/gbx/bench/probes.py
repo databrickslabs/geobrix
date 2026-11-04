@@ -739,9 +739,9 @@ def _proc_pixels(blob) -> list:
     """The pixels of a GeoTIFF as nested lists (None for no bytes): two tiles are the same when their pixels are."""
     if blob is None:
         return None
-    from rasterio.io import MemoryFile
+    from databricks.labs.gbx._gdal_policy import open_bytes
 
-    with MemoryFile(bytes(blob)) as mf, mf.open() as ds:
+    with open_bytes(bytes(blob)) as ds:
         return [[_proc_norm(float(x)) for x in row] for row in ds.read(1).tolist()]
 
 
@@ -939,6 +939,7 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
 
     Each table is added to ``tables`` (when given) before it is created, so a failure part-way still drops it.
     """
+    from databricks.labs.gbx.bench.clientcap import client_dataframe
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     tiles, zone_bytes = _proc_tile_inputs()
@@ -957,13 +958,18 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
                 tables.append(t(name))
 
     made("mos_src", "mos_tgt", "zs_tiles", "zs_zones", "zs_tgt")
-    spark.createDataFrame(
-        tiles, "tile_key string, tile " + V2_TILE_SCHEMA.simpleString()
+    client_dataframe(
+        spark,
+        tiles,
+        "tile_key string, tile " + V2_TILE_SCHEMA.simpleString(),
+        what="mosaic tile input",
     ).write.mode("overwrite").saveAsTable(t("mos_src").replace("`", ""))
     spark.sql(f"DROP TABLE IF EXISTS {t('mos_tgt')}")
-    spark.createDataFrame(
+    client_dataframe(
+        spark,
         zone_tile,
         "tile_id int, tile " + V2_TILE_SCHEMA.simpleString() + ", bbox_wkt string",
+        what="zonal tile input",
     ).createOrReplaceTempView("gbxproc_tiles_tmp")
     spark.sql(
         f"CREATE OR REPLACE TABLE {t('zs_tiles')} AS SELECT tile_id, tile, st_geomfromwkt(bbox_wkt, 3857) AS bbox "
@@ -1007,6 +1013,7 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
 
 def _proc_h3_reference(spark, source: str) -> list:
     """The session flow of the H3 surface: the session cell-fill aggregate, then the session rasterize aggregate."""
+    from databricks.labs.gbx.bench.clientcap import client_dataframe
     from databricks.labs.gbx.pygx import _cellfill
 
     cells = f"SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM {source} GROUP BY 1"
@@ -1014,8 +1021,8 @@ def _proc_h3_reference(spark, source: str) -> list:
         f"SELECT gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) FROM ({cells})"
     ).first()[0]
     filled = _cellfill.decode(bytes(payload))
-    spark.createDataFrame(
-        filled, "cellid bigint, value double"
+    client_dataframe(
+        spark, filled, "cellid bigint, value double", what="H3 filled cells"
     ).createOrReplaceTempView("gbxproc_h3_filled")
     nulls = (
         ", ".join(["CAST(NULL AS DOUBLE)"] * 5)

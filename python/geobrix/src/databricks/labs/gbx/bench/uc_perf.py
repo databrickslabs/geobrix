@@ -1199,12 +1199,13 @@ def _write_gradient(path: str, side: int, bands: int = 1) -> int:
     """A ZSTD GeoTIFF of ``side`` x ``side`` x ``bands`` Float32 (a gradient, so the file is small and the decode is not),
     written a block row at a time; the file's size."""
     import numpy as np
-    import rasterio
     from rasterio.transform import from_origin
     from rasterio.windows import Window
 
+    from databricks.labs.gbx._gdal_policy import open_data
+
     block = min(512, side)
-    with rasterio.open(
+    with open_data(
         path + ".part",
         "w",
         driver="GTiff",

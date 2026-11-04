@@ -697,7 +697,7 @@ def test_uc_ddl_contract(fn):
         assert f"RETURNS TABLE ({', '.join(f'{n} {t}' for n, t in fn.columns)})" in tvf
         call = f"`cat`.`sch`.{over}({', '.join(p.name for p in fn.params)})"
         # one row per struct element (`inline`), or per single value in the table's one column (`explode`)
-        if (
+        if ddl.sql_type(
             MAN.private[tvf_inner(fn)].returns
             if tvf_inner(fn) in MAN.private
             else MAN.functions[tvf_inner(fn)].returns_uc
@@ -944,7 +944,7 @@ def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
     ) == sum(  # every UC row ran: the scalars, and the table function's handler
         "uc" in c.surfaces for c in oracles.MVP_S
     ) + sum(
-        "uc" in c.surfaces and c.fn == oracles.TE for c in oracles.MVP_G
+        "uc" in c.surfaces and c.fn in (oracles.TE, oracles.RT) for c in oracles.MVP_G
     )
 
 

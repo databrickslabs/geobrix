@@ -2469,19 +2469,20 @@ Covering mode uses a **positive-area overlap** rule. All three grids share it: `
 ### rst_maketiles
 
 {/* BEGIN GENERATED gbx_rst_maketiles: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_maketiles(tile, size_in_mb)` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_maketiles(tile, size_in_mb)` | rows |
 | Python | `rasterx.functions.rst_maketiles(df, tile, size_in_mb)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `size_in_mb` | `INT` |  | The most megabytes one tile may hold. The tile is cut into a 2^k by 2^k grid (1, 4, 16 ... at most 256 tiles) until each part fits; 0 or less does not cut. A fraction is cut to a whole number. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `size_in_mb` | `INT` | `INT` |  | The most megabytes one tile may hold. The tile is cut into a 2^k by 2^k grid (1, 4, 16 ... at most 256 tiles) until each part fits; 0 or less does not cut. A fraction is cut to a whole number. |
 {/* END GENERATED gbx_rst_maketiles */}
 
 <Impl udtf/>
@@ -2586,20 +2587,21 @@ Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (
 ### rst_retile
 
 {/* BEGIN GENERATED gbx_rst_retile: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_retile(tile, tile_width, tile_height)` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_retile(tile, tile_width, tile_height)` | rows |
 | Python | `rasterx.functions.rst_retile(df, tile, tile_width, tile_height)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `tile_width` | `INT` |  | The sub-tile width in pixels. |
-| `tile_height` | `INT` |  | The sub-tile height in pixels. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `tile_width` | `INT` | `INT` |  | The sub-tile width in pixels. |
+| `tile_height` | `INT` | `INT` |  | The sub-tile height in pixels. |
 {/* END GENERATED gbx_rst_retile */}
 
 <Impl udtf/>
@@ -2622,18 +2624,19 @@ Retile to uniform dimensions.
 ### rst_separatebands
 
 {/* BEGIN GENERATED gbx_rst_separatebands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_separatebands(tile)` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_separatebands(tile)` | rows |
 | Python | `rasterx.functions.rst_separatebands(df, tile)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
 {/* END GENERATED gbx_rst_separatebands */}
 
 <Impl udtf/>
@@ -2657,21 +2660,22 @@ Split multi-band into array of bands.
 ### rst_tooverlappingtiles
 
 {/* BEGIN GENERATED gbx_rst_tooverlappingtiles: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap)` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_tooverlappingtiles(tile, tile_width, tile_height, overlap)` | rows |
 | Python | `rasterx.functions.rst_tooverlappingtiles(df, tile, tile_width, tile_height, overlap)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `tile_width` | `INT` |  | The width of each tile in pixels, above 0. |
-| `tile_height` | `INT` |  | The height of each tile in pixels, above 0. |
-| `overlap` | `INT` |  | The overlap as a percentage of the tile size, from 0 to below 100. Each edge overlaps by the tile size times this, rounded up. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `tile_width` | `INT` | `INT` |  | The width of each tile in pixels, above 0. |
+| `tile_height` | `INT` | `INT` |  | The height of each tile in pixels, above 0. |
+| `overlap` | `INT` | `INT` |  | The overlap as a percentage of the tile size, from 0 to below 100. Each edge overlaps by the tile size times this, rounded up. |
 {/* END GENERATED gbx_rst_tooverlappingtiles */}
 
 <Impl udtf/>

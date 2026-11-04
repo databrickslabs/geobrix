@@ -837,7 +837,7 @@ MVP_G: Tuple[Case, ...] = (
         (Build("tile_4326"), 32, 32),
         "windows",
         [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
-        ("session",),
+        ("session", "uc"),
     ),
     # Two tiles of one size that differ in one pixel, in ONE task: each gets its own windows. A shape that keeps
     # the last tile's dataset open for the next call must tell them apart by their bytes, and the edit sits
@@ -871,7 +871,7 @@ MVP_G: Tuple[Case, ...] = (
         (Build("tile_4326"), 0, 32),
         "raises",
         "tile_width",
-        ("session",),
+        ("session", "uc"),
     ),
     # A NULL window size is data: the same one error tile on every level that judges errors, never a bare exception.
     Case(
@@ -883,7 +883,7 @@ MVP_G: Tuple[Case, ...] = (
         ("session",),
     ),
     # A NULL tile has nothing to split: no rows, as explode(NULL) gives.
-    Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session",)),
+    Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session", "uc")),
     # An error tile in comes out as the same error tile (the upstream reason survives); a tile that
     # cannot be read is one error tile, never a failed task.
     Case(
@@ -892,7 +892,7 @@ MVP_G: Tuple[Case, ...] = (
         (Build("tile_error"), 32, 32),
         "error_tile",
         UPSTREAM_ERROR,
-        ("session",),
+        ("session", "uc"),
     ),
     Case(
         "rt_corrupt",
@@ -901,6 +901,48 @@ MVP_G: Tuple[Case, ...] = (
         "error_tile",
         None,
         ("session",),
+    ),
+    # Unity Catalog: a function with no error tile gives NULL (no rows) for a tile or a size it cannot use, refuses a virtual
+    # tile, an input decoded over the cap and a result the window arithmetic says cannot fit (no window is cut for it).
+    Case(
+        "uc_rt_corrupt_null",
+        RT,
+        (Build("tile_corrupt"), 32, 32),
+        "no_rows",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_null_window",
+        RT,
+        (Build("tile_4326"), None, 32),
+        "no_rows",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_virtual_refused",
+        RT,
+        (Build("tile_virtual"), 32, 32),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_input_over_cap_refused",
+        RT,
+        (Build("rg_over_cap"), 512, 512),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_rt_result_over_cap_refused",
+        RT,
+        (Build("rg_big"), 1, 1),
+        "uc_refused",
+        None,
+        ("uc",),
     ),
     *_TE,
     # The array form returns the same chips as one value (a session function: UC reaches it through the TVF).

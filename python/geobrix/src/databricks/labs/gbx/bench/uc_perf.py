@@ -945,11 +945,44 @@ def _installed_procedures(
 _CLIP_BOX = "POLYGON((500100 4999900, 500400 4999900, 500400 4999600, 500100 4999600, 500100 4999900))"
 
 
+def _m10_retile_probe(c: Ctx, u: Unit) -> Optional[str]:
+    """Create the probe copy of the retile routine with the decode cap raised (``forms.rst_retile_tiles_probe``) and return
+    its qualified name; None, with the reason in ``u.skipped``, when the wheel has no retile routine. A product function
+    refuses a tile decoded over 64 MiB, so a timing at 128 or 256 MiB can only be taken on a probe copy; the copy is a
+    ``gbx_mvp_perf_`` routine that is dropped at the end, never over the product's."""
+    from databricks.labs.gbx.uc import ddl
+
+    private = c.man.private.get("gbx__rst_retile_tiles")
+    if private is None:
+        u.skipped["retile_raised"] = (
+            "needs the private routine gbx__rst_retile_tiles (not in this wheel)"
+        )
+        return None
+    pf = dataclasses.replace(
+        private,
+        name=f"{PERF}retile_tiles",
+        handler="databricks.labs.gbx.uc.forms:rst_retile_tiles_probe",
+        summary="Probe: gbx_rst_retile with the decode cap raised, to time what the product function refuses.",
+    )
+    sql = ddl.private_ddl(
+        pf, c.catalog, c.schema, c.wheel_uri, c.man.uc_dependencies, c.version
+    )
+    u.setup.append(("create_retile_raised", sql))
+    u.drops += _drops_for([sql])
+    return f"{c.q}.{pf.name}"
+
+
 def _m10(c: Ctx) -> Unit:
     u = Unit(
         "m10",
         "decode cap: a header read, a clip and a window read (retile) on tiles of 16, 64 and 256 MiB decoded",
     )
+    raised = None
+    have_retile = not _has_uc(c, "gbx_rst_retile")
+    if have_retile:
+        raised = _m10_retile_probe(c, u)
+    else:
+        u.skipped["retile"] = "needs gbx_rst_retile (no UC form in this wheel yet)"
     for mib in _tail(c, "m10"):
         t = f"({_tile_select(c, f'perf_{mib}MiB.tif')})"
         u.legs += [
@@ -959,15 +992,22 @@ def _m10(c: Ctx) -> Unit:
                 f"SELECT length({c.q}.gbx_rst_clip(tile, CAST(st_geomfromwkt('{_CLIP_BOX}', 32633) AS GEOMETRY(ANY)), true).raster) FROM {t}",
             ),
         ]
-        if not _has_uc(c, "gbx_rst_retile"):
+        if have_retile:
+            # the product function: a refusal is a result above the cap (and where its estimate of the array lands)
             u.legs.append(
                 Leg(
                     f"retile_{mib}mib",
                     f"SELECT count(*), sum(length(r.raster)) FROM {t} s, LATERAL {c.q}.gbx_rst_retile(s.tile, 512, 512) AS r",
                 )
             )
-        else:
-            u.skipped["retile"] = "needs gbx_rst_retile (no UC form in this wheel yet)"
+        if raised is not None:
+            # the same retile with the cap raised: the cost of the window reads themselves
+            u.legs.append(
+                Leg(
+                    f"retile_raised_{mib}mib",
+                    f"SELECT count(*), sum(length(r.raster)) FROM {t} s LATERAL VIEW inline({raised}(s.tile, 512, 512)) r",
+                )
+            )
     return u
 
 

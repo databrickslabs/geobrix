@@ -18,10 +18,11 @@ and a missing dependency are never data.
 
 from __future__ import annotations
 
+import importlib
 import json
-from typing import List
+from typing import Callable, List, Optional
 
-from databricks.labs.gbx.pyrx.core.budget import size_text
+from databricks.labs.gbx.pyrx.core.budget import decoded_bytes, grid_bytes, size_text
 from databricks.labs.gbx.uc.handlers import (
     WGS84_SRID,
     _check_array,
@@ -30,7 +31,15 @@ from databricks.labs.gbx.uc.handlers import (
     _Refusal,
     _refuse,
 )
-from databricks.labs.gbx.uc.tier_b import DECODED_CAP
+from databricks.labs.gbx.uc.tier_b import (
+    _CORES,
+    DECODED_CAP,
+    _Parameter,
+    _tile_dict,
+    gate,
+    raster_of,
+    result_refusal,
+)
 
 _CELL_BYTES = 40  # a cell of an array: the id, the value and the row's overhead, an upper estimate
 _TILE_OVERHEAD = 32
@@ -435,6 +444,253 @@ def st_asmvt_features(tiles, layer_name, extent):
     return _mvt.encode_layer(features, layer, ext)
 
 
+# --- the retile family: one tile cut into an array of tiles -------------------------------------------------------
+# The private routines behind gbx_rst_retile, gbx_rst_maketiles, gbx_rst_tooverlappingtiles and gbx_rst_separatebands:
+# each returns the sub-tiles of one tile as an array, and the table function turns the array into rows. Three bounds
+# keep the work and the array under the cap:
+#   1. the input, decoded, is under the cap (a refusal that names the session, where the tile is read in windows);
+#   2. the array is estimated BEFORE a window is cut, from the window arithmetic alone (the count of tiles and the sum of
+#      their pixels, `tiling.window_stats`): the decoded bytes of every tile with 1% for the codec, and per tile the
+#      measured file header and the row. It never falls under the bytes the kernel makes, so an array over the cap is
+#      refused with no window cut; the price is that it is an upper bound and can refuse an array that would have fitted;
+#   3. each tile made is counted again as it is cut (the bytes so far against the cap) and checked against the cap
+#      decoded, so a tile or an array the estimate let through is still never returned over the cap.
+_TILE_FILE_BYTES = 4096  # a tile's TIFF header: 0.4 KiB for one band, 3.4 KiB for 500 (measured), rounded up
+_TILE_BAND_BYTES = 32  # and per band of the tile
+_TILE_ROW_BYTES = 512  # the row around the bytes: the other fields and the metadata map
+PROBE_DECODED_CAP = (
+    512 * 1024 * 1024
+)  # what a bench probe copy decodes and returns (see rst_retile_tiles_probe)
+
+
+def tiles_estimate(tiles: int, decoded: int, bands: int) -> int:
+    """An upper bound of the bytes of an array of ``tiles`` tiles of ``bands`` bands each that hold ``decoded`` bytes of
+    pixels between them: the pixels with 1% for the codec (zstd adds under 0.4% to data it cannot compress), plus a header
+    and a row for every tile."""
+    return -(-decoded * 101 // 100) + tiles * (
+        _TILE_FILE_BYTES + _TILE_BAND_BYTES * bands + _TILE_ROW_BYTES
+    )
+
+
+def _window_dict(window) -> Optional[dict]:
+    if window is None:
+        return None
+    keys = ("col_off", "row_off", "width", "height")
+    if isinstance(window, (tuple, list)):
+        return dict(zip(keys, (int(v) for v in window)))
+    values = [_field(window, k) for k in keys]
+    return None if any(v is None for v in values) else dict(zip(keys, values))
+
+
+def _sub_tile(
+    fn: str, tile, raster: bytes, cap: int, window=None, band=None, whole=False
+):
+    """The tile row of one piece of ``tile``: the session's fields (where it was cut from in ``window``, the band marker),
+    with the CRS as an SRID as every UC tile has it. The one piece that covers its whole input IS the input, so it keeps the
+    input's own provenance. A piece decoded over ``cap`` is refused with a Fix, never returned.
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    with MemoryFile(raster) as mf, open_bytes(mf) as ds:
+        decoded = decoded_bytes(ds)
+        if decoded > cap:
+            raise result_refusal(
+                fn,
+                decoded,
+                cap,
+                f"run {fn} in a notebook or job session, or ask for smaller tiles",
+            )
+        meta = {
+            "driver": "GTiff",
+            "width": str(ds.width),
+            "height": str(ds.height),
+            "count": str(ds.count),
+        }
+        srid = authority_srid_of(ds.crs)
+    parent_band = (_field(tile, "metadata") or {}).get("band")
+    if band is not None:
+        meta["band"] = str(band)
+    elif parent_band is not None:
+        meta["band"] = parent_band
+    row = _tile_dict(tile, raster, srid, meta)
+    if whole:
+        row["path"] = _field(tile, "path")
+        row["window"] = _window_dict(_field(tile, "window"))
+        row["clip_polygon"] = _field(tile, "clip_polygon")
+        row["clip_crs"] = _field(tile, "clip_crs")
+    else:
+        row["window"] = _window_dict(window)
+    return row
+
+
+def _tile_array(fn: str, tile, cap: int, plan: Callable, lower: str):
+    """The pieces of ``tile`` as an array of tile rows, under the three bounds above. NULL for a NULL tile and for data
+    that cannot be read (UC has no error tile); an error tile goes out as itself; a virtual tile is refused.
+
+    ``plan(ds, raster)`` returns ``(tiles, pixel_bytes, bands, whole, pieces)``: the count of tiles, the decoded bytes
+    of all of them, the bands of each, whether the one tile is the whole input, and a function ``pieces(ds)`` that yields
+    ``(window, band, raster bytes)`` one piece at a time.
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.uc.handlers import _check_bytes
+
+    done, early = gate(
+        fn, tile
+    )  # an error tile passes through, a virtual tile is refused
+    if done:
+        return None if early is None else [early]
+    raster = raster_of(fn, tile)
+    try:
+        with MemoryFile(raster) as mf, open_bytes(mf) as ds:
+            decoded = decoded_bytes(ds)
+            if decoded > cap:
+                raise _Refusal(
+                    f"{fn}: the tile is {size_text(decoded)} decoded, over the {size_text(cap)} a Unity Catalog "
+                    f"function decodes. Fix: run {fn} in a notebook or job session, which reads the tile in windows"
+                )
+            tiles, pixel_bytes, bands, whole, pieces = plan(ds, raster)
+            _check_bytes(
+                fn,
+                tiles_estimate(tiles, pixel_bytes, bands),
+                "the tiles it returns (an upper estimate)",
+                lower=lower,
+                cap=cap,
+            )
+            out, total = [], 0
+            for window, band, data in pieces(ds):
+                out.append(_sub_tile(fn, tile, data, cap, window, band, whole))
+                total += len(data) + _TILE_ROW_BYTES
+                _check_bytes(fn, total, "the tiles it returns", lower=lower, cap=cap)
+            return out
+    except (MemoryError, RecursionError, ImportError, _Refusal, _Parameter):
+        raise
+    except Exception:  # noqa: BLE001 - unreadable data is NULL on UC (no error tile)
+        return None
+
+
+def _window_plan(windows: Callable, tile_size: Callable, overlap: int = 0) -> Callable:
+    """The plan of a function that cuts windows: ``tile_size(ds, raster)`` gives the tile width and height; ``windows`` is
+    the core's located iterator over them."""
+    tiling = importlib.import_module(f"{_CORES}.tiling")
+
+    def plan(ds, raster):
+        tw, th = tile_size(ds, raster)
+        tiles, pixels = tiling.window_stats(ds.width, ds.height, tw, th, overlap)
+        return (
+            tiles,
+            pixels * grid_bytes(1, 1, ds.dtypes),
+            ds.count,
+            tiling.covers_whole_input(ds, tw, th, overlap),
+            lambda d: ((win, None, b) for win, b in windows(d, tw, th)),
+        )
+
+    return plan
+
+
+def _retile_tiles(tile, tile_width, tile_height, cap):
+    fn = "gbx_rst_retile"
+    tiling = importlib.import_module(f"{_CORES}.tiling")
+    tiling.require_window(tile_width, tile_height, fn)
+    if tile is None or tile_width is None or tile_height is None:
+        return None
+    w, h = int(tile_width), int(tile_height)
+    return _tile_array(
+        fn,
+        tile,
+        cap,
+        _window_plan(tiling.iter_retile_located, lambda ds, raster: (w, h)),
+        "pass a larger tile_width and tile_height",
+    )
+
+
+def rst_retile_tiles(tile, tile_width, tile_height):
+    """gbx__rst_retile_tiles: the non-overlapping windows of a tile as an array of tiles, in the session's order (rows, then
+    columns; the edge tiles are smaller). A window of under one pixel raises with a Fix, also for a tile with nothing to read.
+    """
+    return _retile_tiles(tile, tile_width, tile_height, DECODED_CAP)
+
+
+def rst_retile_tiles_probe(tile, tile_width, tile_height):
+    """The bench probe copy of :func:`rst_retile_tiles`: the same function with the cap raised to :data:`PROBE_DECODED_CAP`
+    for the input, each tile and the array, so a timing can measure what the product function refuses. Created only under
+    a ``gbx_mvp_perf_`` name; never a product routine."""
+    return _retile_tiles(tile, tile_width, tile_height, PROBE_DECODED_CAP)
+
+
+def rst_tooverlappingtiles_tiles(tile, tile_width, tile_height, overlap):
+    """gbx__rst_tooverlappingtiles_tiles: the overlapping windows of a tile (each edge overlaps by ``overlap`` percent of the
+    tile size, rounded up) as an array of tiles, in the session's order. A window under one pixel, or an overlap outside 0 to
+    below 100, raises with a Fix."""
+    fn = "gbx_rst_tooverlappingtiles"
+    tiling = importlib.import_module(f"{_CORES}.tiling")
+    tiling.require_window(tile_width, tile_height, fn)
+    ov = tiling.require_overlap(overlap, fn)
+    if tile is None or tile_width is None or tile_height is None or ov is None:
+        return None
+    w, h = int(tile_width), int(tile_height)
+    return _tile_array(
+        fn,
+        tile,
+        DECODED_CAP,
+        _window_plan(
+            lambda ds, tw, th: tiling.iter_to_overlapping_tiles_located(ds, tw, th, ov),
+            lambda ds, raster: (w, h),
+            ov,
+        ),
+        "pass a larger tile size or a smaller overlap",
+    )
+
+
+def rst_maketiles_tiles(tile, size_in_mb):
+    """gbx__rst_maketiles_tiles: the tile cut into the power-of-4 grid (1, 4, 16 ... at most 256 tiles) whose parts each fit
+    ``size_in_mb`` megabytes of the tile's own bytes; 0 or less does not cut. The grid is the session's.
+    """
+    fn = "gbx_rst_maketiles"
+    tiling = importlib.import_module(f"{_CORES}.tiling")
+    if tile is None or size_in_mb is None:
+        return None
+    mb = int(size_in_mb)
+    return _tile_array(
+        fn,
+        tile,
+        DECODED_CAP,
+        _window_plan(
+            tiling.iter_retile_located,
+            lambda ds, raster: tiling.make_tiles_size(ds, mb, size_bytes=len(raster)),
+        ),
+        "pass a larger size_in_mb",
+    )
+
+
+def rst_separatebands_tiles(tile):
+    """gbx__rst_separatebands_tiles: one single-band tile per band, in band order, each marked with its band number in its
+    metadata."""
+    fn = "gbx_rst_separatebands"
+    tiling = importlib.import_module(f"{_CORES}.tiling")
+    if tile is None:
+        return None
+
+    def plan(ds, raster):
+        return (
+            ds.count,
+            decoded_bytes(ds),
+            1,
+            False,
+            lambda d: (
+                (None, band, b) for band, b in tiling.iter_separate_bands_indexed(d)
+            ),
+        )
+
+    return _tile_array(
+        fn, tile, DECODED_CAP, plan, "split the raster by band before it is a tile"
+    )
+
+
 HANDLERS = {
     "gbx__st_asmvt_pyramid_cells": st_asmvt_pyramid_cells,
     "gbx_rst_h3_rasterize": rst_h3_rasterize,
@@ -443,4 +699,8 @@ HANDLERS = {
     "gbx_bng_cellfill_array": bng_cellfill_array,
     "gbx_custom_cellfill_array": custom_cellfill_array,
     "gbx__st_asmvt_features": st_asmvt_features,
+    "gbx__rst_retile_tiles": rst_retile_tiles,
+    "gbx__rst_maketiles_tiles": rst_maketiles_tiles,
+    "gbx__rst_tooverlappingtiles_tiles": rst_tooverlappingtiles_tiles,
+    "gbx__rst_separatebands_tiles": rst_separatebands_tiles,
 }

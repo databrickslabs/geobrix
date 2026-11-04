@@ -10,6 +10,7 @@ and propagate (as the JVM's NonFatal).
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 from databricks.labs.gbx._gdal_policy import open_bytes
 
@@ -569,10 +570,12 @@ def _check_bytes(
     size: int,
     what: str,
     lower: str = "lower k, or split the input into smaller groups",
+    cap: Optional[int] = None,
 ) -> None:
     """Refuse a result of ``size`` bytes over the cap, with a Fix that names the session function. ``lower`` is the
-    first remedy (what to change to get a smaller result)."""
-    cap = _array_cap()
+    first remedy (what to change to get a smaller result). ``cap`` replaces the product cap (a bench probe copy, which
+    measures above it, is the one caller that passes it)."""
+    cap = _array_cap() if cap is None else cap
     if size > cap:
         from databricks.labs.gbx.pyrx.core.budget import size_text
 

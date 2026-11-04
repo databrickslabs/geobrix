@@ -972,6 +972,7 @@
       "description": "Split a tile into tiles of about the given size in megabytes.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1405,6 +1406,7 @@
       "description": "Partition a tile into non-overlapping sub-tiles of the given pixel size.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -1486,6 +1488,7 @@
       "description": "Split a multi-band tile into single-band tiles, one row per band.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1627,6 +1630,7 @@
       "description": "Partition a tile into overlapping tiles of the given pixel size.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

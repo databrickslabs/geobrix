@@ -9,6 +9,7 @@ without compression (5.76 MB); `rg_ramp_4326` an 80 x 60 ramp on a 0.01 degree g
 ramp on a 100 m grid in EPSG:27700 at (530000, 183000), so it covers twelve 1 km cells.
 """
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import share
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import G
 from databricks.labs.gbx.bench.oracle_tables.raster_tile_op import _ramp
 from databricks.labs.gbx.bench.oracles import (
@@ -27,6 +28,7 @@ H3T, QBT, BNGT, CGT = (
     "gbx_rst_custom_tessellate",
 )
 T4326, ERR, CORRUPT = Build("tile_4326"), Build("tile_error"), Build("tile_corrupt")
+VIRT, OVER = Build("tile_virtual"), Build("rg_over_cap")
 BANDS3, BIG = Build("rto_bands3"), Build("rg_big")
 RAMP4326, RAMPBNG = Build("rg_ramp_4326"), Build("rg_bng")
 ONLY = ("session",)
@@ -65,6 +67,34 @@ def _rg_big(tmpdir):
         return _tile(mf.read())
 
 
+@builder("rg_over_cap")
+def _rg_over_cap(tmpdir):
+    """A one-band uint8 raster of 8200 x 8200 pixels: 64.1 MiB decoded, over the 64 MiB a Unity Catalog function decodes.
+    Every pixel is 1, so it compresses to a few KiB and the row stays cheap to carry."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.compression import creation_opts
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    side = 8200
+    profile = dict(
+        driver="GTiff",
+        width=side,
+        height=side,
+        count=1,
+        dtype="uint8",
+        crs=resolve_crs("EPSG:3857"),
+        transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+        **creation_opts("uint8", compress="zstd"),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(np.ones((1, side, side), dtype="uint8"))
+        return _tile(mf.read())
+
+
 @builder("rg_ramp_4326")
 def _rg_ramp_4326(tmpdir):
     from databricks.labs.gbx.bench.oracles import _gtiff
@@ -100,7 +130,7 @@ SIXTEEN = [(c, r, 300, 300) for r in range(0, 1200, 300) for c in range(0, 1200,
 _BANDS = [(_ramp(False) + 100.0 * k).tolist() for k in (1, 2, 3)]
 _CRS3857 = {"crs": "EPSG:3857", "count": 1, "width": 8, "height": 6}
 
-RASTER_GENERATOR = (
+_SESSION_ROWS = (
     # ---------------------------------------------------------------------------------------------- maketiles
     Case("maketiles_5mb", MK, (BIG, 1), "windows", SIXTEEN, ONLY),
     Case("maketiles_fits", MK, (BIG, 8), "windows", [(0, 0, 1200, 1200)], ONLY),
@@ -244,4 +274,65 @@ RASTER_GENERATOR = (
     Case("cg_tess_null", CGT, (None, G, 0), "no_rows", None, ONLY),
     Case("cg_tess_null_res", CGT, (RAMPBNG, G, None), "error_tile", None, ONLY),
     Case("cg_tess_null_grid", CGT, (RAMPBNG, None, 0), "error_tile", None, ONLY),
+)
+
+
+# Unity Catalog: the table functions over the private tile-array routines. A materialized tile gives the session's
+# sub-tiles in the session's order; a virtual tile is refused with a Fix, and so is an input decoded over the cap or a
+# result that could not fit (checked from the window arithmetic before any window is cut); data a function cannot read
+# is NULL (no rows) where the session gives an error tile, and so is a NULL argument; an error tile goes through as itself.
+_SHARED = (
+    "maketiles_5mb", "maketiles_fits", "maketiles_no_split", "maketiles_null", "maketiles_error_tile",
+    "separatebands_three", "separatebands_single", "separatebands_null", "separatebands_error_tile",
+    "overlap_half", "overlap_zero", "overlap_all", "overlap_zero_window", "overlap_null", "overlap_error_tile",
+)  # fmt: skip
+UC = ("uc",)
+
+
+def _uc_edges(short, fn, args, null_arg=None, over_result=None):
+    """The rows of one function that only the UC surface has: the refusals and the NULLs. ``args`` are the arguments after
+    the tile; ``null_arg`` is a full argument row with a NULL size; ``over_result`` is a full row that fits the input cap
+    and whose result does not."""
+    rows = [
+        Case(f"uc_{short}_virtual_refused", fn, (VIRT, *args), "uc_refused", None, UC),
+        Case(f"uc_{short}_corrupt_null", fn, (CORRUPT, *args), "no_rows", None, UC),
+        Case(
+            f"uc_{short}_input_over_cap_refused",
+            fn,
+            (OVER, *args),
+            "uc_refused",
+            None,
+            UC,
+        ),
+    ]
+    if null_arg is not None:
+        rows.append(Case(f"uc_{short}_null_size", fn, null_arg, "no_rows", None, UC))
+    if over_result is not None:
+        rows.append(
+            Case(
+                f"uc_{short}_result_over_cap_refused",
+                fn,
+                over_result,
+                "uc_refused",
+                None,
+                UC,
+            )
+        )
+    return rows
+
+
+RASTER_GENERATOR = (
+    share(_SESSION_ROWS, *_SHARED)
+    + tuple(_uc_edges("maketiles", MK, (1,), (T4326, None)))
+    + tuple(_uc_edges("separatebands", SB, ()))
+    + tuple(
+        _uc_edges(
+            "overlap",
+            OV,
+            (32, 32, 50),
+            (T4326, None, 32, 50),
+            # 1200 x 1200 in 6 x 6 pixel steps: 40,000 windows of 600 x 600 pixels, about 58 GB
+            (BIG, 600, 600, 99),
+        )
+    )
 )

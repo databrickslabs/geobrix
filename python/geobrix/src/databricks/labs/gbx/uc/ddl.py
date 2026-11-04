@@ -386,7 +386,7 @@ def _table_function_ddl(
     )
     rows = (
         f"inline({call})"
-        if returns.lower().startswith("array<struct")
+        if sql_type(returns).lower().startswith("array<struct")  # ARRAY<TILE> is one
         else f"explode({call}) AS {fn.columns[0][0]}"
     )
     return (

@@ -107,7 +107,9 @@ def test_mvp_g_oracle(request, tmp_path, shape):
 def test_mvp_g_uc_handlers(tmp_path):
     """The UC table function without Spark: the handler behind it, called with the values UC passes."""
     ran = oracles.run_handlers_rows(oracles.MVP_G, tmpdir=str(tmp_path))
-    assert len(ran) == sum(c.fn == TE and "uc" in c.surfaces for c in oracles.MVP_G)
+    assert len(ran) == sum(
+        c.fn in (TE, RT) and "uc" in c.surfaces for c in oracles.MVP_G
+    )
     assert [m for _, m in ran if m] == []
 
 

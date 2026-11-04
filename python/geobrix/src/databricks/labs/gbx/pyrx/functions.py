@@ -3851,19 +3851,7 @@ class _RstToOverlappingTilesUDTF:
 
     def eval(self, tile, tile_width, tile_height, overlap, file_ref=None):
         tiling.require_window(tile_width, tile_height, "gbx_rst_tooverlappingtiles")
-        if overlap is not None:
-            try:
-                overlap = int(overlap)
-            except (TypeError, ValueError, OverflowError):  # NaN, infinity, text
-                raise ValueError(
-                    f"gbx_rst_tooverlappingtiles: overlap must be a number from 0 to below 100 percent, got {overlap!r}. "
-                    "Fix: pass the overlap as a percentage of the tile size."
-                ) from None
-            if not 0 <= overlap < 100:
-                raise ValueError(
-                    f"gbx_rst_tooverlappingtiles: overlap must be from 0 to below 100 percent, got {overlap}. "
-                    "Fix: pass the overlap as a percentage of the tile size."
-                )
+        overlap = tiling.require_overlap(overlap)  # raises for a bad overlap
         if _tile_is_empty(tile):
             yield from _empty_tile_rows(tile, "RST_ToOverlappingTiles")
             return

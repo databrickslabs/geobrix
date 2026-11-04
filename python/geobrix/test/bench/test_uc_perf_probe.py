@@ -82,6 +82,35 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     assert {"twin_1m", "d1_1m"} <= set(labels["m7"])
 
 
+def test_m10_times_retile_on_the_product_and_on_a_probe_copy_with_the_cap_raised():
+    """The product function refuses a tile decoded over the cap, so the 128 and 256 MiB window reads are timed through a
+    `gbx_mvp_perf_` copy whose handler takes the raised cap; the product leg stays beside it (where its refusal lands).
+    """
+    (m10,) = uc_perf.perf_plan("cat", "sch", wheel_path=WHEEL, only=["m10"])
+    labels = [leg.label for leg in m10.legs]
+    for mib in (16, 64, 256):
+        assert {f"retile_{mib}mib", f"retile_raised_{mib}mib"} <= set(labels)
+    product = next(x for x in m10.legs if x.label == "retile_256mib").sql
+    raised = next(x for x in m10.legs if x.label == "retile_raised_256mib").sql
+    assert "LATERAL `cat`.`sch`.gbx_rst_retile(" in product
+    assert (
+        "gbx_mvp_perf_retile_tiles(s.tile, 512, 512)" in raised
+        and "gbx_rst_retile" not in raised
+    )
+    ((_, create),) = [x for x in m10.setup if x[0] == "create_retile_raised"]
+    assert "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_mvp_perf_retile_tiles(" in create
+    assert "import rst_retile_tiles_probe as handler" in create
+    assert (
+        "drop_gbx_mvp_perf_retile_tiles",
+        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_retile_tiles",
+    ) in m10.drops
+    from databricks.labs.gbx.uc import forms
+
+    assert (
+        forms.PROBE_DECODED_CAP >= 2 * 256 * 1024 * 1024
+    )  # room for the tile and the array of its pieces
+
+
 def test_a_unit_whose_function_arrives_builds_with_no_change_to_the_probe(monkeypatch):
     monkeypatch.setattr(uc_perf, "_has_uc", lambda c, *names: [])
     monkeypatch.setattr(

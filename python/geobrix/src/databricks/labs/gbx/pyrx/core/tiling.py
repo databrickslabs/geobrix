@@ -69,6 +69,56 @@ def require_window(tile_width, tile_height, fn="gbx_rst_retile"):
             )
 
 
+def require_overlap(overlap, fn="gbx_rst_tooverlappingtiles"):
+    """The overlap as a whole percentage from 0 to below 100 (NULL is left to the caller); anything else raises with a Fix.
+
+    The percentage of the tile size each edge overlaps its neighbour by: 100 would never advance, so it is a PARAMETER
+    error (it raises, never an error tile), on every level.
+    """
+    if overlap is None:
+        return None
+    try:
+        value = int(overlap)
+    except (TypeError, ValueError, OverflowError):  # NaN, infinity, text
+        raise ValueError(
+            f"{fn}: overlap must be a number from 0 to below 100 percent, got {overlap!r}. "
+            "Fix: pass the overlap as a percentage of the tile size."
+        ) from None
+    if not 0 <= value < 100:
+        raise ValueError(
+            f"{fn}: overlap must be from 0 to below 100 percent, got {value}. "
+            "Fix: pass the overlap as a percentage of the tile size."
+        )
+    return value
+
+
+def _axis_windows(size, window, step):
+    """``(count, total)`` of the 1-D windows that start at 0, step, 2 step ... below ``size``, each clamped at the edge:
+    how many there are and the sum of their lengths. Closed form, so a window of one pixel on a long axis costs no loop.
+    """
+    count = -(-size // step)
+    full = (
+        (size - window) // step + 1 if size >= window else 0
+    )  # windows that fit whole
+    full = min(full, count)
+    rest = (
+        count - full
+    )  # the clamped ones: lengths size - i step for i = full .. count - 1
+    clamped = rest * size - step * ((full + count - 1) * rest // 2)
+    return count, full * window + clamped
+
+
+def window_stats(width, height, tile_width, tile_height, overlap=0):
+    """``(tiles, pixels)`` of the window grid ``plan_grid_windows`` lays over ``width x height``: the number of windows and
+    the sum of their areas (a pixel inside two overlapping windows counts twice). Pure arithmetic in the window sizes, so a
+    caller can judge the size of the result before it cuts a window; equal to the enumeration for every grid.
+    """
+    tw, th, step_x, step_y = _overlap_steps(tile_width, tile_height, overlap)
+    nx, sum_w = _axis_windows(int(width), tw, step_x)
+    ny, sum_h = _axis_windows(int(height), th, step_y)
+    return nx * ny, sum_w * sum_h
+
+
 def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
     """Yield one GTiff byte string per window tile (streaming, never buffered)."""
     for _, b in _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):

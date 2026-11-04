@@ -48,6 +48,14 @@ while [[ $# -gt 0 ]]; do
             STAGE_ARGS+=(--versioned); VERSIONED=true
             shift
             ;;
+        --dest)
+            if [[ -z "${2:-}" || "$2" == --* ]]; then
+                echo "--dest needs a Volume folder" >&2
+                exit 2
+            fi
+            STAGE_ARGS+=(--dest "$2")
+            shift 2
+            ;;
         --profile)
             if [[ -z "${2:-}" || "$2" == --* ]]; then
                 echo "--profile needs a profile name" >&2
@@ -84,6 +92,9 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "                 left as it is, so no other wheel there is touched."
     echo "  --versioned    With --env: stage each wheel to <bundle volroot>/geobrix/<version>/env<N>/, remove every"
     echo "                 other geobrix-*.whl there, and verify the uploaded size. The volroot's own wheels stay."
+    echo "  --dest DIR     With one --env 5|6: stage the wheel to the Volume folder DIR (created when missing), remove every"
+    echo "                 other geobrix-*.whl there and verify the uploaded size: an isolated folder holding this one"
+    echo "                 wheel (e.g. for a Unity Catalog install). Not with --versioned or --env both."
     echo "  --no-prune     Keep every other geobrix-*.whl in the artifact Volume dir (skip the single-version cleanup)"
     echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
     echo "                    in the environment or examples/tests/databricks_cluster_config.env)"

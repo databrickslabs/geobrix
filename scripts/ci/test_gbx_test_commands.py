@@ -1140,6 +1140,8 @@ class NotFound(Exception):
 class _Files:
     def create_directory(self, path):
         pass
+    def list_directory_contents(self, path):
+        return []
     def upload(self, path, fh, overwrite):
         if os.environ.get("FAKE_UPLOAD_FAILS"):
             raise NotFound("Volume %s does not exist" % path)
@@ -1184,6 +1186,53 @@ def test_stage_wheel_exits_nonzero_when_the_upload_raises(sandbox, tmp_path, log
 
     assert res.returncode == 0, res.output
     assert "Done: /Volumes/main/default/geobrix_samples/geobrix-0.6.0+env6-py3-none-any.whl" in res.output
+
+
+def test_stage_wheel_dest_stages_one_env_wheel_to_the_folder_and_refuses_the_rest(
+    tmp_path,
+):
+    # --dest puts the wheel in an isolated Volume folder (the Unity Catalog install folder); it needs
+    # exactly one --env and no --versioned, and says so with exit 2 before anything is uploaded. The
+    # script runs on a stub SDK, so the launcher's interpreter choice is not part of this test.
+    stub = tmp_path / "stub"
+    (stub / "databricks" / "sdk").mkdir(parents=True)
+    (stub / "databricks" / "__init__.py").write_text("")
+    (stub / "databricks" / "sdk" / "__init__.py").write_text(_FAILING_SDK)
+    tests = tmp_path / "root" / "examples" / "tests"
+    tests.mkdir(parents=True)
+    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):
+        shutil.copy(REPO_ROOT / "examples" / "tests" / name, tests / name)
+    dist = tmp_path / "root" / "dist" / "env6"
+    dist.mkdir(parents=True)
+    (dist / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"wheel")
+    env = {
+        "PATH": os.environ["PATH"],
+        "PYTHONPATH": str(stub),
+        "DATABRICKS_CONFIG_PROFILE": "p",
+    }
+
+    def stage(*args):
+        return subprocess.run(
+            [sys.executable, str(tests / "stage_wheel_to_volume.py"), *args],
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+
+    dest = "/Volumes/c/s/v/uc-env6"
+    res = stage("--env", "6", "--dest", dest)
+    assert res.returncode == 0, res.stderr
+    assert f"Done: {dest}/geobrix-0.6.0+env6-py3-none-any.whl" in res.stdout
+    for args in (
+        ["--dest", dest],
+        ["--env", "both", "--dest", dest],
+        ["--env", "6", "--versioned", "--dest", dest],
+        ["--env", "6", "--dest", "/tmp/not-a-volume"],
+        ["--env", "6", "--dest"],
+    ):
+        res = stage(*args)
+        assert res.returncode == 2, (args, res.stderr)
+        assert "Done:" not in res.stdout, args
 
 
 def test_stage_wheel_profile_reaches_the_launcher_and_an_unknown_option_is_refused(sandbox):

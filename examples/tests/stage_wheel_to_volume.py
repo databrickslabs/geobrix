@@ -19,6 +19,9 @@ bundle volroot (the %pip path); the artifact Volume dir and its plain wheel are 
 --no-prune keeps every other geobrix-*.whl in the artifact Volume dir (no single-version cleanup).
 --versioned (with --env) stages each env wheel to <volroot>/geobrix/<version>/env<N>/ instead of the volroot itself,
 removes every other geobrix-*.whl in that folder and verifies the uploaded size; the wheels of the volroot are left alone.
+--dest DIR (with one --env 5|6) stages that wheel to the Volume folder DIR (created if missing), removes every other
+geobrix-*.whl there and verifies the uploaded size: an isolated folder that holds this one wheel, e.g. for a Unity
+Catalog install. It excludes --versioned and --env both.
 """
 from __future__ import annotations
 
@@ -90,6 +93,17 @@ def main() -> int:
     if versioned and "--env" not in args:
         print("--versioned stages env wheels: pass --env 5|6|both", file=sys.stderr)
         return 2
+    dest = None
+    if "--dest" in args:
+        i = args.index("--dest")
+        dest = (args[i + 1] if i + 1 < len(args) else "").rstrip("/")
+        if not dest.startswith("/Volumes/") or dest.count("/") < 5:
+            print("--dest needs a Volume folder: /Volumes/<catalog>/<schema>/<volume>/<folder>", file=sys.stderr)
+            return 2
+        env_arg = args[args.index("--env") + 1 : args.index("--env") + 2] if "--env" in args else []
+        if versioned or env_arg not in (["5"], ["6"]):
+            print("--dest stages ONE env wheel: pass --env 5|6, without --versioned", file=sys.stderr)
+            return 2
     envs = None
     if "--env" in args:
         i = args.index("--env")
@@ -137,6 +151,14 @@ def main() -> int:
             print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: %s found; skipping Databricks upload." % [x.name for x in wheels])
             return 0
         b_root = bundle_root()
+        if dest:  # an isolated folder: this wheel alone is left in it
+            try:
+                w.files.create_directory(dest)
+                prune_stale(w, dest, "geobrix-", ".whl", wheels[0].name)
+            except Exception as e:
+                print(f"Error: could not prepare {dest}: {e}", file=sys.stderr)
+                return 1
+            return upload_verified(w, wheels[0], f"{dest}/{wheels[0].name}")
         if not versioned:
             try:
                 w.files.create_directory(b_root)

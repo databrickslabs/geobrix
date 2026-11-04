@@ -38,15 +38,13 @@ def spark():
         .getOrCreate()
     )
 
-    from test._heavy import heavy_register
+    from test._heavy import pin_l1
 
-    from databricks.labs.gbx import manager as gbx_manager
-
-    heavy_register(spark, ("gbx_rst_",))
-    # heavy_register serves the JAR's companions and the names that have an L1 row. The SQL below also names
-    # functions that have no L1 row (the light function is the only form): register them at L3.
-    gbx_manager.register_family(
-        spark, ("gbx_rst_",), only=["gbx_rst_histogram"], level="L3"
+    # Only the functions the heavy cases call, at the heavy level. The histogram case has no heavy form: it
+    # registers the light function itself, and skips without the light packages.
+    pin_l1(
+        spark,
+        ["gbx_rst_fromcontent", "gbx_rst_sample", "gbx_rst_setsrid", "gbx_rst_band"],
     )
     return spark
 
@@ -93,6 +91,15 @@ def test_pixel_ops_roundtrip(spark, label, sql_expr, expected_col, validator):
     """Each pixel-ops function returns a non-null result via SQL."""
     if not Path(SRTM_PATH).exists():
         pytest.skip(f"sample DEM not present: {SRTM_PATH}")
+    if label == "histogram":
+        # histogram has no heavy form: the light function, which the heavyweight CI env cannot load
+        pytest.importorskip("rasterio")
+        pytest.importorskip("pandas")
+        from databricks.labs.gbx import manager as gbx_manager
+
+        gbx_manager.register_family(
+            spark, ("gbx_rst_",), only=["gbx_rst_histogram"], level="L3"
+        )
 
     # gbx_rst_fromfile is lightweight-only (issue #34, pyrx UDF). The heavy tier
     # loads the local DEM by reading its bytes via the binaryFile reader and

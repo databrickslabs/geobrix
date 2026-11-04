@@ -40,10 +40,15 @@ def spark():
 @pytest.fixture(scope="session")
 def bng_registered(spark):
     """Register BNG functions once for all tests."""
-    from databricks.labs.gbx import manager as gbx_manager
+    from test._heavy import pin_l1
+
     from databricks.labs.gbx.gridx.bng import functions as bng_funcs
 
-    gbx_manager.register_family(spark, ("gbx_bng_",))
+    # Only the functions this file tests, at the heavy level: the rest of the family has light-only forms.
+    pin_l1(
+        spark,
+        ["gbx_bng_eastnorthasbng", "gbx_bng_tessellate", "gbx_bng_tessellateexplode"],
+    )
     return bng_funcs
 
 

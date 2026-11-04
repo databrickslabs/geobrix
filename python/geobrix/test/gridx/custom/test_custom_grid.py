@@ -39,10 +39,20 @@ def spark():
 @pytest.fixture(scope="session")
 def custom_registered(spark):
     """Register custom grid functions once for all tests."""
-    from databricks.labs.gbx import manager as gbx_manager
+    from test._heavy import pin_l1
+
     from databricks.labs.gbx.gridx.custom import functions as cx
 
-    gbx_manager.register_family(spark, ("gbx_custom_",))
+    # Only the functions this file tests, at the heavy level: the rest of the family has light-only forms.
+    pin_l1(
+        spark,
+        [
+            "gbx_custom_grid",
+            "gbx_custom_pointascell",
+            "gbx_custom_geomkringexplode",
+            "gbx_custom_geomkloopexplode",
+        ],
+    )
     return cx
 
 

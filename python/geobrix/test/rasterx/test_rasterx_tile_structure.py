@@ -36,7 +36,7 @@ MODIS_DIR = (HERE.parents[4] / "src/test/resources/modis").resolve()
 @pytest.fixture(scope="module")
 def spark():
     """Create SparkSession with GeoBrix JAR loaded"""
-    from databricks.labs.gbx import manager as gbx_manager
+    from test._heavy import pin_l1
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark_session = (
@@ -49,7 +49,9 @@ def spark():
         .getOrCreate()
     )
 
-    gbx_manager.register_family(spark_session, ("gbx_rst_",))
+    # Only the heavy function the heavy tests call, at the heavy level; the tests that need the light level skip
+    # without the light packages and register what they use on first call.
+    pin_l1(spark_session, ["gbx_rst_fromcontent"])
     return spark_session
 
 
@@ -162,6 +164,10 @@ def test_tile_metadata_contains_driver_info(spark):
 
 def test_tessellated_tiles_have_cellid(spark):
     """Test that tessellated tiles have non-null cellid"""
+    # Table functions are served by the light level: the heavy level returns the tile struct, not the session's
+    # columns. The heavyweight CI env has no light deps (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     # rst_h3_tessellate is a generator: it takes the DataFrame first and gives one row per cell tile

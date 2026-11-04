@@ -54,14 +54,14 @@ def _sql_name(fqn):
     raise AssertionError(f"{fqn}: no companion with a SQL name in src/main/scala")
 
 
-def install_jvm_scalars(spark, prefixes):
-    """Install the JAR's companions whose SQL name starts with one of ``prefixes`` (the scalar function registry);
-    the SQL names installed."""
+def install_jvm_scalars(spark, prefixes, names=None):
+    """Install the JAR's companions whose SQL name starts with one of ``prefixes`` (the scalar function registry),
+    or, with ``names``, only those named; the SQL names installed."""
     installer = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
     installed = []
     for fqn in _companions():
         name = _sql_name(fqn)
-        if not name.startswith(tuple(prefixes)):
+        if not name.startswith(tuple(prefixes)) or (names and name not in names):
             continue
         result = installer.install(spark._jsparkSession, name, fqn)
         assert result == "ok", f"{fqn}: {result}"
@@ -86,3 +86,26 @@ def heavy_register(spark, prefixes):
     installed = set(install_jvm_scalars(spark, prefixes))
     names = [n for n in manager.names_at_level(prefixes, "L1") if n not in installed]
     return manager.register_family(spark, prefixes, only=names, level="L1")
+
+
+def pin_l1(spark, names):
+    """Register exactly ``names`` at the heavy (Catalyst) level, and nothing else of their families.
+
+    A heavy-dir fixture uses this instead of registering a whole family: a family also holds names whose only form
+    is the light one, and installing those imports the light packages (pandas, rasterio), which the heavyweight CI
+    env does not have. A scalar's companion goes in as it is (it needs no light kernel behind it, which the
+    manager's own L1 install of a virtual-tile row does); a generator, and a scalar with no companion, take the
+    manager's L1 row. A name with neither belongs in a test that skips without the light packages.
+    """
+    from databricks.labs.gbx import manager, manifest
+
+    fns = manifest.load().functions
+    names = [n.lower() for n in names]
+    scalars = {n for n in names if fns[n].kind != "generator"}
+    installed = (
+        set(install_jvm_scalars(spark, ("gbx_",), names=scalars)) if scalars else set()
+    )
+    rest = [n for n in names if n not in installed]
+    if rest:
+        manager.register_family(spark, ("gbx_",), only=rest, level="L1")
+    return names

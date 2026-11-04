@@ -28,7 +28,7 @@ MODIS_B03 = (
 
 @pytest.fixture(scope="module")
 def spark():
-    from databricks.labs.gbx import manager as gbx_manager
+    from test._heavy import pin_l1
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark = (
@@ -41,12 +41,18 @@ def spark():
         .getOrCreate()
     )
 
-    gbx_manager.register_family(spark, ("gbx_rst_",))
+    # Only the heavy function the heavy tests call, at the heavy level; the table-function tests skip without the
+    # light packages and register what they use on first call.
+    pin_l1(spark, ["gbx_rst_fromcontent"])
     return spark
 
 
 def test_rst_maketiles(spark):
     """Test making tiles based on size in MB."""
+    # Table functions are served by the light level: the heavy level returns the tile struct, not the session's
+    # columns. The heavyweight CI env has no light deps (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     src = spark.range(1).select(
@@ -61,6 +67,10 @@ def test_rst_maketiles(spark):
 
 def test_rst_tooverlappingtiles(spark):
     """Test creating overlapping tiles."""
+    # Table functions are served by the light level: the heavy level returns the tile struct, not the session's
+    # columns. The heavyweight CI env has no light deps (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     src = spark.range(1).select(
@@ -75,6 +85,10 @@ def test_rst_tooverlappingtiles(spark):
 
 def test_rst_separatebands(spark):
     """Test separating bands into individual rasters."""
+    # Table functions are served by the light level: the heavy level returns the tile struct, not the session's
+    # columns. The heavyweight CI env has no light deps (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     # First create a multi-band raster by combining single bands.
@@ -101,6 +115,10 @@ def test_rst_separatebands(spark):
 
 def test_rst_h3_tessellate(spark):
     """Test H3 tessellation of raster."""
+    # Table functions are served by the light level: the heavy level returns the tile struct, not the session's
+    # columns. The heavyweight CI env has no light deps (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     src = spark.range(1).select(

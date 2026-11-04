@@ -783,6 +783,27 @@ def test_uc_ddl_batch_style_names_a_pandas_handler_beside_the_product_function()
     assert "bng_eastnorthasbng_batch as handler" in stmt
 
 
+def test_uc_ddl_names_a_bench_probe_copys_implementation_beside_its_wrapper():
+    # a probe copy (gbx_mvp_*) with a DEFAULT: its wrapper calls gbx_mvp_<x>_impl, not the public gbx__<x>
+    impl, wrapper = ddl.function_ddl(
+        MAN.functions["gbx_bng_geomkring"],
+        "cat",
+        "sch",
+        "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
+        MAN.uc_dependencies,
+        "0.6.0",
+        name="gbx_mvp_bng_geomkring",
+    )
+    assert impl.startswith(
+        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_mvp_bng_geomkring_impl("
+    )
+    assert wrapper.startswith(
+        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_mvp_bng_geomkring("
+    )
+    assert "RETURN `cat`.`sch`.gbx_mvp_bng_geomkring_impl(" in wrapper
+    assert "gbx__bng_geomkring" not in impl + wrapper
+
+
 @pytest.mark.parametrize(
     "value,want",
     [

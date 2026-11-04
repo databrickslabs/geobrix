@@ -184,6 +184,48 @@ def test_rename_is_case_sensitive_whole_word_and_leaves_types_alone():
     assert sqlbody.rename("`k` + 'k' + `other`", {"k": "(5)"}) == "(5) + 'k' + `other`"
 
 
+def test_rename_leaves_a_backticked_alias_and_field_alone():
+    # `expr AS `k`` names a column, `t.`k`` is a field: neither is the parameter, a bare `k` still is
+    assert sqlbody.rename("x AS `k`", {"k": "(1)"}) == "x AS `k`"
+    assert sqlbody.rename("t.`k` + `k`", {"k": "(1)"}) == "t.`k` + (1)"
+    assert sqlbody.rename("x as   `k`, `k`", {"k": "(1)"}) == "x as   `k`, (1)"
+
+
+def test_a_body_that_spells_a_parameter_in_another_case_is_refused_at_load():
+    # Spark reads K as k, the inliner does not: the body is refused with the parameter and the spelling found
+    def edit(raw):
+        _kring_sql(raw)
+        _row(raw, "gbx_bng_kring")["levels"]["L4"]["sql"] += " + K"
+
+    with pytest.raises(
+        ValueError, match=r"gbx_bng_kring L4\.sql: parameter 'k' is spelled 'K'"
+    ):
+        perf_manifest(edit)
+
+    def helper_edit(raw):
+        _kring_sql(raw)
+        _row(raw, "gbx_bng_kring")["levels"]["L4"]["sql_helpers"] = [
+            {**HELPER, "sql": "2 * K + 1"}
+        ]
+
+    with pytest.raises(
+        ValueError, match=r"gbx__ring_width: parameter 'k' is spelled 'K'"
+    ):
+        perf_manifest(helper_edit)
+    # a type after AS and a field are not the parameter, whatever their case
+    assert (
+        sqlbody.case_mismatches("CAST(x AS STRING) + t.K + K(1)", ["string", "k"]) == []
+    )
+    assert sqlbody.case_mismatches("`K` + 'K' + k", ["k"]) == [("k", "K")]
+    assert perf_manifest(_kring_sql)  # the spelling as declared loads
+
+
+def test_a_parameter_with_no_session_type_is_refused_not_an_index_error():
+    bad = manifest.Param("p", (), "INT")
+    with pytest.raises(ValueError, match="parameter p has no session type"):
+        manifest._check_shared_l0_signature("gbx_x", (bad,), "INT", "INT")
+
+
 def test_helper_calls_nested_in_an_argument_inline_like_they_render():
     h = [
         {"name": "gbx__h", "params": [["k", "INT"]], "returns": "INT", "sql": "k * 2"},
@@ -698,3 +740,11 @@ def test_the_collision_gate_covers_suffixed_names_sql_helpers_and_stubs():
     )
     assert any("is a function name" in f for f in findings(wrapper, holder))
     assert findings(kernel, holder) == []  # a SQL kernel creates no gbx__k wrapper
+    # a SQL kernel that keeps a handler can be forced to python, which creates the wrapper: the name is reserved
+    forced = rename(
+        base,
+        "gbx_w",
+        params=(base.params[0], withdefault),
+        levels={**base.levels, "L4": {"sql": "1", "handler": "m:f"}},
+    )
+    assert any("is a function name" in f for f in findings(forced, holder))

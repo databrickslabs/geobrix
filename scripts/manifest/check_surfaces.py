@@ -275,15 +275,14 @@ def form_findings(man) -> List[str]:
     implementation name, and is one definition wherever it is named; a stub's text is the sentence after ``Fix:``.
     """
     fns = man.functions
-    # `gbx__<name>` is created only for a UC function that has DEFAULTs and is a Python or Scala function: a SQL kernel
-    # declares its DEFAULTs itself, a table function is one statement, and a row with no UC level has no UC function.
+    # `gbx__<name>` is reserved for every UC row that has DEFAULTs and a handler: a Python or Scala function creates it,
+    # and so does a row with a SQL kernel when its form is forced to python. A table function is one statement, and a row
+    # with no UC level has no UC function.
     implicit = {
         f"gbx__{fn.sql_name[4:]}"
         for fn in fns.values()
         if any(p.default for p in fn.params)
-        and "L4" in fn.levels
-        and "sql" not in fn.levels["L4"]
-        and "tvf_over" not in fn.levels["L4"]
+        and "handler" in fn.levels.get("L4", {})
     }
     taken = set(fns) | implicit | set(getattr(man, "private", {}))
     out, seen = [], {}

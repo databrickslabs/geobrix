@@ -617,6 +617,12 @@ def _check_shared_l0_signature(
     name: str, params, returns_session: str, returns_uc
 ) -> None:
     """One L0 body serves the session and Unity Catalog only where both signatures are the same types."""
+    for p in params:
+        if not p.session:
+            raise ValueError(
+                f"{name}: parameter {p.name} has no session type, so its L0 and L4 signatures cannot be compared. "
+                f"Fix: give it a session type."
+            )
     pairs = [(f"parameter {p.name}", p.session[0], p.uc) for p in params]
     pairs.append(("the result", returns_session, returns_uc or ""))
     differ = [
@@ -629,6 +635,32 @@ def _check_shared_l0_signature(
             f"{name}: L4 sql is {SQL_FROM_L0!r} (one body for the session and UC) but the types differ "
             f"({'; '.join(differ)}). Fix: give L4 its own sql body."
         )
+
+
+def _check_sql_param_case(name: str, params, levels: Mapping) -> None:
+    """A SQL body spells each parameter as declared: Spark identifiers are case-insensitive, the inliner's renaming is not.
+
+    A function body is read against the function's parameters, a helper body against the helper's own.
+    """
+    from databricks.labs.gbx.uc.sqlbody import case_mismatches
+
+    def check(where: str, body, names) -> None:
+        if not isinstance(body, str) or body == SQL_FROM_L0:
+            return
+        for declared, found in case_mismatches(body, names):
+            raise ValueError(
+                f"{name} {where}: parameter {declared!r} is spelled {found!r}. "
+                f"Fix: spell it {declared!r}; the SQL body is matched to parameters case-sensitively."
+            )
+
+    for level, spec in levels.items():
+        check(f"{level}.sql", spec.get("sql"), [p.name for p in params])
+        for h in spec.get("sql_helpers", ()):
+            check(
+                f"{level}.sql_helpers {h['name']}",
+                h.get("sql"),
+                [hp[0] for hp in h.get("params", ())],
+            )
 
 
 def _check_sql_levels(name: str, levels: Mapping, kind: str = "scalar") -> None:
@@ -810,6 +842,7 @@ def parse(raw: Mapping) -> Manifest:
             stub = l4_raw["stub"]
             levels_raw = {k: v for k, v in levels_raw.items() if k != "L4"}
         _check_sql_levels(r["sql_name"], levels_raw, r["kind"])
+        _check_sql_param_case(r["sql_name"], params, levels_raw)
         if levels_raw.get("L4", {}).get("sql") == SQL_FROM_L0:
             _check_shared_l0_signature(
                 r["sql_name"],

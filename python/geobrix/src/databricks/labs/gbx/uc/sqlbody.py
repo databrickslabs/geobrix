@@ -9,7 +9,8 @@ Pure Python, no pyspark: it runs where the DDL is built.
 
 A body must not use a parameter name as a lambda variable or an alias: inlining renames identifiers outside quotes
 (matched case-sensitively, whole words only, never after ``AS``, so ``CAST(x AS STRING)`` survives a parameter named
-``string``; a backtick-quoted parameter is renamed too). Helper calls may nest, in a body, in a helper and in an
+``string``; a backtick-quoted parameter is renamed too, except after ``AS`` or ``.``). Spark identifiers are
+case-insensitive, so :func:`case_mismatches` finds a body that spells a parameter in another case. Helper calls may nest, in a body, in a helper and in an
 argument: every path (the UC call, the session's L0 function, a table function) resolves them the same way.
 """
 
@@ -67,10 +68,43 @@ def render(body: str, prefix: str) -> str:
     )
 
 
+_AFTER_AS = re.compile(r"\bas\s+$", re.IGNORECASE)
+_WORD = re.compile(r"(?<![\w.$])(\w+)(?![\w(])")
+
+
+def case_mismatches(body: str, names: Sequence[str]) -> List[Tuple[str, str]]:
+    """``(declared, found)`` for each identifier of ``body`` that spells a name of ``names`` in another case.
+
+    Spark identifiers are case-insensitive and :func:`rename` is not, so such a spelling would reach the engine unbound.
+    The same places are skipped as in :func:`rename`: quoted text (but a backtick name is read), a field after ``.``, a
+    call and what follows ``AS``.
+    """
+    lower = {n.lower(): n for n in names}
+    found: List[Tuple[str, str]] = []
+    seen = ""
+    for code, piece in _segments(body):
+        if code:
+            for m in _WORD.finditer(piece):
+                if _AFTER_AS.search(piece[: m.start()]):
+                    continue
+                declared = lower.get(m.group(1).lower())
+                if declared is not None and declared != m.group(1):
+                    found.append((declared, m.group(1)))
+        elif piece.startswith("`") and not (
+            _AFTER_AS.search(seen) or seen.endswith(".")
+        ):
+            declared = lower.get(piece[1:-1].lower())
+            if declared is not None and declared != piece[1:-1]:
+                found.append((declared, piece[1:-1]))
+        seen += piece
+    return found
+
+
 def rename(body: str, mapping: Mapping[str, str]) -> str:
     """``body`` with each identifier in ``mapping`` replaced by its value. The match is case-sensitive and a whole word;
-    quoted text is untouched, except a backtick-quoted name that IS a parameter; an identifier after ``.`` (a field
-    access), before ``(`` (a function call) or after ``AS`` (a type or an alias) is not the parameter.
+    quoted text is untouched, except a backtick-quoted name that IS a parameter and does not follow ``AS`` or ``.``; an
+    identifier after ``.`` (a field access), before ``(`` (a function call) or after ``AS`` (a type or an alias) is not
+    the parameter.
     """
     mapping = {k: v for k, v in mapping.items() if k != v}
     if not mapping:
@@ -78,11 +112,10 @@ def rename(body: str, mapping: Mapping[str, str]) -> str:
     pat = re.compile(
         r"(?<![\w.$])(" + "|".join(map(re.escape, mapping)) + r")(?![\w(])"
     )
-    after_as = re.compile(r"\bas\s+$", re.IGNORECASE)
 
     def sub_code(piece: str) -> str:
         def one(m):
-            if after_as.search(piece[: m.start()]):
+            if _AFTER_AS.search(piece[: m.start()]):
                 return m.group(0)
             return mapping[m.group(1)]
 
@@ -93,7 +126,13 @@ def rename(body: str, mapping: Mapping[str, str]) -> str:
         if code:
             out.append(sub_code(piece))
         elif piece.startswith("`") and piece[1:-1] in mapping:
-            out.append(mapping[piece[1:-1]])
+            before = "".join(out)
+            if _AFTER_AS.search(before) or before.endswith("."):
+                out.append(
+                    piece
+                )  # `expr AS `k``, `t.`k``: an alias or a field, not the parameter
+            else:
+                out.append(mapping[piece[1:-1]])
         else:
             out.append(piece)
     return "".join(out)

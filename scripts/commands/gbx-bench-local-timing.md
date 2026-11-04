@@ -2,7 +2,7 @@
 
 Time the forms of a levels set at three sizes on `local[8]` in the dev container. Exit 1 when a form does not scale with n, or (with `--baseline`) costs more per tile than it did.
 
-The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` and `--baseline-write` take about 2.5 minutes (2:24 and 2:38 measured): they time every n three times. Run it before a cluster IO round and after a change to `levels_forms._io_read`, `pyrx/_mvp_forms.py` or `open_tile.py`.
+The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` and `--baseline-write` take about 2.5 minutes (2:24 and 2:38 measured): they time every n three times. Run it before a cluster IO round and after a change to `levels_forms._io_read`, `pyrx/tile_batches.py`, `pyrx/_mvp_forms.py`, the `raster_gbx` reader's batch read (`ds/raster.py`) or `open_tile.py`.
 
 **Usage:** `bash scripts/commands/gbx-bench-local-timing.sh [OPTIONS]`
 

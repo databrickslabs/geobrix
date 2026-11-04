@@ -161,22 +161,22 @@ def test_no_window_overlap(tmp_path):
     assert np.all(mask == 1), "Each pixel must appear in exactly one tile window."
 
 
-def test_passthrough_partition_has_no_window(tmp_path):
-    """A small GTiff (below budget) produces a single passthrough partition."""
-    from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
+def test_a_plain_materialized_read_plans_a_whole_file_task_that_opens_no_header(
+    tmp_path, named_raster_reads
+):
+    """virtualTiles=false, no selector, no split: the planner opens nothing; the task decodes the whole file."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader, _BatchPartition
 
     p = tmp_path / "small.tif"
     _write_striped(str(p), side=4, bands=1, dtype="float32")
+    opened = named_raster_reads
 
-    # virtualTiles=false: the virtual default short-circuit bypasses the
-    # passthrough fast path (which lives in the materialized budget branch).
     reader = RasterGbxReader({"path": str(p), "virtualTiles": "false"})
     parts = reader.partitions()
 
-    assert len(parts) == 1
-    assert isinstance(parts[0], _TilePartition)
-    assert parts[0].is_passthrough, "Small GTiff should use passthrough fast path"
-    assert parts[0].window is None
+    assert len(parts) == 1 and isinstance(parts[0], _BatchPartition)
+    assert parts[0].file_paths == [str(p)] and parts[0].window is None
+    assert opened == [], "the planner opened a header"
 
 
 # ---------------------------------------------------------------------------

@@ -283,6 +283,41 @@ class _TilePartition(InputPartition):
         self.folder_files: Optional[int] = None
 
 
+# A folder of many files is read in groups: the planner opens no header (that is one serial open per file on the
+# driver, a FUSE round trip each on a Volume) and a task decodes `files_per_task(n)` files in bounded Arrow batches.
+_FILES_PER_TASK_MAX = 8  # the most files in one task (a few ~16 MB tiles each: the batch is bounded by bytes, too)
+_FILES_PER_TASK_FROM = 64  # a task takes n_files // this files, so a folder under 128 files is a task per file
+
+
+def files_per_task(n_files: int) -> int:
+    """How many files one task of a plain read decodes: `n_files // _FILES_PER_TASK_FROM`, at least 1 and never more
+    than `_FILES_PER_TASK_MAX`. A folder under 128 files is one task per file; 1000 files are 125 tasks of 8; the task
+    count then stays at 64 to 128 for folders up to 512 files, so a cluster's cores are not left idle.
+    """
+    return max(1, min(_FILES_PER_TASK_MAX, int(n_files) // _FILES_PER_TASK_FROM))
+
+
+class _BatchPartition(InputPartition):
+    """The whole-file tiles of one task of a plain read (``virtualTiles=false``, no clip, window, tile size or split).
+
+    Planned without opening a file: the task opens each header when it decodes (``materialize_batches``), so the
+    planner's cost does not grow with the file count. ``file_paths`` are in listing order; ``folder_files`` is the
+    count of files the planner found beside each (None when it is under the bound a worker lists up to).
+    """
+
+    window = (
+        None  # a task of whole files: no part of one file (``_quarantine.part_label``)
+    )
+
+    def __init__(self, file_paths, folder_files=None):
+        self.file_paths = list(file_paths)
+        self.folder_files = list(folder_files or [None] * len(self.file_paths))
+
+    @property
+    def file_path(self) -> str:
+        return self.file_paths[0]
+
+
 # ---------------------------------------------------------------------------
 # Backward-compatible alias: old code that constructs _FilePartition directly
 # (notably test_raster_datasource.py and test_raster_large.py) still works.
@@ -1071,6 +1106,13 @@ class RasterGbxReader(DataSourceReader):
                 "regular tiling grid only)."
             )
         self.emit_virtual = str(options.get("virtualTiles", "true")).lower() == "true"
+        # The read cap of a task that decodes at read, captured here on the driver: a worker cannot measure it
+        # (64 MiB on Serverless / Spark Connect, 256 MiB classic).
+        self._read_cap = None
+        if not self.emit_virtual:
+            from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+            self._read_cap = report_detected_cap()
 
         # Approach 1 — pre-computed tile input.
         # When manifest or tilesTable is present, partitions() reads tile rows
@@ -1159,6 +1201,31 @@ class RasterGbxReader(DataSourceReader):
             return parts
         return sorted(parts, key=lambda p: (p.file_path is None, p.file_path or ""))
 
+    def _decodes_whole_files(self, budget_bytes: int) -> bool:
+        """A plain read with bytes: whole files, no selector (clip, windows, tile size) and no split budget. Its tiles
+        are decoded at read in bounded batches (:meth:`_read_batch`); any other read plans a tile at a time.
+        """
+        return (
+            not self.emit_virtual
+            and not (self.clip_polygons or self.windows or self.tile_size)
+            and budget_bytes <= 0
+        )
+
+    def _plan_batches(self, files: list, folder_files: dict) -> list:
+        """One :class:`_BatchPartition` per `files_per_task` consecutive files (listing order). No header is opened."""
+        if self.skip_ordering:
+            order = files
+        else:
+            order = sorted(files)
+        per_task = files_per_task(len(order))
+        return [
+            _BatchPartition(
+                order[i : i + per_task],
+                [folder_files.get(os.path.dirname(f)) for f in order[i : i + per_task]],
+            )
+            for i in range(0, len(order), per_task)
+        ]
+
     def partitions(self) -> Sequence[InputPartition]:
         resolved_budget = _resolved_budget(self.size_mib, self.strategy)
 
@@ -1241,6 +1308,8 @@ class RasterGbxReader(DataSourceReader):
         # never n = file_count.
         files = self._list_source_files()
         folder_files = getattr(self, "_folder_files", {})
+        if self._decodes_whole_files(resolved_budget):
+            return self._plan_batches(files, folder_files)
         result: list = []
         for f in files:
             n = folder_files.get(os.path.dirname(f))
@@ -1280,6 +1349,10 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         if getattr(partition, "_is_legacy", False):
             yield from self._read_legacy(partition)
+            return
+
+        if isinstance(partition, _BatchPartition):
+            yield from self._read_batch(partition)
             return
 
         source = _listing.to_spark_uri(partition.file_path)
@@ -1507,6 +1580,114 @@ class RasterGbxReader(DataSourceReader):
                 crs=tile_crs,
             ),
         )
+
+    # ------------------------------------------------------------------
+    # Decode at read: a task of whole files, in bounded Arrow batches
+    # ------------------------------------------------------------------
+    def _read_batch(self, partition: "_BatchPartition") -> Iterator:
+        """The tiles of a task's files as Arrow batches of ``(source, tile)``, decoded in one Python call by
+        ``tile_batches.materialize_batches``: a batch holds at most ``out_chunk_bytes()`` of decoded bytes, so a
+        task's memory does not grow with its file count. A file that cannot be read (a bad file, a refused
+        location, a tile over the read cap) fails the read, as a file of any other plan does: ``read_paths`` sets it
+        aside with ``on_error="skip"`` or ``"quarantine"``."""
+        import pyarrow as pa
+
+        from databricks.labs.gbx.ds.paths import _arrow_schema
+        from databricks.labs.gbx.pyrx import tile_batches
+        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+        want = _arrow_schema(reader_schema_v2())
+        one = pa.schema([pa.field("tile", want.field("tile").type)])
+        for path, n in zip(partition.file_paths, partition.folder_files):
+            _env.note_folder_files(path, n)
+        batch = pa.RecordBatch.from_pylist(
+            [
+                {"tile": VirtualTile(cellid=_encode.CELLID_FRESH, path=p).to_row()}
+                for p in partition.file_paths
+            ],
+            schema=one,
+        )
+        sources = [_listing.to_spark_uri(p) for p in partition.file_paths]
+        at = 0
+        for out in tile_batches.materialize_batches(
+            [batch], cap_bytes=self._read_cap, decode=self._whole_file_tile
+        ):
+            n = out.num_rows
+            yield pa.RecordBatch.from_arrays(
+                [
+                    pa.array(sources[at : at + n], want.field("source").type),
+                    out.column("tile"),
+                ],
+                schema=want,
+            )
+            at += n
+
+    def _whole_file_tile(self, tile: dict, cap_bytes) -> dict:
+        """The materialized row of a whole file: a GTiff passes through as the file's own bytes (no decode, colormaps
+        and masks kept), any other driver is re-encoded as a GTiff. Refused over the read cap before the bytes are
+        read, and over the 2 GiB cell limit."""
+        from databricks.labs.gbx.pyrx import tile_batches
+        from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
+        path = tile["path"]
+        size = os.path.getsize(path)
+        with open_raster(path) as ds:
+            tile_crs = crs_to_canonical(ds.crs)
+            width, height, driver, bands = ds.width, ds.height, ds.driver, ds.count
+            dtype = ds.dtypes[0]
+            compression = str(ds.profile.get("compress") or "DEFLATE").upper()
+        est = _estimate_tile_bytes(width, height, bands, "float32", size)
+        if est > _MAX_TILE_BYTES:
+            raise ValueError(
+                f"raster {path} is ~{est // (1024 * 1024)} MB "
+                f"as a single tile, which exceeds the ~2 GB Spark cell limit; "
+                f"set the reader option sizeInMB=<n> (a positive MB value) to "
+                f"tile it into smaller pieces."
+            )
+        passthrough = driver == "GTiff"
+        held = (
+            size
+            if passthrough
+            else _estimate_tile_bytes(width, height, bands, dtype, size)
+        )
+        tile_batches.refuse_over_cap(held, cap_bytes, "the tile")
+        if passthrough:
+            cellid, raster_bytes, meta = _encode.passthrough_tile(
+                path,
+                width,
+                height,
+                source_path=path,
+                all_parents="",
+                compression=compression,
+            )
+        else:
+            with _RASTER_STAGE.use(path) as local_path:
+                with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
+                    with open_raster(local_path) as ds:
+                        cellid, raster_bytes, meta = _encode.encode_tile(
+                            ds,
+                            window=(0, 0, width, height),
+                            source_path=path,
+                            all_parents="",
+                            tile_format="gtiff",
+                        )
+        meta["tile_byte_size"] = str(len(raster_bytes))
+        return {
+            "cellid": int(cellid),
+            "raster": raster_bytes,
+            "path": path,
+            "path_mode": None,
+            "window": {
+                "col_off": 0,
+                "row_off": 0,
+                "width": int(width),
+                "height": int(height),
+            },
+            "clip_polygon": None,
+            "clip_crs": None,
+            "crs": tile_crs,
+            "metadata": meta,
+        }
 
     # ------------------------------------------------------------------
     # Legacy path (backward compat with tests that use _FilePartition directly)

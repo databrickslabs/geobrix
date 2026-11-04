@@ -506,6 +506,24 @@ def test_pytest_addopts_reaches_the_gbx_test_python_container_run(sandbox):
     env = [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "pytest" in c[-1]][-1]
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
 
+    # the phased run (no --path) passes it to every phase's pytest; unset, nothing is passed
+    for action in ("python_build", "pyrx_build"):
+        dest = sandbox.root / ".github" / "actions" / action / "action.yml"
+        dest.parent.mkdir(parents=True)
+        dest.write_text((REPO_ROOT / ".github" / "actions" / action / "action.yml").read_text())
+
+    def phase_envs():
+        return [e for c, e in zip(sandbox.execs(), sandbox.exec_envs()) if "pytest" in c[-1]]
+
+    before = len(phase_envs())
+    sandbox.run("gbx-test-python.sh", PYTEST_ADDOPTS="--durations=7")
+    phases = phase_envs()[before:]
+    assert len(phases) == 2 and all(e["PYTEST_ADDOPTS"] == "--durations=7" for e in phases)
+    before = len(phase_envs())
+    sandbox.run("gbx-test-python.sh")
+    phases = phase_envs()[before:]
+    assert len(phases) == 2 and all("PYTEST_ADDOPTS" not in e for e in phases)
+
 
 def test_a_native_payload_reaches_the_scala_test_jvm(sandbox):
     # The Scala run passes GBX_NATIVE_ROOT (as its /root/geobrix path) beside the locale; unset, nothing is passed.

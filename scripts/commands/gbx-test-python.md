@@ -28,6 +28,8 @@ Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in 
 
 `PYTEST_ADDOPTS` in the calling shell (`--durations=20`, `--junitxml=...`) is passed into the container's pytest, in the `--path` run and in each phase, as `gbx:test:pyrx` does.
 
+- A `--junitxml` path is reliable only with `--path`. The phased run starts one pytest per phase, and each overwrites the file, so it keeps the last phase's report.
+
 ## Phased default run (no `--path`)
 
 | Phase | What runs | Where the list comes from |

@@ -25,6 +25,10 @@ Set `GBX_NATIVE_ROOT` in the calling shell to run the container's pytest on a na
 
 Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged. Unset, nothing is passed and the harness runs every table.
 
+## Pytest options
+
+Set `PYTEST_ADDOPTS` in the calling shell (`--durations=20`) to pass it into each file's pytest process. Each file is its own process, so a `--junitxml` path is overwritten by every file after the first; keep it for a single `--path` file.
+
 ## Why this command exists
 
 Parity suites are marked `@pytest.mark.integration` and need the assembly JAR staged in `python/geobrix/lib/`, because they start a Spark session with `spark.jars` pointing at it to call the heavy tier. In a normal `gbx:test:python` run they are excluded by the default `not integration` marker filter, and even with `--with-integration` they self-skip when no JAR is staged.

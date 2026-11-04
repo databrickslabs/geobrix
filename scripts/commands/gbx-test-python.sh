@@ -21,7 +21,7 @@ show_help() {
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Oracle tables:${NC} set ${YELLOW}GBX_ORACLE_TABLES=<T1,T2>${NC} in the calling shell to run only those oracle tables in the family harness; it is passed into the container unchanged."
-    echo -e "${CYAN}Pytest options:${NC} set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (e.g. '--durations=20 --junitxml=test-logs/python.xml'); it is passed into the container."
+    echo -e "${CYAN}Pytest options:${NC} set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (e.g. '--durations=20 --junitxml=test-logs/python.xml'); it is passed into the container, to the --path run and to each phase. A --junitxml path is reliable only with --path (each phase overwrites it)."
     echo ""
     echo -e "${CYAN}Phases (no --path):${NC} the heavy and light tiers cannot share one pytest process, so the default"
     echo -e "  run mirrors CI's heavy and light jobs as separate pytest invocations (the light phase is one process here; CI shards it), each with its own log, and prints a per-phase summary:"

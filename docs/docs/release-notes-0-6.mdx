@@ -720,6 +720,7 @@ Every raster function follows the same order of checks on both implementations.
   - A kernel that is not rectangular with odd sides, or percentiles outside 0 to 100.
   - A method other than `spectral`, `kmeans` or `hybrid`, a subdataset the tile lacks, or a band past the last band.
   - An `out_srid` that is not a positive EPSG or ESRI code.
+  - `gbx_rst_slope` raises for a unit other than `degrees` or `percent`; it used to treat any other value as degrees.
   - The Python Column API raises the same errors as SQL.
   - Heavyweight functions that gave an error tile for a wrong argument now fail the call.
 - **An aggregate of only error tiles gives the first error tile.** `rst_combine*` and `rst_frombands` skip a NULL element, an error tile or a tile that cannot be opened, and combine the others.

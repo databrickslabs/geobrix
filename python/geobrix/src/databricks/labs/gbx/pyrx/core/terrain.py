@@ -114,6 +114,16 @@ HILLSHADE_HALF_SCALE_REFUSAL = SLOPE_HALF_SCALE_REFUSAL.replace(
     "gbx_rst_slope", "gbx_rst_hillshade"
 )
 
+SLOPE_UNITS = ("degrees", "percent")
+
+
+def slope_unit_refusal(unit) -> str:
+    """The reason of a slope unit that is neither degrees nor percent (the same text on every surface)."""
+    return (
+        f"gbx_rst_slope: unit must be 'degrees' or 'percent'; got {str(unit)!r}. "
+        "Fix: pass 'degrees' or 'percent'"
+    )
+
 
 def _resolve_scale(ds, xscale, yscale) -> tuple:
     """Explicit (xscale, yscale) when BOTH given, else GDAL-normal auto-scale."""
@@ -133,12 +143,14 @@ def slope(ds, unit: str = "degrees", xscale=None, yscale=None) -> bytes:
 
     Args:
         ds:    Open rasterio DatasetReader. Band 1 is the DEM.
-        unit:  ``"degrees"`` (default) or ``"percent"``.
+        unit:  ``"degrees"`` (default) or ``"percent"``; any other value raises.
         xscale, yscale: optional explicit scale overrides (both or neither).
 
     Returns:
         Single-band Float32 GTiff bytes; nodata = -9999.
     """
+    if str(unit) not in SLOPE_UNITS:
+        raise ValueError(slope_unit_refusal(unit))
     if (xscale is None) != (yscale is None):
         raise ValueError(SLOPE_HALF_SCALE_REFUSAL)
     dzdx, dzdy, valid = _horn_gradients(ds)

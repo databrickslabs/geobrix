@@ -383,6 +383,17 @@ def test_hillshade_auto_scale_geographic_realistic():
     assert np.array_equal(r[1:-1, 1:-1], expected[1:-1, 1:-1])
 
 
+@pytest.mark.parametrize("unit", ["radians", "Degrees", ""])
+def test_slope_refuses_a_unit_that_is_not_degrees_or_percent(unit):
+    """Any other unit is a wrong argument that names the value, never a silent read as degrees."""
+    with _serde.open_tile(_dem(np.zeros((4, 4)))) as ds:
+        with pytest.raises(ValueError) as exc:
+            terrain.slope(ds, unit=unit)
+    assert f"unit must be 'degrees' or 'percent'; got {unit!r}. Fix: pass" in str(
+        exc.value
+    )
+
+
 @pytest.mark.parametrize("scales", [{"xscale": 2.0}, {"yscale": 2.0}])
 def test_slope_refuses_one_scale_without_the_other(scales):
     """The legacy kernel (and the force-output path that runs it) refuses half a scale, as the engine does."""

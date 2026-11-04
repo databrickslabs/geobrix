@@ -91,6 +91,14 @@ TABLE, TABLE_A = Build("cr_table"), Build("cr_table_alpha")
 _session_dem_rows = (
     # slope: the engine's own rows (SPEC_SE) hold its edge cases; this one is the docs example.
     Case("slope_example", SL, (DEM, "degrees"), "ref", "slope", ONLY),
+    Case(
+        "slope_bad_unit",
+        SL,
+        (DEM, "radians"),
+        "raises",
+        "unit must be 'degrees' or 'percent'",
+        ONLY,
+    ),
     Case("aspect_compass", AS, (DEM, False, False), "ref", "aspect", ONLY),
     Case("aspect_trig", AS, (DEM, True, False), "ref", "aspect", ONLY),
     Case("aspect_plane_east", AS, (PLANE, False, False), "ref", "aspect", ONLY),
@@ -222,8 +230,7 @@ _session_dem_rows += (
 
 
 # Unity Catalog: the surface of a materialized DEM tile is the session's; a virtual tile is refused with a Fix, a
-# corrupt one is NULL, and a unit that is not degrees or percent is a wrong argument (the session reads any other as
-# degrees).
+# corrupt one is NULL, and a unit that is not degrees or percent is a wrong argument (the session raises too).
 SPEC_DEM = share(
     _session_dem_rows,
     "slope_example", "aspect_compass", "aspect_trig", "aspect_plane_east", "aspect_flat_nodata", "aspect_flat_zero",

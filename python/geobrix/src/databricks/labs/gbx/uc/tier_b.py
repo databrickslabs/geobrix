@@ -919,3 +919,264 @@ rst_proximity = _tile_fn(
     ),
     grows=_surface("float32"),
 )
+
+
+# --- an ARRAY of tiles: combine, merge, frombands, mapalgebra -------------------------------------------------------
+# The session rules for the members of an array (pyrx.core.arrays): a NULL element is skipped, an error tile or a tile
+# that cannot be read is skipped and counted in the result's `last_error`, an array of nothing but error tiles answers
+# the first of them, and an array with no usable member is NULL. UC adds what a sandbox needs: a virtual member refuses
+# the array, and the members' decoded sizes plus the result's are checked against the cap before any pixel is read.
+def _agg():
+    from databricks.labs.gbx.pyrx.core import agg
+
+    return agg
+
+
+def array_members(fn: str, tiles):
+    """``(members, done, value)`` for an ARRAY<TILE> argument: ``members`` is ``[(tile, raster bytes)]`` for the
+    elements that hold a raster, in order. A virtual element refuses the array (before anything is read). With no
+    element holding a raster, ``done`` is True and ``value`` is the first error tile when every non-NULL element is
+    one, else NULL."""
+    if tiles is None:
+        return [], True, None
+    present = [t for t in tiles if t is not None]
+    members = []
+    for t in present:
+        raster = raster_of(fn, t)
+        if raster is not None:
+            members.append((t, raster))
+    if members:
+        return members, False, None
+    errors = [error_row(t) for t in present if _is_error_tile(t)]
+    if present and len(errors) == len(present):
+        return [], True, _kernel("arrays", "first_error")(errors)
+    return [], True, None
+
+
+def usable_members(members):
+    """``(tiles, rasters, dropped)``: the members whose bytes open as a raster (the others are counted, not errors)."""
+    rasters, kept, dropped = _kernel("arrays", "collect_members")(
+        members, lambda m: m[1]
+    )
+    return [t for t, _ in kept], rasters, dropped
+
+
+def check_array_cap(fn: str, hdrs, output: int, member_fix: str, total_fix: str):
+    """Refuse an array before any pixel is read: a member decoded over the cap, or the members together with the result
+    over it. The Fix of each is the session function's route for it."""
+    cap = DECODED_CAP
+    for h in hdrs:
+        if h.decoded > cap:
+            raise _Refusal(
+                f"{fn}: the tile is {size_text(h.decoded)} decoded, over the {size_text(cap)} a Unity Catalog "
+                f"function decodes. Fix: {member_fix}"
+            )
+    members = sum(h.decoded for h in hdrs)
+    if members + output > cap:
+        raise _Refusal(
+            f"{fn}: the {len(hdrs)} tiles are {size_text(members)} decoded and the result {size_text(output)}, "
+            f"together over the {size_text(cap)} a Unity Catalog function decodes. Fix: {total_fix}"
+        )
+
+
+def run_array_kernel(fn: str, kernel: Callable):
+    """``kernel()`` with the UC cap as the read cap every gate of the kernel judges by. A refusal of the kernel keeps its
+    Fix; a wrong argument, resource exhaustion and a missing dependency raise; bytes the kernel cannot read are NULL.
+    """
+    from databricks.labs.gbx._gdal_policy import carried
+
+    agg = _agg()
+    try:
+        with carried(None, DECODED_CAP):
+            return kernel()
+    except (agg.ReadCapRefused, agg.MosaicTooLarge) as exc:
+        raise _Refusal(f"{fn}: {exc}") from exc
+    except (ValueError, MemoryError, RecursionError, ImportError):
+        raise
+    except Exception:  # noqa: BLE001 - unreadable data is NULL on UC (no error tile)
+        return None
+
+
+def array_row(fn: str, raster, cellid: int, op: str, dropped: int = 0):
+    """The tile an array function returns: the cell id the session gives it, and the note for the members it skipped."""
+    row = tile_row(fn, {"cellid": cellid}, raster)
+    if row is not None and dropped:
+        row["metadata"]["last_error"] = _kernel("arrays", "skipped_note")(op, dropped)
+    return row
+
+
+def _cellid(tile) -> int:
+    return int(_field(tile, "cellid") or 0)
+
+
+def _array_fn(
+    sql_name: str, op: str, kernel: Callable, output: Callable, fixes: Callable
+):
+    """A handler ``(tiles)`` for a function that folds an array into one tile.
+
+    ``kernel(rasters)`` makes the GTiff bytes, ``output(hdrs)`` is the decoded size of the result, ``fixes(hdrs)`` gives
+    the ``(member, total)`` Fix of an array over the cap, and the cell id of the result is the session's rule for ``op``.
+    """
+    fn = sql_name
+
+    def handler(tiles):
+        members, done, value = array_members(fn, tiles)
+        if done:
+            return value
+        kept, rasters, dropped = usable_members(members)
+        if not rasters:
+            return None
+        hdrs = _agg()._scan_headers(rasters)
+        check_array_cap(fn, hdrs, output(hdrs), *fixes(hdrs))
+        made = run_array_kernel(fn, lambda: kernel(rasters))
+        return array_row(fn, made, _result_cellid(op, kept), op, dropped)
+
+    handler.__name__ = sql_name[len("gbx_") :]
+    handler.__doc__ = (
+        f"{sql_name} over an array of materialized tiles ({op}); the tile it makes."
+    )
+    HANDLERS[sql_name] = handler
+    return handler
+
+
+def _result_cellid(op: str, kept) -> int:
+    """The cell id of a result, by the session rule of each function: a combine keeps the cell id its members share (-1
+    when they differ), a merge has none (0), a stack of bands keeps the first member's.
+    """
+    if op == "RST_Merge":
+        return 0
+    if op == "RST_FromBands":
+        return _cellid(kept[0])
+    return _kernel("arrays", "shared_cellid")([_cellid(t) for t in kept])
+
+
+def _same_grid(hdrs) -> int:
+    """The decoded size of one band of the first member's grid in its first band's type, times its bands."""
+    ref = hdrs[0]
+    return grid_bytes(ref.width, ref.height, ref.dtypes[:1] * ref.count)
+
+
+def _combine_fixes(hdrs):
+    route = _agg()._COMBINE_OUT_ROUTE
+    return route, route
+
+
+def _combine(stat: str) -> Callable:
+    reducer = "combineavg_tiles" if stat == "avg" else f"combine_{stat}_tiles"
+    return _array_fn(
+        f"gbx_rst_combine{stat}",
+        f"RST_Combine{stat.capitalize()}",
+        lambda rasters: getattr(_agg(), reducer)(rasters),
+        _same_grid,
+        _combine_fixes,
+    )
+
+
+rst_combineavg = _combine("avg")
+rst_combinecount = _combine("count")
+rst_combinemax = _combine("max")
+rst_combinemedian = _combine("median")
+rst_combinemin = _combine("min")
+rst_combinestddev = _combine("stddev")
+rst_combinesum = _combine("sum")
+
+
+def _session_fix(fn: str):
+    return (
+        lambda hdrs: (
+            (
+                f"run {fn} in a notebook or job session, or retile first (gbx_rst_retile) so each tile is smaller"
+            ),
+        )
+        * 2
+    )
+
+
+def _stack_bytes(hdrs) -> int:
+    """The decoded size of the stack of every member's bands on the first member's grid."""
+    ref = hdrs[0]
+    return grid_bytes(ref.width, ref.height, [dt for h in hdrs for dt in h.dtypes])
+
+
+rst_frombands = _array_fn(
+    "gbx_rst_frombands",
+    "RST_FromBands",
+    lambda rasters: _agg().frombands_tiles(list(enumerate(rasters))),
+    _stack_bytes,
+    _session_fix("gbx_rst_frombands"),
+)
+
+
+def rst_merge(tiles):
+    """gbx_rst_merge: the mosaic of an array of tiles by extent, in the CRS of the lowest EPSG code (tiles in other CRSs
+    are reprojected onto it). A mosaic the sandbox cannot build in memory is refused with the session's routes.
+    """
+    fn = "gbx_rst_merge"
+    members, done, value = array_members(fn, tiles)
+    if done:
+        return value
+    kept, rasters, dropped = usable_members(members)
+    if not rasters:
+        return None
+    agg = _agg()
+    hdrs = agg._scan_headers(rasters)
+    ref_crs = agg._pick_ref_crs(hdrs)
+    mixed = agg._mixed_grid(hdrs, ref_crs)
+    try:
+        union = agg._union_decoded_bytes(hdrs, ref_crs)
+    except (
+        Exception
+    ):  # noqa: BLE001 - the kernel's own size gate falls back the same way
+        union = max(h.decoded for h in hdrs)
+    check_array_cap(
+        fn,
+        hdrs,
+        union,
+        "retile it first (gbx_rst_retile) so each tile is smaller, or "
+        + agg._vrt_fix(agg._VRT_ROUTE, mixed),
+        agg._vrt_fix(agg._MOSAIC_ROUTE, mixed),
+    )
+    made = run_array_kernel(fn, lambda: agg.merge_tiles(rasters, stream=False))
+    return array_row(fn, made, 0, "RST_Merge", dropped)
+
+
+HANDLERS["gbx_rst_merge"] = rst_merge
+
+
+def rst_mapalgebra(tiles, expression):
+    """gbx_rst_mapalgebra: an expression over band 1 of each tile (A, B, C, ... in array order), or the bands a JSON spec
+    names, as a Float32 tile on the first tile's grid. The expression is evaluated by numexpr (math only). An error
+    member goes through; a member that cannot be read is NULL (every member is needed).
+    """
+    fn = "gbx_rst_mapalgebra"
+    if tiles is None or expression is None:
+        return None
+    members, done, value = array_members(fn, tiles)
+    if done:
+        return value
+    errors = [error_row(t) for t in tiles if t is not None and _is_error_tile(t)]
+    if errors:
+        return _kernel("arrays", "first_error")(errors)
+    try:
+        _kernel("mapalgebra", "check_expression")(expression, len(members))
+    except ValueError as exc:
+        raise _Parameter(f"{fn}: {exc}") from exc
+    rasters = [r for _, r in members]
+    agg = _agg()
+    try:
+        hdrs = agg._scan_headers(rasters)
+    except Exception:  # noqa: BLE001 - a member that cannot be read: the call is NULL
+        return None
+    check_array_cap(
+        fn,
+        hdrs,
+        grid_bytes(hdrs[0].width, hdrs[0].height, ["float32"]),
+        *_session_fix(fn)(hdrs),
+    )
+    made = run_array_kernel(
+        fn, lambda: _kernel("mapalgebra", "mapalgebra")(rasters, str(expression))
+    )
+    return array_row(fn, made, _cellid(tiles[0]), "RST_MapAlgebra")
+
+
+HANDLERS["gbx_rst_mapalgebra"] = rst_mapalgebra

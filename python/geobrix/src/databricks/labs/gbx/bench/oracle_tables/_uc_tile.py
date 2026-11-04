@@ -53,3 +53,25 @@ def edges(_not_null=(), **extra):
             )
         )
     return tuple(rows)
+
+
+def array_edges(**extra):
+    """The UC refusal and corrupt-tile rows of each function over an ARRAY of tiles: `array_edges(combineavg=(),
+    mapalgebra=("A * 2",))` takes the function's short name and the arguments after the array. Per function: an array
+    of one virtual tile and a stack with a virtual member are refused with a Fix, so is a stack whose members and
+    result are over the UC cap, and an array of nothing but a corrupt tile is NULL."""
+    rows = []
+    for short, args in extra.items():
+        fn = f"gbx_rst_{short}"
+        for cid, build, kind in (
+            ("virtual_refused", "aa_virtual_only", "uc_refused"),
+            ("virtual_member_refused", "aa_stack_virtual_member", "uc_refused"),
+            ("over_cap_sum_refused", "aa_over_cap_sum", "uc_refused"),
+            ("corrupt_null", "aa_corrupt_only", "null"),
+        ):
+            rows.append(
+                Case(
+                    f"uc_{short}_{cid}", fn, (Build(build), *args), kind, None, ("uc",)
+                )
+            )
+    return tuple(rows)

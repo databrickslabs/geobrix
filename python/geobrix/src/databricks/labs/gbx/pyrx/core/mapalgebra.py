@@ -96,6 +96,25 @@ def _parse_spec(expression: str, n_rasters: int):
     return str(calc), bindings
 
 
+def check_expression(expression: str, n_rasters: int) -> None:
+    """Raise a ``ValueError`` (with a Fix) when ``expression`` cannot be evaluated over ``n_rasters`` tiles, before any
+    raster is read: the spec does not parse, it names a tile that is not there, or numexpr cannot evaluate the
+    expression of the variables that are bound (an unbound letter, an operation numexpr does not have).
+    """
+    calc, bindings = _parse_spec(str(expression), n_rasters)
+    needed = set(bindings) | {_VARS[i] for i in range(n_rasters)}
+    probe = {var: np.zeros((1, 1), dtype="float64") for var in needed}
+    try:
+        ne.evaluate(calc, local_dict=probe)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - whatever numexpr rejects is a wrong expression
+        raise ValueError(
+            f"map-algebra expression {calc!r} cannot be evaluated: {exc}. Fix: use the letters of the tiles (A is band "
+            "1 of the first tile, B of the second, ...) and numexpr operations only"
+        ) from exc
+
+
 def mapalgebra(rasters, expression: str) -> bytes:
     """Apply a math expression across one or more rasters.
 

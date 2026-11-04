@@ -1265,7 +1265,12 @@ SPEC_SE: Tuple[Case, ...] = (
         ("session",),
     ),
     Case(
-        "se_ma_times2", MALG, (Build("se_one"), "A * 2"), "ref", "times2", ("session",)
+        "se_ma_times2",
+        MALG,
+        (Build("se_one"), "A * 2"),
+        "ref",
+        "times2",
+        ("session", "uc"),
     ),
     Case(
         "se_ma_nd_two_tiles",
@@ -1273,7 +1278,7 @@ SPEC_SE: Tuple[Case, ...] = (
         (Build("se_pair"), "(A - B) / (A + B)"),
         "ref",
         "norm_diff",
-        ("session",),
+        ("session", "uc"),
     ),
     Case(
         "se_ma_multiband",
@@ -1284,7 +1289,7 @@ SPEC_SE: Tuple[Case, ...] = (
         ),
         "ref",
         "nd_bands_4_3",
-        ("session",),
+        ("session", "uc"),
     ),
     # A literal expression GDAL cannot evaluate is a parameter error, found by the engine's dry run (muparser's
     # message names the fault).
@@ -1302,10 +1307,15 @@ SPEC_SE: Tuple[Case, ...] = (
         (Build("se_one"), '{"calc": "A*2", "extra_options": "--hideNoData"}'),
         "raises",
         "extra_options",
-        ("session",),
+        ("session", "uc"),
     ),
     Case(
-        "se_ma_unbound", MALG, (Build("se_one"), "A + C"), "raises", "C", ("session",)
+        "se_ma_unbound",
+        MALG,
+        (Build("se_one"), "A + C"),
+        "raises",
+        "C",
+        ("session", "uc"),
     ),
     Case(
         "se_ma_error_in",
@@ -1313,7 +1323,7 @@ SPEC_SE: Tuple[Case, ...] = (
         (Build("se_error_pair"), NORM_DIFF),
         "error_tile",
         UPSTREAM_ERROR,
-        ("session",),
+        ("session", "uc"),
     ),
     # Two tiles whose CRS differ: a fault of the data, so that row's error tile (not a parameter error that fails the
     # query); the same expression over a matching pair afterwards still runs (the check caches no data fault).
@@ -1331,9 +1341,52 @@ SPEC_SE: Tuple[Case, ...] = (
         (Build("se_pair"), "(A - B) / (A + B) + 0"),
         "ref",
         "norm_diff",
-        ("session",),
+        ("session", "uc"),
     ),
-    Case("se_ma_null", MALG, (None, NORM_DIFF), "null", None, ("session",)),
+    Case("se_ma_null", MALG, (None, NORM_DIFF), "null", None, ("session", "uc")),
+    # Unity Catalog evaluates with numexpr: an expression it cannot evaluate is a wrong argument, found before any
+    # raster is read; an array of members over the cap, or with a virtual member, is refused with a Fix
+    Case(
+        "uc_ma_bad_syntax",
+        MALG,
+        (Build("se_one"), "A +* 2"),
+        "raises",
+        "cannot be evaluated",
+        ("uc",),
+    ),
+    Case("uc_ma_null_expression", MALG, (Build("se_one"), None), "null", None, ("uc",)),
+    Case(
+        "uc_ma_virtual_refused",
+        MALG,
+        (Build("aa_virtual_only"), "A * 2"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_ma_virtual_member_refused",
+        MALG,
+        (Build("aa_stack_virtual_member"), "A + B"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_ma_over_cap_sum_refused",
+        MALG,
+        (Build("aa_over_cap_sum"), "A + B"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_ma_corrupt_null",
+        MALG,
+        (Build("aa_corrupt_only"), "A * 2"),
+        "null",
+        None,
+        ("uc",),
+    ),
 )
 
 
@@ -4935,6 +4988,17 @@ def _legacy_literal(value: dict, param) -> str:
 def _sql_literal(value, param, case: Case) -> str:
     if value is None:
         return "NULL"
+    if isinstance(value, list):  # an ARRAY<TILE>: a NULL element is a NULL tile
+        elem = replace(param, uc="TILE")
+        items = ", ".join(
+            (
+                "CAST(NULL AS " + sql_type("TILE") + ")"
+                if v is None
+                else _sql_literal(v, elem, case)
+            )
+            for v in value
+        )
+        return f"array({items})" if value else f"CAST(array() AS {sql_type(param.uc)})"
     if isinstance(value, dict) and "typeId" in value:
         return _legacy_literal(value, param)
     if isinstance(value, dict):

@@ -164,6 +164,8 @@ _UC_TABLES = (
     "SPEC_WARP",
     "SPEC_CALC",
     "SPEC_DEM",
+    "RASTER_ARRAY_OP",
+    "SPEC_SE",
 )
 
 
@@ -178,7 +180,12 @@ def _uc_fns(table):
     )
 
 
-UC_ROWS = [pytest.param(t, fn, id=f"{fn}-L4") for t in _UC_TABLES for fn in _uc_fns(t)]
+UC_ROWS = [
+    pytest.param(t, fn, id=f"{fn}-L4")
+    for t in _UC_TABLES
+    if not _ONLY or t in _ONLY
+    for fn in _uc_fns(t)
+]
 
 
 @pytest.mark.parametrize("table,sql_name", UC_ROWS)

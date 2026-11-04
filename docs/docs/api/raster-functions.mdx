@@ -1912,16 +1912,17 @@ Output CRS via `out_srid` (int); input points assumed already in the output CRS.
 ### rst_frombands
 
 {/* BEGIN GENERATED gbx_rst_frombands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_frombands(bands)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_frombands(bands)` | `TILE` |
 | Python | `rasterx.functions.rst_frombands(bands, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `bands` | `ARRAY<TILE>` |  | The single-band tiles, in an array: element 0 becomes band 1, element 1 band 2, and so on. The georeference, data type and NoData come from the first. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `bands` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The single-band tiles, in an array: element 0 becomes band 1, element 1 band 2, and so on. The georeference, data type and NoData come from the first. |
 {/* END GENERATED gbx_rst_frombands */}
 
 :::note Implementation
@@ -3894,16 +3895,17 @@ Per-band percentile contrast stretch to uint8. For each band, `lo_pct` and `hi_p
 ### rst_combineavg
 
 {/* BEGIN GENERATED gbx_rst_combineavg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combineavg(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combineavg(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combineavg(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combineavg */}
 
 :::note Implementation
@@ -3929,16 +3931,17 @@ Average multiple tiles (e.g. temporal composite).
 ### rst_combinecount
 
 {/* BEGIN GENERATED gbx_rst_combinecount: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combinecount(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combinecount(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combinecount(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combinecount */}
 
 :::note Implementation
@@ -3960,16 +3963,17 @@ Count of valid pixels per location.
 ### rst_combinemax
 
 {/* BEGIN GENERATED gbx_rst_combinemax: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combinemax(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combinemax(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combinemax(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combinemax */}
 
 :::note Implementation
@@ -3991,16 +3995,17 @@ Maximum pixel value per location.
 ### rst_combinemedian
 
 {/* BEGIN GENERATED gbx_rst_combinemedian: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combinemedian(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combinemedian(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combinemedian(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combinemedian */}
 
 :::note Implementation
@@ -4022,16 +4027,17 @@ Median pixel value per location.
 ### rst_combinemin
 
 {/* BEGIN GENERATED gbx_rst_combinemin: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combinemin(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combinemin(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combinemin(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combinemin */}
 
 :::note Implementation
@@ -4053,16 +4059,17 @@ Minimum pixel value per location.
 ### rst_combinestddev
 
 {/* BEGIN GENERATED gbx_rst_combinestddev: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combinestddev(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combinestddev(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combinestddev(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combinestddev */}
 
 :::note Implementation
@@ -4084,16 +4091,17 @@ Population standard deviation of pixel values per location.
 ### rst_combinesum
 
 {/* BEGIN GENERATED gbx_rst_combinesum: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_combinesum(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_combinesum(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_combinesum(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to combine, in an array: aligned tiles that share size, extent and CRS (use `gbx_rst_align_to` first). |
 {/* END GENERATED gbx_rst_combinesum */}
 
 :::note Implementation
@@ -4295,17 +4303,18 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 ### rst_mapalgebra
 
 {/* BEGIN GENERATED gbx_rst_mapalgebra: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_mapalgebra(tiles, expression)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_mapalgebra(tiles, expression)` | `TILE` |
 | Python | `rasterx.functions.rst_mapalgebra(tiles, expression, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The input tiles. Band 1 of each tile binds to `A`, `B`, `C` and so on, in array order. |
-| `expression` | `STRING` |  | The expression: a JSON envelope with a `calc` key, or a bare expression such as `'(A - B) / (A + B)'`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The input tiles. Band 1 of each tile binds to `A`, `B`, `C` and so on, in array order. |
+| `expression` | `STRING` | `STRING` |  | The expression: a JSON envelope with a `calc` key, or a bare expression such as `'(A - B) / (A + B)'`. |
 {/* END GENERATED gbx_rst_mapalgebra */}
 
 :::note Implementation
@@ -4350,16 +4359,17 @@ The **envelope** is portable, but the **calc expression language is not fully po
 ### rst_merge
 
 {/* BEGIN GENERATED gbx_rst_merge: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_merge(tiles)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_merge(tiles)` | `TILE` |
 | Python | `rasterx.functions.rst_merge(tiles, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tiles` | `ARRAY<TILE>` |  | The tiles to mosaic, in an array. Tiles in another CRS are reprojected onto the grid of a tile in the reference CRS. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tiles` | `ARRAY<TILE>` | `ARRAY<TILE>` |  | The tiles to mosaic, in an array. Tiles in another CRS are reprojected onto the grid of a tile in the reference CRS. |
 {/* END GENERATED gbx_rst_merge */}
 
 :::note Implementation

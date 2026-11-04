@@ -12,6 +12,7 @@ member's error tile; an error tile or a tile that cannot be read inside an array
 of different shapes raise; a group over the memory budget is folded window by window; one whose single row of members
 does not fit the budget is the row's error tile with a `Fix:`."""
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import array_edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -127,7 +128,33 @@ def _aa_quad_error(tmpdir):
     return [_build("tile_error", tmpdir), *_build("quad_tiles", tmpdir)]
 
 
-RASTER_ARRAY_OP = (
+@builder("aa_virtual_only")
+def _aa_virtual_only(tmpdir):
+    return [_build("tile_virtual", tmpdir)]
+
+
+@builder("aa_stack_virtual_member")
+def _aa_stack_virtual_member(tmpdir):
+    return [*_stack_tiles(), _build("tile_virtual", tmpdir)]
+
+
+@builder("aa_corrupt_only")
+def _aa_corrupt_only(tmpdir):
+    return [_build("tile_corrupt", tmpdir)]
+
+
+@builder("aa_over_cap_sum")
+def _aa_over_cap_sum(tmpdir):
+    """Two 2500 x 2500 Float32 tiles on one grid: 25 MiB decoded each, so each is within the 64 MiB a Unity Catalog
+    function decodes, while the two together with a result of that size (and any result) are not. Zeros compress to
+    a few KiB, so the rows stay cheap."""
+    import numpy as np
+
+    pixels = np.zeros((1, 2500, 2500))
+    return [_tile(_gtiff(pixels, "EPSG:3857")) for _ in range(2)]
+
+
+_SESSION_ROWS = (
     # --- the combine family: the statistic of the valid values at each pixel, against numpy
     *(
         Case(f"combine{s}_stack", CB[s], (STACK,), "ref", f"combine_{s}", ONLY)
@@ -314,3 +341,21 @@ RASTER_ARRAY_OP = (
         ONLY,
     ),
 )
+
+# The rows Unity Catalog shares with the session (the value of each is the session's), then its own: a virtual member
+# refuses the array, an array over the cap is refused with the session's Fix, and an unreadable tile is NULL.
+RASTER_ARRAY_OP = share(
+    _SESSION_ROWS,
+    *(f"combine{s}_stack" for s in STATS),
+    *(f"combine{s}_no_tiles" for s in ("avg", "max")),
+    *(f"combine{s}_all_error" for s in ("avg", "max")),
+    *(f"combine{s}_corrupt_member" for s in ("avg", "max")),
+    "combineavg_error_member", "combineavg_null_element",
+    "combineavg_misshaped", "combinesum_misshaped",
+    "merge_quad", "merge_no_tiles", "merge_all_error", "merge_corrupt_member", "merge_error_member",
+    "merge_mixed_crs",
+    "frombands_three", "frombands_array_order", "frombands_no_tiles", "frombands_all_error",
+    "frombands_corrupt_member",
+) + array_edges(
+    **{f"combine{s}": () for s in STATS}, merge=(), frombands=()
+)  # fmt: skip

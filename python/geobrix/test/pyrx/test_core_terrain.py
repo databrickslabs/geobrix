@@ -389,7 +389,7 @@ def test_slope_refuses_a_unit_that_is_not_degrees_or_percent(unit):
     with _serde.open_tile(_dem(np.zeros((4, 4)))) as ds:
         with pytest.raises(ValueError) as exc:
             terrain.slope(ds, unit=unit)
-    assert f"unit must be 'degrees' or 'percent'; got {unit!r}. Fix: pass" in str(
+    assert f"unit must be one of 'degrees', 'percent' (got '{unit}'). Fix: pass" in str(
         exc.value
     )
 

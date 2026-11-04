@@ -96,7 +96,7 @@ _session_dem_rows = (
         SL,
         (DEM, "radians"),
         "raises",
-        "unit must be 'degrees' or 'percent'",
+        "unit must be one of 'degrees', 'percent'",
         ONLY,
     ),
     Case("aspect_compass", AS, (DEM, False, False), "ref", "aspect", ONLY),

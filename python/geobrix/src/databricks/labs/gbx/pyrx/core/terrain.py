@@ -118,10 +118,14 @@ SLOPE_UNITS = ("degrees", "percent")
 
 
 def slope_unit_refusal(unit) -> str:
-    """The reason of a slope unit that is neither degrees nor percent (the same text on every surface)."""
+    """The reason of a slope unit that is neither degrees nor percent.
+
+    The head is the wording of the spec engine's enum binder (``unit must be one of 'degrees', 'percent' (got
+    'radians')``), so the light, UC and engine surfaces share it; the light core adds the Fix.
+    """
     return (
-        f"gbx_rst_slope: unit must be 'degrees' or 'percent'; got {str(unit)!r}. "
-        "Fix: pass 'degrees' or 'percent'"
+        "gbx_rst_slope: unit must be one of 'degrees', 'percent' "
+        f"(got '{unit}'). Fix: pass 'degrees' or 'percent'"
     )
 
 

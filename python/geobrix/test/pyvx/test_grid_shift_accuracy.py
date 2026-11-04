@@ -170,13 +170,36 @@ def test_registration_makes_grid_consulted():
     )
 
 
-def test_worker_grid_dirs_survive_the_transform_itself():
+def test_clearing_the_registry_on_the_driver_removes_the_grid_dirs():
+    """On the driver the registry is authoritative: replaced with nothing, the next transform takes the grid dir off
+    the search path (the dirs a worker's closure set are the only ones that outlive an empty registry).
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    crs_grids.register_proj_grids(spark=None, dirs=GRID_DIR)
+    _crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS)
+    assert GRID_DIR in _env.pyproj_grid_dirs()
+
+    proj_grids.set_registered_dirs(
+        [], replace=True
+    )  # the registry cleared; the search path still holds the dir
+    _corecrs._thread_local.__dict__.pop("transformers", None)
+    try:
+        _crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS)
+    except Exception:  # noqa: BLE001 - the grid-required transform may raise without it
+        pass
+    assert GRID_DIR not in _env.pyproj_grid_dirs()
+
+
+def test_worker_grid_dirs_survive_the_transform_itself(monkeypatch):
     """A worker holds no driver registry: its UDF closure puts the grid dirs on the search path, and the transform
     that follows must not read the empty registry as "no grids" and take them off again. The driver registry stays
     empty here, as on a worker, so this holds on any machine (a PROJ data dir that already holds the grid, as the
     dev container's does, cannot hide a regression)."""
+    from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.pyrx import _env
 
+    monkeypatch.setattr(_gdal_policy, "_in_spark_task", lambda: True)  # a worker
     assert proj_grids.get_registered_dirs() == []
     _env.configure_gdal_env(extra_proj_dirs=[GRID_DIR])
 
@@ -192,7 +215,8 @@ def test_transform_sets_the_gdal_and_proj_env_with_an_empty_registry(monkeypatch
     monkeypatch.delenv("PROJ_LIB", raising=False)
     assert proj_grids.get_registered_dirs() == []
 
-    assert _crs.st_transformcrs(PT_WKT, TGT_CRS, SRC_CRS) is not None
+    # a plain transform: it needs no grid, which an empty driver registry rightly leaves off the search path
+    assert _crs.st_transformcrs(PT_WKT, "EPSG:3857", "EPSG:4326") is not None
 
     assert os.environ.get("GDAL_DATA")
     assert os.environ.get("PROJ_DATA")

@@ -528,15 +528,18 @@ def st_transformcrs(
     # the dirs into pyproj's search path (a PROJ_DATA env var alone never reaches
     # pyproj), so a CRS string that references a grid by filename (e.g. +nadgrids=..)
     # actually resolves it. Idempotent and cheap when nothing new is registered.
-    # The env setup (GDAL_DATA / PROJ_DATA / readdir) always runs. The registry is driver-side
-    # state, so a worker's is empty: there the dirs already on the search path (put there by the
-    # UDF closure, _build_transformcrs_udf) are passed on, not read as "no grids" and removed.
+    # The env setup (GDAL_DATA / PROJ_DATA / readdir) always runs. On the driver the registry is the whole truth: an
+    # empty one (cleared, or replaced with nothing) takes every grid dir off the search path. A worker's registry is
+    # always empty (driver-side state): there the dirs already on the search path (put there by the UDF closure,
+    # _build_transformcrs_udf) are passed on, not read as "no grids" and removed.
+    from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.pyrx import _env
 
-    _env.configure_gdal_env(
-        extra_proj_dirs=proj_grids.get_registered_dirs() or _env.pyproj_grid_dirs()
-    )
+    grid_dirs = proj_grids.get_registered_dirs()
+    if not grid_dirs and _gdal_policy._in_spark_task():
+        grid_dirs = _env.pyproj_grid_dirs()
+    _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
     tr = get_transformer(src, tgt)
     g_proj = transform(tr.transform, g)
 

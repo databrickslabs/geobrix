@@ -2780,12 +2780,7 @@ _ISOBAND_SCHEMA = ArrayType(
 @f.udf(_ISOBAND_SCHEMA)
 def _isoband_udf(tile, breaks):
     if breaks is not None:  # a PARAMETER error, as in the JVM: checked before the tile
-        for i, b in enumerate(breaks):
-            if b is None:
-                raise ValueError(
-                    f"rst_isoband: breaks must not contain NULL; element {i} is NULL. "
-                    "Fix: remove the NULL from the breaks array."
-                )
+        features.check_breaks(breaks)
     if _tile_is_empty(tile):
         return None
     if not breaks:

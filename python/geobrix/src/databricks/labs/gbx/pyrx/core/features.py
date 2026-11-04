@@ -130,6 +130,22 @@ def polygonize(ds, band: int = 1, connectedness: int = 4):
     return out
 
 
+def check_breaks(breaks) -> None:
+    """ValueError naming the element when ``breaks`` holds a NULL (a parameter error, found before any tile is read)."""
+    for i, b in enumerate(breaks):
+        if b is None:
+            raise ValueError(
+                f"rst_isoband: breaks must not contain NULL; element {i} is NULL. "
+                "Fix: remove the NULL from the breaks array."
+            )
+
+
+def check_ascending(breaks) -> None:
+    """ValueError when ``breaks`` is not strictly ascending."""
+    if not np.all(np.diff(np.asarray(breaks, dtype="float64")) > 0):
+        raise ValueError("breaks must be strictly ascending")
+
+
 def isoband(ds, breaks, band=1):
     """Reclassify a band into value bins ``[breaks[i], breaks[i+1])`` and return one
     ``(geom_wkb, band_index, lower, upper)`` tuple per CONTIGUOUS patch.
@@ -149,8 +165,7 @@ def isoband(ds, breaks, band=1):
         Polygon (2-D, raster CRS).
     """
     brk = np.asarray(breaks, dtype="float64")
-    if not np.all(np.diff(brk) > 0):
-        raise ValueError("breaks must be strictly ascending")
+    check_ascending(brk)
     arr = ds.read(int(band))
     msk = band_valid_mask(ds, int(band))  # False where NoData, masked or transparent
     # np.digitize(right=False) maps a value v to index i such that breaks[i-1] <= v < breaks[i].

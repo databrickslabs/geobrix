@@ -379,6 +379,20 @@ def cog_convert_file(
         rio_shutil.copy(_src, dst_path, driver="COG", **creation)
 
 
+def check_contour(levels, interval, attr_field) -> None:
+    """ValueError for the arguments of :func:`contour` that make no contour: an empty value field, or no levels and an
+    interval that is not above 0 and finite. Found from the arguments alone, before any pixel is read.
+    """
+    if attr_field is None or str(attr_field).strip() == "":
+        raise ValueError("rst_contour: attr_field must be non-empty")
+    if not levels:
+        if not (interval > 0.0) or math.isinf(interval) or math.isnan(interval):
+            raise ValueError(
+                "rst_contour: levels is empty so interval must be > 0 and finite; "
+                f"got {interval}"
+            )
+
+
 def contour(ds, levels, interval, base, attr_field):
     """Generate contour lines from band 1 as ``(geom_wkb, value)`` features.
 
@@ -413,9 +427,7 @@ def contour(ds, levels, interval, base, attr_field):
         list[dict]: one ``{"geom_wkb": bytes, "value": float}`` per contour
         LineString.
     """
-    if attr_field is None or str(attr_field).strip() == "":
-        raise ValueError("rst_contour: attr_field must be non-empty")
-
+    check_contour(levels, interval, attr_field)
     levels = [] if levels is None else [float(v) for v in levels]
 
     band = ds.read(1).astype("float64")
@@ -424,11 +436,6 @@ def contour(ds, levels, interval, base, attr_field):
     band = np.where(msk == 0, np.nan, band)
 
     if not levels:
-        if not (interval > 0.0) or math.isinf(interval) or math.isnan(interval):
-            raise ValueError(
-                "rst_contour: levels is empty so interval must be > 0 and finite; "
-                f"got {interval}"
-            )
         finite = band[np.isfinite(band)]
         if finite.size == 0:
             return []

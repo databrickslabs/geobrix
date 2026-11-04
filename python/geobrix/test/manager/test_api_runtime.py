@@ -27,6 +27,23 @@ def test_a_real_register_marks_the_names_so_ensure_does_not_register_again(
     _api.ensure(stub, "gbx_st_makevalid")
 
 
+def test_a_missing_light_dependency_is_named_with_a_fix(monkeypatch):
+    # A Connect session has no JVM level, so the name is served by the light one; its module cannot import pandas.
+    from databricks.labs.gbx.manager import l3
+
+    def no_pandas(ref):
+        raise ModuleNotFoundError("No module named 'pandas'", name="pandas")
+
+    monkeypatch.setattr(l3, "resolve_ref", no_pandas)
+    with pytest.raises(ImportError) as err:
+        manager.register(ConnectStub(), only=["gbx_bng_eastnorthasbng"])
+    text = str(err.value)
+    assert "lightweight functions need pandas" in text
+    assert "gbx_bng_eastnorthasbng" in text and "grid-scalar" in text
+    assert "Fix: install the geobrix env wheel" in text and "pip install pandas" in text
+    assert isinstance(err.value.__cause__, ModuleNotFoundError)
+
+
 def test_ensure_refuses_a_name_the_manager_did_not_register(monkeypatch):
     stub, seen = ConnectStub(), []
     monkeypatch.setattr(

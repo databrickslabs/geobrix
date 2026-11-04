@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from databricks.labs.gbx import manifest
@@ -281,6 +282,26 @@ def register_family(
     return register(spark, only=names, _levels=forced) if names else {}
 
 
+@contextlib.contextmanager
+def _light_deps(fn):
+    """Installing the light level imports its modules. Where a third-party package they need is missing, say which
+    function family cannot be served, which package is absent, and what to do, instead of the bare import error.
+    """
+    try:
+        yield
+    except ImportError as exc:
+        pkg = (exc.name or "").split(".")[0]
+        if (
+            not pkg or pkg == "databricks"
+        ):  # not a missing dependency: a defect in our own import chain
+            raise
+        raise ImportError(
+            f"geobrix: the lightweight functions need {pkg}, which is not installed ({fn.sql_name}, a "
+            f"{fn.family} function, is served by them here). Fix: install the geobrix env wheel for this runtime, "
+            f"or pip install {pkg}."
+        ) from exc
+
+
 def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
     """Install ``fn`` at ``choice``; each line it has to say goes into ``lines`` as (name, line)."""
     from databricks.labs.gbx.manager import l3
@@ -322,7 +343,8 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
     )
     if on_engine:
         form = choice.variant if choice.variant in levels.ENGINE_L3 else levels.ENGINE
-        variant = l3.register_l3_engine(spark, fn, form)
+        with _light_deps(fn):
+            variant = l3.register_l3_engine(spark, fn, form)
         for r in reasons:
             lines.append((fn.sql_name, f"{r}; using {levels.NAMES['L3']}"))
         return Choice("L3", variant, tuple(reasons))
@@ -331,7 +353,8 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
         if forced and choice.variant != "-"
         else l3.l3_variant(fn)
     )
-    l3.register_l3(spark, fn, variant)
+    with _light_deps(fn):
+        l3.register_l3(spark, fn, variant)
     for r in reasons:
         lines.append((fn.sql_name, f"{r}; using {levels.NAMES['L3']}"))
     if skip:

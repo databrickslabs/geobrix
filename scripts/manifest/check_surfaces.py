@@ -262,6 +262,59 @@ def collision_findings(man) -> List[str]:
             out.append(f"{fn.sql_name}: its UC private function name is a public name")
     out += private_findings(man, public)
     out += procedure_findings(man, public)
+    out += form_findings(man)
+    return out
+
+
+FORM_SUFFIXES = ("_array", "_partial", "_finalize")
+
+
+def form_findings(man) -> List[str]:
+    """The names the performance forms add. A ``_array`` / ``_partial`` / ``_finalize`` function is a scalar, and a
+    ``_finalize`` has the ``_partial`` that feeds it; a SQL helper (``gbx__<x>``) equals no function name, no private
+    implementation name, and is one definition wherever it is named; a stub's text is the sentence after ``Fix:``.
+    """
+    fns = man.functions
+    implicit = {
+        f"gbx__{fn.sql_name[4:]}"
+        for fn in fns.values()
+        if any(p.default for p in fn.params)
+    }
+    taken = set(fns) | implicit | set(getattr(man, "private", {}))
+    out, seen = [], {}
+    for fn in fns.values():
+        name = fn.sql_name
+        for suffix in FORM_SUFFIXES:
+            if name.endswith(suffix):
+                if fn.kind != "scalar":
+                    out.append(
+                        f"{name}: a {suffix} function must be a scalar (it is a {fn.kind})"
+                    )
+                if (
+                    suffix == "_finalize"
+                    and f"{name[:-len(suffix)]}_partial" not in fns
+                ):
+                    out.append(
+                        f"{name}: a _finalize needs {name[:-len(suffix)]}_partial, which has no row"
+                    )
+        src = [
+            h
+            for level in ("L0", "L4")
+            for h in fn.levels.get(level, {}).get("sql_helpers", ())
+        ]
+        for h in src:
+            hn = h["name"]
+            if hn in taken:
+                out.append(f"{name}: SQL helper {hn} is a function name")
+            key = (tuple(map(tuple, h["params"])), h["returns"], h["sql"])
+            if seen.setdefault(hn, (key, name))[0] != key:
+                out.append(
+                    f"{name}: SQL helper {hn} is defined differently in {seen[hn][1]}"
+                )
+        if fn.stub is not None and fn.stub.lstrip().lower().startswith("fix:"):
+            out.append(
+                f"{name}: its stub text starts with Fix:, which the message adds"
+            )
     return out
 
 

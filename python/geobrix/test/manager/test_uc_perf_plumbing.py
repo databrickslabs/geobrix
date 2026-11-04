@@ -477,3 +477,66 @@ def test_twin_refuses_a_row_that_is_not_there_a_python_only_row_a_same_name_form
         twin(
             rows, "gbx_quadbin_cellunion", Adapt(), "agg_a"
         )  # a session function, no L4
+
+
+# ---- the collision gate covers the new names -------------------------------------------------------------------
+
+
+def test_the_collision_gate_covers_suffixed_names_sql_helpers_and_stubs():
+    import dataclasses
+    import importlib.util
+    import sys
+    from types import SimpleNamespace
+
+    path = Path(__file__).resolve().parents[4] / "scripts/manifest/check_surfaces.py"
+    spec = importlib.util.spec_from_file_location("gbx_check_surfaces", path)
+    gates = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = gates
+    spec.loader.exec_module(gates)
+    man = manifest.load()
+    assert gates.form_findings(man) == []  # the manifest as it stands
+    base = man.functions["gbx_bng_kring"]
+    agg = man.functions["gbx_h3_cellfill"]
+
+    def rename(fn, name, **kw):
+        return dataclasses.replace(fn, sql_name=name, **kw)
+
+    def findings(*fns):
+        return gates.form_findings(
+            SimpleNamespace(functions={f.sql_name: f for f in fns})
+        )
+
+    # a suffixed name is a scalar; a finalize needs its partial
+    assert any(
+        "must be a scalar" in f for f in findings(rename(agg, "gbx_h3_cellfill_array"))
+    )
+    fin = rename(base, "gbx_rst_binpoints_finalize")
+    assert any("gbx_rst_binpoints_partial" in f for f in findings(fin))
+    assert findings(fin, rename(base, "gbx_rst_binpoints_partial")) == []
+    # a SQL helper named like a public function, or two different helpers of one name
+    h = {"name": "gbx_bng_cellarea", "params": (), "returns": "INT", "sql": "1"}
+    clash = rename(
+        base, "gbx_x", levels={**base.levels, "L4": {"sql": "1", "sql_helpers": (h,)}}
+    )
+    assert any(
+        "is a function name" in f
+        for f in findings(clash, man.functions["gbx_bng_cellarea"])
+    )
+    h1 = {"name": "gbx__w", "params": (), "returns": "INT", "sql": "1"}
+    one = rename(
+        base,
+        "gbx_a",
+        levels={"L3": {}, "L4": {"sql": "{q}gbx__w()", "sql_helpers": (h1,)}},
+    )
+    two = rename(
+        base,
+        "gbx_b",
+        levels={
+            "L3": {},
+            "L4": {"sql": "{q}gbx__w()", "sql_helpers": ({**h1, "sql": "2"},)},
+        },
+    )
+    assert any("gbx__w" in f and "differently" in f for f in findings(one, two))
+    # a stub's Fix text is the sentence after "Fix:", not a second "Fix:"
+    stub = rename(man.functions["gbx_st_crs"], "gbx_st_crs", stub="Fix: use st_srid.")
+    assert any("Fix:" in f for f in findings(stub))

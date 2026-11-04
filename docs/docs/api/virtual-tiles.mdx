@@ -149,7 +149,7 @@ See [Raster Reader performance](../readers/raster#loading-many-small-files) and
 
 ## Zarr tiles
 
-A [Zarr](../formats/zarr) store is the first **N-dimensional** format with virtual tiles. A GeoTIFF is one
+A [Zarr](./zarr-stores) store is the first **N-dimensional** format with virtual tiles. A GeoTIFF is one
 picture; a Zarr variable is a cube (`time` by `latitude` by `longitude`, say), so a tile is a window of one
 2-D plane of it. [`gbx_zarr_read(..., output="tiles")`](../readers/zarr#output-geobrix-tiles) cuts every
 selected latitude-longitude plane of a variable into windows (one inner chunk each by default), and each
@@ -173,7 +173,7 @@ header function such as `rst_crs` or `rst_width` reads no chunk at all.
   to pass the store's `/Volumes/<catalog>/<schema>/<volume>/...` path. For a store with a manifest table, a
   file that the tile names and that has gone missing raises `ZarrStoreDrift`. Vacuum deletes the files of
   versions older than the store's `retain` period, so
-  [tag](../formats/zarr#snapshots-time-travel-and-tags) the version that a saved table of tiles points at.
+  [tag](./zarr-versions) the version that a saved table of tiles points at.
 - **`access="direct"` needs `virtual_tiles=False`.** A virtual tile is opened later, in another job and
   without the credentials of the call that made it, so `gbx_zarr_read` refuses `access="direct"` with
   virtual tiles and raises `ZarrAccessUnavailable`. Read the tiles now with `virtual_tiles=False` to use
@@ -186,7 +186,7 @@ header function such as `rst_crs` or `rst_width` reads no chunk at all.
 
 Zarr tiles are a lightweight-tier capability of Databricks Runtime 19 and Serverless environment 6, installed
 with the env6 wheel's `[zarr]` extra. The [Zarr Reader](../readers/zarr#virtual-tiles-and-the-rst_-functions)
-shows them in use, and [Zarr Stores](../formats/zarr) explains versions, tags and retention.
+shows them in use, and [Zarr Stores](./zarr-stores) and its topic pages explain versions, tags and retention.
 
 ## Operating on tiles: your choice of output
 
@@ -244,6 +244,6 @@ The JVM level (a dedicated cluster with the JAR) accepts both v1 and v2 **materi
   and the JVM level.
 - [COG reader (`cog_gbx`)](../readers/cog) and [Readers overview](../readers/overview)
   — the windowed-read option reference.
-- [Zarr Reader](../readers/zarr) and [Zarr Stores](../formats/zarr) — tiles cut from N-dimensional
+- [Zarr Reader](../readers/zarr) and [Zarr Stores](./zarr-stores) — tiles cut from N-dimensional
   Zarr cubes.
 - [Writers overview](../writers/overview) — persisting tiles to files.

@@ -125,7 +125,7 @@ To enumerate paths from a Volume directory and decode each one in a single pipel
 
 ### Zarr tile metadata
 
-A tile cut from a [Zarr store](../formats/zarr) with [`gbx_zarr_read(..., output="tiles")`](../readers/zarr#output-geobrix-tiles)
+A tile cut from a [Zarr store](./zarr-stores) with [`gbx_zarr_read(..., output="tiles")`](../readers/zarr#output-geobrix-tiles)
 is virtual, and its `metadata` holds everything a task needs to read its window. `window` is a window of one
 2-D plane of a variable (its latitude and longitude); `sliceDims` says where the tile sits along the other
 dimensions. A table of these tiles can be saved and opened later by tasks that have no session and no manifest

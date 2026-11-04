@@ -12,7 +12,7 @@ features need, so that it stays readable for training.
 
 > **No JAR needed.** Zarr runs on the env wheel alone:
 > `geobrix[zarr,vizx]` from the env6 wheel on **Serverless environment 6** (the notebook's
-> target), or on a classic **Databricks Runtime 19** cluster. See [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr#what-you-need).
+> target), or on a classic **Databricks Runtime 19** cluster. See [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/api/zarr-stores#what-you-need).
 
 > **Data: the GeoBrix sample cube.** Two days of made-up hourly weather on a one-degree global
 > grid, `time` (48) by `latitude` (181) by `longitude` (360), with `t2m`, `u10`, `v10` and `msl`,
@@ -112,7 +112,7 @@ Tagged version: outlives retain and vacuum; the features reproduce from it     [
 - **GeoBrix RasterX** (`rx.*`): `rst_clip`, `rst_width`, `rst_height`, `rst_avg`, `rst_max` on
   tiles cut from the cube.
 - **GeoBrix viz** (`gbx.vizx`): `plot_raster`.
-- **Reference**: [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr) ·
+- **Reference**: [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/api/zarr-stores) ·
   [Zarr Reader](https://databrickslabs.github.io/geobrix/docs/readers/zarr) ·
   [Zarr Writer](https://databrickslabs.github.io/geobrix/docs/writers/zarr) ·
   [Zarr Function Reference](https://databrickslabs.github.io/geobrix/docs/api/zarr-functions).
@@ -140,7 +140,7 @@ Tagged version: outlives retain and vacuum; the features reproduce from it     [
 ## Related resources
 
 - [Weather Features with Zarr example page](https://databrickslabs.github.io/geobrix/docs/notebooks/zarr-weather-features)
-- [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/formats/zarr) — the transactional model: versions, tags, retention, file modes
+- [Zarr Stores](https://databrickslabs.github.io/geobrix/docs/api/zarr-stores) — the transactional model: versions, tags, retention, file modes
 - [Virtual Tiles](https://databrickslabs.github.io/geobrix/docs/api/virtual-tiles) — how a tile that holds no pixels is opened
 - [GeoBrix RasterX API](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)
 - [GeoBrix Viz API](https://databrickslabs.github.io/geobrix/docs/api/vizx)

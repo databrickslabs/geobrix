@@ -19,7 +19,7 @@ The modes split along that grain: gridded variables use raster mode,
 and feature or point data uses vector mode.
 
 For a large cube, or one that many jobs read slices of or write results back to, use
-[Zarr](../formats/zarr) instead of NetCDF: it is read a chunk at a time and written transactionally (see the
+[Zarr](../api/zarr-stores) instead of NetCDF: it is read a chunk at a time and written transactionally (see the
 [Zarr Reader](./zarr)).
 
 ## Selecting variables — the unified contract

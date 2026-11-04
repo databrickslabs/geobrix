@@ -17,6 +17,7 @@ round-trip a Long digit-id internally).
 """
 
 import math
+import sys
 
 import h3
 import numpy as np
@@ -489,6 +490,20 @@ def cells_to_raster(
 _NO_VALUE = object()
 
 
+def is_missing(v):
+    """True for a NULL: None, NaN, or ``pd.NA``. pandas is used only when the caller already imported it (a Spark UDF
+    always has), so this core stays importable without it."""
+    if v is None:
+        return True
+    pd = sys.modules.get("pandas")
+    if pd is not None:
+        try:
+            return bool(pd.isna(v))
+        except (TypeError, ValueError):  # an array-like is a value, not a NULL
+            return False
+    return v != v
+
+
 def max_value_per_cell(cells, vals, key=None, typed=True):
     """``{cell: value}`` for the four cell rasterizers, one value per distinct cell.
 
@@ -512,7 +527,7 @@ def max_value_per_cell(cells, vals, key=None, typed=True):
     best = {}  # stored id -> [raw id, value or None]
     for cell, val in zip(cells, vals):
         k = cell if key is None else key(cell)
-        v = None if val is None or val != val else float(val)
+        v = None if is_missing(val) else float(val)
         cur = best.get(k, _NO_VALUE)
         if cur is _NO_VALUE:
             best[k] = [cell, v]
@@ -538,17 +553,19 @@ def rasterize_cells(
     height,
     mode,
     kring_pad,
+    check_canvas=None,
 ):
     """The gridspec and burn shared by the per-grid rasterize aggregates and their array twins.
 
     ``cell_values`` is ``{raw_id: float}`` (see :func:`max_value_per_cell`), ``cells`` the same raw ids, ``ad`` the
     per-grid adapter, ``srid`` the resolved output CRS. The canvas and the other per-group constants are plain values
-    (None for NULL). Returns raw GTiff bytes.
+    (None for NULL). ``check_canvas(width, height)``, when given, is called with the resolved canvas (given or derived)
+    before anything is allocated, so a caller can refuse a canvas it cannot hold. Returns raw GTiff bytes.
     """
     res = ad.resolution([ad.to_key(c) for c in cells])
 
     def _has(v):
-        return v is not None and v == v  # a NULL is None, or NaN in a numeric column
+        return not is_missing(v)
 
     _mode = mode if _has(mode) else "centroids"
     _kp = int(kring_pad) if _has(kring_pad) else 1
@@ -586,6 +603,8 @@ def rasterize_cells(
             grid=grid_name,
             _ad=ad,
         )
+    if check_canvas is not None:
+        check_canvas(gs[5], gs[6])
     return cells_to_raster(cell_values, *gs, resolution=res, grid=grid_name, _ad=ad)
 
 
@@ -595,7 +614,7 @@ def cell_out_srid(fn, out_srid, out_crs):
     interchangeably. A NULL is None or NaN."""
 
     def _set(v):
-        return v is not None and v == v
+        return not is_missing(v)
 
     crs_set = _set(out_crs) and bool(str(out_crs).strip())
     srid_set = _set(out_srid)

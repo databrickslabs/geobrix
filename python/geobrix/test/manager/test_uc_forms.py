@@ -147,3 +147,48 @@ def test_the_filled_array_is_the_input_of_the_h3_rasterizer():
 
     with MemoryFile(tiff) as mf, mf.open() as ds:
         assert ds.count == 1 and ds.read(1).max() == pytest.approx(2.0)
+
+
+def test_a_derived_canvas_over_the_cap_is_refused_before_it_is_allocated(monkeypatch):
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    def fail(*_a, **_k):
+        raise AssertionError("the burn ran: the canvas was not refused first")
+
+    monkeypatch.setattr(cr, "cells_to_raster", fail)
+    monkeypatch.setattr(forms, "DECODED_CAP", 10_000)
+    monkeypatch.setattr("databricks.labs.gbx.uc.tier_b.DECODED_CAP", 10_000)
+    far = [
+        {"cellid": h3.str_to_int(h3.latlng_to_cell(lat, lon, 8)), "value": 1.0}
+        for lat, lon in ((37.77, -122.42), (40.71, -74.0))
+    ]
+    # the six canvas arguments NULL: the canvas is derived from the cells, a fine pixel size makes it huge
+    with pytest.raises(_Refusal, match=r"grid is .*Fix: .*gbx_rst_h3_rasterize_agg"):
+        forms.rst_h3_rasterize(
+            far, 4326, 0.001, None, None, None, None, None, None, "centroids", 0, None
+        )
+
+
+def test_a_raster_whose_encoded_size_is_over_the_cap_is_refused_with_the_aggregate(
+    monkeypatch,
+):
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    monkeypatch.setattr(cr, "rasterize_cells", lambda *a, **k: b"x" * 50)
+    monkeypatch.setattr(forms, "DECODED_CAP", 40)
+    cells = [
+        {"cellid": h3.str_to_int(h3.latlng_to_cell(37.77, -122.42, 8)), "value": 1.0}
+    ]
+    with pytest.raises(
+        _Refusal, match="Fix: run gbx_rst_h3_rasterize_agg in a notebook"
+    ):
+        forms.rst_h3_rasterize(
+            cells, 4326, None, None, None, None, None, None, None, "centroids", 0, None
+        )
+
+
+def test_an_invalid_h3_cell_id_raises_with_a_fix_and_keeps_the_h3_error():
+    cells = [{"cellid": 12345, "value": 1.0}]
+    with pytest.raises(ValueError, match="not a valid H3 cell id.*Fix:") as err:
+        forms.h3_cellfill_cells(cells, 1, "mean", 2.0)
+    assert err.value.__cause__ is not None

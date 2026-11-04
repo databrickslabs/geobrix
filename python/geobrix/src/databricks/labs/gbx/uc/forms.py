@@ -166,10 +166,19 @@ def rst_h3_rasterize(
             out_crs, fn=fn
         ).code  # a CRS form UC takes, as an authority code
     srid = cr.cell_out_srid(fn, out_srid, out_crs)
-    if all(a is not None for a in (xmin, ymin, xmax, ymax, width, height)):
+
+    def check_canvas(
+        w, h
+    ):  # the canvas given or derived from the cells, refused before it is allocated
         tier_b.check_made(
-            fn, width, height, ["float64"], int(width) * int(height) * 8 * 3
+            fn,
+            w,
+            h,
+            ["float64"],
+            int(w) * int(h) * 8 * 3,
+            session_fn="gbx_rst_h3_rasterize_agg",
         )
+
     _env.configure_gdal_env()
     ad = cr._adapter("h3")
     vals = [None if v is None or v != v else float(v) for v in values]
@@ -191,9 +200,12 @@ def rst_h3_rasterize(
         height,
         mode,
         kring_pad,
+        check_canvas=check_canvas,
     )
-    if made is not None and len(made) > DECODED_CAP:
-        raise _too_big(fn, "the raster", len(made), "gbx_rst_h3_rasterize")
+    if (
+        made is not None and len(made) > DECODED_CAP
+    ):  # the encoded size: a backstop to the canvas check
+        raise _too_big(fn, "the raster", len(made), "gbx_rst_h3_rasterize_agg")
     return made
 
 
@@ -202,6 +214,21 @@ def _h3_ring(cell_id: int, d: int) -> List[int]:
     import h3
 
     return [int(c, 16) for c in h3.grid_ring(h3.int_to_str(cell_id), d)]
+
+
+def _check_h3_ids(fn: str, ids) -> None:
+    """Raise, naming the id and a Fix, for a cell id that is not an H3 cell (the h3 error is the ``__cause__``)."""
+    import h3
+
+    for c in ids:
+        try:
+            h3.get_resolution(h3.int_to_str(int(c)))
+        except (ValueError, OverflowError, TypeError) as exc:
+            raise _parameter(
+                fn,
+                f"{c!r} is not a valid H3 cell id ({exc}). Fix: pass cell ids as BIGINT H3 cells, "
+                "for example from h3_pointash3",
+            ) from exc
 
 
 def h3_cellfill_cells(cells, k, method, power):
@@ -217,6 +244,7 @@ def h3_cellfill_cells(cells, k, method, power):
     ids, values = _cells(cells)
     if not ids:
         return None
+    _check_h3_ids(fn, ids)
     ring = 1 if k is None else k
     how = "mean" if method is None else str(method)
     exponent = 2.0 if power is None else float(power)

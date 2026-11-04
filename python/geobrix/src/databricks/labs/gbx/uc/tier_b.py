@@ -1265,23 +1265,37 @@ _ASK_FEWER = "a smaller width_px and height_px, or one call for each part of the
 
 
 def grid_refusal(
-    fn: str, width: int, height: int, decoded: int, working: int, ask: str = _ASK_FEWER
+    fn: str,
+    width: int,
+    height: int,
+    decoded: int,
+    working: int,
+    ask: str = _ASK_FEWER,
+    session_fn: str = None,
 ) -> _Refusal:
-    """A grid too big for a Unity Catalog function to make: never truncated, refused with a Fix."""
+    """A grid too big for a Unity Catalog function to make: never truncated, refused with a Fix. ``session_fn`` names
+    the session function to run instead when it is not ``fn`` itself (an aggregate that has a UC array twin).
+    """
     return _Refusal(
         f"{fn}: the {int(width)} x {int(height)} grid is {size_text(decoded)} decoded and takes about "
         f"{size_text(working)} to make, over the {size_text(DECODED_CAP)} a Unity Catalog function holds. "
-        f"Fix: ask for fewer pixels ({ask}), or run {fn} in a notebook or job session"
+        f"Fix: ask for fewer pixels ({ask}), or run {session_fn or fn} in a notebook or job session"
     )
 
 
 def check_made(
-    fn: str, width, height, dtypes, working: int, ask: str = _ASK_FEWER
+    fn: str,
+    width,
+    height,
+    dtypes,
+    working: int,
+    ask: str = _ASK_FEWER,
+    session_fn: str = None,
 ) -> None:
     """Refuse, before anything is allocated, a grid whose pixels or whose working set are over the cap."""
     decoded = grid_bytes(width, height, dtypes)
     if max(decoded, working) > DECODED_CAP:
-        raise grid_refusal(fn, width, height, decoded, working, ask)
+        raise grid_refusal(fn, width, height, decoded, working, ask, session_fn)
 
 
 def _grid_args(fn: str, xmin, ymin, xmax, ymax, width_px, height_px) -> None:

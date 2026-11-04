@@ -175,3 +175,70 @@ def test_the_bng_burn_of_no_cells_is_all_nodata_and_still_refuses_a_canvas_that_
         cr.cells_to_raster(
             {}, float("nan"), 0.0, 1000.0, 1000.0, 100.0, 10, 10, 27700, 3, grid="bng"
         )
+
+
+def _one_cell():
+    cell = h3.str_to_int(h3.latlng_to_cell(37.77, -122.42, 8))
+    return cell, cr._adapter("h3")
+
+
+def test_a_canvas_given_in_part_is_refused_naming_the_null_arguments():
+    cell, ad = _one_cell()
+    with pytest.raises(ValueError, match=r"given in part \(xmin, width\).*ymin.*Fix:"):
+        cr.rasterize_cells(
+            {cell: 1.0},
+            [cell],
+            ad,
+            "h3",
+            4326,
+            None,
+            -123.0,
+            None,
+            None,
+            None,
+            10,
+            None,
+            "centroids",
+            0,
+        )
+
+
+def test_the_resolved_canvas_is_handed_to_the_caller_before_the_burn(monkeypatch):
+    cell, ad = _one_cell()
+    seen = []
+
+    def refuse(w, h):
+        seen.append((w, h))
+        raise RuntimeError("stop")
+
+    monkeypatch.setattr(
+        cr, "cells_to_raster", lambda *a, **k: pytest.fail("the burn ran")
+    )
+    with pytest.raises(RuntimeError, match="stop"):
+        cr.rasterize_cells(
+            {cell: 1.0},
+            [cell],
+            ad,
+            "h3",
+            4326,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            "centroids",
+            0,
+            check_canvas=refuse,
+        )
+    assert seen and seen[0][0] > 0 and seen[0][1] > 0
+
+
+def test_a_null_is_none_nan_or_pandas_na_and_nothing_else():
+    import pandas as pd
+
+    assert all(cr.is_missing(v) for v in (None, float("nan"), pd.NA))
+    assert not any(cr.is_missing(v) for v in (0, 0.0, "centroids", -9999.0))
+    # the NA-safe check keeps cell_out_srid and the canvas rule working on pd.NA, which has no truth value
+    assert cr.cell_out_srid("fn", pd.NA, pd.NA) == 4326

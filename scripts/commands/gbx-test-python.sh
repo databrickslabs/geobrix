@@ -20,6 +20,8 @@ show_help() {
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
+    echo -e "${CYAN}Oracle tables:${NC} set ${YELLOW}GBX_ORACLE_TABLES=<T1,T2>${NC} in the calling shell to run only those oracle tables in the family harness; it is passed into the container unchanged."
+    echo ""
     echo -e "${CYAN}Phases (no --path):${NC} the heavy and light tiers cannot share one pytest process, so the default"
     echo -e "  run mirrors CI's heavy and light jobs as separate pytest invocations (the light phase is one process here; CI shards it), each with its own log, and prints a per-phase summary:"
     echo -e "  ${YELLOW}heavy${NC}  test/ minus the light dirs (LIGHT_IGNORES in .github/actions/python_build/action.yml)"
@@ -203,7 +205,8 @@ run_single() {
         cd /root/geobrix && \
         python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
-    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
+    gbx_test_env_args
+    docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 
     echo ""
@@ -272,7 +275,8 @@ run_phase() {
     echo -e "${CYAN}  pytest ${args}${NC}"
     show_separator
     echo ""
-    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
+    gbx_test_env_args
+    docker exec ${GBX_TEST_ENV_ARGS[@]+"${GBX_TEST_ENV_ARGS[@]}"} "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix/python/geobrix && \
         python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
     return "${PIPESTATUS[0]}"

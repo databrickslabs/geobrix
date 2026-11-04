@@ -20,6 +20,10 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 - `--markers <expr>` - Override marker filter with a custom pytest expression (e.g. `"not slow"`). Disables the default `not integration` filter.
 - `--help` - Display help message
 
+## Oracle table filter
+
+Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged, in the `--path` run and in each phase. Unset, nothing is passed and the harness runs every table.
+
 ## Phased default run (no `--path`)
 
 | Phase | What runs | Where the list comes from |

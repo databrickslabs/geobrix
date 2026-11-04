@@ -100,7 +100,7 @@ These rules hold for the BNG, quadbin, H3 and custom grid functions.
 
 - **A cell id that is no cell gives `NULL`.** That covers a text that is no BNG cell and a number that is no cell of the grid.
 - **A geometry result is little-endian EWKB with the SRID of the grid.** A custom grid made with no SRID gives plain WKB.
-- **A ring or loop result over 64 MiB is refused with a `Fix:`.** This covers the `kring`, `kloop`, `geomkring` and `geomkloop` functions. The `Fix:` says to lower `k`, split the input, or call the session function.
+- **A result over 64 MiB is refused with a `Fix:`.** This covers the ring and loop functions, and the BNG and quadbin fills and tessellations. The ring and loop `Fix:` says to lower `k`, split the input, or call the session function. The fill `Fix:` says to use a coarser resolution or split the geometry.
 - **A geometry that cannot be read, or has a coordinate that is not finite, gives `NULL`.** A bad `mode`, `coverage`, `k` or resolution raises with a `Fix:` before any row is read.
 
 A custom grid is a struct. Build it once with `gbx_custom_grid` and pass it to the other `gbx_custom_*` functions. `gbx_custom_grid` raises for bounds or sizes that make no grid.
@@ -221,7 +221,7 @@ A UC function has no error tile. It follows one rule for each kind of problem:
 
 <CodeFromTest code={ucExamples} language="python" functionName="bad_parameter_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-UC differs from the session in one place. A data-limit error gives `NULL` on UC where the session raises. `gbx_quadbin_polyfill` on a geometry that covers more than 1,000,000 cells is the example. The [error contract](./error-handling) describes the session behavior.
+`gbx_quadbin_polyfill` on a geometry that covers more than 1,000,000 cells is refused with a `Fix:` that says to use a lower zoom. The [error contract](./error-handling) describes the session behavior.
 
 ## Procedures
 

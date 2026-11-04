@@ -37,6 +37,7 @@ from pyspark.sql.types import (
 from rasterio.io import DatasetReader, MemoryFile
 
 from databricks.labs.gbx._gdal_policy import open_bytes
+from databricks.labs.gbx.pyrx.core.budget import decoded_bytes
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
 # Legacy 3-field tile struct — INPUT-ONLY (reader/writer v1 read/load path).
@@ -49,21 +50,6 @@ TILE_SCHEMA = StructType(
         StructField("metadata", MapType(StringType(), StringType()), nullable=True),
     ]
 )
-
-
-# rasterio's names for GDAL's complex integer types, which numpy has no dtype of
-_COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
-
-
-def decoded_bytes(ds) -> int:
-    """The decoded size of an open raster, from its header: width x height x the type size of each band."""
-    import numpy as np
-
-    pixels = ds.width * ds.height
-    return sum(
-        pixels * (_COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize)
-        for name in ds.dtypes
-    )
 
 
 def over_read_cap(ds) -> Optional[str]:

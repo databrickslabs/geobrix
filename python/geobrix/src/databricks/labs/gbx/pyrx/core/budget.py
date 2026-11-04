@@ -27,6 +27,10 @@ _MIB = 1024 * 1024
 # typical instances — very large tiles carry a ~10x encode-peak multiplier, so small
 # classic executors may need a smaller sizeInMB override.
 _BUDGETS = {"serverless": 64 * _MIB, "classic": 1536 * _MIB, "none": 0}
+# A Unity Catalog function decodes a tile within the Serverless worker's cap whatever the compute: the sandbox's own
+# memory is not published, and 64 MiB is what a Serverless task has been measured to hold. One value for every UC tile
+# function (uc.tier_b); a tile decoded over it is refused with a Fix, never truncated.
+UC_DECODED_CAP = _BUDGETS["serverless"]
 _MAX_TILES = 512
 
 # cgroup memory-limit paths (worker-safe: readable from any Spark task on Linux)
@@ -110,6 +114,26 @@ def decoded_budget_bytes(strategy: str) -> int:
             return max(int(limit * 0.15), 32 * _MIB)
         return _BUDGETS["serverless"]
     return _BUDGETS[s]
+
+
+# rasterio's names for GDAL's complex integer types, which numpy has no dtype of
+_COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
+
+
+def decoded_bytes(ds) -> int:
+    """The decoded size of an open raster, from its header: width x height x the type size of each band."""
+    import numpy as np
+
+    pixels = ds.width * ds.height
+    return sum(
+        pixels * (_COMPLEX_INT_SIZES.get(name) or np.dtype(name).itemsize)
+        for name in ds.dtypes
+    )
+
+
+def size_text(n: int) -> str:
+    """A byte count as the refusal texts print it: whole MiB, or KiB under one MiB."""
+    return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
 
 
 # GDAL's raster block cache, for the sites that cap it (the raster reader's opens, the STAC window

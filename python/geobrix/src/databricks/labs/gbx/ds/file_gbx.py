@@ -40,6 +40,7 @@ from databricks.labs.gbx.ds._listing import (  # re-exported for backward compat
 from databricks.labs.gbx.pyrx.core.budget import (  # noqa: F401  (re-exported)
     READ_CAP_KEY,
     session_read_cap,
+    size_text,
 )
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
@@ -1066,11 +1067,8 @@ def lazy_read_cap() -> int:
 def read_cap_refusal(decoded: int, cap: int) -> str:
     """The reason of a tile decoded over the read cap, the same text on every level (the JVM's TileBytes)."""
 
-    def size(n: int) -> str:
-        return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
-
     return (
-        f"the tile is {size(decoded)} decoded, over this compute's read cap ({size(cap)}). "
+        f"the tile is {size_text(decoded)} decoded, over this compute's read cap ({size_text(cap)}). "
         "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
     )
 

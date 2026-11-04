@@ -1270,6 +1270,63 @@ def test_stage_wheel_dest_stages_one_env_wheel_to_the_folder_and_refuses_the_res
         assert "Done:" not in res.stdout, args
 
 
+def test_stage_wheel_dest_without_one_env_is_refused_before_any_build_or_upload(sandbox):
+    # --dest alone used to run `mvn clean package` and upload a JAR before the script refused it with exit 2.
+    log = _python3_logging_args(sandbox)
+    for args in (
+        ["--dest", "/Volumes/c/s/v/f"],
+        ["--env", "both", "--dest", "/Volumes/c/s/v/f"],
+        ["--env", "6", "--versioned", "--dest", "/Volumes/c/s/v/f"],
+    ):
+        res = sandbox.run("gbx-data-stage-wheel.sh", *args)
+        assert res.returncode == 2 and "--dest stages ONE env wheel" in res.output, (args, res.output)
+        assert not log.exists(), args  # the staging script never ran, so no JAR step either
+    res = sandbox.run("gbx-data-stage-wheel.sh", "--env", "6", "--dest", "/Volumes/c/s/v/f", GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1")
+    assert res.returncode == 0, res.output
+    assert log.read_text().split()[2:] == ["--env", "6", "--dest", "/Volumes/c/s/v/f"]
+
+
+_PRUNING_SDK = _FAILING_SDK.replace(
+    "        return []\n",
+    "        return [type('E', (), {'is_directory': False, 'name': 'geobrix-0.5.0+env6-py3-none-any.whl', 'path': path + '/geobrix-0.5.0+env6-py3-none-any.whl'})()]\n    def delete(self, path):\n        open(os.environ['FAKE_DELETE_LOG'], 'a').write(path + '\\n')\n",
+)
+
+
+def test_stage_wheel_dest_removes_the_other_wheels_only_after_the_upload_landed(tmp_path):
+    stub = tmp_path / "stub"
+    (stub / "databricks" / "sdk").mkdir(parents=True)
+    (stub / "databricks" / "__init__.py").write_text("")
+    (stub / "databricks" / "sdk" / "__init__.py").write_text(_PRUNING_SDK)
+    tests = tmp_path / "root" / "examples" / "tests"
+    tests.mkdir(parents=True)
+    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):
+        shutil.copy(REPO_ROOT / "examples" / "tests" / name, tests / name)
+    dist = tmp_path / "root" / "dist" / "env6"
+    dist.mkdir(parents=True)
+    (dist / "geobrix-0.6.0+env6-py3-none-any.whl").write_bytes(b"wheel")
+    deleted = tmp_path / "deleted.log"
+    env = {
+        "PATH": os.environ["PATH"],
+        "PYTHONPATH": str(stub),
+        "DATABRICKS_CONFIG_PROFILE": "p",
+        "FAKE_DELETE_LOG": str(deleted),
+    }
+
+    def stage(**extra):
+        return subprocess.run(
+            [sys.executable, str(tests / "stage_wheel_to_volume.py"), "--env", "6", "--dest", "/Volumes/c/s/v/uc"],
+            capture_output=True,
+            text=True,
+            env={**env, **extra},
+        )
+
+    res = stage(FAKE_UPLOAD_FAILS="1")  # the upload fails: the wheel already there must survive
+    assert res.returncode != 0 and not deleted.exists(), (res.stdout, res.stderr)
+    res = stage()
+    assert res.returncode == 0, res.stderr
+    assert deleted.read_text().split() == ["/Volumes/c/s/v/uc/geobrix-0.5.0+env6-py3-none-any.whl"]
+
+
 def test_stage_wheel_profile_reaches_the_launcher_and_an_unknown_option_is_refused(sandbox):
     # --profile was dropped by a catch-all `*) shift`, so staging used the config file's profile
     # while the caller believed it chose one. It must set the launcher's profile, and anything the

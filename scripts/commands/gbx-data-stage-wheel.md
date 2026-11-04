@@ -15,7 +15,7 @@ bash scripts/commands/gbx-data-stage-wheel.sh [--env 5|6|both [--versioned | --d
   - It removes every other `geobrix-*.whl` in that folder and checks the uploaded size.
   - The wheels in the volroot itself are not touched.
   - Without `--env` it exits 2.
-- `--dest DIR` - with one `--env 5|6`: stage the wheel to the Volume folder `DIR`, not the volroot. `DIR` is `/Volumes/<catalog>/<schema>/<volume>/<folder>`. It creates the folder, removes every other `geobrix-*.whl` in it and checks the uploaded size. The folder then holds that wheel alone, an isolated install folder such as `gbx.uc.install` uses. It exits 2 with `--versioned`, with `--env both`, or without `--env`.
+- `--dest DIR` - with one `--env 5|6`: stage the wheel to the Volume folder `DIR`, not the volroot. `DIR` is `/Volumes/<catalog>/<schema>/<volume>/<folder>`. It creates the folder, uploads the wheel and checks the uploaded size, then removes every other `geobrix-*.whl` in it. The folder then holds that wheel alone, an isolated install folder such as `gbx.uc.install` uses. It exits 2 with `--versioned`, with `--env both`, or without `--env`.
 - `--profile NAME` - the Databricks config profile for the uploads. Without it the profile is `DATABRICKS_CONFIG_PROFILE` from the environment, else from `examples/tests/databricks_cluster_config.env`.
 - `--no-prune` - keep every other `geobrix-*.whl` in the artifact directory: skip the single-version cleanup of the plain-wheel stage.
 

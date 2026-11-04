@@ -18,7 +18,9 @@ LOG_FILE=""
 SHOW_HELP=0
 STAGE_ARGS=()
 ENV_STAGE=false
+ENV_VALUE=""
 VERSIONED=false
+DEST=false
 PROFILE=""
 
 while [[ $# -gt 0 ]]; do
@@ -37,7 +39,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --env)
             case "${2:-}" in 5|6|both) ;; *) echo "--env must be 5, 6 or both" >&2; exit 2 ;; esac
-            STAGE_ARGS+=(--env "$2"); ENV_STAGE=true
+            STAGE_ARGS+=(--env "$2"); ENV_STAGE=true; ENV_VALUE="$2"
             shift 2
             ;;
         --no-prune)
@@ -53,7 +55,7 @@ while [[ $# -gt 0 ]]; do
                 echo "--dest needs a Volume folder" >&2
                 exit 2
             fi
-            STAGE_ARGS+=(--dest "$2")
+            STAGE_ARGS+=(--dest "$2"); DEST=true
             shift 2
             ;;
         --profile)
@@ -92,9 +94,9 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "                 left as it is, so no other wheel there is touched."
     echo "  --versioned    With --env: stage each wheel to <bundle volroot>/geobrix/<version>/env<N>/, remove every"
     echo "                 other geobrix-*.whl there, and verify the uploaded size. The volroot's own wheels stay."
-    echo "  --dest DIR     With one --env 5|6: stage the wheel to the Volume folder DIR (created when missing), remove every"
-    echo "                 other geobrix-*.whl there and verify the uploaded size: an isolated folder holding this one"
-    echo "                 wheel (e.g. for a Unity Catalog install). Not with --versioned or --env both."
+    echo "  --dest DIR     With one --env 5|6: stage the wheel to the Volume folder DIR (created when missing), upload and"
+    echo "                 verify the size, then remove every other geobrix-*.whl there: an isolated folder holding this one"
+    echo "                 wheel (e.g. for a Unity Catalog install). Needs --env 5|6; exits 2 at once with --versioned or --env both."
     echo "  --no-prune     Keep every other geobrix-*.whl in the artifact Volume dir (skip the single-version cleanup)"
     echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
     echo "                    in the environment or examples/tests/databricks_cluster_config.env)"
@@ -123,6 +125,11 @@ fi
 
 if [[ "$VERSIONED" == true && "$ENV_STAGE" != true ]]; then
     echo "--versioned stages env wheels: pass --env 5|6|both" >&2
+    exit 2
+fi
+
+if [[ "$DEST" == true && ( "$ENV_VALUE" != 5 && "$ENV_VALUE" != 6 || "$VERSIONED" == true ) ]]; then
+    echo "--dest stages ONE env wheel: pass --env 5|6, without --versioned" >&2
     exit 2
 fi
 

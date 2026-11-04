@@ -85,6 +85,20 @@ def _env_wheels(project_root: Path, envs) -> list:
     return out
 
 
+def _upload_then_prune(w, whl: Path, folder: str) -> int:
+    """Upload ``whl`` to ``folder`` and verify it, and only then remove every other geobrix-*.whl there: a failed
+    upload never leaves the folder with no wheel. 0 on success, else 1 after one line on stderr."""
+    rc = upload_verified(w, whl, f"{folder}/{whl.name}")
+    if rc:
+        return rc
+    try:
+        prune_stale(w, folder, "geobrix-", ".whl", whl.name)
+    except Exception as e:
+        print(f"Error: uploaded {whl.name} but could not remove the other wheels in {folder}: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     exit_if_help(__doc__)
     args = sys.argv[1:]
@@ -151,14 +165,13 @@ def main() -> int:
             print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: %s found; skipping Databricks upload." % [x.name for x in wheels])
             return 0
         b_root = bundle_root()
-        if dest:  # an isolated folder: this wheel alone is left in it
+        if dest:  # an isolated folder: this wheel alone is left in it, the others removed once it has landed
             try:
                 w.files.create_directory(dest)
-                prune_stale(w, dest, "geobrix-", ".whl", wheels[0].name)
             except Exception as e:
                 print(f"Error: could not prepare {dest}: {e}", file=sys.stderr)
                 return 1
-            return upload_verified(w, wheels[0], f"{dest}/{wheels[0].name}")
+            return _upload_then_prune(w, wheels[0], dest)
         if not versioned:
             try:
                 w.files.create_directory(b_root)
@@ -170,12 +183,13 @@ def main() -> int:
                 folder = versioned_dir(b_root, wheel_version(whl.name), f"env{env}")
                 try:
                     w.files.create_directory(folder)  # also creates its parents
-                    prune_stale(w, folder, "geobrix-", ".whl", whl.name)
                 except Exception as e:
                     print(f"Error: could not prepare {folder}: {e}", file=sys.stderr)
                     return 1
-            # by its own +env<N> name; unversioned, no other wheel is touched
-            rc = upload_verified(w, whl, f"{folder}/{whl.name}")
+                rc = _upload_then_prune(w, whl, folder)
+            else:
+                # by its own +env<N> name; unversioned, no other wheel is touched
+                rc = upload_verified(w, whl, f"{folder}/{whl.name}")
             if rc:
                 return rc
         return 0

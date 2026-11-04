@@ -611,11 +611,13 @@ def _m5(c: Ctx) -> Unit:
         u.setup.append((label, create))
         u.drops.append((f"drop_tiles_{n}", f"DROP TABLE IF EXISTS {table}"))
         p = f"{c.q}.{partial}"
-        part = f"SELECT p.* FROM {table} r LATERAL VIEW inline({p}(r.tile, 7)) p"
+        # the partial has DEFAULTs, so its public name is a SQL function, and UC refuses one inside a generator: call it in a
+        # subquery and explode the column
+        part = f"SELECT c.* FROM (SELECT {p}(r.tile, 7) AS cells FROM {table} r) LATERAL VIEW inline(cells) c"
         u.legs.append(
             Leg(
                 f"fused_{n}t",
-                f"WITH p AS ({part}) SELECT count(*), sum({_hash('band, cellid, sum / count, count, sum, min, max, m2 / count, sqrt(m2 / count)')}) FROM p",
+                f"WITH p AS ({part}) SELECT count(*), sum({_hash('band, cellid, try_divide(sum, count), count, sum, min, max, try_divide(m2, count), sqrt(try_divide(m2, count))')}) FROM p",
             )
         )
         for s in H3_STATS:
@@ -628,9 +630,11 @@ def _m5(c: Ctx) -> Unit:
             )
         f1 = (
             f"WITH p AS ({part}), "
-            "w AS (SELECT *, sum(sum) OVER (PARTITION BY band, cellid) / sum(count) OVER (PARTITION BY band, cellid) AS mu FROM p), "
+            "w AS (SELECT *, try_divide(sum(sum) OVER (PARTITION BY band, cellid), "
+            "sum(count) OVER (PARTITION BY band, cellid)) AS mu FROM p), "
             "g AS (SELECT band, cellid, sum(count) AS count, sum(sum) AS sum, min(min) AS min, max(max) AS max, "
-            "sum(sum) / sum(count) AS avg, (sum(m2) + sum(CASE WHEN count > 0 THEN count * pow(sum / count - mu, 2) END)) / sum(count) AS variance "
+            "try_divide(sum(sum), sum(count)) AS avg, "
+            "try_divide(sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2)), sum(count)) AS variance "
             "FROM w GROUP BY band, cellid) "
             f"SELECT count(*), sum({_hash('band, cellid, count, avg, variance')}) FROM g"
         )

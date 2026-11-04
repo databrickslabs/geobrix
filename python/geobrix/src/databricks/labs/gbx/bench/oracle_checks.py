@@ -333,6 +333,109 @@ def check_grid_stats(case, rows, args) -> Optional[str]:
     )
 
 
+def check_grid_stats_json(case, out, args) -> Optional[str]:
+    """`grid_stats_json`: a recipe's one value, the JSON text of its (band, cellID, measure) rows, judged as
+    `grid_stats` judges them. `args` are those of the session row the recipe stands for (the whole tile, which is
+    what the tiles the recipe merges were cut from)."""
+    import json
+
+    if out is None:
+        return f"{case.cid}: got NULL, want the rows of a grid reducer"
+    return check_grid_stats(case, json.loads(out), args)
+
+
+def _band_cells(args, e):
+    """Per band the valid pixel values of each cell (a dict cell id -> list), the bands (masked) and the pixel centres,
+    from the tile `args[0]`: a pixel is in the cell its centre is in (the same reading as `check_grid_stats`).
+    """
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _ref_dataset
+
+    with _ref_dataset(args) as src:
+        bands = [src.read(b, masked=True) for b in range(1, src.count + 1)]
+        ys, xs = np.mgrid[0 : src.height, 0 : src.width]
+        cx, cy = src.transform * (xs.ravel() + 0.5, ys.ravel() + 0.5)
+        keys = _grid_keys(e["grid"], e["res"], cx, cy)
+        geo = (src.height, src.width, src.transform)
+    per_band = []
+    for band in bands:
+        cells: dict = {}
+        flat, mask = band.data.ravel(), np.ma.getmaskarray(band).ravel()
+        for k, v, m in zip(keys, flat, mask):
+            if not m:
+                cells.setdefault(k, []).append(float(v))
+        per_band.append(cells)
+    return bands, keys, per_band, geo
+
+
+def check_grid_partial(case, out, args) -> Optional[str]:
+    """`grid_partial`: `expect` is {"grid", "res" (an index)} and optionally "coverage" ("sparse": no cell but those
+    with a valid pixel) and "assignment" ("covering": the counts of a band add up to its valid pixels). `out` is the
+    array of structs (band, cellid, count, sum, m2, min, max).
+
+    For the default centroid assignment numpy recomputes each field over the valid pixels of each cell: the count, the
+    sum, M2 (the sum of the squared deviations from the cell's mean), the least and the greatest. A cell that holds no
+    valid pixel may be there (complete coverage) with a count of 0.0 and NULL for the other fields. A band of nothing
+    but NoData has only such cells.
+    """
+    import numpy as np
+
+    e = case.expect
+    if out is None:
+        return f"{case.cid}: got NULL, want the cells' partial state"
+    rows = list(out)
+    bands, keys, per_band, geo = _band_cells(args, e)
+    got: dict = {}
+    for r in rows:
+        k = (int(_field(r, "band")), _field(r, "cellid"))
+        if k in got:
+            return f"{case.cid}: band {k[0]} cell {k[1]} twice"
+        got[k] = tuple(_field(r, f) for f in ("count", "sum", "m2", "min", "max"))
+    if any(isinstance(c, (float, bool)) for _, c in got):
+        return f"{case.cid}: a cell id is not an int or a string: {sorted(map(str, got))[:3]}"
+    if e.get("assignment") == "covering":
+        counts = {k: v[0] for k, v in got.items()}
+        from databricks.labs.gbx.bench.oracles import _ref_dataset
+
+        with _ref_dataset(args) as src:
+            ys, xs = np.mgrid[0 : src.height, 0 : src.width]
+            cx, cy = src.transform * (xs.ravel() + 0.5, ys.ravel() + 0.5)
+            return _check_covering(
+                case,
+                {**e, "stat": "count"},
+                bands,
+                counts,
+                keys,
+                (src, cx, cy),
+            )
+    want: dict = {}
+    for b, cells in enumerate(per_band, start=1):
+        for k, v in cells.items():
+            a = np.asarray(v)
+            want[(b, k)] = (
+                float(len(a)),
+                float(a.sum()),
+                float(((a - a.sum() / len(a)) ** 2).sum()),
+                float(a.min()),
+                float(a.max()),
+            )
+    missing = sorted(set(want) - set(got), key=str)
+    if missing:
+        return f"{case.cid}: {len(missing)} cells missing, e.g. {missing[:3]}"
+    extra = sorted(set(got) - set(want), key=str)
+    if extra and e.get("coverage") == "sparse":
+        return f"{case.cid}: {len(extra)} cells without a valid pixel, e.g. {extra[:3]}"
+    bad = [k for k in extra if got[k] != (0.0, None, None, None, None)]
+    if bad:
+        return f"{case.cid}: empty cells {bad[:3]} have the state {got[bad[0]]}, want (0.0, NULL, NULL, NULL, NULL)"
+    for k, w in want.items():
+        g = got[k]
+        if any(x is None or abs(x - y) > 1e-9 * max(1.0, abs(y)) for x, y in zip(g, w)):
+            return f"{case.cid}: {k} got {g}, want {w}"
+    return None
+
+
 def _cellfill_pairs(case, out):
     """The ``(cell id, value)`` pairs of a fill result and a problem text: the aggregate's BINARY payload (decoded here
     from its documented layout, so the check does not call the function under test) or the array form's structs.

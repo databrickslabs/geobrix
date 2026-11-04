@@ -14,6 +14,7 @@ statistic. The functions are table functions (rows of band, cellID, measure) at 
 (an ARRAY scalar) is not part of the contract.
 """
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import BOTH, recipe, share
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import G
 from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
@@ -46,6 +47,37 @@ def _rtg_bng(tmpdir):
     return _tile(
         _gtiff(_bands(30, 40), "EPSG:27700", origin=(530000.0, 183000.0), px=100.0)
     )
+
+
+@builder("rtg_ll_west")
+def _rtg_ll_west(tmpdir):
+    """The west 40 columns of `rtg_ll`: the same pixel grid, cut in two, so the cells on the seam hold pixels of both."""
+    return _tile(
+        _gtiff(_bands(60, 80)[:, :, :40], "EPSG:4326", origin=(-1.0, 52.0), px=0.01)
+    )
+
+
+@builder("rtg_ll_east")
+def _rtg_ll_east(tmpdir):
+    return _tile(
+        _gtiff(_bands(60, 80)[:, :, 40:], "EPSG:4326", origin=(-0.6, 52.0), px=0.01)
+    )
+
+
+@builder("rtg_ll_nodata_band")
+def _rtg_ll_nodata_band(tmpdir):
+    """`rtg_ll` with the second band all NoData: that band has no valid pixel, so only empty cells."""
+    bands = _bands(60, 80)
+    bands[1][:] = -9999.0
+    return _tile(_gtiff(bands, "EPSG:4326", origin=(-1.0, 52.0), px=0.01))
+
+
+@builder("rtg_ll_nodata_tile")
+def _rtg_ll_nodata_tile(tmpdir):
+    """Every pixel of every band is NoData."""
+    bands = _bands(60, 80)
+    bands[:] = -9999.0
+    return _tile(_gtiff(bands, "EPSG:4326", origin=(-1.0, 52.0), px=0.01))
 
 
 # (grid, SQL prefix, the tile, the arguments between tile and coverage, the resolution as an index)
@@ -81,7 +113,7 @@ def _fn(grid, stat):
     return f"{_PREFIX[grid]}{stat}"
 
 
-RASTER_TO_GRID = _stat_rows() + (
+_SESSION_ROWS = _stat_rows() + (
     # ---------------------------------------------------------------------------------------------- coverage
     # sparse: exactly the cells that hold a valid pixel. quadbin ids are far past 2**53: they must come out exact
     Case(
@@ -179,4 +211,149 @@ RASTER_TO_GRID = _stat_rows() + (
     Case(
         "cg_rtg_corrupt", _fn("custom", "avg"), (CORRUPT, G, 1), "no_rows", None, ONLY
     ),
+)
+
+
+# ------------------------------------------------------------------------------------------------ Unity Catalog
+# The seven H3 statistics that split (every one but the median) are table functions on UC too: a projection of the one
+# partial the kernel makes (`gbx_rst_h3_rastertogrid_partial`). Their rows are the session's: the same tile, the same
+# numpy reference. The median keeps its per-tile kernel and is a later form.
+H3P = "gbx_rst_h3_rastertogrid_partial"
+H3_SPLIT = tuple(s for s in STATS if s != "median")
+_H3_SHARED = (
+    *(f"h3_rtg_{s}" for s in H3_SPLIT),
+    "h3_rtg_sparse",
+    "h3_rtg_null_tile",
+    "h3_rtg_null_res",
+    "h3_rtg_error_tile",
+    "h3_rtg_corrupt",
+    "h3_rtg_bad_coverage",
+    "h3_rtg_bad_assignment",
+    "h3_rtg_bad_res",
+    "h3_rtg_bad_res_error_tile",
+)
+NODATA_BAND, NODATA_TILE = Build("rtg_ll_nodata_band"), Build("rtg_ll_nodata_tile")
+VIRTUAL = Build("tile_virtual")
+_H3 = {"grid": "h3", "res": 5}
+
+# The partial itself: per band and cell `count, sum, m2, min, max`, each recomputed with numpy. It is a scalar (an array of
+# structs), so a NULL tile is NULL and a tile with nothing to read is NULL, where the table functions give no rows.
+_PARTIAL_ROWS = (
+    Case("h3_rtgp_value", H3P, (LL, 5), "grid_partial", _H3, BOTH),
+    Case(
+        "h3_rtgp_sparse",
+        H3P,
+        (LL, 5, "sparse"),
+        "grid_partial",
+        {**_H3, "coverage": "sparse"},
+        BOTH,
+    ),
+    # a band of nothing but NoData has only covered-but-empty cells: count 0.0, the other fields NULL
+    Case(
+        "h3_rtgp_nodata_band",
+        H3P,
+        (NODATA_BAND, 5),
+        "grid_partial",
+        _H3,
+        BOTH,
+    ),
+    Case(
+        "h3_rtgp_nodata_band_sparse",
+        H3P,
+        (NODATA_BAND, 5, "sparse"),
+        "grid_partial",
+        {**_H3, "coverage": "sparse"},
+        BOTH,
+    ),
+    Case(
+        "h3_rtgp_nodata_tile_sparse",
+        H3P,
+        (NODATA_TILE, 5, "sparse"),
+        "grid_partial",
+        {**_H3, "coverage": "sparse"},  # no valid pixel: an empty array, not NULL
+        BOTH,
+    ),
+    Case(
+        "h3_rtgp_covering",
+        H3P,
+        (LL, 5, "complete", "covering"),
+        "grid_partial",
+        {**_H3, "assignment": "covering"},
+        BOTH,
+    ),
+    Case("h3_rtgp_null_tile", H3P, (None, 5), "null", None, BOTH),
+    Case("h3_rtgp_null_res", H3P, (LL, None), "null", None, BOTH),
+    Case("h3_rtgp_error_tile", H3P, (ERR, 5), "null", None, BOTH),
+    Case("h3_rtgp_corrupt", H3P, (CORRUPT, 5), "null", None, BOTH),
+    Case("h3_rtgp_bad_coverage", H3P, (LL, 5, "sideways"), "raises", "sideways", BOTH),
+    Case(
+        "h3_rtgp_bad_assignment",
+        H3P,
+        (LL, 5, "complete", "sideways"),
+        "raises",
+        "sideways",
+        BOTH,
+    ),
+    Case("h3_rtgp_bad_res", H3P, (LL, 16), "raises", "16", BOTH),
+    Case("h3_rtgp_bad_res_error_tile", H3P, (ERR, 16), "raises", "16", BOTH),
+    # UC only: a virtual tile is session-only, refused with a Fix naming the function
+    Case("uc_h3_rtgp_virtual_refused", H3P, (VIRTUAL, 5), "uc_refused", None, ("uc",)),
+)
+
+# every statistic's table function: a NULL tile gives no rows, a virtual tile is refused with a Fix naming the function
+_TVF_EDGES = tuple(
+    row
+    for stat in H3_SPLIT
+    for row in (
+        Case(
+            f"uc_h3_rtg_{stat}_null",
+            _fn("h3", stat),
+            (None, 5),
+            "no_rows",
+            None,
+            ("uc",),
+        ),
+        Case(
+            f"uc_h3_rtg_{stat}_virtual_refused",
+            _fn("h3", stat),
+            (VIRTUAL, 5),
+            "uc_refused",
+            None,
+            ("uc",),
+        ),
+    )
+)
+
+# F1: the statistic of a cell across tiles. The two halves of `rtg_ll` are two tiles of one table; the partial of each is
+# merged by a native GROUP BY (Chan's update for the variance), and the answer is the session statistic over the WHOLE
+# tile, which is the union of their pixels. The partial is called in a subquery and exploded in the next: UC refuses a SQL
+# function (the partial has DEFAULTs, so its public name is one) inside a generator.
+_F1 = (
+    "WITH rasters AS (SELECT {tile:rtg_ll_west} AS tile UNION ALL SELECT {tile:rtg_ll_east} AS tile), "
+    "parts AS (SELECT {q}gbx_rst_h3_rastertogrid_partial(tile, 5) AS cells FROM rasters), "
+    "p AS (SELECT c.* FROM parts LATERAL VIEW inline(cells) c), "
+    "w AS (SELECT *, try_divide(sum(sum) OVER (PARTITION BY band, cellid), "
+    "sum(count) OVER (PARTITION BY band, cellid)) AS mu FROM p), "
+    "m AS (SELECT band, cellid, sum(count) AS count, sum(sum) AS sum, min(min) AS min, max(max) AS max, "
+    "try_divide(sum(sum), sum(count)) AS avg, "
+    "try_divide(sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2)), sum(count)) AS variance "
+    "FROM w GROUP BY band, cellid) "
+    "SELECT to_json(collect_list(named_struct('band', band, 'cellID', cellid, 'measure', <stat>))) AS out FROM m"
+)
+_MEASURE = {"stddev": "sqrt(variance)"}
+_MERGE_ROWS = tuple(
+    recipe(
+        f"recipe_h3_merge_{stat}",
+        H3P,
+        _F1.replace("<stat>", _MEASURE.get(stat, stat)),
+        "grid_stats_json",
+        {**_H3, "stat": stat},
+        BOTH,
+        args=(LL, 5),
+    )
+    for stat in H3_SPLIT
+)
+
+RASTER_TO_GRID = (
+    share(_SESSION_ROWS, *_H3_SHARED) + _PARTIAL_ROWS + _TVF_EDGES + _MERGE_ROWS
 )

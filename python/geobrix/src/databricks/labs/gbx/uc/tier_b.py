@@ -1773,3 +1773,58 @@ def rst_tilexyz(tile, z, x, y, format, size, resampling, rescale):
 
 
 HANDLERS["gbx_rst_tilexyz"] = rst_tilexyz
+
+
+# --- raster to grid: the partial state of every cell ---------------------------------------------------------------
+# One row per band and cell: band (int), cellid (bigint), then count, sum, m2, min, max (doubles). The struct is 52 bytes
+# of data; a row is counted at 64.
+_PARTIAL_ROW_BYTES = 64
+
+
+def rst_h3_rastertogrid_partial(tile, resolution, coverage, assignment):
+    """gbx_rst_h3_rastertogrid_partial: the mergeable state of every H3 cell the tile covers, per band, in one pass over
+    the pixels (core.gridagg.raster_to_grid_partial, the pass every session statistic is read from). NULL for a NULL tile
+    or resolution, an error tile and a tile that cannot be read. A wrong resolution, coverage or assignment raises, also
+    for a tile that has nothing to read."""
+    from databricks.labs.gbx.uc.handlers import _check_bytes
+
+    fn = "gbx_rst_h3_rastertogrid_partial"
+    if tile is None or resolution is None:
+        return None
+    gridagg = importlib.import_module(f"{_CORES}.gridagg")
+    coverage = "complete" if coverage is None else coverage
+    assignment = "centroid" if assignment is None else assignment
+    try:
+        gridagg.check_arguments(
+            int(resolution), "h3", "count", coverage, assignment, None
+        )
+    except ValueError as exc:
+        raise _Parameter(
+            f"{fn}: {exc}. Fix: pass a resolution from 0 to 15, a coverage of 'complete' or 'sparse', "
+            "and an assignment of 'centroid' or 'covering'"
+        ) from exc
+
+    def kernel(ds):
+        rows = [
+            {"band": band, "cellid": int(c["cellID"]), **{k: c[k] for k in _FIELDS}}
+            for band, cells in enumerate(
+                gridagg.raster_to_grid_partial(
+                    ds, int(resolution), "h3", coverage, assignment
+                ),
+                start=1,
+            )
+            for c in cells
+        ]
+        _check_bytes(
+            fn,
+            len(rows) * _PARTIAL_ROW_BYTES,
+            "the cells of the tile",
+            lower="use a coarser resolution, or retile the raster first (gbx_rst_retile) so each tile covers fewer cells",
+        )
+        return rows
+
+    return with_dataset(fn, tile, kernel)
+
+
+_FIELDS = ("count", "sum", "m2", "min", "max")
+HANDLERS["gbx_rst_h3_rastertogrid_partial"] = rst_h3_rastertogrid_partial

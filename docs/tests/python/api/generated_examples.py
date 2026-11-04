@@ -684,6 +684,11 @@ EXAMPLES = {
         "h3r_dup_max",
         "SELECT gbx_rst_h3_rasterize_agg(c0, c1, 4326, CAST(NULL AS DOUBLE), -122.43D, 37.76D, -122.405D, 37.785D, 10, 10, 'centroids', 0) AS out FROM gbx_example",
     ),
+    "gbx_rst_h3_rastertogrid_partial": (
+        "RASTER_TO_GRID",
+        "h3_rtgp_value",
+        "SELECT gbx_rst_h3_rastertogrid_partial(c0, 5) AS out FROM gbx_example",
+    ),
     "gbx_rst_h3_rastertogridavg": (
         "RASTER_TO_GRID",
         "h3_rtg_avg",

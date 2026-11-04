@@ -393,5 +393,19 @@ def _table_function_ddl(
         f"CREATE OR REPLACE FUNCTION {q}.{sql_name}({sig})\n"
         f"RETURNS TABLE ({cols})\n"
         f"COMMENT {comment_text(fn, version)}\n"
-        f"RETURN SELECT {rows}"
+        f"RETURN {_tvf_query(fn, rows)}"
     )
+
+
+def _tvf_query(fn, rows: str) -> str:
+    """The query a table function returns: the rows of the function it is over (``rows``, an ``inline`` or ``explode``), or,
+    with the row's L4 ``tvf_select``, a projection of them. THE one place that shapes a projected table function.
+
+    The projection form puts a generator over a Python function inside a subquery and projects its fields in the outer
+    SELECT, so one call serves every statistic that is a function of the same state. It is waiting for the workspace
+    pass: UC refuses a SQL function inside a generator, and whether it takes this shape over a Python one is not proven
+    on the host. If it refuses, the fallback is here: one Python array function per statistic under the same names, and
+    this function returns ``SELECT {rows}`` over that function.
+    """
+    select = fn.levels["L4"].get("tvf_select")
+    return f"SELECT {select} FROM (SELECT {rows})" if select else f"SELECT {rows}"

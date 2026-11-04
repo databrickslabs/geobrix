@@ -12,6 +12,7 @@ import functools
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 from dataclasses import dataclass, replace
@@ -59,7 +60,9 @@ class Case:
     # "props": {..}}; every row's `mvt_bytes` decodes to that layer with one feature of those properties.
     # The raster generators and vectorizers (see bench/oracle_checks.py): tile_rows (the first band of each row, in
     # order), tessellation (the cells and the pixel sum of each), polygons (value and area per row), isobands and
-    # contours (the structs of the array a scalar returns). grid_stats: the (band, cellID, measure) rows of a
+    # contours (the structs of the array a scalar returns). grid_partial: the array of (band, cellid, count, sum, m2, min,
+    # max) structs of a raster-to-grid partial, each field recomputed with numpy; grid_stats_json: the JSON text of
+    # (band, cellID, measure) rows (a recipe's one value), judged as grid_stats. grid_stats: the (band, cellID, measure) rows of a
     # raster-to-grid reducer, each statistic recomputed with numpy over the pixels of the cells (see oracle_checks).
     # The DataFrame helpers' rst_viewshed_towers uses towers (see MVP_H).
     # windows_batch is one task over several tiles: `args` is a tuple of argument rows, as for exact_rows.
@@ -3515,6 +3518,8 @@ _ARG_CHECKS = {
     "contours": _oracle_check("check_contours"),
     "cellfill": _oracle_check("check_cellfill"),
     "mvt_layer": _oracle_check("check_mvt_layer"),
+    "grid_partial": _oracle_check("check_grid_partial"),
+    "grid_stats_json": _oracle_check("check_grid_stats_json"),
 }
 
 
@@ -4193,18 +4198,50 @@ def _projection(case: Case, params, rows, surface: str) -> str:
     return ", ".join(cols)
 
 
-def render_recipe(sql: str, prefix: str = "") -> str:
-    """A recipe row's statement with every ``{q}`` replaced by ``prefix`` (the 3-level schema prefix on UC, "" in a session)."""
-    return sql.replace("{q}", prefix)
+def render_recipe(sql: str, prefix: str = "", tmpdir: Optional[str] = None) -> str:
+    """A recipe row's statement with every ``{q}`` replaced by ``prefix`` (the 3-level schema prefix on UC, "" in a
+    session) and every ``{tile:<builder>}`` by the tile struct that fixture builder makes, as a SQL literal (built when
+    the row runs, in ``tmpdir``, so a table needs no raster library to be imported)."""
+    out = sql.replace("{q}", prefix)
+    if "{tile:" not in out:
+        return out
+    from databricks.labs.gbx import manifest
+
+    param = manifest.load().functions["gbx_rst_width"].params[0]  # a TILE parameter
+    with contextlib.ExitStack() as stack:
+        d = tmpdir or stack.enter_context(
+            tempfile.TemporaryDirectory(prefix="gbx-oracle-")
+        )
+
+        def literal(m):
+            tile = _build(m.group(1), d)
+            text = _sql_literal(tile, param, Case("", "", (), ""))
+            md = tile.get("metadata") or {}
+            if not md:
+                return text
+            # a session reads the driver from the tile's metadata: the literal carries it, as the fixture does
+            pairs = ", ".join(
+                f"'{k}', '{str(v).replace(chr(39), chr(39) * 2)}'"
+                for k, v in md.items()
+            )
+            return text.replace("CAST(map() AS map<string,string>)", f"map({pairs})")
+
+        return re.sub(r"\{tile:(\w+)\}", literal, out)
 
 
-def run_recipe(spark, case: Case, prefix: str = "") -> Optional[str]:
+def run_recipe(
+    spark, case: Case, prefix: str = "", tmpdir: Optional[str] = None
+) -> Optional[str]:
     """Run a recipe row's statement and check the one row it answers (its ``out`` column); None when it meets the case."""
     try:
-        got = spark.sql(render_recipe(case.sql, prefix)).collect()
-        if len(got) != 1:
-            return f"{case.cid}: the recipe gave {len(got)} rows, want one"
-        return check(case, got[0]["out"], list(case.args))
+        with contextlib.ExitStack() as stack:
+            d = tmpdir or stack.enter_context(
+                tempfile.TemporaryDirectory(prefix="gbx-oracle-")
+            )
+            got = spark.sql(render_recipe(case.sql, prefix, d)).collect()
+            if len(got) != 1:
+                return f"{case.cid}: the recipe gave {len(got)} rows, want one"
+            return check(case, got[0]["out"], [resolve_arg(a, d) for a in case.args])
     except (
         Exception
     ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
@@ -4239,7 +4276,7 @@ def run_session(
         if (
             case.sql is not None
         ):  # a recipe: one statement, `{q}` the qualifier name_of gives a bare name
-            results.append((case, run_recipe(spark, case, name_of(""))))
+            results.append((case, run_recipe(spark, case, name_of(""), tmpdir)))
             continue
         rows = _argument_rows(case, tmpdir)
         args = rows[0]
@@ -5107,7 +5144,9 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
         ]
         try:
             elems = list(handler(*uc_args) or [])
-            if (
+            if "tvf_select" in fn.levels["L4"]:
+                elems = _projected_rows(fn, elems)
+            elif (
                 len(fn.columns) == 1
             ):  # an array of single values: the TVF's one column holds each
                 elems = [{fn.columns[0][0]: e} for e in elems]
@@ -5117,6 +5156,25 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
             out.append((case, check_error(case, exc)))
     return out
+
+
+def _projected_rows(fn, elems: list) -> list:
+    """The rows of a table function that PROJECTS the rows of the function it is over (L4 ``tvf_select``): the
+    statistic is read from each partial row by ``gridagg.measure_of``, the Python twin of the SQL projection (a host test holds
+    the two equal on every state a cell can have, and the workspace runs the SQL)."""
+    from databricks.labs.gbx.pyrx.core import gridagg
+
+    stat = fn.sql_name.rsplit("rastertogrid", 1)[1]
+    return [
+        {
+            "band": e["band"],
+            "cellID": e["cellid"],
+            "measure": gridagg.measure_of(
+                stat, tuple(e[k] for k in gridagg.PARTIAL_FIELDS)
+            ),
+        }
+        for e in elems
+    ]
 
 
 def _legacy_literal(value: dict, param) -> str:
@@ -5236,7 +5294,7 @@ def uc_sql(cases, catalog: str, schema: str, tmpdir: str) -> List[Tuple[str, str
             continue
         if case.sql is not None:
             stmts.append(
-                (case.cid, render_recipe(case.sql, f"`{catalog}`.`{schema}`."))
+                (case.cid, render_recipe(case.sql, f"`{catalog}`.`{schema}`.", tmpdir))
             )
             continue
         fn = man.functions[case.fn]

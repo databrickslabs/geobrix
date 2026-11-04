@@ -195,6 +195,7 @@ _UC_TABLES = (
     "RASTER_AGGREGATE",
     "VECTOR_GENERATOR",
     "CELL_AGGREGATE",
+    "RASTER_TO_GRID",
 )
 
 
@@ -232,7 +233,8 @@ def test_family_oracle_uc_handlers(tmp_path, table, sql_name):
         else oracles.run_handlers
     )
     ran = run(cases, tmpdir=str(tmp_path))
-    assert ran and sum("uc" in c.surfaces for c in cases) == len(ran)
+    # a recipe row is a statement for the workspace (and the session runs it): no handler runs it
+    assert ran and sum("uc" in c.surfaces and c.sql is None for c in cases) == len(ran)
     assert [m for _, m in ran if m] == []
 
 

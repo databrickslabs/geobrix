@@ -76,7 +76,7 @@ def test_oracle_rows_fit_signature(fn):
             c.sql is not None
         ):  # a recipe row is one whole statement: no arguments to fit (`args` is only the data of its reference)
             assert not c.variants and "uc" in c.surfaces, c.cid
-            assert c.kind == "ref" or not c.args, c.cid
+            assert c.kind in ("ref", "grid_stats_json") or not c.args, c.cid
             continue
         arg_rows = (
             c.args
@@ -702,10 +702,16 @@ def test_uc_ddl_contract(fn):
             if tvf_inner(fn) in MAN.private
             else MAN.functions[tvf_inner(fn)].returns_uc
         ).startswith("array<struct"):
-            assert tvf.endswith(f"RETURN SELECT inline({call})")
+            select = fn.levels["L4"].get("tvf_select")
+            if select:  # a projection of the rows: the generator sits in a subquery
+                assert tvf.endswith(
+                    f"RETURN SELECT {select} FROM (SELECT inline({call}))"
+                )
+            else:
+                assert tvf.endswith(f"RETURN SELECT inline({call})")
         else:
             assert tvf.endswith(f"RETURN SELECT explode({call}) AS {fn.columns[0][0]}")
-        assert all(f"{p.name} {p.uc}" in tvf for p in fn.params)
+        assert all(f"{p.name} {ddl.sql_type(p.uc)}" in tvf for p in fn.params)
         for p in fn.params:
             if p.default:
                 assert f"{p.name} {ddl.sql_type(p.uc)} DEFAULT {p.default}" in tvf

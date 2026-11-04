@@ -57,7 +57,7 @@ def test_every_measurement_is_built_or_says_what_it_needs():
         assert u.legs or u.skipped, u.id  # a unit is never silently empty
     missing = uc_perf.skipped(plan)
     # the functions that other work adds are named, and the units that do not need them are whole
-    assert "gbx_rst_h3_rastertogrid_partial" in missing["m5"]["m5"]
+    assert "m5" not in missing  # the partial and its seven table functions exist
     assert (
         "m6" not in missing
     )  # the SQL fill, the quadbin union and the BNG chip union all exist

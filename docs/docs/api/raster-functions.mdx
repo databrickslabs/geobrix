@@ -2795,24 +2795,62 @@ STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE,
 
 ---
 
+### rst_h3_rastertogrid_partial
+
+{/* BEGIN GENERATED gbx_rst_h3_rastertogrid_partial: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_h3_rastertogrid_partial(tile, resolution, [coverage], [assignment])` | `array<struct<band:int,cellid:bigint,count:double,sum:double,m2:double,min:double,max:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogrid_partial(tile, resolution, [coverage], [assignment])` | `array<struct<band:int,cellid:bigint,count:double,sum:double,m2:double,min:double,max:double>>` |
+| Python | `rasterx.functions.rst_h3_rastertogrid_partial(tile, resolution, coverage=None, assignment=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+{/* END GENERATED gbx_rst_h3_rastertogrid_partial */}
+
+Give the state of every H3 cell a tile covers, in one pass over the pixels.
+Each row of the array holds `count`, `sum`, `m2`, `min` and `max` for one band and one cell.
+The average of a cell is `sum / count`. The variance is `m2 / count`, and the standard deviation is its square root.
+The seven table functions `rst_h3_rastertogridavg`, `count`, `max`, `min`, `stddev`, `sum` and `variance` read these fields, so one pass serves every statistic.
+The median does not split. It keeps its own table function.
+
+```sql
+SELECT t.band, t.cellid, t.sum / t.count AS avg, t.max - t.min AS spread
+FROM rasters r LATERAL VIEW inline(gbx_rst_h3_rastertogrid_partial(r.tile, 7)) t
+```
+
+The state merges across tiles of one table. Sum `count` and `sum`, and take the least `min` and the greatest `max`.
+Combine `m2` with the update on the Unity Catalog functions page, so the variance of a cell that spans two tiles is exact.
+Tiles must not overlap. A pixel in two tiles counts twice.
+On Unity Catalog a virtual tile is refused, and so is a result over the size limit.
+
+---
+
 ### rst_h3_rastertogridavg
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridavg: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridavg(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridavg(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridavg(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridavg */}
 
 <Impl udtf/>
@@ -2829,21 +2867,22 @@ Mean pixel value per H3 cell.
 ### rst_h3_rastertogridcount
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridcount: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridcount(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridcount(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridcount(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridcount */}
 
 <Impl udtf/>
@@ -2860,21 +2899,22 @@ Pixel count (Double) per H3 cell.
 ### rst_h3_rastertogridmax
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridmax: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridmax(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridmax(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridmax(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridmax */}
 
 <Impl udtf/>
@@ -2922,21 +2962,22 @@ Median value per H3 cell.
 ### rst_h3_rastertogridmin
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridmin: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridmin(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridmin(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridmin(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridmin */}
 
 <Impl udtf/>
@@ -2953,21 +2994,22 @@ Min value per H3 cell.
 ### rst_h3_rastertogridstddev
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridstddev: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridstddev(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridstddev(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridstddev(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridstddev */}
 
 <Impl udtf/>
@@ -2984,21 +3026,22 @@ Population standard deviation of pixel values per H3 cell.
 ### rst_h3_rastertogridsum
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridsum: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridsum(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridsum(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridsum(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridsum */}
 
 <Impl udtf/>
@@ -3015,21 +3058,22 @@ Sum of pixel values per H3 cell.
 ### rst_h3_rastertogridvariance
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridvariance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridvariance(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridvariance(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridvariance(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridvariance */}
 
 <Impl udtf/>

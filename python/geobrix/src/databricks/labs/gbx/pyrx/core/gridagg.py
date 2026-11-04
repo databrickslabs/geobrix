@@ -48,6 +48,8 @@ matching the heavy tier's O(pixels) design).  Use small/coarse rasters; this
 path is not intended for large tiles.
 """
 
+import math
+
 import h3
 import numpy as np
 
@@ -69,6 +71,14 @@ QUADBIN_MAX_RES = 20
 _COVERING_FAST_PATH_EXACT = frozenset({"custom", "quadbin", "bng"})
 
 _AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
+# The statistics that split: each is a plain function of one cell's partial state (see ``measure_of``), so ONE pass over the
+# pixels gives all seven. The median does not split (it needs the values), and keeps its own per-cell pass.
+PARTIAL_STATS = tuple(a for a in _AGGS if a != "median")
+_PARTIAL = "partial"  # the internal agg word: the reducers return the partial state tuple instead of one measure
+# The partial state of one cell, in this order: the number of valid pixels (the sum of the weights when pixels are
+# shared out), the sum of the values, M2 (the sum of the squared deviations from the cell's mean), the minimum, the maximum.
+PARTIAL_FIELDS = ("count", "sum", "m2", "min", "max")
+_EMPTY_STATE = (0.0, None, None, None, None)  # a covered cell that holds no valid pixel
 _COVERAGES = ("sparse", "complete")
 _ASSIGNMENTS = ("centroid", "covering")
 
@@ -132,6 +142,22 @@ def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
     inv = inv.astype(np.intp)
     counts = np.bincount(inv, minlength=uniq.size)
 
+    if agg == _PARTIAL:
+        vals = np.asarray(vals, dtype="float64")
+        sums = np.bincount(inv, weights=vals, minlength=uniq.size)
+        # the two-pass M2 of the variance below: the mean first, then the squared deviations from it
+        m2 = np.bincount(
+            inv, weights=(vals - (sums / counts)[inv]) ** 2, minlength=uniq.size
+        )
+        lo = np.full(uniq.size, np.inf)
+        np.minimum.at(lo, inv, vals)
+        hi = np.full(uniq.size, -np.inf)
+        np.maximum.at(hi, inv, vals)
+        return uniq, [
+            (float(n), float(s), float(m), float(a), float(b))
+            for n, s, m, a, b in zip(counts, sums, m2, lo, hi)
+        ]
+
     if agg == "count":
         measures = [float(c) for c in counts]  # float for heavy-tier parity
         return uniq, measures
@@ -191,6 +217,16 @@ def _weighted_reduce(pairs: list, agg: str) -> float:
       median:   cumulative-weight interpolated weighted median
     """
     sw = sum(p[1] for p in pairs)
+    if agg == _PARTIAL:
+        sv = sum(v * w for v, w in pairs)
+        mean = sv / sw
+        return (
+            float(sw),
+            float(sv),
+            float(sum(w * (v - mean) ** 2 for v, w in pairs)),
+            float(min(p[0] for p in pairs)),
+            float(max(p[0] for p in pairs)),
+        )
     if agg == "count":
         return float(sw)
     if agg == "sum":
@@ -396,7 +432,7 @@ def _complete_coverage_pass(
     west, south, east, north = work_ds.bounds
     bbox_poly = _box(west, south, east, north)
 
-    empty_value = 0.0 if agg == "count" else None
+    empty_value = _EMPTY_STATE if agg == _PARTIAL else (0.0 if agg == "count" else None)
     existing_ids = {r["cellID"] for r in band_result}
 
     extra = []
@@ -498,7 +534,96 @@ def check_arguments(
             )
 
 
+def measure_of(stat: str, state: tuple):
+    """The measure of ONE cell for ``stat``, from its partial state ``(count, sum, m2, min, max)``: the sum over the
+    count, M2 over the count (the population variance), its square root, or a field as it is. A covered cell that holds no
+    valid pixel (a ``None`` sum) is NULL for every statistic but ``count``, which is 0.0. The SQL projection of the
+    Unity Catalog table functions (the manifest's ``tvf_select``) is this function, and a test holds them equal.
+    """
+    n, s, m2, lo, hi = state
+    if stat == "count":
+        return n
+    if s is None:
+        return None
+    if stat == "avg":
+        return s / n
+    if stat == "sum":
+        return s
+    if stat == "variance":
+        return m2 / n
+    if stat == "stddev":
+        return math.sqrt(m2 / n)
+    if stat == "min":
+        return lo
+    if stat == "max":
+        return hi
+    raise ValueError(f"{stat!r} does not split; expected one of {PARTIAL_STATS}")
+
+
 def raster_to_grid(
+    ds,
+    resolution: int,
+    grid: str,
+    agg: str,
+    coverage: str = "complete",
+    assignment: str = "centroid",
+    crs=None,
+    grid_conf=None,
+) -> list:
+    """Aggregate raster pixel values into discrete-global-grid cells, per band: :func:`raster_to_grid_partial`'s pass
+    with the statistic taken from each cell's state (:func:`measure_of`), or, for the median, its own pass. The rest of
+    this note is :func:`_raster_to_grid`'s.
+
+    Returns one list per band of ``{"cellID", "measure"}``.
+    """
+    check_arguments(resolution, grid, agg, coverage, assignment, grid_conf)
+    if agg == "median":
+        return _raster_to_grid(
+            ds, resolution, grid, agg, coverage, assignment, crs, grid_conf
+        )
+    return [
+        [{"cellID": c["cellID"], "measure": measure_of(agg, c["state"])} for c in band]
+        for band in _partial_states(
+            ds, resolution, grid, coverage, assignment, crs, grid_conf
+        )
+    ]
+
+
+def _partial_states(ds, resolution, grid, coverage, assignment, crs, grid_conf):
+    """One list per band of ``{"cellID", "state"}`` (the state is the tuple of :data:`PARTIAL_FIELDS`)."""
+    return [
+        [{"cellID": c["cellID"], "state": c["measure"]} for c in band]
+        for band in _raster_to_grid(
+            ds, resolution, grid, _PARTIAL, coverage, assignment, crs, grid_conf
+        )
+    ]
+
+
+def raster_to_grid_partial(
+    ds,
+    resolution: int,
+    grid: str,
+    coverage: str = "complete",
+    assignment: str = "centroid",
+    crs=None,
+    grid_conf=None,
+) -> list:
+    """The mergeable state of every cell, per band, in one pass over the pixels: one list per band of ``{"cellID",
+    "count", "sum", "m2", "min", "max"}`` (see :data:`PARTIAL_FIELDS`). The arguments are those of
+    :func:`raster_to_grid`. Two tiles of one grid merge by summing ``count`` and ``sum``, taking the least ``min`` and
+    greatest ``max``, and adding to the ``m2`` of each tile the count times the squared distance of its mean from the merged
+    mean (Chan's parallel update), so a statistic over many tiles needs no pixel.
+    """
+    check_arguments(resolution, grid, "count", coverage, assignment, grid_conf)
+    return [
+        [{"cellID": c["cellID"], **dict(zip(PARTIAL_FIELDS, c["state"]))} for c in band]
+        for band in _partial_states(
+            ds, resolution, grid, coverage, assignment, crs, grid_conf
+        )
+    ]
+
+
+def _raster_to_grid(
     ds,
     resolution: int,
     grid: str,
@@ -549,8 +674,6 @@ def raster_to_grid(
         H3/quadbin/custom and a formatted BNG ``str`` (e.g. ``"TQ3080"``) for
         BNG.
     """
-    check_arguments(resolution, grid, agg, coverage, assignment, grid_conf)
-
     if grid == "custom":
         return _raster_to_custom(
             ds,

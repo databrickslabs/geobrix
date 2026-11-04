@@ -765,12 +765,24 @@
       ],
       "since": "0.4.0"
     },
+    "gbx_rst_h3_rastertogrid_partial": {
+      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogrid_partial(c0, 5) AS out FROM gbx_example;",
+      "usage_args": "tile, resolution, [coverage], [assignment]",
+      "description": "Give the mergeable state of every H3 cell the raster covers, so one pass serves every statistic.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_h3_rastertogridavg": {
       "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "description": "Mean of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -781,6 +793,7 @@
       "description": "Count the pixels in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -791,6 +804,7 @@
       "description": "Maximum of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -811,6 +825,7 @@
       "description": "Minimum of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -821,6 +836,7 @@
       "description": "Population standard deviation of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -831,6 +847,7 @@
       "description": "Sum of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -841,6 +858,7 @@
       "description": "Population variance of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"

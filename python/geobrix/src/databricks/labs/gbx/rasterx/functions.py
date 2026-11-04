@@ -2951,6 +2951,47 @@ def rst_h3_rasterize_agg(
     )
 
 
+def rst_h3_rastertogrid_partial(
+    tile: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = None,
+    assignment: ColLike = None,
+) -> Column:
+    """Give the mergeable state of every H3 cell the raster covers, so one pass serves every statistic.
+
+    Args:
+        tile: The tile to aggregate.
+        resolution: The H3 resolution, a whole number from 0 to 15.
+        coverage: `'complete'` also gives the cells that overlap the raster but hold no
+            valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the
+            cells that hold a valid pixel. Any other word raises. SQL default:
+            ``'complete'``.
+        assignment: How a pixel joins a cell: `'centroid'` (the cell holds the pixel's
+            centre) or `'covering'` (every cell the pixel overlaps, in proportion to the
+            overlapping area). Any other word raises. SQL default: ``'centroid'``.
+
+    Returns:
+        An array of structs, one per band and cell: `band` (from 1), `cellid`, `count`,
+        `sum`, `m2`, `min` and `max`. `m2` is the sum of the squared deviations from the
+        cell's mean. A cell that holds no valid pixel (with `'complete'` coverage) has a
+        `count` of 0 and NULL for the rest. The average of a cell is `sum / count`, its
+        variance `m2 / count`, and its standard deviation the square root of that. Tiles
+        of one table merge by summing `count` and `sum`, taking the least `min` and the
+        greatest `max`, and combining `m2` as the recipe on the Unity Catalog page
+        shows. NULL for a NULL tile, a NULL resolution, an error tile or a tile that
+        cannot be read.
+
+    SQL: ``gbx_rst_h3_rastertogrid_partial(tile, resolution, [coverage], [assignment])``
+    """
+    return _api.call(
+        "gbx_rst_h3_rastertogrid_partial",
+        tile,
+        resolution,
+        coverage,
+        assignment,
+    )
+
+
 def rst_h3_rastertogridavg(
     df: DataFrame,
     tile: ColLike,

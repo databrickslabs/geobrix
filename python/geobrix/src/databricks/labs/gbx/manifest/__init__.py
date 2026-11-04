@@ -59,6 +59,7 @@ LEVEL_KEYS = {
             "handler",
             "deps",
             "tvf_over",
+            "tvf_select",
             "engine",
             "scala",
             "jar",
@@ -68,6 +69,10 @@ LEVEL_KEYS = {
         }
     ),
 }
+# `tvf_select` (with `tvf_over`) is the SELECT list of a UC table function that is a PROJECTION of the rows the function
+# it is over returns: `RETURN SELECT <tvf_select> FROM (SELECT inline(<tvf_over>(...)))`. It reads the fields of the
+# partial's struct (a raster-to-grid statistic is `try_divide(sum, count)` of the cell's state), so one kernel serves every
+# statistic. Without it the table function is the plain `inline(...)` of the rows.
 # `scala` (a UC Scala handler, `<class>.<method>` in the JAR) and `jar` go together: `jar: "volume"` says the JAR is read from
 # the Volume folder `gbx.uc.install` is given. The row keeps its Python `handler`, which `install` creates when that
 # folder holds no JAR.
@@ -687,6 +692,13 @@ def _check_sql_levels(name: str, levels: Mapping, kind: str = "scalar") -> None:
         raise ValueError(
             f"{name}: a table function (tvf_over) has no sql body of its own"
         )
+    if "tvf_select" in l4:
+        if "tvf_over" not in l4:
+            raise ValueError(
+                f"{name}: tvf_select needs tvf_over (the rows it projects)"
+            )
+        if not (isinstance(l4["tvf_select"], str) and l4["tvf_select"].strip()):
+            raise ValueError(f"{name} L4: tvf_select must be non-empty text")
     if "sql" in l4 and kind != "scalar":
         raise ValueError(
             f"{name}: an L4 sql body makes a scalar SQL function, and this row's kind is {kind}"

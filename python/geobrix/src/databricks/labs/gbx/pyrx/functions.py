@@ -4664,6 +4664,69 @@ def _rastertogrid_rows(
             yield (band_idx, cid, cell["measure"])
 
 
+# The partial state of every cell, per band: ONE pass over the pixels (core.gridagg.raster_to_grid_partial), from which each
+# statistic's table function reads its measure. It is a scalar (an array of structs), so it can be grouped and merged in SQL.
+_GRID_PARTIAL_SCHEMA = ArrayType(
+    StructType(
+        [
+            StructField("band", IntegerType(), True),
+            StructField("cellid", LongType(), True),
+            StructField("count", DoubleType(), True),
+            StructField("sum", DoubleType(), True),
+            StructField("m2", DoubleType(), True),
+            StructField("min", DoubleType(), True),
+            StructField("max", DoubleType(), True),
+        ]
+    )
+)
+
+
+def _rastertogrid_partial_cells(
+    tile, resolution, grid, coverage, assignment, grid_struct=None
+):
+    """The cells of one raster->grid call as partial-state rows (a list of dicts), or None: for a NULL tile or resolution,
+    an error tile and a tile that cannot be read. The arguments are checked first, as :func:`_rastertogrid_rows` checks
+    them, so a wrong word raises also for a tile that has nothing to read."""
+    if tile is None or resolution is None or (grid == "custom" and grid_struct is None):
+        return None
+    coverage, assignment = coverage or "complete", assignment or "centroid"
+    gridagg.check_arguments(
+        resolution, grid, "count", coverage, assignment, grid_struct
+    )
+    if _tile_is_empty(tile):
+        return None
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with _open_or_none(tile) as ds:
+        if ds is None:
+            return None
+        bands = gridagg.raster_to_grid_partial(
+            ds,
+            resolution,
+            grid,
+            coverage=coverage,
+            assignment=assignment,
+            grid_conf=grid_struct,
+        )
+    return [
+        {
+            "band": band,
+            "cellid": int(c["cellID"]),
+            **{k: c[k] for k in gridagg.PARTIAL_FIELDS},
+        }
+        for band, cells in enumerate(bands, start=1)
+        for c in cells
+    ]
+
+
+@f.udf(_GRID_PARTIAL_SCHEMA)
+def _h3_rastertogrid_partial_udf(
+    tile, resolution, coverage="complete", assignment="centroid"
+):  # the row's defaults: no SQL wrapper
+    return _rastertogrid_partial_cells(tile, resolution, "h3", coverage, assignment)
+
+
 def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):
     """Factory for raster->grid aggregation UDTFs.
 

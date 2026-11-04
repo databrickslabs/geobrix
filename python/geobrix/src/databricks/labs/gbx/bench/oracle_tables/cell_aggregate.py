@@ -342,6 +342,20 @@ def _extra_array_rows(prefix, fn):
 for _prefix, _fn in _FA.items():
     CELL_AGGREGATE += _extra_array_rows(_prefix, _fn)
 
+# A radius whose work (the NULL cells x (2k+1)^2 neighbours) is over the 64 MiB cap is refused with a Fix BEFORE any ring
+# is built. H3 is not listed: its UC form is a SQL kernel over the product's h3_kringdistances, which cannot pre-check.
+CELL_AGGREGATE += tuple(
+    Case(
+        f"uc_{p}_cellfill_array_over_cap",
+        fn,
+        (Build(f"{p}_fill_mean"), *_consts(p, 100_000, "mean", 2.0)),
+        "uc_refused",
+        None,
+        ("uc",),
+    )
+    for p, fn in (("qb", QBFA), ("bng", BNFA), ("cg", CGFA))
+)
+
 
 @builder("h3_fill_pentagon")
 def _h3_fill_pentagon(tmpdir):

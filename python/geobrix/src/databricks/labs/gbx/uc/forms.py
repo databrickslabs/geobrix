@@ -24,6 +24,7 @@ from typing import List
 from databricks.labs.gbx.pyrx.core.budget import size_text
 from databricks.labs.gbx.uc.handlers import (
     WGS84_SRID,
+    _check_array,
     _field,
     _geom_bytes,
     _Refusal,
@@ -231,6 +232,17 @@ def _check_h3_ids(fn: str, ids) -> None:
             ) from exc
 
 
+def _check_fill_work(fn: str, n_null: int, k: int) -> None:
+    """Refuse a cell fill whose work is over the cap, before any ring is built: each NULL cell looks at the
+    ``(2k+1)^2`` cells within k rings, counted at the size of a cell of an array."""
+    _check_array(
+        fn,
+        n_null * (2 * k + 1) ** 2,
+        "the neighbour cells to look at for the NULL cells",
+        lower="lower k, or split the cells into smaller groups",
+    )
+
+
 def h3_cellfill_cells(cells, k, method, power):
     """gbx__h3_cellfill_cells: the cells of ``gbx_h3_cellfill`` as an array of ``(cellid, value)`` structs, in
     ascending unsigned cell id order; a valid cell passes through, a NULL one takes the mean (or the inverse-distance
@@ -251,6 +263,8 @@ def h3_cellfill_cells(cells, k, method, power):
     collected = _cellfill.collect(
         (int(c), None if v is None or v != v else float(v)) for c, v in zip(ids, values)
     )
+    if int(ring) >= 0:  # a negative k is the fill's own error, below
+        _check_fill_work(fn, sum(1 for v in collected.values() if v is None), int(ring))
     try:
         filled = _cellfill.fill(collected, int(ring), how, exponent, _h3_ring)
     except ValueError as exc:
@@ -265,7 +279,8 @@ def h3_cellfill_cells(cells, k, method, power):
 def _fill_array(fn, session_fn, cells, k, method, power, ring, parse=None, fmt=None):
     """The shared body of ``gbx_<grid>_cellfill_array``: ``cells`` (an array of ``(cellid, value)`` structs) filled with
     the grid's ring function, as an array of ``{cellid, value}`` in ascending id order. NULL for NULL or for an array with
-    no cell id; a wrong k or method raises with a Fix; an array over the cap is refused.
+    no cell id; a wrong k or method raises with a Fix; an array over the cap is refused, and so is a fill whose work
+    (the NULL cells, each looking at ``(2k+1)^2`` neighbours) is over the cap, before any ring is built.
     """
     from databricks.labs.gbx.pygx import _cellfill
 
@@ -275,10 +290,18 @@ def _fill_array(fn, session_fn, cells, k, method, power, ring, parse=None, fmt=N
     rows = [(_field(c, "cellid"), _field(c, "value")) for c in cells if c is not None]
     if parse is not None:  # a cell id that is no cell is skipped
         rows = [(parse(c), v) for c, v in rows if c is not None]
+
     try:
         filled = _cellfill.fill_cells(
-            ((c, v) for c, v in rows if c is not None), k, method, power, ring
+            ((c, v) for c, v in rows if c is not None),
+            k,
+            method,
+            power,
+            ring,
+            before_fill=lambda n_null, radius: _check_fill_work(fn, n_null, radius),
         )
+    except _Refusal:
+        raise
     except ValueError as exc:
         raise _parameter(
             fn,

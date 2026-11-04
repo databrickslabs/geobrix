@@ -133,6 +133,37 @@ def test_the_cell_arrays_over_the_cap_are_refused_with_the_session_function(
         )
 
 
+def test_a_fill_radius_whose_work_is_over_the_cap_is_refused_before_any_ring_is_built(
+    monkeypatch,
+):
+    """Each NULL cell looks at (2k+1)^2 cells: the work is judged before the kernel, with a Fix naming the session route."""
+    from databricks.labs.gbx.pygx import _cellfill
+
+    def never(*_a, **_k):
+        raise AssertionError("a ring was built")
+
+    monkeypatch.setattr(_cellfill, "fill", never)
+    monkeypatch.setattr(_cellfill, "k_loop", never, raising=False)
+    centre = h3.str_to_int(h3.latlng_to_cell(37.77, -122.42, 8))
+    near = h3.str_to_int(h3.grid_ring(h3.int_to_str(centre), 1)[0])
+    cells = [{"cellid": centre, "value": None}, {"cellid": near, "value": 1.0}]
+    with pytest.raises(
+        _Refusal,
+        match=r"over the 64 MiB.*Fix: lower k.*session function gbx_h3_cellfill",
+    ):
+        forms.h3_cellfill_cells(cells, 100_000, "mean", 2.0)
+    # the array forms of the other grids go through the same bound, ahead of the kernel
+    with pytest.raises(
+        _Refusal, match=r"Fix: lower k.*session function gbx_quadbin_cellfill_array"
+    ):
+        forms.quadbin_cellfill_array(
+            [{"cellid": 5192650370358181887, "value": None}], 100_000, "mean", 2.0
+        )
+    # a small radius is not refused (its own work is far under the cap)
+    monkeypatch.undo()
+    assert forms.h3_cellfill_cells(cells, 1, "mean", 2.0)
+
+
 def test_the_filled_array_is_the_input_of_the_h3_rasterizer():
     centre = h3.str_to_int(h3.latlng_to_cell(37.77, -122.42, 8))
     ring = [h3.str_to_int(c) for c in h3.grid_ring(h3.int_to_str(centre), 1)]

@@ -119,10 +119,13 @@ def fill_cells(
     method,
     power,
     k_loop_fn: Callable[[int, int], List[int]],
+    before_fill: Optional[Callable[[int, int], None]] = None,
 ) -> Optional[List[Tuple[int, Optional[float]]]]:
     """The array form of the fill: ``(cell_id, value)`` rows to the filled ``[(cell_id, value)]`` in ascending unsigned
     id order, or None when no row has a cell id. A NULL ``k``, ``method`` or ``power`` takes 1, ``'mean'`` and 2.0;
     a NaN value is a missing one. One kernel for the session UDFs and the Unity Catalog handlers of every grid.
+    ``before_fill(n_null, k)``, when given, is called with the number of cells to fill and the radius after the
+    arguments are checked and before any ring is built: a caller bounds the work there by raising.
     """
     k = 1 if k is None else int(k)
     method = "mean" if method is None else str(method)
@@ -134,6 +137,8 @@ def fill_cells(
     )
     if not cells:
         return None
+    if before_fill is not None:
+        before_fill(sum(1 for v in cells.values() if v is None), k)
     return fill(cells, k, method, 2.0 if power is None else float(power), k_loop_fn)
 
 

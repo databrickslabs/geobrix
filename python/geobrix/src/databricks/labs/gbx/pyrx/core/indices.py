@@ -73,6 +73,34 @@ def builtin_formulae() -> list:
     return sorted(_INDEX_REGISTRY.keys())
 
 
+def formula_bands(key: str) -> list:
+    """The names of the bands the built-in formula ``key`` (as :func:`check_index` returns it) reads."""
+    return list(_INDEX_REGISTRY[key][1])
+
+
+def check_index(formula_name, band_map):
+    """``(formula key, band map with lower-case names)`` of ``rst_index``; a ``ValueError`` that names the offender
+    for no formula, no band map, an unknown formula, or a band the formula needs that the map lacks.
+    """
+    if not formula_name:
+        raise ValueError("rst_index: formula_name required")
+    if not band_map:
+        raise ValueError("rst_index: band_map required (e.g. {'red': 1, 'nir': 2})")
+    key = str(formula_name).lower()
+    band_map_lc = {str(k).lower(): int(v) for k, v in dict(band_map).items()}
+    if key not in _INDEX_REGISTRY:
+        known = ", ".join(builtin_formulae())
+        raise ValueError(f"rst_index: unknown formula '{formula_name}'. Known: {known}")
+    for b in _INDEX_REGISTRY[key][1]:
+        if b not in band_map_lc:
+            have = ", ".join(sorted(band_map_lc.keys()))
+            raise ValueError(
+                f"rst_index: formula '{formula_name}' requires band '{b}' in "
+                f"band_map; got keys {have}"
+            )
+    return key, band_map_lc
+
+
 def index(ds, formula_name: str, band_map) -> bytes:
     """Generic named-index dispatcher (mirrors heavyweight ``RST_Index``).
 
@@ -89,23 +117,8 @@ def index(ds, formula_name: str, band_map) -> bytes:
     Returns:
         Single-band Float32 GTiff bytes (NoData ``-9999.0`` for non-finite).
     """
-    if not formula_name:
-        raise ValueError("rst_index: formula_name required")
-    if not band_map:
-        raise ValueError("rst_index: band_map required (e.g. {'red': 1, 'nir': 2})")
-    key = str(formula_name).lower()
-    band_map_lc = {str(k).lower(): int(v) for k, v in dict(band_map).items()}
-    if key not in _INDEX_REGISTRY:
-        known = ", ".join(builtin_formulae())
-        raise ValueError(f"rst_index: unknown formula '{formula_name}'. Known: {known}")
+    key, band_map_lc = check_index(formula_name, band_map)
     calc, bands = _INDEX_REGISTRY[key]
-    for b in bands:
-        if b not in band_map_lc:
-            have = ", ".join(sorted(band_map_lc.keys()))
-            raise ValueError(
-                f"rst_index: formula '{formula_name}' requires band '{b}' in "
-                f"band_map; got keys {have}"
-            )
     # Assign A, B, C... aliases to the formula's bands in declared order, then
     # substitute placeholders and bind each alias to its 1-based pixel array.
     local_dict = {}

@@ -213,12 +213,13 @@ def _copy(c: Ctx, u: Unit, product: str, short: str, **kw) -> Optional[str]:
     """Create the probe copy ``gbx_mvp_perf_<short>`` of a product scalar in the form ``kw`` names; its qualified name,
     or None (recorded in ``u.skipped``) when the row cannot be that form. A SQL kernel's helpers are created as
     ``gbx_mvp_perf_`` routines of the probe, never over the product's."""
-    from databricks.labs.gbx.uc import ddl
+    from databricks.labs.gbx.uc import candidates, ddl
 
     fn = c.man.functions[product]
     form = kw.get("form")
     if form in (None, "sql"):
-        fn = _probe_helpers(fn)
+        # a row with no SQL kernel of its own takes the candidate body (uc.candidates): the probe times it, the row stays
+        fn = _probe_helpers(candidates.with_candidate(fn))
     try:
         stmts = ddl.function_ddl(
             fn,
@@ -293,22 +294,35 @@ def _m0(c: Ctx) -> Unit:
 
 # ---- M1 is a SQL function inlined ------------------------------------------------------------------------------
 
-_QRES = "bit_and(shiftright({c}, 52), 31)"  # the quadbin resolution field, the control SQL body
+_QRES_FN = "gbx_quadbin_resolution"
 
 
 def _m1(c: Ctx) -> Unit:
+    """Is a SQL UDF inlined: the product's own kernel as a probe copy against the same expression written inline. The
+    inline text is the row's body with its parameter replaced by the column, so the two cannot drift.
+    """
+    from databricks.labs.gbx.uc import sqlbody
+
     u = Unit(
         "m1",
         "is a SQL UDF inlined into the caller's plan (plan and time against the inline expression)",
     )
-    f = f"{c.q}.{PERF}qres"
-    u.setup.append(
-        (
-            "create_qres",
-            f"CREATE OR REPLACE FUNCTION {f}(c BIGINT) RETURNS INT LANGUAGE SQL DETERMINISTIC RETURN {_QRES.format(c='c')}",
+    fn = c.man.functions.get(_QRES_FN)
+    src = None if fn is None or "L4" not in fn.levels else sqlbody.l4_source(fn)
+    if src is None:
+        u.skipped["qres"] = (
+            f"needs {_QRES_FN} as a SQL kernel (no such UC form in this wheel yet)"
         )
-    )
-    u.drops.append(("drop_qres", f"DROP FUNCTION IF EXISTS {f}"))
+        return u
+    f = _copy(c, u, _QRES_FN, "qres", form="sql")
+    if f is None:
+        return u
+    param = fn.params[0].name
+    text = sqlbody.inlined(*src)
+
+    def inline(col: str) -> str:
+        return f"({sqlbody.rename(text, {param: f'({col})'})})"
+
     u.legs += [
         Leg(
             "explain_sql",
@@ -316,7 +330,7 @@ def _m1(c: Ctx) -> Unit:
         ),
         Leg(
             "explain_inline",
-            f"EXPLAIN FORMATTED SELECT sum({_QRES.format(c='shiftleft(id % 27, 52)')}) FROM range(1000)",
+            f"EXPLAIN FORMATTED SELECT sum({inline('shiftleft(id % 27, 52)')}) FROM range(1000)",
         ),
     ]
     for n in _tail(c, "m1"):
@@ -327,7 +341,7 @@ def _m1(c: Ctx) -> Unit:
             ),
             Leg(
                 f"t_inline_{_n(n)}",
-                f"SELECT count(*), sum({_hash(_QRES.format(c='c'))}) FROM {gen}",
+                f"SELECT count(*), sum({_hash(inline('c'))}) FROM {gen}",
             ),
         ]
     return u
@@ -375,9 +389,9 @@ def _forms(
     py = _copy(c, u, product, f"{short}_py", form="python")
     if py:
         out["py"] = py
-    from databricks.labs.gbx.uc import sqlbody
+    from databricks.labs.gbx.uc import candidates, sqlbody
 
-    if sqlbody.l4_source(fn) is not None:
+    if sqlbody.l4_source(candidates.with_candidate(fn)) is not None:
         sql = _copy(c, u, product, f"{short}_sql", form="sql")
         if sql:
             out["sql"] = sql

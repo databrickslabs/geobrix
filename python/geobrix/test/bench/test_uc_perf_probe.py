@@ -624,3 +624,74 @@ def test_proc_warm_plan_quotes_both_names_and_refuses_a_backtick():
         uc_perf.proc_warm_plan("cat", "sch`; DROP SCHEMA x")
     with pytest.raises(ValueError, match="catalog"):
         uc_perf.proc_warm_plan("ca`t", "sch")
+
+
+def _w_ctx(jar=JAR):
+    return uc_perf.Ctx(
+        "cat",
+        "sch",
+        "`cat`.`sch`",
+        "file://" + WHEEL,
+        jar,
+        "/t",
+        dict(uc_perf.DEFAULT_SIZES),
+        "w",
+        manifest.load(),
+        "0.6.0",
+    )
+
+
+def test_the_candidate_bodies_give_m2_its_sql_leg_with_no_manifest_sql_key():
+    c = _w_ctx()
+    u = uc_perf.Unit("m2", "t")
+    forms = uc_perf._forms(c, u, "bng_eastnorthasbng", "gbx_bng_eastnorthasbng")
+    assert set(forms) == {"py", "sql", "scala", "batch"}
+    created = dict(u.setup)
+    names = [k for k in created if k.startswith("create_bng_eastnorthasbng_sql")]
+    sql = created[names[-1]]  # the helpers are created first, the function last
+    assert (
+        "gbx_mvp_perf_bng_eastnorthasbng_sql(" in sql
+        and "LANGUAGE SQL\nDETERMINISTIC" in sql
+    )
+    # the candidate's helpers are probe routines of their own, created before the function and dropped with it
+    assert any("gbx_mvp_perf_bng_cell(" in created[k] for k in names[:-1])
+    assert all("gbx__bng_" not in created[k] for k in names)
+    dropped = " ".join(s for _, s in u.drops)
+    assert (
+        "gbx_mvp_perf_bng_resindex" in dropped
+        and "`gbx_bng_eastnorthasbng`" not in dropped
+    )
+    assert "sql" not in manifest.load().functions["gbx_bng_eastnorthasbng"].levels["L4"]
+    # no candidate and no kernel: no SQL leg, with the reason
+    u2 = uc_perf.Unit("m2", "t")
+    forms2 = uc_perf._forms(c, u2, "bng_polyfill", "gbx_bng_polyfill")
+    assert (
+        "sql" not in forms2
+        and u2.skipped["bng_polyfill_sql"] == "no SQL kernel for this row yet"
+    )
+
+
+def test_m2_times_and_diffs_the_sql_candidate_of_both_grid_scalars():
+    u = uc_perf._m2(_w_ctx())
+    labels = {leg.label for leg in u.legs}
+    for short in ("bng_cellarea", "bng_eastnorthasbng"):
+        assert f"t_{short}_sql_1m" in labels and f"t_{short}_sql_10m" in labels
+        assert f"diff_{short}_sql_vs_py_100k" in labels
+        assert f"t_{short}_py_1m" in labels and f"t_{short}_scala_1m" in labels
+    assert not [k for k in u.skipped if k.endswith("_sql")]
+
+
+def test_m1_compares_the_products_own_quadbin_kernel_with_the_same_expression_inline():
+    u = uc_perf._m1(_w_ctx())
+    created = dict(u.setup)["create_qres"]
+    assert "gbx_mvp_perf_qres(" in created and "(cell >> 52) & 31" in created
+    inline = next(leg.sql for leg in u.legs if leg.label == "explain_inline")
+    assert "`cat`" not in inline and "(shiftleft(id % 27, 52)) >> 52" in inline
+    assert [leg.label for leg in u.legs][-2:] == ["t_sql_10m", "t_inline_10m"]
+    # a wheel without the function says what it needs and builds nothing
+    gone = uc_perf._m1(
+        uc_perf.Ctx(
+            **{**_w_ctx().__dict__, "man": _manifest_without("gbx_quadbin_resolution")}
+        )
+    )
+    assert not gone.legs and "gbx_quadbin_resolution" in gone.skipped["qres"]

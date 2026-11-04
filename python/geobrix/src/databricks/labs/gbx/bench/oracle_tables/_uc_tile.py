@@ -53,7 +53,7 @@ def collect_group(project: Optional[Callable[[Any], Any]] = None):
 
 
 def twin(rows, uc_fn: str, adapt: Adapt, *cids):
-    """The UC rows of a form that is not the session's: each named session row (all of them without ``cids``) copied to
+    """The UC rows of a form that is not the session's: each named session row (every session row without ``cids``) copied to
     the UC surface under the function ``uc_fn``, its arguments and expected value adapted. ``share`` is for a UC function
     of the session's own name; this is for another name or shape (an array twin of an aggregate, a partial-state form).
 
@@ -65,7 +65,8 @@ def twin(rows, uc_fn: str, adapt: Adapt, *cids):
     fn = manifest.load().functions.get(uc_fn)
     if fn is None or "L4" not in fn.levels:
         raise ValueError(f"twin: {uc_fn} is no UC function in the manifest")
-    wanted = set(cids) or {c.cid for c in rows}
+    # no names: every row that has a session value to adapt (a Python-only row is skipped); a named row must have one
+    wanted = set(cids) or {c.cid for c in rows if "session" in c.surfaces}
     found = {c.cid for c in rows}
     assert (
         not wanted - found

@@ -52,6 +52,11 @@ Python-only keywords (the force-output trio) are declared in the row's `python` 
   (`scripts/manifest/check_surfaces.py` `form_findings`) enforces this and the helper names.
 - A UC form with another name or shape than its session row takes `twin()` rows (`bench/oracle_tables/_uc_tile.py`),
   not `share()`.
+- Known limits (documented, not fixed): `install` does not check that a form the caller forces is one the row can be
+  (the DDL builder raises instead); a kernel rename of a parameter reaches a helper's body only through inlining, so a
+  helper that spells the same name for another purpose is rewritten too; code that reads `functions.json` directly sees
+  an L4 `stub` row as a UC function (use `manifest.load()`); and an unforced L0 that fails falls back to L3 only, not
+  to L1 or L2. Parameter matching in a body is case-sensitive: spell it exactly as declared.
 
 ## Functions not yet in the manifest (transition only; deleted when the last family migrates)
 

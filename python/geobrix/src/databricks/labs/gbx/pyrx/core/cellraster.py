@@ -484,3 +484,123 @@ def cells_to_raster(
         with mf.open(**profile) as ds:
             ds.write(data, 1)
         return mf.read()
+
+
+_NO_VALUE = object()
+
+
+def max_value_per_cell(cells, vals, key=None, typed=True):
+    """``{cell: value}`` for the four cell rasterizers, one value per distinct cell.
+
+    The duplicate-cell rule of ``rst_{h3,quadbin,bng,custom}_rasterize_agg``: a cell id
+    that repeats keeps its LARGEST value, the same as the heavyweight tier, which sorts
+    the group by ``(cellid, value)`` and lets the last write win. Arrival order inside a
+    Spark group is not fixed, so "the last row wins" would change the raster from run to
+    run; the largest value does not depend on order.
+
+    A null value never wins. A typed Double column delivers a null as ``NaN`` and a real
+    ``NaN`` looks the same, so both are read as null: they are ignored whenever the cell
+    has a number, and a cell whose every value is null burns ``NaN``. ``typed`` is False
+    when the value was omitted (the UDF then receives an object column of ``None``, not a
+    float column): that is the presence mask, every cell burns ``1.0``. A typed column
+    of nulls is data and follows the rule above.
+
+    ``key`` maps a raw cell id to the id it is stored under (``adapter.to_key``), so two
+    spellings of one cell (``TQ3080`` and ``TQ 3080``, or a quadbin id as signed and
+    unsigned) are one cell here too. The result is keyed by the raw id first seen.
+    """
+    best = {}  # stored id -> [raw id, value or None]
+    for cell, val in zip(cells, vals):
+        k = cell if key is None else key(cell)
+        v = None if val is None or val != val else float(val)
+        cur = best.get(k, _NO_VALUE)
+        if cur is _NO_VALUE:
+            best[k] = [cell, v]
+        elif v is not None and (cur[1] is None or v > cur[1]):
+            cur[1] = v
+    if not typed and all(v is None for _, v in best.values()):
+        return {raw: 1.0 for raw, _ in best.values()}
+    return {raw: float("nan") if v is None else v for raw, v in best.values()}
+
+
+def rasterize_cells(
+    cell_values,
+    cells,
+    ad,
+    grid_name,
+    srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+):
+    """The gridspec and burn shared by the per-grid rasterize aggregates and their array twins.
+
+    ``cell_values`` is ``{raw_id: float}`` (see :func:`max_value_per_cell`), ``cells`` the same raw ids, ``ad`` the
+    per-grid adapter, ``srid`` the resolved output CRS. The canvas and the other per-group constants are plain values
+    (None for NULL). Returns raw GTiff bytes.
+    """
+    res = ad.resolution([ad.to_key(c) for c in cells])
+
+    def _has(v):
+        return v is not None and v == v  # a NULL is None, or NaN in a numeric column
+
+    _mode = mode if _has(mode) else "centroids"
+    _kp = int(kring_pad) if _has(kring_pad) else 1
+    canvas = dict(
+        xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax, width=width, height=height
+    )
+    given = [n for n, v in canvas.items() if _has(v)]
+    if given and len(given) < len(canvas):
+        # NULL xmin derives the canvas from the cells; a canvas given in part is neither that nor an explicit one
+        missing = [n for n in canvas if n not in given]
+        raise ValueError(
+            f"{grid_name} rasterize_agg: the canvas is given in part ({', '.join(given)}), "
+            f"but {', '.join(missing)} {'is' if len(missing) == 1 else 'are'} NULL. "
+            "Fix: pass xmin, ymin, xmax, ymax, width and height together, or NULL for all six to derive the canvas "
+            "from the cells."
+        )
+    if given:
+        gs = (
+            float(xmin),
+            float(ymin),
+            float(xmax),
+            float(ymax),
+            (float(xmax) - float(xmin)) / int(width),
+            int(width),
+            int(height),
+            srid,
+        )
+    else:
+        gs = compute_gridspec(
+            cells,
+            srid=srid,
+            pixel_size=float(pixel_size) if _has(pixel_size) else None,
+            mode=_mode,
+            kring_pad=_kp,
+            grid=grid_name,
+            _ad=ad,
+        )
+    return cells_to_raster(cell_values, *gs, resolution=res, grid=grid_name, _ad=ad)
+
+
+def cell_out_srid(fn, out_srid, out_crs):
+    """The output CRS of an H3 or quadbin rasterizer: ``out_srid`` or ``out_crs``, never both (a blank ``out_crs`` is
+    unset); neither is the grid-native EPSG:4326. An int SRID or a CRS string, which this module accepts
+    interchangeably. A NULL is None or NaN."""
+
+    def _set(v):
+        return v is not None and v == v
+
+    crs_set = _set(out_crs) and bool(str(out_crs).strip())
+    srid_set = _set(out_srid)
+    if crs_set and srid_set:
+        raise ValueError(f"{fn}: out_srid and out_crs are both set. Fix: set one.")
+    if crs_set:
+        return out_crs
+    return int(out_srid) if srid_set else 4326

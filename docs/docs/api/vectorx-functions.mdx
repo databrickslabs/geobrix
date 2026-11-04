@@ -249,23 +249,24 @@ multiple `(z, x, y)` tiles into a single PMTiles file.
 ### st_asmvt_pyramid
 
 {/* BEGIN GENERATED gbx_st_asmvt_pyramid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, [layer_name], [extent])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_asmvt_pyramid(geom, attrs, min_z, max_z, [layer_name], [extent])` | rows |
 | Python | `vectorx.functions.st_asmvt_pyramid(df, geom, attrs, min_z, max_z, layer_name=None, extent=None)` | DataFrame |
 
 Rows: `z` `INT`, `x` `INT`, `y` `INT`, `mvt_bytes` `BINARY`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The feature geometry in EPSG:4326: WKB, EWKB, WKT or EWKT. |
-| `attrs` | `STRUCT` |  | The feature's attributes, as a struct; each field becomes an MVT property. |
-| `min_z` | `INT` |  | The first zoom level, from 0. |
-| `max_z` | `INT` |  | The last zoom level, at least `min_z` and at most 20. |
-| `layer_name` | `STRING` | `'layer'` | The layer name written into each tile. |
-| `extent` | `INT` | `4096` | The tile coordinate extent. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The feature geometry in EPSG:4326: WKB, EWKB, WKT or EWKT. |
+| `attrs` | `STRUCT` | `STRING` |  | The feature's attributes, as a struct; each field becomes an MVT property. On Unity Catalog it is a JSON object text, for example `to_json(struct(name, id))`. |
+| `min_z` | `INT` | `INT` |  | The first zoom level, from 0. |
+| `max_z` | `INT` | `INT` |  | The last zoom level, at least `min_z` and at most 20. |
+| `layer_name` | `STRING` | `STRING` | `'layer'` | The layer name written into each tile. |
+| `extent` | `INT` | `INT` | `4096` | The tile coordinate extent. |
 {/* END GENERATED gbx_st_asmvt_pyramid */}
 
 <Impl udtf/>

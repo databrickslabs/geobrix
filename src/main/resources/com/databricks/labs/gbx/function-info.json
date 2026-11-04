@@ -727,6 +727,7 @@
       "description": "Rasterize an array of H3 cells into one tile (pixel-centroid burn).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.6.0"
@@ -2280,6 +2281,7 @@
       "description": "Encode one feature into a Mapbox Vector Tile for every web-mercator tile it touches, across a range of zoom levels.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"

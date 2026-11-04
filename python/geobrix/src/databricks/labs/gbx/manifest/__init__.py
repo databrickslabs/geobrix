@@ -152,6 +152,22 @@ class Param:
 
 
 @dataclass(frozen=True)
+class PrivateRoutine:
+    """A UC routine with no public name (``gbx__<x>``): a Python function a table function or a procedure calls.
+
+    It has no session surface and no oracle row of its own; the public row that reads it (``tvf_over``), or the
+    procedure that calls it, is where it is tested.
+    """
+
+    name: str
+    handler: str
+    deps: Tuple[str, ...]
+    params: Tuple[Tuple[str, str], ...]  # (name, UC type)
+    returns: str
+    summary: str
+
+
+@dataclass(frozen=True)
 class Doc:
     summary: str
     returns: str = ""
@@ -620,6 +636,7 @@ class Manifest:
     helpers: Tuple[Helper, ...] = ()
     gdal: Optional[GdalSection] = None
     datasources: Tuple[DataSource, ...] = ()
+    private: Mapping[str, PrivateRoutine] = MappingProxyType({})
 
 
 def sql_type(t: str) -> str:
@@ -724,6 +741,19 @@ def load() -> Manifest:
                 d.get("status", "stable"),
             )
             for d in raw.get("datasources", [])
+        ),
+        MappingProxyType(
+            {
+                r["name"]: PrivateRoutine(
+                    r["name"],
+                    r["handler"],
+                    tuple(r["deps"]),
+                    tuple((p[0], p[1]) for p in r["params"]),
+                    r["returns"],
+                    r["summary"],
+                )
+                for r in raw.get("uc_private", [])
+            }
         ),
     )
 

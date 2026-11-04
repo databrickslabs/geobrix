@@ -10,7 +10,7 @@ from shapely.geometry.base import BaseGeometry
 from shapely.ops import transform
 
 from ._geom import parse_geom
-from ._serde import to_native_props
+from ._props import to_native_props
 
 MAX_ZOOM = 20
 MAX_TILES = 1_000_000

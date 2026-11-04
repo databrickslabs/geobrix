@@ -141,6 +141,7 @@ def install(
     only: Optional[Iterable[str]] = None,
     dry_run: bool = False,
     jar: Optional[str] = None,
+    procedures: bool = False,
 ) -> List[str]:
     """Create the UC functions in ``catalog.schema`` from the wheel in ``volume_dir``; return the DDL.
 
@@ -149,6 +150,10 @@ def install(
 
     ``dry_run`` only returns the DDL (the wheel name is the env 6 wheel's, not looked up, and no folder is read for a
     JAR: pass ``jar`` to see the Scala form).
+
+    ``procedures=True`` also creates the governed ETL procedures (:mod:`databricks.labs.gbx.uc.procedures`), after
+    every function they call, and verifies them with the functions. A procedure whose precondition does not hold is
+    skipped, with one line saying why.
     """
     # Everything that reaches a statement is checked before any statement is built or any folder read.
     ddl.quote_ident("catalog", catalog)
@@ -170,7 +175,23 @@ def install(
             volume_dir
         )  # only a selected function with a Scala handler needs a JAR
     stmts: List[str] = []
+    made_private = set()
     for n in names:
+        over = man.functions[n].levels["L4"].get("tvf_over")
+        if over in man.private and over not in made_private:
+            made_private.add(
+                over
+            )  # a table function is created after the private function it reads
+            stmts.append(
+                ddl.private_ddl(
+                    man.private[over],
+                    catalog,
+                    schema,
+                    "file://" + wheel,
+                    man.uc_dependencies,
+                    _public_version(),
+                )
+            )
         stmts += ddl.function_ddl(
             man.functions[n],
             catalog,
@@ -180,6 +201,19 @@ def install(
             _public_version(),
             jar_uri=jar,
         )
+    procedure_names: List[str] = []
+    if procedures:
+        from databricks.labs.gbx.uc import procedures as _procedures
+
+        stmts += _private_for_procedures(
+            man, catalog, schema, "file://" + wheel, made_private
+        )
+        built, skipped = _procedures.build_all(catalog, schema)
+        for name, why in skipped.items():
+            print(f"geobrix: procedure {name} skipped: {why}")
+        stmts += [text for _, text in built]
+        procedure_names = [name for name, _ in built]
+    verified = names + sorted(made_private) + procedure_names
     if not dry_run:
         if spark is None:
             from pyspark.sql import SparkSession
@@ -187,8 +221,31 @@ def install(
             spark = SparkSession.builder.getOrCreate()
         for s in stmts:
             spark.sql(s)
-        verify(spark, catalog, schema, names)
+        verify(spark, catalog, schema, verified)
     return stmts
+
+
+# the private routines a procedure calls and no table function reads
+_PROCEDURE_ONLY = ("gbx__h3_cellfill_cells", "gbx__st_asmvt_features")
+
+
+def _private_for_procedures(man, catalog, schema, wheel_uri, made) -> List[str]:
+    """The DDL of the private routines the procedures call (the ones no table function created), once each."""
+    out = []
+    for name in _PROCEDURE_ONLY:
+        if name not in made:
+            made.add(name)
+            out.append(
+                ddl.private_ddl(
+                    man.private[name],
+                    catalog,
+                    schema,
+                    wheel_uri,
+                    man.uc_dependencies,
+                    _public_version(),
+                )
+            )
+    return out
 
 
 def verify(

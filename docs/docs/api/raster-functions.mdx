@@ -1556,27 +1556,28 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 ### rst_h3_rasterize
 
 {/* BEGIN GENERATED gbx_rst_h3_rasterize: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, [out_crs])` | `BINARY` |
 | Python | `rasterx.functions.rst_h3_rasterize(cells, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad, out_crs=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cells` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a repeated cell burns its largest value, a NULL cell id is skipped. |
-| `out_srid` | `INT` |  | The EPSG code of the output CRS. |
-| `pixel_size` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
-| `xmin` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
-| `ymin` | `DOUBLE` |  | The south edge of the canvas. |
-| `xmax` | `DOUBLE` |  | The east edge of the canvas. |
-| `ymax` | `DOUBLE` |  | The north edge of the canvas. |
-| `width` | `INT` |  | The canvas width in pixels. |
-| `height` | `INT` |  | The canvas height in pixels. |
-| `mode` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
-| `kring_pad` | `INT` |  | Rings of padding around the derived canvas. |
-| `out_crs` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both: setting both raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cells` | `array<struct<cellid:bigint,value:double>>` | `array<struct<cellid:bigint,value:double>>` |  | The group's cells as an array of structs `(cellid, value)`, for example `collect_list(struct(cellid, value))`. The rules of the aggregate hold: a repeated cell burns its largest value, a NULL cell id is skipped. |
+| `out_srid` | `INT` | `INT` |  | The EPSG code of the output CRS. |
+| `pixel_size` | `DOUBLE` | `DOUBLE` |  | The pixel size in CRS units; NULL takes it from the cells' resolution. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the canvas; NULL derives the canvas from the cells. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the canvas. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the canvas. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the canvas. |
+| `width` | `INT` | `INT` |  | The canvas width in pixels. |
+| `height` | `INT` | `INT` |  | The canvas height in pixels. |
+| `mode` | `STRING` | `STRING` |  | How the canvas is derived when no extent is given: `'centroids'` or `'spatial_envelope'`. |
+| `kring_pad` | `INT` | `INT` |  | Rings of padding around the derived canvas. |
+| `out_crs` | `STRING` | `STRING` | `NULL` | The output CRS as `EPSG:<n>`. Set `out_srid` or `out_crs`, not both: setting both raises. |
 {/* END GENERATED gbx_rst_h3_rasterize */}
 
 Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg). Collect the group's cells first, for example `gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), ...)`. The answer is the same bytes as the aggregate gives. Use it for a group the aggregate's streaming shape cannot take, such as a Serverless finalize or a group from an earlier step. It is a session function, with no Unity Catalog form.

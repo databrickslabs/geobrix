@@ -183,6 +183,7 @@ VECTOR_GENERATOR = (
         (_wkb.dumps(Point(100.0, 45.0)), ATTRS, 0, 1),
         "mvt_tiles",
         {"tiles": PYR_TILES, "layer": "layer", "props": {"name": "a", "id": 7}},
+        ("session",),  # UC takes a GEOMETRY, not WKB bytes
     ),
     # NULL attributes are a feature with no properties; in Python the NULL is the STRUCT cast, CAST(NULL AS struct<>).
     Case(

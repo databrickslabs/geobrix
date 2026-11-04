@@ -4852,8 +4852,21 @@ def _from_uc_geometry(out):
     return to_wkb(set_srid(from_wkb(out.wkb), out.srid), include_srid=True)
 
 
+def _struct_rows(value, param):
+    """An array of flat structs given as tuples (the session builds the struct from the declared fields) as dicts
+    keyed by the field names of the parameter's UC type."""
+    uc = (param.uc or "").lower()
+    if not (isinstance(value, list) and uc.startswith("array<struct<")):
+        return value
+    names = [f.split(":", 1)[0] for f in uc[len("array<struct<") : -2].split(",")]
+    return [dict(zip(names, v)) if isinstance(v, tuple) else v for v in value]
+
+
 def _uc_value(arg, param, case: Case):
     """A session-shaped oracle argument as the UC function receives it."""
+    arg = _struct_rows(arg, param)
+    if arg is not None and tuple(param.session) == ("STRUCT",) and param.uc == "STRING":
+        return json.dumps(arg)  # a struct of any fields reaches UC as its JSON text
     if arg is None or isinstance(arg, dict):
         return arg
     if param.uc == "GEOMETRY" and isinstance(arg, str):
@@ -4938,17 +4951,30 @@ def run_handlers_rows(cases, tmpdir: Optional[str] = None):
         fn = man.functions[case.fn]
         if "uc" not in case.surfaces or "tvf_over" not in fn.levels.get("L4", {}):
             continue
-        inner = man.functions[fn.levels["L4"]["tvf_over"]]
-        handler = manifest.resolve_ref(inner.levels["L4"]["handler"])
+        over = fn.levels["L4"]["tvf_over"]
+        if (
+            over in man.private
+        ):  # a private array function takes the table function's own parameters
+            inner, params = None, fn.params
+            handler = manifest.resolve_ref(man.private[over].handler)
+        else:
+            inner = man.functions[over]
+            params = inner.params
+            handler = manifest.resolve_ref(inner.levels["L4"]["handler"])
         args = [resolve_arg(a, tmpdir) for a in case.args]
         args += [
             None if p.default is None else p.default.strip("'")
-            for p in inner.params[len(args) :]
+            for p in params[len(args) :]
         ]
-        uc_args = [_uc_value(a, p, case) for a, p in zip(args, inner.params)]
+        if inner is None:  # the DEFAULT of the table function, typed by the parameter
+            args = [
+                _uc_default(p) if i >= len(case.args) else a
+                for i, (a, p) in enumerate(zip(args, params))
+            ]
+        uc_args = [_uc_value(a, p, case) for a, p in zip(args, params)]
         uc_args = [
             a == "true" if p.uc == "BOOLEAN" and isinstance(a, str) else a
-            for a, p in zip(uc_args, inner.params)
+            for a, p in zip(uc_args, params)
         ]
         try:
             elems = list(handler(*uc_args) or [])
@@ -4998,6 +5024,7 @@ def _array_element_type(param) -> str:
 def _sql_literal(value, param, case: Case) -> str:
     if value is None:
         return "NULL"
+    value = _struct_rows(value, param)
     if isinstance(
         value, list
     ):  # an ARRAY<X>: the element type is the parameter's own (a NULL element is a NULL X)
@@ -5012,8 +5039,25 @@ def _sql_literal(value, param, case: Case) -> str:
             for v in value
         )
         return f"array({items})" if value else f"CAST(array() AS {sql_type(param.uc)})"
+    if tuple(param.session) == ("STRUCT",) and param.uc == "STRING":
+        return (
+            "'" + json.dumps(value).replace("'", "''") + "'"
+        )  # the JSON text of a struct of any fields
     if isinstance(value, dict) and "typeId" in value:
         return _legacy_literal(value, param)
+    if isinstance(value, dict) and (param.uc or "").lower().startswith("struct<"):
+        # a flat struct of a declared type (an element of an array of cells): each field cast to its type
+        decl = [f.split(":", 1) for f in param.uc[len("struct<") : -1].split(",")]
+        parts = ", ".join(
+            f"'{n}', "
+            + (
+                f"CAST(NULL AS {t})"
+                if value.get(n) is None
+                else f"CAST({_sql_literal(value[n], replace(param, uc=t.upper()), case)} AS {t})"
+            )
+            for n, t in decl
+        )
+        return f"named_struct({parts})"
     if isinstance(value, dict):
         raster = (
             "NULL" if value["raster"] is None else "X'" + value["raster"].hex() + "'"

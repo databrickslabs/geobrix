@@ -108,7 +108,8 @@ def st_asmvt_pyramid(
         df: The input DataFrame; each row is joined with the rows generated from it.
         geom: The feature geometry in EPSG:4326: WKB, EWKB, WKT or EWKT.
         attrs: The feature's attributes, as a struct; each field becomes an MVT
-            property.
+            property. On Unity Catalog it is a JSON object text, for example
+            `to_json(struct(name, id))`.
         min_z: The first zoom level, from 0.
         max_z: The last zoom level, at least `min_z` and at most 20.
         layer_name: The layer name written into each tile. SQL default: ``'layer'``.

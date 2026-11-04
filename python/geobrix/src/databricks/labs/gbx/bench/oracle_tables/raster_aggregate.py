@@ -39,6 +39,13 @@ from databricks.labs.gbx.bench.oracles import (
 )
 
 ONLY = ("session",)
+
+
+def _surfaces(fn):
+    """The surfaces of a scalar twin's rows: the H3 twin is also a Unity Catalog function."""
+    return ("session", "uc") if fn == "gbx_rst_h3_rasterize" else ONLY
+
+
 MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
 CA, FB, DB, RZ = (
     "gbx_rst_combineavg_agg",
@@ -605,7 +612,7 @@ def _cells_cases(prefix):
                 (Build(f"{tname}_{kind}"), *grid_arg, *canvas),
                 "pixels",
                 _pixels(prefix, kind),
-                ONLY,
+                _surfaces(twin),
             )
         )
     rows += [
@@ -624,7 +631,7 @@ def _cells_cases(prefix):
             (Build(f"{tname}_null_id"), *grid_arg, *canvas),
             "pixels",
             _pixels(prefix, "null_id"),
-            ONLY,
+            _surfaces(twin),
         ),
         Case(
             f"{name}_empty",
@@ -640,7 +647,7 @@ def _cells_cases(prefix):
             (Build(f"{tname}_empty"), *grid_arg, *canvas),
             "null",
             None,
-            ONLY,
+            _surfaces(twin),
         ),
     ]
     return tuple(rows)
@@ -691,7 +698,7 @@ RASTER_AGGREGATE += (
         (Build("h3rt_dup_max"), *_CELLS["h3"][3], "EPSG:3857"),
         "raises",
         "Fix: set one",
-        ONLY,
+        _surfaces(H3T),
     ),
     Case(
         "qbrt_out_srid_and_crs",

@@ -170,6 +170,32 @@ def function_ddl(
     return stmts
 
 
+def private_ddl(
+    pf, catalog: str, schema: str, wheel_uri: str, deps: Dict[str, str], version: str
+) -> str:
+    """A private routine (``gbx__<x>``, a manifest ``uc_private`` entry): one Python function, no DEFAULTs, called only
+    by a table function or a procedure of this package."""
+    q = f"{quote_ident('catalog', catalog)}.{quote_ident('schema', schema)}"
+    if _UNSAFE_IN_PATH.search(wheel_uri):
+        raise ValueError(
+            f"wheel_uri {wheel_uri!r} has a quote, backslash or control character. "
+            "Fix: stage the wheel under a plain /Volumes path."
+        )
+    if not re.fullmatch(r"gbx__[a-z0-9_]+", pf.name):
+        raise ValueError(f"private routine name {pf.name!r} must be gbx__<name>")
+    mod, _, attr = pf.handler.partition(":")
+    params = ", ".join(f"{n} {sql_type(t)}" for n, t in pf.params)
+    env = json.dumps([f"geobrix @ {wheel_uri}"] + [f"{n}=={deps[n]}" for n in pf.deps])
+    comment = quote_str(f"geobrix {version}: {pf.summary}".rstrip(": "))
+    return (
+        f"CREATE OR REPLACE FUNCTION {q}.{pf.name}({params})\n"
+        f"RETURNS {sql_type(pf.returns)}\n"
+        f"LANGUAGE PYTHON\nDETERMINISTIC\nCOMMENT {comment}\n"
+        f"ENVIRONMENT (dependencies = {quote_str(env)}, environment_version = '6')\n"
+        f"HANDLER 'handler'\nAS $$\nfrom {mod} import {attr} as handler\n$$"
+    )
+
+
 def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> str:
     """A generator on UC is a SQL table function over the array function: one row per element.
 
@@ -180,7 +206,10 @@ def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> s
     from databricks.labs.gbx import manifest
 
     inner = over
-    if any(p.default for p in manifest.load().functions[over].params):
+    private = manifest.load().private.get(over)
+    if private is None and any(
+        p.default for p in manifest.load().functions[over].params
+    ):
         over = f"gbx__{over[len('gbx_'):]}"
     cols = ", ".join(f"{n} {sql_type(t)}" for n, t in fn.columns)
     sig = ", ".join(
@@ -191,12 +220,14 @@ def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> s
     call = f"{q}.{over}({args})"
     # an array of structs is one row per element with the struct's fields as columns (`inline`); an array of single
     # values is one row per element in the table's one column (`explode`)
+    returns = (
+        private.returns
+        if private is not None
+        else manifest.load().functions[inner].returns_uc
+    )
     rows = (
         f"inline({call})"
-        if manifest.load()
-        .functions[inner]
-        .returns_uc.lower()
-        .startswith("array<struct")
+        if returns.lower().startswith("array<struct")
         else f"explode({call}) AS {fn.columns[0][0]}"
     )
     return (

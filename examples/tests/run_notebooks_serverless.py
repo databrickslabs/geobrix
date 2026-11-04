@@ -302,6 +302,8 @@ class JobCluster:
     access_mode: str = "dedicated"
     user_name: Optional[str] = None
     jar: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (the heavy tier)
+    wheel: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (--python-task)
+    extra_jars: tuple = ()  # more /Volumes JARs installed as libraries (--python-task, --extra-jar)
 
 
 def _cluster_spec(cluster: JobCluster):
@@ -319,14 +321,24 @@ def _cluster_spec(cluster: JobCluster):
             else compute.DataSecurityMode.USER_ISOLATION
         ),
         single_user_name=cluster.user_name if dedicated else None,
+        # No worker means a single node cluster: without this profile the cluster has no executor at all and
+        # the first Spark job waits for one forever.
+        spark_conf=(
+            {"spark.databricks.cluster.profile": "singleNode", "spark.master": "local[*, 4]"}
+            if cluster.num_workers == 0
+            else None
+        ),
+        custom_tags={"ResourceClass": "SingleNode"} if cluster.num_workers == 0 else None,
     )
 
 
 def _cluster_libraries(cluster: JobCluster) -> list:
-    """The libraries of the run's task: the JAR when ``--jar`` was given, else none."""
+    """The libraries of the run's task: the wheel, the JAR and any extra JARs that were given, else none."""
     from databricks.sdk.service import compute
 
-    return [compute.Library(jar=cluster.jar)] if cluster.jar else []
+    libs = [compute.Library(whl=cluster.wheel)] if cluster.wheel else []
+    libs += [compute.Library(jar=j) for j in ([cluster.jar] if cluster.jar else []) + list(cluster.extra_jars)]
+    return libs
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +654,91 @@ def run_jar_task(
     return result == RunResultState.SUCCESS
 
 
+def _poll_run(w, run_id: int, poll_secs: int) -> object:
+    """Poll a run to a terminal state, printing each change of life cycle state; returns the final run."""
+    terminal, last, started = _terminal_states(), None, time.time()
+    while True:
+        r = w.jobs.get_run(run_id=run_id)
+        life = r.state.life_cycle_state if r.state else None
+        if life != last:
+            print(f"    [{int(time.time() - started)}s] life_cycle_state={life}", flush=True)
+            last = life
+        if life in terminal:
+            return r
+        time.sleep(poll_secs)
+
+
+def run_python_task(
+    w,
+    local_path: pathlib.Path,
+    ws_dir: str,
+    params: list[str],
+    job_cluster: JobCluster,
+    poll_secs: int,
+    timeout_min: int = DEFAULT_TIMEOUT_MIN,
+) -> bool:
+    """Run ONE ``spark_python_task`` on a job cluster made for the run (terminated when the run ends).
+
+    The local ``.py`` file is imported into the workspace as a file, and the cluster installs the wheel and the
+    JARs of ``job_cluster`` as libraries before the file runs. Returns True on SUCCESS; prints the run's state
+    message and the task's stdout (``logs``).
+    """
+    from databricks.sdk.service import jobs, workspace
+
+    ws_path = f"{ws_dir.rstrip('/')}/{local_path.name}"
+    w.workspace.mkdirs(ws_dir)
+    w.workspace.import_(
+        ws_path,
+        format=workspace.ImportFormat.AUTO,
+        content=base64.b64encode(local_path.read_bytes()).decode(),
+        overwrite=True,
+    )
+    kind = w.workspace.get_status(ws_path).object_type
+    if kind != workspace.ObjectType.FILE:  # a notebook would run as a notebook, not as the Python file
+        print(f"!!! STOP - {ws_path} was imported as {kind}, not as a workspace file.", flush=True)
+        return False
+    task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
+    print(
+        f"\n=== SUBMIT (new {job_cluster.access_mode} cluster {job_cluster.spark_version}, python task): "
+        f"{ws_path} {params} ===",
+        flush=True,
+    )
+    waiter = submit_once(
+        w,
+        run_name=f"gbx-py:{task_key}",
+        timeout_seconds=timeout_min * 60,
+        tasks=[
+            jobs.SubmitTask(
+                task_key=task_key,
+                spark_python_task=jobs.SparkPythonTask(python_file=ws_path, parameters=params),
+                new_cluster=_cluster_spec(job_cluster),
+                libraries=_cluster_libraries(job_cluster),
+                max_retries=0,  # run exactly once
+            )
+        ],
+    )
+    run_id = waiter.run_id
+    print(f"    run_id={run_id}  run_page_url={w.jobs.get_run(run_id=run_id).run_page_url}", flush=True)
+    r = _poll_run(w, run_id, poll_secs)
+    result = r.state.result_state if r.state else None
+    print(f"=== RESULT: {local_path.name}  result_state={result}  ({(r.state.state_message or '')[:500]})", flush=True)
+    for t in r.tasks or []:
+        cluster_id = getattr(getattr(t, "cluster_instance", None), "cluster_id", None)
+        if cluster_id:
+            print(f"    task {t.task_key} job cluster: {cluster_id}", flush=True)
+        try:
+            out = w.jobs.get_run_output(run_id=t.run_id)
+            for k in ("logs", "error", "error_trace"):
+                v = getattr(out, k, None)
+                if v:
+                    print(f"    task {t.task_key} {k}:\n{v}", flush=True)
+        except Exception as exc:  # noqa: BLE001 - output fetch is best-effort
+            print(f"    (no output for {t.task_key}: {exc})", flush=True)
+    from databricks.sdk.service.jobs import RunResultState
+
+    return result == RunResultState.SUCCESS
+
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -883,11 +980,32 @@ def main() -> int:
         default=None,
         help=(
             "The JAR (a /Volumes path): for --jar-task, the environment's java dependency; with --new-cluster, "
-            "a library of the cluster (the heavy tier)."
+            "a library of the cluster (the heavy tier; also for --python-task)."
         ),
     )
     parser.add_argument(
         "--jar-args", metavar="CSV", default="", help="Comma-separated parameters of the --jar-task main class."
+    )
+    parser.add_argument(
+        "--python-task",
+        metavar="PY",
+        default=None,
+        help=(
+            "Run ONE spark_python_task (a local .py file, imported into --ws-dir) on a new job cluster instead of "
+            "notebooks. Needs --new-cluster. The cluster installs --wheel, --jar and each --extra-jar as libraries; "
+            "--python-args are the file's parameters."
+        ),
+    )
+    parser.add_argument(
+        "--python-args", metavar="CSV", default="", help="Comma-separated parameters of the --python-task file."
+    )
+    parser.add_argument(
+        "--extra-jar",
+        metavar="VOLPATH",
+        action="append",
+        dest="extra_jars",
+        default=[],
+        help="With --python-task: one more JAR (a /Volumes path) to install as a library of the cluster. Repeatable.",
     )
     parser.add_argument(
         "--harvest-outputs",
@@ -922,6 +1040,45 @@ def main() -> int:
             w, args.jar_task, args.jar, params, str(args.env_version), args.poll_secs, args.timeout_min
         )
         return 0 if ok else 1
+
+    if args.python_task:
+        if not args.new_cluster or args.notebooks or args.dirs or args.existing_cluster_id or args.hardware_accelerator:
+            parser.error(
+                "--python-task needs --new-cluster and runs alone (no --notebook/--dir/--existing-cluster-id/"
+                "--hardware-accelerator)"
+            )
+        local = pathlib.Path(args.python_task).resolve()
+        if not local.is_file() or local.suffix != ".py":
+            parser.error(f"--python-task {args.python_task}: not a .py file")
+        from databricks.sdk import WorkspaceClient
+
+        w = WorkspaceClient(profile=args.profile)
+        me = w.current_user.me().user_name
+        snap = snapshot_files([local], prefix="gbx-py-")
+        cluster = JobCluster(
+            spark_version=args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version,
+            node_type=args.node_type,
+            num_workers=args.num_workers,
+            access_mode=args.access_mode,
+            user_name=me,
+            jar=args.jar,
+            wheel=args.wheel,
+            extra_jars=tuple(args.extra_jars),
+        )
+        params = [a.strip() for a in args.python_args.split(",") if a.strip()]
+        ok = run_python_task(
+            w,
+            snap.get(local, local),
+            args.ws_dir or f"/Users/{me}/GeoBrix/python-task",
+            params,
+            cluster,
+            args.poll_secs,
+            args.timeout_min,
+        )
+        return 0 if ok else 1
+
+    if args.extra_jars:
+        parser.error("--extra-jar goes with --python-task")
 
     if args.jar and not args.new_cluster:
         parser.error("--jar goes with --jar-task or --new-cluster (it is not used on Serverless or a warm cluster)")

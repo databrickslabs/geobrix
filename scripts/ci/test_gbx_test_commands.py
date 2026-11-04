@@ -2327,6 +2327,71 @@ def test_the_serverless_runner_submits_one_jar_task_with_the_jar_as_a_java_depen
     assert (task.spark_jar_task.main_class_name, task.spark_jar_task.parameters) == ("a.b.Job", ["t1", "t2", "3"])
 
 
+def test_the_serverless_runner_submits_one_python_task_on_a_new_cluster_with_the_wheel_and_both_jars(
+    monkeypatch, tmp_path
+):
+    from types import SimpleNamespace
+
+    jobs = pytest.importorskip("databricks.sdk.service.jobs")  # the launcher's own interpreter has it
+    workspace = pytest.importorskip("databricks.sdk.service.workspace")
+    runner = _launcher("run_notebooks_serverless", monkeypatch)
+    sent, imported = {}, {}
+
+    def fake_submit(w, **kw):
+        sent.update(kw)
+        return SimpleNamespace(run_id=7)
+
+    state = SimpleNamespace(life_cycle_state=jobs.RunLifeCycleState.TERMINATED,
+                            result_state=jobs.RunResultState.SUCCESS, state_message="")  # fmt: skip
+    w = SimpleNamespace(
+        jobs=SimpleNamespace(
+            get_run=lambda run_id: SimpleNamespace(run_page_url="u", state=state, tasks=[]),
+            get_run_output=lambda run_id: SimpleNamespace(logs="E-PYtask ok"),
+        ),
+        workspace=SimpleNamespace(
+            mkdirs=lambda d: None,
+            import_=lambda path, **kw: imported.update(path=path, **kw),
+            get_status=lambda path: SimpleNamespace(object_type=workspace.ObjectType.FILE),
+        ),
+    )  # fmt: skip
+    monkeypatch.setattr(runner, "submit_once", fake_submit)
+    py = tmp_path / "entry.py"
+    py.write_text("print('x')\n")
+    cluster = runner.JobCluster(spark_version="17.3.x-scala2.13", num_workers=0, user_name="me@x.com",
+                                jar="/Volumes/c/s/v/g.jar", wheel="/Volumes/c/s/v/g+env5.whl",
+                                extra_jars=("/Volumes/c/s/v/t.jar",))  # fmt: skip
+
+    assert runner.run_python_task(w, py, "/Users/me@x.com/d", ["a", "b"], cluster, 0)
+
+    (task,) = sent["tasks"]
+    assert imported["path"] == "/Users/me@x.com/d/entry.py" and imported["format"] == workspace.ImportFormat.AUTO
+    assert (task.spark_python_task.python_file, task.spark_python_task.parameters) == (imported["path"], ["a", "b"])
+    assert task.max_retries == 0 and task.new_cluster.spark_version == "17.3.x-scala2.13"
+    assert task.new_cluster.num_workers == 0  # no worker: a single node cluster, which needs its profile and tag
+    assert task.new_cluster.spark_conf["spark.databricks.cluster.profile"] == "singleNode"
+    assert task.new_cluster.custom_tags == {"ResourceClass": "SingleNode"}
+    assert [(lib.whl, lib.jar) for lib in task.libraries] == [
+        ("/Volumes/c/s/v/g+env5.whl", None), (None, "/Volumes/c/s/v/g.jar"), (None, "/Volumes/c/s/v/t.jar"),
+    ]  # fmt: skip
+
+
+def test_the_serverless_command_forwards_a_python_task_and_adds_no_default_notebooks(sandbox):
+    env, _stub_log, uv_log = _stage_sample_sandbox(sandbox)
+    (sandbox.bin / "uv").write_text('#!/bin/sh\nfor a in "$@"; do echo "$a"; done >> "$UV_LOG"\nexit 0\n')
+    runner = sandbox.root / "examples" / "tests" / "run_notebooks_serverless.py"
+    runner.parent.mkdir(parents=True, exist_ok=True)
+    runner.write_text("")
+    args = ["--python-task", "e.py", "--python-args", "a,b", "--new-cluster", "17.3.x-scala2.13",
+            "--wheel", "/Volumes/c/s/v/w.whl", "--jar", "/Volumes/c/s/v/g.jar",
+            "--extra-jar", "/Volumes/c/s/v/t.jar"]  # fmt: skip
+
+    res = sandbox.run("gbx-test-notebooks-serverless.sh", *args, **env)
+
+    assert res.returncode == 0, res.output
+    seen = uv_log.read_text().splitlines()
+    assert seen[seen.index("python") + 2 :] == args  # no Helios notebook was added
+
+
 def test_the_warehouse_runner_records_a_statement_with_no_result_set(monkeypatch):
     """A CREATE FUNCTION answers SUCCEEDED with no columns: a result with no value, not a stopped run."""
     from types import SimpleNamespace as NS

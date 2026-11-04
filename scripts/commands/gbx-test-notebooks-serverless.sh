@@ -64,6 +64,9 @@ show_help() {
     echo -e "  ${GREEN}--jar-task MAIN${NC}       Run ONE Serverless JAR task with this main class instead of notebooks"
     echo -e "                        (with --jar VOLPATH, the JAR, and --jar-args CSV, its parameters;"
     echo -e "                        --env-version 4 or later)."
+    echo -e "  ${GREEN}--python-task PY${NC}      Run ONE spark_python_task (a local .py file) on a new job cluster instead of"
+    echo -e "                        notebooks (needs --new-cluster; --python-args CSV are its parameters). The cluster"
+    echo -e "                        installs --wheel, --jar and each --extra-jar VOLPATH as libraries."
     echo -e "  ${GREEN}--harvest-outputs${NC}     After each SUCCESS, export and harvest cell outputs"
     echo -e "                        back into the local .ipynb (aligns by source, preserves"
     echo -e "                        serialization, strips injected cells)."
@@ -109,7 +112,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --notebook|--dir|--jar-task)
+        --notebook|--dir|--jar-task|--python-task)
             HAS_NOTEBOOK_OR_DIR=true
             RUNNER_ARGS+=("$1" "$2")
             shift 2

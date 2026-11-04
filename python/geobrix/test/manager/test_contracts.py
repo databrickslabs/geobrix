@@ -3690,6 +3690,7 @@ def test_the_merge_only_procedures_say_they_upsert_and_which_key_must_be_unique(
         "gbx_points_to_h3_surface",
         "gbx_features_to_mvt",
         "gbx_mosaic_by_key",
+        "gbx_combine_by_key",
         "gbx_zonal_stats",
     ):
         comment = re.search(r"\nCOMMENT '(.*)'\nAS BEGIN", _procedure(name)).group(1)

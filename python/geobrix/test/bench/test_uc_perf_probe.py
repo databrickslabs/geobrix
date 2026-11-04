@@ -60,7 +60,7 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     assert "gbx_rst_h3_rastertogrid_partial" in missing["m5"]["m5"]
     assert "gbx_h3_cellfill_array" in missing["m6"]["sql_array"]
     assert "gbx_rst_binpoints_finalize" in missing["m7"]["d1"]
-    assert "gbx_combine_by_key" in missing["m8"]["tree"]
+    assert "m8" not in missing  # both tree procedures exist, so the tree leg is built
     assert "gbx_rst_zonalstats_partial" in missing["m11"]["partial"]
     assert not {"m0", "m1", "m12", "m13"} & set(missing)
     # the legs that can run today do: the native recipe C1 and the Python twin of the fill, the array twin of binpoints

@@ -134,8 +134,12 @@ def test_warehouse_statements_call_each_procedure_then_diff_it_against_plain_sql
     for name in procedures.RECIPES:
         if name.startswith("gbx_zarr_"):
             continue
-        assert stmts[f"{name}:call"].startswith(f"CALL `c`.`s`.{name}("), name
-        assert ids.index(f"{name}:call") < ids.index(f"{name}:diff"), name
+        # a procedure with several cases (combine by key, one per op) has the id `<name>:<op>:call`
+        calls = [i for i in ids if i.startswith(name) and i.endswith(":call")]
+        assert calls, name
+        for call in calls:
+            assert stmts[call].startswith(f"CALL `c`.`s`.{name}("), call
+            assert ids.index(call) < ids.index(call.replace(":call", ":diff")), call
     # every table a case makes is dropped at the end, and the zarr manifest is one of them
     created = {
         m.group(1)
@@ -316,3 +320,108 @@ def test_the_tile_cases_register_each_table_before_creating_it():
     with pytest.raises(RuntimeError, match="no Spark"):
         probes._proc_tile_cases(_Spark(), "c", "s", tables)
     assert "`c`.`s`.gbxproc_mos_src" in tables and "`c`.`s`.gbxproc_zs_tgt" in tables
+
+
+# --- the tree procedures, the combine and the H3 surface in the probe ----------------------------------------------
+
+
+def _defs():
+    q = "`c`.`s`"
+
+    def t(name):
+        return f"{q}.{probes.PROC_PREFIX}{name}"
+
+    def lit(name):
+        return "'" + t(name).replace("`", "") + "'"
+
+    return probes._proc_tile_case_defs(t, lit)
+
+
+def test_the_inputs_have_a_mosaic_key_past_one_function_call_and_one_past_two_levels():
+    mosaic, _zone = probes._proc_tile_inputs()
+    per_key = {}
+    for key, _tile in mosaic:
+        per_key[key] = per_key.get(key, 0) + 1
+    assert per_key["a"] == 2 and per_key["b"] == 1  # as before
+    # more than the 8 a call takes: two levels for 12, three for 70 (ceil(n / 8): 12 -> 2 -> 1; 70 -> 9 -> 2 -> 1)
+    assert per_key["wide"] == 12 and per_key["deep"] == 70
+    combine = probes._proc_combine_inputs()
+    per_key = {}
+    for key, _tile in combine:
+        per_key[key] = per_key.get(key, 0) + 1
+    assert per_key == {"one": 1, "few": 3, "many": 12}
+
+
+def test_there_is_a_combine_case_for_each_op_and_the_session_reference_is_the_same_op():
+    cases = _defs()
+    combine = [c for c in cases if c["name"] == "gbx_combine_by_key"]
+    assert [c["label"] for c in combine] == [
+        f"gbx_combine_by_key:{op}"
+        for op in ("avg", "sum", "count", "min", "max", "stddev")
+    ]
+    for c in combine:
+        op = c["label"].split(":")[1]
+        assert c["args"]["op"] == f"'{op}'"
+        assert f"gbx_rst_combine{op}(collect_list(tile))" in c["ref"]
+        assert c["compare"] == "pixels"
+    # the Float32 results (avg, stddev) are compared to fewer digits than the exact ones
+    digits = {c["label"].split(":")[1]: c["decimals"] for c in combine}
+    assert digits["avg"] == digits["stddev"] == 3 and digits["sum"] == 9
+    # the cases name the procedure parameters the procedure declares
+    for c in combine:
+        declared = {n for n, _d in _params(procedures.RECIPES[c["name"]]("c", "s"))}
+        assert set(c["args"]) <= declared
+
+
+def test_the_tile_inputs_are_built_through_the_guarded_client_dataframe(monkeypatch):
+    from databricks.labs.gbx.bench import clientcap
+
+    seen = []
+
+    def fake(spark, rows, schema, what=None):
+        seen.append(what)
+        raise RuntimeError("stop after the first")
+
+    monkeypatch.setattr(clientcap, "client_dataframe", fake)
+    with pytest.raises(RuntimeError, match="stop after the first"):
+        probes._proc_tile_cases(_Spark(), "c", "s", [])
+    assert seen == ["mosaic tile input"]
+
+
+def test_a_combine_case_has_its_own_record_and_its_own_target(
+    monkeypatch, capsys, tmp_path
+):
+    import databricks.labs.gbx as gbx
+
+    monkeypatch.setattr(gbx, "register", lambda *_a, **_k: {})
+    monkeypatch.setattr(probes, "_proc_tile_cases", lambda *a: _defs())
+    spark = _Spark()
+    out = probes.run_procedures(spark, "c", "s", str(tmp_path))
+    labels = [k for k in out["recipes"] if k.startswith("gbx_combine_by_key:")]
+    assert len(labels) == 6
+    calls = [s for s in spark.stmts if s.startswith("CALL `c`.`s`.gbx_combine_by_key(")]
+    assert len(calls) == 6
+    assert (
+        len({re.search(r"target_table => '([^']*)'", s).group(1) for s in calls}) == 6
+    )
+    text = capsys.readouterr().out
+    assert "[PROC] gbx_combine_by_key:stddev call START" in text
+
+
+def test_the_pixel_compare_rounds_and_treats_a_pixel_with_no_data_as_none():
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    arr = np.array([[1.0000049, -9999.0], [2.5, 3.0]], dtype="float32")
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff", width=2, height=2, count=1, dtype="float32", nodata=-9999.0,
+            crs="EPSG:3857", transform=from_origin(0, 20, 10, 10),
+        ) as dst:  # fmt: skip
+            dst.write(arr[np.newaxis])
+        blob = mf.read()
+    assert probes._proc_pixels(blob, 3) == [[1.0, None], [2.5, 3.0]]
+    assert probes._proc_pixels(None) is None
+
+

@@ -542,6 +542,153 @@ DECLARE v_lvl INT DEFAULT 1;
     )
 
 
+# --- combine by key ---------------------------------------------------------------------------------------------------
+# op -> (the partial tile columns, the combine function of level 1 per column, of the levels above per column, the final
+# expression over the partials or None when p1 is the result). The members of avg and stddev are cast to Float64 first
+# (a sum in the member type wraps: eight uint8 tiles of 200). The partials of stddev are the count A, the sum B and the
+# sum of squares C: the population standard deviation is sqrt(C / A - (B / A) ** 2), the combinestddev of the session.
+_COMBINE_OPS = ("avg", "sum", "count", "min", "max", "stddev")
+_EXPR = {"avg": "B / A", "stddev": "sqrt(abs(C / A - (B / A) ** 2))"}
+
+
+def _combine_level1(q: str, op: str) -> str:
+    cols = "tile_key, lvl, bucket, p1" + (", p2" if op in ("avg", "stddev") else "")
+    cols += ", p3" if op == "stddev" else ""
+    ranked = _ranked("tile", "IDENTIFIER(source_table)", _MEMBER_ORDER)
+    if op in ("sum", "min", "max", "count"):
+        fn = "combinecount" if op == "count" else f"combine{op}"
+        sel = f"SELECT tile_key, 1, bucket, {q}.gbx_rst_{fn}(collect_list(tile)) AS p1\nFROM (\n{ranked}\n) GROUP BY tile_key, bucket"
+    else:
+        # u is the member as Float64, made once per member; for stddev sq is its square (Float32 from the map algebra)
+        cast = f"{q}.gbx_rst_updatetype(tile, 'Float64') AS u"
+        inner = f"SELECT tile_key, bucket, {cast}\nFROM (\n{ranked}\n)"
+        if op == "avg":
+            sel = (
+                f"SELECT tile_key, 1, bucket, {q}.gbx_rst_combinecount(collect_list(u)) AS p1,\n"
+                f"  {q}.gbx_rst_combinesum(collect_list(u)) AS p2\n"
+                f"FROM (\n{inner}\n) GROUP BY tile_key, bucket"
+            )
+        else:
+            sq = f"{q}.gbx_rst_mapalgebra(array(u), 'A * A') AS sq"
+            sel = (
+                f"SELECT tile_key, 1, bucket, {q}.gbx_rst_combinecount(collect_list(u)) AS p1,\n"
+                f"  {q}.gbx_rst_combinesum(collect_list(u)) AS p2, {q}.gbx_rst_combinesum(collect_list(sq)) AS p3\n"
+                f"FROM (SELECT tile_key, bucket, u, {sq}\nFROM (\n{inner}\n)) GROUP BY tile_key, bucket"
+            )
+    return f"INSERT INTO IDENTIFIER(v_scratch) ({cols})\n{sel};"
+
+
+def _combine_next(q: str, op: str) -> str:
+    parts = {"avg": 2, "stddev": 3}.get(op, 1)
+    cols = "tile_key, lvl, bucket, " + ", ".join(f"p{i}" for i in range(1, parts + 1))
+    fn = {
+        "sum": "combinesum",
+        "count": "combinesum",
+        "min": "combinemin",
+        "max": "combinemax",
+    }.get(op, "combinesum")
+    aggs = ", ".join(
+        f"{q}.gbx_rst_{fn}(collect_list(p{i})) AS p{i}" for i in range(1, parts + 1)
+    )
+    ranked = _ranked(
+        ", ".join(f"p{i}" for i in range(1, parts + 1)),
+        "IDENTIFIER(v_scratch)",
+        "bucket",
+    )
+    ranked = ranked.replace(
+        "  FROM IDENTIFIER(v_scratch)\n",
+        "  FROM IDENTIFIER(v_scratch) WHERE lvl = v_lvl\n",
+    )
+    return (
+        f"INSERT INTO IDENTIFIER(v_scratch) ({cols})\n"
+        f"SELECT tile_key, v_lvl + 1, bucket, {aggs}\nFROM (\n{ranked}\n) GROUP BY tile_key, bucket;"
+    )
+
+
+def _chain(statements: Dict[str, str]) -> str:
+    """``IF v_op = 'a' THEN ... ELSEIF v_op = 'b' THEN ... END IF;`` over the ops, one statement each."""
+    out = []
+    for i, op in enumerate(_COMBINE_OPS):
+        out.append(
+            f"{'IF' if i == 0 else 'ELSEIF'} v_op = '{op}' THEN\n{statements[op]}"
+        )
+    return "\n".join(out) + "\nEND IF;"
+
+
+def combine_by_key(catalog: str, schema: str) -> str:
+    _need(
+        "gbx_rst_combinesum", "gbx_rst_combinecount", "gbx_rst_combinemin", "gbx_rst_combinemax",
+        "gbx_rst_updatetype", "gbx_rst_mapalgebra",
+    )  # fmt: skip
+    q = _q(catalog, schema)
+    fix = (
+        "gbx_combine_by_key: the combined tile of a key is over 64 MiB, more than a Unity Catalog function returns. "
+        "Fix: combine that key in a notebook or job with the session aggregate, or split the key into smaller areas."
+    )
+    median = (
+        "gbx_combine_by_key: median does not split into partial tiles, so it cannot be combined in a tree. "
+        "Fix: combine at most 10 tiles per key with gbx_rst_combinemedian, or retile the key first."
+    )
+    other = (
+        "gbx_combine_by_key: op must be one of avg, sum, count, min, max or stddev. "
+        "Fix: pass one of them (median is refused: it does not split into partial tiles)."
+    )
+    first = _chain({op: _combine_level1(q, op) for op in _COMBINE_OPS})
+    nxt = _chain({op: _combine_next(q, op) for op in _COMBINE_OPS})
+    nxt = "\n".join("  " + line for line in nxt.split("\n"))
+
+    def final(op: str) -> str:
+        if op not in _EXPR:
+            return _final_merge("p1")
+        parts = 3 if op == "stddev" else 2
+        cols = ", ".join(f"p{i}" for i in range(1, parts + 1))
+        expr = f"{q}.gbx_rst_mapalgebra(array({cols}), {ddl.quote_str(_EXPR[op])})"
+        return _final_merge(expr, cols)
+
+    create = _create_table(
+        "target_table", f"tile_key, CAST(NULL AS {manifest.TILE_SQL}) AS tile"
+    )
+    body = f"""
+DECLARE v_op STRING DEFAULT lower(trim(op));
+DECLARE v_lvl INT DEFAULT 1;
+{_SCRATCH_DECLARE}
+{_SCRATCH_HANDLER}
+IF v_op = 'median' THEN
+  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = {ddl.quote_str(median)};
+ELSEIF v_op IS NULL OR v_op NOT IN ({", ".join(ddl.quote_str(o) for o in _COMBINE_OPS)}) THEN
+  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = {ddl.quote_str(other)};
+END IF;
+{create}
+{_scratch_create(3)}
+-- level 1
+{first}
+{_size_check("1", fix)}
+{_tree_loop(nxt, fix, "gbx_combine_by_key")}
+-- result
+{_chain({op: final(op) for op in _COMBINE_OPS})}
+{_SCRATCH_DROP}"""
+    return _ddl(
+        catalog,
+        schema,
+        "gbx_combine_by_key",
+        f"Combine the aligned tiles of a table (columns tile_key, tile) pixel by pixel into one tile per key with op "
+        f"avg, sum, count, min, max or stddev (the population standard deviation), in a tree of partial tiles of at most "
+        f"{TREE_FAN_IN} members each, so a key may have any number of tiles. Pixels with no data are left out, as in the "
+        "session combine functions. avg and stddev return Float32 tiles; median is refused. A key with one tile keeps "
+        "that tile. " + _UPSERTS,
+        [
+            SRC,
+            TGT,
+            Param(
+                "op",
+                "STRING",
+                "The statistic: avg, sum, count, min, max or stddev.",
+            ),
+        ],
+        body,
+    )
+
+
 # --- zonal statistics ------------------------------------------------------------------------------------------------
 def zonal_stats(catalog: str, schema: str) -> str:
     _need("gbx_rst_clip", "gbx_rst_summary")
@@ -705,6 +852,7 @@ RECIPES: Dict[str, Callable[[str, str], str]] = {
     "gbx_points_to_h3_surface": points_to_h3_surface,
     "gbx_features_to_mvt": features_to_mvt,
     "gbx_mosaic_by_key": mosaic_by_key,
+    "gbx_combine_by_key": combine_by_key,
     "gbx_zonal_stats": zonal_stats,
     "gbx_zarr_tag_version": zarr_tag_version,
     "gbx_zarr_untag_version": zarr_untag_version,
@@ -719,6 +867,14 @@ CALLS: Dict[str, Tuple[str, ...]] = {
     "gbx_points_to_h3_surface": ("gbx_rst_h3_rasterize", "gbx__h3_cellfill_cells"),
     "gbx_features_to_mvt": ("gbx_st_asmvt_pyramid", "gbx__st_asmvt_features"),
     "gbx_mosaic_by_key": ("gbx_rst_merge",),
+    "gbx_combine_by_key": (
+        "gbx_rst_combinesum",
+        "gbx_rst_combinecount",
+        "gbx_rst_combinemin",
+        "gbx_rst_combinemax",
+        "gbx_rst_updatetype",
+        "gbx_rst_mapalgebra",
+    ),
     "gbx_zonal_stats": ("gbx_rst_clip", "gbx_rst_summary"),
 }
 

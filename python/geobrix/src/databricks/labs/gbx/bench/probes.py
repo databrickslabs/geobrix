@@ -735,14 +735,23 @@ def _proc_norm(value):
     return value
 
 
-def _proc_pixels(blob) -> list:
-    """The pixels of a GeoTIFF as nested lists (None for no bytes): two tiles are the same when their pixels are."""
+def _proc_pixels(blob, decimals: int = 9) -> list:
+    """The pixels of a GeoTIFF as nested lists (None for no bytes): two tiles are the same when their pixels are.
+
+    ``decimals`` rounds the values: a tile that went through a Float32 step (the average and the standard deviation of
+    ``gbx_combine_by_key``) equals the session's Float64 value to about seven digits, not nine. A pixel with no data
+    is None, whatever the NoData value of the tile.
+    """
     if blob is None:
         return None
     from databricks.labs.gbx._gdal_policy import open_bytes
 
     with open_bytes(bytes(blob)) as ds:
-        return [[_proc_norm(float(x)) for x in row] for row in ds.read(1).tolist()]
+        masks = ds.read_masks(1).tolist()
+        return [
+            [round(float(x), decimals) if m else None for x, m in zip(row, mrow)]
+            for row, mrow in zip(ds.read(1).tolist(), masks)
+        ]
 
 
 def _proc_mvt_features(blob) -> list:
@@ -915,9 +924,21 @@ def _proc_call(name: str, args: dict) -> str:
     return f"CALL {name}(" + ", ".join(f"{k} => {v}" for k, v in args.items()) + ")"
 
 
+# The keys of the tile inputs. A key of more than 8 tiles needs the levels of the tree procedures: "wide" has 12 (two
+# levels), "deep" has 70 (three levels).
+_TREE_WIDE, _TREE_DEEP = 12, 70
+# The ops of gbx_combine_by_key the probe runs, and the decimals the compare keeps (the average and the standard
+# deviation come back Float32 from the map algebra, the session's Float64 rounded).
+_COMBINE_PROBE = (
+    ("avg", 3), ("sum", 9), ("count", 9), ("min", 9), ("max", 9), ("stddev", 3),
+)  # fmt: skip
+
+
 def _proc_tile_inputs():
     """The tile inputs of the tile cases: ``([(tile_key, tile)], zone tile)``, each tile the v2 tile dict of a 4 x 4
-    GeoTIFF. Session and warehouse build the same bytes."""
+    GeoTIFF. Session and warehouse build the same bytes. The mosaic keys: ``a`` (two tiles side by side), ``b`` (one),
+    ``wide`` and ``deep`` (more than the 8 a function call takes, side by side without overlap).
+    """
     import numpy as np
 
     from databricks.labs.gbx.bench.oracles import _gtiff, _tile
@@ -931,11 +952,96 @@ def _proc_tile_inputs():
         ("a", tile(40.0, 40.0, 100)),
         ("b", tile(0.0, 40.0, 200)),
     ]
+    mosaic += [("wide", tile(40.0 * i, 40.0, 16 * i)) for i in range(_TREE_WIDE)]
+    mosaic += [("deep", tile(40.0 * i, 40.0, i)) for i in range(_TREE_DEEP)]
     return mosaic, tile(0.0, 100.0, 0)
 
 
+def _proc_combine_inputs():
+    """The input of ``gbx_combine_by_key``: ``[(tile_key, tile)]`` of aligned 4 x 4 tiles with holes. ``one`` has a
+    single tile (kept as it is), ``few`` three (one function call), ``many`` twelve (two levels). The pixel (0, 0) has
+    no data in any member; every odd member has no data at (1, 1)."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff, _tile
+
+    def tile(base, i):
+        arr = (
+            np.arange(16, dtype="float64").reshape(1, 4, 4) * (1 + 0.25 * (i % 3))
+            + base
+        )
+        arr[0, 0, 0] = -9999.0
+        if i % 2:
+            arr[0, 1, 1] = -9999.0
+        return _tile(_gtiff(arr, "EPSG:3857", origin=(0.0, 40.0), px=10.0))
+
+    return (
+        [("one", tile(7, 0))]
+        + [("few", tile(10 * i, i)) for i in range(3)]
+        + [("many", tile(3 * i, i)) for i in range(12)]
+    )
+
+
+def _proc_tile_case_defs(t, lit) -> list:
+    """The tile cases as dicts (no session needed): mosaic by key, one case per op of combine by key, zonal stats.
+
+    ``label`` is the key of the case's record in the run's result (the procedure name, and the op for a combine).
+    The reference of a case is the same flow over the session functions on the same input.
+    """
+    cases = [
+        {
+            "name": "gbx_mosaic_by_key",
+            "tables": ["mos_src", "mos_tgt"],
+            "args": {"source_table": lit("mos_src"), "target_table": lit("mos_tgt")},
+            "out": f"SELECT tile_key, tile FROM {t('mos_tgt')} ORDER BY tile_key",
+            "ref": f"SELECT tile_key, gbx_rst_merge(collect_list(tile)) AS tile FROM {t('mos_src')} "
+            "GROUP BY tile_key ORDER BY tile_key",
+            "compare": "pixels",
+            "column": "tile",
+        }
+    ]
+    for op, decimals in _COMBINE_PROBE:
+        tgt = f"cmb_{op}"
+        cases.append(
+            {
+                "name": "gbx_combine_by_key",
+                "label": f"gbx_combine_by_key:{op}",
+                "tables": ["cmb_src", tgt],
+                "args": {
+                    "source_table": lit("cmb_src"),
+                    "target_table": lit(tgt),
+                    "op": f"'{op}'",
+                },
+                "out": f"SELECT tile_key, tile FROM {t(tgt)} ORDER BY tile_key",
+                "ref": f"SELECT tile_key, gbx_rst_combine{op}(collect_list(tile)) AS tile FROM {t('cmb_src')} "
+                "GROUP BY tile_key ORDER BY tile_key",
+                "compare": "pixels",
+                "column": "tile",
+                "decimals": decimals,
+            }
+        )
+    cases.append(
+        {
+            "name": "gbx_zonal_stats",
+            "tables": ["zs_tiles", "zs_zones", "zs_tgt"],
+            "args": {
+                "zones_table": lit("zs_zones"),
+                "source_table": lit("zs_tiles"),
+                "target_table": lit("zs_tgt"),
+            },
+            "out": f"SELECT zone_id, tile_id, summary FROM {t('zs_tgt')} ORDER BY zone_id, tile_id",
+            "ref": "SELECT z.zone_id, t.tile_id, gbx_rst_summary(gbx_rst_clip(t.tile, st_asewkb(z.geom), true)) "
+            f"AS summary FROM {t('zs_zones')} AS z JOIN {t('zs_tiles')} AS t ON st_intersects(z.geom, t.bbox) "
+            "ORDER BY zone_id, tile_id",
+            "compare": "rows",
+        }
+    )
+    return cases
+
+
 def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> list:
-    """The tile-input cases (mosaic by key, zonal statistics): their input tables are built from GeoTIFF bytes.
+    """The tile-input cases (mosaic by key, combine by key, zonal statistics): their input tables are built from
+    GeoTIFF bytes, through ``client_dataframe`` (the guarded builder of Spark Connect inputs).
 
     Each table is added to ``tables`` (when given) before it is created, so a failure part-way still drops it.
     """
@@ -957,7 +1063,10 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
             if tables is not None and t(name) not in tables:
                 tables.append(t(name))
 
-    made("mos_src", "mos_tgt", "zs_tiles", "zs_zones", "zs_tgt")
+    made(
+        "mos_src", "mos_tgt", "cmb_src", "zs_tiles", "zs_zones", "zs_tgt",
+        *(f"cmb_{op}" for op, _d in _COMBINE_PROBE),
+    )  # fmt: skip
     client_dataframe(
         spark,
         tiles,
@@ -965,6 +1074,14 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
         what="mosaic tile input",
     ).write.mode("overwrite").saveAsTable(t("mos_src").replace("`", ""))
     spark.sql(f"DROP TABLE IF EXISTS {t('mos_tgt')}")
+    client_dataframe(
+        spark,
+        _proc_combine_inputs(),
+        "tile_key string, tile " + V2_TILE_SCHEMA.simpleString(),
+        what="combine tile input",
+    ).write.mode("overwrite").saveAsTable(t("cmb_src").replace("`", ""))
+    for op, _d in _COMBINE_PROBE:
+        spark.sql(f"DROP TABLE IF EXISTS {t('cmb_' + op)}")
     client_dataframe(
         spark,
         zone_tile,
@@ -983,32 +1100,7 @@ def _proc_tile_cases(spark, catalog: str, schema: str, tables: list = None) -> l
         "(2, st_geomfromwkt('POLYGON((900 900,950 900,950 950,900 950,900 900))', 3857))"
     )
     spark.sql(f"DROP TABLE IF EXISTS {t('zs_tgt')}")
-    return [
-        {
-            "name": "gbx_mosaic_by_key",
-            "tables": ["mos_src", "mos_tgt"],
-            "args": {"source_table": lit("mos_src"), "target_table": lit("mos_tgt")},
-            "out": f"SELECT tile_key, tile FROM {t('mos_tgt')} ORDER BY tile_key",
-            "ref": f"SELECT tile_key, gbx_rst_merge(collect_list(tile)) AS tile FROM {t('mos_src')} "
-            "GROUP BY tile_key ORDER BY tile_key",
-            "compare": "pixels",
-            "column": "tile",
-        },
-        {
-            "name": "gbx_zonal_stats",
-            "tables": ["zs_tiles", "zs_zones", "zs_tgt"],
-            "args": {
-                "zones_table": lit("zs_zones"),
-                "source_table": lit("zs_tiles"),
-                "target_table": lit("zs_tgt"),
-            },
-            "out": f"SELECT zone_id, tile_id, summary FROM {t('zs_tgt')} ORDER BY zone_id, tile_id",
-            "ref": "SELECT z.zone_id, t.tile_id, gbx_rst_summary(gbx_rst_clip(t.tile, st_asewkb(z.geom), true)) "
-            f"AS summary FROM {t('zs_zones')} AS z JOIN {t('zs_tiles')} AS t ON st_intersects(z.geom, t.bbox) "
-            "ORDER BY zone_id, tile_id",
-            "compare": "rows",
-        },
-    ]
+    return _proc_tile_case_defs(t, lit)
 
 
 def _proc_h3_reference(spark, source: str) -> list:
@@ -1073,14 +1165,17 @@ def proc_warehouse_statements(
             + ")"
         )
 
-    def case(name, setup, args, out_sql, ref_sql, also=None):
+    def case(name, setup, args, out_sql, ref_sql, also=None, label=None):
+        label = (
+            label or name
+        )  # the statement ids; a procedure with several cases (combine, per op) has a label each
         for i, stmt in enumerate(setup):
-            out.append((f"{name}:setup{i}", stmt))
-        out.append((f"{name}:call", call(name, args)))
-        out.append((f"{name}:rows", f"SELECT count(*) AS n FROM ({out_sql})"))
-        out.append((f"{name}:diff", _diff_sql(out_sql, ref_sql)))
+            out.append((f"{label}:setup{i}", stmt))
+        out.append((f"{label}:call", call(name, args)))
+        out.append((f"{label}:rows", f"SELECT count(*) AS n FROM ({out_sql})"))
+        out.append((f"{label}:diff", _diff_sql(out_sql, ref_sql)))
         if also:
-            out.append((f"{name}:diff_also", _diff_sql(*also)))
+            out.append((f"{label}:diff_also", _diff_sql(*also)))
 
     by_name = {c["name"]: c for c in proc_cases(catalog, schema)}
     # polygons -> BNG
@@ -1164,6 +1259,15 @@ def proc_warehouse_statements(
         )
 
     values = ", ".join(f"('{k}', {tile_sql(v)})" for k, v in mosaic)
+    # the bytes of a mosaic of mosaics can differ from the flat mosaic's (the encoding follows the size), the pixels
+    # do not: the compare is the size and the band statistics
+    stat = lambda tile: ", ".join(  # noqa: E731
+        [f"{q}.gbx_rst_width({tile}) AS w", f"{q}.gbx_rst_height({tile}) AS h"]
+        + [
+            f"transform({q}.gbx_rst_{fn}({tile}), x -> round(x, 3)) AS {fn}"
+            for fn in ("avg", "min", "max")
+        ]
+    )
     case(
         "gbx_mosaic_by_key",
         [
@@ -1172,10 +1276,32 @@ def proc_warehouse_statements(
             f"DROP TABLE IF EXISTS {t('mos_tgt')}",
         ],
         {"source_table": lit("mos_src"), "target_table": lit("mos_tgt")},
-        f"SELECT tile_key, sha2(tile.raster, 256) AS h FROM {t('mos_tgt')}",
-        f"SELECT tile_key, sha2({q}.gbx_rst_merge(collect_list(tile)).raster, 256) AS h FROM {t('mos_src')} "
-        "GROUP BY tile_key",
+        f"SELECT tile_key, {stat('tile')} FROM {t('mos_tgt')}",
+        f"SELECT tile_key, {stat('c')} FROM (SELECT tile_key, {q}.gbx_rst_merge(collect_list(tile)) AS c "
+        f"FROM {t('mos_src')} GROUP BY tile_key)",
     )  # fmt: skip
+    # combine by key: one source table, one CALL and one stats compare per op (the bytes of a tile that went through the
+    # map algebra differ from the session's, the band statistics do not)
+    for i, (op, _decimals) in enumerate(_COMBINE_PROBE):
+        setup = []
+        if i == 0:
+            cvalues = ", ".join(
+                f"('{k}', {tile_sql(v)})" for k, v in _proc_combine_inputs()
+            )
+            setup = [
+                f"CREATE OR REPLACE TABLE {t('cmb_src')} (tile_key STRING, tile {TILE_SQL})",
+                f"INSERT INTO {t('cmb_src')} VALUES {cvalues}",
+            ]
+        setup.append(f"DROP TABLE IF EXISTS {t('cmb_' + op)}")
+        case(
+            "gbx_combine_by_key",
+            setup,
+            {"source_table": lit("cmb_src"), "target_table": lit("cmb_" + op), "op": f"'{op}'"},
+            f"SELECT tile_key, {stat('tile')} FROM {t('cmb_' + op)}",
+            f"SELECT tile_key, {stat('c')} FROM (SELECT tile_key, {q}.gbx_rst_combine{op}(collect_list(tile)) AS c "
+            f"FROM {t('cmb_src')} GROUP BY tile_key)",
+            label=f"gbx_combine_by_key:{op}",
+        )  # fmt: skip
     case(
         "gbx_zonal_stats",
         [
@@ -1259,9 +1385,9 @@ def proc_warehouse_statements(
         f"{PROC_PREFIX}{x}"
         for x in (
             "bng_src bng_tgt cg_src cg_tgt cg_rej mig_src mig_tgt h3_src h3_tgt mvt_src mvt_tgt "
-            "mos_src mos_tgt zs_tiles zs_zones zs_tgt zm_wh"
+            "mos_src mos_tgt cmb_src zs_tiles zs_zones zs_tgt zm_wh"
         ).split()
-    ]
+    ] + [f"{PROC_PREFIX}cmb_{op}" for op, _d in _COMBINE_PROBE]
     out += [(f"drop:{n}", f"DROP TABLE IF EXISTS {q}.{n}") for n in tables]
     return out
 
@@ -1291,7 +1417,7 @@ def _proc_rows(rows, case) -> list:
         if kind == "pixels":
             col = d[case["column"]]
             blob = col["raster"] if isinstance(col, dict) else col
-            d[case["column"]] = _proc_pixels(blob)
+            d[case["column"]] = _proc_pixels(blob, case.get("decimals", 9))
         elif kind == "mvt":
             d["mvt"] = _proc_mvt_features(d["mvt"])
         for col in case.get("geometries", ()):
@@ -1355,7 +1481,7 @@ def run_procedures(
     ).start()
     out = {"installed": None, "skipped": {}, "recipes": {}, "dropped": []}
     counter = {"n": 0}
-    total = len(procedures.RECIPES) * 2 + 2
+    total = (len(procedures.RECIPES) + len(_COMBINE_PROBE) - 1) * 2 + 2
 
     def step(label, surface, fn):
         """One timed step; the error is the measurement, so it is recorded, never raised."""
@@ -1399,6 +1525,7 @@ def run_procedures(
             only=[
                 "gbx_bng_tessellateexplode", "gbx_st_makevalid", "gbx_st_legacyaswkb", "gbx_st_asmvt_pyramid",
                 "gbx_rst_merge", "gbx_rst_clip", "gbx_rst_summary", "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg",
+                *(f"gbx_rst_combine{op}" for op, _d in _COMBINE_PROBE),
             ],
         )  # fmt: skip
         cases = proc_cases(catalog, schema) + _proc_tile_cases(
@@ -1406,7 +1533,10 @@ def run_procedures(
         )
         for case in cases:
             name = case["name"]
-            rec = out["recipes"].setdefault(name, {})
+            label = case.get(
+                "label", name
+            )  # a procedure with several cases (combine, one per op) has a record each
+            rec = out["recipes"].setdefault(label, {})
             tables += [
                 tbl
                 for tbl in (
@@ -1417,7 +1547,7 @@ def run_procedures(
             for stmt in case.get("setup", ()):
                 spark.sql(stmt)
             _, err, wall = step(
-                name, "call",
+                label, "call",
                 lambda: spark.sql(
                     f"CALL `{catalog}`.`{schema}`.{name}("
                     + ", ".join(f"{k} => {v}" for k, v in case["args"].items())
@@ -1429,7 +1559,7 @@ def run_procedures(
                 continue
             got = _proc_rows(spark.sql(case["out"]).collect(), case)
             ref_rows, rerr, rwall = step(
-                name, "session",
+                label, "session",
                 lambda: (
                     _proc_h3_reference(spark, f"`{catalog}`.`{schema}`.{PROC_PREFIX}h3_src")
                     if case["ref"] is None

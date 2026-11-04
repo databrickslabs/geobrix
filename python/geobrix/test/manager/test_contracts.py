@@ -2040,9 +2040,13 @@ def _answers(spark, tmp_path, names, register_it, fixture="tile_4326", cap=None)
 
 
 def _light(spark, names):
+    """Register `names` at the light level. A session that carries a staged JAR would otherwise pick the JVM level
+    (the best one it has), and these tests assert the light kernels' contract; CI's light shards have no JAR.
+    """
     from databricks.labs.gbx import register
 
-    return lambda: register(spark, only=[f"gbx_{n}" for n in names])
+    sql = [f"gbx_{n}" for n in names]
+    return lambda: register(spark, only=sql, _prefer={n: "L3" for n in sql})
 
 
 def _heavy(spark, names):
@@ -2542,7 +2546,11 @@ def test_column_api_forms_fold_or_refuse_an_over_cap_group_with_an_error_tile(
         return _over_cap_group(
             spark,
             tmp_path,
-            lambda: None,
+            # the forms resolve their SQL function by name: light, whatever JAR the session carries
+            _light(
+                spark,
+                ["rst_merge", "rst_combineavg", "rst_combinemax", "rst_frombands"],
+            ),
             columns=lambda: [_column_api_forms(tmp_path)[form]().alias("out")],
             cap=cap,
         )["out"]

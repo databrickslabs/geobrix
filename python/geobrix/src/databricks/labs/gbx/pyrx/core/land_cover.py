@@ -8,6 +8,8 @@ from scipy import ndimage as ndi
 from scipy.cluster.vq import kmeans2
 from skimage.morphology import disk
 
+from databricks.labs.gbx.pyrx.core._nodata import emit
+
 # Class scheme: index = class id; -1 = nodata/unclassified.
 DEFAULT_CLASSES = ["vegetation", "bare", "impervious", "dark"]
 
@@ -185,3 +187,26 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
         lab = _despeckle(lab, smooth)
         lab[f["nodata"]] = -1  # re-mask nodata after de-speckle
     return lab.astype(np.int32), names
+
+
+class TooFewBands(ValueError):
+    """The tile has fewer than the three colour bands the classification reads."""
+
+
+def classify_dataset(ds, method, n_clusters, smooth) -> bytes:
+    """The land-cover labels of an open tile (red, green, blue, optionally near-infrared in its first bands) as
+    single-band Int32 GTiff bytes, -1 where a pixel is unclassified. :class:`TooFewBands` for a tile of fewer than
+    three bands; the arguments are as :func:`check_args` reads them."""
+    if ds.count < 3:
+        raise TooFewBands(
+            f"rst_land_cover needs a tile with 3 or more bands (red, green, blue); this one has {ds.count}. "
+            "Fix: stack the bands first (gbx_rst_frombands)"
+        )
+    arr = ds.read().transpose(1, 2, 0)  # (bands,H,W) -> HxWxbands
+    labels, _names = classify(
+        arr,
+        method=str(method).lower(),
+        n_clusters=int(n_clusters),
+        smooth=int(smooth),
+    )
+    return emit(ds, labels, -1, labels == -1, "int32")

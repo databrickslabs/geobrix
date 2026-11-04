@@ -3508,23 +3508,13 @@ def _index_family_wrapper(
 
 def _land_cover_bytes(tile, method, n_clusters, smooth):
     from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core._nodata import emit
 
     _env.configure_gdal_env()
     with _open_op(tile) as ds:
-        if ds.count < 3:
-            raise _UnreadableTile(
-                f"rst_land_cover needs a tile with 3 or more bands (red, green, blue); this one has {ds.count}. "
-                "Fix: stack the bands first (gbx_rst_frombands)"
-            )
-        arr = ds.read().transpose(1, 2, 0)  # (bands,H,W) -> HxWxbands
-        labels, _names = land_cover_core.classify(
-            arr,
-            method=str(method).lower(),
-            n_clusters=int(n_clusters),
-            smooth=int(smooth),
-        )
-        return emit(ds, labels, -1, labels == -1, "int32")
+        try:
+            return land_cover_core.classify_dataset(ds, method, n_clusters, smooth)
+        except land_cover_core.TooFewBands as exc:
+            raise _UnreadableTile(str(exc)) from exc
 
 
 def _check_land_cover(*, method, n_clusters, smooth, **_):

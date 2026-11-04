@@ -12,3 +12,4 @@
 .uc      { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }
 .python  { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }
 .scala   { background: #e6f4ea; color: #1e7e34; border: 1px solid #b7dfc2; }
+.ucNote { font-size: 0.85rem; color: var(--ifm-color-emphasis-700); margin-top: 0.25rem; }

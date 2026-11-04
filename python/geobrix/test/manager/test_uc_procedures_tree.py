@@ -36,7 +36,8 @@ def _statements(text):
 def _bucket_formula(text):
     """The bucket expression of the tree as a Python function of (rn, n), read from the procedure's own text."""
     m = re.search(
-        r"\(\(rn - 1\) \* \(\(n \+ (\d+)\) DIV (\d+)\)\) DIV n AS bucket", text
+        r"CAST\(\(\(rn - 1\) \* \(\(n \+ (\d+)\) DIV (\d+)\)\) DIV n AS INT\) AS bucket",
+        text,
     )
     assert m, "the tree has no bucket formula"
     add, fan = int(m.group(1)), int(m.group(2))

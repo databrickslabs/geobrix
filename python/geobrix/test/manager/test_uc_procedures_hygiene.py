@@ -47,6 +47,16 @@ def test_clean_geometries_matches_null_ids_and_repairs_each_geometry_once():
     # the repair runs once, into a scratch table the four statements read
     assert text.count("gbx_st_makevalid(") == 1
     assert text.count("gbx_st_explainvalidity(") == 1
+    # a NULL geometry is not repaired, and the reason is asked for the rejects only (a filter below the call)
+    stage = next(
+        s
+        for s in _statements(text)
+        if s.startswith("CREATE TABLE IDENTIFIER(v_scratch)")
+    )
+    assert "WHERE geom IS NOT NULL" in stage.split("UNION ALL")[0]
+    assert "gbx_st_explainvalidity" not in stage
+    reason = text[text.index("gbx_st_explainvalidity(") :]
+    assert "FROM IDENTIFIER(v_scratch) WHERE NOT ok AND geom IS NOT NULL" in reason
     assert "DECLARE EXIT HANDLER FOR SQLEXCEPTION" in text
     assert text.rstrip().endswith("DROP TABLE IF EXISTS IDENTIFIER(v_scratch);\nEND")
 

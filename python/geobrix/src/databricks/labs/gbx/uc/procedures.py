@@ -190,20 +190,25 @@ _SCRATCH_DROP = "DROP TABLE IF EXISTS IDENTIFIER(v_scratch);"
 # --- clean geometries --------------------------------------------------------------------------------------------
 def clean_geometries(catalog: str, schema: str) -> str:
     q = _q(catalog, schema)
-    # Every row is repaired ONCE, into a scratch table; the four statements after it read the scratch rows. The repaired
+    # Every row is repaired ONCE, into a scratch table; the writes after it read the scratch rows. The repaired
     # geometry is kept as WKB (a GEOMETRY(ANY) is no table column) and given the source's SRID where it is merged.
+    # A NULL geometry is a reject without a call, and the reason of a reject is asked for the rejects only.
     stage = (
         "CREATE TABLE IDENTIFIER(v_scratch) AS\n"
-        "SELECT id, geom AS original, st_asbinary(fixed) AS wkb,\n"
-        "  geom IS NOT NULL AND fixed IS NOT NULL AND st_isvalid(fixed) AS ok,\n"
-        "  CASE WHEN geom IS NULL THEN 'the geometry is NULL'\n"
-        "    WHEN fixed IS NULL OR NOT st_isvalid(fixed) THEN\n"
-        f"      coalesce({q}.gbx_st_explainvalidity(CAST(geom AS GEOMETRY(ANY))), 'the geometry could not be repaired')\n"
-        "  END AS reason\n"
+        "SELECT id, geom, st_asbinary(fixed) AS wkb, fixed IS NOT NULL AND st_isvalid(fixed) AS ok\n"
         "FROM (\n"
         f"  SELECT id, geom, {q}.gbx_st_makevalid(CAST(geom AS GEOMETRY(ANY)), repair_level) AS fixed\n"
-        "  FROM IDENTIFIER(source_table)\n"
-        ");"
+        "  FROM IDENTIFIER(source_table) WHERE geom IS NOT NULL\n"
+        ")\n"
+        "UNION ALL\n"
+        "SELECT id, geom, CAST(NULL AS BINARY), false FROM IDENTIFIER(source_table) WHERE geom IS NULL;"
+    )
+    rejects = (
+        "SELECT id, geom,\n"
+        f"  coalesce({q}.gbx_st_explainvalidity(CAST(geom AS GEOMETRY(ANY))), 'the geometry could not be repaired') AS reason\n"
+        "FROM IDENTIFIER(v_scratch) WHERE NOT ok AND geom IS NOT NULL\n"
+        "UNION ALL\n"
+        "SELECT id, geom, 'the geometry is NULL' FROM IDENTIFIER(v_scratch) WHERE geom IS NULL"
     )
     merge = (
         "MERGE INTO IDENTIFIER(:t) AS t USING (\n"
@@ -235,7 +240,7 @@ EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, v_scratch AS s;
 DELETE FROM IDENTIFIER(target_table) AS t
 WHERE EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) AS b WHERE NOT b.ok AND b.id <=> t.id);
 MERGE INTO IDENTIFIER(rejects_table) AS t USING (
-SELECT id, original AS geom, reason FROM IDENTIFIER(v_scratch) WHERE NOT ok
+{rejects}
 ) AS s ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *;
 DELETE FROM IDENTIFIER(rejects_table) AS t
 WHERE EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) AS g WHERE g.ok AND g.id <=> t.id);
@@ -423,7 +428,7 @@ WHEN NOT MATCHED THEN INSERT *;"""
 # writes one row per bucket of a scratch table, and the next level reads those rows, until a key has one row. The
 # buckets of a key are contiguous runs of the same size (to within one), so no call gets a lone member: a combine
 # function returns a single tile as it is, which would make a "count" of one tile the tile itself.
-_BUCKET = f"((rn - 1) * ((n + {TREE_FAN_IN - 1}) DIV {TREE_FAN_IN})) DIV n"
+_BUCKET = f"CAST(((rn - 1) * ((n + {TREE_FAN_IN - 1}) DIV {TREE_FAN_IN})) DIV n AS INT)"
 
 
 def _ranked(columns: str, source: str, order: str) -> str:

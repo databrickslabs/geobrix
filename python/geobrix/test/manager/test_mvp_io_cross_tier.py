@@ -340,6 +340,28 @@ def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):
     assert [b.to_pylist()[0] for b in out] == whole.to_pylist()
 
 
+def test_a_slice_is_cut_before_the_tile_that_would_pass_the_bound(monkeypatch):
+    """The bound lies between two tile sizes (25 for tiles of 10): a slice holds two tiles, never three. Cutting
+    after the tile that reaches the bound would give [3, 2], a slice over it."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import tile_batches
+
+    base = _batch_of("/x0.tif")
+    rows = [r for i in range(5) for r in _batch_of(f"/x{i}.tif").to_pylist()]
+    batch = pa.RecordBatch.from_pylist(rows, schema=base.schema)
+    monkeypatch.setattr(tile_batches, "_OUT_CHUNK_BYTES", 25)
+    monkeypatch.setattr(tile_batches.budget, "decoded_budget_bytes", lambda s: 1 << 40)
+
+    def ten_bytes(tile, cap_bytes):
+        return {**tile, "raster": b"x" * 10, "path": None}
+
+    out = list(tile_batches.materialize_batches([batch], decode=ten_bytes))
+    assert [b.num_rows for b in out] == [2, 2, 1]
+    for b in out:
+        assert sum(len(r["tile"]["raster"]) for r in b.to_pylist()) <= 25
+
+
 def test_the_batch_decode_of_an_empty_batch_is_one_empty_batch_with_the_same_schema():
     import pyarrow as pa
 

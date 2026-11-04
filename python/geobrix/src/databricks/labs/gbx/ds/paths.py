@@ -808,9 +808,12 @@ def _read_planned(
     lineage: bool,
     on_error: str = "fail",
     bad_records_dir: Optional[str] = None,
+    read_cap: Optional[int] = None,
 ):
     """``mapInArrow`` function: planned ``(path, mtime, part)`` rows -> the
-    reader's output for each partition. One reader (and one existence check) per
+    reader's output for each partition. ``read_cap`` is the driver's read cap
+    (``report_detected_cap``), set on each reader that decodes at read: a worker
+    cannot measure it. One reader (and one existence check) per
     file per task. With ``on_error="skip"`` each partition (a tile window, a
     group of tiles) is the unit of failure."""
     base = _base(schema)
@@ -820,21 +823,21 @@ def _read_planned(
         bad = _collector(on_error, bad_records_dir)
         readers: dict = {}
 
+        def _build(local):
+            reader = resolve_format(fmt)({**opts, "path": local}).reader(base)
+            reader._gbx_read_cap = read_cap
+            return reader
+
         def _reader(local, us):
             if not _exists(local):
                 return None
             if bad is None:
                 try:
-                    return resolve_format(fmt)({**opts, "path": local}).reader(base)
+                    return _build(local)
                 except Exception as e:
                     _quarantine.name_the_file(e, local)
                     raise
-            reader = _open_guarded(
-                bad,
-                local,
-                us,
-                lambda: resolve_format(fmt)({**opts, "path": local}).reader(base),
-            )
+            reader = _open_guarded(bad, local, us, lambda: _build(local))
             if reader is not None:
                 setattr(reader, _quarantine.HOOK, bad.hook(local, us))
             return reader
@@ -1224,6 +1227,10 @@ def read_paths(
     fmt, opts, keep = format, dict(options or {}), lineage
     mode, bad_dir = on_error, bad_records_dir
     if two_stage:
+        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+        # the driver's read cap, read where the session is: the workers carry it into their readers
+        cap = report_detected_cap(df.sparkSession)
         planned = src.mapInArrow(
             _plan_batches(fmt, opts, schema, mode, bad_dir), _PLAN_SCHEMA
         )
@@ -1231,7 +1238,7 @@ def read_paths(
             # Hash on the pickled partition: each window of one file is distinct.
             planned = planned.repartition(int(num_partitions), "part")
         return planned.mapInArrow(
-            _read_planned(fmt, opts, schema, keep, mode, bad_dir), schema
+            _read_planned(fmt, opts, schema, keep, mode, bad_dir, cap), schema
         )
     if num_partitions:
         src = src.repartition(int(num_partitions), "path")

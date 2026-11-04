@@ -4,12 +4,15 @@ Planning opens no header; a task takes ``files_per_task(n)`` files and yields th
 ``tile_batches.materialize_batches``. The rows are the rows the per-file plan gave.
 """
 
+import os
+
 import numpy as np
 import pyarrow as pa
 import pytest
 import rasterio
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx.ds import _quarantine
 from databricks.labs.gbx.ds import raster as R
 from databricks.labs.gbx.pyrx import tile_batches
 
@@ -137,14 +140,47 @@ def test_a_tile_over_the_read_cap_fails_the_read_with_its_fix(tmp_path):
         list(reader.read(part))
 
 
-def test_the_read_cap_is_the_drivers_connect_aware_cap(tmp_path):
+def test_the_read_cap_is_the_drivers_connect_aware_cap(tmp_path, monkeypatch):
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
     _folder(tmp_path, 1)
-    assert (
-        _reader(tmp_path)._read_cap == 256 << 20
-    )  # classic here; Serverless is 64 MiB
+    # classic here (256 MiB); Serverless is 64 MiB
+    assert _reader(tmp_path)._read_cap == report_detected_cap()
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
+    assert _reader(tmp_path)._read_cap == 12345
     assert (
         R.RasterGbxReader({"path": str(tmp_path)})._read_cap is None
     )  # virtual tiles decode nothing at read
+
+
+def test_a_reader_with_no_session_enforces_the_cap_the_driver_carried(
+    tmp_path, monkeypatch
+):
+    """The planner process and the per-file readers of read_paths may have no active session, where the cap would
+    resolve to the classic 256 MiB: the registration carries the driver's 64 MiB into the reader, and nothing
+    re-resolves it."""
+    from pyspark.sql import SparkSession
+
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.ds import file_gbx
+
+    _folder(tmp_path, 1)
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.setattr(SparkSession, "getActiveSession", staticmethod(lambda: None))
+    source = _gdal_policy.carrying_source(R.RasterGbxDataSource, True, 64 << 20)(
+        {"path": str(tmp_path), "virtualTiles": "false"}
+    )
+    reader = source.reader(source.schema())
+    monkeypatch.setattr(
+        file_gbx,
+        "report_detected_cap",
+        lambda *a: pytest.fail("the carried cap was resolved again"),
+    )
+    assert reader._read_cap == 64 << 20
+    with pytest.raises(ValueError, match="retile it first"):
+        tile_batches.refuse_over_cap(65 << 20, reader._read_cap, "the tile")
+    tile_batches.refuse_over_cap(63 << 20, reader._read_cap, "the tile")
 
 
 def test_a_corrupt_file_among_good_ones_fails_the_read(tmp_path, monkeypatch):
@@ -154,5 +190,99 @@ def test_a_corrupt_file_among_good_ones_fails_the_read(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "_FILES_PER_TASK_MAX", 3)
     reader = _reader(tmp_path)
     (part,) = reader.partitions()
-    with pytest.raises(Exception, match="t0001|not recognized|TIFF"):
+    with pytest.raises(rasterio.errors.RasterioIOError, match="t0001.tif"):
         list(reader.read(part))
+
+
+def _three_with_a_corrupt_middle(tmp_path, monkeypatch):
+    _folder(tmp_path, 3)
+    bad = tmp_path / "t0001.tif"
+    bad.write_bytes(b"not a raster")
+    monkeypatch.setattr(R, "_FILES_PER_TASK_FROM", 1)
+    monkeypatch.setattr(R, "_FILES_PER_TASK_MAX", 3)
+    reader = _reader(tmp_path)
+    (part,) = reader.partitions()
+    assert [os.path.basename(p) for p in part.file_paths] == [
+        "t0000.tif",
+        "t0001.tif",
+        "t0002.tif",
+    ]
+    return reader, part, str(bad)
+
+
+def test_a_bad_file_in_a_batch_is_set_aside_by_its_own_path_and_the_others_kept(
+    tmp_path, monkeypatch
+):
+    """With the bad-record hook of read_paths(on_error="skip"|"quarantine") the failure unit is the file: the middle
+    file is recorded under its own path (not the task's first file) and left out, files 1 and 3 are read. Without
+    the hook the read fails naming the middle file."""
+    reader, part, bad = _three_with_a_corrupt_middle(tmp_path, monkeypatch)
+    with pytest.raises(rasterio.errors.RasterioIOError) as failed:
+        list(reader.read(part))
+    notes = " ".join(getattr(failed.value, "__notes__", ()))
+    assert bad in str(failed.value) + notes
+
+    recorded = []
+    setattr(
+        reader,
+        _quarantine.HOOK,
+        lambda *a: recorded.append(a),
+    )
+    rows = _rows(reader, [part])
+    assert [os.path.basename(s) for s, _ in rows] == ["t0000.tif", "t0002.tif"]
+    assert all(t["raster"] for _, t in rows)
+    ((index, error_class, message),) = [a[:3] for a in recorded]
+    assert index is None and "RasterioIOError" in error_class and bad in message
+
+
+def test_a_transient_miss_reading_a_header_is_retried_and_a_bad_file_is_not(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.core import _retry
+
+    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    (path,) = _folder(tmp_path, 1)
+    real, calls = R.open_raster, []
+
+    def flaky(p, *a, **k):
+        calls.append(p)
+        if len(calls) == 1:
+            raise FileNotFoundError(2, "No such file or directory", p)
+        return real(p, *a, **k)
+
+    monkeypatch.setattr(R, "open_raster", flaky)
+    assert R._whole_file_header(path)[2] == 32 and len(calls) == 2
+    bad = tmp_path / "bad.tif"
+    bad.write_bytes(b"not a raster")
+    calls.clear()
+    monkeypatch.setattr(R, "open_raster", real)
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        R._whole_file_header(str(bad))
+
+
+def test_a_non_gtiff_file_is_re_encoded_to_the_row_of_the_per_file_plan(tmp_path):
+    path = str(tmp_path / "a.img")
+    with rasterio.open(
+        path, "w", driver="HFA", width=16, height=16, count=2, dtype="uint8", crs="EPSG:32633",
+        transform=from_origin(500000, 4000000, 10, 10),
+    ) as dst:  # fmt: skip
+        dst.write(np.arange(512, dtype="uint8").reshape(2, 16, 16))
+    reader = _reader(tmp_path, extensions="img")
+    (part,) = reader.partitions()
+    assert part.file_paths == [path]
+    batched = _rows(reader, [part])
+    per_file = _rows(reader, R._plan_partitions_for_file(path, 0, emit_virtual=False))
+    assert len(batched) == len(per_file) == 1
+    (src_b, got), (src_p, want) = batched[0], per_file[0]
+    assert src_b == src_p and got["crs"] == want["crs"] == "EPSG:32633"
+    assert got["window"] == want["window"] and got["raster"] and want["raster"]
+    assert got["metadata"] == want["metadata"]
+    with (
+        rasterio.MemoryFile(got["raster"]) as a,
+        rasterio.MemoryFile(want["raster"]) as b,
+        a.open() as da,
+        b.open() as db,
+    ):
+        assert da.driver == "GTiff" and da.crs == db.crs
+        assert da.transform == db.transform
+        assert np.array_equal(da.read(), db.read())

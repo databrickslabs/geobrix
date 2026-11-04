@@ -110,6 +110,47 @@ _RASTER_STAGE = StageCache(
 )
 
 
+def _is_transient_miss(e: BaseException) -> bool:
+    """A file the mount (a Serverless Volume) briefly does not show, not a file that is bad: worth a retry. GDAL words a
+    missing file as an IO error with no errno."""
+    if isinstance(e, FileNotFoundError):
+        return True
+    text = str(e)
+    return "does not exist in the file system" in text or "No such file" in text
+
+
+def _whole_file_header(path: str) -> tuple:
+    """``(size, crs, width, height, driver, bands, dtype, compression)`` of a whole file read at a worker, with the
+    transient-miss retry of every worker read of a Volume (``_listing._retry_transient``): a miss is retried, a bad file
+    is not (it would wait out the retries for nothing)."""
+
+    def read():
+        try:
+            from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
+            size = os.path.getsize(path)
+            with open_raster(path) as ds:
+                return (
+                    size,
+                    crs_to_canonical(ds.crs),
+                    ds.width,
+                    ds.height,
+                    ds.driver,
+                    ds.count,
+                    ds.dtypes[0],
+                    str(ds.profile.get("compress") or "DEFLATE").upper(),
+                ), None
+        except OSError as e:
+            if _is_transient_miss(e):
+                raise
+            return None, e
+
+    header, error = _listing._retry_transient(read)
+    if error is not None:
+        raise error
+    return header
+
+
 def _numpy_itemsize(dtype: str) -> int:
     import numpy as np
 
@@ -1106,14 +1147,6 @@ class RasterGbxReader(DataSourceReader):
                 "regular tiling grid only)."
             )
         self.emit_virtual = str(options.get("virtualTiles", "true")).lower() == "true"
-        # The read cap of a task that decodes at read, captured here on the driver: a worker cannot measure it
-        # (64 MiB on Serverless / Spark Connect, 256 MiB classic).
-        self._read_cap = None
-        if not self.emit_virtual:
-            from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-
-            self._read_cap = report_detected_cap()
-
         # Approach 1 — pre-computed tile input.
         # When manifest or tilesTable is present, partitions() reads tile rows
         # from those sources instead of walking self.path.
@@ -1133,6 +1166,30 @@ class RasterGbxReader(DataSourceReader):
         self.version_as_of, self.timestamp_as_of = _table_time_travel(
             options, has_tiles_table=bool(self.tiles_table)
         )
+
+    # The driver's read cap, carried in at registration (``_gdal_policy.carrying_source``) or by ``read_paths``: the
+    # planner and per-file readers run where no session may be active, so they must not resolve it themselves.
+    _gbx_read_cap: Optional[int] = None
+    _read_cap_set: Optional[int] = None
+
+    @property
+    def _read_cap(self) -> Optional[int]:
+        """The read cap of a task that decodes at read (64 MiB on Serverless / Spark Connect, 256 MiB classic; None
+        when the read keeps virtual tiles). A worker cannot measure it: it is the cap the driver carried, else (a reader
+        used with no registration) what this process resolves."""
+        if self._read_cap_set is not None:
+            return self._read_cap_set
+        if self.emit_virtual:
+            return None
+        if self._gbx_read_cap is not None:
+            return self._gbx_read_cap
+        from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+        return report_detected_cap()
+
+    @_read_cap.setter
+    def _read_cap(self, value: Optional[int]) -> None:
+        self._read_cap_set = value
 
     def _list_source_files(self) -> list:
         """Enumerate source files via the session-free file_gbx core.
@@ -1587,11 +1644,15 @@ class RasterGbxReader(DataSourceReader):
     def _read_batch(self, partition: "_BatchPartition") -> Iterator:
         """The tiles of a task's files as Arrow batches of ``(source, tile)``, decoded in one Python call by
         ``tile_batches.materialize_batches``: a batch holds at most ``out_chunk_bytes()`` of decoded bytes, so a
-        task's memory does not grow with its file count. A file that cannot be read (a bad file, a refused
-        location, a tile over the read cap) fails the read, as a file of any other plan does: ``read_paths`` sets it
-        aside with ``on_error="skip"`` or ``"quarantine"``."""
+        task's memory does not grow with its file count.
+
+        A file is the unit of failure. One that cannot be read (a bad file, a refused location, a tile over the read
+        cap) fails the read naming that file; with the bad-record hook ``read_paths`` sets (``on_error="skip"`` or
+        ``"quarantine"``) it is recorded under its own path and left out, and the rows of the other files are kept.
+        An error of the environment (memory, I/O) fails the read either way."""
         import pyarrow as pa
 
+        from databricks.labs.gbx.ds import _quarantine
         from databricks.labs.gbx.ds.paths import _arrow_schema
         from databricks.labs.gbx.pyrx import tile_batches
         from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -1608,34 +1669,52 @@ class RasterGbxReader(DataSourceReader):
             schema=one,
         )
         sources = [_listing.to_spark_uri(p) for p in partition.file_paths]
+        hook = _quarantine.hook_of(self)
+        set_aside: set = set()
+
+        def decode(tile, cap_bytes):
+            path = tile["path"]
+            diag = _quarantine.Diagnostics()
+            try:
+                with _quarantine.capture(diag):
+                    return self._whole_file_tile(tile, cap_bytes)
+            except RecursionError:
+                raise
+            except Exception as e:  # noqa: BLE001 - this file's, named below
+                _quarantine.name_the_file(e, path)
+                if hook is None:
+                    raise
+                _quarantine.reraise_environment(e)
+                hook(None, _quarantine.error_class(e), _quarantine.describe(e, diag))
+                set_aside.add(path)
+                return _serde.build_error_tile(str(e), _encode.CELLID_FRESH)
+
         at = 0
         for out in tile_batches.materialize_batches(
-            [batch], cap_bytes=self._read_cap, decode=self._whole_file_tile
+            [batch], cap_bytes=self._read_cap, decode=decode
         ):
             n = out.num_rows
-            yield pa.RecordBatch.from_arrays(
-                [
-                    pa.array(sources[at : at + n], want.field("source").type),
-                    out.column("tile"),
-                ],
-                schema=want,
-            )
+            tiles, srcs = out.column("tile"), sources[at : at + n]
+            keep = [p not in set_aside for p in partition.file_paths[at : at + n]]
             at += n
+            if not all(keep):
+                tiles = tiles.filter(pa.array(keep, pa.bool_()))
+                srcs = [s for s, k in zip(srcs, keep) if k]
+            if srcs:
+                yield pa.RecordBatch.from_arrays(
+                    [pa.array(srcs, want.field("source").type), tiles], schema=want
+                )
 
     def _whole_file_tile(self, tile: dict, cap_bytes) -> dict:
         """The materialized row of a whole file: a GTiff passes through as the file's own bytes (no decode, colormaps
         and masks kept), any other driver is re-encoded as a GTiff. Refused over the read cap before the bytes are
         read, and over the 2 GiB cell limit."""
         from databricks.labs.gbx.pyrx import tile_batches
-        from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
         path = tile["path"]
-        size = os.path.getsize(path)
-        with open_raster(path) as ds:
-            tile_crs = crs_to_canonical(ds.crs)
-            width, height, driver, bands = ds.width, ds.height, ds.driver, ds.count
-            dtype = ds.dtypes[0]
-            compression = str(ds.profile.get("compress") or "DEFLATE").upper()
+        size, tile_crs, width, height, driver, bands, dtype, compression = (
+            _whole_file_header(path)
+        )
         est = _estimate_tile_bytes(width, height, bands, "float32", size)
         if est > _MAX_TILE_BYTES:
             raise ValueError(

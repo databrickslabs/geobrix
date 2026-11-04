@@ -390,12 +390,15 @@ def carry_read_cap_in_column_api(namespace: dict) -> None:
                     value[key] = swapped[id(item)]
 
 
-def carrying_source(cls, allowed: bool):
-    """A DataSource class whose readers carry ``allowed`` (``reader._gbx_remote_allowed``) into their planning."""
+def carrying_source(cls, allowed: bool, cap: Optional[int] = None):
+    """A DataSource class whose readers carry ``allowed`` (``reader._gbx_remote_allowed``) into their planning, and
+    ``cap`` (``reader._gbx_read_cap``): the driver's connect-aware read cap, which a reader built in a planner process
+    with no active session could not resolve itself."""
 
     def reader(self, schema):
         r = cls.reader(self, schema)
         r._gbx_remote_allowed = allowed
+        r._gbx_read_cap = cap
         return r
 
     return type(

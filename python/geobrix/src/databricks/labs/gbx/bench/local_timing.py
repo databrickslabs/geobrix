@@ -20,7 +20,7 @@ floor's, the median over the runs; one run of a form differed by 1.6x from the n
 Exit codes: 0 no flags, 1 the pass flagged a form, 2 a precondition is missing (``PRECONDITION MISSING``, or a usage
 error), 3 the pass itself failed.
 
-The IO and S sets are implemented; ``SETS`` is where another set's forms and sizes go. The flagging is plain Python over a
+The IO, S and SE sets are implemented; ``SETS`` is where another set's forms and sizes go. The flagging is plain Python over a
 ``{(form, n): seconds}`` dict, so it is unit-tested without Spark (``test/bench/test_local_timing.py``). The runner
 (``main``) is what ``scripts/commands/gbx-bench-local-timing.sh`` runs in the dev container.
 
@@ -104,6 +104,17 @@ SETS: Dict[str, SetSpec] = {
         peer_exempt=(
             "c0",
         ),  # the plain-Python reference rung: slow by design, not a peer of c1 and d
+    ),
+    # the GDAL engine's slope forms over 1024 px tiles replicated in memory; the floor form (`raster select` on the slope
+    # signature) is the engine's shell cost without the algorithm. 256 px tiles up to the client cap leave Spark's fixed
+    # query cost most of the time (every form reads as n-independent), and the 4-band corpus tiles (16 MiB) time the
+    # disk (the cost over the floor is noise)
+    "SE": SetSpec(
+        mvp="SE",
+        forms=("engine@mem", "engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_slope",
     ),
 }
 
@@ -672,7 +683,7 @@ def main(argv=None) -> int:
         description="Local timing pass of a levels set. Exit 0: no flags; 1: a form was flagged; 2: a precondition is "
         "missing or the usage is wrong; 3: the pass failed."
     )
-    ap.add_argument("--set", default="IO", help="levels set (have: IO, S)")
+    ap.add_argument("--set", default="IO", help="levels set (have: IO, S, SE)")
     ap.add_argument(
         "--k",
         type=float,

@@ -58,6 +58,6 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `bash scripts/commands/gbx-bench-local-timing.sh --corpus-dir /Volumes/main/default/bench-corpus/rows` (the big-folder shape; once before a cluster round)
 
 **Limits:**
-- Only `IO` and `S` exist. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.
+- The sets are `IO`, `S` and `SE`. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.
 - Growth below linear is normal: a fixed scan and worker cost plus 8 cores keep t96/t24 near 1.4 to 3.
 - Local ratios understate a cluster's: 8 local cores run the parallel forms about 4 times less parallel.

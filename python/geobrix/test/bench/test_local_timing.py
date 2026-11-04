@@ -87,8 +87,18 @@ def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_udf_and_t96_over_t2
     assert udf == ["udf", "1.5", "2.5", "7.0", "4.4", "1.0", "2.80"]
 
 
-def test_only_the_io_and_s_sets_are_implemented(capsys):
-    assert set(lt.SETS) == {"IO", "S"}
+def test_every_form_of_the_se_set_exists_for_its_function():
+    """A renamed variant would time nothing and still pass: each name of the set picks exactly one form."""
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    spec = lt.SETS["SE"]
+    for variant in spec.forms:
+        picked = [f for f in lf.FORMS["SE"] if f.variant == variant and f.fn == spec.fn]
+        assert len(picked) == 1, variant
+
+
+def test_only_the_known_sets_are_implemented(capsys):
+    assert set(lt.SETS) == {"IO", "S", "SE"}
     with pytest.raises(
         SystemExit
     ) as e:  # a usage error: 2, so 1 stays "the pass flagged a form"

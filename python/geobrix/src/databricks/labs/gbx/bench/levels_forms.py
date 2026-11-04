@@ -1259,6 +1259,48 @@ INPUTS.update({f"se_dem_{s}": _se_dems(s) for s in _SE_SIZES})
 INPUTS["se_pair_512"] = _se_pairs(512)
 
 
+def _se_dems_replicated(size: int):
+    """`size` px DEM tiles, n rows: four distinct tiles built once on the client and replicated on the executors, then
+    cached (the rows are not rebuilt by each timed query, and no client cap applies to n).
+    """
+
+    def build(spark, n, corpus, schema):
+        from pyspark.sql import functions as F
+
+        from databricks.labs.gbx.manifest import TILE_SQL
+
+        name = f"mvp_in_se_dem{size}_mem_v{RECIPE_VERSION}_{n}"
+        if schema is None and spark.catalog.tableExists(name):
+            return name
+        four = client_dataframe(
+            spark,
+            [(i, _se_dem_tile(size, i)) for i in range(4)],
+            f"idx int, tile {TILE_SQL}",
+            what=f"se_dem_{size} tiles",
+        )
+
+        def rows():
+            df = (
+                spark.range(n)
+                .select((F.col("id") % 4).cast("int").alias("idx"))
+                .join(F.broadcast(four), "idx")
+                .select("tile")
+                .repartition(8)
+            )
+            if schema is None:
+                df = df.cache()
+                df.count()
+            return df
+
+        return _table(spark, schema, name, rows)
+
+    return build
+
+
+INPUTS["se_dem_1024_mem"] = _se_dems_replicated(1024)
+BASE_ROWS["se_dem_1024_mem"] = 16
+
+
 def _se_floor_function():
     """The floor's spec: `raster select --band=1` on slope's signature (a bench spec, not a SQL function)."""
     import dataclasses
@@ -1458,6 +1500,43 @@ FORMS["SE"] = (
         _se(_MALG, "L3", "engine-c1", "se_pair_512", _SE_MA_ENGINE),
     ]
 )
+
+# Slope over 1024 px tiles replicated on the executors (`se_dem_1024_mem`): the local timing pass needs a few hundred
+# tiles of real work per size, so the per-tile cost shows above Spark's fixed query cost; tiles built on the client stop
+# at the client cap (16 of this size) and the corpus tiles (4 bands, 16 MiB) make the pass a measure of disk reads.
+FORMS["SE"] += [
+    _se(_SL, "L1", "engine@mem", "se_dem_1024_mem", _SE_SLOPE, computes=_DED),
+    _se(_SL, "L3", "engine-c0@mem", "se_dem_1024_mem", _SE_SLOPE),
+    _se(_SL, "L3", "engine-c1@mem", "se_dem_1024_mem", _SE_SLOPE),
+    _se(
+        _SL,
+        "L3",
+        "floor-c0@mem",
+        "se_dem_1024_mem",
+        _SE_FLOOR_C0,
+        setup="setup_se_floor",
+        register=False,
+    ),
+]
+
+# The query floor: one 256 px tile per variant, so what the form costs is Spark's query, the worker start and the first
+# row, not the per-tile work. A fixed cost an engine form pays and today's light form does not shows here first.
+BASE_ROWS["se_dem_256_one"] = 1
+INPUTS["se_dem_256_one"] = _se_dems(256)
+FORMS["SE"] += [
+    _se(_SL, "L3", f"{v}@query-floor", "se_dem_256_one", _SE_SLOPE)
+    for v in ("engine-c0", "engine-c1")
+] + [
+    _se(
+        _SL,
+        "L3",
+        "today@query-floor",
+        "se_dem_256_one",
+        _SE_SLOPE_L3_TODAY,
+        setup="setup_se_slope_light_today",
+        register=False,
+    )
+]
 
 
 # --- IO, the read paths: bytes-free reads with a Python decode against the reader with bytes ----------------------------
@@ -1845,6 +1924,7 @@ STALL_FORM = Form(
 # tiles per row): the preflight refuses a ladder whose client-built bytes pass the cap before anything is submitted.
 CLIENT_TILES = {
     "se_dem_256": (256, 1),
+    "se_dem_256_one": (256, 1),
     "se_dem_512": (512, 1),
     "se_dem_1024": (1024, 1),
     "se_pair_512": (512, 2),

@@ -162,6 +162,25 @@ class RST_BinPointsTest extends AnyFunSuite with BeforeAndAfterAll {
         band(0) shouldBe 42.0f
     }
 
+    // --- non-finite coordinates ---
+
+    test("RST_BinPoints: a NaN or infinite x or y is skipped, not binned into pixel (0,0), as in Python") {
+        // NaN.toInt is 0 on the JVM, a real pixel; each of these would land in the single cell and win the max.
+        val nan = Double.NaN
+        val inf = Double.PositiveInfinity
+        val bytes = RST_BinPoints.execute(
+            Array(nan, 0.5, inf, 0.5, 0.5), Array(0.5, nan, 0.5, -inf, 0.5), Array(99.0, 98.0, 97.0, 96.0, 42.0),
+            0.0, 0.0, 1.0, 1.0, 1, 1, epsg, "max"
+        )
+        val (band, _, _) = readBand(bytes)
+        band(0) shouldBe 42.0f
+        // count: only the one finite point is counted
+        val counted = RST_BinPoints.execute(
+            Array(nan, 0.5), Array(0.5, nan), Array(1.0, 1.0), 0.0, 0.0, 1.0, 1.0, 1, 1, epsg, "count"
+        )
+        readBand(counted)._1(0) shouldBe -9999.0f
+    }
+
     // --- output dtype and NoData ---
 
     test("RST_BinPoints: output band is Float32 with NoData=-9999") {

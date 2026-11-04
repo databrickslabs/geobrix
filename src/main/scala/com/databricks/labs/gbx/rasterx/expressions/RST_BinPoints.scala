@@ -248,7 +248,11 @@ object RST_BinPoints extends WithExpressionInfo {
       *   col = floor((x - xmin) / xRange * w)    →  in [0, w)
       *   row = floor((ymax - y) / yRange * h)     →  in [0, h)  (row 0 = top)
       * A point at x == xmax yields col == w → dropped (not clamped).
+      * A point with a NaN or infinite x or y is in no pixel and is skipped, as in Python: the test is explicit because
+      * `NaN.toInt` is 0 on the JVM, a real pixel.
       */
+    private def finite(x: Double, y: Double): Boolean = java.lang.Double.isFinite(x) && java.lang.Double.isFinite(y)
+
     private def binAndReduce(
         x: Array[Double], y: Array[Double], z: Array[Double],
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
@@ -267,7 +271,7 @@ object RST_BinPoints extends WithExpressionInfo {
                 while (i < n) {
                     val col = math.floor((x(i) - xmin) / xRange * w).toInt
                     val row = math.floor((ymax - y(i)) / yRange * h).toInt
-                    if (col >= 0 && col < w && row >= 0 && row < h) {
+                    if (finite(x(i), y(i)) && col >= 0 && col < w && row >= 0 && row < h) {
                         val idx = row * w + col
                         acc(idx) = if (acc(idx).isNaN) z(i) else math.max(acc(idx), z(i))
                     }
@@ -281,7 +285,7 @@ object RST_BinPoints extends WithExpressionInfo {
                 while (i < n) {
                     val col = math.floor((x(i) - xmin) / xRange * w).toInt
                     val row = math.floor((ymax - y(i)) / yRange * h).toInt
-                    if (col >= 0 && col < w && row >= 0 && row < h) {
+                    if (finite(x(i), y(i)) && col >= 0 && col < w && row >= 0 && row < h) {
                         val idx = row * w + col
                         acc(idx) = if (acc(idx).isNaN) z(i) else math.min(acc(idx), z(i))
                     }
@@ -296,7 +300,7 @@ object RST_BinPoints extends WithExpressionInfo {
                 while (i < n) {
                     val col = math.floor((x(i) - xmin) / xRange * w).toInt
                     val row = math.floor((ymax - y(i)) / yRange * h).toInt
-                    if (col >= 0 && col < w && row >= 0 && row < h) {
+                    if (finite(x(i), y(i)) && col >= 0 && col < w && row >= 0 && row < h) {
                         val idx = row * w + col
                         sums(idx)   += z(i)
                         counts(idx) += 1
@@ -313,7 +317,7 @@ object RST_BinPoints extends WithExpressionInfo {
                 while (i < n) {
                     val col = math.floor((x(i) - xmin) / xRange * w).toInt
                     val row = math.floor((ymax - y(i)) / yRange * h).toInt
-                    if (col >= 0 && col < w && row >= 0 && row < h) {
+                    if (finite(x(i), y(i)) && col >= 0 && col < w && row >= 0 && row < h) {
                         cnt(row * w + col) += 1.0
                     }
                     i += 1
@@ -330,7 +334,7 @@ object RST_BinPoints extends WithExpressionInfo {
                 while (i < n) {
                     val col = math.floor((x(i) - xmin) / xRange * w).toInt
                     val row = math.floor((ymax - y(i)) / yRange * h).toInt
-                    if (col >= 0 && col < w && row >= 0 && row < h) {
+                    if (finite(x(i), y(i)) && col >= 0 && col < w && row >= 0 && row < h) {
                         val idx = row * w + col
                         cellVals.getOrElseUpdate(idx, mutable.ArrayBuffer.empty[Double]) += z(i)
                     }

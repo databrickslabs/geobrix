@@ -680,11 +680,21 @@ class MosaicTooLarge(ValueError):
     aggregate whose result is bytes raises it."""
 
 
+def _merge_size_refusal(n: int, mixed: bool) -> str:
+    """The refusal of a merge that may not stream when the size of its mosaic cannot be worked out."""
+    return (
+        f"the size of the mosaic of these {n} tiles could not be worked out, so it cannot be held to this "
+        f"compute's memory budget for one call. "
+        f"Fix: {_vrt_fix(_MOSAIC_ROUTE, mixed)}"
+    )
+
+
 def _merge_route(hdrs, ref_crs, mixed: bool, n: int, stream: bool) -> str:
     """How a merge of the members whose headers are *hdrs* is built: ``"stream"`` is the in-RAM merge (the name is the
     COG decision's), ``"driver"`` the streamed one through a VRT and a COG. Raises :class:`MosaicTooLarge` for a mosaic
     past what a merge can stream; with ``stream=False`` a mosaic that would need streaming raises
-    :class:`ReadCapRefused` instead. A failure to work out the size falls back to the in-RAM path.
+    :class:`ReadCapRefused` instead. A failure to work out the size falls back to the in-RAM path, except with
+    ``stream=False``: a mosaic whose size is unknown is not built in memory under a budget, it is refused.
     """
     union = None
     try:
@@ -695,6 +705,8 @@ def _merge_route(hdrs, ref_crs, mixed: bool, n: int, stream: bool) -> str:
             exc_info=True,
         )
     if union is None:
+        if not stream:
+            raise ReadCapRefused(_merge_size_refusal(n, mixed))
         return "stream"
     budget = _merge_budget()
     how = "stream"

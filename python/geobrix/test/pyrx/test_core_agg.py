@@ -568,6 +568,29 @@ def test_a_merge_whose_mosaic_fits_but_whose_working_set_does_not_streams_to_the
     assert np.array_equal(pa, pb) and np.array_equal(ma, mb)
 
 
+def test_a_merge_that_may_not_stream_is_refused_when_the_size_of_its_mosaic_is_unknown(
+    monkeypatch,
+):
+    """With `stream=False` a mosaic whose size cannot be worked out is refused with the VRT Fix, never built in RAM
+    unbounded; with `stream=True` the in-RAM fallback stays."""
+    rasters = [
+        _ras(np.ones((8, 8)), ulx=0.0, uly=8.0),
+        _ras(np.ones((8, 8)), ulx=8.0, uly=8.0),
+    ]
+    hdrs = agg._scan_headers(rasters)
+    ref_crs = agg._pick_ref_crs(hdrs)
+
+    def broken(*_a, **_k):
+        raise RuntimeError("no size")
+
+    monkeypatch.setattr(agg, "_union_decoded_bytes", broken)
+    assert agg._merge_route(hdrs, ref_crs, False, 2, True) == "stream"
+    with pytest.raises(agg.ReadCapRefused, match=r"could not be worked out.*Fix: "):
+        agg._merge_route(hdrs, ref_crs, False, 2, False)
+    with pytest.raises(agg.ReadCapRefused, match=r"mint_vrt\("):
+        agg.merge_tiles(rasters, stream=False)
+
+
 def test_the_in_ram_estimate_counts_the_copies_the_merge_holds():
     """Each term of the estimate moves it: an alpha member adds its decoded copy, a member in another CRS its
     reprojected tile at the target size, a group with an own mask a union-sized mask."""

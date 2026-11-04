@@ -15,6 +15,11 @@
 #                    profile), the indexed ragged array representation: `profile_index` on the observation dimension
 #                    (instance_dimension="profile") says which profile an observation belongs to; z and temp are on the
 #                    observation dimension. netcdf_ogr gives 9 3D points (z is the point's Z), fields profile, temp, time.
+#   trajectories_indexed.nc  featureType="trajectory", the ragged form CF gives a trajectory: 2 trajectories, 5
+#                    observations (3 + 2), `trajectory_index` on the observation dimension (instance_dimension=
+#                    "trajectory"); lat/lon/time/z/temp are on the OBSERVATION dimension, the trajectory id and a
+#                    `platform` on the trajectory dimension. No oracle: netcdf_gbx expands `platform` and the id per
+#                    observation, as it does the profile ones.
 #   trajectories.nc  featureType="trajectory": 2 trajectories, 6 observations (4 + 2); every variable is on the
 #                    observation dimension (the trajectory id too). netcdf_ogr gives 6 2D points, fields trajectory,
 #                    temp, time.
@@ -27,7 +32,8 @@ ROOT = "src/test/resources/binary"
 PROFILES = f"{ROOT}/netcdf-dsg-profile/profiles.nc"
 TRAJECTORIES = f"{ROOT}/netcdf-dsg-trajectory/trajectories.nc"
 CONTIGUOUS = f"{ROOT}/netcdf-dsg-ragged/profiles_contiguous.nc"
-for p in (PROFILES, TRAJECTORIES, CONTIGUOUS):
+TRAJECTORIES_INDEXED = f"{ROOT}/netcdf-dsg-trajectory-indexed/trajectories_indexed.nc"
+for p in (PROFILES, TRAJECTORIES, CONTIGUOUS, TRAJECTORIES_INDEXED):
     os.makedirs(os.path.dirname(p), exist_ok=True)
 
 
@@ -103,4 +109,30 @@ with Dataset(CONTIGUOUS, "w") as ds:
     temp.coordinates = "time latitude longitude z"
     temp[:] = np.arange(9, dtype="float32") + 0.5
 
-print(f"wrote {PROFILES}, {TRAJECTORIES} and {CONTIGUOUS}")
+with Dataset(TRAJECTORIES_INDEXED, "w") as ds:
+    ds.Conventions = "CF-1.8"
+    ds.featureType = "trajectory"
+    ds.createDimension("trajectory", 2)
+    ds.createDimension("obs", 5)
+    tid = ds.createVariable("trajectory", "i4", ("trajectory",))
+    tid.cf_role = "trajectory_id"
+    tid[:] = [7, 8]
+    plat = ds.createVariable("platform", "i4", ("trajectory",))
+    plat.long_name = "platform of this trajectory"
+    plat[:] = [70, 80]
+    ix = ds.createVariable("trajectory_index", "i4", ("obs",))
+    ix.long_name = "which trajectory this observation belongs to"
+    ix.instance_dimension = "trajectory"
+    ix[:] = [0, 0, 0, 1, 1]
+    coord(ds, "latitude", ("obs",), "degrees_north", "latitude", [50.0, 50.1, 50.2, 40.0, 40.1])
+    coord(ds, "longitude", ("obs",), "degrees_east", "longitude", [10.0, 10.1, 10.2, 20.0, 20.1])
+    coord(ds, "time", ("obs",), "days since 2020-01-01", "time", [0.0, 0.1, 0.2, 1.0, 1.1])
+    z = coord(ds, "z", ("obs",), "m", "altitude", [0.0, 5.0, 10.0, 0.0, 5.0])
+    z.positive = "up"
+    temp = ds.createVariable("temp", "f4", ("obs",))
+    temp.standard_name = "air_temperature"
+    temp.units = "degree_C"
+    temp.coordinates = "time latitude longitude z"
+    temp[:] = np.arange(5, dtype="float32") + 0.75
+
+print(f"wrote {PROFILES}, {TRAJECTORIES}, {CONTIGUOUS} and {TRAJECTORIES_INDEXED}")

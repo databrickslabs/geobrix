@@ -364,7 +364,7 @@ class Dsg:
 
     ``obs_dim`` is the dimension of the observations (one point each). ``lat``, ``lon`` and the optional altitude
     ``z`` (the point's Z) sit on it, or, in a ragged array representation, on ``instance_dim`` (the profile or
-    trajectory dimension). Indexed ragged: ``index`` is the variable on ``obs_dim`` whose ``instance_dimension``
+    trajectory dimension); ``lat`` and ``lon`` may stay on ``obs_dim`` there, as a CF trajectory has them. Indexed ragged: ``index`` is the variable on ``obs_dim`` whose ``instance_dimension``
     attribute names ``instance_dim`` and whose values say which instance each observation belongs to. Contiguous
     ragged: ``counts`` is the variable on ``instance_dim`` whose ``sample_dimension`` attribute names ``obs_dim``
     and whose values count the observations of each instance, which follow one another.
@@ -381,10 +381,19 @@ class Dsg:
     counts: Optional[str] = None
 
 
+# CF vertical coordinates: by axis, by standard name (altitude is a height, depth its downward counterpart), or by
+# the ``positive`` attribute CF requires on every vertical coordinate.
+_Z_STANDARD_NAMES = frozenset({"altitude", "depth"})
+
+
 def _is_z(var) -> bool:
+    """True for a CF vertical coordinate. A depth (``positive="down"`` or ``standard_name="depth"``) is one, and its
+    values are the point's Z as stored, positive down: the GDAL netCDF driver (``netcdf_ogr``) gives the same Z and
+    does not flip the sign, so the two readers agree."""
     return (
         str(var.attrs.get("axis", "")).upper() == "Z"
-        or str(var.attrs.get("standard_name", "")).lower() == "altitude"
+        or str(var.attrs.get("standard_name", "")).lower() in _Z_STANDARD_NAMES
+        or str(var.attrs.get("positive", "")).lower() in ("up", "down")
     )
 
 
@@ -417,7 +426,10 @@ def dsg_layout(ds) -> Optional[Dsg]:
         obs_dim = ds[index].dims[0]
     elif counts is None:
         obs_dim = lat.dims[0]
-    if instance_dim is not None and lat.dims != (instance_dim,):
+    # lat/lon sit on the instance dimension (one position per profile or trajectory) or, as a CF trajectory has them and
+    # a profile may, on the observation dimension (a position per observation): either way the instance variables
+    # are expanded per observation, and the id, the time and the Z are columns.
+    if instance_dim is not None and lat.dims not in ((instance_dim,), (obs_dim,)):
         return None
     z = next(
         (
@@ -458,10 +470,39 @@ def dsg_arrays(
     import numpy as np
 
     ix = None  # the instance of each observation
+    n_obs = ds.sizes[layout.obs_dim]
+    n_inst = ds.sizes[layout.instance_dim] if layout.instance_dim else 0
     if layout.index is not None:
-        ix = np.asarray(ds[layout.index].values).astype("int64")
+        raw = np.asarray(ds[layout.index].values)
+        # a missing index decodes to NaN (a fill value masked), -1 is the usual stand-in: an observation with no
+        # instance. It has no profile or trajectory to take its id, time or position from, so the file is refused
+        # rather than the observation dropped or, worse, wrapped onto the last instance (index -1).
+        bad = ~np.isfinite(raw) if raw.dtype.kind == "f" else np.zeros(raw.shape, bool)
+        ix = np.where(bad, -1, raw).astype("int64")
+        orphan = bad | (ix < 0) | (ix >= n_inst)
+        if orphan.any():
+            first = int(np.flatnonzero(orphan)[0])
+            raise ValueError(
+                f"netcdf_gbx: {layout.index!r} gives observation {first} (of {n_obs}) no instance: its value is "
+                f"{raw[first]!r}, not an index in [0, {n_inst}) of {layout.instance_dim!r}; "
+                f"{int(orphan.sum())} observation(s) in all. Fix: give every observation a valid instance index "
+                f"(CF allows no missing index), or drop the observation(s) from the file."
+            )
     elif layout.counts is not None:
-        sizes = np.asarray(ds[layout.counts].values).astype("int64")
+        raw = np.asarray(ds[layout.counts].values)
+        if raw.dtype.kind == "f" and not np.isfinite(raw).all():
+            raise ValueError(
+                f"netcdf_gbx: {layout.counts!r} holds a missing count. Fix: give every {layout.instance_dim!r} "
+                f"its number of observations (0 for none)."
+            )
+        sizes = raw.astype("int64")
+        if (sizes < 0).any() or int(sizes.sum()) != n_obs:
+            raise ValueError(
+                f"netcdf_gbx: the counts in {layout.counts!r} add up to {int(sizes.sum())}, but "
+                f"{layout.obs_dim!r} holds {n_obs} observations"
+                + (", and a count is negative" if (sizes < 0).any() else "")
+                + f". Fix: make the counts sum to the size of {layout.obs_dim!r}."
+            )
         ix = np.repeat(np.arange(len(sizes)), sizes)
 
     def per_obs(name: str):

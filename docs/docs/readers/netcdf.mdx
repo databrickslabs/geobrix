@@ -212,7 +212,9 @@ no target grid or resampling method is chosen for you.
 A file with a `featureType` of `point`, `profile` or `trajectory` gives one point per observation.
 The columns are the id variable (`cf_role`), then the other variables by name.
 A variable stored once per profile, such as its time, repeats on each of its observations.
-The altitude of a profile (`standard_name = "altitude"` or `axis = "Z"`) is the point's Z, not a column.
+The vertical coordinate of a profile is the point's Z, not a column.
+It is the variable with `axis = "Z"`, a `standard_name` of `altitude` or `depth`, or a `positive` attribute.
+A depth keeps its stored sign (positive down), as the GDAL netCDF driver gives it.
 A time variable in these files is a `TIMESTAMP`, as in the other vector files, and the CRS is EPSG:4326.
 
 <CodeFromTest code={netcdfExamples} language="python" functionName="READ_VECTOR_PROFILE"
@@ -226,6 +228,8 @@ A time variable in these files is a `TIMESTAMP`, as in the other vector files, a
 A profile file stores its observations flat or as a ragged array. In an indexed ragged array, a variable on the
 observation dimension with an `instance_dimension` attribute says which profile each belongs to. In a contiguous ragged
 array, a variable with a `sample_dimension` attribute counts the observations of each profile.
+The latitude and longitude may sit on the profile (or trajectory) dimension or on the observation dimension.
+An index outside the profiles, a missing index, or counts that do not add up to the observations are refused with an error.
 
 Attribute columns take their type from the variable's CF attributes: a time variable
 is a `TIMESTAMP` (read as UTC), except an integer count of whole days (`days since …`, a

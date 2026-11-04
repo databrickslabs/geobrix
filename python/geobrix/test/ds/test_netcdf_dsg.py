@@ -23,6 +23,8 @@ FIXTURES = {
     "trajectory": RES / "netcdf-dsg-trajectory",
     "ragged": RES
     / "netcdf-dsg-ragged",  # the profiles as a contiguous ragged array: only netcdf_gbx reads it
+    "trajectory_indexed": RES  # a ragged trajectory, lat/lon per observation: only netcdf_gbx reads it
+    / "netcdf-dsg-trajectory-indexed",
 }
 _T0 = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
@@ -126,3 +128,126 @@ def test_a_contiguous_ragged_profile_file_reads_as_the_indexed_one_does(spark):
     df = _read_gbx(spark, "ragged")
     assert set(df.columns) == columns | {"geom_0", "geom_0_srid", "geom_0_srid_proj"}
     _same(_normalise(df.collect()), sorted(features, key=lambda f: f[0]))
+
+
+def test_a_ragged_trajectory_with_lat_lon_per_observation_keeps_its_instance_columns_and_z(
+    spark,
+):
+    """The CF trajectory layout: lat/lon on the observation dimension, the id and `platform` on the trajectory
+    dimension, an index per observation. The id and `platform` are expanded per observation, `time` is a column and
+    the altitude is the point's Z (this file used to fall back to plain points: no id, no platform, no Z).
+    """
+    df = _read_gbx(spark, "trajectory_indexed")
+    assert set(df.columns) == {
+        "trajectory",
+        "platform",
+        "temp",
+        "time",
+        "geom_0",
+        "geom_0_srid",
+        "geom_0_srid_proj",
+    }
+    want = [
+        (
+            "POINT Z (10 50 0)",
+            {"trajectory": 7, "platform": 70, "temp": 0.75, "time": 0.0},
+        ),
+        (
+            "POINT Z (10.1 50.1 5)",
+            {"trajectory": 7, "platform": 70, "temp": 1.75, "time": 0.1},
+        ),
+        (
+            "POINT Z (10.2 50.2 10)",
+            {"trajectory": 7, "platform": 70, "temp": 2.75, "time": 0.2},
+        ),
+        (
+            "POINT Z (20 40 0)",
+            {"trajectory": 8, "platform": 80, "temp": 3.75, "time": 1.0},
+        ),
+        (
+            "POINT Z (20.1 40.1 5)",
+            {"trajectory": 8, "platform": 80, "temp": 4.75, "time": 1.1},
+        ),
+    ]
+    _same(_normalise(df.collect()), sorted(want, key=lambda f: f[0]))
+
+
+def _ragged_dataset(index=(0, 0, 1, 1), z_attrs=None, counts=None):
+    """An in-memory CF ragged profile file: 2 profiles, 4 observations, lat/lon on the profiles."""
+    import numpy as np
+    import xarray as xr
+
+    ds = xr.Dataset(
+        {
+            "profile": ("profile", np.array([101, 102]), {"cf_role": "profile_id"}),
+            "latitude": (
+                "profile",
+                np.array([50.0, 51.0]),
+                {"standard_name": "latitude", "units": "degrees_north"},
+            ),
+            "longitude": (
+                "profile",
+                np.array([10.0, 11.0]),
+                {"standard_name": "longitude", "units": "degrees_east"},
+            ),
+            "depth": (
+                "obs",
+                np.array([0.0, 10.0, 0.0, 20.0]),
+                z_attrs or {"standard_name": "depth", "positive": "down"},
+            ),
+            "temp": ("obs", np.arange(4, dtype="float32")),
+        },
+        attrs={"featureType": "profile"},
+    )
+    if counts is None:
+        ds["profile_index"] = (
+            "obs",
+            np.array(index),
+            {"instance_dimension": "profile"},
+        )
+    else:
+        ds["row_size"] = ("profile", np.array(counts), {"sample_dimension": "obs"})
+    return ds
+
+
+def test_a_depth_is_the_z_with_the_sign_the_gdal_netcdf_driver_gives():
+    """`positive="down"` / `standard_name="depth"` make the variable the Z, and its values are kept as stored (positive
+    down): the GDAL netCDF driver (netcdf_ogr) gives the same Z for such a file and does not flip the sign.
+    """
+    from databricks.labs.gbx.ds import _netcdf
+
+    ds = _ragged_dataset()
+    layout = _netcdf.dsg_layout(ds)
+    assert layout.z == "depth"
+    _, _, z, _, _ = _netcdf.dsg_arrays(ds, layout, ["temp"])
+    assert list(z) == [0.0, 10.0, 0.0, 20.0]
+
+
+@pytest.mark.parametrize(
+    "dataset,message",
+    [
+        (
+            _ragged_dataset(index=(0, -1, 1, 1)),
+            r"'profile_index' gives observation 1 .*no instance.*-1",
+        ),
+        (
+            _ragged_dataset(index=(0, 0, 1, 2)),
+            r"observation 3 .*not an index in \[0, 2\)",
+        ),
+        (_ragged_dataset(counts=(2, 1)), r"add up to 3, but 'obs' holds 4"),
+        (_ragged_dataset(counts=(3, 2)), r"add up to 5, but 'obs' holds 4"),
+    ],
+    ids=["negative-index", "index-past-the-instances", "counts-short", "counts-long"],
+)
+def test_ragged_index_and_counts_that_do_not_fit_the_file_are_refused_with_a_fix(
+    dataset, message
+):
+    """An observation with no instance is refused, not dropped or wrapped onto the last instance; counts that do
+    not sum to the observation dimension are refused, not paired with the wrong observations.
+    """
+    from databricks.labs.gbx.ds import _netcdf
+
+    layout = _netcdf.dsg_layout(dataset)
+    with pytest.raises(ValueError, match=message) as err:
+        _netcdf.dsg_arrays(dataset, layout, ["temp"])
+    assert "Fix:" in str(err.value)

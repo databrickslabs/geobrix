@@ -1,6 +1,6 @@
 ---
 sidebar_label: Databricks Container Service
-description: Run the GeoBrix lightweight and heavyweight tiers on a dedicated DBR 19 cluster started from a GeoBrix Databricks Container Service image that carries the env6 wheel, its native GDAL and the JAR.
+description: Run GeoBrix, with its JVM engine, on a dedicated DBR 19 cluster started from a GeoBrix Databricks Container Service image that carries the env6 wheel, its native GDAL and the JAR.
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
@@ -10,7 +10,7 @@ import verifyInstallation from '!!raw-loader!../../tests/python/installation/ver
 
 [Databricks Container Service](https://docs.databricks.com/aws/en/compute/custom-containers) (DCS)
 starts a cluster from a custom Docker image. A GeoBrix image carries the env6 wheel with its native GDAL
-and Java (JNI) bindings, and the GeoBrix JAR. A **dedicated** cluster started from it runs **both tiers**
+and Java (JNI) bindings, and the GeoBrix JAR. A **dedicated** cluster started from it runs every function, in Python and on the JVM,
 with no library to attach.
 
 The image bakes in the same natives that the env wheel installs on a stock cluster. On DBR 17.3, 18 or 19
@@ -38,8 +38,8 @@ verified on clusters, on DBR 17.3, 18 and 19.
 There is no DBR 17.3 / 18 image. On that compute, install the env5 wheel and the GeoBrix JAR as
 [cluster libraries](../installation.mdx#heavyweight).
 
-The heavyweight tier needs dedicated compute. On standard access mode and Serverless, use
-[WHL-only (Lightweight)](../installation.mdx#whl-only).
+The JVM engine needs dedicated compute. On standard access mode and Serverless, use
+the [env wheel](../installation.mdx#whl-only).
 
 ## The image
 
@@ -60,8 +60,8 @@ on the version you tested. The two architectures carry the same contents:
   [Databricks base image list](https://docs.databricks.com/aws/en/compute/custom-containers-standard).
 - **Native GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0** from the env6 wheel, with GDAL's Java (JNI) bindings.
   The image links the JNI library into `/usr/lib`, where the heavyweight JAR loads it.
-- **The GeoBrix env6 wheel**, installed with the `[vizx]` extra (the core lightweight tier plus
-  visualization) into the image's Python, so the lightweight tier needs no `%pip` step. The image
+- **The GeoBrix env6 wheel**, installed with the `[vizx]` extra (the core library plus
+  visualization) into the image's Python, so the Python engine needs no `%pip` step. The image
   holds the wheel's dependencies from a hashed lock. The lock changes one base package, `idna`, which moves to 3.20.
 - **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
   dedicated cluster loads JARs from.
@@ -156,23 +156,21 @@ The image already carries it, and a cluster should have only one GeoBrix JAR.
 
 ## Verify the install
 
-**Lightweight tier** — run the check in
-[Verify the lightweight tier](../installation.mdx#verify-the-lightweight-tier). There is no install
-step: the wheel ships in the image.
-
-**Heavyweight tier** — register the heavyweight RasterX functions and list them:
+Register GeoBrix, then list the raster functions. There is no install step: the wheel and the JAR
+ship in the image. The check below also runs the Python check from
+[Verify the install](../installation.mdx#verify-the-install).
 
 <CodeFromTest
   code={verifyInstallation}
   language="python"
   functionName="VERIFY_PYTHON_INSTALLATION"
-  title="Verify the heavyweight tier"
+  title="Verify the install"
   source="docs/tests/python/installation/verify_installation.py"
   testFile="docs/tests/python/installation/test_verify_installation.py"
   outputConstant="VERIFY_PYTHON_INSTALLATION_output"
 />
 
-If the list shows `gbx_rst_*` functions, the heavyweight tier is ready.
+If the list shows `gbx_rst_*` functions, the install is ready. The line `register` prints names the level it picked for each function.
 
 ## Reading `/Volumes` data {#volumes-heavyweight}
 
@@ -184,7 +182,7 @@ reader's options.
 ## netCDF-4 filters and h5py {#netcdf-filters}
 
 The image links `/usr/local/hdf5/lib/plugin` to the wheel's HDF5 filter plugins. By design, the
-heavyweight tier then reads zstd, blosc and bzip2 netCDF-4 with no `HDF5_PLUGIN_PATH` setting.
+JVM engine then reads zstd, blosc and bzip2 netCDF-4 with no `HDF5_PLUGIN_PATH` setting.
 GeoBrix has checked the link in the image, but has not run such a read on a cluster.
 
 h5py's own `libhdf5` searches that directory too. An h5py write that uses `hdf5plugin`, blosc
@@ -195,6 +193,6 @@ not measured it on a DCS cluster. See
 
 ## Next Steps
 
-- Compare the tiers in [Choosing an Execution Tier](../api/execution-tiers.mdx)
+- See how GeoBrix picks an implementation in [Surfaces and levels](../api/execution-tiers.mdx)
 - Follow the [Quick Start Guide](../quick-start.mdx) to begin using GeoBrix
-- On DBR 17.3 / 18, install the heavyweight tier with [cluster libraries](../installation.mdx#heavyweight)
+- On DBR 17.3 / 18, install the JVM engine with the [env wheel and JAR](../installation.mdx#heavyweight)

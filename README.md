@@ -29,10 +29,12 @@
 
 <img src="resources/images/brand/geobrix_vision.png" width="70%" />
 
-## Tiers
+## Implementations
 
-- **Lightweight tier** — pure Python (+ SQL bindings) on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR, no init script, no native GDAL bundle**. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM** — where the heavyweight tier can't.
-- **Heavyweight tier** — Scala (Python and SQL bindings) + native GDAL for distributed processing on dedicated clusters — with the env wheel and the GeoBrix JAR installed as cluster libraries, or from the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **Same function names across tiers** — switching is a one-line import change.
+GeoBrix has one function set and one Python API. `gbx.register(spark)` picks the faster implementation of each function on the compute, and says why when it falls back.
+
+- **Lightweight (Python)** — runs every function in Python on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR, no init script, no native GDAL bundle**. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM**.
+- **Heavyweight (JVM)** — Scala + native GDAL on dedicated clusters, where it is faster. Add the GeoBrix JAR (`gbx.stage_jar` stages it from the env wheel) as a cluster library, or use the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **The code does not change** between the two.
 
 ## Packages
 
@@ -41,7 +43,7 @@
 - **[RasterX](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)** — full-spectrum raster I/O and analytics (gap-filling; the platform has no built-in raster): reprojection, terrain, spectral indices, XYZ/PMTiles tiling, and H3/quadbin/BNG aggregation, plus **virtual tiles** and a **COG-preparation lane** for memory-safe processing of multi-gigabyte rasters. **Both tiers** — lightweight `pyrx` and heavyweight Scala.
 - **[GridX](https://databrickslabs.github.io/geobrix/docs/api/gridx-functions)** — discrete global grids: British National Grid, CARTO quadbin, and custom user-defined grids — cell math, k-ring/k-loop, polyfill, tessellation, and grid-aware aggregation (pairs with native H3 for global hex). **Both tiers** — lightweight `pygx` and heavyweight Scala.
 - **[VectorX](https://databrickslabs.github.io/geobrix/docs/api/vectorx-functions)** — vector operations that augment the native ST functions: MVT tile encoding, TIN elevation surfaces, authority-string CRS transforms, antimeridian handling, and distributed-shapely geometry validity, cleaning & coverage-validity, plus legacy-geometry migration. **Both tiers** — lightweight `pyvx` and heavyweight Scala.
-- **[VizX](https://databrickslabs.github.io/geobrix/docs/api/vizx)** — tier-agnostic notebook visualization: render raster tiles/files, whole VRT mosaics (`plot_mosaic`), and PMTiles/COG archives, and turn Spark geometry/H3-cell/grid DataFrames into GeoPandas for static & interactive maps. **Python-only** (no SQL); works with either tier.
+- **[VizX](https://databrickslabs.github.io/geobrix/docs/api/vizx)** — notebook visualization: render raster tiles/files, whole VRT mosaics (`plot_mosaic`), and PMTiles/COG archives, and turn Spark geometry/H3-cell/grid DataFrames into GeoPandas for static & interactive maps. **Python-only** (no SQL); works with either tier.
 
 All SQL functions register with a `gbx_` prefix (e.g. `gbx_rst_clip`, `gbx_bng_cellarea`, `gbx_st_asmvt`) so usage is clearly attributable to GeoBrix on classic compute. Python/Scala bindings mirror the names. See [benchmarks](https://databrickslabs.github.io/geobrix/docs/api/benchmarking) for light-vs-heavy timings. 
 
@@ -70,10 +72,10 @@ Stage the env wheel for your runtime (a [Releases](https://github.com/databricks
 > **Use the quoted `geobrix[<extras>] @ file://…` form** (PEP 508, one argument). Don't put an extra on the path (`'/Volumes/…/…whl[vizx]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[vizx]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
 
 ```python
-from databricks.labs.gbx import register   # *_gbx readers/writers
-from databricks.labs.gbx.pyrx import functions as rx   # gbx_rst_* functions
+from databricks.labs import gbx
+from databricks.labs.gbx.rasterx import functions as rx   # gbx_rst_* functions
 
-register(spark)   # gbx_* functions plus the *_gbx readers and writers
+gbx.register(spark)   # gbx_* functions plus the *_gbx readers and writers
 
 # Read a GeoTIFF and compute with RasterX
 rasters = spark.read.format("gtiff_gbx").load("/Volumes/<catalog>/<schema>/<volume>/*.tif")
@@ -84,7 +86,7 @@ boroughs = spark.read.format("geojson_gbx").load("/Volumes/.../boroughs.geojson"
 boroughs.write.format("geojson_gbx").mode("overwrite").save("/Volumes/.../out.geojson")
 ```
 
-**Heavyweight** is the same code with `from databricks.labs.gbx.rasterx import functions as rx`, plus the JAR and a heavyweight install (the env wheel and the JAR as cluster libraries, or the GeoBrix DCS image) — see [Installing & Choosing a Tier](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
+On a dedicated cluster, the same code also uses the JVM implementation once you add the JAR (`gbx.stage_jar`) or use the GeoBrix DCS image. See [Surfaces and levels](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers). Moving from 0.5.x? Read the [migration guide](https://databrickslabs.github.io/geobrix/docs/migration-0-6).
 
 ## Readers & writers
 

@@ -2,8 +2,6 @@
 sidebar_position: 3
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import quickstartCode from '!!raw-loader!../tests/python/quickstart/examples.py';
 
@@ -11,14 +9,9 @@ import quickstartCode from '!!raw-loader!../tests/python/quickstart/examples.py'
 
 This guide will help you get started with GeoBrix quickly after installation. All code below is copy-paste executable when you use the sample data paths shown.
 
-## Choose your execution tier
+## Install and register
 
-GeoBrix ships in two tiers that share the same function names — pick one with the toggle below and the rest of this page follows your choice (all tabs grouped under the same tier toggle stay in sync).
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight — recommended">
-
-Python bindings over the env wheel's own GDAL, no JAR and no GDAL or OGR to install. A single wheel via `%pip` or as a cluster library, and it runs on serverless, standard/shared, ARM, and Lakeflow declarative pipelines. Covers **RasterX** (every `rst_*` function), **VectorX** (`gbx_st_*`), and the **GridX quadbin** grid (`gbx_quadbin_*`), plus the lightweight readers.
+Install the env wheel for your runtime, then register once per session. One wheel covers **RasterX** (every `rst_*` function), **VectorX** (`gbx_st_*`) and **GridX** (`gbx_bng_*`, `gbx_quadbin_*`, `gbx_custom_*`, `gbx_h3_*`), plus the readers and writers. It runs on Serverless, standard and dedicated clusters, ARM and Lakeflow pipelines.
 
 ```python
 # Stage the env wheel for your runtime in a Unity Catalog Volume (+env6: Serverless environment 6
@@ -26,8 +19,8 @@ Python bindings over the env wheel's own GDAL, no JAR and no GDAL or OGR to inst
 # PEP 508 "name @ file://" form (Serverless-safe); add feature extras as "geobrix[vizx] @ ...":
 %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 
-from databricks.labs.gbx.pyrx import functions as rx
-rx.register(spark)   # installs the gbx_rst_* SQL names, pyspark-backed
+from databricks.labs import gbx
+gbx.register(spark)   # the gbx_* SQL functions and the *_gbx readers and writers
 ```
 
 :::warning Quote the `geobrix[<extras>] @ file://…` requirement
@@ -39,22 +32,7 @@ specifier."* The named form installs cleanly on Serverless, standard/shared,
 and ARM.
 :::
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight">
-
-JVM-native (Scala + GDAL/OGR), on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path). It covers everything the lightweight tier does. Choose this tier when your environment is already JVM/GDAL-based.
-
-```python
-from databricks.labs.gbx.rasterx import functions as rx
-rx.register(spark)
-```
-
-</TabItem>
-</Tabs>
-
-The two tiers expose the same module alias (`rx` / `vx` / `gx`) and the same `gbx_*` SQL names, so most code on this page is identical across tiers — only the import/register line and the reader format strings differ. The tabs below sync to your choice; where a block has no tabs, the code is identical on both tiers.
-
-See [Installation](./installation) for the three install paths and [Choosing an Execution Tier](./api/execution-tiers) for the full comparison.
+GeoBrix picks the faster implementation the compute offers and says why when it falls back. A dedicated cluster can also add the GeoBrix JAR. See [Installation](./installation) for the install paths and [Surfaces and levels](./api/execution-tiers) for how GeoBrix picks.
 
 :::tip Set up sample data first
 The examples on this page use **sample data paths** (e.g. `/Volumes/.../geobrix-examples/nyc/...`). To run them as-is, set up sample data first: **[Sample Data Guide](./sample-data/overview)** — then use the same paths or volume in your notebook.
@@ -71,36 +49,7 @@ You do not need to register functions if you are only using the included readers
 
 ## Register Functions
 
-The import/register line is the one place each package genuinely differs by tier. Pick your tier; the function names you call afterward are the same either way.
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight">
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="REGISTER_RASTERX_LIGHT"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-/>
-
-Register VectorX and the GridX quadbin grid the same way:
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="REGISTER_VECTORX_LIGHT"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-/>
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="REGISTER_QUADBIN_LIGHT"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-/>
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight">
+`gbx.register(spark)` registers every GeoBrix SQL function and the `*_gbx` readers and writers. Call it once per session.
 
 <CodeFromTest
   code={quickstartCode}
@@ -109,35 +58,18 @@ Register VectorX and the GridX quadbin grid the same way:
   testFile="docs/tests/python/quickstart/test_examples.py"
 />
 
-The same in Scala:
+`register(spark, only=["gbx_rst_width"])` limits the functions it registers.
+
+Scala registers no SQL. Register from Python or SQL, then call the SQL names from Scala:
 
 <CodeFromTest
   code={quickstartCode}
   language="scala"
   functionName="REGISTER_RASTERX_SCALA"
-  title="Register RasterX (Scala)"
+  title="Call GeoBrix from Scala"
   source="docs/tests/python/quickstart/examples.py"
   testFile="docs/tests/python/quickstart/test_examples.py"
 />
-
-Register GridX (BNG) and VectorX the same way:
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="REGISTER_GRIDX"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-/>
-
-<CodeFromTest
-  code={quickstartCode}
-  language="python"
-  functionName="REGISTER_VECTORX"
-  testFile="docs/tests/python/quickstart/test_examples.py"
-/>
-
-</TabItem>
-</Tabs>
 
 ## List and Describe Functions
 
@@ -159,9 +91,9 @@ Register GridX (BNG) and VectorX the same way:
 
 ## Reading Data
 
-Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle). Both tiers read with the pure-Python `*_gbx` readers (no GDAL/OGR install). To keep a table in sync with a landing folder rather than read it once, see [Ingestion Pipelines](./ingestion/overview).
+Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle). The `*_gbx` readers are pure Python (no GDAL/OGR install) and run on every compute. To keep a table in sync with a landing folder rather than read it once, see [Ingestion Pipelines](./ingestion/overview).
 
-Register the readers once per session, then load by format string (`gtiff_gbx` / `raster_gbx` for rasters; `shapefile_gbx` / `geojson_gbx` / `gpkg_gbx` / `file_gdb_gbx` for vectors).
+`gbx.register(spark)` registers the readers. Load by format string (`gtiff_gbx` / `raster_gbx` for rasters; `shapefile_gbx` / `geojson_gbx` / `gpkg_gbx` / `file_gdb_gbx` for vectors).
 
 #### Read GeoTIFF
 
@@ -204,7 +136,7 @@ into tiles without accumulating memory. Pass `.option("virtualTiles", "false")` 
 
 ### RasterX
 
-Identical on both tiers — only the import/register differs (see the tier toggle above). Once registered, the `rx.rst_*` calls are the same.
+Once registered, call the `rx.rst_*` functions from Python or the `gbx_rst_*` names from SQL.
 
 <CodeFromTest
   code={quickstartCode}
@@ -216,10 +148,7 @@ Identical on both tiers — only the import/register differs (see the tier toggl
 
 ### GridX
 
-All GridX grids — **quadbin** (`gx.quadbin_*` / `gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom grids** (`gbx_custom_*`) — are available on **both** tiers.
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight">
+All GridX grids — **quadbin** (`gx.quadbin_*` / `gbx_quadbin_*`), **BNG** (`gbx_bng_*`), **custom grids** (`gbx_custom_*`) and **H3** (`gbx_h3_*`) — run on every compute.
 
 Index a point to a quadbin cell and read its resolution:
 
@@ -231,10 +160,7 @@ Index a point to a quadbin cell and read its resolution:
   outputConstant="USE_QUADBIN_output"
 />
 
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight">
-
-The heavyweight tier adds the BNG grid (`gbx_bng_*`) and custom grids on top of quadbin:
+Use the BNG grid in SQL:
 
 <CodeFromTest
   code={quickstartCode}
@@ -244,12 +170,9 @@ The heavyweight tier adds the BNG grid (`gbx_bng_*`) and custom grids on top of 
   outputConstant="USE_BNG_output"
 />
 
-</TabItem>
-</Tabs>
-
 ### VectorX
 
-Identical on both tiers — only the import/register differs (see the tier toggle above). The `vx.st_*` calls and `gbx_st_*` SQL names are the same.
+Call the `vx.st_*` functions from Python or the `gbx_st_*` names from SQL.
 
 <CodeFromTest
   code={quickstartCode}
@@ -261,7 +184,7 @@ Identical on both tiers — only the import/register differs (see the tier toggl
 
 ## Using SQL
 
-The `gbx_*` SQL names are identical on both tiers. Both tiers read with the same `*_gbx` readers (see [Reading Data](#reading-data)).
+The `gbx_*` SQL names are the same on every compute. The `*_gbx` readers load the data (see [Reading Data](#reading-data)).
 
 <CodeFromTest
   code={quickstartCode}

@@ -1,14 +1,31 @@
 """
 Installation verification snippets (one-copy for docs/docs/installation/*.mdx).
 
-Displayed in Installation > Cluster libraries (Heavyweight) > Verify the heavyweight
-tier and Databricks Container Service > Verify the install. Tested by test_verify_installation.py.
+Displayed in Installation (register, stage the JAR, install the Unity Catalog functions, verify) and
+Databricks Container Service > Verify the install. Tested by test_verify_installation.py.
 """
 
-VERIFY_PYTHON_INSTALLATION = """from databricks.labs.gbx.rasterx import functions as rx
+REGISTER_PYTHON_INSTALLATION = """from databricks.labs import gbx
 
-# Register functions
-rx.register(spark)
+# The gbx_* SQL functions and the *_gbx readers and writers, once per session
+gbx.register(spark)"""
+
+STAGE_JAR_PYTHON = """from databricks.labs import gbx
+
+# Copy the JAR this env wheel carries to a Volume folder (with a .sha256 file beside it)
+gbx.stage_jar("/Volumes/<catalog>/<schema>/<volume>/geobrix/0.6.0/jar")
+# Then add the printed path as a cluster library on a dedicated cluster and restart the cluster."""
+
+UC_INSTALL_PYTHON = """from databricks.labs import gbx
+
+# Once, from a Serverless environment 6 or DBR 19 notebook.
+# The folder holds the env 6 wheel of the same version.
+gbx.uc.install("<catalog>", "<schema>", "/Volumes/<catalog>/<schema>/<volume>/geobrix/0.6.0/env6")"""
+
+VERIFY_PYTHON_INSTALLATION = """from databricks.labs import gbx
+
+# Register functions and the lightweight readers
+gbx.register(spark)
 
 # List registered functions
 spark.sql("SHOW FUNCTIONS LIKE 'gbx_rst_*'").show()"""

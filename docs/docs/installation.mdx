@@ -1,6 +1,6 @@
 ---
 sidebar_position: 2
-description: Install GeoBrix three ways — the WHL-only env wheel for the runtime, the env wheel plus the GeoBrix JAR as cluster libraries, or a Databricks Container Service image.
+description: Install GeoBrix the way your compute needs — the env wheel for the runtime, the env wheel plus the GeoBrix JAR on a dedicated cluster, a Databricks Container Service image, or Unity Catalog functions for SQL warehouses.
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
@@ -8,25 +8,27 @@ import verifyInstallation from '!!raw-loader!../tests/python/installation/verify
 
 # Installation
 
-GeoBrix has two [execution tiers](./api/execution-tiers.mdx) — the pure-Python **lightweight** tier
-and the JVM + native GDAL **heavyweight** tier — and three ways to install them. Pick the path that
-matches the tier you need and the compute you run on.
+GeoBrix installs as one **env wheel** for your runtime. The wheel runs every function in Python, the
+**lightweight** implementation. A dedicated cluster can add the GeoBrix JAR for the JVM,
+**heavyweight**, implementation of some functions. You never choose between them in code:
+`gbx.register(spark)` picks the faster one the compute offers. See [Surfaces and levels](./api/execution-tiers.mdx).
+Pick the install path that matches your compute.
 
 ## Choose an install path {#choose-an-install-path}
 
 ![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed as the env wheel for the runtime (env5 or env6), running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release that carries its own GDAL, PROJ and GEOS, giving the lightweight tier; heavyweight on a dedicated cluster leads to path b, Cluster libraries, the env wheel and the GeoBrix JAR both installed as cluster libraries from a Volume, running on a dedicated cluster with x86 on DBR 17.3, 18 or 19 or Graviton on DBR 19, where the wheel's own GDAL serves the JVM, giving both the lightweight and heavyweight tiers; heavyweight on arm64 or x86 with DBR 19 leads to path c, Databricks Container Service, a GeoBrix container image with the env6 wheel, its native GDAL and the JAR, run on a dedicated Graviton (arm64) or x86 (amd64) DBR 19 cluster with no library to attach, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
 
-| Path | Tiers | Compute | What you install |
+| Path | Runs | Compute | What you install |
 |---|---|---|---|
-| **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) |
-| **(b) [Cluster libraries (Heavyweight)](#heavyweight)** | Lightweight + Heavyweight | Dedicated cluster, x86 on DBR 17.3 / 18 / 19, Graviton (arm64) on DBR 19 | The env wheel and the GeoBrix JAR, both as cluster libraries |
-| **(c) [Databricks Container Service](./installation/dcs.mdx)** | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image (the env6 wheel, its native GDAL and the JAR) — no library to attach |
+| **(a) [Env wheel](#whl-only)** — recommended | Every function, in Python | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | The env wheel for the runtime (`+env5` or `+env6`) |
+| **(b) [Env wheel and JAR](#heavyweight)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, x86 on DBR 17.3 / 18 / 19, Graviton (arm64) on DBR 19 | The env wheel and the GeoBrix JAR, both as cluster libraries |
+| **(c) [Databricks Container Service](./installation/dcs.mdx)** | Every function, plus the JVM engine where it is faster | Dedicated cluster, Graviton (arm64) or x86 (amd64), DBR 19 | A GeoBrix container image (the env6 wheel, its native GDAL and the JAR) — no library to attach |
 
-**(a) WHL-only (Lightweight)** is the default: if you don't specifically need the JVM tier, install
+**(a) Env wheel** is the default: if you don't specifically need the JVM engine, install
 the wheel and stop there. The full install steps are [below](#whl-only).
 
-**(b) Cluster libraries (Heavyweight)** adds the JVM tier. A dedicated cluster installs the env wheel
-and the GeoBrix JAR as cluster libraries. The wheel carries the native GDAL, PROJ and GEOS, and the JVM
+**(b) Env wheel and JAR** adds the JVM engine. A dedicated cluster installs the env wheel
+and the GeoBrix JAR as cluster libraries. `gbx.stage_jar` puts the JAR on a Volume for you. The wheel carries the native GDAL, PROJ and GEOS, and the JVM
 loads them from the wheel, so nothing else is installed. Verified on dedicated
 clusters with x86 on DBR 17.3, 18 and 19, and Graviton (arm64) on DBR 19. See [below](#heavyweight).
 
@@ -35,8 +37,10 @@ The image already holds the env6 wheel with its native GDAL, and the GeoBrix JAR
 to attach. It runs on both Graviton (arm64) and x86 (amd64) instance types, each with its own image tag.
 See [Databricks Container Service](./installation/dcs.mdx).
 
-The **heavyweight tier needs dedicated compute** (a dedicated access mode cluster), through (b) or
-(c). On standard access mode and Serverless, use **(a)**: the lightweight tier runs there in full.
+The **JVM engine needs dedicated compute** (a dedicated access mode cluster), through (b) or
+(c). On standard access mode and Serverless, use **(a)**: every function runs there in Python.
+
+**SQL warehouses** run no wheel. An owner installs the [Unity Catalog functions](#uc-functions) once, and users call them by their three-part names.
 
 ## Supported Databricks Runtimes
 
@@ -58,15 +62,15 @@ family, and no light extra to pick:
 | Serverless environment 6 (recommended), DBR 19, DBR 19 ML, SQL warehouses and UC functions | `geobrix-<version>+env6-py3-none-any.whl` |
 | Serverless environment 5, DBR 17.3, DBR 18, Lakeflow declarative pipelines | `geobrix-<version>+env5-py3-none-any.whl` |
 
-See [WHL-only (Lightweight)](#whl-only) below for the install steps.
+See [Env wheel](#whl-only) below for the install steps.
 
 :::note PySpark comes from the runtime
 On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark. Outside Databricks (for example a local Spark session), install `pyspark>=4.0.0` alongside GeoBrix.
 :::
 
-## WHL-only (Lightweight) {#whl-only}
+## Env wheel {#whl-only}
 
-The lightweight tier is a single Python wheel, the **env wheel** for your runtime — **no separate JAR and no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo`, built against them. A process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
+The env wheel is a single Python wheel for your runtime — **no separate JAR and no native GDAL bundle**. The env wheel carries its own GDAL, PROJ and GEOS. It also carries `rasterio`, `pyogrio`, `pyproj`, `shapely`, `netCDF4` and GDAL's own `osgeo`, built against them. A process runs one GDAL. It holds the runtime's preinstalled packages instead of replacing them. It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole library: RasterX (`databricks.labs.gbx.rasterx`), GridX (`databricks.labs.gbx.gridx.<grid>`), VectorX (`databricks.labs.gbx.vectorx`) and `pmtiles`.
 
 :::note Choose the wheel for your runtime
 | Runtime | Install command |
@@ -94,9 +98,9 @@ required on Serverless.
 
 :::warning Install the env wheel for the runtime's family
 The env wheel of the other family refuses to import, naming the file to install. The **plain wheel**,
-`geobrix-<version>-py3-none-any.whl`, is for use **off Databricks** (a laptop, a non-Linux machine,
-another Python, a GDAL you bring yourself): `pip install geobrix` gives a working lightweight tier
-with PyPI's `rasterio`, `pyogrio`, `pyproj` and `shapely`, and the plain wheel keeps the feature
+`geobrix-<version>-py3-none-any.whl`, is for use **off Databricks**. Examples are a laptop, a
+non-Linux machine, another Python, or a GDAL you bring yourself. `pip install geobrix` gives a
+working install with PyPI's `rasterio`, `pyogrio`, `pyproj` and `shapely`. The plain wheel keeps the feature
 extras (`stac`, `vizx`, `zarr_dbr19`, `overture`, `earthdata`, …). On Databricks it would put a
 second GDAL stack beside the runtime's packages.
 :::
@@ -165,25 +169,24 @@ version, so it takes the wheel for that runtime (`+env5` for DBR 18, `+env6` for
 Workspaces that restrict outbound network access (for example, Serverless egress controls) can
 block GitHub — install from a Unity Catalog Volume, as above, in that case.
 
-Then import the package(s) you need and (optionally) register their SQL functions. Each light package exposes the same `functions` / `register(spark)` pattern:
+### Register {#register}
 
-```python
-from databricks.labs.gbx.pyrx import functions as rx  # RasterX (rst_*)
-# from databricks.labs.gbx.pyvx import functions as vx  # VectorX (st_*)
-# from databricks.labs.gbx.pygx import functions as gx  # GridX quadbin (quadbin_*)
+Register once per session. One call registers every SQL function and the `*_gbx` readers and writers:
 
-# optional — only needed to call the SQL functions:
-rx.register(spark)
+<CodeFromTest
+  code={verifyInstallation}
+  language="python"
+  functionName="REGISTER_PYTHON_INSTALLATION"
+  title="Register GeoBrix"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+/>
 
-# Lightweight readers and writers (raster_gbx, gtiff_gbx, etc.) are Python Data Source
-# V2 sources and aren't auto-discovered. This call registers them with the functions:
-# from databricks.labs.gbx import register
-# register(spark)
-```
+`register` picks the best implementation of each function for the compute and prints one line when it falls back. The Python API also registers a function on its first call. The old per-package `register()` functions are removed; see the [migration guide](./migration-0-6).
 
-### Verify the lightweight tier
+### Verify the install
 
-Confirm the wheel imports, the env wheel's GDAL is the one rasterio runs, and a function runs end to end. The check below exercises RasterX (`rst_*`); VectorX (`pyvx`, `st_*`) and GridX quadbin (`pygx`, `quadbin_*`) ship in the same wheel and register and run the same way:
+Confirm the wheel imports, the env wheel's GDAL is the one rasterio runs, and a function runs end to end. The check below exercises RasterX (`rst_*`); VectorX (`st_*`) and GridX ship in the same wheel and run the same way:
 
 ```python
 import rasterio
@@ -191,7 +194,7 @@ from databricks.labs.gbx.rasterx import functions as rx
 
 print("rasterio", rasterio.__version__, "| GDAL", rasterio.__gdal_version__)
 
-# Functional check: load a GeoTIFF and read its properties through pyrx.
+# Functional check: load a GeoTIFF and read its properties.
 tiles = (
     spark.read.format("binaryFile")
     .load("/Volumes/<catalog>/<schema>/<volume>/path/to/*.tif")
@@ -204,53 +207,97 @@ tiles.select(
 ).show()
 ```
 
-If the import succeeds and the query returns raster dimensions, the lightweight tier is ready. For the heavyweight tier, continue with [Cluster libraries](#heavyweight) or [Databricks Container Service](./installation/dcs.mdx).
+If the import succeeds and the query returns raster dimensions, the install is ready. To add the JVM engine, continue with [Env wheel and JAR](#heavyweight) or [Databricks Container Service](./installation/dcs.mdx).
 
-## Cluster libraries (Heavyweight) {#heavyweight}
+## Env wheel and JAR {#heavyweight}
 
-The heavyweight tier runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. The JVM loads them from the wheel.
+The JVM engine runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. The JVM loads them from the wheel.
 
 1. Stage the env wheel for the runtime in a Unity Catalog Volume: `+env5` on DBR 17.3 and 18, `+env6` on DBR 19.
-2. Download `geobrix-<version>-jar-with-dependencies.jar` from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases). Stage it in a Volume.
+2. Stage the JAR with `gbx.stage_jar`, as described [below](#stage-jar).
 3. Create a cluster with **Dedicated** access mode on DBR 17.3, 18 or 19. Use an x86 instance type on any of them, or Graviton (arm64) on DBR 19.
 4. Under **Libraries**, install the wheel (Python whl) and the JAR (JAR) from their Volume paths.
-5. Start the cluster, and attach a notebook.
+5. Start the cluster, attach a notebook and [register](#register).
 
 A cluster loads one GeoBrix JAR, so install only one. On DBR 19 you can also install the wheel from a notebook with `%pip` and keep the JAR as a cluster library.
 
-Standard access mode refuses the heavyweight functions. Use the lightweight tier there.
+Standard access mode refuses the JVM functions. Every function still runs in Python there.
+
+### Stage the JAR with `gbx.stage_jar` {#stage-jar}
+
+The env wheel carries the JAR that matches its version. `gbx.stage_jar` copies it to a Volume folder, so you need no separate download:
+
+<CodeFromTest
+  code={verifyInstallation}
+  language="python"
+  functionName="STAGE_JAR_PYTHON"
+  title="Stage the JAR from the env wheel"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+/>
+
+The call does this:
+
+- It copies the JAR to the folder and writes a `.sha256` file beside it.
+- It checks that the JAR matches the wheel's version and the hash in the wheel's `RECORD`.
+- It refuses a folder that already holds another GeoBrix JAR. A cluster must load one.
+- It prints the next step and returns the staged path.
+
+Pass `overwrite=True` to copy the JAR again. Then add the printed path as a cluster library and **restart the cluster**: a running cluster cannot load a JAR.
+
+On standard access mode, a metastore admin must first add the Volume path to the artifact allowlist. Dedicated clusters need no allowlist entry.
+
+Then install the same env wheel on the cluster. `gbx.register(spark)` checks that the JAR and the wheel are the same version.
 
 :::warning Upgrading from GeoBrix 0.5.x
-GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Release Notes: 0.6.x](./release-notes-0-6#init-script).
+GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that init script from the cluster** and do not install the GDAL bundle. A system GDAL beside a 0.6.0 wheel puts two GDAL stacks in one cluster. See [Release Notes: 0.6.x](./release-notes-0-6#init-script) and the [migration guide](./migration-0-6).
 :::
 
 :::note Staying on GeoBrix 0.5.x
 These pages describe 0.6.x. To install 0.5.x with its init script, use the assets of the [v0.5.2 release](https://github.com/databrickslabs/geobrix/releases/tag/v0.5.2). They include the init script, the GDAL bundle and `geobrix-docs-0.5.2.zip`, the docs for that release.
 :::
 
-Two optional settings apply to the heavyweight tier:
+Two optional settings apply to the JVM engine:
 
 - **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster. See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
 - **HTTP.** Leave `GDAL_HTTP_VERSION` unset. See [Remote reads](./readers/raster#remote-reads-over-https).
 
-### Verify the heavyweight tier
+### Verify the JVM engine
 
-Register the heavyweight RasterX functions and list them:
+Register GeoBrix and list the raster functions:
 
 <CodeFromTest
   code={verifyInstallation}
   language="python"
   functionName="VERIFY_PYTHON_INSTALLATION"
-  title="Verify the heavyweight tier"
+  title="Verify the install"
   source="docs/tests/python/installation/verify_installation.py"
   testFile="docs/tests/python/installation/test_verify_installation.py"
   outputConstant="VERIFY_PYTHON_INSTALLATION_output"
 />
 
-If the list shows `gbx_rst_*` functions, the heavyweight tier is ready.
+If the list shows `gbx_rst_*` functions, the install is ready. The line `register` prints names the level it picked for each function.
+
+## SQL warehouses and Unity Catalog functions {#uc-functions}
+
+A SQL warehouse runs no wheel. Users call GeoBrix as Unity Catalog functions, such as `<catalog>.<schema>.gbx_bng_pointascell`, and install nothing.
+
+An owner installs the functions once. Run `gbx.uc.install` from a notebook on Serverless environment 6 or DBR 19. The Volume folder holds the same version's env 6 wheel:
+
+<CodeFromTest
+  code={verifyInstallation}
+  language="python"
+  functionName="UC_INSTALL_PYTHON"
+  title="Install the Unity Catalog functions"
+  source="docs/tests/python/installation/verify_installation.py"
+  testFile="docs/tests/python/installation/test_verify_installation.py"
+/>
+
+Run it again after each upgrade. The [Unity Catalog functions](./api/uc-functions) page lists the functions and the permissions the owner needs.
 
 ## Next Steps
 
 - Follow the [Quick Start Guide](./quick-start.mdx) to begin using GeoBrix
 - Explore the [Functions](./api/overview.mdx) documentation
-- Compare the tiers in [Choosing an Execution Tier](./api/execution-tiers.mdx)
+- See how GeoBrix picks an implementation in [Surfaces and levels](./api/execution-tiers.mdx)
+- Moving from 0.5.x? Read the [migration guide](./migration-0-6)

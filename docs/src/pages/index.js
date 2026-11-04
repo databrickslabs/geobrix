@@ -136,8 +136,9 @@ export default function Home() {
 %pip install --quiet "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
 
 # Import and register functions
-from databricks.labs.gbx.pyrx import functions as rx
-rx.register(spark)
+from databricks.labs import gbx
+from databricks.labs.gbx.rasterx import functions as rx
+gbx.register(spark)
 
 # Read and process geospatial data
 rasters = (spark.read.format("binaryFile").load("/data/rasters")

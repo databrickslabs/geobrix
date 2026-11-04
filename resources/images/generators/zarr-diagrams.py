@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the diagrams of the Formats / Zarr page (docs/docs/formats/zarr.mdx).
+"""Generate the diagrams of the Zarr topic pages (docs/docs/api/zarr-stores.mdx and its siblings).
 
 Five diagrams, each an SVG plus a PNG under resources/images/diagrams/zarr/:
 

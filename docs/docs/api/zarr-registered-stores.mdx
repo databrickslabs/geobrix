@@ -1,0 +1,125 @@
+---
+title: "Registering, Syncing and Ownership"
+sidebar_label: Registering and Syncing
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
+import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.py';
+
+# Zarr: Registering, Syncing and Ownership
+
+<ZarrNav current="registered" />
+
+_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+
+**Use this page when a Zarr store already exists** and you want versions, grants and transactional
+writes on it without copying it. You **register** the store as a table. GeoBrix lists it once and records
+every object, and the store itself is never changed. This page also covers what happens when another tool
+changes the store later, and why every root has exactly one owner.
+
+The examples use the names and the sample cube from [Zarr Stores](./zarr-stores#what-you-need).
+
+## Register a store in place
+
+Registering lists a store once and records every object with its identity. It copies nothing and writes
+nothing to the store. Many tables can register one store, each with its own history, grants and (if
+writable) overlay root.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="register_in_place"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+GeoBrix prints one progress line per step while it registers a big store. A registration reads Zarr v2
+and v3 stores alike.
+
+### Writable registrations and the overlay
+
+A **writable** registration needs an `overlay_root`: a directory outside the store that this table owns.
+Writes go there, as new pack files in the base array's own codecs and key encoding. The overlay rows
+replace the store's rows for the keys they touch. The store itself is never written, except by an
+explicit [publish](#outside-changes-drift-sync-and-publish).
+
+<CodeFromTest code={zarrExamples} language="python" functionName="register_with_an_overlay"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+The same call that updates a managed store (shown in [Transactions](./zarr-transactions)) updates this
+registration. Its files land in the overlay, and the store is byte for byte what it was.
+
+### Branches
+
+Registrations of one store behave like **branches**. Each sees the store plus only its own writes, and
+there is no merge between them.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="compare_branches"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="COMPARE_BRANCHES_output" />
+
+## Outside changes: drift, sync and publish
+
+GeoBrix cannot make other tools' writes to a registered store transactional, but it detects them. Every
+read checks the identity of the objects it touches: their modification time and size on a Volume. If
+another tool changed one, the read stops and says so. It does not return bytes the manifest never saw.
+
+`gbx_zarr_sync` brings the registration up to date:
+
+- It lists the store again and records what changed, appeared or disappeared as one new version.
+- It lists any keys that both the store and the overlay changed. The overlay still wins.
+- It sets the store's shape to the larger of the store's and the overlay's, so days a data provider
+  appended show up.
+
+A change to the array's data type, chunk grid or codecs cannot be synced. Register the store again.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="detect_outside_changes"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="DETECT_OUTSIDE_CHANGES_output" />
+
+(The progress lines GeoBrix prints while it syncs are left out above.)
+
+### Publish the overlay
+
+**Publish** writes a writable registration's overlay into the store itself, so that every Zarr reader
+sees it. It needs write access to the store. It takes a lock so two publishes cannot interleave, and it
+refuses if the store changed since the last sync.
+
+Publish is **not atomic for plain readers**. It writes the chunks first and the metadata last. A plain
+reader that opens the store while it runs can see some chunks of the new version. Two more effects follow:
+
+- Other registrations of that store see drift on their next read.
+- Older versions that pointed at objects the publish overwrote can no longer be read.
+
+GeoBrix records the identity of each published object only after the Volume has settled its modification
+time. A Volume moves that time to the next whole second a moment after the write. So a read right after a
+publish does not report drift.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="publish_the_overlay"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+## One owner per root
+
+Every root GeoBrix writes to has exactly one owner. A root is a managed store's root or a writable
+registration's overlay root. A Delta transaction decides the owner, not the file system. A small Delta
+table inside the root, `_gbx_owner`, records the owner through a compare-and-swap. When two tables claim a
+root at the same moment, exactly one wins, on every kind of compute.
+
+A marker file, `_gbx_store.json`, names the owner as well. It is advisory. A run that changes the store
+(not a dry run) restores it from the ledger if it goes missing.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="refuse_a_second_owner"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+The error names the table that owns the root and how to fix the conflict. A vacuum never enters a
+directory that holds `_gbx_owner` or `_gbx_store.json`, so one store's vacuum can never delete another
+store's files.
+
+## Next Steps
+
+- [Transactions and concurrent writers](./zarr-transactions): write to the registration.
+- [Versions, time travel and tags](./zarr-versions): read, name and export versions.
+- [`gbx_zarr_register`](./zarr-functions#gbx_zarr_register) and [`gbx_zarr_sync`](./zarr-functions#gbx_zarr_sync): every parameter.
+- [Publishing](../writers/zarr#publishing): the writer's how-to for a registered store.

@@ -282,7 +282,7 @@ def test_registering_a_store_with_an_outer_codec_leaves_the_array_unreadable(
         gbx_zarr_read(spark, table, variables=["msl"])
 
 
-# --- the format of an export (formats/zarr and api/zarr-functions) ------------------------
+# --- the format of an export (the Zarr topic pages and api/zarr-functions) ------------------------
 
 
 def test_a_copy_keeps_the_stores_format_and_a_written_store_is_v3_with_crc32c(

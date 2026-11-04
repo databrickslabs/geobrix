@@ -4,24 +4,33 @@ sidebar_position: 10
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import zarrFunctions from '!!raw-loader!../../tests/python/api/zarr_functions_examples.py';
+import ZarrNav from '@site/src/components/ZarrNav';
 
 # Zarr Function Reference
+
+<ZarrNav current="functions" />
 
 _Since:_ **v0.6.0** · _(Python level only; no JAR)_
 
 The Zarr functions read, write, version and maintain [Zarr](https://zarr.dev) stores. They are Python
 functions in `databricks.labs.gbx.zarr` and have no SQL binding. A store's manifest is a Delta table, so
 SQL can query it. The GeoBrix tiles a read returns work with every
-[`rst_*` function](./raster-functions). Install the env6 wheel with its `[zarr]` extra, on Serverless environment 6 or Databricks Runtime 19. See [Zarr Stores](../formats/zarr#what-you-need). Importing the package
+[`rst_*` function](./raster-functions). Install the env6 wheel with its `[zarr]` extra, on Serverless environment 6 or Databricks Runtime 19. See [Zarr Stores](./zarr-stores#what-you-need). Importing the package
 imports no large library; importing a name loads only the module that defines it.
 
 ```python
 from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
 ```
 
-For how-to guides see the [Zarr Reader](../readers/zarr) and the [Zarr Writer](../writers/zarr); for the
-model (versions, tags, retention, file modes) see [Zarr Stores](../formats/zarr). Every example on this
-page is run by the documentation tests. They use these names, which stand for what is yours:
+:::tip See it end to end
+The [Weather Features with Zarr](../notebooks/zarr-weather-features) notebook uses these functions in order.
+It registers a weather cube in place and samples it at 100 sites. It writes a derived variable back as a
+new version, maps it as raster tiles, and tags the version for training.
+:::
+
+For how-to guides see the [Zarr Reader](../readers/zarr) and the [Zarr Writer](../writers/zarr). For the
+model, see the [topic pages](#learn-the-model-first). Every example on this page is run by the documentation tests. They use
+these names, which stand for what is yours:
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="SETUP" />
 
@@ -45,6 +54,19 @@ to resolve it; see [Errors](#errors). A mistake in an argument is a plain `Value
 `except ZarrError` does not catch; the ones in the tables below end with a `Fix:` too. The tables list the
 errors you are most likely to meet, with the start of the fix each one gives (all of it where it is short,
 and `<name>` where the message fills in a value).
+
+## Learn the model first
+
+New to Zarr in GeoBrix? Read the topic pages in this order. Each opens with what it is for.
+
+| Topic | Read it to |
+|---|---|
+| [Zarr Stores: concepts and store kinds](./zarr-stores) | Understand managed, registered and plain stores, and how a store is files and rows |
+| [Registering, syncing and ownership](./zarr-registered-stores) | Use a store you already have without copying it, and handle outside changes |
+| [Transactions and concurrent writers](./zarr-transactions) | Know what a write guarantees and what happens when writers meet |
+| [Versions, time travel and tags](./zarr-versions) | Read, name, restore and export versions |
+| [Lifecycle, retention and optimize](./zarr-lifecycle) | Free storage and keep reads fast |
+| [Performance and limits](./zarr-performance) | Size a workload and check what is not supported |
 
 ## Read and sample
 
@@ -675,6 +697,6 @@ their details, so one raised on a Spark worker reaches the driver intact (wrappe
   that registers a weather cube in place, samples it into a features table, writes a derived
   variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Reader](../readers/zarr) and [Zarr Writer](../writers/zarr) — the how-to guides.
-- [Zarr Stores](../formats/zarr) — the transactional model.
+- [Zarr Stores](./zarr-stores) — the transactional model, with topic pages for each part of it.
 - [Virtual Tiles](./virtual-tiles) — the tiles a Zarr read returns.
 - [Error Handling](./error-handling) — how GeoBrix errors reach you.

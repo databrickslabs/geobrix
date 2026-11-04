@@ -1,0 +1,129 @@
+---
+title: "Zarr Transactions and Concurrent Writers"
+sidebar_label: Transactions
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
+import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.py';
+
+# Zarr: Transactions and Concurrent Writers
+
+<ZarrNav current="transactions" />
+
+_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+
+**Use this page to learn what a write guarantees.** Every `gbx_zarr_write` is all-or-nothing: readers see
+the whole write or none of it. Several jobs can write to one store at the same time, and you can retry a
+write safely. This page shows how a write works, what happens when two writers meet, and what to do when
+one loses.
+
+The examples use the names and the sample cube from [Zarr Stores](./zarr-stores#what-you-need). For every
+parameter see [`gbx_zarr_write`](./zarr-functions#gbx_zarr_write), and for the how-to see the
+[Zarr Writer](../writers/zarr).
+
+## The four modes
+
+| Mode | What it does |
+|---|---|
+| `create` | Makes a new store. |
+| `append` | Extends one dimension, by default the first time dimension. |
+| `update` | Writes into the existing extent. |
+| `overwrite` | Replaces whole variables. Older versions stay readable until vacuumed. |
+
+Writing a variable the store lacks creates it on the store's dimensions. Appends label the new steps.
+They must come after the store's last step. On a regular axis they land at their step, so appends may
+arrive out of order.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="append_hours"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+## How a write commits
+
+A write happens in two phases, and only the second one is visible.
+
+![A write in two phases. Phase one is distributed and invisible. The driver plans against a base version of the manifest and picks a write_id. Executor tasks encode the chunks: fully covered chunks fresh, and partly covered ones by read-modify-write at the base version. Each task writes one immutable pack file for each array it holds to the Volume. It returns small manifest rows to the driver. Phase two is atomic. The driver commits one Delta MERGE with a compare-and-swap on each replaced key. The MERGE carries the changed array and coordinate rows and a commit row keyed by the write_id. The manifest moves to the next version, visible whole. A failure before the MERGE leaves only unreferenced packs for vacuum. Running a write again with the same write_id returns the version it already committed.](../../../resources/images/diagrams/zarr/write-commit.png)
+
+1. **Files.** The input is grouped by the shard it belongs to. Each task encodes the chunks it owns. It
+   writes **one pack file for each array it holds**, each in a single sequential write. A chunk the input
+   covers completely is encoded fresh. A chunk it only partly covers is read at the base version, patched
+   and re-encoded. Each task hands back a small manifest row for every chunk it wrote.
+2. **Commit.** The driver collects the rows and runs **one Delta MERGE**. The MERGE writes:
+   - the chunk rows, with a compare-and-swap (CAS) on every key it replaces. The CAS compares the
+     `write_id` the key had in the base version, or "still absent" for a new key;
+   - the changed array and coordinate rows;
+   - a `commit` row keyed by the write's `write_id`.
+
+Until the MERGE commits, nothing is visible. If anything fails before it, the version has not moved. The
+packs are unreferenced files that a later vacuum removes. After the MERGE commits, the whole write is
+visible at once.
+
+## Concurrent writers
+
+![What happens when two writers meet, in three panels. When two writers touch different chunks, both MERGEs land without a retry, because Delta applies them at row level. When two appends change shared metadata, the second writer rebases. Shared metadata is the array shape and a shared coordinate chunk. The second writer re-reads the latest version and checks that none of its own data keys moved. It recomputes the shape and the shared chunk. It retries up to twenty times, without rewriting its data files. When two writes change the same chunk, the second fails its compare-and-swap. It raises ZarrWriteConflict, which names the keys and the winning write. Nothing of the second write becomes visible.](../../../resources/images/diagrams/zarr/concurrent-writers.png)
+
+The manifest decides, row by row.
+
+- **Different data.** Writers that touch different chunks touch different rows. Delta lands both without
+  a retry.
+- **Shared metadata.** Two appenders both change the array's shape, and often a shared coordinate chunk.
+  When a writer finds that another has committed those rows first, it **rebases**:
+  1. It re-reads the latest version.
+  2. It checks that none of the data keys it replaces has changed since its base (the CAS).
+  3. It recomputes the shape (the maximum extent) and redoes the coordinate chunk.
+  4. It retries the MERGE.
+
+  Its data files are never rewritten. A rebase retries up to 20 times with a jittered wait. Every lost
+  round means another writer landed, so the last of N simultaneous appenders needs about N attempts. In
+  GeoBrix's checks, 8 appenders to one array at the same moment all landed.
+- **The same chunk.** Suppose another writer committed a change to a chunk this write also touches, after
+  this write's base version. Then the write raises `ZarrWriteConflict`. That includes two partial writes to
+  different cells of one chunk, because each is a read-modify-write of the whole chunk.
+
+Two jobs appending at the same moment, as they would from two clusters:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="append_from_two_writers"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+Both appends land, in whichever order they reach the commit. The store ends with all 48 hours in the
+right place.
+
+## Update a region
+
+An update that corrects a region reads the blocks, changes them and writes them back by position:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="update_a_region"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+## Handle a conflict
+
+A conflict names the keys and the write that got there first. Nothing of the losing write is visible.
+The safe response is to read the region again and write again:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="handle_a_conflict"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+## Retry safely with a write ID
+
+A write can carry its own **`write_id`** (32 lowercase hex characters). Writing again with an id that has
+already committed returns that version and writes nothing. A job that is retried after a timeout
+cannot apply the same write twice:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="retry_with_a_write_id"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+Errors raised while Spark runs a read or a write reach the driver as a `PythonException`. Its message
+keeps the GeoBrix error name and the `Fix:` line. Every GeoBrix Zarr error ends with a `Fix:` that says
+how to resolve it.
+
+## Next Steps
+
+- [Versions, time travel and tags](./zarr-versions): read the store as it was before a write.
+- [Lifecycle and retention](./zarr-lifecycle): clean up the files that failed or superseded writes leave.
+- [Performance and limits](./zarr-performance): how concurrent appenders behave at scale.
+- [Zarr Writer](../writers/zarr): the how-to guide.

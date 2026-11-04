@@ -1,0 +1,146 @@
+---
+title: "Zarr Lifecycle, Retention and Optimize"
+sidebar_label: Lifecycle and Retention
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
+import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.py';
+
+# Zarr: Lifecycle, Retention and Optimize
+
+<ZarrNav current="lifecycle" />
+
+_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+
+**Use this page to keep a store tidy and fast.** Writes never change a file. They add new ones, so old
+files pile up and a shard can end up spread over many small objects. `gbx_zarr_vacuum` deletes the files
+no readable version needs. `gbx_zarr_optimize` folds small objects back into whole shards. This page also
+explains how long old versions stay readable.
+
+The examples use the names and the sample cube from [Zarr Stores](./zarr-stores#what-you-need).
+
+## Lifecycle and retention
+
+Immutable files mean old files pile up. Every update, overwrite and failed write leaves packs that no
+current row needs. `gbx_zarr_vacuum` deletes the files that no readable version needs.
+
+![The timeline of a vacuum. Versions v1 to v8 run left to right. The retain window, seven days by default, is shaded at the right. It starts at the horizon, which is the later of the last vacuum's horizon and the moment retain ago. Version v4 is live at the horizon and stays readable. Versions older than it raise ZarrVersionUnavailable. A pack replaced before the horizon is superseded and deleted. A pack replaced inside the window is retained, because a readable version, v4, still uses it. Packs that live rows point at are live. A pack that a tag row points at is tagged and kept until the tag is removed. The pack of a write that never committed is uncommitted. It is kept for the retain period and then deleted. A pack younger than one hour is recent and always kept. Below the timeline, the manifest table's own retention properties keep Delta history at least as long as the store's retain. Predictive optimization may vacuum the table itself.](../../../resources/images/diagrams/zarr/retention-timeline.png)
+
+A file is kept while **any** of these is true:
+
+- **live**: a current row points at it;
+- **tagged**: a tag row points at it;
+- **retained**: a version within `retain` points at it (`retain` is `"7 days"` unless you set it when
+  you created or registered the store);
+- **recent**: it is under one hour old, because the write that made it may still be running. The files of
+  a write that never committed are kept for the store's `retain`, too.
+
+Everything else is **superseded** or **uncommitted**:
+
+- **superseded**: a newer version replaced it, and only versions older than `retain` used it;
+- **uncommitted**: its write failed, was retried or lost a conflict.
+
+`dry_run=True` lists what would go and changes nothing. Two checks protect the `retain` value:
+
+- A `retain` under one hour is refused unless `force=True`.
+- A `retain` longer than the store's is refused too, since versions older than the store's own `retain`
+  are not readable anyway.
+
+Time travel needs two things: the files, and the manifest's own Delta history. When a store is created or
+registered, GeoBrix sets two properties on the manifest table:
+
+- `delta.deletedFileRetentionDuration` to at least the store's `retain`;
+- `delta.logRetentionDuration` to the larger of 30 days and `retain`.
+
+Vacuum keeps them aligned. It never lowers a value you raised.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="show_retention"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="SHOW_RETENTION_output" />
+
+### Time travel stops at `retain`
+
+**Time travel stops at `retain`, with or without a vacuum.** GeoBrix promises a version only as far back
+as the **horizon**. The horizon is the later of the horizon a vacuum recorded and the moment `retain` ago.
+
+A read by version number or by timestamp of a version older than the one that was live at the horizon
+raises `ZarrVersionUnavailable` with a `Fix:`. This holds even if no vacuum has ever run, because Delta's
+own maintenance may already have removed the files. The latest version and every tagged version are
+always readable. This store keeps its versions for two seconds so the example is quick (the default is
+`"7 days"`):
+
+<CodeFromTest code={zarrExamples} language="python" functionName="time_travel_stops_at_retain"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="TIME_TRAVEL_STOPS_AT_RETAIN_output" />
+
+**Predictive optimization** can run `VACUUM` on a Unity Catalog managed table by itself. In GeoBrix's own
+checks it kept a table's files for at least 7 days, even when the table asked for less. A store whose
+`retain` is shorter than that can still find Delta history for a version whose files are gone. That is why
+the horizon, and not Delta's history, decides what is readable. A vacuum that deletes records its horizon
+on the table before it removes anything. To keep a version for good, [tag it](./zarr-versions).
+
+### Run a vacuum
+
+The vacuum below ran a week after the store was written. (In the documentation tests, the clock is moved
+on.) It lists first, then deletes. The tag keeps its files, and the live rows keep theirs. The packs that
+only older versions used go. So does the pack of the conflict example's losing write, which never
+committed:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="vacuum_the_store"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="VACUUM_THE_STORE_output" />
+
+A vacuum only touches the pack files GeoBrix wrote under the store's own root. It never deletes the
+objects of a registered store, anything else in a root, or anything in a directory that another store
+owns. A dry run changes nothing at all.
+
+## Chunk rows and shard rows
+
+Zarr v3 groups many small **inner chunks** into one **shard** object. The manifest has a row for each of
+two things:
+
+- a **shard row** points at a whole shard in one object: that is how a registered store of shards begins;
+- a **chunk row** points at one inner chunk inside a pack file.
+
+![Chunk rows over a shard row, in three stages. First, a store of shards has one shard row pointing at one shard object that holds eight inner chunks. After appends and updates, the shard row is still there. Chunk rows laid over it point at replacement chunks in small packs. One chunk is a deleted tombstone. A read lays the chunk rows over the shard's bytes. After optimize, a single shard row points at a new pack that holds all eight inner chunks again. The chunk rows and the deleted chunk are folded away.](../../../resources/images/diagrams/zarr/chunk-vs-shard-rows.png)
+
+A write adds chunk rows, one for each chunk it changes, in packs it has just written. That keeps a small
+append or update cheap, because nothing already written is rewritten. A new managed store is chunk rows
+only. The price is on the read side. A shard is now spread over many small objects, and on a Volume every
+object costs a round trip.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="count_manifest_rows"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="COUNT_MANIFEST_ROWS_before_output" />
+
+### Fold chunk rows back with optimize
+
+`gbx_zarr_optimize` folds chunk rows back into shard rows. For every shard that has chunk rows, it:
+
+1. copies the shard's bytes, without decoding them, into one new pack as a standard Zarr v3 shard;
+2. commits **one shard row in place of the chunk rows**, with the same compare-and-swap as a write;
+3. folds deleted chunks away.
+
+A shard whose rows changed while the optimize ran is skipped, with a warning, and folded the next time.
+`gbx_zarr_write(..., optimize=True)` folds the shards a write touched right after it commits. Run optimize
+after many small appends, especially for reads from a Volume. It changes no cell.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="optimize_the_store"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+<CodeFromTest code={zarrExamples} language="python" functionName="count_manifest_rows"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="COUNT_MANIFEST_ROWS_after_output" />
+
+## Next Steps
+
+- [Versions, time travel and tags](./zarr-versions): tag a version so a vacuum keeps it.
+- [Performance and limits](./zarr-performance): what layout and compute mean for read and write times.
+- [`gbx_zarr_vacuum`](./zarr-functions#gbx_zarr_vacuum) and [`gbx_zarr_optimize`](./zarr-functions#gbx_zarr_optimize): every parameter.

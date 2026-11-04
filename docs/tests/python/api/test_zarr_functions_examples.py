@@ -424,7 +424,7 @@ def test_the_page_is_wired_in_and_speaks_to_users():
     assert "'api/zarr-functions'" in sidebar
     pattern = re.compile(r"\bwave[ -]?\d+|\btask \d+|gate g\d|ruling|\bZT\d+", re.I)
     assert not pattern.findall(PAGE.read_text())
-    for page in ("zarr.mdx", "overview.mdx"):
-        assert "../api/zarr-functions" in (DOCS / "formats" / page).read_text()
+    assert "./zarr-functions" in (DOCS / "api" / "zarr-stores.mdx").read_text()
+    assert "./api/zarr-functions" in (DOCS / "choosing-a-format.mdx").read_text()
     for page in (DOCS / "readers" / "zarr.mdx", DOCS / "writers" / "zarr.mdx"):
         assert "../api/zarr-functions" in page.read_text()

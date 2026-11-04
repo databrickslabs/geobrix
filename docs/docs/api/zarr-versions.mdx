@@ -1,0 +1,109 @@
+---
+title: "Zarr Versions, Time Travel and Tags"
+sidebar_label: Versions and Tags
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
+import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.py';
+
+# Zarr: Versions, Time Travel and Tags
+
+<ZarrNav current="versions" />
+
+_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+
+**Use this page to go back to an earlier state of a store, to keep one for good, or to take one out of
+GeoBrix.** Every write makes a new version, and old versions stay readable. You can list the history,
+read an older version, name a version with a tag, restore one, and export one as a plain Zarr store.
+
+The examples use the names and the sample cube from [Zarr Stores](./zarr-stores#what-you-need).
+
+## Snapshots, time travel and tags
+
+A **store version is the manifest's Delta version**. A read pins one version when it is planned: the
+latest, or the one you ask for. Files are immutable, so that is a consistent snapshot even while writers
+keep committing.
+
+`gbx_zarr_history` returns one row per commit, built from the commit rows. Each row has the mode, the
+variables written and the region of each dimension the write covered (`[start, stop)` in cells):
+
+<CodeFromTest code={zarrExamples} language="python" functionName="read_history"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="READ_HISTORY_output" />
+
+Read an older version by number (`version_as_of=1`), by time (`timestamp_as_of`), or by tag
+(`version_as_of="tag:name"`). Versions last for the store's `retain` period; see
+[Lifecycle and retention](./zarr-lifecycle#time-travel-stops-at-retain).
+
+### Tag a version to keep it
+
+A **tag** names a version so that it outlives everything else. It copies that version's manifest rows
+into the table as current rows labelled with the tag. A tagged version therefore survives GeoBrix's
+vacuum, Delta's own `VACUUM` and history expiry. The cost is one manifest row per chunk or shard in the
+tagged version, for each tag. `gbx_zarr_untag` removes a tag and makes its files collectable by the next
+vacuum.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="tag_a_version"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+### Time travel
+
+One cell's time series at four points in the store's history:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="time_travel"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="TIME_TRAVEL_output" />
+
+## Restore an older version
+
+**Restore** makes the live store equal an older version again, as a **new commit**. Nothing is copied and
+nothing is removed, so the older versions stay readable and the restore can itself be undone. Restore
+refuses a version that vacuum has already removed.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="restore_a_version"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+## Export a version
+
+**Export** takes a version out of GeoBrix. It has two methods: `copy` writes a plain Zarr store, and
+`reference` writes a small JSON file that points at the store's own files.
+
+### Export a copy
+
+`method="copy"` writes a plain Zarr store at canonical keys, in the store's own format. A copy of a Zarr
+v2 store is Zarr v2, and a copy of a v3 store is v3. GeoBrix writes the metadata last, so a reader never
+sees a half-written store. Any tool that reads that format opens the copy.
+
+Three details to know:
+
+- A store that `gbx_zarr_write` made is Zarr v3 with sharding and the `crc32c` codec by default. A GDAL
+  before 3.13 cannot read those.
+- The target must be empty.
+- Shards that are already in standard form are copied as bytes, without decoding.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="export_a_version"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+### Export a reference
+
+`method="reference"` writes a small JSON file that maps each key to a file, offset and length in the
+store's own files. Nothing is copied. xarray opens the file through fsspec's `reference` file system.
+
+- **fsspec version.** The compute that **reads** a reference needs `fsspec` 2024.12.0 or later. GeoBrix
+  does not pin it, because the runtime shares fsspec with other libraries. Databricks runtimes
+  preinstall an older one that cannot open a reference.
+- **Contiguous shards.** Every shard must be one contiguous region, so run `gbx_zarr_optimize` first.
+- **Tag the version.** A reference points at the pack files of one version, so tag that version. A vacuum
+  then cannot delete them.
+
+## Next Steps
+
+- [Lifecycle and retention](./zarr-lifecycle): how long versions stay readable.
+- [`gbx_zarr_history`](./zarr-functions#gbx_zarr_history), [`gbx_zarr_tag`](./zarr-functions#gbx_zarr_tag), [`gbx_zarr_restore`](./zarr-functions#gbx_zarr_restore) and [`gbx_zarr_export`](./zarr-functions#gbx_zarr_export): every parameter.
+- [Zarr Reader](../readers/zarr): read a version by number, time or tag.

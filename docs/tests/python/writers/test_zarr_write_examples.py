@@ -507,5 +507,5 @@ def test_the_page_is_wired_in_and_speaks_to_users():
     assert "'writers/zarr'" in sidebar
     pattern = re.compile(r"\bwave[ -]?\d+|\btask \d+|gate g\d|ruling|\bZT\d+", re.I)
     assert not pattern.findall(PAGE.read_text())
-    for page in ("zarr.mdx", "overview.mdx"):
-        assert "../writers/zarr" in (DOCS / "formats" / page).read_text()
+    assert "../writers/zarr" in (DOCS / "api" / "zarr-stores.mdx").read_text()
+    assert "./writers/zarr" in (DOCS / "choosing-a-format.mdx").read_text()

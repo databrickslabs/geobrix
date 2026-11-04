@@ -4,9 +4,13 @@ title: Weather Features with Zarr
 sidebar_label: Zarr Weather Features
 ---
 
+import ZarrNav from '@site/src/components/ZarrNav';
+
 # Weather Features with Zarr — Register, Sample, Write Back and Version a Weather Cube
 
-An end-to-end example showing how to run a feature workflow on a weather cube stored as Zarr, with GeoBrix's [transactional Zarr stores](../formats/zarr): every write is all-or-nothing, every version of the store stays readable, and the cube itself is never copied.
+<ZarrNav current="notebook" />
+
+An end-to-end example showing how to run a feature workflow on a weather cube stored as Zarr, with GeoBrix's [transactional Zarr stores](../api/zarr-stores): every write is all-or-nothing, every version of the store stays readable, and the cube itself is never copied.
 
 The notebook uses the GeoBrix sample cube: two days of synthetic, ERA5-like hourly weather on a global one-degree grid.
 
@@ -30,7 +34,7 @@ It takes the cube through seven steps:
 :::
 
 :::info Runs on Serverless (`geobrix[zarr,vizx]`, env6 wheel)
-Zarr stores need no JAR. The notebook targets **Serverless environment 6** with the env6 wheel and `geobrix[zarr,vizx]`. On a classic **Databricks Runtime 19** cluster, install the same env6 wheel and extras. The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../formats/zarr#what-you-need) and [Surfaces and levels](../api/execution-tiers).
+Zarr stores need no JAR. The notebook targets **Serverless environment 6** with the env6 wheel and `geobrix[zarr,vizx]`. On a classic **Databricks Runtime 19** cluster, install the same env6 wheel and extras. The committed outputs are from a run on Serverless environment 6, and the notebook gives the same results on a Databricks Runtime 19 dedicated cluster. See [Zarr Stores](../api/zarr-stores#what-you-need) and [Surfaces and levels](../api/execution-tiers).
 :::
 
 ---
@@ -97,11 +101,11 @@ Tagged version: outlives retain and vacuum; the 4,800 feature rows reproduce fro
 
 ## Key GeoBrix functions shown
 
-- **[`gbx_zarr_register`](../api/zarr-functions#gbx_zarr_register)** — registers an existing Zarr store in place as a manifest table: one row per array document and per chunk or shard object, each pointing at the store's own file. `writable=True` with an `overlay_root` lets GeoBrix write to the registration without touching the store. See [Register a store in place](../formats/zarr#register-a-store-in-place).
+- **[`gbx_zarr_register`](../api/zarr-functions#gbx_zarr_register)** — registers an existing Zarr store in place as a manifest table: one row per array document and per chunk or shard object, each pointing at the store's own file. `writable=True` with an `overlay_root` lets GeoBrix write to the registration without touching the store. See [Register a store in place](../api/zarr-registered-stores#register-a-store-in-place).
 - **[`gbx_zarr_read`](../api/zarr-functions#gbx_zarr_read)** — reads a store by label (`sel`) or position (`isel`), at any readable version (`version_as_of`), as blocks, a table of cells, or GeoBrix raster tiles. `block_to_numpy` turns a block into a NumPy array. See the [Zarr Reader](../readers/zarr).
 - **[`gbx_zarr_sample`](../api/zarr-functions#gbx_zarr_sample)** — reads a store at the points of a DataFrame (WKT, WKB, EWKT or EWKB), at the nearest cell, repeating each point for every step of the dimensions left in. See [Sampling at points](../readers/zarr#sampling-at-points).
 - **[`gbx_zarr_write`](../api/zarr-functions#gbx_zarr_write)** — writes blocks to a store as one transaction; `mode="update"` with `variables=` creates a variable the store lacks. See the [Zarr Writer](../writers/zarr).
-- **[`gbx_zarr_history`](../api/zarr-functions#gbx_zarr_history)** and **[`gbx_zarr_tag`](../api/zarr-functions#gbx_zarr_tag)** — one row per commit, and a name that keeps a version readable for as long as the tag exists. See [Snapshots, time travel and tags](../formats/zarr#snapshots-time-travel-and-tags).
+- **[`gbx_zarr_history`](../api/zarr-functions#gbx_zarr_history)** and **[`gbx_zarr_tag`](../api/zarr-functions#gbx_zarr_tag)** — one row per commit, and a name that keeps a version readable for as long as the tag exists. See [Versions, time travel and tags](../api/zarr-versions).
 - **`rst_clip`, `rst_width`, `rst_height`, `rst_avg`, `rst_max`** — lightweight [RasterX functions](../api/raster-functions) applied to tiles cut from the cube, which open their chunks on demand ([Virtual Tiles](../api/virtual-tiles)).
 - **`plot_raster`** — the [`gbx.vizx`](../api/vizx) renderer for a tile that holds its pixels.
 

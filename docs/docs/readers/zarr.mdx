@@ -4,9 +4,12 @@ sidebar_label: Zarr
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
 import zarrRead from '!!raw-loader!../../tests/python/readers/zarr_read_examples.py';
 
 # Zarr Reader
+
+<ZarrNav current="reader" />
 
 _Since:_ lightweight `zarr_gbx` **v0.6.0** · _(light-only — no heavyweight tier)_
 
@@ -21,14 +24,14 @@ reader:
 
 All three run in the lightweight tier, so there is no JAR to install. Install the
 env6 wheel with its `[zarr]` extra, on Serverless environment 6 or Databricks Runtime 19.
-[Zarr Stores](../formats/zarr#what-you-need) describes this. To write a store back see the
+[Zarr Stores](../api/zarr-stores#what-you-need) describes this. To write a store back see the
 [Zarr Writer](../writers/zarr); for every parameter, return value and error see the
 [Zarr Function Reference](../api/zarr-functions). The examples use two names that stand for
 what is yours:
 
 <CodeFromTest code={zarrRead} language="python" functionName="SETUP" />
 
-The sample cube is the one [Zarr Stores](../formats/zarr#what-you-need) generates: two days of
+The sample cube is the one [Zarr Stores](../api/zarr-stores#what-you-need) generates: two days of
 made-up hourly weather on a one-degree global grid, `time` (48) by `latitude` (181) by
 `longitude` (360), with the variables `t2m`, `u10`, `v10` and `msl`. Every code block on this
 page is run by the documentation tests.
@@ -52,10 +55,10 @@ the path of a plain store, and anything else as the name of a manifest table. Pa
   outputConstant="READ_A_VERSION_output" />
 
 A version older than the store's `retain` period raises `ZarrVersionUnavailable`; see
-[Snapshots, time travel and tags](../formats/zarr#snapshots-time-travel-and-tags). A store made
+[Lifecycle and retention](../api/zarr-lifecycle#time-travel-stops-at-retain). A store made
 with `file_mode="external"` holds `FILE` values in its manifest and must be read on compute that
 supports them; other compute refuses with a `ZarrUnsupported` whose `Fix:` names the options (see
-[File modes](../formats/zarr#file-modes)).
+[File modes](../api/zarr-stores#file-modes)).
 
 ## Choosing what to read
 
@@ -326,7 +329,7 @@ points. Within a chunk, scattered points are read cell by cell. When a chunk's p
 more of the cells of the box around them, and the box fits in half of a task's decoded-data budget
 (32 MiB on Serverless and 768 MiB on Databricks Runtime 19 in these measurements), the box is read once
 and every point takes its cells from it; a chunk whose box is larger is read cell by cell. On the ERA5 store
-of the [Zarr Stores performance figures](../formats/zarr#performance) (one 90 x 90 chunk of 2-metre
+of the [Zarr performance figures](../api/zarr-performance) (one 90 x 90 chunk of 2-metre
 temperature, all 744 hours) on Serverless, points on a quarter of the chunk's cells took 0.44 s this way
 against 1.7 s cell by cell, and points on every cell 0.55 s against 6.7 s; at one point in 81 cells
 (100 points), reading cell by cell was the faster (0.26 s against 0.40 s).
@@ -378,6 +381,6 @@ GeoBrix error name and the `Fix:` line:
   variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Writer](../writers/zarr) — create, append, update and overwrite a store transactionally.
 - [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.
-- [Zarr Stores](../formats/zarr) — the transactional model: versions, tags, retention, file modes.
+- [Zarr Stores](../api/zarr-stores) — the transactional model and its topic pages: versions, tags, retention, file modes.
 - [Virtual Tiles](../api/virtual-tiles) — how a tile that holds no pixels is opened.
 - [Readers Overview](./overview) — all readers, with their tiers and options.

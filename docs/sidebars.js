@@ -103,19 +103,11 @@ const sidebars = {
     },
     {
       type: 'category',
-      label: 'Formats',
-      collapsed: true,
-      link: { type: 'doc', id: 'formats/overview' },
-      items: [
-        'formats/zarr',
-      ],
-    },
-    {
-      type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },
       items: [
+        'choosing-a-format',
         'common-functions',
         {
           type: 'category',
@@ -196,7 +188,20 @@ const sidebars = {
           ],
         },
         { type: 'doc', id: 'api/pmtiles-functions', label: 'PMTiles' },
-        { type: 'doc', id: 'api/zarr-functions', label: 'Zarr' },
+        {
+          type: 'category',
+          label: 'Zarr',
+          collapsed: true,
+          link: { type: 'doc', id: 'api/zarr-functions' },
+          items: [
+            'api/zarr-stores',
+            'api/zarr-registered-stores',
+            'api/zarr-transactions',
+            'api/zarr-versions',
+            'api/zarr-lifecycle',
+            'api/zarr-performance',
+          ],
+        },
         { type: 'doc', id: 'api/stac', label: 'STAC' },
         {
           type: 'category',

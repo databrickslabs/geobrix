@@ -1,0 +1,232 @@
+---
+title: "Zarr Stores: Concepts and Store Kinds"
+sidebar_label: Concepts and Store Kinds
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
+import zarrExamples from '!!raw-loader!../../tests/python/formats/zarr_examples.py';
+
+# Zarr Stores: Concepts and Store Kinds
+
+<ZarrNav current="stores" />
+
+_Since:_ **v0.6.0** · _(lightweight tier only; no JAR)_
+
+[Zarr](https://zarr.dev) stores N-dimensional arrays as many small objects in object storage. That makes it
+the format of choice for large weather, climate and earth-observation cubes. Plain Zarr has no
+transactions. Two jobs that write to one store can lose each other's updates, and a reader can see a
+half-written store.
+
+GeoBrix adds the missing layer:
+
+- **Read and sample** Zarr stores of any origin.
+- **Register** an existing store **in place**, without copying it.
+- **Write transactionally.** Every write is all-or-nothing, and concurrent writers do not corrupt each other.
+- **Keep every version readable** for the store's `retain` period (7 days by default). Tag a version to
+  keep it for as long as you like.
+
+This page is the place to start. It explains the four kinds of store and how a store is kept as files and
+rows. The examples run against a small sample cube, and the documentation tests run every block of code.
+
+:::tip See it end to end
+The [Weather Features with Zarr](../notebooks/zarr-weather-features) notebook runs these ideas on a small
+weather cube. It registers the cube in place and samples it at 100 sites. It writes a derived variable back
+as a new version, maps it as raster tiles, and tags the version for training.
+:::
+
+## Which page do you need?
+
+| You want to | Go to |
+|---|---|
+| Look up a function, its parameters and its errors | [Zarr Function Reference](./zarr-functions) |
+| Read a cube, or sample it at points | [Zarr Reader](../readers/zarr) |
+| Write blocks to a store | [Zarr Writer](../writers/zarr) |
+| Point a table at a store you already have, and keep it in sync | [Registering and syncing](./zarr-registered-stores) |
+| Know what happens when several jobs write at once | [Transactions and concurrent writers](./zarr-transactions) |
+| Read an older version, name one, or take one out | [Versions, time travel and tags](./zarr-versions) |
+| Free storage, or make reads faster after many small writes | [Lifecycle and retention](./zarr-lifecycle) |
+| See what a store costs, and what is not supported | [Performance and limits](./zarr-performance) |
+
+## Why Zarr
+
+| | **Zarr** | **GeoTIFF / COG** | **NetCDF / HDF5** | **GRIB2** | **Delta table, one row per cell** |
+|---|---|---|---|---|---|
+| Shape | Any number of dimensions | Bands of a 2-D grid | Any number of dimensions | A sequence of 2-D fields | Rows and columns; the grid is lost |
+| Layout | One object per chunk, or per shard of chunks | One file; a COG is tiled inside | One file, chunked inside | One file of messages | Parquet files |
+| Reading a slice from object storage | Fetches only the chunks the slice touches | A COG fetches the tiles it needs | Possible with range-read tooling; many readers copy the whole file | Needs an index of the messages | Scans and filters rows |
+| Several writers at once | Safe only for different chunks, and only if none changes the metadata | One file, one writer | One file, one writer | One file, one writer | Yes (Delta transactions) |
+| All-or-nothing writes | No | No | No | No | Yes |
+| Versions and time travel | No | No | No | No | Yes |
+| Best for | Cubes read and written at scale | Imagery and single surfaces | Files from data providers | Weather model output | Tabular analytics on cells |
+
+Zarr's strength is the layout. A job reads only the chunks it needs, and many jobs read different chunks
+at once. Its weakness is that the layout has no commit. GeoBrix keeps the layout and adds the commit.
+A store then gets the guarantees of the last column without turning an array into rows.
+
+**What GeoBrix adds**
+
+- **Register in place.** Point a table at an existing store; nothing is copied.
+- **Three ways to read.** Read N-dimensional blocks, a long table with a column per dimension, or
+  [GeoBrix raster tiles](./virtual-tiles). With tiles, every `rst_*` function works on a cube without
+  converting it to GeoTIFF. Select by label or by position. See the [Zarr Reader](../readers/zarr).
+- **Sample.** Read the time series at points, with the same geometry inputs as `rst_sample`
+  ([sampling at points](../readers/zarr#sampling-at-points)).
+- **Write back transactionally.** Create, append, update and overwrite, with history, time travel,
+  tags, restore, export and lifecycle management. See the [Zarr Writer](../writers/zarr).
+- **Concurrent writers.** Writers that touch different chunks both land. Writers that only change the
+  store's shape or coordinates are rebased automatically. Writers that meet on one chunk get a clear error.
+
+## What you need
+
+Install the env6 wheel with its `[zarr]` extra. Zarr runs on Databricks Runtime 19 and Serverless
+environment 6, in the lightweight tier, so there is no JAR to install.
+
+```python
+%pip install "geobrix[zarr] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
+```
+
+Off Databricks, the plain wheel's extra is `pip install "geobrix[zarr_dbr19]"`.
+
+The examples use three names:
+
+- `cube` is the path of a Zarr store.
+- `table` is the Unity Catalog name of a store's manifest table.
+- `root` is a directory on a Volume that GeoBrix writes a store's files to.
+
+The `cube` path below exists once the sample cube has been generated into your sample-data Volume (next).
+Until then, point `cube` at any Zarr store.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="SETUP" />
+
+The sample cube is two days of made-up hourly weather on a one-degree global grid: `time` (48 steps) by
+`latitude` (181) by `longitude` (360). Its variables are `t2m` (2 m temperature), `u10` and `v10`
+(10 m wind) and `msl` (mean sea level pressure). It is generated, not downloaded, and takes seconds:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="make_the_sample_cube"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+It writes the cube twice: `era5_like_v3.zarr` (Zarr v3 with sharding) and `era5_like_v2.zarr`
+(Zarr v2).
+
+## Read and sample a cube
+
+A selection reads as a table, one row per cell, with a column per dimension and per variable:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="read_a_selection"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="READ_A_SELECTION_output" />
+
+Label slices include both ends and follow the axis order, which is why latitude runs from 60 down to 40.
+Points are sampled the same way, at the nearest cell:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="sample_a_time_series"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="SAMPLE_A_TIME_SERIES_output" />
+
+## Store kinds
+
+A Zarr store GeoBrix works with is one of four kinds. They differ in where the bytes live, whether a
+manifest table exists, and who may write.
+
+| Kind | Created by | Where the bytes live | Versions and transactions | Who may write |
+|---|---|---|---|---|
+| **Plain store** | Anyone: xarray, a vendor, any Zarr tool | The store's own objects | None. GeoBrix reads the current bytes. | Not GeoBrix |
+| **Registered, read-only** | `gbx_zarr_register(spark, path, table)` | The store's own objects, **not copied** | Yes, in the manifest table | Nobody through GeoBrix |
+| **Registered, writable** | `gbx_zarr_register(spark, path, table, writable=True, overlay_root=...)` | The store's own objects, plus an **overlay** of new pack files | Yes | Anyone with `MODIFY` on the table and write access to the overlay root's Volume; the store itself is never written |
+| **Managed** | `gbx_zarr_write(..., mode="create")` | Pack files GeoBrix wrote under the store's root | Yes | Anyone with `MODIFY` on the table and write access to the root's Volume |
+
+![The four kinds of Zarr store side by side. A plain store has only its own objects and no manifest table. A read-only registered store has a Delta manifest table that points at the store's objects without copying them. A writable registered store has a manifest that points at the store's objects and at an overlay root of immutable pack files. The store's objects are locked against writes. A managed store has a manifest that points at pack files under a data root. A banner explains that many registrations of one store are independent branches. It also explains that every root has exactly one owner.](../../../resources/images/diagrams/zarr/store-kinds.png)
+
+Use a **managed** store when GeoBrix creates the data. Use a **registered** store when the data already
+exists and other tools keep using it. [Registering and syncing](./zarr-registered-stores) covers the
+registered kinds.
+
+### How a store is made of files and rows
+
+Every byte GeoBrix writes goes into a new **pack file** that is never modified again. Pack files sit
+under `data/<array>/<write_id>/part-*.zpack` in the store's root.
+
+A **manifest** is a Delta table with:
+
+- one row per chunk or shard, and per array and group document, that says which file, offset and length hold it;
+- one `commit` row for every write.
+
+A version of the store **is** a version of that Delta table, and one Delta transaction is one store
+transaction. Because files are immutable and rows are versioned, a reader that pins a version sees a
+consistent snapshot no matter what writers do meanwhile.
+
+A shard row points at a whole shard. A chunk row points at one chunk inside a pack file. Appends and
+updates add chunk rows, and `gbx_zarr_optimize` folds them back into shard rows; see
+[chunk rows and shard rows](./zarr-lifecycle#chunk-rows-and-shard-rows).
+
+### Create a managed store
+
+A managed store is made by writing blocks. This example writes the first 12 hours of two variables,
+together with the coordinates that label them:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="create_a_store"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+The new array layout defaults to chunks of about 4 MiB decoded, grouped into shards of up to 128 MiB.
+Its codecs are `bytes`, `zstd` (level 3) and `crc32c`. `chunks` takes a preset or a size per dimension:
+
+- `"maps"` for large spatial tiles;
+- `"series"` for long time series at small tiles;
+- `"balanced"` for both.
+
+The next step is usually [Transactions](./zarr-transactions), which covers appends, updates and
+concurrent writers.
+
+## File modes
+
+`file_mode` decides how the manifest refers to a store's files, and so who deletes superseded files.
+It matches the `file_mode` of `gbx_file_write`.
+
+| `file_mode` | The manifest's `file` column | Who deletes superseded files | Where it runs |
+|---|---|---|---|
+| `fuse` (default) | Path strings, relative to the store's root | GeoBrix `gbx_zarr_vacuum` | Everywhere, Serverless included |
+| `external` | `FILE EXTERNAL` references, governed with the table | GeoBrix `gbx_zarr_vacuum` | Compute that supports `FILE` values, in a workspace with the File type preview (**preview**) |
+| `managed` | `FILE MANAGED` values | The table | **Not available in this release** |
+| `auto` | `external` on compute that supports `FILE` values (Serverless included, in a workspace with the File type preview), otherwise `fuse`; it never fails | | |
+
+The default is `fuse`, so a store made on `FILE`-capable compute still reads on every compute. Pass
+`file_mode="auto"` or `"external"` to keep `FILE` references.
+
+`managed` is not available because Delta's `VACUUM` does not reclaim the bytes of a managed file, so a
+managed store would only grow. A registered store is never `managed`: managed ingest would copy the
+store.
+
+**A `FILE` store needs `FILE`-capable compute.** A store whose files are `FILE` values (`external`) must be
+written, maintained and read on compute that supports them. Other compute refuses up front with a `Fix:`
+that tells you what to do. You have three options:
+
+- Use a Databricks Runtime 19 dedicated cluster (single user, with `fileReferenceCreationMode=MANAGED`)
+  in a workspace with the preview.
+- Copy the data out with `gbx_zarr_export(method="copy")`, and register the copy with `file_mode="fuse"`.
+- Create stores that other compute also uses with `file_mode="fuse"`.
+
+Reads of a store return the same cells in every mode.
+
+<CodeFromTest code={zarrExamples} language="python" functionName="create_with_a_file_mode"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py" />
+
+Asking for `managed` fails before anything is written:
+
+<CodeFromTest code={zarrExamples} language="python" functionName="managed_is_not_available"
+  source="docs/tests/python/formats/zarr_examples.py"
+  testFile="docs/tests/python/formats/test_zarr_examples.py"
+  outputConstant="MANAGED_IS_NOT_AVAILABLE_output" />
+
+## Next Steps
+
+- [Registering and syncing](./zarr-registered-stores): use a store you already have, without copying it.
+- [Transactions and concurrent writers](./zarr-transactions): append, update and write from several jobs.
+- [Zarr Function Reference](./zarr-functions): every option, return value and error.
+- [Virtual Tiles](./virtual-tiles): the tiles a Zarr read returns.
+- [Limitations](../limitations)

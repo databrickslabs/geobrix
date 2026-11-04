@@ -1,6 +1,7 @@
 """Executes the Formats / Zarr doc examples on the sample cube (Docker only).
 
-Every code block on ``docs/docs/formats/zarr.mdx`` is a function of ``zarr_examples.py``;
+Every code block on the Zarr topic pages (``docs/docs/api/zarr-stores.mdx`` and its five
+siblings) is a function of ``zarr_examples.py``;
 these tests run each one against the real sample cube on a local Delta session and assert
 what the page says it does. The manifest of a Zarr store is a Delta table, so the session is
 the Delta one from ``zarr_delta.py`` (via ``conftest.py``).
@@ -48,7 +49,19 @@ from databricks.labs.gbx.zarr import (  # noqa: E402
 )
 
 DOCS = Path(__file__).resolve().parents[3] / "docs"
-PAGES = [DOCS / "formats" / "overview.mdx", DOCS / "formats" / "zarr.mdx"]
+# The Zarr topic pages, in sidebar order (they replace the old single formats/zarr page).
+ZARR_TOPICS = [
+    DOCS / "api" / f"zarr-{name}.mdx"
+    for name in (
+        "stores",
+        "registered-stores",
+        "transactions",
+        "versions",
+        "lifecycle",
+        "performance",
+    )
+]
+PAGES = [DOCS / "choosing-a-format.mdx", *ZARR_TOPICS]
 IMAGES = (
     Path(__file__).resolve().parents[4] / "resources" / "images" / "diagrams" / "zarr"
 )
@@ -474,7 +487,7 @@ def test_every_snippet_a_page_shows_exists():
 
 @pytest.mark.structure
 def test_diagrams_are_linked_relatively_with_descriptive_alt_text():
-    text = (DOCS / "formats" / "zarr.mdx").read_text()
+    text = "\n".join(p.read_text() for p in ZARR_TOPICS)
     images = re.findall(r"!\[([^\]]*)\]\(([^)]+)\)", text)
     found = {Path(p).stem: (alt, p) for alt, p in images}
     for name in (
@@ -484,7 +497,7 @@ def test_diagrams_are_linked_relatively_with_descriptive_alt_text():
         "retention-timeline",
         "chunk-vs-shard-rows",
     ):
-        assert name in found, f"zarr.mdx does not show the {name} diagram"
+        assert name in found, f"the Zarr topic pages do not show the {name} diagram"
         alt, link = found[name]
         assert (
             len(alt) >= 120
@@ -498,13 +511,17 @@ def test_diagrams_are_linked_relatively_with_descriptive_alt_text():
 
 @pytest.mark.structure
 def test_zarr_page_sections_come_in_the_planned_order():
-    text = (DOCS / "formats" / "zarr.mdx").read_text()
+    text = "\n".join(p.read_text() for p in ZARR_TOPICS)
     titles = [h.strip() for h in re.findall(r"^## (.+)$", text, flags=re.M)]
     wanted = [
         "Why Zarr",
         "Store kinds",
         "File modes",
-        "Transactions",
+        "Register a store",
+        "Outside changes",
+        "One owner",
+        "How a write commits",
+        "Concurrent writers",
         "Snapshots",
         "Lifecycle",
         "Chunk rows",
@@ -522,11 +539,42 @@ def test_zarr_page_sections_come_in_the_planned_order():
 @pytest.mark.structure
 def test_the_pages_are_wired_in_and_speak_to_users():
     sidebar = (DOCS.parent / "sidebars.js").read_text()
-    assert "'formats/overview'" in sidebar and "'formats/zarr'" in sidebar
-    assert sidebar.index("'formats/zarr'") < sidebar.index("label: 'Readers & Writers'")
+    assert "'formats/" not in sidebar, "the Formats category moved"
+    readers_writers = sidebar.index("label: 'Readers & Writers'")
+    assert sidebar.index("'choosing-a-format'") > readers_writers
+    for page in ZARR_TOPICS:
+        assert f"'api/{page.stem}'" in sidebar, f"{page.stem} is not in the sidebar"
     raster = (DOCS / "readers" / "raster.mdx").read_text()
-    assert "formats/overview" in raster and "### Format Selection Guide" not in raster
+    assert "choosing-a-format" in raster and "### Format Selection Guide" not in raster
     pattern = re.compile(r"\bwave[ -]?\d+|\btask \d+|gate g\d|ruling|\bZT\d+", re.I)
     for page in PAGES:
         leaks = pattern.findall(page.read_text())
         assert not leaks, f"{page.name} leaks internal vocabulary: {leaks}"
+
+
+@pytest.mark.structure
+def test_every_zarr_page_opens_with_the_one_orientation_block():
+    """One component (src/components/ZarrNav.js) is the "Zarr in GeoBrix" block of every page."""
+    nav = (DOCS.parent / "src" / "components" / "ZarrNav.js").read_text()
+    pages = [
+        *ZARR_TOPICS,
+        DOCS / "api" / "zarr-functions.mdx",
+        DOCS / "readers" / "zarr.mdx",
+        DOCS / "writers" / "zarr.mdx",
+        DOCS / "notebooks" / "zarr-weather-features.mdx",
+        DOCS / "choosing-a-format.mdx",
+    ]
+    for page in pages:
+        text = page.read_text()
+        assert "import ZarrNav from '@site/src/components/ZarrNav'" in text, page.name
+        assert "<ZarrNav" in text, page.name
+        head = text.split("<ZarrNav", 1)[0]
+        assert head.count("\n## ") == 0, f"{page.name}: the block must come before the first section"
+    for target in (
+        "/docs/api/zarr-functions",
+        "/docs/readers/zarr",
+        "/docs/writers/zarr",
+        "/docs/notebooks/zarr-weather-features",
+        *(f"/docs/api/{p.stem}" for p in ZARR_TOPICS),
+    ):
+        assert f"'{target}'" in nav, f"ZarrNav does not link {target}"

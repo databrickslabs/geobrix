@@ -1,7 +1,7 @@
 """Formats / Zarr examples — single source of truth.
 
-Code shown on docs/docs/formats/zarr.mdx is imported from here, and every function runs for
-real in test_zarr_examples.py on the sample ERA5-like cube (a small synthetic weather cube:
+Code shown on the Zarr topic pages (docs/docs/api/zarr-stores.mdx and its siblings) is
+imported from here, and every function runs for real in test_zarr_examples.py on the sample ERA5-like cube (a small synthetic weather cube:
 ``time`` 48 hourly steps x ``latitude`` 181 x ``longitude`` 360, variables ``t2m``, ``u10``,
 ``v10`` and ``msl``). The page shows each function's body: the ``def`` line, the docstring
 and the closing ``return`` are not shown.

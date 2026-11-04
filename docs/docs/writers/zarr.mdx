@@ -4,9 +4,12 @@ sidebar_label: Zarr
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
+import ZarrNav from '@site/src/components/ZarrNav';
 import zarrWrite from '!!raw-loader!../../tests/python/writers/zarr_write_examples.py';
 
 # Zarr Writer
+
+<ZarrNav current="writer" />
 
 _Since:_ lightweight `gbx_zarr_write` **v0.6.0** · _(light-only — no heavyweight tier)_
 
@@ -14,12 +17,12 @@ _Since:_ lightweight `gbx_zarr_write` **v0.6.0** · _(light-only — no heavywei
 `MERGE` on the store's manifest table, so it is visible whole or not at all; writers that touch
 different chunks both land, and writers that meet on one chunk get a clear error. This page is the
 how-to: the modes, the inputs, the layout of new arrays, what happens when writers meet, and publishing a
-registered store. [Zarr Stores](../formats/zarr) explains the model, and the
+registered store. [Zarr Stores](../api/zarr-stores) explains the model, and the
 [Zarr Function Reference](../api/zarr-functions#gbx_zarr_write) lists every parameter and error.
 To read a store back see the [Zarr Reader](../readers/zarr).
 
 It runs in the lightweight tier, so there is no JAR to install: install the env6 wheel with its
-`[zarr]` extra, as [Zarr Stores](../formats/zarr#what-you-need) describes. The examples use these names:
+`[zarr]` extra, as [Zarr Stores](../api/zarr-stores#what-you-need) describes. The examples use these names:
 
 <CodeFromTest code={zarrWrite} language="python" functionName="SETUP" />
 
@@ -41,7 +44,7 @@ modes they raise `ValueError` with a `Fix:` (a later write may repeat the store'
 with `writable=True`; it goes to the store's overlay root, in the base arrays' own codecs and key
 encoding, and the store itself is never written (see [Registered stores](#registered-stores-and-publish)).
 
-Old versions stay readable until [vacuumed](../formats/zarr#lifecycle-and-retention): an `overwrite`
+Old versions stay readable until [vacuumed](../api/zarr-lifecycle): an `overwrite`
 does not destroy what it replaces.
 
 ## Inputs
@@ -102,11 +105,11 @@ The layout is in the array's document, which is a row of the manifest table:
 
 `create` needs `root` not to exist, or to be empty. It gets an ownership ledger (the small Delta table
 `_gbx_owner`, which decides which table owns the root even when several claim it at once) and the
-`_gbx_store.json` marker; see [One owner per root](../formats/zarr#one-owner-per-root). `file_mode`
+`_gbx_store.json` marker; see [One owner per root](../api/zarr-registered-stores#one-owner-per-root). `file_mode`
 (`"fuse"` by default; `"auto"` or `"external"` keep `FILE` references; `"managed"` is not
 available in this release) and `retain` (how long superseded versions stay readable,
 `"7 days"` by default) are the store's from then on; see
-[File modes](../formats/zarr#file-modes). A store in `external` mode keeps `FILE` values in its manifest,
+[File modes](../api/zarr-stores#file-modes). A store in `external` mode keeps `FILE` values in its manifest,
 so it can be written, read and maintained only on compute that supports them; other compute refuses
 before it writes anything.
 
@@ -131,7 +134,7 @@ above do). Without them the write still succeeds and logs a warning, "the blocks
 
 An `append` labels the new steps: they must come after the store's last, and on a regular axis they land
 at their step, so appends may arrive out of order. On an irregular axis they land at the current length.
-[Zarr Stores](../formats/zarr#transactions) shows an append, an update and a conflict.
+[Zarr transactions](../api/zarr-transactions) shows an append, an update and a conflict.
 
 An `update` writes into the existing extent. An inner chunk the input covers whole is encoded without
 being read; a chunk it covers only in part is read at the base version, patched and written again. A
@@ -192,7 +195,7 @@ chunks do not sit side by side in the data file and a read of that shard takes m
 block of one shard keeps them together. A 1 GB create of blocks of one shard each wrote its data
 files at a median 119 MB/s through the Volume and 80 MB/s direct to storage on Databricks Runtime 19
 (direct runs from 39 to 139 MB/s), and at 122 MB/s on Serverless; see
-[Zarr Stores](../formats/zarr#performance).
+[Zarr performance](../api/zarr-performance).
 
 An `xarray.Dataset` and a DataFrame of tiles are planned on the driver from what they hold, so neither
 has a pass of this kind.
@@ -270,7 +273,7 @@ tile that does not fit is refused on the driver, before any file is written.
 
 ## When writers meet
 
-[Zarr Stores](../formats/zarr#concurrent-writers) explains the rules row by row; in short, writers
+[Zarr transactions](../api/zarr-transactions#concurrent-writers) explains the rules row by row; in short, writers
 that touch **different chunks** both land, writers that only change the **shape or a shared coordinate
 chunk** are rebased, and a write that meets another's **chunk** raises `ZarrWriteConflict` and commits
 nothing. The limits of the rebase are worth knowing before many jobs append to one array:
@@ -311,7 +314,7 @@ deletes the object.
 ### Publishing
 
 `gbx_zarr_export(spark, table, method="publish")` writes the overlay into the store itself, so every
-Zarr reader sees it ([Outside changes: drift, sync and publish](../formats/zarr#outside-changes-drift-sync-and-publish)
+Zarr reader sees it ([Outside changes: drift, sync and publish](../api/zarr-registered-stores#outside-changes-drift-sync-and-publish)
 describes what it does and guarantees). The limits:
 
 - **A publish refuses if the store changed since the last sync**, with `ZarrStoreDrift`. Run
@@ -390,5 +393,5 @@ message; a failed write commits nothing. The full list, with the cause of each, 
   variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Reader](../readers/zarr) — read a store as blocks, a table or tiles.
 - [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.
-- [Zarr Stores](../formats/zarr) — versions, tags, retention and file modes.
+- [Zarr Stores](../api/zarr-stores) — the transactional model and its topic pages: versions, tags, retention and file modes.
 - [Writers Overview](./overview) — all writers, with their tiers and options.

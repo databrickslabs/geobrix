@@ -427,7 +427,7 @@ def test_the_page_is_wired_in_and_speaks_to_users():
     pattern = re.compile(r"\bwave[ -]?\d+|\btask \d+|gate g\d|ruling|\bZT\d+", re.I)
     text = PAGE.read_text()
     assert not pattern.findall(text), pattern.findall(text)
-    formats = (DOCS / "formats" / "zarr.mdx").read_text()
-    overview = (DOCS / "formats" / "overview.mdx").read_text()
-    for page in (formats, overview):
-        assert "../readers/zarr" in page
+    stores = (DOCS / "api" / "zarr-stores.mdx").read_text()
+    overview = (DOCS / "choosing-a-format.mdx").read_text()
+    assert "../readers/zarr" in stores
+    assert "./readers/zarr" in overview

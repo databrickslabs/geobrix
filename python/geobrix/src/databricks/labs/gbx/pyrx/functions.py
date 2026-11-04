@@ -1575,7 +1575,7 @@ def _align_to_bytes(tile, reference):
 
     _env.configure_gdal_env()
     with _open_op(tile) as src, _open_op(reference, header=True) as ref:
-        return agg_core.align_datasets(src, ref)
+        return warp.align_datasets(src, ref)
 
 
 @f.udf(V2_TILE_SCHEMA)

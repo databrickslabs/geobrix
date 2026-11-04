@@ -317,6 +317,18 @@ def test_a_list_literal_takes_the_element_type_of_its_parameter_and_ewkt_is_pars
     assert literal("gbx_rst_rasterize", 0, "POINT(1 2)") == (
         "CAST(st_geomfromwkt('POINT(1 2)', 3857) AS GEOMETRY(ANY))"
     )
+    # an EWKT is recognised whatever its case or leading whitespace, and a quote in it is doubled
+    for ewkt in (
+        "srid=4326;POINT(1 2)",
+        "  SRID=4326;POINT(1 2)",
+        "\n\tSrid=4326;POINT(1 2)",
+    ):
+        assert literal("gbx_rst_rasterize", 0, ewkt) == (
+            f"CAST(st_geomfromewkt('{ewkt}') AS GEOMETRY(ANY))"
+        )
+    assert literal("gbx_rst_rasterize", 0, "SRID=4326;POINT(1 2)'; --") == (
+        "CAST(st_geomfromewkt('SRID=4326;POINT(1 2)''; --') AS GEOMETRY(ANY))"
+    )
 
 
 def test_a_reference_of_several_bands_holds_every_band_in_order():

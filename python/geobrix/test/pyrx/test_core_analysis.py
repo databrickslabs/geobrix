@@ -107,6 +107,12 @@ def test_proximity_targets_that_are_not_numbers_are_a_checked_argument():
         ValueError, match="target_values must be comma-separated numbers"
     ):
         analysis.check_proximity(target_values="a,b")
+    # float("inf") parses, then int(round(inf)) overflows: the same argument error, not an OverflowError
+    for bad in ("1,inf", "-inf", "1e999"):
+        with pytest.raises(
+            ValueError, match="target_values must be comma-separated numbers"
+        ):
+            analysis.check_proximity(target_values=bad)
     analysis.check_proximity(target_values=None)
     analysis.check_proximity(target_values="1, 2,")
     with _serde.open_tile(_single_source_bytes()) as ds:

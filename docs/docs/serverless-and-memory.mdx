@@ -160,7 +160,7 @@ See [Readers & Writers](./readers-writers#file-gbx) for the full file-access bas
 
 ### `rst_fromfile(materialize=True)` {#rst_fromfile-materialize-true}
 
-`rst_fromfile` with `materialize=True` (and the SQL function `gbx_rst_fromfile`, which always materializes) forces the raster bytes into the tile's `raster` field immediately. If the file is larger than the connect-aware cap (**64 MiB on Serverless / Spark Connect**, 256 MiB on classic), this raises a `ValueError`. The error is intentional — silently materializing an oversized tile would OOM the executor.
+`rst_fromfile` with `materialize=True` (and the SQL function `gbx_rst_fromfile`, which always materializes) forces the raster bytes into the tile's `raster` field immediately. The connect-aware cap is **64 MiB on Serverless and Spark Connect**, and 256 MiB on classic. A larger file fails the call with an error that says how to fix it. The failure is intentional, because silently materializing an oversized tile would run the executor out of memory. A tile that is already in a column and over the cap gives an error tile instead. See [Error handling](./api/error-handling).
 
 **Fix:** Use the virtual default (`materialize=False`, or omit the argument; Python only). Virtual tiles are Serverless-safe by construction — pixels are read lazily, size-gated, at each downstream operation.
 

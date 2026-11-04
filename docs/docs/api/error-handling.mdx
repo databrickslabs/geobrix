@@ -14,53 +14,112 @@ This separation keeps large-scale spatial pipelines reliable: parameter mistakes
 
 ## RasterX
 
-RasterX has four result shapes, and each expresses the bad-data-degrades rule in a way that fits its shape.
+RasterX has four result shapes. Each one applies the bad-data-degrades rule in its own way. A tile function returns a tile, so it can carry the reason for a failure. A function that returns a number or a string cannot, so it returns `NULL`.
+
+### Order of checks
+
+Every raster tile function checks its input in the same order at every level:
+
+1. A `NULL` tile, or a `NULL` required argument, gives `NULL`.
+2. An error tile comes out unchanged, so the first reason survives.
+3. A bad argument raises an error that names the value.
+4. A tile that cannot be opened, is refused, or is over the read cap becomes an error tile.
+
+A bad argument raises on every row that is not already an error tile. An error tile in the column does not hide a typo in your query.
+
+### The error tile
+
+An **error tile** is a valid tile struct with no pixels. Its `raster` field is `NULL`, its `path` is `NULL`, and its `metadata` map holds the reason under `last_error`. The JVM level also writes the same text under `error_message`. Test for `last_error`, which every level writes.
+
+A good tile can also carry `last_error` as a warning, for example when a merge skipped corrupt members. The mark of an error tile is no pixels plus `last_error`.
+
+```sql
+SELECT path,
+       gbx_rst_retile(tile, 256, 256) AS retiled
+FROM my_rasters
+-- a tile that cannot be retiled comes back as an error tile
+```
+
+To list the problem rows:
+
+```sql
+SELECT path, tile.metadata['last_error'] AS err
+FROM results
+WHERE tile.raster IS NULL AND tile.path IS NULL
+  AND tile.metadata['last_error'] IS NOT NULL
+```
+
+An error tile also answers the accessors in a fixed way: `gbx_rst_isempty(tile)` is true and `gbx_rst_tryopen(tile)` is false. `gbx_rst_tryopen` is false for any payload that does not open as a raster.
 
 ### Scalar accessors
 
-Functions that read a single property from a raster tile (band count, CRS, pixel type, and similar) return `NULL` when the tile is corrupt or unreadable. The rest of the column is unaffected.
+Functions that read one property (band count, CRS, pixel type and similar) return `NULL` for a `NULL`, error or corrupt tile. The rest of the column is unaffected. A NetCDF container tile has no bands. Band-level accessors give the empty answer for it, such as an empty array.
 
 ```sql
-SELECT path, gbx_rst_bandcount(tile) AS bands
+SELECT path, gbx_rst_numbands(tile) AS bands
 FROM my_rasters
 -- rows with a corrupt tile produce NULL for `bands`; the query does not fail
 ```
 
-### Tile operations
+### Tile functions
 
-Functions that return a raster tile (transforms, resampling, band math) return an **empty tile** when they encounter bad data. An empty tile is a valid struct — it carries no pixel data, but its `metadata` map contains an `error_message` key that describes what went wrong.
+Functions that return a tile (transforms, resampling, band math) return an error tile when they meet bad data. One bad row never fails the stage.
 
-```sql
-SELECT path,
-       gbx_rst_retile(tile, 256, 256)  AS retiled,
-       gbx_rst_retile(tile, 256, 256).metadata['error_message'] AS err
-FROM my_rasters
--- rows that could not be retiled produce an empty tile; err is non-NULL for those rows
-```
+Both levels accept the same tile drivers. Bytes in a driver from the allowed set that are not GeoTIFF translate to GeoTIFF in memory first. A driver GeoBrix refuses gives an error tile with a `Fix:`.
 
-To isolate problem rows:
+### Tiles over the read cap
 
-```sql
-SELECT path, err
-FROM (
-  SELECT path,
-         gbx_rst_retile(tile, 256, 256).metadata['error_message'] AS err
-  FROM my_rasters
-)
-WHERE err IS NOT NULL
-```
+A function that must decode a tile checks the decoded size first. The cap is 64 MiB on Serverless and Spark Connect, and 256 MiB on classic compute. A tile over the cap gives the same error tile at every level. The error text ends with a `Fix:` that says to retile first with `gbx_rst_retile`.
+
+A **file** read over the cap is different. `gbx_rst_fromfile`, and `rst_fromfile(materialize=True)`, fail the call with an error that says how to fix it. The `raster_gbx` reader does the same when you set `virtualTiles=false`. Set `sizeInMB` to split the file, or keep virtual tiles.
+
+An out-of-memory error fails the task. GeoBrix never turns it into an error tile.
+
+### Arrays of tiles, merges and combines
+
+Functions that take an `ARRAY` of tiles (`gbx_rst_merge`, the `gbx_rst_combine*` family, `gbx_rst_frombands`) share one contract:
+
+- A `NULL` or empty array gives `NULL`.
+- An array of only error tiles gives the first member's error tile.
+- A `NULL` element, an error tile or an unreadable tile is skipped. The skipped count goes into `last_error`.
+- Tiles of different shapes raise.
+- An array over the memory budget gives that group's error tile with a `Fix:`.
+
+The `Fix:` names the route that fits the group:
+
+- Members on mixed CRS or pixel size: bring them to one grid first with `gbx_rst_transform` and `gbx_rst_resample_to_res`.
+- A mosaic or result over the cap: keep the tiles as files on a Volume. Then build the mosaic with `rasterx.helpers.mint_vrt(paths, out="/Volumes/...")` or the `cog_gbx` writer in mosaic mode, and read the VRT.
+- Members that do not fit in memory, with a result that does: `merge_by_key(..., method="vrt")`.
+- A combine over the cap: retile first with `gbx_rst_retile`, or use `combine_by_key`.
 
 ### Aggregators
 
-Aggregation functions (mosaic, union, merge) skip any corrupt member tile. The aggregate continues over the remaining valid members. A stage-level error is not raised.
+The aggregators (`gbx_rst_merge_agg`, `gbx_rst_combineavg_agg`, `gbx_rst_frombands_agg` and the others) skip a corrupt member and continue over the rest. They stream under the worker cap.
+
+The aggregators that return `BINARY` have no place for a reason. When they must refuse, they raise an error with the same `Fix:` instead of returning `NULL`. They refuse when a member is over the read cap or the result is over the cap. A group with no usable member gives `NULL`.
 
 ### Generators
 
-Functions that expand a single tile into multiple rows (tessellation, tiling, pyramid generation) emit one error row when a tile fails. The error row's tile column holds an empty tile with `error_message` set; it can be filtered or audited like any other row. The exception is the heavyweight `gbx_rst_xyzpyramid`, whose `(z, x, y, bytes)` tile struct has no metadata to hold an error: a tile that cannot be read gives one row with a NULL `tile`, while an argument error (an unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096], a `max_z` above the cap, or too many tiles for the zoom range) raises its message. The lightweight `gbx_rst_xyzpyramid` instead yields no rows for a NULL raster and raises on corrupt bytes.
+Functions that turn one tile into many rows (tessellation, tiling, pyramids) behave by what they return:
+
+- A generator that returns tiles emits one error row for a tile it cannot read. Filter or audit that row like any other.
+- A generator that returns no tile column (the cell explodes, the TIN functions, `gbx_rst_polygonize`) gives no rows for any `NULL` or unreadable input.
+- `gbx_rst_xyzpyramid` gives no rows for a `NULL` or unreadable tile. An unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096], a `max_z` above the cap, or too many tiles for the zoom range raises its message.
+- A `NULL` size, resolution or grid gives one error tile.
+
+Call a generator as `FROM t, LATERAL gbx_...(args)`. That form works at every level. The select-list form works only when you force the JVM level on a dedicated cluster.
+
+### Readers
+
+A reader fails the read when it cannot open a file. Set `on_error` to `skip` or `quarantine` to set the file aside and continue. The tile functions above follow the error-tile rule instead.
+
+### Setting both `out_srid` and `out_crs`
+
+`gbx_rst_rasterize`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms` and their `_agg` forms raise when you set both. The H3, quadbin and custom-grid cell rasterizers use `out_crs` when you set both.
 
 ### Flipping data errors to hard failures for debugging
 
-The Spark configuration key `spark.databricks.labs.gbx.expressions.crash.on.error` makes RasterX data-level errors raise hard failures instead of degrading. Use it when you want stack traces during development or when diagnosing unexpected `NULL`s or empty tiles in a pipeline.
+The Spark configuration key `spark.databricks.labs.gbx.expressions.crash.on.error` makes the JVM RasterX expressions raise hard failures instead of degrading. Use it to get stack traces during development.
 
 ```python
 spark.conf.set(
@@ -69,9 +128,9 @@ spark.conf.set(
 )
 ```
 
-Set it back to `false` (the default) before running production workloads.
+Set it back to `false` (the default) before production runs.
 
-This switch applies **only to the heavyweight (JVM) RasterX expressions**. It is read by the Scala tile expressions and has no effect on the lightweight Python tier (`pyrx`), which does not consult Spark configuration, nor on VectorX (see below), which does not have an equivalent switch.
+The switch affects only the JVM level (L1). The Python level does not read Spark configuration. VectorX has no such switch.
 
 ## VectorX
 
@@ -150,9 +209,19 @@ Fix the resolution argument; do not expect this to degrade quietly.
 
 This behaviour is intentional and differs from BNG and Custom, which return `NULL` for a coordinate outside their valid extent.
 
+## Unity Catalog functions
+
+A Unity Catalog function follows a stricter rule than the session function. It cannot return a reason beside the data.
+
+- **Corrupt data gives `NULL`.** A cell id that is no cell, or a geometry the kernel cannot read, gives `NULL` for that row.
+- **Non-conforming input is refused with a `Fix:`.** Examples are a geometry with the wrong SRID, a CRS form UC does not accept, and a `BINARY` value where a `GEOMETRY` belongs. The error names the session function to use.
+- **Parameters are checked first.** A bad `mode`, `coverage`, resolution, zoom or `k` raises with a `Fix:`.
+
+Unity Catalog gives `NULL` where the session raises for a data limit. For example, `gbx_quadbin_polyfill` of a geometry over 1,000,000 cells raises in a session and gives `NULL` on UC. See [Unity Catalog functions](./uc-functions).
+
 ## Catching degraded rows
 
-**VectorX / scalar accessors:** filter on `IS NOT NULL`:
+**Scalar accessors and VectorX:** filter on `IS NOT NULL`:
 
 ```sql
 SELECT *
@@ -160,18 +229,20 @@ FROM results
 WHERE geom IS NOT NULL
 ```
 
-**RasterX tile operations:** filter on the `error_message` metadata key:
+**RasterX tile functions:** filter on the error-tile mark:
 
 ```sql
 SELECT *
 FROM results
-WHERE tile.metadata['error_message'] IS NULL
+WHERE NOT (tile.raster IS NULL AND tile.path IS NULL
+           AND tile.metadata['last_error'] IS NOT NULL)
 ```
 
 Or audit the errors:
 
 ```sql
-SELECT path, tile.metadata['error_message'] AS err
+SELECT path, tile.metadata['last_error'] AS err
 FROM results
-WHERE tile.metadata['error_message'] IS NOT NULL
+WHERE tile.raster IS NULL AND tile.path IS NULL
+  AND tile.metadata['last_error'] IS NOT NULL
 ```

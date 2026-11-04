@@ -693,3 +693,69 @@ rst_convolve = _tile_fn(
     "gbx_rst_convolve", "focal", "convolve", check=_check("focal", "check_kernel")
 )
 rst_fillnodata = _tile_fn("gbx_rst_fillnodata", "features", "fill_nodata")
+
+
+# --- terrain: a DEM tile to a surface tile -------------------------------------------------------------------------
+def _slope_args(unit, xscale, yscale):
+    """The wrong arguments of gbx_rst_slope: a unit that is not degrees or percent, one scale without the other."""
+    fn = "gbx_rst_slope"
+    if str(unit) not in ("degrees", "percent"):
+        raise _Parameter(
+            f"{fn}: unit must be 'degrees' or 'percent'; got {str(unit)!r}. Fix: pass 'degrees' or 'percent'"
+        )
+    if (xscale is None) != (yscale is None):
+        raise _Parameter(_kernel("terrain", "SLOPE_HALF_SCALE_REFUSAL"))
+
+
+def _hillshade_args(azimuth, altitude, z_factor, xscale, yscale):
+    if (xscale is None) != (yscale is None):
+        raise _Parameter(_kernel("terrain", "HILLSHADE_HALF_SCALE_REFUSAL"))
+
+
+def _surface(dtype: str) -> Callable:
+    """A ``grows`` hint: a terrain result is one band of ``dtype`` on the tile's grid."""
+    return lambda ds, *args: (ds.width, ds.height, [dtype])
+
+
+def _optional_float(*values):
+    return tuple(None if v is None else float(v) for v in values)
+
+
+rst_slope = _tile_fn(
+    "gbx_rst_slope",
+    "terrain",
+    "slope",
+    optional=(1, 2),
+    check=_slope_args,
+    cast=lambda unit, xscale, yscale: (str(unit), *_optional_float(xscale, yscale)),
+    grows=_surface("float32"),
+)
+rst_aspect = _tile_fn(
+    "gbx_rst_aspect",
+    "terrain",
+    "aspect",
+    cast=lambda trigonometric, zero_for_flat: (
+        bool(trigonometric),
+        bool(zero_for_flat),
+    ),
+    grows=_surface("float32"),
+)
+rst_hillshade = _tile_fn(
+    "gbx_rst_hillshade",
+    "terrain",
+    "hillshade",
+    optional=(3, 4),
+    check=_hillshade_args,
+    cast=lambda azimuth, altitude, z_factor, xscale, yscale: (
+        float(azimuth),
+        float(altitude),
+        float(z_factor),
+        *_optional_float(xscale, yscale),
+    ),
+    grows=_surface("uint8"),
+)
+rst_tpi = _tile_fn("gbx_rst_tpi", "terrain", "tpi", grows=_surface("float32"))
+rst_tri = _tile_fn("gbx_rst_tri", "terrain", "tri", grows=_surface("float32"))
+rst_roughness = _tile_fn(
+    "gbx_rst_roughness", "terrain", "roughness", grows=_surface("float32")
+)

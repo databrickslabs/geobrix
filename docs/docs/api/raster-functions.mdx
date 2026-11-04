@@ -5096,18 +5096,19 @@ Thin wrappers around `gdal.DEMProcessing` for digital elevation model (DEM) deri
 ### rst_aspect
 
 {/* BEGIN GENERATED gbx_rst_aspect: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_aspect(tile, [trigonometric], [zero_for_flat])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_aspect(tile, [trigonometric], [zero_for_flat])` | `TILE` |
 | Python | `rasterx.functions.rst_aspect(tile, trigonometric=None, zero_for_flat=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
-| `trigonometric` | `BOOLEAN` | `false` | `true` gives counter-clockwise degrees from east; `false` gives compass degrees clockwise from north. |
-| `zero_for_flat` | `BOOLEAN` | `false` | `true` gives 0 for flat cells; `false` leaves them NoData. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
+| `trigonometric` | `BOOLEAN` | `BOOLEAN` | `false` | `true` gives counter-clockwise degrees from east; `false` gives compass degrees clockwise from north. |
+| `zero_for_flat` | `BOOLEAN` | `BOOLEAN` | `false` | `true` gives 0 for flat cells; `false` leaves them NoData. |
 {/* END GENERATED gbx_rst_aspect */}
 
 :::note Edges and NoData
@@ -5168,21 +5169,22 @@ Apply a `gdaldem` color table (`elevation R G B [A]` per line) to produce an RGB
 ### rst_hillshade
 
 {/* BEGIN GENERATED gbx_rst_hillshade: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_hillshade(tile, [azimuth], [altitude], [z_factor], [xscale], [yscale])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_hillshade(tile, [azimuth], [altitude], [z_factor], [xscale], [yscale])` | `TILE` |
 | Python | `rasterx.functions.rst_hillshade(tile, azimuth=None, altitude=None, z_factor=None, xscale=None, yscale=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
-| `azimuth` | `DOUBLE` | `315.0` | Sun azimuth in degrees clockwise from north. |
-| `altitude` | `DOUBLE` | `45.0` | Sun elevation above the horizon in degrees. |
-| `z_factor` | `DOUBLE` | `1.0` | Vertical exaggeration applied to the gradients. |
-| `xscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along x; set it with `yscale`. When both are NULL, the scale comes from the raster CRS. |
-| `yscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along y; set it with `xscale`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
+| `azimuth` | `DOUBLE` | `DOUBLE` | `315.0` | Sun azimuth in degrees clockwise from north. |
+| `altitude` | `DOUBLE` | `DOUBLE` | `45.0` | Sun elevation above the horizon in degrees. |
+| `z_factor` | `DOUBLE` | `DOUBLE` | `1.0` | Vertical exaggeration applied to the gradients. |
+| `xscale` | `DOUBLE` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along x; set it with `yscale`. When both are NULL, the scale comes from the raster CRS. |
+| `yscale` | `DOUBLE` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along y; set it with `xscale`. |
 {/* END GENERATED gbx_rst_hillshade */}
 
 :::note Edges and NoData
@@ -5205,16 +5207,17 @@ Shaded relief as an 8-bit image with values from 1 to 255; 0 is NoData. Common v
 ### rst_roughness
 
 {/* BEGIN GENERATED gbx_rst_roughness: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_roughness(tile)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_roughness(tile)` | `TILE` |
 | Python | `rasterx.functions.rst_roughness(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
 {/* END GENERATED gbx_rst_roughness */}
 
 :::note Edges and NoData
@@ -5237,19 +5240,20 @@ The largest minus the smallest value in the 3×3 window around each pixel.
 ### rst_slope
 
 {/* BEGIN GENERATED gbx_rst_slope: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_slope(tile, [unit], [xscale], [yscale])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_slope(tile, [unit], [xscale], [yscale])` | `TILE` |
 | Python | `rasterx.functions.rst_slope(tile, unit=None, xscale=None, yscale=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
-| `unit` | `STRING` | `'degrees'` | `'degrees'` or `'percent'`. |
-| `xscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along x; set it with `yscale`. When both are NULL, the scale comes from the raster CRS. |
-| `yscale` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along y; set it with `xscale`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
+| `unit` | `STRING` | `STRING` | `'degrees'` | `'degrees'` or `'percent'`. |
+| `xscale` | `DOUBLE` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along x; set it with `yscale`. When both are NULL, the scale comes from the raster CRS. |
+| `yscale` | `DOUBLE` | `DOUBLE` | `NULL` | Vertical units per horizontal unit along y; set it with `xscale`. |
 {/* END GENERATED gbx_rst_slope */}
 
 :::note Implementation
@@ -5272,16 +5276,17 @@ Compute slope per pixel. `unit` is `'degrees'` or `'percent'`; `xscale` and `ysc
 ### rst_tpi
 
 {/* BEGIN GENERATED gbx_rst_tpi: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_tpi(tile)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_tpi(tile)` | `TILE` |
 | Python | `rasterx.functions.rst_tpi(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
 {/* END GENERATED gbx_rst_tpi */}
 
 :::note Edges and NoData
@@ -5304,16 +5309,17 @@ Topographic Position Index — pixel value minus the mean of its 8 neighbours. P
 ### rst_tri
 
 {/* BEGIN GENERATED gbx_rst_tri: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_tri(tile)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_tri(tile)` | `TILE` |
 | Python | `rasterx.functions.rst_tri(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The single-band DEM tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The single-band DEM tile. |
 {/* END GENERATED gbx_rst_tri */}
 
 :::note Edges and NoData

@@ -31,6 +31,7 @@
       "description": "Compute the direction of steepest descent from a single-band DEM tile (Horn's 3x3 method).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -835,6 +836,7 @@
       "description": "Compute shaded relief from a single-band DEM tile (Horn's 3x3 method).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1357,6 +1359,7 @@
       "description": "Compute terrain roughness from a single-band DEM tile.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1473,6 +1476,7 @@
       "description": "Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1564,6 +1568,7 @@
       "description": "Compute the Topographic Position Index from a single-band DEM tile.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1599,6 +1604,7 @@
       "description": "Compute the Terrain Ruggedness Index (Riley) from a single-band DEM tile.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

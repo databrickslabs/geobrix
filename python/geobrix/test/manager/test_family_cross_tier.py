@@ -163,6 +163,7 @@ _UC_TABLES = (
     "RASTER_TILE_OP",
     "SPEC_WARP",
     "SPEC_CALC",
+    "SPEC_DEM",
 )
 
 

@@ -10,6 +10,7 @@ pixel is NoData when its 3 x 3 window holds NoData or crosses the border. The fi
 
 import os
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -87,7 +88,7 @@ def _cr_table_missing(tmpdir):
 
 
 TABLE, TABLE_A = Build("cr_table"), Build("cr_table_alpha")
-SPEC_DEM = (
+_session_dem_rows = (
     # slope: the engine's own rows (SPEC_SE) hold its edge cases; this one is the docs example.
     Case("slope_example", SL, (DEM, "degrees"), "ref", "slope", ONLY),
     Case("aspect_compass", AS, (DEM, False, False), "ref", "aspect", ONLY),
@@ -181,7 +182,7 @@ SPEC_DEM = (
 CT = "gbx_rst_contour"
 COLUMNS = Build("vz_columns")
 
-SPEC_DEM += (
+_session_dem_rows += (
     Case(
         "contour_levels",
         CT,
@@ -218,3 +219,25 @@ SPEC_DEM += (
         ONLY,
     ),
 )
+
+
+# Unity Catalog: the surface of a materialized DEM tile is the session's; a virtual tile is refused with a Fix, a
+# corrupt one is NULL, and a unit that is not degrees or percent is a wrong argument (the session reads any other as
+# degrees).
+SPEC_DEM = share(
+    _session_dem_rows,
+    "slope_example", "aspect_compass", "aspect_trig", "aspect_plane_east", "aspect_flat_nodata", "aspect_flat_zero",
+    "aspect_null_param", "aspect_null_tile", "aspect_error_tile",
+    "hillshade_default", "hillshade_params", "hillshade_scales", "hillshade_sql_defaults", "hillshade_half_scale",
+    "hillshade_null_param", "tri", "tri_null_tile", "tri_error_tile", "tpi", "roughness",
+) + edges(
+    slope=("degrees",), aspect=(False, False), hillshade=(315.0, 45.0, 1.0), tpi=(), tri=(), roughness=(),
+) + (
+    Case("uc_slope_percent", SL, (DEM, "percent"), "ref", "slope", ("uc",)),
+    Case("uc_slope_scales", SL, (DEM, "degrees", 2.0, 0.5), "ref", "slope", ("uc",)),
+    Case("uc_slope_half_scale", SL, (DEM, "degrees", 2.0, None), "raises", "xscale and yscale must be supplied together", ("uc",)),
+    Case("uc_slope_bad_unit", SL, (DEM, "radians"), "uc_refused", None, ("uc",)),
+    Case("uc_slope_null_unit", SL, (DEM, None), "null", None, ("uc",)),
+    Case("uc_slope_null_tile", SL, (None, "degrees"), "null", None, ("uc",)),
+    Case("uc_slope_error_tile", SL, (ERR, "radians"), "error_tile", UPSTREAM_ERROR, ("uc",)),
+)  # fmt: skip

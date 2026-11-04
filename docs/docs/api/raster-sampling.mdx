@@ -6,21 +6,18 @@ title: Raster Sampling
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
-import Tier from '@site/src/components/Tier';
 
 # Raster Sampling
 
 **Raster sampling** is the operation of reading raster values at one or more point locations — the equivalent of Esri's ArcGIS **Sample** tool and its `RS_VALUE` output columns. You have a raster (a DEM, a satellite scene, a modeled surface) and a set of coordinates; you want the cell value at each coordinate.
 
-GeoBrix covers this with [`rst_sample`](./raster-functions#rst_sample), available in both execution tiers.
+GeoBrix covers this with [`rst_sample`](./raster-functions#rst_sample), available on every compute.
 
 :::note Coordinate reference systems
 Sampling functions accept a `crs` parameter (source role) to declare the CRS of a plain WKB/WKT point; an EWKB/EWKT embedded SRID always takes precedence. The point is reprojected to the raster's CRS before the pixel lookup. `out_srid` / `out_crs` parameters on related functions (such as `rst_gridfrompoints`) control the output CRS. See [Coordinate reference systems](./coordinate-reference-systems) for the full source-vs-output CRS model.
 :::
 
 ## Value at a point — `rst_sample`
-
-<Tier both/>
 
 ```sql
 gbx_rst_sample(tile, geom [, crs])  →  ARRAY<DOUBLE>
@@ -48,7 +45,7 @@ If the point falls outside the raster's extent, or if the raster's geotransform 
 
 ### Many points on a virtual tile
 
-On a [virtual tile](./virtual-tiles), the lightweight `rst_sample` reads only the block of the file that holds the point, and the points of one file in a Spark task share one open of it. Many points per tile are cheap when the rows of a file stay together in a task, as they do when a tile DataFrame is cross-joined with a broadcast point table. After a shuffle that scatters them, group them again with `repartition(n, "tile.path").sortWithinPartitions("tile.path")` (see [Virtual tile read performance](./performance#virtual-tile-read-performance)). A clipped or reprojected virtual tile is read whole, as the other pixel functions read it.
+On a [virtual tile](./virtual-tiles), the Python level of `rst_sample` reads only the block of the file that holds the point. The points of one file in a Spark task share one open of it. Many points per tile are cheap when a file's rows stay together in a task. They do when a tile DataFrame is cross-joined with a broadcast point table. After a shuffle that scatters them, group them again with `repartition(n, "tile.path").sortWithinPartitions("tile.path")` (see [Virtual tile read performance](./performance#virtual-tile-read-performance)). A clipped or reprojected virtual tile is read whole, as the other pixel functions read it.
 
 For `rst_sample` examples (doc-tested), see the [`rst_sample` function reference](./raster-functions#rst_sample).
 
@@ -338,7 +335,7 @@ The `rst_*_rastertogrid*` family and `rst_gridfrompoints*` answer **area questio
 
 ## Function reference cross-links
 
-- [`rst_sample`](./raster-functions#rst_sample) — full signature, examples, tier notes
+- [`rst_sample`](./raster-functions#rst_sample) — full signature, examples, implementation notes
 - [`rst_resample`](./raster-functions#rst_resample) — resample by factor
 - [`rst_resample_to_res`](./raster-functions#rst_resample_to_res) — resample by ground resolution
 - [`rst_resample_to_size`](./raster-functions#rst_resample_to_size) — resample by pixel dimensions

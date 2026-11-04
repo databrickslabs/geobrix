@@ -10,11 +10,13 @@ import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_function
 
 VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
 
-:::note Lightweight tier only
-The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+:::note Implementation
+These functions use Shapely at the Python level and run on every compute. Register them once per session, then call them from SQL or Python:
 ```python
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)
+from databricks.labs.gbx import register
+from databricks.labs.gbx.vectorx import functions as vx
+
+register(spark)
 ```
 :::
 

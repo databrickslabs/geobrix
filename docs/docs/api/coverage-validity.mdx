@@ -4,7 +4,6 @@ title: Coverage Validity
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
-import Tier from '@site/src/components/Tier';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
 import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
 
@@ -12,11 +11,13 @@ import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functi
 
 VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
 
-:::note Lightweight tier only
-The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+:::note Implementation
+These functions use Shapely at the Python level and run on every compute. Register them once per session, then call them from SQL or Python:
 ```python
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)
+from databricks.labs.gbx import register
+from databricks.labs.gbx.vectorx import functions as vx
+
+register(spark)
 ```
 :::
 
@@ -47,8 +48,6 @@ Both `gbx_st_coverageisvalid` and `gbx_st_coverageinvalidedges` take a required 
 
 ## gbx_st_coverageisvalid
 
-<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
-
 Check whether a group of polygons forms a valid coverage. Use `GROUP BY` to define which polygons belong to the same coverage — the aggregator evaluates the entire group at once and returns a single `BOOLEAN` per group.
 
 **Signature:** `gbx_st_coverageisvalid(geom, gap_width)`
@@ -73,8 +72,6 @@ Check whether a group of polygons forms a valid coverage. Use `GROUP BY` to defi
 />
 
 ## gbx_st_coverageinvalidedges
-
-<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
 
 Return the union of the boundary segments that violate the coverage. Like `gbx_st_coverageisvalid`, this is a grouped aggregate — it evaluates all polygons in the group together and returns one geometry per group.
 
@@ -103,8 +100,6 @@ Same constraint as `gbx_st_coverageisvalid` — always pass the second argument 
 
 ## coverage_simplify (Python API)
 
-<Tier light/>
-
 Topology-preserving simplification of a whole coverage. Unlike `gbx_st_simplifypreservetopology` (which simplifies each geometry independently), `coverage_simplify` simplifies the entire coverage as a unit — vertices on shared edges are dropped or kept together in both polygons, so boundaries that were shared before simplification remain shared after.
 
 This is a **Python-API only** function. There is no SQL form; it operates directly on a Spark DataFrame.
@@ -123,10 +118,12 @@ This is a **Python-API only** function. There is no SQL form; it operates direct
 
 **Import:**
 ```python
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)
+from databricks.labs.gbx import register
+from databricks.labs.gbx.vectorx.helpers import coverage_simplify
 
-result = vx.coverage_simplify(df, "admin_level", "geom_wkb", tolerance=50.0)
+register(spark)
+
+result = coverage_simplify(df, "admin_level", "geom_wkb", tolerance=50.0)
 ```
 
 <CodeFromTest
@@ -159,10 +156,12 @@ result = vx.coverage_simplify(df, "admin_level", "geom_wkb", tolerance=50.0)
 
 Future versions of GeoBrix will explore streaming coverage algorithms that relax the all-in-memory constraint.
 
-## Tier availability
+## Levels
 
-| Function | Lightweight (`pyvx`) | Heavyweight (`vectorx`) |
-|---|---|---|
-| `gbx_st_coverageisvalid` | Supported | — |
-| `gbx_st_coverageinvalidedges` | Supported | — |
-| `coverage_simplify` | Supported (Python API) | — |
+Every function below runs at the Python level, on every compute. GeoBrix picks the level; see [Surfaces and levels](./execution-tiers).
+
+| Function | Levels |
+|---|---|
+| `gbx_st_coverageisvalid` | Python |
+| `gbx_st_coverageinvalidedges` | Python |
+| `coverage_simplify` | Python helper, no SQL form |

@@ -3,16 +3,13 @@ sidebar_position: 7
 title: VectorX Function Reference
 ---
 
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
 import FunctionExamples from '@site/src/components/FunctionExamples';
 import vectorxFunctionsExamples from '!!raw-loader!../../tests/python/api/vectorx_functions.py';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
 import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
 import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
-import Tier from '@site/src/components/Tier';
 import Surfaces from '@site/src/components/Surfaces';
-import { Impl } from '@site/src/components/Tier';
+import { Impl } from '@site/src/components/Impl';
 import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 
 # <img src={VectorXIcon} alt="VectorX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
@@ -25,18 +22,19 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 
 As of v0.5.0 it covers:
 
-- **Vector tile encoding** — `gbx_st_asmvt` aggregator + `gbx_st_asmvt_pyramid` generator for publishing Mapbox Vector Tile (MVT) layers, available in **both** the lightweight (`pyvx`) and heavyweight (`vectorx`) tiers
-- **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, in **both** tiers (with a `constrained`/`conforming` mode selector)
-- **CRS strings** — `gbx_st_crs`, `gbx_st_setcrs`, and `gbx_st_transformcrs` for reading, stamping, and reprojecting a geometry's coordinate reference system by **CRS string** (ESRI codes, WKT, PROJ4 — not just an EPSG integer), in **both** tiers
-- **Geometry validity** — `gbx_st_makevalid` and `gbx_st_explainvalidity` for repairing and diagnosing OGC-invalid geometries, **lightweight tier only** (`pyvx`)
-- **Coverage validity** — `gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges` (SQL grouped-aggregates), and `coverage_simplify` (Python-API helper) for validating and simplifying polygon coverages, **lightweight tier only** (`pyvx`)
-- **Geometry cleaning** — `gbx_st_simplifypreservetopology`, `gbx_st_removerepeatedpoints`, `gbx_st_reduceprecision`, `gbx_st_node`, and `gbx_st_snap` for topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping, **lightweight tier only** (`pyvx`)
-- **Antimeridian handling** — `gbx_st_shiftlongitude`, `gbx_st_wrapx`, and `gbx_st_split` for normalizing geometries that cross the 180° antimeridian, **lightweight tier only** (`pyvx`)
-- **OGR-based vector readers** — Shapefile, GeoJSON, GeoPackage, FileGDB (heavyweight only)
-- **Legacy Mosaic conversion** — `gbx_st_legacyaswkb` for migrating geometries written by DBLabs Mosaic, in **both** tiers
+- **Vector tile encoding** — `gbx_st_asmvt` aggregator and `gbx_st_asmvt_pyramid` generator for publishing Mapbox Vector Tile (MVT) layers
+- **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox` and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, with a `constrained` or `conforming` mode
+- **CRS strings** — `gbx_st_crs`, `gbx_st_setcrs` and `gbx_st_transformcrs` for reading, stamping and reprojecting a geometry's CRS by **CRS string** (ESRI codes, WKT, PROJ4 — not just an EPSG integer)
+- **Geometry validity** — `gbx_st_makevalid` and `gbx_st_explainvalidity` for repairing and diagnosing OGC-invalid geometries
+- **Coverage validity** — `gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges` (SQL grouped aggregates) and `coverage_simplify` (a Python helper) for validating and simplifying polygon coverages
+- **Geometry cleaning** — `gbx_st_simplifypreservetopology`, `gbx_st_removerepeatedpoints`, `gbx_st_reduceprecision`, `gbx_st_node` and `gbx_st_snap` for topology-safe simplification, vertex deduplication, precision reduction, noding and snapping
+- **Antimeridian handling** — `gbx_st_shiftlongitude`, `gbx_st_wrapx` and `gbx_st_split` for normalizing geometries that cross the 180° antimeridian
+- **Legacy Mosaic conversion** — `gbx_st_legacyaswkb` for migrating geometries written by DBLabs Mosaic
+
+Vector files are read and written by the `*_gbx` readers and writers. See the [readers overview](../readers/overview).
 
 :::note Using these functions
-- **Import paths** — vector tile encoding: `databricks.labs.gbx.pyvx` (lightweight) · `databricks.labs.gbx.vectorx` Python / `com.databricks.labs.gbx.vectorx` Scala (heavyweight). Legacy Mosaic conversion: `databricks.labs.gbx.vectorx.jts.legacy` (Python) / `com.databricks.labs.gbx.vectorx.jts.legacy` (Scala).
+- **Import paths** — Python: `databricks.labs.gbx.vectorx.functions`. Python-only helpers such as `coverage_simplify`: `databricks.labs.gbx.vectorx.helpers`. Scala: `com.databricks.labs.gbx.vectorx`.
 - **SQL examples** — examples use **SQL** (and Python where shown); in SQL, VectorX functions are prefixed with **`gbx_`** (e.g. `gbx_st_legacyaswkb`). For SQL, Python, and Scala usage patterns, see [Language Bindings](./language-bindings).
 - **Geometry input encodings** — every `gbx_st_*` geometry input accepts **WKB, EWKB, WKT, and EWKT** interchangeably. WKB/WKT carry no SRID; EWKB/EWKT carry one. Pass whichever encoding your upstream produces — no separate conversion step is required.
 :::
@@ -45,64 +43,40 @@ As of v0.5.0 it covers:
 `gbx_st_crs(geom)` returns the geometry's canonical CRS string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) or `NULL` for a geometry with no SRID. `gbx_st_setcrs(geom, crs)` stamps a CRS as a label-only change (raises for authority-less CRS — a geometry can only carry an integer SRID). `gbx_st_transformcrs(geom, target_crs[, source_crs])` reprojects; an authority-less target reprojects and clears the stale SRID. All three accept WKB/EWKB/WKT/EWKT input and return `BINARY` (`gbx_st_crs` returns `STRING`). See [Coordinate reference systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model, EPSG→ESRI resolution order, and ESRI/OGC authority-preservation behavior.
 :::
 
-## Tier availability
+## Levels by function
 
-| Function | Lightweight (pyvx) | Heavyweight (vectorx) |
+Every function runs on every compute through its Python level. GeoBrix picks the JVM level on a dedicated cluster with the JAR, where that level is faster. See [Surfaces and levels](./execution-tiers).
+
+| Function | Levels | Notes |
 |---|---|---|
-| `st_asmvt` | Supported | Supported |
-| `st_asmvt_pyramid` | Supported | Supported |
-| `st_triangulate` | Supported (`constrained`) | Supported (`constrained` + `conforming`) |
-| `st_interpolateelevationbbox` | Supported (`constrained`) | Supported (`constrained` + `conforming`) |
-| `st_interpolateelevationgeom` | Supported (`constrained`) | Supported (`constrained` + `conforming`) |
-| `st_crs` | Supported | Supported |
-| `st_setcrs` | Supported | Supported |
-| `st_transformcrs` | Supported | Supported |
-| `st_legacyaswkb` | Supported | Supported |
-| `st_makevalid` | Supported | — |
-| `st_explainvalidity` | Supported | — |
-| `st_coverageisvalid` | Supported | — |
-| `st_coverageinvalidedges` | Supported | — |
-| `coverage_simplify` | Supported (Python API) | — |
-| `st_simplifypreservetopology` | Supported | — |
-| `st_removerepeatedpoints` | Supported | — |
-| `st_reduceprecision` | Supported | — |
-| `st_node` | Supported | — |
-| `st_snap` | Supported | — |
-| `st_shiftlongitude` | Supported | — |
-| `st_wrapx` | Supported | — |
-| `st_split` | Supported | — |
+| `st_asmvt` | Python, JVM | Python level by default |
+| `st_asmvt_pyramid` | Python | |
+| `st_triangulate` | Python, JVM | JVM level by default on a dedicated cluster; `conforming` mode runs on the JVM level only |
+| `st_interpolateelevationbbox` | Python, JVM | JVM level by default on a dedicated cluster; `conforming` mode runs on the JVM level only |
+| `st_interpolateelevationgeom` | Python, JVM | Python level by default; `conforming` mode runs on the JVM level only |
+| `st_crs`, `st_setcrs`, `st_transformcrs` | Python, JVM | JVM level by default on a dedicated cluster |
+| `st_legacyaswkb` | Python, JVM, Unity Catalog | Python level by default |
+| `st_makevalid`, `st_explainvalidity` | Python, Unity Catalog | |
+| `st_wrapx` | Python, Unity Catalog | |
+| `st_coverageisvalid`, `st_coverageinvalidedges` | Python | |
+| `coverage_simplify` | Python helper | No SQL form |
+| `st_simplifypreservetopology`, `st_removerepeatedpoints`, `st_reduceprecision`, `st_node`, `st_snap` | Python | |
+| `st_shiftlongitude`, `st_split` | Python | |
 
 ---
 
 ## Setup {#setup}
 
-With GeoBrix already [installed](../installation), register VectorX in your session before running any example. Both tiers alias the module as `vx`, so every example below is identical regardless of tier — only this import line differs.
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pyvx)">
+With GeoBrix already [installed](../installation), register the functions once per session. Every example below assumes this setup.
 
 ```python
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)
-```
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (vectorx)">
-
-```python
+from databricks.labs.gbx import register
 from databricks.labs.gbx.vectorx import functions as vx
-vx.register(spark)
+
+register(spark)
 ```
 
-For the legacy conversion function (`st_legacyaswkb`), use:
-
-```python
-from databricks.labs.gbx.vectorx.jts.legacy import functions as vx
-vx.register(spark)
-```
-
-</TabItem>
-</Tabs>
+Legacy Mosaic geometries need no extra import. `st_legacyaswkb` is in the same `vx` module.
 
 The examples on this page read from **four canonical DataFrames**, one per function family. Each is available as a temp view for SQL examples. Point the placeholders at your own data to reproduce the examples:
 
@@ -119,18 +93,18 @@ All four views are built from inline literals in the doc-test fixture helpers (n
 
 ## Examples — Conventions {#conventions}
 
-### How to read the four tabs
+### How to read the tabs
 
-Every function on this page shows **one example**, expressed identically across four tabs:
+Every function on this page shows **one example**, expressed on each surface it runs on:
 
-| Tab | Tier | Badge |
-|---|---|---|
-| **SQL** | Both (default) | — |
-| **Python (light)** | `pyvx` lightweight tier | — |
-| **Python (heavy)** | `vectorx` heavyweight tier | Blue |
-| **Scala** | `vectorx` heavyweight tier | Blue |
+| Tab | Surface |
+|---|---|
+| **SQL** | Session SQL, after `register(spark)` |
+| **Unity Catalog SQL** | A `<catalog>.<schema>.gbx_*` function, where the function exists in Unity Catalog |
+| **Python** | The `vectorx` Python API |
+| **Scala** | The `vectorx` Scala functions |
 
-All four tabs operate on the **same input fixture** with the **same arguments**. Where a genuine tier difference exists — a diverging output schema or a mode available only in one tier — the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
+The tabs operate on the **same input fixture** with the **same arguments**. Where a genuine difference exists, such as a diverging output schema or a mode available at one level only, the affected tab carries a labeled `:::note`. A difference without a label is a documentation error.
 
 In each Python example, `df = spark.table("<view>")` or an equivalent inline `spark.sql(...)` call loads the canonical fixture. Each SQL example reads `FROM <view>` or uses an inline CTE — no separate `CREATE TEMP VIEW` step is shown.
 
@@ -168,11 +142,11 @@ PROJCS["British National Grid", ...] (CRS)
 
 **Cell width** — output cells are capped at approximately 60 characters. A longer value is truncated with `...` and annotated with its type.
 
-**Identical-across-tier values** — when all four tabs produce the same result (e.g. `EPSG:4326` from `st_crs`), each tab shows that value identically with the same annotation. Genuine tier differences are called out in a labeled `:::note`.
+**Identical values** — when every tab produces the same result (e.g. `EPSG:4326` from `st_crs`), each tab shows that value with the same annotation. Genuine differences are called out in a labeled `:::note`.
 
 ### CRS-family functions return BINARY
 
-`gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB or EWKB) in **all input encodings and both tiers** — a STRING (WKT/EWKT) input still yields BINARY output. Only `gbx_st_crs` returns `STRING`. The clickable pointer to the CRS contract: [Coordinate Reference Systems](./coordinate-reference-systems).
+`gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB or EWKB) in **all input encodings and every level** — a STRING (WKT/EWKT) input still yields BINARY output. Only `gbx_st_crs` returns `STRING`. The clickable pointer to the CRS contract: [Coordinate Reference Systems](./coordinate-reference-systems).
 
 ### Generators are table functions
 
@@ -190,17 +164,13 @@ The Python entry takes the input DataFrame first and returns it joined with the 
 
 Encode features into [Mapbox Vector Tile (MVT)](https://github.com/mapbox/vector-tile-spec) protobufs. Pair the per-tile MVT bytes with [`gbx_pmtiles_agg`](./pmtiles-functions#pmtiles_agg) or the [PMTiles writer](../writers/pmtiles) to publish a vector pyramid as a single `.pmtiles` archive targeting MapLibre, deck.gl, Mapbox GL JS, or Felt.
 
-`st_asmvt` and `st_asmvt_pyramid` have the same names and output columns in both tiers. The one-line swap for `st_asmvt`:
+`st_asmvt` and `st_asmvt_pyramid` have the same names and output columns on every compute. Call `register(spark)` once, then use them:
 
 ```python
-# Lightweight (pyvx) — Serverless-safe, no JAR
-from databricks.labs.gbx.pyvx    import functions as vx
-
-# Heavyweight (vectorx) — dedicated cluster (env wheel + JAR, or the DCS image), JAR required
+from databricks.labs.gbx import register
 from databricks.labs.gbx.vectorx import functions as vx
 
-# Everything below is identical in both tiers:
-vx.register(spark)
+register(spark)
 ```
 
 ### Options
@@ -214,19 +184,11 @@ vx.register(spark)
 
 ### Compute compatibility
 
-| Aspect | Lightweight (pyvx) | Heavyweight (vectorx) |
-|---|---|---|
-| Install | Volume-staged env wheel, e.g. `+env6` ([install](../installation#whl-only)) | JAR + native GDAL ([install paths](../installation#choose-an-install-path)) |
-| Serverless / shared | Supported | Not supported |
-| Dedicated cluster, ARM (Graviton) | Supported | Supported on DBR 19, with the env6 wheel and the JAR as cluster libraries or the GeoBrix [DCS image](../installation/dcs.mdx) |
-| Dedicated cluster, x86 | Supported | Supported on DBR 17.3 / 18 / 19, with the env wheel and the JAR as cluster libraries, or on DBR 19 with the GeoBrix [DCS image](../installation/dcs.mdx) |
-| Lakeflow declarative pipelines | Supported | Not supported |
-| Execution model | Python UDTF / pandas UDF | JVM (Scala + Spark columnar) |
-| JVM access | None — `spark.udf.register` only | Required |
+The Python level of both functions runs on every compute: Serverless, standard, dedicated (x86 and Graviton) and Lakeflow declarative pipelines. It needs only the env wheel ([install](../installation#whl-only)), with no JVM access. `st_asmvt` also has a JVM level that needs the JAR on a dedicated cluster ([install paths](../installation#choose-an-install-path)). GeoBrix uses the Python level by default.
 
 ### Native attribute typing
 
-Both tiers encode MVT feature attributes with native protobuf value types:
+Every level encodes MVT feature attributes with native protobuf value types:
 
 - **Integer / Long → int64 value**
 - **Float / Double → double value**
@@ -258,8 +220,8 @@ This means downstream clients (MapLibre GL JS, Mapbox GL JS, deck.gl) receive nu
 
 Aggregator that encodes a group of features into a single MVT protobuf blob for one
 `(z, x, y)` tile. Each `groupBy(z, x, y).agg(vx.st_asmvt(...))` call produces the
-MVT bytes for exactly one tile. Both tiers expose the same grouped-aggregate API and
-produce identical output bytes — a one-line swap between `pyvx` and `vectorx`.
+MVT bytes for exactly one tile. Every level exposes the same grouped-aggregate API
+and produces identical output bytes.
 
 - `geom` (`BINARY`) — Feature geometry (WKB, EWKB, WKT, or EWKT) in **tile-local coordinates** (pixel
   space, `0..extent`). Clip and project each feature to the tile coordinate system upstream
@@ -322,17 +284,17 @@ FROM features, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 12, 'layer', 409
 -- Output columns: t.z, t.x, t.y, t.mvt_bytes
 ```
 
-The function runs on the lightweight level.
+The function runs at the Python level.
 
-**Full pipeline — vector pyramid to PMTiles (lightweight):**
+**Full pipeline — vector pyramid to PMTiles:**
 
 ```python
-from databricks.labs.gbx.pyvx    import functions as vx
+from databricks.labs.gbx import register
+from databricks.labs.gbx.vectorx import functions as vx
 from databricks.labs.gbx.pmtiles import functions as px
 from pyspark.sql import functions as F
 
-vx.register(spark)
-px.register(spark)
+register(spark)
 
 # Step 1: explode features → per-tile MVT rows (distributed; LATERAL in SQL)
 tiles_df = spark.sql("""
@@ -357,7 +319,7 @@ with open("/tmp/roads.pmtiles", "wb") as fh:
 ```
 
 For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](../writers/pmtiles)
-(`pmtiles_gbx` for the lightweight tier) instead of `pmtiles_agg`.
+(`pmtiles_gbx` for the Python level) instead of `pmtiles_agg`.
 
 <FunctionExamples
   name="st_asmvt_pyramid"
@@ -370,18 +332,18 @@ For larger pyramids that exceed the Spark cell limit, use the [PMTiles Writer](.
 
 ## Triangulation and elevation
 
-These generators build a Delaunay triangulated irregular network (TIN) from Z-valued mass points and optional breaklines. They then either expose the triangles directly or sample the surface on a regular grid to produce elevation points. Useful for surface modeling, DTM/DEM derivation, and elevation sampling from survey point clouds. All three run in both tiers; both honor break lines.
+These generators build a Delaunay triangulated irregular network (TIN) from Z-valued mass points and optional breaklines. They then either expose the triangles directly or sample the surface on a regular grid to produce elevation points. Useful for surface modeling, DTM/DEM derivation, and elevation sampling from survey point clouds. All three run at every level; both honor break lines.
 
 ### Triangulation modes: `constrained` vs `conforming`
 
 Each TIN function takes a trailing `mode` argument (default `'constrained'`):
 
-| Mode | Tiers | Behavior |
+| Mode | Levels | Behavior |
 |---|---|---|
-| `constrained` *(default)* | Lightweight **and** heavyweight | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your input mass points plus breakline vertices. Identical algorithm in both tiers, so the result is a seamless cross-tier swap. |
-| `conforming` | Heavyweight only | JTS conforming-Delaunay triangulation: the mesh may insert additional **Steiner points** along breakline segments to satisfy the Delaunay property near constraints. Produces a smoother mesh around dense breaklines at the cost of extra vertices. |
+| `constrained` *(default)* | Python and JVM | Constrained Delaunay triangulation. Breaklines are honored as forced edges with **no Steiner points** — the output vertex set is exactly your input mass points plus breakline vertices. The algorithm is the same at every level. |
+| `conforming` | JVM only | JTS conforming-Delaunay triangulation: the mesh may insert additional **Steiner points** along breakline segments to satisfy the Delaunay property near constraints. Produces a smoother mesh around dense breaklines at the cost of extra vertices. |
 
-The lightweight tier raises `NotImplementedError` on `mode='conforming'` — it has no Steiner-point refinement. This is a **documented, intentional divergence**, analogous to the [H3 covering note](./gridx-functions) elsewhere in these docs: the two tiers agree exactly in the default (`constrained`) mode, and the heavyweight tier offers `conforming` as a deliberate opt-in superset. If you need a result that is byte-identical across tiers, stay on `constrained` (the default).
+The Python level raises `NotImplementedError` on `mode='conforming'` — it has no Steiner-point refinement. This divergence is intentional. The two levels agree exactly in the default `constrained` mode. The JVM level offers `conforming` as an opt-in superset. If you need a result that is byte-identical across levels, stay on `constrained` (the default).
 
 :::note Invocation surface
 Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t`), or through the Python entry, which takes the DataFrame first. `mode='conforming'` runs on the JVM level only; see the note under `st_triangulate`.
@@ -413,7 +375,7 @@ Rows: `elevation_point` `BINARY`.
 | `width_px` | `INT` |  | The number of grid columns, above 0. |
 | `height_px` | `INT` |  | The number of grid rows, above 0. |
 | `srid` | `INT` |  | The SRID of the output points; 0 for none. |
-| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the lightweight level raises for it. Any other word raises. |
+| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
 {/* END GENERATED gbx_st_interpolateelevationbbox */}
 
 <Impl udtf/>
@@ -456,7 +418,7 @@ Rows: `elevation_point` `BINARY`.
 | `grid_rows` | `INT` |  | The number of grid rows. |
 | `cell_size_x` | `DOUBLE` |  | The cell width in the geometry's units; a positive value steps east. |
 | `cell_size_y` | `DOUBLE` |  | The cell height in the geometry's units; a negative value steps south. |
-| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the lightweight level raises for it. Any other word raises. |
+| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
 {/* END GENERATED gbx_st_interpolateelevationgeom */}
 
 <Impl udtf/>
@@ -494,7 +456,7 @@ Rows: `triangle` `BINARY`.
 | `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
 | `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
 | `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
-| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the lightweight level raises for it. Any other word raises. |
+| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
 {/* END GENERATED gbx_st_triangulate */}
 
 <Impl udtf/>
@@ -511,8 +473,8 @@ Builds a Delaunay TIN from mass-point geometries (with Z values) and optional br
   testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
 />
 
-:::note `mode='conforming'` is heavyweight-only
-The `'constrained'` mode (default) is available in **both** tiers. The `'conforming'` mode — which inserts Steiner points along breakline segments for a smoother mesh — is **heavyweight-only**: the lightweight `pyvx` tier raises `NotImplementedError` if you pass `mode='conforming'`. The examples on all tabs use the default `'constrained'` mode.
+:::note `mode='conforming'` runs on the JVM level only
+The `'constrained'` mode (default) runs at every level. The `'conforming'` mode inserts Steiner points along breakline segments for a smoother mesh. It runs on the JVM level only. The Python level raises `NotImplementedError` if you pass `mode='conforming'`. The examples on all tabs use the default `'constrained'` mode.
 :::
 
 ---
@@ -521,7 +483,7 @@ The `'constrained'` mode (default) is available in **both** tiers. The `'conform
 
 Read, stamp, and reproject a geometry's CRS by **CRS string** — an ESRI code, a WKT definition, or a PROJ4 string, not only an EPSG integer. These complement the product's built-in `ST_SRID` / `ST_SetSRID` / `ST_Transform`, which take an integer SRID: use the built-ins when an EPSG code is all you need, and these when the CRS can only be named as a string. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model shared with RasterX.
 
-All three are available in **both** tiers under the same names, so a CRS query is a one-line tier swap.
+All three have the same names and results at every level.
 
 ### Shared contracts
 
@@ -546,16 +508,16 @@ All three are available in **both** tiers under the same names, so a CRS query i
 - `gbx_st_transformcrs` reprojects it as **2D**. Reprojecting a missing Z propagates it into X and Y and destroys the horizontal position, so dropping the Z is what keeps every X/Y correct.
 - `gbx_st_setcrs` keeps the partial Z as-is, since stamping an SRID never moves coordinates.
 
-A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream. Both tiers behave identically here, in every input encoding.
+A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream. Every level behaves identically here, in every input encoding.
 
 :::caution Known limitations
-These apply in **every** input encoding and on **both** tiers — they are properties of the operations, not of how you pass the geometry.
+These apply in **every** input encoding and at every level — they are properties of the operations, not of how you pass the geometry.
 
 - **Chaining `setcrs` → `transformcrs` on a partial-Z geometry yields a 2D result**, for the reason described just above: the reproject drops a partial Z. So a geometry that entered the chain with some elevations leaves it with none.
 - **Reprojecting out and back is not bit-exact.** A round trip such as `EPSG:4326` → `EPSG:32633` → `EPSG:4326` returns `11.000000000000002` where it started at `11` — a floating-point artifact of the projection math, in the last decimal place or two. It does not compound meaningfully: further round trips stay in that same last-place range rather than drifting away. Compare reprojected coordinates with a tolerance, never for exact equality.
-- **`st_setcrs` relabels without reprojecting**, so stamping a CRS whose units do not match the coordinates leaves the geometry mislabelled. A later `st_transformcrs` then transforms from the wrong CRS: projected metres tagged `EPSG:4326` come back as `Infinity` coordinates on the lightweight tier, and raise a projection error on the heavyweight tier. Use `st_transformcrs` when you want the coordinates moved.
-- **Coordinates outside the target CRS's valid domain** behave the same way — for example a latitude of `100`, which does not exist. The lightweight tier returns `Infinity` coordinates; the heavyweight tier raises a projection error. Filter to the target CRS's area of use before reprojecting if your input may contain out-of-range coordinates.
-- **M (measure) values are dropped.** Both tiers carry X, Y and Z only, so a `ZM` geometry comes back as `Z` with the measure gone, and a geometry carrying M but no Z comes back plain 2D — no `Z` is invented to fill the slot. This is worth noting because the product's own geometry type does persist M.
+- **`st_setcrs` relabels without reprojecting**, so stamping a CRS whose units do not match the coordinates leaves the geometry mislabelled. A later `st_transformcrs` then transforms from the wrong CRS. Projected metres tagged `EPSG:4326` come back as `Infinity` coordinates on the Python level. The JVM level raises a projection error. Use `st_transformcrs` when you want the coordinates moved.
+- **Coordinates outside the target CRS's valid domain** behave the same way — for example a latitude of `100`, which does not exist. The Python level returns `Infinity` coordinates; the JVM level raises a projection error. Filter to the target CRS's area of use before reprojecting if your input may contain out-of-range coordinates.
+- **M (measure) values are dropped.** Every level carries X, Y and Z only. A `ZM` geometry comes back as `Z` with the measure gone. A geometry carrying M but no Z comes back plain 2D, with no `Z` invented. The product's own geometry type does persist M.
 :::
 
 ---
@@ -674,7 +636,7 @@ When the output is EWKB (the SRID travels with the geometry), convert it with th
 
 ## Geometry validity
 
-Distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster — for diagnosing and repairing OGC-invalid geometries. **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Validity](./geometry-validity) for the full conditional-repair workflow and invalidity reason codes.
+Distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster — for diagnosing and repairing OGC-invalid geometries. These functions run at the Python level, on every compute. See [Geometry Validity](./geometry-validity) for the full conditional-repair workflow and invalidity reason codes.
 
 ### st_makevalid
 
@@ -741,7 +703,7 @@ See [Geometry Validity](./geometry-validity).
 
 ## Coverage validity
 
-Distributed shapely helpers — grouped-aggregate SQL UDFs and a Python DataFrame helper — for validating and simplifying polygon **coverages** (sets of polygons that share edges and together partition a region). **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Coverage Validity](./coverage-validity) for the `gap_width` semantics, scale-ceiling notes, and the comparison with per-geometry validity.
+Distributed shapely helpers validate and simplify polygon **coverages**. A coverage is a set of polygons that share edges and together partition a region. The helpers are grouped-aggregate SQL UDFs and a Python DataFrame helper. These functions run at the Python level, on every compute. See [Coverage Validity](./coverage-validity) for the `gap_width` semantics, scale-ceiling notes, and the comparison with per-geometry validity.
 
 ### st_coverageisvalid
 
@@ -758,8 +720,6 @@ Distributed shapely helpers — grouped-aggregate SQL UDFs and a Python DataFram
 | `geom` | `BINARY` or `STRING` |  | A polygon of the coverage: WKB, EWKB, WKT or EWKT. A NULL or empty one is skipped. |
 | `gap_width` | `DOUBLE` | `0.0` | The widest gap between polygons that still counts as a gap, in the CRS units. |
 {/* END GENERATED gbx_st_coverageisvalid */}
-
-<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
 
 Returns `true` when the polygon group forms a valid coverage — no overlaps; no gaps thinner than `gap_width`. Use with `GROUP BY` to identify which coverage groups pass.
 
@@ -792,8 +752,6 @@ See [Coverage Validity](./coverage-validity).
 | `gap_width` | `DOUBLE` | `0.0` | The widest gap between polygons that still counts as a gap, in the CRS units. |
 {/* END GENERATED gbx_st_coverageinvalidedges */}
 
-<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
-
 Returns the union of the boundary segments that violate the coverage as `BINARY` (WKB/EWKB). Empty geometry when the coverage is clean; non-empty when overlaps or slivers exist. Use the output geometry to highlight problem zones on a map.
 
 **Returns:** `BINARY` — WKB/EWKB union of invalid edge segments. Empty geometry when clean. `NULL` when the group is empty.
@@ -811,11 +769,9 @@ See [Coverage Validity](./coverage-validity).
 
 ### coverage_simplify
 
-<Tier light/>
-
 **Python-API only — no SQL form.** Topology-preserving simplification of a whole coverage. Unlike per-row simplification (`gbx_st_simplifypreservetopology`), this helper simplifies the coverage as a unit so shared edges stay aligned in both adjacent polygons after simplification.
 
-**Signature:** `vx.coverage_simplify(df, group_col, geom_col, tolerance, simplify_boundary=True, out_col="geom_simplified")`
+**Signature:** `coverage_simplify(df, group_col, geom_col, tolerance, simplify_boundary=True, out_col="geom_simplified")`
 
 **Parameters:**
 - `df` — Input Spark DataFrame.
@@ -828,10 +784,12 @@ See [Coverage Validity](./coverage-validity).
 **Returns:** A Spark DataFrame — same rows, all original columns, plus `out_col` (`BINARY`). N→N.
 
 ```python
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)
+from databricks.labs.gbx import register
+from databricks.labs.gbx.vectorx.helpers import coverage_simplify
 
-simplified_df = vx.coverage_simplify(
+register(spark)
+
+simplified_df = coverage_simplify(
     df, group_col="admin_level", geom_col="geom_wkb", tolerance=50.0
 )
 ```
@@ -842,7 +800,7 @@ See [Coverage Validity](./coverage-validity#coverage_simplify-python-api).
 
 ## Geometry cleaning
 
-Distributed shapely helpers — shapely/GEOS operations running as Python UDFs — for improving the quality of **already-valid** geometries. If your geometry is invalid, repair it first with `gbx_st_makevalid`, then clean it. **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Cleaning](./geometry-cleaning) for usage guidance and the comparison with the product's built-in simplify.
+Distributed shapely helpers — shapely/GEOS operations running as Python UDFs — for improving the quality of **already-valid** geometries. If your geometry is invalid, repair it first with `gbx_st_makevalid`, then clean it. These functions run at the Python level, on every compute. See [Geometry Cleaning](./geometry-cleaning) for usage guidance and the comparison with the product's built-in simplify.
 
 ### st_simplifypreservetopology
 
@@ -1003,7 +961,7 @@ See [Geometry Cleaning](./geometry-cleaning).
 
 ## Antimeridian handling
 
-These three functions are distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster. They are **lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Antimeridian](./antimeridian) for the full composition pattern.
+These three functions are distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster. They run at the Python level, on every compute. See [Antimeridian](./antimeridian) for the full composition pattern.
 
 ### st_shiftlongitude
 
@@ -1143,9 +1101,9 @@ Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WK
 - [Coverage Validity](./coverage-validity) — validate and simplify polygon coverages with `gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges`, and `coverage_simplify`
 - [Geometry Cleaning](./geometry-cleaning) — topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping
 - [Antimeridian](./antimeridian) — antimeridian composition pattern with full example
-- [Choosing an Execution Tier](./execution-tiers) — lightweight vs heavyweight comparison
+- [Surfaces and levels](./execution-tiers) — how GeoBrix picks the implementation
 - [PMTiles Function Reference](./pmtiles-functions) — Aggregate MVT tiles into a single `.pmtiles` archive
 - [PMTiles Writer](../writers/pmtiles) — DataSource for streaming large pyramids to a single `.pmtiles` file
 - [Helios notebooks](../notebooks/helios) — worked end-to-end example: `gbx_st_asmvt` + `gbx_st_asmvt_pyramid` encode San Francisco building footprints into a PMTiles archive (NB01).
-- [Benchmarking](./benchmarking) — light-vs-heavy timing methodology
+- [Benchmarking](./benchmarking) — timing method
 - [API Overview](./overview) — All GeoBrix APIs

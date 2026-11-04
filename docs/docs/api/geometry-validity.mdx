@@ -4,7 +4,6 @@ title: Geometry Validity
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
-import Tier from '@site/src/components/Tier';
 import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
 import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
 
@@ -12,17 +11,19 @@ import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functi
 
 VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
 
-:::note Lightweight tier only
-The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+:::note Implementation
+These functions use Shapely at the Python level and run on every compute. Register them once per session, then call them from SQL or Python:
 ```python
-from databricks.labs.gbx.pyvx import functions as vx
-vx.register(spark)
+from databricks.labs.gbx import register
+from databricks.labs.gbx.vectorx import functions as vx
+
+register(spark)
 ```
 :::
 
 The **OGC Simple Features Specification (SFS)** defines what makes a geometry valid: every ring must be closed, holes must lie inside their outer boundary, no ring may properly self-intersect, every ring must have at least four points, and coordinates must be finite. Databricks Runtime's `ST_IsValid` checks these rules and returns a boolean. What it does not provide is the *why*, the *where*, or the *fix* — and at scale, a single malformed geometry can fail a worker or a shuffle.
 
-GeoBrix fills those gaps with two light-tier functions:
+GeoBrix fills those gaps with two functions:
 
 - **`gbx_st_explainvalidity`** — *diagnose*: returns a JSON string with the SFS violation class, a stable code, and the coordinate where the violation occurs.
 - **`gbx_st_makevalid`** — *repair*: returns a valid geometry, preserving the original CRS.
@@ -98,8 +99,6 @@ WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom));
 
 ## gbx_st_makevalid
 
-<Tier light/>
-
 Repairs a geometry to OGC-SFS validity. Uses GEOS `make_valid` under the hood (via shapely). The default `linework` level splits self-intersections by noding edges into a valid multi-polygon; `structure` uses the more conservative GEOS structure/overlay method. Both default modes also apply `orient_polygons` so output passes the product's stricter `ST_IsValid` (which enforces ring orientation in addition to OGC topology). The `ogc` level skips orientation normalization for callers who need OGC-only semantics.
 
 **Signature:** `gbx_st_makevalid(geom [, level])`
@@ -132,8 +131,6 @@ Repairs a geometry to OGC-SFS validity. Uses GEOS `make_valid` under the hood (v
 />
 
 ## gbx_st_explainvalidity
-
-<Tier light/>
 
 Diagnoses geometry validity and returns a JSON string with four fields. The `valid` and `reason` fields are always present. The `code` and `location` fields are best-effort: GEOS embeds the violation coordinate in the reason string as `Reason[x y]`, and `gbx_st_explainvalidity` extracts it to a `POINT(x y)` WKT string; `code` maps the GEOS reason prefix to a stable integer from the table below. Both are `null` when GEOS does not provide them. Nothing throws.
 
@@ -173,12 +170,14 @@ Returns `NULL` for null or unparseable input.
   outputConstant="st_explainvalidity_python_light_example_output"
 />
 
-## Tier availability
+## Levels
 
-| Function | Lightweight (`pyvx`) | Heavyweight (`vectorx`) |
-|---|---|---|
-| `gbx_st_makevalid` | Supported | — |
-| `gbx_st_explainvalidity` | Supported | — |
+Every function below runs at the Python level, on every compute. GeoBrix picks the level; see [Surfaces and levels](./execution-tiers).
+
+| Function | Levels |
+|---|---|
+| `gbx_st_makevalid` | Python, Unity Catalog |
+| `gbx_st_explainvalidity` | Python, Unity Catalog |
 
 ## Invalidity reason codes
 

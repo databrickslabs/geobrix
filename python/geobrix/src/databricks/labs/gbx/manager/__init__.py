@@ -334,6 +334,8 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
         from databricks.labs.gbx.manager import sqlwrap
 
         try:
+            # a function of this name that an earlier install made as a UDF cannot be replaced by a SQL function
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
             spark.sql(sqlwrap.sql_kernel(fn))
             why = None
         except (

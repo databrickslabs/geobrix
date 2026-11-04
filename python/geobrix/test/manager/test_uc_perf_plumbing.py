@@ -258,14 +258,14 @@ def test_the_inlining_guards_name_a_cycle_an_unbalanced_call_and_a_leftover_qual
 def test_the_session_and_uc_share_one_l0_body():
     def edit(raw):
         r = _row(raw, "gbx_quadbin_resolution")
-        r["levels"]["L0"] = {"sql": "bit_and(shiftright(cell, 52), 31)"}
+        r["levels"]["L0"] = {"sql": "CAST((cell >> 52) & 31 AS INT)"}
         r["levels"]["L4"] = {"sql": "L0"}
 
     man = perf_manifest(edit)
     fn = man.functions["gbx_quadbin_resolution"]
     assert sqlbody.l4_source(fn) == sqlbody.l0_source(fn)
     (text,) = ddl.function_ddl(fn, "cat", "sch", WHEEL, man.uc_dependencies, "0.6.0")
-    assert text.endswith("RETURN bit_and(shiftright(cell, 52), 31)")
+    assert text.endswith("RETURN CAST((cell >> 52) & 31 AS INT)")
     assert "L4" in fn.levels and "L0" in fn.levels
 
 
@@ -275,7 +275,7 @@ def test_the_sql_keys_have_rules_a_load_enforces():
             perf_manifest(edit)
 
     def l4_from_l0_without_l0(raw):
-        _row(raw, "gbx_quadbin_resolution")["levels"]["L4"] = {"sql": "L0"}
+        _row(raw, "gbx_quadbin_distance")["levels"]["L4"] = {"sql": "L0"}
 
     def helpers_without_body(raw):
         _row(raw, "gbx_quadbin_resolution")["levels"]["L0"] = {"sql_helpers": [HELPER]}
@@ -336,7 +336,7 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
     assert "L4" not in man.functions["gbx_st_crs"].levels  # a stub is no UC function
     assert "uc" not in man.functions["gbx_st_crs"].surfaces
     plain = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True)
-    assert not any("raise_error" in s for s in plain)
+    assert not any("runs in a notebook or job session" in s for s in plain)  # no stub text
     assert not any("gbx_st_crs(" in s.split("\n")[0] for s in plain)
     with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)
     assert with_stubs[: len(plain)] == plain  # the same statements, then the stubs
@@ -489,7 +489,7 @@ def _l0_manifest(helpers=False):
             "sql": (
                 "{q}gbx__res_bits(cell)"
                 if helpers
-                else "bit_and(shiftright(cell, 52), 31)"
+                else "CAST((cell >> 52) & 31 AS INT)"
             )
         }
         if helpers:
@@ -498,7 +498,7 @@ def _l0_manifest(helpers=False):
                     "name": "gbx__res_bits",
                     "params": [["c", "BIGINT"]],
                     "returns": "INT",
-                    "sql": "bit_and(shiftright(c, 52), 31)",
+                    "sql": "CAST((c >> 52) & 31 AS INT)",
                 }
             ]
         r["levels"]["L4"] = {"sql": "L0"}
@@ -525,8 +525,9 @@ def test_l0_is_chosen_only_where_the_level_table_prefers_it_and_installs_a_tempo
     spark, lines = _RecordingSpark(), []
     manager._install(spark, fn, choice, _caps(), forced=False, lines=lines)
     assert spark.stmts == [
+        "DROP TEMPORARY FUNCTION IF EXISTS gbx_quadbin_resolution",
         "CREATE OR REPLACE TEMPORARY FUNCTION gbx_quadbin_resolution(cell BIGINT) "
-        "RETURNS INT RETURN (bit_and(shiftright((cell), 52), 31))"
+        "RETURNS INT RETURN (CAST(((cell) >> 52) & 31 AS INT))"
     ]
     assert not lines
 

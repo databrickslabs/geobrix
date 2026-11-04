@@ -111,9 +111,10 @@ def _function_examples_blocks():
 _FNS = _load_bindings()
 # A function of the function manifest (its entry lists `surfaces`) has its tabs checked by
 # gbx:manifest:gen --check, on every page; this test keeps the other functions.
+_ALL_BLOCKS = _function_examples_blocks()
 _BLOCKS = [
     b
-    for b in _function_examples_blocks()
+    for b in _ALL_BLOCKS
     if "surfaces" not in (_FNS.get("gbx_" + b[0]) or _FNS.get(b[0]) or {})
 ]
 
@@ -165,9 +166,11 @@ def test_no_single_tab_on_multitier_function():
 
 
 def test_blocks_discovered():
+    # Counts the blocks on the page, not the ones left to this file's tab check: every function is now a manifest
+    # function, whose tabs gbx:manifest:gen --check holds, so the checked list is empty.
     assert (
-        len(_BLOCKS) > 50
-    ), f"expected 50+ FunctionExamples blocks, found {len(_BLOCKS)}"
+        len(_ALL_BLOCKS) > 50
+    ), f"expected 50+ FunctionExamples blocks, found {len(_ALL_BLOCKS)}"
 
 
 def _load_check_script():

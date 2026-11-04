@@ -1,10 +1,11 @@
 """Every function's generated example runs and meets the oracle row it was generated from."""
 
 import pytest
-from generated_examples import EXAMPLES
 
 from databricks.labs.gbx import register
 from databricks.labs.gbx.bench import oracles
+
+from .generated_examples import EXAMPLES
 
 
 @pytest.mark.parametrize("sql_name", sorted(EXAMPLES))

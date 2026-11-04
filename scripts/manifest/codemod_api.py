@@ -40,7 +40,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 LIGHT = r"databricks\.labs\.gbx\.(pyrx|pygx|pyvx)"
 ALIAS = {
@@ -642,12 +642,18 @@ def _register_verdict(call, text: str, mods: set, regs: set, mgrs: set):
     def seg(n):
         return ast.get_source_segment(text, n)
 
-    arg = seg(call.args[0]) if call.args else "spark"
+    # the session argument as given: first positional, else a ``spark=`` keyword, else the name ``spark``
+    kw_spark = next((k for k in call.keywords if k.arg == "spark"), None)
+    arg = (
+        seg(call.args[0])
+        if call.args
+        else seg(kw_spark.value) if kw_spark is not None else "spark"
+    )
     if isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name):
         base, attr = f.value.id, f.attr
         if attr == "register" and base in mods:
             kws = {k.arg: k for k in call.keywords}
-            extra = [k for k in call.keywords if k.arg not in ("only",)]
+            extra = [k for k in call.keywords if k.arg not in ("only", "spark")]
             if extra:
                 return (
                     "unresolved",
@@ -660,20 +666,38 @@ def _register_verdict(call, text: str, mods: set, regs: set, mgrs: set):
                 return "unresolved", f"{base}.{attr}( with only=: check by hand"
             return "rewrite", arg
     if isinstance(f, ast.Name) and f.id in regs:
-        if call.keywords:
+        if any(k.arg != "spark" for k in call.keywords):
             return "unresolved", f"{f.id}( takes keywords: check by hand"
         return "rewrite", arg
     return None
 
 
-def _register_edits(body, verdict, edits: list, issues: list) -> None:
-    """Collect the statement edits of one statement list and, recursively, of the lists inside it."""
+def _owns_its_lines(st, lines: list) -> bool:
+    """True when the statement is the only code on its lines: nothing before it (a condition, ``a();``) and
+    nothing after it but a comment (``; b()``). Replacing whole lines is safe only then.
+    """
+    first, last = lines[st.lineno - 1], lines[st.end_lineno - 1]
+    before = first.encode()[: st.col_offset].decode()
+    after = last.encode()[st.end_col_offset :].decode().strip()
+    return not before.strip() and (not after or after.startswith("#"))
+
+
+def _register_edits(body, verdict, edits: list, issues: list, lines: list) -> None:
+    """Collect the statement edits of one statement list and, recursively, of the lists inside it.
+    A register call that shares its line with other code is reported and left unchanged (a ``None`` edit).
+    """
     import ast
 
     seen = None
     for st in body:
         if isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
             v = verdict(st.value)
+            if v and v[0] == "rewrite" and not _owns_its_lines(st, lines):
+                issues.append(
+                    f"line {st.lineno}: the register call shares its line with other code: edit by hand"
+                )
+                edits.append((st.lineno, st.end_lineno, None))
+                continue
             if v and v[0] == "rewrite":
                 new = f"{' ' * st.col_offset}gbx.register({v[1]})"
                 # a second call in the same statement list is dropped
@@ -685,9 +709,9 @@ def _register_edits(body, verdict, edits: list, issues: list) -> None:
         for field in ("body", "orelse", "finalbody"):
             sub = getattr(st, field, None)
             if isinstance(sub, list) and sub and isinstance(sub[0], ast.stmt):
-                _register_edits(sub, verdict, edits, issues)
+                _register_edits(sub, verdict, edits, issues, lines)
         for h in getattr(st, "handlers", []):
-            _register_edits(h.body, verdict, edits, issues)
+            _register_edits(h.body, verdict, edits, issues, lines)
 
 
 def rewrite_registers(
@@ -709,11 +733,12 @@ def rewrite_registers(
     def verdict(call):
         return _register_verdict(call, text, mods, regs, mgrs)
 
-    edits: List[Tuple[int, int, str]] = (
+    edits: List[Tuple[int, int, Optional[str]]] = (
         []
-    )  # (first line, last line, replacement or ""), 1-based
-    _register_edits(tree.body, verdict, edits, issues)
-    if not edits:
+    )  # (first line, last line, replacement, "" to drop, None to leave), 1-based
+    lines = text.split("\n")
+    _register_edits(tree.body, verdict, edits, issues, lines)
+    if not any(new is not None for _, _, new in edits):
         return text, issues
     # a call used as an expression (assigned, returned) is not a statement edit: report it
     stmt_lines = {ln for a, b, _ in edits for ln in range(a, b + 1)}
@@ -722,9 +747,9 @@ def rewrite_registers(
             issues.append(
                 f"line {n.lineno}: a register call used as a value: check by hand"
             )
-    lines = text.split("\n")
-    for a, b, new in sorted(edits, reverse=True):
-        lines[a - 1 : b] = [new] if new else []
+    for a, b, new in sorted(edits, key=lambda e: e[:2], reverse=True):
+        if new is not None:
+            lines[a - 1 : b] = [new] if new else []
     text = "\n".join(lines)
     # gbx bound where it is used: replace the manager import in place, else add one before the first call
     text = _bind_gbx(text, context)

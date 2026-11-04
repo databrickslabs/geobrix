@@ -132,3 +132,19 @@ def test_the_registers_pass_rewrites_every_registrar_to_one_call_and_is_idempote
     assert any("register_family( with only=" in i for i in issues)
     compile(new, "fixture", "exec")
     assert codemod_api._apply(new, targets, "", False, True)[0] == new
+
+
+def test_the_registers_pass_leaves_a_shared_line_for_a_hand_edit_and_carries_spark_keyword():
+    targets = dict(codemod_api.HELPERS)
+    src = (
+        "from databricks.labs.gbx.pyrx import functions as rx\n\n\n"
+        "def setup(spark, sess, ready):\n"
+        "    if ready: rx.register(spark)\n"
+        "    prepare(); rx.register(spark)\n"
+        "    rx.register(spark=sess)\n"
+    )
+    new, issues = codemod_api._apply(src, targets, "", False, True)
+    assert "    if ready: rx.register(spark)\n    prepare(); rx.register(spark)\n" in new  # unchanged
+    assert sum("shares its line" in i for i in issues) == 2
+    assert "    gbx.register(sess)\n" in new  # the keyword argument is carried over as given
+    compile(new, "fixture", "exec")

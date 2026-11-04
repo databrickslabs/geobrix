@@ -7,7 +7,10 @@ table function over a SQL kernel, and the session's temporary function, carry th
 
 Pure Python, no pyspark: it runs where the DDL is built.
 
-A body must not use a parameter name as a lambda variable or an alias: inlining renames identifiers outside quotes.
+A body must not use a parameter name as a lambda variable or an alias: inlining renames identifiers outside quotes
+(matched case-sensitively, whole words only, never after ``AS``, so ``CAST(x AS STRING)`` survives a parameter named
+``string``; a backtick-quoted parameter is renamed too). Helper calls may nest, in a body, in a helper and in an
+argument: every path (the UC call, the session's L0 function, a table function) resolves them the same way.
 """
 
 from __future__ import annotations
@@ -43,11 +46,6 @@ def l0_source(fn) -> Optional[Tuple[str, tuple]]:
     return l0["sql"], tuple(l0.get("sql_helpers", ()))
 
 
-def render(body: str, prefix: str) -> str:
-    """``body`` with every ``{q}`` replaced by ``prefix`` (``\\`cat\\`.\\`sch\\`.`` on UC)."""
-    return body.replace(Q, prefix)
-
-
 def _segments(text: str) -> List[Tuple[bool, str]]:
     """``text`` as (is_code, piece) runs: quoted strings and backtick names are not code."""
     out, pos = [], 0
@@ -61,21 +59,44 @@ def _segments(text: str) -> List[Tuple[bool, str]]:
     return out
 
 
+def render(body: str, prefix: str) -> str:
+    """``body`` with every ``{q}`` in code replaced by ``prefix`` (``\\`cat\\`.\\`sch\\`.`` on UC); a ``{q}`` inside a
+    string literal or a backtick name is text, as it is for :func:`inlined`."""
+    return "".join(
+        piece.replace(Q, prefix) if code else piece for code, piece in _segments(body)
+    )
+
+
 def rename(body: str, mapping: Mapping[str, str]) -> str:
-    """``body`` with each identifier in ``mapping`` replaced by its value, outside quotes, after a ``.`` and before a
-    ``(`` untouched (a field access and a function call are not the parameter)."""
+    """``body`` with each identifier in ``mapping`` replaced by its value. The match is case-sensitive and a whole word;
+    quoted text is untouched, except a backtick-quoted name that IS a parameter; an identifier after ``.`` (a field
+    access), before ``(`` (a function call) or after ``AS`` (a type or an alias) is not the parameter.
+    """
     mapping = {k: v for k, v in mapping.items() if k != v}
     if not mapping:
         return body
     pat = re.compile(
-        r"(?<![\w.$])(" + "|".join(map(re.escape, mapping)) + r")(?![\w(])",
-        re.IGNORECASE,
+        r"(?<![\w.$])(" + "|".join(map(re.escape, mapping)) + r")(?![\w(])"
     )
-    low = {k.lower(): v for k, v in mapping.items()}
-    return "".join(
-        pat.sub(lambda m: low[m.group(1).lower()], piece) if code else piece
-        for code, piece in _segments(body)
-    )
+    after_as = re.compile(r"\bas\s+$", re.IGNORECASE)
+
+    def sub_code(piece: str) -> str:
+        def one(m):
+            if after_as.search(piece[: m.start()]):
+                return m.group(0)
+            return mapping[m.group(1)]
+
+        return pat.sub(one, piece)
+
+    out = []
+    for code, piece in _segments(body):
+        if code:
+            out.append(sub_code(piece))
+        elif piece.startswith("`") and piece[1:-1] in mapping:
+            out.append(mapping[piece[1:-1]])
+        else:
+            out.append(piece)
+    return "".join(out)
 
 
 def _call_end(text: str, open_idx: int) -> Tuple[List[str], int]:
@@ -128,6 +149,9 @@ def inline_helpers(body: str, helpers: Sequence[Mapping], _depth: int = 0) -> st
                 f"SQL body calls {m.group(1)}, which is not a declared helper"
             )
         args, end = _call_end(body, m.end() - 1)
+        args = [
+            inline_helpers(a, helpers, _depth) for a in args
+        ]  # a call nested in an argument
         params = [p[0] for p in h["params"]]
         if len(args) != len(params):
             raise ValueError(
@@ -145,8 +169,8 @@ def _in_code(text: str, idx: int) -> bool:
 
 
 def inlined(body: str, helpers: Sequence[Mapping]) -> str:
-    """``body`` with its helpers inlined and no ``{q}`` left (a body that holds one is a ValueError)."""
+    """``body`` with its helpers inlined and no ``{q}`` left in code (a body that holds one is a ValueError)."""
     text = inline_helpers(body, helpers)
-    if Q in text:
+    if any(code and Q in piece for code, piece in _segments(text)):
         raise ValueError("SQL body holds a {q} that is not a declared helper call")
     return text

@@ -613,9 +613,27 @@ def _check_sql_helpers(name: str, level: str, helpers) -> None:
             raise ValueError(f"{name} {level}.sql_helpers: {hn} has an empty body")
 
 
-def _check_sql_levels(name: str, levels: Mapping) -> None:
+def _check_shared_l0_signature(
+    name: str, params, returns_session: str, returns_uc
+) -> None:
+    """One L0 body serves the session and Unity Catalog only where both signatures are the same types."""
+    pairs = [(f"parameter {p.name}", p.session[0], p.uc) for p in params]
+    pairs.append(("the result", returns_session, returns_uc or ""))
+    differ = [
+        f"{what}: {sql_type(a)} in the session, {sql_type(b) or '-'} in UC"
+        for what, a, b in pairs
+        if sql_type(a).lower() != sql_type(b).lower()
+    ]
+    if differ:
+        raise ValueError(
+            f"{name}: L4 sql is {SQL_FROM_L0!r} (one body for the session and UC) but the types differ "
+            f"({'; '.join(differ)}). Fix: give L4 its own sql body."
+        )
+
+
+def _check_sql_levels(name: str, levels: Mapping, kind: str = "scalar") -> None:
     """The rules of the SQL keys: a body is non-empty text; "L0" in L4 needs an L0 body (and no helpers of its own: they
-    live with the body); helpers need a body; a table function has no body of its own.
+    live with the body); helpers need a body; a table function has no body of its own; only a scalar has a UC SQL body.
     """
     l0, l4 = levels.get("L0", {}), levels.get("L4", {})
     for level, spec in (("L0", l0), ("L4", l4)):
@@ -636,6 +654,10 @@ def _check_sql_levels(name: str, levels: Mapping) -> None:
     if "sql" in l4 and "tvf_over" in l4:
         raise ValueError(
             f"{name}: a table function (tvf_over) has no sql body of its own"
+        )
+    if "sql" in l4 and kind != "scalar":
+        raise ValueError(
+            f"{name}: an L4 sql body makes a scalar SQL function, and this row's kind is {kind}"
         )
 
 
@@ -787,7 +809,14 @@ def parse(raw: Mapping) -> Manifest:
                 )
             stub = l4_raw["stub"]
             levels_raw = {k: v for k, v in levels_raw.items() if k != "L4"}
-        _check_sql_levels(r["sql_name"], levels_raw)
+        _check_sql_levels(r["sql_name"], levels_raw, r["kind"])
+        if levels_raw.get("L4", {}).get("sql") == SQL_FROM_L0:
+            _check_shared_l0_signature(
+                r["sql_name"],
+                params,
+                r["returns"]["session"],
+                r["returns"].get("uc"),
+            )
         fns[r["sql_name"]] = Function(
             r["sql_name"],
             r["family"],

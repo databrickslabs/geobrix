@@ -204,7 +204,12 @@ def function_ddl(
     if use == "python" and "handler" not in l4:
         raise ValueError(f"{fn.sql_name} has no Python handler")
     has_default = any(p.default for p in fn.params)
-    impl = f"gbx__{sql_name[len('gbx_'):]}" if has_default else sql_name
+    if not has_default:
+        impl = sql_name
+    elif sql_name.startswith("gbx_mvp_"):
+        impl = f"{sql_name}_impl"  # a bench probe copy: its wrapper's implementation is a probe routine too
+    else:
+        impl = f"gbx__{sql_name[len('gbx_'):]}"
     params = ", ".join(f"{p.name} {sql_type(p.uc)}" for p in fn.params)
     comment = comment_text(fn, version)
     if use == "scala":
@@ -297,7 +302,8 @@ def private_ddl(
             f"wheel_uri {wheel_uri!r} has a quote, backslash or control character. "
             "Fix: stage the wheel under a plain /Volumes path."
         )
-    if not re.fullmatch(r"gbx__[a-z0-9_]+", pf.name):
+    # a bench probe copy of a private routine is named gbx_mvp_perf_<name>, beside the product's and never over it
+    if not re.fullmatch(r"gbx__[a-z0-9_]+|gbx_mvp_perf_[a-z0-9_]+", pf.name):
         raise ValueError(f"private routine name {pf.name!r} must be gbx__<name>")
     mod, _, attr = pf.handler.partition(":")
     params = ", ".join(f"{n} {sql_type(t)}" for n, t in pf.params)

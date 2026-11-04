@@ -712,3 +712,506 @@ def run_p2_tiles(spark, catalog: str, schema: str, volume_dir: str) -> dict:
         out["dropped"] = dropped
         hb.stop()
     return out
+
+
+# --- the governed ETL procedures (uc.procedures) --------------------------------------------------------------------
+PROC_PREFIX = "gbxproc_"
+
+
+def _proc_norm(value):
+    """A cell as a comparable value: bytes by digest, floats rounded, structs and arrays by content."""
+    import hashlib
+
+    if isinstance(value, (bytes, bytearray)):
+        return "sha:" + hashlib.sha256(bytes(value)).hexdigest()[:16]
+    if isinstance(value, float):
+        return round(value, 9)
+    if isinstance(value, (list, tuple)):
+        return [_proc_norm(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _proc_norm(v) for k, v in sorted(value.items())}
+    if hasattr(value, "asDict"):
+        return _proc_norm(value.asDict(recursive=True))
+    return value
+
+
+def _proc_pixels(blob) -> list:
+    """The pixels of a GeoTIFF as nested lists (None for no bytes): two tiles are the same when their pixels are."""
+    if blob is None:
+        return None
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(blob)) as mf, mf.open() as ds:
+        return [[_proc_norm(float(x)) for x in row] for row in ds.read(1).tolist()]
+
+
+def _proc_mvt_features(blob) -> list:
+    """The features of an MVT layer as sorted (WKT-free) (geometry, properties) pairs, for a tile compare."""
+    import json as _json
+
+    import mapbox_vector_tile as mvt
+
+    out = []
+    for layer in mvt.decode(
+        bytes(blob), default_options={"y_coord_down": True}
+    ).values():
+        for f in layer["features"]:
+            out.append(_json.dumps([f["geometry"], f["properties"]], sort_keys=True))
+    return sorted(out)
+
+
+def proc_cases(catalog: str, schema: str) -> list:
+    """The small input of each probed recipe and the session-SQL flow its output is compared with.
+
+    Each case is ``{"name", "tables", "args", "setup": [SQL], "out", "ref", "compare"}``: ``setup`` creates the inputs
+    (SQL statements), ``args`` are the named arguments of the ``CALL``, ``out`` reads the table the call wrote, ``ref`` is the same flow in session SQL (unqualified ``gbx_`` names), and ``compare`` is ``rows``,
+    ``pixels`` (a column of GeoTIFF bytes) or ``mvt`` (the features of a layer).
+    """
+    import h3
+
+    q = f"`{catalog}`.`{schema}`"
+
+    def t(name):
+        return f"{q}.{PROC_PREFIX}{name}"
+
+    def lit(name):
+        return (
+            "'" + t(name).replace("`", "") + "'"
+        )  # a table name as the STRING a procedure takes
+
+    square = "POLYGON((0 0, 2 0, 2 2, 0 2, 0 0))"
+    bowtie = "POLYGON((0 0, 2 2, 2 0, 0 2, 0 0))"
+    cases = []
+
+    # polygons -> BNG
+    cases.append(
+        {
+            "name": "gbx_polygons_to_bng",
+            "tables": ["bng_src", "bng_tgt"],
+            "setup": [
+                f"CREATE OR REPLACE TABLE {t('bng_src')} (id INT, geom GEOMETRY(27700))",
+                f"INSERT INTO {t('bng_src')} VALUES (1, st_geomfromwkt('POLYGON((530000 180000, 530300 180000, "
+                f"530300 180300, 530000 180300, 530000 180000))', 27700))",
+                f"DROP TABLE IF EXISTS {t('bng_tgt')}",
+            ],
+            "args": {
+                "source_table": lit("bng_src"),
+                "target_table": lit("bng_tgt"),
+                "bng_resolution": "'100m'",
+            },
+            "out": f"SELECT id, cellid, core, chip FROM {t('bng_tgt')} ORDER BY cellid, core",
+            "ref": f"SELECT s.id, c.cellid, c.core, c.chip FROM {t('bng_src')} AS s, "
+            f"LATERAL gbx_bng_tessellateexplode(st_asewkb(s.geom), '100m', false) AS c ORDER BY cellid, core",
+            "compare": "rows",
+        }
+    )
+    # clean geometries
+    cases.append(
+        {
+            "name": "gbx_clean_geometries",
+            "tables": ["cg_src", "cg_tgt", "cg_rej"],
+            "args": {
+                "source_table": lit("cg_src"),
+                "target_table": lit("cg_tgt"),
+                "rejects_table": lit("cg_rej"),
+            },
+            "setup": [
+                f"CREATE OR REPLACE TABLE {t('cg_src')} (id INT, geom GEOMETRY(4326))",
+                f"INSERT INTO {t('cg_src')} VALUES (1, st_geomfromwkt('{bowtie}', 4326)), "
+                f"(2, st_geomfromwkt('{square}', 4326)), (3, NULL)",
+                f"DROP TABLE IF EXISTS {t('cg_tgt')}",
+                f"DROP TABLE IF EXISTS {t('cg_rej')}",
+            ],
+            "out": f"SELECT id, st_astext(geom) AS wkt FROM {t('cg_tgt')} ORDER BY id",
+            "ref": "SELECT id, st_astext(st_geomfromwkb(g)) AS wkt FROM (SELECT id, "
+            f"gbx_st_makevalid(st_asbinary(geom), 'linework') AS g FROM {t('cg_src')} WHERE geom IS NOT NULL) "
+            "WHERE g IS NOT NULL AND st_isvalid(st_geomfromwkb(g)) ORDER BY id",
+            "compare": "rows",
+            "also": (
+                f"SELECT id, reason FROM {t('cg_rej')} ORDER BY id",
+                f"SELECT id, 'the geometry is NULL' AS reason FROM {t('cg_src')} WHERE geom IS NULL ORDER BY id",
+            ),
+        }
+    )
+    # migrate Mosaic geometry
+    legacy = (
+        "named_struct('typeId', 5, 'srid', 4326, "
+        "'boundaries', array(array(array(0D, 0D), array(10D, 0D), array(10D, 10D), array(0D, 10D), array(0D, 0D))), "
+        "'holes', CAST(array() AS array<array<array<array<double>>>>))"
+    )
+    cases.append(
+        {
+            "name": "gbx_migrate_mosaic_geometry",
+            "tables": ["mig_src", "mig_tgt"],
+            "args": {"source_table": lit("mig_src"), "target_table": lit("mig_tgt")},
+            "setup": [
+                f"CREATE OR REPLACE TABLE {t('mig_src')} AS SELECT 1 AS id, {legacy} AS geom",
+                f"DROP TABLE IF EXISTS {t('mig_tgt')}",
+            ],
+            "out": f"SELECT id, st_astext(geom) AS wkt FROM {t('mig_tgt')} ORDER BY id",
+            "ref": f"SELECT id, st_astext(st_geomfromwkb(gbx_st_legacyaswkb(geom))) AS wkt FROM {t('mig_src')} ORDER BY id",
+            "compare": "rows",
+        }
+    )
+    # points -> H3 surface: a cell with no value among cells that have one
+    centre = h3.latlng_to_cell(37.77, -122.42, 8)
+    ring = sorted(h3.grid_ring(centre, 1))[:3]
+    pts = [(centre, None)] + [(c, float(i + 1)) for i, c in enumerate(ring)]
+    values = ", ".join(
+        f"({h3.cell_to_latlng(c)[1]!r}, {h3.cell_to_latlng(c)[0]!r}, "
+        f"{'NULL' if v is None else repr(v)})"
+        for c, v in pts
+    )
+    cases.append(
+        {
+            "name": "gbx_points_to_h3_surface",
+            "tables": ["h3_src", "h3_tgt"],
+            "args": {
+                "source_table": lit("h3_src"),
+                "target_table": lit("h3_tgt"),
+                "surface_name": "'probe'",
+                "h3_resolution": "8",
+            },
+            "setup": [
+                f"CREATE OR REPLACE TABLE {t('h3_src')} (longitude DOUBLE, latitude DOUBLE, value DOUBLE)",
+                f"INSERT INTO {t('h3_src')} VALUES {values}",
+                f"DROP TABLE IF EXISTS {t('h3_tgt')}",
+            ],
+            "out": f"SELECT surface, tile FROM {t('h3_tgt')}",
+            "ref": None,  # built in Python: the fill payload of the session aggregate, then the session rasterizer
+            "compare": "pixels",
+            "column": "tile",
+        }
+    )
+    # features -> MVT: two points in one tile of each zoom
+    cases.append(
+        {
+            "name": "gbx_features_to_mvt",
+            "tables": ["mvt_src", "mvt_tgt"],
+            "args": {
+                "source_table": lit("mvt_src"),
+                "target_table": lit("mvt_tgt"),
+                "mvt_layer": "'layer'",
+                "min_zoom": "0",
+                "max_zoom": "1",
+            },
+            "setup": [
+                f"CREATE OR REPLACE TABLE {t('mvt_src')} (geom GEOMETRY(4326), attrs STRUCT<n: INT>)",
+                f"INSERT INTO {t('mvt_src')} VALUES (st_geomfromwkt('POINT (100 45)', 4326), named_struct('n', 1)), "
+                f"(st_geomfromwkt('POINT (101 46)', 4326), named_struct('n', 2))",
+                f"DROP TABLE IF EXISTS {t('mvt_tgt')}",
+            ],
+            "out": f"SELECT z, x, y, mvt FROM {t('mvt_tgt')} ORDER BY z, x, y",
+            "ref": f"SELECT p.z, p.x, p.y, p.mvt_bytes AS mvt FROM {t('mvt_src')} AS s, "
+            "LATERAL gbx_st_asmvt_pyramid(st_asbinary(s.geom), s.attrs, 0, 1, 'layer', 4096) AS p ORDER BY z, x, y",
+            "compare": "mvt",
+        }
+    )
+    return cases
+
+
+def _proc_call(name: str, args: dict) -> str:
+    return f"CALL {name}(" + ", ".join(f"{k} => {v}" for k, v in args.items()) + ")"
+
+
+def _proc_tile_cases(spark, catalog: str, schema: str) -> list:
+    """The tile-input cases (mosaic by key, zonal statistics): their input tables are built from GeoTIFF bytes."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff, _tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    q = f"`{catalog}`.`{schema}`"
+
+    def t(name):
+        return f"{q}.{PROC_PREFIX}{name}"
+
+    def lit(name):
+        return "'" + t(name).replace("`", "") + "'"
+
+    def tile(origin_x, origin_y, base):
+        arr = (np.arange(16, dtype="float64").reshape(1, 4, 4)) + base
+        return _tile(_gtiff(arr, "EPSG:3857", origin=(origin_x, origin_y), px=10.0))
+
+    tiles = [
+        ("a", tile(0.0, 40.0, 0)),
+        ("a", tile(40.0, 40.0, 100)),
+        ("b", tile(0.0, 40.0, 200)),
+    ]
+    spark.createDataFrame(
+        tiles, "tile_key string, tile " + V2_TILE_SCHEMA.simpleString()
+    ).write.mode("overwrite").saveAsTable(t("mos_src").replace("`", ""))
+    spark.sql(f"DROP TABLE IF EXISTS {t('mos_tgt')}")
+    zone_tile = [(1, tile(0.0, 100.0, 0), "POLYGON((0 0,100 0,100 100,0 100,0 0))")]
+    spark.createDataFrame(
+        zone_tile,
+        "tile_id int, tile " + V2_TILE_SCHEMA.simpleString() + ", bbox_wkt string",
+    ).createOrReplaceTempView("gbxproc_tiles_tmp")
+    spark.sql(
+        f"CREATE OR REPLACE TABLE {t('zs_tiles')} AS SELECT tile_id, tile, st_geomfromwkt(bbox_wkt, 3857) AS bbox "
+        "FROM gbxproc_tiles_tmp"
+    )
+    spark.sql(
+        f"CREATE OR REPLACE TABLE {t('zs_zones')} (zone_id INT, geom GEOMETRY(3857))"
+    )
+    spark.sql(
+        f"INSERT INTO {t('zs_zones')} VALUES (1, st_geomfromwkt('POLYGON((0 0,50 0,50 50,0 50,0 0))', 3857)), "
+        "(2, st_geomfromwkt('POLYGON((900 900,950 900,950 950,900 950,900 900))', 3857))"
+    )
+    spark.sql(f"DROP TABLE IF EXISTS {t('zs_tgt')}")
+    return [
+        {
+            "name": "gbx_mosaic_by_key",
+            "tables": ["mos_src", "mos_tgt"],
+            "args": {"source_table": lit("mos_src"), "target_table": lit("mos_tgt")},
+            "out": f"SELECT tile_key, tile FROM {t('mos_tgt')} ORDER BY tile_key",
+            "ref": f"SELECT tile_key, gbx_rst_merge(collect_list(tile)) AS tile FROM {t('mos_src')} "
+            "GROUP BY tile_key ORDER BY tile_key",
+            "compare": "pixels",
+            "column": "tile",
+        },
+        {
+            "name": "gbx_zonal_stats",
+            "tables": ["zs_tiles", "zs_zones", "zs_tgt"],
+            "args": {
+                "zones_table": lit("zs_zones"),
+                "source_table": lit("zs_tiles"),
+                "target_table": lit("zs_tgt"),
+            },
+            "out": f"SELECT zone_id, tile_id, summary FROM {t('zs_tgt')} ORDER BY zone_id, tile_id",
+            "ref": "SELECT z.zone_id, t.tile_id, gbx_rst_summary(gbx_rst_clip(t.tile, st_asewkb(z.geom), true)) "
+            f"AS summary FROM {t('zs_zones')} AS z JOIN {t('zs_tiles')} AS t ON st_intersects(z.geom, t.bbox) "
+            "ORDER BY zone_id, tile_id",
+            "compare": "rows",
+        },
+    ]
+
+
+def _proc_h3_reference(spark, source: str) -> list:
+    """The session flow of the H3 surface: the session cell-fill aggregate, then the session rasterize aggregate."""
+    from databricks.labs.gbx.pygx import _cellfill
+
+    cells = f"SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM {source} GROUP BY 1"
+    payload = spark.sql(
+        f"SELECT gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) FROM ({cells})"
+    ).first()[0]
+    filled = _cellfill.decode(bytes(payload))
+    spark.createDataFrame(
+        filled, "cellid bigint, value double"
+    ).createOrReplaceTempView("gbxproc_h3_filled")
+    nulls = (
+        ", ".join(["CAST(NULL AS DOUBLE)"] * 5)
+        + ", CAST(NULL AS INT), CAST(NULL AS INT)"
+    )
+    return spark.sql(
+        f"SELECT 'probe' AS surface, gbx_rst_h3_rasterize_agg(cellid, value, 4326, {nulls}, 'centroids', 0) AS tile "
+        "FROM gbxproc_h3_filled"
+    ).collect()
+
+
+def _proc_rows(rows, case) -> list:
+    """The rows of a result in a comparable form, by the case's ``compare``."""
+    kind = case["compare"]
+    out = []
+    for r in rows:
+        d = r.asDict(recursive=True)
+        if kind == "pixels":
+            col = d[case["column"]]
+            blob = col["raster"] if isinstance(col, dict) else col
+            d[case["column"]] = _proc_pixels(blob)
+        elif kind == "mvt":
+            d["mvt"] = _proc_mvt_features(d["mvt"])
+        out.append(_proc_norm(d))
+    return out
+
+
+def run_procedures(
+    spark, catalog: str, schema: str, tmpdir: str, volume_dir: str = None
+) -> dict:
+    """CALL each governed ETL procedure on a small input table and compare its output with the same flow in session SQL.
+
+    ``volume_dir`` (the Volume folder with the one env 6 wheel) makes the run install the functions and the
+    procedures first, with ``gbx.uc.install(..., procedures=True)``; without it they must be installed already. The
+    session functions the flows need are registered in this session. Tables are ``<catalog>.<schema>.gbxproc_*``,
+    dropped at the end. ``tmpdir`` is a scratch folder (a Zarr store root).
+
+    Prints ``[PROC] <procedure> <surface> START`` and ``[PROC] <procedure> <surface> DONE <s>s rows=<n>`` per procedure
+    and per surface (``call``: the procedure; ``session``: the session flow), and a RUNNING line every 60 s through
+    ``liveness.Heartbeat`` (begun with ``set_name="PROC"``).
+
+    Returns ``{"installed", "skipped", "recipes": {procedure: {"call_s", "session_s", "rows", "match", "diff",
+    "error"}}, "dropped"}``.
+    """
+    import os
+    import tempfile
+
+    from databricks.labs.gbx import register, uc
+    from databricks.labs.gbx.bench import liveness
+    from databricks.labs.gbx.uc import procedures
+
+    hb = liveness.Heartbeat(
+        os.path.join(tempfile.gettempdir(), "proc-heartbeat.json"),
+        interval=30,
+        phase="proc",
+        print_every=60,
+    ).start()
+    out = {"installed": None, "skipped": {}, "recipes": {}, "dropped": []}
+    counter = {"n": 0}
+    total = len(procedures.RECIPES) * 2 + 2
+
+    def step(label, surface, fn):
+        """One timed step; the error is the measurement, so it is recorded, never raised."""
+        hb.begin(f"{label} {surface}", counter["n"], total, set_name="PROC")
+        counter["n"] += 1
+        print(f"[PROC] {label} {surface} START", flush=True)
+        t0 = time.time()
+        val, err = None, None
+        try:
+            val = fn()
+        except Exception as exc:  # noqa: BLE001
+            err = f"{type(exc).__name__}: {str(exc)[:600]}"
+        wall = time.time() - t0
+        rows = len(val) if isinstance(val, list) else None
+        print(
+            f"[PROC] {label} {surface} DONE {wall:.1f}s rows={rows if err is None else 'ERROR'}"
+            + (f" {err}" if err else ""),
+            flush=True,
+        )
+        hb.end(status=None if err is None else "error")
+        return val, err, wall
+
+    tables = []
+    try:
+        if volume_dir is not None:
+            stmts, err, _ = step(
+                "install", "functions+procedures",
+                lambda: uc.install(catalog, schema, volume_dir, spark=spark, procedures=True),
+            )  # fmt: skip
+            out["installed"] = len(stmts) if err is None else err
+        _, built_skipped = procedures.build_all(catalog, schema)
+        out["skipped"] = built_skipped
+        register(
+            spark,
+            only=[
+                "gbx_bng_tessellateexplode", "gbx_st_makevalid", "gbx_st_legacyaswkb", "gbx_st_asmvt_pyramid",
+                "gbx_rst_merge", "gbx_rst_clip", "gbx_rst_summary", "gbx_h3_cellfill", "gbx_rst_h3_rasterize_agg",
+            ],
+        )  # fmt: skip
+        cases = proc_cases(catalog, schema) + _proc_tile_cases(spark, catalog, schema)
+        for case in cases:
+            name = case["name"]
+            rec = out["recipes"].setdefault(name, {})
+            tables += [
+                f"`{catalog}`.`{schema}`.{PROC_PREFIX}{x}" for x in case["tables"]
+            ]
+            for stmt in case.get("setup", ()):
+                spark.sql(stmt)
+            _, err, wall = step(
+                name, "call",
+                lambda: spark.sql(
+                    f"CALL `{catalog}`.`{schema}`.{name}("
+                    + ", ".join(f"{k} => {v}" for k, v in case["args"].items())
+                    + ")"
+                ).collect(),
+            )  # fmt: skip
+            rec["call_s"], rec["error"] = round(wall, 2), err
+            if err:
+                continue
+            got = _proc_rows(spark.sql(case["out"]).collect(), case)
+            ref_rows, rerr, rwall = step(
+                name, "session",
+                lambda: (
+                    _proc_h3_reference(spark, f"`{catalog}`.`{schema}`.{PROC_PREFIX}h3_src")
+                    if case["ref"] is None
+                    else spark.sql(case["ref"]).collect()
+                ),
+            )  # fmt: skip
+            rec["session_s"], rec["rows"] = round(rwall, 2), len(got)
+            if rerr:
+                rec["error"] = rerr
+                continue
+            want = _proc_rows(ref_rows, case)
+            rec["match"] = got == want
+            if got != want:
+                rec["diff"] = {"procedure": got[:3], "session": want[:3]}
+            if "also" in case:  # a second output table of the same call (the rejects)
+                extra_got = _proc_rows(
+                    spark.sql(case["also"][0]).collect(), {"compare": "rows"}
+                )
+                extra_want = _proc_rows(
+                    spark.sql(case["also"][1]).collect(), {"compare": "rows"}
+                )
+                rec["match_also"] = extra_got == extra_want
+        out["recipes"]["zarr"] = _proc_zarr(
+            spark, catalog, schema, tmpdir, step, tables
+        )
+    finally:
+
+        def drop():
+            for tbl in tables:
+                spark.sql(f"DROP TABLE IF EXISTS {tbl}")
+                out["dropped"].append(tbl)
+            return out["dropped"]
+
+        step("cleanup", "drop", drop)
+        hb.stop()
+    return out
+
+
+def _proc_zarr(
+    spark, catalog: str, schema: str, tmpdir: str, step, tables: list
+) -> dict:
+    """Tag, history and untag through the procedures on one manifest table, against the Python functions on a twin."""
+    from databricks.labs.gbx.zarr import _maint
+    from databricks.labs.gbx.zarr import _manifest as M
+
+    base = f"`{catalog}`.`{schema}`.{PROC_PREFIX}"
+    a, b = base + "zm_proc", base + "zm_py"
+    props = M.StoreProps("managed", tmpdir, None, True, "fuse", "7 days")
+    rec = {}
+    try:
+        for tbl in (a, b):
+            tables.append(tbl)
+            spark.sql(f"DROP TABLE IF EXISTS {tbl}")
+            M.create_manifest(spark, tbl.replace("`", ""), props)
+            spark.sql(
+                f"INSERT INTO {tbl} (kind, array, key, write_id, meta) VALUES "
+                "('group', NULL, '.', 'w1', NULL), ('array', 'v', 'v/.zarray', 'w1', NULL), "
+                "('commit', NULL, 'w1', 'w1', '{\"mode\": \"create\"}')"
+            )
+
+        def tag_rows(tbl):
+            return [
+                tuple(r)
+                for r in spark.sql(
+                    f"SELECT kind, array, key, write_id FROM {tbl} WHERE tag = 'probe' ORDER BY kind, array, key"
+                ).collect()
+            ]
+
+        _, err, _ = step(
+            "gbx_zarr_tag_version", "call",
+            lambda: spark.sql(f"CALL `{catalog}`.`{schema}`.gbx_zarr_tag_version('{a.replace(chr(96), '')}', 'probe')").collect(),
+        )  # fmt: skip
+        _maint.gbx_zarr_tag(spark, b.replace("`", ""), "probe")
+        rec["tag_match"] = err is None and tag_rows(a) == tag_rows(b)
+        rec["error"] = err
+        _, err, _ = step(
+            "gbx_zarr_tag_version", "call (existing tag)",
+            lambda: spark.sql(f"CALL `{catalog}`.`{schema}`.gbx_zarr_tag_version('{a.replace(chr(96), '')}', 'probe')").collect(),
+        )  # fmt: skip
+        rec["second_tag_refused"] = err is not None and "already exists" in err
+        hist, herr, _ = step(
+            "gbx_zarr_version_history", "call",
+            lambda: spark.sql(f"CALL `{catalog}`.`{schema}`.gbx_zarr_version_history('{a.replace(chr(96), '')}')").collect(),
+        )  # fmt: skip
+        rec["history_rows"] = None if herr else len(hist)
+        rec["history_error"] = herr
+        _, err, _ = step(
+            "gbx_zarr_untag_version", "call",
+            lambda: spark.sql(f"CALL `{catalog}`.`{schema}`.gbx_zarr_untag_version('{a.replace(chr(96), '')}', 'probe')").collect(),
+        )  # fmt: skip
+        rec["untag_ok"] = err is None and tag_rows(a) == []
+        rec["untag_error"] = err
+    except Exception as exc:  # noqa: BLE001 - the error is the measurement
+        rec["error"] = f"{type(exc).__name__}: {str(exc)[:600]}"
+    return rec

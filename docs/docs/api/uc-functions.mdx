@@ -67,11 +67,11 @@ A warehouse reads rasters and vector files through the session readers. Ingest t
 | H3 cells | `gbx_h3_geomkring` |
 | Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` |
 | Raster | See [Raster functions](#raster-functions) |
-| Table functions | `gbx_bng_kringexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode` |
+| Table functions | `gbx_bng_kringexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_st_asmvt_pyramid` |
 
 A function with default arguments installs as a SQL wrapper over a private function named `gbx__<name>`. Call the public name.
 
-A table function is a SQL body over the array function, and you call it in `FROM`.
+A table function is a SQL body over the array function, and you call it in `FROM`. `gbx_st_asmvt_pyramid` reads its attributes as a JSON object text, for example `to_json(struct(name, id))`, because UC has no struct of any fields. It refuses a feature whose tiles total more than 64 MiB.
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_KRINGEXPLODE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
@@ -156,7 +156,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Tile operations: other | `gbx_rst_chm`, `gbx_rst_land_cover`, `gbx_rst_percentile_stretch`, `gbx_rst_proximity` |
 | Tile arrays: combiners | `gbx_rst_combineavg`, `gbx_rst_combinecount`, `gbx_rst_combinemax`, `gbx_rst_combinemedian`, `gbx_rst_combinemin`, `gbx_rst_combinestddev`, `gbx_rst_combinesum` |
 | Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
-| Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms` |
+| Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize` |
 | Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
 | From file bytes | `gbx_rst_fromcontent` |
 | Web tiles | `gbx_rst_tilexyz` |
@@ -201,6 +201,33 @@ A UC function has no error tile. It follows one rule for each kind of problem:
 <CodeFromTest code={ucExamples} language="python" functionName="bad_parameter_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 UC differs from the session in one place. A data-limit error gives `NULL` on UC where the session raises. `gbx_quadbin_polyfill` on a geometry that covers more than 1,000,000 cells is the example. The [error contract](./error-handling) describes the session behavior.
+
+## Procedures
+
+Procedures run a whole ETL step inside Unity Catalog. Each one reads a table, calls GeoBrix functions and merges the result into another table. A procedure adds flow only: it computes nothing itself and writes no file.
+
+Install them with the functions. A procedure is created after the functions it calls, and `SQL SECURITY INVOKER` runs it with the privileges of the caller.
+
+<CodeFromTest code={ucExamples} language="python" functionName="INSTALL_PROCEDURES_PYTHON" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A caller needs `EXECUTE` on the procedure and `SELECT` and `MODIFY` on the tables it names. Table names are parameters, as `catalog.schema.table`. Each procedure reads fixed column names, listed in its comment. A procedure creates the target table when it is missing and merges into it on later calls.
+
+| Procedure | Reads | Writes |
+|---|---|---|
+| `gbx_polygons_to_bng` | `id`, `geom` in SRID 27700 | `id`, `cellid`, `core`, `chip` |
+| `gbx_clean_geometries` | `id`, `geom` | the valid geometries, and a rejects table with the reason |
+| `gbx_migrate_mosaic_geometry` | `id`, a legacy Mosaic `geom` | the same table with a `GEOMETRY` column |
+| `gbx_points_to_h3_surface` | `longitude`, `latitude`, `value` | one GeoTIFF surface per name |
+| `gbx_features_to_mvt` | `geom` in EPSG:4326, `attrs` as a struct | `z`, `x`, `y`, `mvt` |
+| `gbx_mosaic_by_key` | `tile_key`, `tile` | one merged tile per key |
+| `gbx_zonal_stats` | zones with `zone_id`, `geom`; tiles with `tile_id`, `tile`, `bbox` | `zone_id`, `tile_id`, `summary` |
+| `gbx_zarr_tag_version`, `gbx_zarr_untag_version`, `gbx_zarr_version_history` | a Zarr store's manifest table | a tag, its removal, or the list of commits |
+
+<CodeFromTest code={ucExamples} language="sql" functionName="CALL_POLYGONS_TO_BNG_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Two procedures refuse input that is too large for a UC function. `gbx_mosaic_by_key` refuses a key with more than 10 tiles. Its `Fix:` names the session aggregate `gbx_rst_merge_agg`. The H3 surface and vector tile procedures refuse an array over 64 MiB and name the session function.
+
+The vector tile procedure writes tiles to a table. A `.pmtiles` archive is built outside Unity Catalog.
 
 ## Names and the path
 

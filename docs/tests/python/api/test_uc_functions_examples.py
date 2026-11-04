@@ -28,6 +28,7 @@ def test_the_install_preview_is_one_create_per_function_plus_default_wrappers():
     for n in _uc_names():
         fn = man.functions[n]
         expected += 2 if any(p.default for p in fn.params) and "tvf_over" not in fn.levels["L4"] else 1
+    expected += len({f.levels["L4"]["tvf_over"] for f in man.functions.values() if f.levels.get("L4", {}).get("tvf_over") in man.private})
     assert len(statements) == expected
     assert all(s.startswith("CREATE OR REPLACE FUNCTION `main`.`geobrix`.") for s in statements)
     assert not any("LANGUAGE SCALA" in s for s in statements)
@@ -197,3 +198,30 @@ def test_a_tile_over_64_mib_is_refused_by_a_pixel_function_and_a_header_function
     assert width == 4200
     assert "the tile is 67 MiB decoded, over the 64 MiB" in message
     assert "Fix: run gbx_rst_avg in a notebook or job session, or retile first" in message
+
+
+def test_the_procedures_install_after_the_functions_they_call():
+    plain = ex.preview_install()
+    statements = ex.preview_procedures()
+    assert statements[: len(plain)] == plain
+    procedures = [s for s in statements if s.startswith("CREATE OR REPLACE PROCEDURE")]
+    assert procedures and all("SQL SECURITY INVOKER" in s for s in procedures)
+    assert all(f"COMMENT 'geobrix {VERSION}: " in s for s in procedures)
+
+
+def test_the_procedures_the_page_lists_are_the_procedures_installed():
+    section = PAGE.read_text().split("## Procedures", 1)[1].split("## Names and the path", 1)[0]
+    rows = "\n".join(line for line in section.splitlines() if line.startswith("|"))
+    listed = set(re.findall(r"`(gbx_[a-z0-9_]+)`", rows))
+    built = {re.search(r"PROCEDURE `main`\.`geobrix`\.(\w+)\(", s).group(1) for s in ex.preview_procedures() if "PROCEDURE" in s.split("(")[0]}
+    assert built <= listed
+    assert {n for n in listed if n.startswith("gbx_zarr_") or n in built} == listed
+
+
+def test_the_call_example_names_a_procedure_and_its_parameters():
+    from databricks.labs.gbx.uc import procedures
+
+    assert "main.geobrix.gbx_polygons_to_bng(" in ex.CALL_POLYGONS_TO_BNG_SQL
+    text = procedures.RECIPES["gbx_polygons_to_bng"]("main", "geobrix")
+    for param in ("source_table", "target_table", "bng_resolution"):
+        assert f"IN {param} STRING" in text and f"{param} =>" in ex.CALL_POLYGONS_TO_BNG_SQL

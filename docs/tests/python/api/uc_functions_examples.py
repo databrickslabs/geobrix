@@ -60,6 +60,18 @@ UC_RASTER_MERGE_SQL = """SELECT main.geobrix.gbx_rst_merge(collect_list(tile)) A
 FROM rasters
 WHERE scene = 'T30UXC'"""
 
+# Install the functions and the procedures that call them.
+INSTALL_PROCEDURES_PYTHON = '''import databricks.labs.gbx as gbx
+
+gbx.uc.install("main", "geobrix", "/Volumes/main/geobrix/artifacts/env6", procedures=True)
+'''
+
+# A procedure takes table names; the columns it reads are fixed.
+CALL_POLYGONS_TO_BNG_SQL = """CALL main.geobrix.gbx_polygons_to_bng(
+  source_table => 'main.geobrix.parcels',
+  target_table => 'main.geobrix.parcel_cells',
+  bng_resolution => '100m')"""
+
 # Check the version and the language of the functions in a schema.
 UC_ROUTINES_SQL = """SELECT routine_name, external_language, comment
 FROM main.information_schema.routines
@@ -183,3 +195,16 @@ def tile_over_the_limit():
         tier_b.HANDLERS["gbx_rst_avg"](tile)
     except ValueError as err:
         return width, str(err)
+
+
+def preview_procedures():
+    """Return the statements install would send for the functions and the procedures, without sending them."""
+    import databricks.labs.gbx as gbx
+
+    return gbx.uc.install(
+        "main",
+        "geobrix",
+        "/Volumes/main/geobrix/artifacts/env6",
+        dry_run=True,
+        procedures=True,
+    )

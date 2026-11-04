@@ -174,7 +174,11 @@ def completeness_findings(man, fns: Iterable) -> List[str]:
         l4 = fn.levels.get("L4", {})
         if "handler" in l4 and not _defines(l4["handler"]):
             out.append(f"{fn.sql_name}: its UC handler {l4['handler']} is not defined")
-        if "tvf_over" in l4 and l4["tvf_over"] not in man.functions:
+        if (
+            "tvf_over" in l4
+            and l4["tvf_over"] not in man.functions
+            and l4["tvf_over"] not in getattr(man, "private", {})
+        ):
             out.append(
                 f"{fn.sql_name}: its UC table function reads {l4['tvf_over']}, which has no row"
             )
@@ -256,6 +260,53 @@ def collision_findings(man) -> List[str]:
             )
         if any(p.default for p in fn.params) and f"gbx__{fn.sql_name[4:]}" in public:
             out.append(f"{fn.sql_name}: its UC private function name is a public name")
+    out += private_findings(man, public)
+    out += procedure_findings(man, public)
+    return out
+
+
+def private_findings(man, public) -> List[str]:
+    """A private UC routine is gbx__<x>, equals no public name and no `gbx__<x>` implementation of a function with
+    DEFAULTs, and has a handler that exists."""
+    implicit = {
+        f"gbx__{fn.sql_name[4:]}"
+        for fn in man.functions.values()
+        if any(p.default for p in fn.params)
+    }
+    out = []
+    for name, pf in getattr(man, "private", {}).items():
+        if not name.startswith("gbx__"):
+            out.append(f"{name}: a private routine name must start gbx__")
+        if name in public or name in implicit:
+            out.append(f"{name}: a private routine name is a function name")
+        if not _defines(pf.handler):
+            out.append(f"{name}: its UC handler {pf.handler} is not defined")
+    return out
+
+
+def procedure_findings(man, public) -> List[str]:
+    """A procedure name is gbx_<x> and equals no function name, public or private (a procedure and a function of one
+    name would be one name in the schema's routine list)."""
+    from databricks.labs.gbx.uc import procedures
+
+    taken = (
+        set(public)
+        | set(getattr(man, "private", {}))
+        | {
+            f"gbx__{fn.sql_name[4:]}"
+            for fn in man.functions.values()
+            if any(p.default for p in fn.params)
+        }
+    )
+    out = []
+    for name in procedures.RECIPES:
+        if not name.startswith("gbx_") or name.startswith("gbx__"):
+            out.append(f"{name}: a procedure name must start gbx_ (not gbx__)")
+        if name in taken:
+            out.append(f"{name}: a procedure name is a function name")
+        for called in procedures.CALLS.get(name, ()):
+            if called not in taken:
+                out.append(f"{name}: calls {called}, which is no UC function")
     return out
 
 

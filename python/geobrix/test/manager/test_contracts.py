@@ -1,6 +1,7 @@
 """Contract checks generated from the per-surface manifest. No per-function tests."""
 
 import dataclasses
+import importlib
 import re
 from pathlib import Path
 
@@ -661,7 +662,7 @@ def test_uc_ddl_contract(fn):
         # A generator is a SQL table function over the array function: no Python, no environment.
         (tvf,) = stmts
         over = fn.levels["L4"]["tvf_over"]
-        if any(
+        if over not in MAN.private and any(
             p.default for p in MAN.functions[over].params
         ):  # its public name is a SQL wrapper
             over = f"gbx__{over[len('gbx_'):]}"
@@ -670,7 +671,11 @@ def test_uc_ddl_contract(fn):
         assert f"RETURNS TABLE ({', '.join(f'{n} {t}' for n, t in fn.columns)})" in tvf
         call = f"`cat`.`sch`.{over}({', '.join(p.name for p in fn.params)})"
         # one row per struct element (`inline`), or per single value in the table's one column (`explode`)
-        if MAN.functions[tvf_inner(fn)].returns_uc.startswith("array<struct"):
+        if (
+            MAN.private[tvf_inner(fn)].returns
+            if tvf_inner(fn) in MAN.private
+            else MAN.functions[tvf_inner(fn)].returns_uc
+        ).startswith("array<struct"):
             assert tvf.endswith(f"RETURN SELECT inline({call})")
         else:
             assert tvf.endswith(f"RETURN SELECT explode({call}) AS {fn.columns[0][0]}")
@@ -898,7 +903,11 @@ def _uc_handler_groups():
         deps = (
             l4["deps"]
             if "deps" in l4
-            else MAN.functions[l4["tvf_over"]].levels["L4"]["deps"]
+            else (
+                MAN.private[l4["tvf_over"]].deps
+                if l4["tvf_over"] in MAN.private
+                else MAN.functions[l4["tvf_over"]].levels["L4"]["deps"]
+            )
         )
         groups.setdefault(tuple(sorted(deps)), []).append(f.sql_name)
     return sorted(groups.items())
@@ -994,6 +1003,15 @@ ENV6_WHEEL = "geobrix-0.6.0+env6-py3-none-any.whl"
 ENV5_WHEEL = "geobrix-0.6.0+env5-py3-none-any.whl"
 PLAIN_WHEEL = "geobrix-0.6.0-py3-none-any.whl"
 UC_NAMES = {f.sql_name: f"geobrix 0.6.0: {f.doc.summary}" for f in UC_FNS}
+# the private routines a table function reads are created and verified with it
+PRIV_TVF = sorted(
+    {
+        f.levels["L4"]["tvf_over"]
+        for f in UC_FNS
+        if f.levels["L4"].get("tvf_over") in MAN.private
+    }
+)
+UC_NAMES.update({n: f"geobrix 0.6.0: {MAN.private[n].summary}" for n in PRIV_TVF})
 VOLUME_DIR = "/Volumes/c/s/v/dir"
 
 
@@ -1074,7 +1092,9 @@ def test_uc_install_creates_the_scala_functions_when_the_folder_holds_the_jar(
     }
     # every other function stays on the wheel
     python = [f for f in UC_FNS if "tvf_over" not in f.levels["L4"]]
-    assert sum("LANGUAGE PYTHON" in s for s in stmts) == len(python) - len(UC_SCALA_FNS)
+    assert sum("LANGUAGE PYTHON" in s for s in stmts) == len(python) - len(
+        UC_SCALA_FNS
+    ) + len(PRIV_TVF)
     assert spark.stmts[: len(stmts)] == stmts
 
 
@@ -1155,7 +1175,7 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
             else 2 if any(p.default for p in f.params) else 1
         )
         for f in UC_FNS
-    )
+    ) + len(PRIV_TVF)
     assert all(ENV6_WHEEL in s for s in everything if "LANGUAGE PYTHON" in s)
     only = uc.install(
         "cat", "sch", VOLUME_DIR, only=["gbx_bng_eastnorthasbng"], dry_run=True
@@ -3464,3 +3484,127 @@ def test_the_reminder_links_to_an_existing_page():
         REPO / "docs/docs" / (messages.MIGRATION_PATH.removeprefix("/docs/") + ".mdx")
     )
     assert page.exists() and messages.MIGRATION_PATH in messages.REMINDER
+
+
+# --- private routines and procedures ---------------------------------------------------------------------------------
+WHEEL_URI = "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl"
+
+
+@pytest.mark.parametrize("name", sorted(MAN.private))
+def test_uc_private_routine_ddl_contract(name):
+    pf = MAN.private[name]
+    stmt = ddl.private_ddl(pf, "cat", "sch", WHEEL_URI, MAN.uc_dependencies, "0.6.0")
+    assert stmt.startswith(f"CREATE OR REPLACE FUNCTION `cat`.`sch`.{name}(")
+    assert "LANGUAGE PYTHON" in stmt and "environment_version = '6'" in stmt
+    assert f"COMMENT {ddl.quote_str('geobrix 0.6.0: ' + pf.summary)}" in stmt
+    assert "DEFAULT" not in stmt  # a Python function cannot declare one
+    assert all(f"=={MAN.uc_dependencies[d]}" in stmt for d in pf.deps)
+    mod, _, attr = pf.handler.partition(":")
+    assert callable(getattr(importlib.import_module(mod), attr))
+    names = {f.sql_name for f in FNS}
+    assert name.startswith("gbx__") and name not in names
+    assert name not in {
+        f"gbx__{f.sql_name[4:]}" for f in FNS if any(p.default for p in f.params)
+    }
+
+
+def _built_procedures():
+    from databricks.labs.gbx.uc import procedures
+
+    built, _skipped = procedures.build_all("cat", "sch")
+    return built
+
+
+PROCEDURES = _built_procedures()
+
+
+def test_every_recipe_is_built_or_skipped_with_a_reason():
+    from databricks.labs.gbx.uc import procedures
+
+    built, skipped = procedures.build_all("cat", "sch")
+    assert sorted([n for n, _ in built] + list(skipped)) == sorted(procedures.RECIPES)
+    assert all(skipped.values())  # one line each
+    assert len(built) >= 8
+
+
+@pytest.mark.parametrize("name,text", PROCEDURES, ids=[n for n, _ in PROCEDURES])
+def test_uc_procedure_ddl_contract(name, text):
+    from databricks.labs.gbx.uc import procedures
+
+    assert text.startswith(f"CREATE OR REPLACE PROCEDURE `cat`.`sch`.{name}(")
+    assert "LANGUAGE SQL\nSQL SECURITY INVOKER\n" in text
+    assert "\nAS BEGIN\n" in text and text.endswith("\nEND")
+    # every call of a gbx_ routine is 3-level qualified
+    for before, called in re.findall(r"(.{0,12})(gbx_[a-z0-9_]+)\(", text):
+        assert before.endswith("`cat`.`sch`."), (name, called)
+    names = {f.sql_name for f in FNS} | set(MAN.private)
+    implicit = {
+        f"gbx__{f.sql_name[4:]}" for f in FNS if any(p.default for p in f.params)
+    }
+    assert (
+        name not in names | implicit
+    )  # no collision with a function, private or public
+    assert name.startswith("gbx_") and not name.startswith("gbx__")
+    for called in procedures.CALLS.get(name, ()):
+        assert called in names, called
+        assert f"`cat`.`sch`.{called}(" in text, (name, called)
+    assert (
+        "'" not in text.split("\n")[0]
+    )  # the catalog and schema are quoted identifiers
+
+
+def test_a_procedure_name_is_quoted_and_validated_before_any_text_is_built():
+    from databricks.labs.gbx.uc import procedures
+
+    with pytest.raises(ValueError, match="Unity Catalog name"):
+        procedures.build_all("ca`t", "sch")
+    with pytest.raises(ValueError, match="Unity Catalog name"):
+        procedures.polygons_to_bng("cat", "x' OR '1'='1")
+
+
+def test_uc_install_with_procedures_creates_them_after_the_functions_they_call(
+    volume, monkeypatch
+):
+    from databricks.labs.gbx import uc
+
+    monkeypatch.delenv("DATABRICKS_ENV_VERSION", raising=False)
+    plain = uc.install("cat", "sch", VOLUME_DIR, dry_run=True)
+    with_procs = uc.install("cat", "sch", VOLUME_DIR, dry_run=True, procedures=True)
+    assert with_procs[: len(plain)] == plain  # the functions first, unchanged
+    tail = with_procs[len(plain) :]
+    assert all(
+        "CREATE OR REPLACE PROCEDURE" in s or "gbx__" in s.split("(")[0] for s in tail
+    )
+    procs = [i for i, s in enumerate(tail) if "PROCEDURE" in s.split("(")[0]]
+    private = [i for i, s in enumerate(tail) if "FUNCTION" in s.split("(")[0]]
+    assert (
+        procs and private and max(private) < min(procs)
+    )  # the private routines before the procedures
+    assert len(procs) == len(PROCEDURES)
+
+
+def test_collision_gate_fires_on_a_procedure_named_like_a_function_and_on_a_bad_private_name(
+    monkeypatch,
+):
+    """A procedure name equal to a function name, public or private, and a private routine named like a public
+    one, are findings; the manifest as it stands has none."""
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.uc import procedures
+
+    gates = _gates()
+    public = {f.sql_name for f in FNS}
+    assert gates.procedure_findings(MAN, public) == []
+    assert gates.private_findings(MAN, public) == []
+    clash = {"gbx_bng_kring": procedures.RECIPES["gbx_zonal_stats"]}
+    monkeypatch.setattr(procedures, "RECIPES", clash)
+    assert any("is a function name" in f for f in gates.procedure_findings(MAN, public))
+    private = dataclasses.replace(
+        next(iter(MAN.private.values())), name="gbx_rst_slope"
+    )
+    man = SimpleNamespace(functions=MAN.functions, private={private.name: private})
+    found = gates.private_findings(man, public)
+    assert any("must start gbx__" in f for f in found)
+    assert any("is a function name" in f for f in found)
+    monkeypatch.setattr(procedures, "CALLS", {"gbx_bng_kring": ("gbx_nope",)})
+    assert any("calls gbx_nope" in f for f in gates.procedure_findings(MAN, public))

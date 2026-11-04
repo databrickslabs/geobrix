@@ -783,6 +783,17 @@ def zarr_tag_version(catalog: str, schema: str) -> str:
     # lands between two statements cannot make `from` name a version the copied rows do not have).
     latest = "(SELECT max(_metadata.row_commit_version) FROM IDENTIFIER(manifest_table) WHERE tag IS NULL)"
     meta = f"to_json(named_struct('mode', 'tag', 'tag', tag_name, 'write_id', v_write_id, 'from', {latest}))"
+    refusal = (
+        "concat('tag ', tag_name, ' already exists. Fix: pick another name, "
+        "or remove it with gbx_zarr_untag_version.')"
+    )
+    # The refusal of a tag that exists must hold whatever its keys are: a MERGE matches on the keys, so a tag whose rows no
+    # longer overlap the live keys would match nothing and mix two versions under one name. The commit row is always
+    # inserted, so the CASE in its meta is always evaluated, and it reads the manifest in the same statement (one snapshot).
+    guarded_meta = (
+        f"CASE WHEN EXISTS (SELECT 1 FROM IDENTIFIER(manifest_table) WHERE tag = tag_name) "
+        f"THEN CAST(raise_error({refusal}) AS STRING) ELSE {meta} END"
+    )
     body = f"""
 DECLARE v_write_id STRING DEFAULT replace(uuid(), '-', '');
 {_tag_check()}
@@ -795,18 +806,18 @@ USING (
   SELECT 'commit' AS kind, CAST(NULL AS STRING) AS array, v_write_id AS key, CAST(NULL AS STRING) AS shard_key,
     NULL AS file, CAST(NULL AS BIGINT) AS offset, CAST(NULL AS BIGINT) AS length, CAST(NULL AS STRING) AS checksum,
     CAST(NULL AS STRING) AS origin, CAST(NULL AS STRING) AS identity, v_write_id AS write_id,
-    CAST(NULL AS STRING) AS tag, {meta} AS meta
+    CAST(NULL AS STRING) AS tag, {guarded_meta} AS meta
 ) AS s
 ON t.kind = s.kind AND t.array <=> s.array AND t.key <=> s.key AND t.tag <=> s.tag
 WHEN MATCHED AND s.kind <> 'commit' THEN UPDATE SET
-  kind = raise_error(concat('tag ', tag_name, ' already exists. Fix: pick another name, or remove it with gbx_zarr_untag_version.'))
+  kind = raise_error({refusal})
 WHEN NOT MATCHED THEN INSERT ({names}) VALUES ({values});"""
     return _ddl(
         catalog,
         schema,
         "gbx_zarr_tag_version",
         "Name the live version of a Zarr store so it outlives vacuum: copy its rows under the tag, in one MERGE. "
-        "A tag that exists raises.",
+        "A tag that exists raises, whatever its keys are.",
         [_MANIFEST, _TAG],
         body,
     )

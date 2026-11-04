@@ -80,6 +80,26 @@ def test_zarr_tag_version_reads_the_manifest_in_one_statement():
     )  # the refusal of a tag that exists stays in the MERGE
 
 
+def test_zarr_tag_version_refuses_an_existing_tag_whatever_its_keys_are():
+    """A MERGE refuses only on matched keys; a tag whose rows no longer overlap the live keys matches nothing and would
+    mix two versions under one name. The always-inserted commit row therefore carries the refusal in its meta.
+    """
+    text = _text("gbx_zarr_tag_version")
+    merge = next(s for s in _statements(text) if s.startswith("MERGE INTO"))
+    commit_row = merge[merge.index("SELECT 'commit' AS kind") :]
+    guard = re.search(
+        r"CASE WHEN EXISTS \(SELECT 1 FROM IDENTIFIER\(manifest_table\) WHERE tag = tag_name\) "
+        r"THEN CAST\(raise_error\(concat\('tag ', tag_name, ' already exists\. Fix:[^;]*?\) AS STRING\) "
+        r"ELSE to_json\(.*?\) END AS meta",
+        commit_row,
+        re.S,
+    )
+    assert guard, commit_row
+    # the key-matched refusal stays as well, and the comment says the refusal does not depend on the keys
+    assert "WHEN MATCHED AND s.kind <> 'commit' THEN UPDATE SET" in merge
+    assert "whatever its keys are" in text
+
+
 def test_the_incremental_install_skip_message_states_the_remedy(capsys):
     uc.install(
         "cat",

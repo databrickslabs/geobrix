@@ -3222,6 +3222,10 @@ def _check_approx(case: Case, out) -> Optional[str]:
     import math
 
     def flat(v):
+        if isinstance(
+            v, dict
+        ):  # a UC function returns a struct as a dict, the session as a Row
+            v = list(v.values())
         return [v] if isinstance(v, (int, float)) else list(v)
 
     if out is None:
@@ -3439,6 +3443,10 @@ def check(case: Case, out, args) -> Optional[str]:
     if callable(case.expect):
         case = replace(case, expect=case.expect())
     if case.kind == "exact":
+        if isinstance(out, dict) and isinstance(case.expect, (tuple, list)):
+            out = tuple(
+                out.values()
+            )  # a UC struct is a dict, the session's a Row (a tuple)
         return (
             None
             if out == case.expect

@@ -9,6 +9,7 @@ corner is (400000, 5760000); `tile_4326` is the 64 x 48 oracle tile (0.01 degree
 
 import math
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
 NODATA = -9999.0
@@ -162,7 +163,7 @@ def _oracle_tile_len() -> int:
     return len(_tile_bytes("EPSG:4326"))
 
 
-RASTER_ACCESSOR = (
+_session_accessor_rows = (
     # size, band count, CRS
     _c("width", "width", (T4326,), "exact", 64),
     _c("height", "height", (T4326,), "exact", 48),
@@ -435,3 +436,24 @@ RASTER_STAT = (
     _c("avg_corrupt_tile", "avg", (CORRUPT,), "null"),
     _c("isempty_error_tile", "isempty", (ERR,), "exact", True),
 )
+
+
+# Unity Catalog: a materialized tile gives the session's value; a virtual tile is refused with a Fix and a corrupt tile
+# is NULL (the first row of each function below shares its session value row).
+RASTER_ACCESSOR = share(
+    _session_accessor_rows,
+    "width", "height", "numbands", "numbands_two", "srid", "srid_3857", "srid_none", "crs", "crs_3857", "crs_none",
+    "crs_esri", "srid_esri", "pixelwidth", "pixelheight", "scalex", "scaley", "upperleftx", "upperlefty", "skewx",
+    "skewy", "rotation", "skewx_rotated", "skewy_rotated", "pixelwidth_rotated", "pixelheight_rotated",
+    "rotation_rotated", "georeference", "boundingbox", "format", "format_hfa", "type", "type_two_band", "getnodata",
+    "getnodata_none", "metadata", "bandmetadata", "bandmetadata_none", "subdatasets", "rastertoworldcoord",
+    "rastertoworldcoordx", "rastertoworldcoordy", "worldtorastercoord", "worldtorastercoordx",
+    "worldtorastercoordy", "worldtorastercoord_edge", "worldtorastercoord_outside", "width_null_tile",
+    "width_error_tile", "width_corrupt_tile", "bandmetadata_null_band",
+) + edges(
+    width=(), height=(), numbands=(), srid=(), crs=(), pixelwidth=(), pixelheight=(), scalex=(), scaley=(),
+    upperleftx=(), upperlefty=(), skewx=(), skewy=(), rotation=(), georeference=(), boundingbox=(), format=(),
+    type=(), getnodata=(), metadata=(), bandmetadata=(1,), subdatasets=(), rastertoworldcoord=(1, 2),
+    rastertoworldcoordx=(1, 2), rastertoworldcoordy=(1, 2), worldtorastercoord=(400015.0, 5759975.0),
+    worldtorastercoordx=(400015.0, 5759975.0), worldtorastercoordy=(400015.0, 5759975.0),
+)  # fmt: skip

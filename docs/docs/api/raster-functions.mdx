@@ -224,17 +224,18 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands: red, NIR, gre
 ### rst_bandmetadata
 
 {/* BEGIN GENERATED gbx_rst_bandmetadata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_bandmetadata(tile, band)` | `map<string,string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_bandmetadata(tile, band)` | `map<string,string>` |
 | Python | `rasterx.functions.rst_bandmetadata(tile, band)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `band` | `INT` |  | The 1-based band number. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `band` | `INT` | `INT` |  | The 1-based band number. |
 {/* END GENERATED gbx_rst_bandmetadata */}
 
 :::note Implementation
@@ -256,16 +257,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with per-band 
 ### rst_boundingbox
 
 {/* BEGIN GENERATED gbx_rst_boundingbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_boundingbox(tile)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_boundingbox(tile)` | `BINARY` |
 | Python | `rasterx.functions.rst_boundingbox(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_boundingbox */}
 
 :::note Implementation
@@ -285,16 +287,17 @@ Bounding box geometry.
 ### rst_crs
 
 {/* BEGIN GENERATED gbx_rst_crs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_crs(tile)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_crs(tile)` | `STRING` |
 | Python | `rasterx.functions.rst_crs(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_crs */}
 
 :::note Implementation
@@ -322,16 +325,17 @@ Returns the authority string (`AUTHORITY:CODE`, e.g. `EPSG:4326` or `ESRI:54008`
 ### rst_format
 
 {/* BEGIN GENERATED gbx_rst_format: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_format(tile)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_format(tile)` | `STRING` |
 | Python | `rasterx.functions.rst_format(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_format */}
 
 :::note Implementation
@@ -351,16 +355,17 @@ GDAL format name.
 ### rst_georeference
 
 {/* BEGIN GENERATED gbx_rst_georeference: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_georeference(tile)` | `map<string,double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_georeference(tile)` | `map<string,double>` |
 | Python | `rasterx.functions.rst_georeference(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_georeference */}
 
 :::note Implementation
@@ -393,16 +398,17 @@ See the [GDAL geotransform tutorial](https://gdal.org/en/stable/tutorials/geotra
 ### rst_getnodata
 
 {/* BEGIN GENERATED gbx_rst_getnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_getnodata(tile)` | `array<double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_getnodata(tile)` | `array<double>` |
 | Python | `rasterx.functions.rst_getnodata(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_getnodata */}
 
 :::note Implementation
@@ -454,16 +460,17 @@ _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which ha
 ### rst_height
 
 {/* BEGIN GENERATED gbx_rst_height: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_height(tile)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_height(tile)` | `INT` |
 | Python | `rasterx.functions.rst_height(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_height */}
 
 :::note Implementation
@@ -577,16 +584,17 @@ In-memory size in bytes.
 ### rst_metadata
 
 {/* BEGIN GENERATED gbx_rst_metadata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_metadata(tile)` | `map<string,string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_metadata(tile)` | `map<string,string>` |
 | Python | `rasterx.functions.rst_metadata(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_metadata */}
 
 :::note Implementation
@@ -638,16 +646,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands); the canonica
 ### rst_numbands
 
 {/* BEGIN GENERATED gbx_rst_numbands: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_numbands(tile)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_numbands(tile)` | `INT` |
 | Python | `rasterx.functions.rst_numbands(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_numbands */}
 
 :::note Implementation
@@ -700,16 +709,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 8×8, 3 bands, no NoDa
 ### rst_pixelheight
 
 {/* BEGIN GENERATED gbx_rst_pixelheight: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_pixelheight(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_pixelheight(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_pixelheight(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_pixelheight */}
 
 :::note Implementation
@@ -729,16 +739,17 @@ Pixel height in ground units.
 ### rst_pixelwidth
 
 {/* BEGIN GENERATED gbx_rst_pixelwidth: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_pixelwidth(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_pixelwidth(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_pixelwidth(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_pixelwidth */}
 
 :::note Implementation
@@ -758,16 +769,17 @@ Pixel width in ground units.
 ### rst_rotation
 
 {/* BEGIN GENERATED gbx_rst_rotation: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_rotation(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_rotation(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_rotation(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_rotation */}
 
 :::note Implementation
@@ -787,16 +799,17 @@ Rotation in radians.
 ### rst_scalex
 
 {/* BEGIN GENERATED gbx_rst_scalex: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_scalex(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_scalex(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_scalex(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_scalex */}
 
 :::note Implementation
@@ -816,16 +829,17 @@ Scale (pixel size) in X/Y.
 ### rst_scaley
 
 {/* BEGIN GENERATED gbx_rst_scaley: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_scaley(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_scaley(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_scaley(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_scaley */}
 
 :::note Implementation
@@ -845,16 +859,17 @@ Scale (pixel size) in X/Y.
 ### rst_skewx
 
 {/* BEGIN GENERATED gbx_rst_skewx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_skewx(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_skewx(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_skewx(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_skewx */}
 
 :::note Implementation
@@ -874,16 +889,17 @@ Skew in X/Y.
 ### rst_skewy
 
 {/* BEGIN GENERATED gbx_rst_skewy: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_skewy(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_skewy(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_skewy(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_skewy */}
 
 :::note Implementation
@@ -903,16 +919,17 @@ Skew in X/Y.
 ### rst_srid
 
 {/* BEGIN GENERATED gbx_rst_srid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_srid(tile)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_srid(tile)` | `INT` |
 | Python | `rasterx.functions.rst_srid(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_srid */}
 
 :::note Implementation
@@ -932,16 +949,17 @@ The stored spatial reference ID integer (an EPSG or ESRI code), or NULL when the
 ### rst_subdatasets
 
 {/* BEGIN GENERATED gbx_rst_subdatasets: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_subdatasets(tile)` | `map<string,string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_subdatasets(tile)` | `map<string,string>` |
 | Python | `rasterx.functions.rst_subdatasets(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_subdatasets */}
 
 :::note Implementation
@@ -994,16 +1012,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) which has rea
 ### rst_type
 
 {/* BEGIN GENERATED gbx_rst_type: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_type(tile)` | `array<string>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_type(tile)` | `array<string>` |
 | Python | `rasterx.functions.rst_type(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_type */}
 
 :::note Implementation
@@ -1025,16 +1044,17 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands, `UInt16`)._
 ### rst_upperleftx
 
 {/* BEGIN GENERATED gbx_rst_upperleftx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_upperleftx(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_upperleftx(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_upperleftx(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_upperleftx */}
 
 :::note Implementation
@@ -1054,16 +1074,17 @@ Upper-left corner coordinates.
 ### rst_upperlefty
 
 {/* BEGIN GENERATED gbx_rst_upperlefty: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_upperlefty(tile)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_upperlefty(tile)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_upperlefty(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_upperlefty */}
 
 :::note Implementation
@@ -1083,16 +1104,17 @@ Upper-left corner coordinates.
 ### rst_width
 
 {/* BEGIN GENERATED gbx_rst_width: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_width(tile)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_width(tile)` | `INT` |
 | Python | `rasterx.functions.rst_width(tile)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
 {/* END GENERATED gbx_rst_width */}
 
 :::note Implementation
@@ -4379,18 +4401,19 @@ NDVI from band indices.
 ### rst_rastertoworldcoord
 
 {/* BEGIN GENERATED gbx_rst_rastertoworldcoord: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_rastertoworldcoord(tile, x, y)` | `struct<x:double,y:double>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_rastertoworldcoord(tile, x, y)` | `struct<x:double,y:double>` |
 | Python | `rasterx.functions.rst_rastertoworldcoord(tile, x, y)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `x` | `INT` |  | The pixel column, counted from 0. |
-| `y` | `INT` |  | The pixel row, counted from 0. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `x` | `INT` | `INT` |  | The pixel column, counted from 0. |
+| `y` | `INT` | `INT` |  | The pixel row, counted from 0. |
 {/* END GENERATED gbx_rst_rastertoworldcoord */}
 
 :::note Implementation
@@ -4410,18 +4433,19 @@ Pixel to world coordinates as a struct with `.x` and `.y` fields.
 ### rst_rastertoworldcoordx
 
 {/* BEGIN GENERATED gbx_rst_rastertoworldcoordx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_rastertoworldcoordx(tile, x, y)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_rastertoworldcoordx(tile, x, y)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_rastertoworldcoordx(tile, x, y)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `x` | `INT` |  | The pixel column, counted from 0. |
-| `y` | `INT` |  | The pixel row, counted from 0. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `x` | `INT` | `INT` |  | The pixel column, counted from 0. |
+| `y` | `INT` | `INT` |  | The pixel row, counted from 0. |
 {/* END GENERATED gbx_rst_rastertoworldcoordx */}
 
 :::note Implementation
@@ -4441,18 +4465,19 @@ World X / Y coordinate of a pixel.
 ### rst_rastertoworldcoordy
 
 {/* BEGIN GENERATED gbx_rst_rastertoworldcoordy: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_rastertoworldcoordy(tile, x, y)` | `DOUBLE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_rastertoworldcoordy(tile, x, y)` | `DOUBLE` |
 | Python | `rasterx.functions.rst_rastertoworldcoordy(tile, x, y)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `x` | `INT` |  | The pixel column, counted from 0. |
-| `y` | `INT` |  | The pixel row, counted from 0. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `x` | `INT` | `INT` |  | The pixel column, counted from 0. |
+| `y` | `INT` | `INT` |  | The pixel row, counted from 0. |
 {/* END GENERATED gbx_rst_rastertoworldcoordy */}
 
 :::note Implementation
@@ -4736,18 +4761,19 @@ Convert raster data type.
 ### rst_worldtorastercoord
 
 {/* BEGIN GENERATED gbx_rst_worldtorastercoord: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_worldtorastercoord(tile, x, y)` | `struct<x:int,y:int>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_worldtorastercoord(tile, x, y)` | `struct<x:int,y:int>` |
 | Python | `rasterx.functions.rst_worldtorastercoord(tile, x, y)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `x` | `DOUBLE` |  | The x coordinate in the raster CRS. |
-| `y` | `DOUBLE` |  | The y coordinate in the raster CRS. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `x` | `DOUBLE` | `DOUBLE` |  | The x coordinate in the raster CRS. |
+| `y` | `DOUBLE` | `DOUBLE` |  | The y coordinate in the raster CRS. |
 {/* END GENERATED gbx_rst_worldtorastercoord */}
 
 :::note Implementation
@@ -4767,18 +4793,19 @@ World to pixel coordinates as a struct with `.x` and `.y` fields.
 ### rst_worldtorastercoordx
 
 {/* BEGIN GENERATED gbx_rst_worldtorastercoordx: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_worldtorastercoordx(tile, x, y)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_worldtorastercoordx(tile, x, y)` | `INT` |
 | Python | `rasterx.functions.rst_worldtorastercoordx(tile, x, y)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `x` | `DOUBLE` |  | The x coordinate in the raster CRS. |
-| `y` | `DOUBLE` |  | The y coordinate in the raster CRS. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `x` | `DOUBLE` | `DOUBLE` |  | The x coordinate in the raster CRS. |
+| `y` | `DOUBLE` | `DOUBLE` |  | The y coordinate in the raster CRS. |
 {/* END GENERATED gbx_rst_worldtorastercoordx */}
 
 :::note Implementation
@@ -4798,18 +4825,19 @@ Pixel column / row for a world coordinate.
 ### rst_worldtorastercoordy
 
 {/* BEGIN GENERATED gbx_rst_worldtorastercoordy: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_worldtorastercoordy(tile, x, y)` | `INT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_worldtorastercoordy(tile, x, y)` | `INT` |
 | Python | `rasterx.functions.rst_worldtorastercoordy(tile, x, y)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The raster tile. |
-| `x` | `DOUBLE` |  | The x coordinate in the raster CRS. |
-| `y` | `DOUBLE` |  | The y coordinate in the raster CRS. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The raster tile. |
+| `x` | `DOUBLE` | `DOUBLE` |  | The x coordinate in the raster CRS. |
+| `y` | `DOUBLE` | `DOUBLE` |  | The y coordinate in the raster CRS. |
 {/* END GENERATED gbx_rst_worldtorastercoordy */}
 
 :::note Implementation

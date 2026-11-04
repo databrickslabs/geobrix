@@ -152,7 +152,13 @@ def test_l1_arity_contract_for_every_companion(jvm_spark):
 # --- Unity Catalog: the handler behind every UC row of the slice tables, on Python values (no Spark) ---------------
 # The warehouse statements of the same rows are run by bench.probes.run_uc_slice; a function that has a Scala handler
 # is answered by the same rows in KernelFacadesSmokeTest (the JAR, in the container).
-_UC_TABLES = ("GRID_SCALAR", "GRID_ARRAY", "GRID_GENERATOR", "VECTOR_SCALAR")
+_UC_TABLES = (
+    "GRID_SCALAR",
+    "GRID_ARRAY",
+    "GRID_GENERATOR",
+    "VECTOR_SCALAR",
+    "RASTER_ACCESSOR",
+)
 
 
 def _uc_fns(table):

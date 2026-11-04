@@ -61,8 +61,10 @@ def time_iters(
     MEASURED iterations always run fn.
     """
     _warm = warmup_fn or fn
+    t_warm = time.perf_counter()
     for _ in range(warmup):
         _warm()
+    warmup_s = (time.perf_counter() - t_warm) if warmup else 0.0
     samples = []
     for _ in range(measured):
         t0 = time.perf_counter()
@@ -74,6 +76,7 @@ def time_iters(
     return {
         "warmup_iters": warmup,
         "measured_iters": measured,
+        "warmup_s": warmup_s,  # wall time of the warmup iterations (0.0 when there are none)
         "iter_median_ms": statistics.median(samples),
         "iter_min_ms": samples[0],
         "iter_p90_ms": samples[p90_idx],

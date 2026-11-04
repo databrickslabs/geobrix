@@ -238,6 +238,29 @@ def test_run_mvp_tells_the_heartbeat_the_set_the_rows_and_the_median(
     )
 
 
+def test_a_form_records_its_setup_and_warmup_time_in_its_row_and_its_done_line(
+    spark_session_local, tmp_path, monkeypatch, capsys
+):
+    tiny_forms(monkeypatch, 1)
+    hb = liveness.Heartbeat(str(tmp_path / "hb.json"), interval=3600).start()
+    cold, none = (
+        levels.run_mvp(
+            spark_session_local, "S", "t", warmup, 1, corpus=str(tmp_path), schema=None, scales=(1,), where="venv",
+            base_rows=50, only_levels=("L3",), heartbeat=hb, form_cap_s=60,
+        )[0]
+        for warmup in (1, 0)
+    )  # fmt: skip
+    hb.stop()
+    assert cold.status == none.status == "ok"
+    assert cold.setup_s >= 0.0 and cold.warmup_s > 0.0
+    assert none.setup_s >= 0.0 and none.warmup_s == 0.0  # no warmup iteration: 0.0
+    done = [ln for ln in _printed(capsys) if " DONE " in ln]
+    assert re.search(
+        r"DONE elapsed \d+\.\ds setup \d+\.\ds warmup \d+\.\ds median \d+\.\d\ds$",
+        done[0],
+    ), done[0]
+
+
 # ---- liveness: each form's rows sink when that form finishes
 
 

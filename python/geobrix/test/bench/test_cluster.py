@@ -57,7 +57,7 @@ def spark():
 def test_rows_to_dataframe_schema_and_where(spark):
     df = cl.rows_to_dataframe([_row(), _row(fn="rst_avg")], spark, where="cluster")
     cols = df.columns
-    assert len(cols) == 59
+    assert len(cols) == 61
     assert "output_fingerprint" in cols
     assert "iter_total_wall_clock_s" in cols
     assert "avg_wall_clock_s" in cols
@@ -74,7 +74,7 @@ def test_rows_to_dataframe_schema_and_where(spark):
     assert cols[mo + 1] == "avg_wall_clock_s"
     assert cols[mo + 2] == "per_tile_avg_s"
     assert cols[mo + 3] == "per_tile_avg_ms"
-    assert cols[-14:] == [
+    assert cols[-16:] == [
         "level",
         "form",
         "compute",
@@ -89,8 +89,10 @@ def test_rows_to_dataframe_schema_and_where(spark):
         "gc_s",
         "py_worker_rss_mb",
         "failure_mode",
+        "setup_s",
+        "warmup_s",
     ]
-    assert cols[-27:-14] == [
+    assert cols[-29:-16] == [
         "iter_min_s",
         "iter_p90_s",
         "iter_total_wall_clock_s",

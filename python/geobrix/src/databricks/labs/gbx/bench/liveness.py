@@ -116,13 +116,21 @@ class Heartbeat:
         form_done: bool = True,
         median_s: Optional[float] = None,
         status: Optional[str] = None,
+        setup_s: Optional[float] = None,
+        warmup_s: Optional[float] = None,
     ) -> None:
         """Mark the form (or one scale of it) finished; ``form_done=False`` for a scale that is not the form's last.
 
         ``median_s`` (the form's median, when it has one) and ``status`` (when it did not end ``ok``) are printed.
+        ``setup_s`` (the work before the first iteration) and ``warmup_s`` (the warmup iterations) are printed
+        between the elapsed and the median, so the cold start is read off the line rather than inferred.
         """
         elapsed = time.monotonic() - self._form_started if self._form else 0.0
         tail = f"elapsed {elapsed:.1f}s"
+        if setup_s is not None:
+            tail += f" setup {setup_s:.1f}s"
+        if warmup_s is not None:
+            tail += f" warmup {warmup_s:.1f}s"
         if median_s is not None:
             tail += f" median {median_s:.2f}s"
         if status and status != "ok":

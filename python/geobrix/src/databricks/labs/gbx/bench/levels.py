@@ -189,6 +189,8 @@ def run_mvp(
                     form_done=scale == scales[-1],
                     median_s=done.iter_median_s if done.status == "ok" else None,
                     status=done.status,
+                    setup_s=done.setup_s,
+                    warmup_s=done.warmup_s,
                 )
             if on_form:
                 # sunk now, not after the last scale: a later scale that hangs or is cancelled loses nothing. The
@@ -303,6 +305,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     from databricks.labs.gbx.bench import levels_forms as lf
     from databricks.labs.gbx.manifest import resolve_ref
 
+    t_start = time.perf_counter()
     spark, uc = ctx.spark, ctx.uc
     gone = _cannot_run_here(form, uc, ctx)
     if gone:
@@ -326,6 +329,9 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     holder: Dict = {}
 
     def _go():
+        holder.setdefault(
+            "first", time.perf_counter()
+        )  # the first iteration, warmup or measured
         holder["t0"] = time.time()
         if form.run:
             res = resolve_ref(form.run)(spark, src)
@@ -386,6 +392,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         fp=str(fp),
         m=m,
         input_partitions=scan_tasks or 0,
+        setup_s=holder["first"] - t_start,
     )
 
 
@@ -454,6 +461,7 @@ def _row(
     m: Optional[Dict] = None,
     failure: str = "",
     input_partitions: int = 0,
+    setup_s: float = 0.0,
 ) -> ResultRow:
     t, m = timing or {}, m or {}
     med = t.get("iter_median_ms", 0.0) / 1000.0
@@ -492,6 +500,8 @@ def _row(
         py_worker_rss_mb=_opt(m.get("py_worker_rss_mb"), float),
         failure_mode=failure,
         input_partitions=input_partitions,
+        setup_s=max(setup_s, 0.0),
+        warmup_s=t.get("warmup_s", 0.0),
     )
 
 

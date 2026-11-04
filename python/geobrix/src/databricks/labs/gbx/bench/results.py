@@ -134,6 +134,11 @@ class ResultRow:
     py_worker_rss_mb: Optional[float] = None
     # Why an error row failed ("ExceptionType: message"); "" on every other row.
     failure_mode: str = ""
+    # Cold start, in seconds. setup_s: the form's start to its first iteration (the work before the
+    # timed loop: input listing, registration, session setup). warmup_s: the warmup iterations' wall
+    # time (0.0 when there are none). 0.0 on a row that did not time (and on every other leg).
+    setup_s: float = 0.0
+    warmup_s: float = 0.0
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

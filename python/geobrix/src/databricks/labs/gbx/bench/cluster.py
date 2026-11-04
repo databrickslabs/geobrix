@@ -82,6 +82,8 @@ ORDER = [
     "gc_s",
     "py_worker_rss_mb",
     "failure_mode",
+    "setup_s",
+    "warmup_s",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.

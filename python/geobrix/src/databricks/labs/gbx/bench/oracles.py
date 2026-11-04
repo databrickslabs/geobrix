@@ -4985,14 +4985,27 @@ def _legacy_literal(value: dict, param) -> str:
     )
 
 
+def _array_element_type(param) -> str:
+    """X of a manifest UC type ``ARRAY<X>``; ValueError for a parameter that is no array."""
+    uc = param.uc or ""
+    if not (uc.upper().startswith("ARRAY<") and uc.endswith(">")):
+        raise ValueError(
+            f"{param.name}: a list needs an ARRAY<...> parameter; got {uc!r}"
+        )
+    return uc[len("ARRAY<") : -1]
+
+
 def _sql_literal(value, param, case: Case) -> str:
     if value is None:
         return "NULL"
-    if isinstance(value, list):  # an ARRAY<TILE>: a NULL element is a NULL tile
-        elem = replace(param, uc="TILE")
+    if isinstance(
+        value, list
+    ):  # an ARRAY<X>: the element type is the parameter's own (a NULL element is a NULL X)
+        elem_uc = _array_element_type(param)
+        elem = replace(param, uc=elem_uc)
         items = ", ".join(
             (
-                "CAST(NULL AS " + sql_type("TILE") + ")"
+                "CAST(NULL AS " + sql_type(elem_uc) + ")"
                 if v is None
                 else _sql_literal(v, elem, case)
             )
@@ -5017,8 +5030,16 @@ def _sql_literal(value, param, case: Case) -> str:
         if isinstance(value, (bytes, bytearray)):
             # a BINARY literal for a GEOMETRY parameter: the engine refuses it (the uc_wkb_into_geometry_refused row)
             return "X'" + bytes(value).hex() + "'"
+        if isinstance(value, str) and value.lstrip()[:5].upper() == "SRID=":
+            # EWKT carries its own SRID: st_geomfromwkt does not parse it, st_geomfromewkt does
+            escaped = value.replace("'", "''")
+            return f"CAST(st_geomfromewkt('{escaped}') AS {UC_GEOMETRY})"
         # integer SRID only (product CRS facts); a UC GEOMETRY(ANY) parameter takes it through a CAST
         return f"CAST(st_geomfromwkt('{value}', {case.geom_srid}) AS {UC_GEOMETRY})"
+    if isinstance(
+        value, (bytes, bytearray)
+    ):  # a BINARY element or value: a hex literal
+        return "X'" + bytes(value).hex() + "'"
 
     if isinstance(value, str):
         return "'" + value.replace("'", "''") + "'"

@@ -287,6 +287,38 @@ def test_geom_srid_without_a_fixed_srid_follows_the_first_argument():
     assert oracles.check(case, _ewkb("POINT Z(1 2 3)", 4326), case.args) is not None
 
 
+def test_a_list_literal_takes_the_element_type_of_its_parameter_and_ewkt_is_parsed_as_ewkt():
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench import oracles
+
+    man = manifest.load()
+
+    def literal(fn, index, value):
+        case = oracles.Case("probe", fn, (), "null", None, geom_srid=3857)
+        return oracles._sql_literal(value, man.functions[fn].params[index], case)
+
+    # ARRAY<BINARY>: bytes are hex literals, a NULL element and an empty array are BINARY
+    assert literal("gbx_rst_gridfrompoints", 0, [b"\x01\xab", None]) == (
+        "array(X'01ab', CAST(NULL AS BINARY))"
+    )
+    assert literal("gbx_rst_gridfrompoints", 0, []) == "CAST(array() AS ARRAY<BINARY>)"
+    # ARRAY<DOUBLE>
+    assert literal("gbx_rst_isoband", 1, [0.0, None, 2.5]) == (
+        "array(0.0, CAST(NULL AS DOUBLE), 2.5)"
+    )
+    assert literal("gbx_rst_isoband", 1, []) == "CAST(array() AS ARRAY<DOUBLE>)"
+    # ARRAY<TILE>
+    tiles = literal("gbx_rst_combineavg", 0, [None])
+    assert tiles.startswith("array(CAST(NULL AS ") and "raster" in tiles
+    # EWKT carries its SRID: it goes to st_geomfromewkt, plain WKT keeps the case SRID
+    assert literal("gbx_rst_rasterize", 0, "SRID=4326;POINT(1 2)") == (
+        "CAST(st_geomfromewkt('SRID=4326;POINT(1 2)') AS GEOMETRY(ANY))"
+    )
+    assert literal("gbx_rst_rasterize", 0, "POINT(1 2)") == (
+        "CAST(st_geomfromwkt('POINT(1 2)', 3857) AS GEOMETRY(ANY))"
+    )
+
+
 def test_a_reference_of_several_bands_holds_every_band_in_order():
     """`ref` with a 3-D reference (frombands, colour relief) compares each band, and the band count."""
     import numpy as np

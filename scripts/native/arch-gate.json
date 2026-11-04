@@ -1,11 +1,11 @@
 {
   "written_by": "bash scripts/commands/gbx-native-verify-arches.sh",
   "checked_by": "python3 scripts/native/native_inputs.py check-stamp (CI: build_main.yml, job arch-gate)",
-  "native_inputs_sha256": "27e2c7bc41748d5c9de761a0166dea05fb8962c51cf74962f3d9806697121219",
-  "date": "2026-11-03",
+  "native_inputs_sha256": "0336d806dbdaf75951ca8de761f5b971484ca585dec1c1687f850fd2c9d450b8",
+  "date": "2026-11-04",
   "gdal_version": "3.13.3",
   "native_revision": "1",
-  "built_from": "acc6cb7bfa461a18ce0f0124a4d3f7e564b915d7",
+  "built_from": "d5e7a906d54f37c228de803340c74e2a503a0915",
   "results": {
     "aarch64": {
       "verify_native": {
@@ -69,7 +69,7 @@
     "python/geobrix/src/_gbx_native_path.py": "91439a475d1c3910874667efef67770407ddd5ff03854c40bfa85d0bb2ce0361",
     "python/geobrix/src/databricks/labs/gbx/_native/__init__.py": "5f5372383f99daf248cd9decc8c10b4eb643aab9cf64662b305c7d6f7964fad2",
     "python/geobrix/src/databricks/labs/gbx/_native/_rules.py": "c2d094f3a6379e6e5d7c6be3e0d9838629df5a02d584f5a20d70cb8c12ab14d6",
-    "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "1bba473e798fb0afc58a77d80c022ef5d90881da4657a60707badad5a569afa1",
+    "python/geobrix/src/databricks/labs/gbx/_native/_selfcheck.py": "a726c00424e7d78dff66e723dbdcafbf1b40ec8b005dd1ca1430c259ff839cff",
     "rust-toolchain.toml": "862adc14eccb8038bf8cead88a04def82032db0e59673d7cf228131e5e25d3b1",
     "scripts/native/JniSmoke.java": "d119583c5188d53f3c45ee7e0cf335a05fd2b2d347ead61d8310d2bfeb5b510b",
     "scripts/native/base_held.py": "433e6d93c6b89ab24b6ccb2e9f46fbfb628ebf80e5560dded46a615dd47cdcf6",
@@ -88,7 +88,7 @@
     "scripts/native/build-requirements.in": "9a4df67eb8215282db860e4bc181c387205b2b72f14db042aaf2359db0b4be34",
     "scripts/native/build-rust-native.sh": "8f77856738e178be7a6a90a0a4709984c1b6ae35ff30cbf6dd774fdff7bced68",
     "scripts/native/build.Dockerfile": "e6dc9c46f06c8374b0955c8dfb841718dabc828d06e66d5440a9307b9ecb69c3",
-    "scripts/native/build_env_wheel.py": "533e332a9b1d09cf0b4633343de1be81eafe27548459ab98793ef94ad9adacf1",
+    "scripts/native/build_env_wheel.py": "9e9b90137acad92144866f010a206de27991f51e4a2161b1d69975e393b33a80",
     "scripts/native/cargo-deny-ci.sh": "7343af663e7b1bf5693169bc91fc974fa8aa8aafd6b2e8071bcb96d35dfdb5b3",
     "scripts/native/cargo-offline.toml": "a8326789ecde9b687444088317921b38f25c1cdedcb0117b9a17f945216de55e",
     "scripts/native/cargo-vendor.sh": "535e5b173666967828b06a6f6d7f39bed70af5fd0d4a3df819cba41f62db990c",

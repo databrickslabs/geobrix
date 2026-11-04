@@ -10,6 +10,7 @@ bands of the ramp (band k adds 100 k); `rto_byte` a 16 x 12 UInt8 ramp and `rto_
 NoData; `rto_rgb` four colour blocks (green, light, grey, dark) and one black pixel.
 """
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -308,7 +309,7 @@ def _rto_nc_windowed(tmpdir):
     return tile
 
 
-RASTER_TILE_OP = (
+_session_tile_op_rows = (
     # --- align_to: nearest-neighbour onto the grid of a reference tile (rasterio.warp), the same CRS
     Case(
         "align_to_coarse", AL, (T4326, Build("rto_coarse_ref")), "ref", "align_to", ONLY
@@ -989,3 +990,48 @@ RASTER_TILE_OP = (
         ONLY,
     ),
 )
+
+
+# Unity Catalog: a materialized tile gives the session's tile; a virtual tile is refused with a Fix, a corrupt one is
+# NULL, an error tile goes through unchanged, and a CRS is an SRID, EPSG:<n> or ESRI:<n> (the first row of each
+# function below shares its session value row).
+RASTER_TILE_OP = share(
+    _session_tile_op_rows,
+    "setsrid_3857", "setsrid_esri_code", "setsrid_zero_clears", "setsrid_negative", "setsrid_unknown_code",
+    "setsrid_null_tile", "setsrid_null_srid", "setsrid_error_in", "setsrid_error_tile_passes_bad_srid",
+    "setcrs_epsg", "setcrs_esri", "setcrs_digit_string", "setcrs_not_a_crs", "setcrs_null_tile", "setcrs_null_crs",
+    "setcrs_error_in", "setcrs_error_tile_passes_bad_crs",
+    "updatetype_int32", "updatetype_int32_props", "updatetype_byte_clamps", "updatetype_uint16_clamps",
+    "updatetype_byte_drops_nodata", "updatetype_lower_case", "updatetype_bad_type", "updatetype_null_tile",
+    "updatetype_null_type", "updatetype_error_in", "updatetype_error_tile_passes_bad_type",
+    "initnodata_unset", "initnodata_kept", "initnodata_nan_kept", "initnodata_null_tile", "initnodata_error_in",
+    "band_2", "band_count", "band_zero", "band_negative", "band_too_high", "band_null_tile", "band_null_index",
+    "band_error_in", "band_error_tile_passes_bad_index",
+    "asformat_png", "asformat_lower_case", "asformat_gtiff", "asformat_cog", "asformat_lower_cog",
+    "asformat_bad_format", "asformat_null_tile", "asformat_null_format", "asformat_error_in",
+    "asformat_error_tile_passes_bad_format",
+    "getsubdataset_bytes", "getsubdataset_plain_tile", "getsubdataset_null_tile", "getsubdataset_null_name",
+    "getsubdataset_error_in",
+    "align_to_coarse", "align_to_other_crs", "align_to_big_reference", "align_to_null_tile", "align_to_null_reference",
+    "align_to_error_in", "align_to_error_reference",
+    "filter_min", "filter_max", "filter_mean", "filter_median", "filter_median_5", "filter_upper_case",
+    "filter_mean_float32", "filter_keeps_type", "filter_even_size", "filter_zero_size", "filter_bad_operation",
+    "filter_null_tile", "filter_null_size", "filter_null_operation", "filter_error_in",
+    "filter_error_tile_passes_bad_operation",
+    "convolve_asymmetric", "convolve_identity", "convolve_float64", "convolve_even_kernel", "convolve_ragged_kernel",
+    "convolve_null_tile", "convolve_null_kernel", "convolve_error_in",
+) + edges(
+    setsrid=(3857,), setcrs=("EPSG:3857",), updatetype=("Int32",), initnodata=(), band=(1,), asformat=("PNG",),
+    getsubdataset=("Band2",), align_to=(Build("rto_coarse_ref"),), filter=(3, "min"), convolve=(IDENTITY,),
+) + (
+    # a CRS definition (WKT, PROJ4) stays on the session function
+    Case("uc_setcrs_wkt_refused", SC, (T4326, Build("wkt_3857")), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_setcrs_proj4_refused", SC, (T4326, "+proj=longlat +datum=WGS84 +no_defs"), "uc_refused", None, ("uc",)
+    ),
+    # a subdataset the container does not have is a wrong argument
+    Case("uc_getsubdataset_missing", SD, (Build("rto_nc_bytes"), "nope"), "raises", "nope", ("uc",)),
+    # the reference of align_to: a virtual one is refused, an unreadable one is NULL
+    Case("uc_align_to_virtual_reference_refused", AL, (T4326, VIRT), "uc_refused", None, ("uc",)),
+    Case("uc_align_to_corrupt_reference_null", AL, (T4326, CORRUPT), "null", None, ("uc",)),
+)  # fmt: skip

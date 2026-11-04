@@ -7,6 +7,7 @@ float32 bands (1 red, 2 near-infrared, 3 blue) on a 10 m grid, with one NoData p
 bands 1 and 2 are both 0 (a division by zero).
 """
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -65,7 +66,7 @@ def _calc_dem(tmpdir):
     return _tile(_gtiff(_calc_dem_array()[np.newaxis], "EPSG:3857"))
 
 
-SPEC_CALC = (
+_session_calc_rows = (
     Case("ndvi", NDVI, (BANDS, 1, 2), "ref", "ndvi", ONLY),
     Case("ndvi_null_band", NDVI, (BANDS, None, 2), "null", None, ONLY),
     Case("ndvi_null_tile", NDVI, (None, 1, 2), "null", None, ONLY),
@@ -118,3 +119,12 @@ SPEC_CALC = (
         ONLY,
     ),
 )
+
+
+# Unity Catalog: the band math of a materialized tile is the session's
+SPEC_CALC = share(
+    _session_calc_rows, "threshold", "threshold_le", "threshold_bad_operator"
+) + edges(threshold=(">", 12.0)) + (
+    Case("uc_threshold_null_tile", THR, (None, ">", 1.0), "null", None, ("uc",)),
+    Case("uc_threshold_error_tile", THR, (ERR, "~", 1.0), "error_tile", UPSTREAM_ERROR, ("uc",)),
+)  # fmt: skip

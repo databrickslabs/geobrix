@@ -13,6 +13,8 @@ function over the pure core of the light kernel (``pyrx/core``), built from a ta
   this size on a Unity Catalog sandbox.
 - Data a function cannot read (corrupt bytes, a pixel outside the grid) is NULL: a UC function has no error tile.
   A parameter error raises with a ``Fix:`` line. Resource exhaustion and a missing dependency are never data.
+- A function that returns a tile builds it with :func:`tile_row`: a result decoded over the cap is refused with a
+  ``Fix:`` too (a resample or a cast can grow a tile), and an error tile goes through unchanged.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ from typing import Callable, Dict, Optional
 from databricks.labs.gbx.pyrx.core.budget import (
     UC_DECODED_CAP,
     decoded_bytes,
+    grid_bytes,
     size_text,
 )
 from databricks.labs.gbx.uc.handlers import _field, _Refusal, _refuse
@@ -247,3 +250,446 @@ def rst_tryopen(tile):
 
 
 HANDLERS["gbx_rst_tryopen"] = rst_tryopen
+
+
+# --- tile-returning functions -------------------------------------------------------------------------------------
+def result_refusal(fn: str, decoded: int, cap: int) -> _Refusal:
+    """A result decoded over the cap (an operation can grow a tile): never truncated, refused with a Fix."""
+    return _Refusal(
+        f"{fn}: the result would be {size_text(decoded)} decoded, over the {size_text(cap)} a Unity Catalog function "
+        f"returns. Fix: run {fn} in a notebook or job session, or retile first (gbx_rst_retile) so each tile is smaller"
+    )
+
+
+def _tile_dict(tile, raster, srid, metadata) -> dict:
+    """The dict a UC function returns for a tile (the shape of gbx_rst_transformcrs): the cell id of the input tile
+    and the raster, with every provenance field empty."""
+    return {
+        "cellid": int(_field(tile, "cellid") or 0),
+        "raster": raster,
+        "path": None,
+        "path_mode": None,
+        "window": None,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None if srid is None else str(srid),
+        "metadata": metadata,
+    }
+
+
+def error_row(tile) -> dict:
+    """An error tile as a dict, with its reason: it goes through a tile-returning function unchanged."""
+    return {
+        **_tile_dict(
+            tile, None, _field(tile, "crs"), dict(_field(tile, "metadata") or {})
+        ),
+        "path_mode": _field(tile, "path_mode"),
+    }
+
+
+def gate(fn: str, *tiles):
+    """``(done, value)`` for the tile arguments of a tile-returning function, once none is NULL: a virtual tile is
+    refused, an error tile goes out as itself (the first of them), a tile with nothing else in it is NULL. ``done`` is
+    False when every tile has a raster to read."""
+    rasters = [raster_of(fn, t) for t in tiles]
+    if all(r is not None for r in rasters):
+        return False, None
+    errors = [
+        error_row(t) for t, r in zip(tiles, rasters) if r is None and _is_error_tile(t)
+    ]
+    return True, errors[0] if errors else None
+
+
+def tile_row(
+    fn: str, tile, raster: Optional[bytes], driver: str = "GTiff"
+) -> Optional[dict]:
+    """The tile a function returns for the raster bytes it made: the metadata the session tile carries (driver, size,
+    band count) and the integer SRID of the raster's CRS. A raster decoded over the cap is refused with a Fix.
+    """
+    if raster is None:
+        return None
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    raster = bytes(raster)
+    with MemoryFile(raster) as mf, open_bytes(mf) as ds:
+        decoded = decoded_bytes(ds)
+        if decoded > DECODED_CAP:
+            raise result_refusal(fn, decoded, DECODED_CAP)
+        meta = {
+            "driver": driver or ds.driver,
+            "width": str(ds.width),
+            "height": str(ds.height),
+            "count": str(ds.count),
+        }
+        return _tile_dict(tile, raster, authority_srid_of(ds.crs), meta)
+
+
+def check_grows(fn: str, width: int, height: int, dtypes) -> None:
+    """Refuse, before any pixel is made, a result grid decoded over the cap."""
+    decoded = grid_bytes(width, height, dtypes)
+    if decoded > DECODED_CAP:
+        raise result_refusal(fn, decoded, DECODED_CAP)
+
+
+def with_tile(fn: str, tile, kernel: Callable, driver: str = "GTiff"):
+    """``with_dataset`` for a function that returns a tile: ``kernel(ds)`` makes the raster bytes (None for no
+    tile), an error tile goes through unchanged, and the result is cap-checked by :func:`tile_row`.
+    """
+    on_empty = error_row(tile) if tile is not None and _is_error_tile(tile) else None
+    return with_dataset(
+        fn, tile, lambda ds: tile_row(fn, tile, kernel(ds), driver), on_empty
+    )
+
+
+def _tile_fn(
+    sql_name: str,
+    module: str,
+    attr: str,
+    *,
+    optional=(),
+    check: Optional[Callable] = None,
+    cast: Optional[Callable] = None,
+    grows: Optional[Callable] = None,
+    driver=None,
+) -> Callable:
+    """A handler ``(tile, *args)`` that returns the tile ``<module>.<attr>(ds, *args)`` makes.
+
+    NULL in is NULL out for the tile and every argument not named in ``optional`` (positions after the tile).
+    ``check(*args)`` raises a ``ValueError`` for a wrong argument, before the tile is read; ``cast(*args)`` gives the
+    kernel's arguments; ``grows(ds, *args)`` gives the ``(width, height, dtypes)`` of the result grid, which is
+    refused over the cap before the kernel makes it; ``driver(*args)`` names the format of the bytes.
+    """
+    fn = sql_name
+    free = frozenset(optional)
+
+    def handler(tile, *args):
+        if tile is None or any(a is None for i, a in enumerate(args) if i not in free):
+            return None
+        done, early = gate(
+            fn, tile
+        )  # an error tile passes through, whatever the arguments are
+        if done:
+            return early
+        if check is not None:
+            check(*args)
+        kargs = cast(*args) if cast is not None else args
+
+        def kernel(ds):
+            if grows is not None:
+                check_grows(fn, *grows(ds, *args))
+            return _kernel(module, attr)(ds, *kargs)
+
+        return with_tile(fn, tile, kernel, driver(*args) if driver else "GTiff")
+
+    handler.__name__ = sql_name[len("gbx_") :]
+    handler.__doc__ = f"{sql_name} over a materialized tile (core.{module}.{attr}); the tile it makes."
+    HANDLERS[sql_name] = handler
+    return handler
+
+
+def _check(module: str, attr: str, *names: str) -> Callable:
+    """A ``check`` that calls the core check ``<module>.<attr>`` with the handler's arguments: by ``names`` (the core
+    checks that take keywords), else by position."""
+
+    def run(*args):
+        check = _kernel(module, attr)
+        check(**dict(zip(names, args))) if names else check(*args)
+
+    return run
+
+
+# --- warp and edit: tile to tile ------------------------------------------------------------------------------------
+def _no_crs_refusal(fn: str) -> _Refusal:
+    return _Refusal(
+        f"{fn}: the tile has no CRS, so it cannot be reprojected. Fix: set its CRS first with gbx_rst_setcrs"
+    )
+
+
+def _reproject(fn: str, ds, crs: str, resampling: str = "nearest"):
+    """The tile reprojected to the CRS ``crs`` (an authority code). A tile with no CRS is refused (nothing to
+    reproject from); a result grid over the cap is refused before the pixels are made.
+    """
+    from databricks.labs.gbx.pyrx.core import warp
+
+    if warp.source_crs(ds) is None:
+        raise _no_crs_refusal(fn)
+    width, height = warp.target_grid(ds, crs)
+    check_grows(fn, width, height, ds.dtypes[:1] * ds.count)
+    return warp.reproject_to_crs(ds, crs, resampling=resampling)
+
+
+def rst_transform(tile, srid):
+    """gbx_rst_transform: the tile reprojected to a CRS given as an SRID integer (an EPSG or ESRI code)."""
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+
+    fn = "gbx_rst_transform"
+    if tile is None or srid is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    crs = parse_uc_crs(srid, fn=fn)
+    return with_tile(fn, tile, lambda ds: _reproject(fn, ds, crs.code))
+
+
+HANDLERS["gbx_rst_transform"] = rst_transform
+
+
+def rst_to_webmercator(tile, resampling):
+    """gbx_rst_to_webmercator: the tile reprojected to EPSG:3857, with the resampling word given."""
+    from databricks.labs.gbx.pyrx.core._util import resampling_enum
+
+    fn = "gbx_rst_to_webmercator"
+    if tile is None or resampling is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    resampling_enum(
+        str(resampling)
+    )  # a word that names no resampling raises, also for a tile already in 3857
+    return with_tile(
+        fn, tile, lambda ds: _reproject(fn, ds, "EPSG:3857", str(resampling))
+    )
+
+
+HANDLERS["gbx_rst_to_webmercator"] = rst_to_webmercator
+
+
+def rst_setsrid(tile, srid):
+    """gbx_rst_setsrid: stamp the CRS from an SRID integer without reprojecting; 0 clears it."""
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+
+    fn = "gbx_rst_setsrid"
+    if tile is None or srid is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    if int(srid) < 0:
+        raise _Parameter(
+            f"{fn}: SRID must be >= 0; got {int(srid)}. Fix: pass 0 to clear the CRS, or an EPSG or ESRI code"
+        )
+    code = parse_uc_crs(int(srid), fn=fn).srid if int(srid) > 0 else 0
+    return with_tile(fn, tile, lambda ds: _kernel("edit", "set_srid")(ds, code))
+
+
+HANDLERS["gbx_rst_setsrid"] = rst_setsrid
+
+
+def rst_setcrs(tile, crs):
+    """gbx_rst_setcrs: stamp the CRS without reprojecting; the CRS is an SRID, 'EPSG:<n>' or 'ESRI:<n>'."""
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+
+    fn = "gbx_rst_setcrs"
+    if tile is None or crs is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    code = parse_uc_crs(crs, fn=fn).code
+    return with_tile(fn, tile, lambda ds: _kernel("edit", "set_crs")(ds, code))
+
+
+HANDLERS["gbx_rst_setcrs"] = rst_setcrs
+
+
+def _grid_of(size: Callable) -> Callable:
+    """A ``grows`` hint from ``size(ds, *args) -> (width, height)``: the grid has the tile's bands and types."""
+
+    def grows(ds, *args):
+        width, height = size(ds, *args)
+        return max(1, int(width)), max(1, int(height)), ds.dtypes
+
+    return grows
+
+
+rst_resample = _tile_fn(
+    "gbx_rst_resample",
+    "resample",
+    "resample_by_factor",
+    check=_check("resample", "check_by_factor", "factor", "algorithm"),
+    grows=_grid_of(
+        lambda ds, f, a: (round(ds.width * float(f)), round(ds.height * float(f)))
+    ),
+)
+rst_resample_to_size = _tile_fn(
+    "gbx_rst_resample_to_size",
+    "resample",
+    "resample_to_size",
+    check=_check("resample", "check_to_size", "width_px", "height_px", "algorithm"),
+    grows=_grid_of(lambda ds, w, h, a: (w, h)),
+)
+
+
+def _res_size(ds, x_res, y_res, algorithm):
+    left, bottom, right, top = ds.bounds
+    return (right - left) / float(x_res), (top - bottom) / float(y_res)
+
+
+rst_resample_to_res = _tile_fn(
+    "gbx_rst_resample_to_res",
+    "resample",
+    "resample_to_res",
+    check=_check("resample", "check_to_res", "x_res", "y_res", "algorithm"),
+    grows=_grid_of(_res_size),
+)
+
+
+def rst_clip(tile, geom, cutline_all_touched, clip_crs):
+    """gbx_rst_clip: the tile cut to a polygon (a GEOMETRY in its own SRID; `clip_crs` names the SRID of one that has
+    none). A polygon that misses the tile, or an empty one, is NULL."""
+    import shapely
+
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+    from databricks.labs.gbx.uc.handlers import _geom_bytes
+
+    fn = "gbx_rst_clip"
+    if tile is None or geom is None or cutline_all_touched is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    source = None if clip_crs is None else parse_uc_crs(clip_crs, fn=fn).code
+    cutline = shapely.from_wkb(_geom_bytes(geom))
+    if cutline.is_empty:
+        return None
+    return with_tile(
+        fn,
+        tile,
+        lambda ds: _kernel("edit", "clip_to_geom")(
+            ds, cutline, bool(cutline_all_touched), geom_crs=source
+        ),
+    )
+
+
+HANDLERS["gbx_rst_clip"] = rst_clip
+
+
+def _type_grid(ds, new_type):
+    return ds.width, ds.height, [_kernel("edit", "numpy_type")(new_type)] * ds.count
+
+
+rst_updatetype = _tile_fn(
+    "gbx_rst_updatetype",
+    "edit",
+    "update_type",
+    check=_check("edit", "gdal_type"),
+    grows=_type_grid,
+)
+rst_initnodata = _tile_fn("gbx_rst_initnodata", "edit", "init_nodata")
+rst_threshold = _tile_fn(
+    "gbx_rst_threshold",
+    "edit",
+    "threshold",
+    check=lambda op, value: _kernel("edit", "check_threshold_op")(op),
+)
+
+
+def rst_band(tile, band_index):
+    """gbx_rst_band: one 1-based band as a single-band tile; a band the tile does not have raises."""
+    fn = "gbx_rst_band"
+    if tile is None or band_index is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    if int(band_index) < 1:
+        raise _Parameter(
+            f"{fn}: band_index {int(band_index)} is out of range (>=1). Fix: pass a band from 1 to the tile's band count"
+        )
+
+    def kernel(ds):
+        if int(band_index) > ds.count:
+            raise _Parameter(
+                f"{fn}: band_index {int(band_index)} is outside the tile's {ds.count} band(s). "
+                f"Fix: pass a band from 1 to {ds.count} (gbx_rst_numbands gives the count)"
+            )
+        return _kernel("edit", "band")(ds, int(band_index))
+
+    return with_tile(fn, tile, kernel)
+
+
+HANDLERS["gbx_rst_band"] = rst_band
+
+
+def rst_asformat(tile, new_format):
+    """gbx_rst_asformat: the tile re-encoded as another GDAL raster format, the pixels unchanged."""
+    fn = "gbx_rst_asformat"
+    if tile is None or new_format is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    _kernel("ops", "driver_name")(new_format)  # a format this GDAL cannot write raises
+    driver = _kernel("ops", "written_driver")(new_format)
+    return with_tile(
+        fn, tile, lambda ds: _kernel("ops", "as_format")(ds, str(new_format)), driver
+    )
+
+
+HANDLERS["gbx_rst_asformat"] = rst_asformat
+
+
+def rst_getsubdataset(tile, subset_name):
+    """gbx_rst_getsubdataset: one subdataset of a container tile (NetCDF, HDF, ...) as a tile; a name the tile does not
+    have raises (gbx_rst_subdatasets lists them)."""
+    fn = "gbx_rst_getsubdataset"
+    if tile is None or subset_name is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+
+    def kernel(ds):
+        try:
+            return _kernel("accessors", "getsubdataset")(ds, str(subset_name))
+        except (
+            ValueError
+        ) as exc:  # the name matches no subdataset (the only ValueError the kernel raises)
+            raise _Parameter(
+                f"{exc}. Fix: pass a name from gbx_rst_subdatasets"
+            ) from exc
+
+    return with_tile(fn, tile, kernel)
+
+
+HANDLERS["gbx_rst_getsubdataset"] = rst_getsubdataset
+
+
+def rst_align_to(tile, reference):
+    """gbx_rst_align_to: the tile warped onto the grid of a reference tile (its CRS, size and transform), nearest
+    neighbour. The reference is read for its header only."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+
+    fn = "gbx_rst_align_to"
+    if tile is None or reference is None:
+        return None
+    done, early = gate(fn, tile, reference)
+    if done:
+        return early
+    reference_raster = raster_of(fn, reference)
+
+    def kernel(ds):
+        with MemoryFile(reference_raster) as rmf, open_bytes(rmf) as ref:
+            check_grows(fn, ref.width, ref.height, ds.dtypes)
+            return _kernel("warp", "align_datasets")(ds, ref)
+
+    return with_tile(fn, tile, kernel)
+
+
+HANDLERS["gbx_rst_align_to"] = rst_align_to
+
+
+rst_filter = _tile_fn(
+    "gbx_rst_filter", "focal", "filt", check=_check("focal", "check_filter")
+)
+rst_convolve = _tile_fn(
+    "gbx_rst_convolve", "focal", "convolve", check=_check("focal", "check_kernel")
+)
+rst_fillnodata = _tile_fn("gbx_rst_fillnodata", "features", "fill_nodata")

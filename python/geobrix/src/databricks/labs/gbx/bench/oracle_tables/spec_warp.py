@@ -10,6 +10,7 @@ the cutline covers. `tile_4326` is 64 x 48 pixels of 0.01 degrees from (-1, 52);
 
 import math
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
@@ -107,7 +108,7 @@ def _gcp_tile(tmpdir):
         return _tile(mf.read())
 
 
-SPEC_WARP = (
+_session_warp_rows = (
     # transform: a reprojection judged against rasterio.warp on the same grid (nearest neighbour)
     Case("transform_3857", TR, (T4326, 3857), "tile_props", "EPSG:3857", ONLY),
     Case("transform_4326", TR, (T3857, 4326), "tile_props", ("EPSG:4326", 4326), ONLY),
@@ -275,3 +276,48 @@ SPEC_WARP = (
         ONLY,
     ),
 )
+
+
+def _uc_clip_row(cid, session_cid, **changes):
+    """A clip row of the session as a UC row: the cutline is a GEOMETRY that carries its own SRID (`geom_srid`)."""
+    from dataclasses import replace
+
+    row = next(c for c in _session_warp_rows if c.cid == session_cid)
+    return replace(row, cid=cid, surfaces=("uc",), **changes)
+
+
+# Unity Catalog: a materialized tile gives the session's tile (a reprojection, a resample, a clip); a virtual tile is
+# refused with a Fix, a corrupt one is NULL, a tile with no CRS cannot be reprojected (refused with a Fix), and a result
+# decoded over the cap is refused before it is made.
+SPEC_WARP = share(
+    _session_warp_rows,
+    "transform_3857", "transform_4326", "transform_identity", "transform_gcp", "transform_null_tile",
+    "transform_null_srid", "transform_error_in",
+    "webmercator_nearest", "webmercator_default", "webmercator_bad_word", "webmercator_bad_word_identity",
+    "webmercator_null_tile", "webmercator_null_tile_bad_word", "webmercator_error_in",
+    "resample_half", "resample_double", "resample_average_half", "resample_word_case", "resample_zero",
+    "resample_negative", "resample_bad_algorithm", "resample_cubicspline", "resample_gauss", "resample_null_tile",
+    "resample_null_factor", "resample_error_in", "resample_error_tile_passes_bad_word",
+    "resample_to_size", "resample_to_size_zero", "resample_to_size_null",
+    "resample_to_res", "resample_to_res_zero", "resample_to_res_null",
+    "clip_half", "clip_half_pixels", "clip_all_touched", "clip_no_overlap", "clip_null_tile", "clip_null_geom",
+    "clip_null_flag", "clip_error_in",
+) + edges(
+    transform=(3857,), to_webmercator=(), resample=(0.5,), resample_to_size=(10, 20), resample_to_res=(0.02, 0.02),
+    clip=(LEFT_HALF, False),
+) + (
+    Case("uc_transform_no_crs_refused", TR, (Build("tile_nocrs"), 3857), "uc_refused", None, ("uc",)),
+    Case("uc_webmercator_no_crs_refused", WM, (Build("tile_nocrs"),), "uc_refused", None, ("uc",)),
+    # a result decoded over the cap is refused before its pixels are made: 20000 x 20000 float32 is 1.5 GiB
+    Case("uc_resample_to_size_result_over_cap", RSZ, (T4326, 20000, 20000), "uc_refused", None, ("uc",)),
+    Case("uc_resample_result_over_cap", RS, (T4326, 1000.0), "uc_refused", None, ("uc",)),
+    Case("uc_resample_to_res_result_over_cap", RSR, (T4326, 0.00001, 0.00001), "uc_refused", None, ("uc",)),
+    # the cutline is a GEOMETRY: a BINARY is not one; a plain one takes `clip_crs`, an EWKT one carries its SRID
+    Case("uc_clip_wkb_into_geometry_refused", CL, (T4326, Build("clip_left_half_wkb"), False), "uc_refused", None, ("uc",)),
+    _uc_clip_row("uc_clip_crs_declared", "clip_crs_declared", geom_srid=0),
+    _uc_clip_row("uc_clip_ewkt_srid_wins", "clip_ewkt_srid_wins", geom_srid=3857),
+    Case(
+        "uc_clip_wkt_crs_refused", CL, (T4326, LEFT_HALF, False, "+proj=longlat +datum=WGS84"), "uc_refused", None,
+        ("uc",), geom_srid=0,
+    ),
+)  # fmt: skip

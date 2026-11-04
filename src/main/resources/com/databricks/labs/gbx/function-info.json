@@ -7,6 +7,7 @@
       "description": "Warp a tile onto the grid of a reference tile, with nearest-neighbour resampling.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -18,6 +19,7 @@
       "description": "Re-encode the raster to another GDAL driver (for example PNG, GTiff or COG).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -52,6 +54,7 @@
       "description": "Extract one band as a new single-band tile.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -252,6 +255,7 @@
       "description": "Clip the raster to a polygon.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"
@@ -383,6 +387,7 @@
       "description": "Convolve each band with a 2-D kernel.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -570,6 +575,7 @@
       "description": "Interpolate across NoData gaps in the raster.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -581,6 +587,7 @@
       "description": "Apply a focal minimum, maximum, mean or median over a square window.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -671,6 +678,7 @@
       "description": "Extract the named subdataset of a container raster as a tile.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -858,6 +866,7 @@
       "description": "Ensure a NoData value is set on the raster; an existing value is kept.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1290,6 +1299,7 @@
       "description": "Resample a raster tile by a multiplicative factor.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1301,6 +1311,7 @@
       "description": "Resample a raster tile to a target ground resolution.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1312,6 +1323,7 @@
       "description": "Resample a raster tile to exact pixel dimensions.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1413,6 +1425,7 @@
       "description": "Stamp a CRS on the raster without reprojecting it, from a CRS string.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1424,6 +1437,7 @@
       "description": "Stamp the CRS of a raster from an integer SRID without reprojecting it.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1505,6 +1519,7 @@
       "description": "Keep the pixels that satisfy the comparison and set the others to NoData.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1526,6 +1541,7 @@
       "description": "Reproject the tile to EPSG:3857 (web mercator).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1559,6 +1575,7 @@
       "description": "Reproject the raster to the target SRID (an EPSG code).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1617,6 +1634,7 @@
       "description": "Cast all bands of the raster to another data type.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

@@ -429,17 +429,18 @@ NoData values per band.
 ### rst_getsubdataset
 
 {/* BEGIN GENERATED gbx_rst_getsubdataset: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_getsubdataset(tile, subset_name)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_getsubdataset(tile, subset_name)` | `TILE` |
 | Python | `rasterx.functions.rst_getsubdataset(tile, subset_name)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | A tile whose raster is a container with subdatasets, such as a NetCDF file. |
-| `subset_name` | `STRING` |  | The name of the subdataset (the last part of its GDAL name, such as `'prAdjust'`). A name that matches none raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | A tile whose raster is a container with subdatasets, such as a NetCDF file. |
+| `subset_name` | `STRING` | `STRING` |  | The name of the subdataset (the last part of its GDAL name, such as `'prAdjust'`). A name that matches none raises. |
 {/* END GENERATED gbx_rst_getsubdataset */}
 
 :::note Implementation
@@ -3744,17 +3745,18 @@ Transform and analyze rasters (20 total).
 ### rst_align_to
 
 {/* BEGIN GENERATED gbx_rst_align_to: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_align_to(tile, reference_tile)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_align_to(tile, reference_tile)` | `TILE` |
 | Python | `rasterx.functions.rst_align_to(tile, reference_tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to warp. |
-| `reference_tile` | `TILE` |  | The tile whose grid (CRS, extent, width, height) the result takes. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to warp. |
+| `reference_tile` | `TILE` | `TILE` |  | The tile whose grid (CRS, extent, width, height) the result takes. |
 {/* END GENERATED gbx_rst_align_to */}
 
 :::note Implementation
@@ -3774,17 +3776,18 @@ Warp a tile to match the grid of a reference tile exactly — same CRS, extent, 
 ### rst_asformat
 
 {/* BEGIN GENERATED gbx_rst_asformat: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_asformat(tile, new_format)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_asformat(tile, new_format)` | `TILE` |
 | Python | `rasterx.functions.rst_asformat(tile, new_format, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to re-encode. |
-| `new_format` | `STRING` |  | A GDAL driver short name that can write a raster, in any case: `'GTiff'`, `'PNG'`, `'COG'`. A name that names none raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to re-encode. |
+| `new_format` | `STRING` | `STRING` |  | A GDAL driver short name that can write a raster, in any case: `'GTiff'`, `'PNG'`, `'COG'`. A name that names none raises. |
 {/* END GENERATED gbx_rst_asformat */}
 
 :::note Implementation
@@ -3812,19 +3815,20 @@ Convert to another format. A driver that is unknown, or cannot write a raster, r
 ### rst_clip
 
 {/* BEGIN GENERATED gbx_rst_clip: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_clip(tile, geom, cutline_all_touched, [clip_crs])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_clip(tile, geom, cutline_all_touched, [clip_crs])` | `TILE` |
 | Python | `rasterx.functions.rst_clip(tile, geom, cutline_all_touched, clip_crs=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to clip. |
-| `geom` | `BINARY` or `STRING` |  | The cutline: a polygon as WKB, EWKB, WKT or EWKT. |
-| `cutline_all_touched` | `BOOLEAN` |  | `true` keeps every pixel the cutline touches; `false` keeps the pixels whose centre it holds. |
-| `clip_crs` | `STRING` | `NULL` | The CRS of a cutline that carries no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or EWKT SRID wins. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to clip. |
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The cutline: a polygon as WKB, EWKB, WKT or EWKT. |
+| `cutline_all_touched` | `BOOLEAN` | `BOOLEAN` |  | `true` keeps every pixel the cutline touches; `false` keeps the pixels whose centre it holds. |
+| `clip_crs` | `STRING` | `STRING` | `NULL` | The CRS of a cutline that carries no SRID: `EPSG:<code>`, `ESRI:<code>`, WKT or an integer code. The CRS of the tile when NULL. An EWKB or EWKT SRID wins. |
 {/* END GENERATED gbx_rst_clip */}
 
 :::note Cutline CRS
@@ -4109,17 +4113,18 @@ Sum of pixel values per location.
 ### rst_convolve
 
 {/* BEGIN GENERATED gbx_rst_convolve: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_convolve(tile, kernel)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_convolve(tile, kernel)` | `TILE` |
 | Python | `rasterx.functions.rst_convolve(tile, kernel, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to convolve. |
-| `kernel` | `ARRAY<ARRAY<DOUBLE>>` |  | A 2-D array of weights with an odd number of rows and columns, applied unflipped (correlation). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to convolve. |
+| `kernel` | `ARRAY<ARRAY<DOUBLE>>` | `ARRAY<ARRAY<DOUBLE>>` |  | A 2-D array of weights with an odd number of rows and columns, applied unflipped (correlation). |
 {/* END GENERATED gbx_rst_convolve */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
@@ -4182,18 +4187,19 @@ Apply a Python pixel function to derive a band. The function runs in the session
 ### rst_filter
 
 {/* BEGIN GENERATED gbx_rst_filter: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_filter(tile, kernel_size, operation)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_filter(tile, kernel_size, operation)` | `TILE` |
 | Python | `rasterx.functions.rst_filter(tile, kernel_size, operation, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to filter. |
-| `kernel_size` | `INT` |  | The side of the square window, a positive odd integer. |
-| `operation` | `STRING` |  | `'min'`, `'max'`, `'mean'` or `'median'`, in any case. Another word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to filter. |
+| `kernel_size` | `INT` | `INT` |  | The side of the square window, a positive odd integer. |
+| `operation` | `STRING` | `STRING` |  | `'min'`, `'max'`, `'mean'` or `'median'`, in any case. Another word raises. |
 {/* END GENERATED gbx_rst_filter */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
@@ -4219,16 +4225,17 @@ Spatial filter over a square window. A window width that is not a positive odd n
 ### rst_initnodata
 
 {/* BEGIN GENERATED gbx_rst_initnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_initnodata(tile)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_initnodata(tile)` | `TILE` |
 | Python | `rasterx.functions.rst_initnodata(tile, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to give a NoData value. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to give a NoData value. |
 {/* END GENERATED gbx_rst_initnodata */}
 
 :::note Implementation
@@ -4505,18 +4512,19 @@ World X / Y coordinate of a pixel.
 ### rst_resample
 
 {/* BEGIN GENERATED gbx_rst_resample: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_resample(tile, factor, [algorithm])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_resample(tile, factor, [algorithm])` | `TILE` |
 | Python | `rasterx.functions.rst_resample(tile, factor, algorithm=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to resample. |
-| `factor` | `DOUBLE` |  | The multiplicative factor, above 0: above 1 upsamples, below 1 downsamples. |
-| `algorithm` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to resample. |
+| `factor` | `DOUBLE` | `DOUBLE` |  | The multiplicative factor, above 0: above 1 upsamples, below 1 downsamples. |
+| `algorithm` | `STRING` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
 {/* END GENERATED gbx_rst_resample */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
@@ -4556,19 +4564,20 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
 ### rst_resample_to_res
 
 {/* BEGIN GENERATED gbx_rst_resample_to_res: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_resample_to_res(tile, x_res, y_res, [algorithm])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_resample_to_res(tile, x_res, y_res, [algorithm])` | `TILE` |
 | Python | `rasterx.functions.rst_resample_to_res(tile, x_res, y_res, algorithm=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to resample. |
-| `x_res` | `DOUBLE` |  | The size of a pixel along x in the units of the tile's CRS, above 0. |
-| `y_res` | `DOUBLE` |  | The size of a pixel along y in the units of the tile's CRS, above 0. |
-| `algorithm` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to resample. |
+| `x_res` | `DOUBLE` | `DOUBLE` |  | The size of a pixel along x in the units of the tile's CRS, above 0. |
+| `y_res` | `DOUBLE` | `DOUBLE` |  | The size of a pixel along y in the units of the tile's CRS, above 0. |
+| `algorithm` | `STRING` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
 {/* END GENERATED gbx_rst_resample_to_res */}
 
 :::note Implementation
@@ -4596,19 +4605,20 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 ### rst_resample_to_size
 
 {/* BEGIN GENERATED gbx_rst_resample_to_size: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_resample_to_size(tile, width_px, height_px, [algorithm])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_resample_to_size(tile, width_px, height_px, [algorithm])` | `TILE` |
 | Python | `rasterx.functions.rst_resample_to_size(tile, width_px, height_px, algorithm=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to resample. |
-| `width_px` | `INT` |  | The width of the result in pixels, above 0. |
-| `height_px` | `INT` |  | The height of the result in pixels, above 0. |
-| `algorithm` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to resample. |
+| `width_px` | `INT` | `INT` |  | The width of the result in pixels, above 0. |
+| `height_px` | `INT` | `INT` |  | The height of the result in pixels, above 0. |
+| `algorithm` | `STRING` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
 {/* END GENERATED gbx_rst_resample_to_size */}
 
 :::note Implementation
@@ -4636,17 +4646,18 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 ### rst_transform
 
 {/* BEGIN GENERATED gbx_rst_transform: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_transform(tile, srid)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_transform(tile, srid)` | `TILE` |
 | Python | `rasterx.functions.rst_transform(tile, srid, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to reproject. |
-| `srid` | `INT` |  | The EPSG (or ESRI) code of the target CRS, a positive integer. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to reproject. |
+| `srid` | `INT` | `INT` |  | The EPSG (or ESRI) code of the target CRS, a positive integer. |
 {/* END GENERATED gbx_rst_transform */}
 
 :::note Implementation
@@ -4735,17 +4746,18 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, committed to the repo,
 ### rst_updatetype
 
 {/* BEGIN GENERATED gbx_rst_updatetype: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_updatetype(tile, new_type)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_updatetype(tile, new_type)` | `TILE` |
 | Python | `rasterx.functions.rst_updatetype(tile, new_type, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to cast. |
-| `new_type` | `STRING` |  | A GDAL data type name, in any case: `Byte`, `Int8`, `UInt16`, `Int16`, `UInt32`, `Int32`, `Float32` or `Float64`. Another word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to cast. |
+| `new_type` | `STRING` | `STRING` |  | A GDAL data type name, in any case: `Byte`, `Int8`, `UInt16`, `Int16`, `UInt32`, `Int32`, `Float32` or `Float64`. Another word raises. |
 {/* END GENERATED gbx_rst_updatetype */}
 
 :::note Implementation
@@ -4915,17 +4927,18 @@ The output is a display web-map tile, not the source's raw bands. **PNG and WebP
 ### rst_to_webmercator
 
 {/* BEGIN GENERATED gbx_rst_to_webmercator: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_to_webmercator(tile, [resampling])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_to_webmercator(tile, [resampling])` | `TILE` |
 | Python | `rasterx.functions.rst_to_webmercator(tile, resampling=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to reproject. |
-| `resampling` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to reproject. |
+| `resampling` | `STRING` | `STRING` | `'bilinear'` | The resampling algorithm: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3` (any case; `nearest` is accepted as `near`). A word that names none raises. |
 {/* END GENERATED gbx_rst_to_webmercator */}
 
 :::note Implementation
@@ -5571,17 +5584,18 @@ Per-pixel transformations and band-level extraction.
 ### rst_band
 
 {/* BEGIN GENERATED gbx_rst_band: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_band(tile, band_index)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_band(tile, band_index)` | `TILE` |
 | Python | `rasterx.functions.rst_band(tile, band_index, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to take a band from. |
-| `band_index` | `INT` |  | The 1-based band to extract, in `[1 .. numbands]`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to take a band from. |
+| `band_index` | `INT` | `INT` |  | The 1-based band to extract, in `[1 .. numbands]`. |
 {/* END GENERATED gbx_rst_band */}
 
 :::note Implementation
@@ -5642,18 +5656,19 @@ Add pyramid overview levels to a tile via `ds.BuildOverviews`. `levels` is an `A
 ### rst_fillnodata
 
 {/* BEGIN GENERATED gbx_rst_fillnodata: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_fillnodata(tile, [max_search_dist], [smoothing_iter])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_fillnodata(tile, [max_search_dist], [smoothing_iter])` | `TILE` |
 | Python | `rasterx.functions.rst_fillnodata(tile, max_search_dist=None, smoothing_iter=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to fill. |
-| `max_search_dist` | `DOUBLE` | `100.0` | How far, in pixels, to search for valid pixels to interpolate from. |
-| `smoothing_iter` | `INT` | `0` | The number of 3x3 smoothing passes over the filled pixels. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to fill. |
+| `max_search_dist` | `DOUBLE` | `DOUBLE` | `100.0` | How far, in pixels, to search for valid pixels to interpolate from. |
+| `smoothing_iter` | `INT` | `INT` | `0` | The number of 3x3 smoothing passes over the filled pixels. |
 {/* END GENERATED gbx_rst_fillnodata */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
@@ -5757,17 +5772,18 @@ See [Raster Sampling](./raster-sampling) for the full workflow guide.
 ### rst_setcrs
 
 {/* BEGIN GENERATED gbx_rst_setcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_setcrs(tile, crs)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_setcrs(tile, crs)` | `TILE` |
 | Python | `rasterx.functions.rst_setcrs(tile, crs)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to relabel. |
-| `crs` | `STRING` |  | The CRS to stamp: an authority code such as `'EPSG:3857'` or `'ESRI:54008'`, WKT, PROJ4, PROJJSON, or an integer string (an EPSG code). A value that is no CRS raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to relabel. |
+| `crs` | `STRING` | `STRING` |  | The CRS to stamp: an authority code such as `'EPSG:3857'` or `'ESRI:54008'`, WKT, PROJ4, PROJJSON, or an integer string (an EPSG code). A value that is no CRS raises. |
 {/* END GENERATED gbx_rst_setcrs */}
 
 :::note Implementation
@@ -5789,17 +5805,18 @@ Distinct from `rst_setsrid` (integer EPSG only): `rst_setcrs` accepts any CRS st
 ### rst_setsrid
 
 {/* BEGIN GENERATED gbx_rst_setsrid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_setsrid(tile, srid)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_setsrid(tile, srid)` | `TILE` |
 | Python | `rasterx.functions.rst_setsrid(tile, srid, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to relabel. |
-| `srid` | `INT` |  | The code to stamp, an EPSG or ESRI code; `0` clears the CRS. A negative number, or a positive code that is neither, raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to relabel. |
+| `srid` | `INT` | `INT` |  | The code to stamp, an EPSG or ESRI code; `0` clears the CRS. A negative number, or a positive code that is neither, raises. |
 {/* END GENERATED gbx_rst_setsrid */}
 
 :::note Implementation
@@ -5823,18 +5840,19 @@ Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a w
 ### rst_threshold
 
 {/* BEGIN GENERATED gbx_rst_threshold: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_threshold(tile, [op], [value])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_threshold(tile, [op], [value])` | `TILE` |
 | Python | `rasterx.functions.rst_threshold(tile, op=None, value=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to threshold. |
-| `op` | `STRING` | `'>'` | The comparison: `>`, `<`, `>=`, `<=`, `==` or `!=`. |
-| `value` | `DOUBLE` | `0.0` | The value to compare each pixel with. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to threshold. |
+| `op` | `STRING` | `STRING` | `'>'` | The comparison: `>`, `<`, `>=`, `<=`, `==` or `!=`. |
+| `value` | `DOUBLE` | `DOUBLE` | `0.0` | The value to compare each pixel with. |
 {/* END GENERATED gbx_rst_threshold */}
 
 :::note Python-only keywords

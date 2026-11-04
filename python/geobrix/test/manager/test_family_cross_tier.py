@@ -160,6 +160,9 @@ _UC_TABLES = (
     "RASTER_ACCESSOR",
     "RASTER_STAT",
     "SPEC_ANALYSIS",
+    "RASTER_TILE_OP",
+    "SPEC_WARP",
+    "SPEC_CALC",
 )
 
 

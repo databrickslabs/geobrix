@@ -911,13 +911,20 @@ def _uc_handler_groups():
 )
 def test_uc_handlers_import_only_the_dependencies_they_declare(deps, names):
     """Every oracle row of a UC function runs in a process where pyspark, pandas and every optional dependency its
-    manifest block does not declare (h3, quadbin, rasterio, pyproj) cannot be imported: the sandbox installs the
-    declared list and nothing else."""
+    manifest block does not declare (h3, quadbin, rasterio, pyproj, scipy, numexpr, scikit-image) cannot be imported:
+    the sandbox installs the declared list and nothing else."""
     import os
     import subprocess
     import sys
 
-    optional = sorted({"h3", "quadbin", "rasterio", "pyproj"} - set(deps))
+    # a group's declared dependencies are installed, and everything else the light tier could reach is not
+    declared = {
+        "scikit-image": "skimage"
+    }  # the import name of a dependency whose name differs
+    optional = sorted(
+        {"h3", "quadbin", "rasterio", "pyproj", "scipy", "numexpr", "skimage"}
+        - {declared.get(d, d) for d in deps}
+    )
     code = (
         "import sys\n"
         "from databricks.labs.gbx import manifest\n"
@@ -928,7 +935,7 @@ def test_uc_handlers_import_only_the_dependencies_they_declare(deps, names):
         "# the kernels re-import under the block\n"
         "for m in [m for m in sys.modules if m.startswith(('databricks.labs.gbx.py',))]:\n"
         "    del sys.modules[m]\n"
-        f"for blocked in ('pyspark', 'pandas', 'pyarrow', 'scipy', *{optional!r}):\n"
+        f"for blocked in ('pyspark', 'pandas', 'pyarrow', *{optional!r}):\n"
         "    sys.modules[blocked] = None\n"
         "import tempfile\n"
         "ran = oracles.run_handlers(cases, tmpdir=tempfile.mkdtemp())\n"

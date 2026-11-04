@@ -1,0 +1,152 @@
+"""SQL kernel bodies: the text of a manifest `sql` key, its helpers, and inlining.
+
+A body is the text after ``RETURN``. ``{q}`` marks where a helper's qualifier goes: the 3-level schema prefix on Unity
+Catalog, nothing in the session. A table function cannot call a SQL function (UC refuses one inside a generator), so a
+table function over a SQL kernel, and the session's temporary function, carry the body with its helpers INLINED: each
+``{q}gbx__x(args)`` is replaced by the helper's body with its parameters bound to the (parenthesised) arguments.
+
+Pure Python, no pyspark: it runs where the DDL is built.
+
+A body must not use a parameter name as a lambda variable or an alias: inlining renames identifiers outside quotes.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Mapping, Optional, Sequence, Tuple
+
+from databricks.labs.gbx.manifest import SQL_FROM_L0
+
+Q = "{q}"
+_CALL = re.compile(r"\{q\}(gbx__[a-z0-9_]+)\(")
+_QUOTED = re.compile(r"'(?:[^'\\]|\\.|'')*'|`[^`]*`|\"(?:[^\"\\]|\\.)*\"")
+_MAX_DEPTH = 16
+
+
+def l4_source(fn) -> Optional[Tuple[str, tuple]]:
+    """``(body, helpers)`` of the UC function's SQL kernel, or None when the row has none."""
+    l4 = fn.levels.get("L4", {})
+    body = l4.get("sql")
+    if body is None:
+        return None
+    if body == SQL_FROM_L0:
+        l0 = fn.levels["L0"]
+        return l0["sql"], tuple(l0.get("sql_helpers", ()))
+    return body, tuple(l4.get("sql_helpers", ()))
+
+
+def l0_source(fn) -> Optional[Tuple[str, tuple]]:
+    """``(body, helpers)`` of the session's SQL kernel, or None when the row has no L0."""
+    l0 = fn.levels.get("L0")
+    if l0 is None:
+        return None
+    return l0["sql"], tuple(l0.get("sql_helpers", ()))
+
+
+def render(body: str, prefix: str) -> str:
+    """``body`` with every ``{q}`` replaced by ``prefix`` (``\\`cat\\`.\\`sch\\`.`` on UC)."""
+    return body.replace(Q, prefix)
+
+
+def _segments(text: str) -> List[Tuple[bool, str]]:
+    """``text`` as (is_code, piece) runs: quoted strings and backtick names are not code."""
+    out, pos = [], 0
+    for m in _QUOTED.finditer(text):
+        if m.start() > pos:
+            out.append((True, text[pos : m.start()]))
+        out.append((False, m.group(0)))
+        pos = m.end()
+    if pos < len(text):
+        out.append((True, text[pos:]))
+    return out
+
+
+def rename(body: str, mapping: Mapping[str, str]) -> str:
+    """``body`` with each identifier in ``mapping`` replaced by its value, outside quotes, after a ``.`` and before a
+    ``(`` untouched (a field access and a function call are not the parameter)."""
+    mapping = {k: v for k, v in mapping.items() if k != v}
+    if not mapping:
+        return body
+    pat = re.compile(
+        r"(?<![\w.$])(" + "|".join(map(re.escape, mapping)) + r")(?![\w(])",
+        re.IGNORECASE,
+    )
+    low = {k.lower(): v for k, v in mapping.items()}
+    return "".join(
+        pat.sub(lambda m: low[m.group(1).lower()], piece) if code else piece
+        for code, piece in _segments(body)
+    )
+
+
+def _call_end(text: str, open_idx: int) -> Tuple[List[str], int]:
+    """The top-level arguments of the call whose ``(`` is at ``open_idx``, and the index after its ``)``."""
+    depth, args, start, i = 0, [], open_idx + 1, open_idx
+    quoted = [(m.start(), m.end()) for m in _QUOTED.finditer(text)]
+    qi = 0
+    while i < len(text):
+        while qi < len(quoted) and quoted[qi][1] <= i:
+            qi += 1
+        if qi < len(quoted) and quoted[qi][0] <= i < quoted[qi][1]:
+            i = quoted[qi][1]
+            continue
+        ch = text[i]
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+            if depth == 0:
+                args.append(text[start:i].strip())
+                return ([] if args == [""] else args), i + 1
+        elif ch == "," and depth == 1:
+            args.append(text[start:i].strip())
+            start = i + 1
+        i += 1
+    raise ValueError(f"unbalanced call in SQL body: {text[open_idx:open_idx + 60]!r}")
+
+
+def inline_helpers(body: str, helpers: Sequence[Mapping], _depth: int = 0) -> str:
+    """``body`` with every helper call replaced by the helper's body, arguments bound; recursive.
+
+    A helper the body names that is not declared, a wrong argument count and a cycle are ValueErrors.
+    """
+    if _depth > _MAX_DEPTH:
+        raise ValueError("SQL helpers nest too deeply (a cycle?)")
+    by_name: Dict[str, Mapping] = {h["name"]: h for h in helpers}
+    out, pos = [], 0
+    while True:
+        m = _CALL.search(body, pos)
+        if m is None:
+            out.append(body[pos:])
+            return "".join(out)
+        if not _in_code(body, m.start()):
+            out.append(body[pos : m.end()])
+            pos = m.end()
+            continue
+        h = by_name.get(m.group(1))
+        if h is None:
+            raise ValueError(
+                f"SQL body calls {m.group(1)}, which is not a declared helper"
+            )
+        args, end = _call_end(body, m.end() - 1)
+        params = [p[0] for p in h["params"]]
+        if len(args) != len(params):
+            raise ValueError(
+                f"{m.group(1)} takes {len(params)} argument(s), the body passes {len(args)}"
+            )
+        inner = inline_helpers(h["sql"], helpers, _depth + 1)
+        bound = rename(inner, {p: f"({a})" for p, a in zip(params, args)})
+        out.append(body[pos : m.start()])
+        out.append(f"({bound})")
+        pos = end
+
+
+def _in_code(text: str, idx: int) -> bool:
+    return not any(m.start() <= idx < m.end() for m in _QUOTED.finditer(text))
+
+
+def inlined(body: str, helpers: Sequence[Mapping]) -> str:
+    """``body`` with its helpers inlined and no ``{q}`` left (a body that holds one is a ValueError)."""
+    text = inline_helpers(body, helpers)
+    if Q in text:
+        raise ValueError("SQL body holds a {q} that is not a declared helper call")
+    return text

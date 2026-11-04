@@ -12,6 +12,7 @@ from __future__ import annotations
 import functools
 import importlib
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -25,6 +26,7 @@ SCHEMA_VERSION = 2
 # `engine` marks a level that runs the row's `gdal` block on the GDAL spec engine where that engine can serve,
 # and its own implementation (the other keys) elsewhere.
 LEVEL_KEYS = {
+    "L0": frozenset({"sql", "sql_helpers"}),
     "L1": frozenset({"companion", "needs_gdal", "session_returns", "engine"}),
     "L2": frozenset(
         {
@@ -52,11 +54,30 @@ LEVEL_KEYS = {
             "arrow",
         }
     ),
-    "L4": frozenset({"handler", "deps", "tvf_over", "engine", "scala", "jar"}),
+    "L4": frozenset(
+        {
+            "handler",
+            "deps",
+            "tvf_over",
+            "engine",
+            "scala",
+            "jar",
+            "sql",
+            "sql_helpers",
+            "stub",
+        }
+    ),
 }
 # `scala` (a UC Scala handler, `<class>.<method>` in the JAR) and `jar` go together: `jar: "volume"` says the JAR is read from
 # the Volume folder `gbx.uc.install` is given. The row keeps its Python `handler`, which `install` creates when that
 # folder holds no JAR.
+# L0 is a SQL kernel the SESSION installs as a temporary SQL function (no UDF, no JVM, no Python): `sql` is the body
+# (the text after RETURN) and `sql_helpers` the private SQL functions it calls. L4 `sql` is the same kind of body for the
+# Unity Catalog function; the string "L0" says "the L0 body" so one text serves both surfaces (one kernel per function).
+# In a body, `{q}` is the place a helper's qualifier goes (`{q}gbx__x(...)`): the 3-level schema prefix on UC, nothing in
+# the session (which inlines its helpers). A helper is {"name": "gbx__<x>", "params": [[name, type], ...], "returns": type,
+# "sql": body, "summary": text (optional)}. `stub` (an L4 spec with no other key) is the Fix text of a function that has no
+# UC form: `gbx.uc.install(..., stubs=True)` makes it a SQL function that raises, and the row has no UC level otherwise.
 # `connect_class` is the Java handler a standard access mode (Spark Connect) session registers instead of `class`: its
 # sandbox loads only Java classes of a JAR added to the session, with concrete parameter types. A row without one has
 # no L2 there. `arg_types` (one SQL type per parameter) are the types the Java classes declare: the manager puts the
@@ -64,13 +85,14 @@ LEVEL_KEYS = {
 # that hands a Java UDF the values as SQL bound them (an INT where the class declares STRING) cannot fail its cast.
 # Keys every spec of that level must carry.
 LEVEL_REQUIRED = {
+    "L0": frozenset({"sql"}),
     "L2": frozenset({"class", "returns"}),
     "L3": frozenset({"register"}),
 }
 # Levels whose spec must carry at least one of these keys.
 LEVEL_REQUIRED_ANY = {
     "L1": frozenset({"companion", "engine"}),
-    "L4": frozenset({"handler", "tvf_over"}),
+    "L4": frozenset({"handler", "tvf_over", "sql", "stub"}),
 }
 
 # The closed vocabulary of a row's `gdal` block (the GDAL spec engine's spec): what `parse_gdal_spec` accepts.
@@ -566,6 +588,57 @@ def _parse_gdal_section(raw: Optional[Mapping]) -> Optional[GdalSection]:
     )
 
 
+SQL_FROM_L0 = "L0"  # the value of an L4 `sql` key that means "the body of the L0 spec"
+_HELPER_KEYS = frozenset({"name", "params", "returns", "sql", "summary"})
+
+
+def _check_sql_helpers(name: str, level: str, helpers) -> None:
+    seen = set()
+    for h in helpers:
+        extra = set(h) - _HELPER_KEYS
+        missing = {"name", "params", "returns", "sql"} - set(h)
+        if extra or missing:
+            raise ValueError(
+                f"{name} {level}.sql_helpers: unknown key(s) {sorted(extra)}, missing {sorted(missing)}"
+            )
+        hn = h["name"]
+        if not isinstance(hn, str) or not re.fullmatch(r"gbx__[a-z0-9_]+", hn):
+            raise ValueError(
+                f"{name} {level}.sql_helpers: helper name {hn!r} must be gbx__<name>"
+            )
+        if hn in seen:
+            raise ValueError(f"{name} {level}.sql_helpers: {hn} is declared twice")
+        seen.add(hn)
+        if not (isinstance(h["sql"], str) and h["sql"].strip()):
+            raise ValueError(f"{name} {level}.sql_helpers: {hn} has an empty body")
+
+
+def _check_sql_levels(name: str, levels: Mapping) -> None:
+    """The rules of the SQL keys: a body is non-empty text; "L0" in L4 needs an L0 body (and no helpers of its own: they
+    live with the body); helpers need a body; a table function has no body of its own.
+    """
+    l0, l4 = levels.get("L0", {}), levels.get("L4", {})
+    for level, spec in (("L0", l0), ("L4", l4)):
+        if "sql_helpers" in spec and "sql" not in spec:
+            raise ValueError(f"{name} {level}: sql_helpers without sql")
+        if "sql" in spec and not (isinstance(spec["sql"], str) and spec["sql"].strip()):
+            raise ValueError(f"{name} {level}: sql must be non-empty text")
+        _check_sql_helpers(name, level, spec.get("sql_helpers", ()))
+    if l4.get("sql") == SQL_FROM_L0:
+        if "sql" not in l0:
+            raise ValueError(
+                f"{name}: L4 sql is {SQL_FROM_L0!r} but there is no L0 sql"
+            )
+        if "sql_helpers" in l4:
+            raise ValueError(
+                f"{name}: L4 sql is {SQL_FROM_L0!r}; its helpers belong to the L0 spec"
+            )
+    if "sql" in l4 and "tvf_over" in l4:
+        raise ValueError(
+            f"{name}: a table function (tvf_over) has no sql body of its own"
+        )
+
+
 @dataclass(frozen=True)
 class Helper:
     """A top-level DataFrame helper (not a SQL function): where it lives, and how settled it is."""
@@ -601,6 +674,9 @@ class Function:
     example: Optional[str] = None
     # A generator that reads a table argument (`TABLE(...) PARTITION BY`) instead of being joined laterally to a row.
     table_input: Optional[TableInput] = None
+    # The Fix text of a row with no UC function (an L4 spec holding only `stub`): the row has no L4 level, so no UC
+    # surface; `gbx.uc.install(..., stubs=True)` makes a raising SQL function of it (scalars only).
+    stub: Optional[str] = None
 
     @property
     def max_args(self) -> int:
@@ -661,7 +737,11 @@ def _freeze(obj: Any) -> Any:
 
 @functools.lru_cache(maxsize=1)
 def load() -> Manifest:
-    raw = json.loads((Path(__file__).with_name("functions.json")).read_text())
+    return parse(json.loads((Path(__file__).with_name("functions.json")).read_text()))
+
+
+def parse(raw: Mapping) -> Manifest:
+    """The manifest a ``functions.json`` document describes (``load`` reads the packaged one; a test parses a changed copy)."""
     if raw.get("schema_version") != SCHEMA_VERSION:
         raise ValueError(
             f"functions.json schema_version {raw.get('schema_version')!r}, expected {SCHEMA_VERSION}"
@@ -695,6 +775,19 @@ def load() -> Manifest:
                 py.get("extra_factory_args"),
             )
         doc = r.get("doc", {})
+        levels_raw = r["levels"]
+        stub = None
+        if "stub" in levels_raw.get("L4", {}):
+            l4_raw = levels_raw["L4"]
+            if set(l4_raw) != {"stub"} or not (
+                isinstance(l4_raw["stub"], str) and l4_raw["stub"].strip()
+            ):
+                raise ValueError(
+                    f"{r['sql_name']}: an L4 stub is the Fix text alone (a row with a UC function has no stub)"
+                )
+            stub = l4_raw["stub"]
+            levels_raw = {k: v for k, v in levels_raw.items() if k != "L4"}
+        _check_sql_levels(r["sql_name"], levels_raw)
         fns[r["sql_name"]] = Function(
             r["sql_name"],
             r["family"],
@@ -704,7 +797,7 @@ def load() -> Manifest:
             r["returns"]["session"],
             r["returns"].get("uc"),
             bool(r.get("accepts_virtual_tile")),
-            _freeze(r["levels"]),
+            _freeze(levels_raw),
             r["oracle"],
             tuple((c[0], c[1]) for c in r.get("columns", [])),
             parse_gdal_spec(r["gdal"]) if "gdal" in r else None,
@@ -721,6 +814,7 @@ def load() -> Manifest:
                 if r.get("table_input")
                 else None
             ),
+            stub,
         )
     return Manifest(
         MappingProxyType(fns),

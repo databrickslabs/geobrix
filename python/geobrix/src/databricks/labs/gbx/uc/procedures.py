@@ -18,8 +18,13 @@ from typing import Callable, Dict, Iterable, List, Optional, Tuple
 from databricks.labs.gbx import __version__, manifest
 from databricks.labs.gbx.uc import ddl
 
-# The UC ceiling of an aggregate over tile structs: ten tiles of 512 x 512 pass, fifty run out of memory.
-MOSAIC_MAX_TILES = 10
+# The tree procedures merge or combine at most this many tiles in one function call (an aggregate over tile structs
+# runs out of memory past about ten 512 x 512 tiles); a key of any size is a tree of such calls.
+TREE_FAN_IN = 8
+# A tree of fan-in 8 has 10 levels for 1e9 tiles; a loop that has not ended by then is stopped.
+TREE_MAX_LEVELS = 10
+# The largest tile a Unity Catalog function returns.
+TREE_MAX_BYTES = 64 * 1024 * 1024
 # Tile names: 1-128 characters, as the Zarr manifest accepts.
 _TAG_RE = r"^[A-Za-z0-9][A-Za-z0-9._:/@+=-]{0,127}$"
 
@@ -89,6 +94,21 @@ TGT = Param(
 )
 
 
+def _create_table(
+    table: str, columns: str, source: str = "IDENTIFIER(source_table)"
+) -> str:
+    """CREATE TABLE IF NOT EXISTS ``table`` with the columns ``columns`` selected from ``source`` and no row.
+
+    The columns are a list, not a second copy of the select that fills the table: ``WHERE false`` does not stop a
+    function in the select list from being planned, and a Python function costs a sandbox start on a warehouse.
+    A column that the source has (its key) takes the source's type; the others are typed NULLs.
+    """
+    return (
+        f"CREATE TABLE IF NOT EXISTS IDENTIFIER({table}) AS\n"
+        f"SELECT {columns} FROM {source} WHERE false;"
+    )
+
+
 def _create_like(select: str) -> str:
     """CREATE TABLE IF NOT EXISTS target with the columns of ``select`` and no row."""
     return (
@@ -154,6 +174,21 @@ WHEN NOT MATCHED THEN INSERT *;"""
         ],
         body,
     )
+
+
+# --- the scratch table of a procedure that stages rows ---------------------------------------------------------------
+# A staged table sits beside the target (the caller can create tables there) and is named once per call. The handler
+# drops it when any statement fails, whether a refusal of the procedure or an error of a function; the last
+# statement drops it when the call succeeds.
+_SCRATCH_DECLARE = "DECLARE v_scratch STRING DEFAULT concat(target_table, '_scratch_', replace(uuid(), '-', ''));"
+_SCRATCH_HANDLER = (
+    "DECLARE EXIT HANDLER FOR SQLEXCEPTION\n"
+    "BEGIN\n"
+    "  DROP TABLE IF EXISTS IDENTIFIER(v_scratch);\n"
+    "  RESIGNAL;\n"
+    "END;"
+)
+_SCRATCH_DROP = "DROP TABLE IF EXISTS IDENTIFIER(v_scratch);"
 
 
 # --- clean geometries --------------------------------------------------------------------------------------------
@@ -375,37 +410,133 @@ WHEN NOT MATCHED THEN INSERT *;"""
     )
 
 
-# --- mosaic by key ----------------------------------------------------------------------------------------------------
-def mosaic_by_key(catalog: str, schema: str) -> str:
-    _need("gbx_rst_merge", "gbx_rst_frombands")
-    q = _q(catalog, schema)
-    sel = (
-        f"SELECT tile_key, {q}.gbx_rst_merge(collect_list(tile)) AS tile\n"
-        f"FROM IDENTIFIER(source_table) GROUP BY tile_key"
+# --- the tree: many tiles per key ----------------------------------------------------------------------------------
+# One function call merges or combines at most TREE_FAN_IN tiles. A key of any size is a tree of such calls: each level
+# writes one row per bucket of a scratch table, and the next level reads those rows, until a key has one row. The
+# buckets of a key are contiguous runs of the same size (to within one), so no call gets a lone member: a combine
+# function returns a single tile as it is, which would make a "count" of one tile the tile itself.
+_BUCKET = f"((rn - 1) * ((n + {TREE_FAN_IN - 1}) DIV {TREE_FAN_IN})) DIV n"
+
+
+def _ranked(columns: str, source: str, order: str) -> str:
+    """The rows of ``source`` with the bucket of each in its key; only the keys with more than one row."""
+    return (
+        f"SELECT tile_key, {columns}, {_BUCKET} AS bucket\n"
+        "FROM (\n"
+        f"  SELECT tile_key, {columns},\n"
+        f"    row_number() OVER (PARTITION BY tile_key ORDER BY {order}) AS rn,\n"
+        "    count(*) OVER (PARTITION BY tile_key) AS n\n"
+        f"  FROM {source}\n"
+        ") WHERE n > 1"
     )
-    fix = (
-        f"gbx_mosaic_by_key: a tile_key has more than {MOSAIC_MAX_TILES} tiles, over what a Unity Catalog "
-        "aggregate holds. Fix: merge those keys in a notebook or job with the session aggregate "
-        "gbx_rst_merge_agg, or split the key."
+
+
+def _scratch_create(parts: int) -> str:
+    """The scratch table: key, level, bucket and ``parts`` tile columns, with no row, typed by a column list."""
+    tile = f"CAST(NULL AS {manifest.TILE_SQL})"
+    cols = ", ".join(f"{tile} AS p{i}" for i in range(1, parts + 1))
+    return (
+        "CREATE TABLE IDENTIFIER(v_scratch) AS\n"
+        f"SELECT tile_key, CAST(0 AS INT) AS lvl, CAST(0 AS INT) AS bucket, {cols}\n"
+        "FROM IDENTIFIER(source_table) WHERE false;"
     )
-    body = f"""
-IF EXISTS (SELECT 1 FROM IDENTIFIER(source_table) GROUP BY tile_key HAVING count(*) > {MOSAIC_MAX_TILES}) THEN
-  SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = {ddl.quote_str(fix)};
-END IF;
-{_create_like(sel)}
-MERGE INTO IDENTIFIER(target_table) AS t
+
+
+def _size_check(level: str, fix: str) -> str:
+    return (
+        f"IF EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) WHERE lvl = {level} AND length(p1.raster) > {TREE_MAX_BYTES}) THEN\n"
+        f"  SIGNAL SQLSTATE '54000' SET MESSAGE_TEXT = {ddl.quote_str(fix)};\n"
+        "END IF;"
+    )
+
+
+def _tree_loop(next_level: str, fix: str, name: str) -> str:
+    """The loop over the levels. ``next_level`` is the statement (or the chain of them) that writes level v_lvl + 1."""
+    cap = (
+        f"{name}: a key needs more than {TREE_MAX_LEVELS} levels of {TREE_FAN_IN} tiles. "
+        "Fix: split the key."
+    )
+    return f"""WHILE EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) WHERE lvl = v_lvl GROUP BY tile_key HAVING count(*) > 1) DO
+  IF v_lvl >= {TREE_MAX_LEVELS} THEN
+    SIGNAL SQLSTATE '54000' SET MESSAGE_TEXT = {ddl.quote_str(cap)};
+  END IF;
+-- next level
+{next_level}
+  SET v_lvl = v_lvl + 1;
+  {_size_check("v_lvl", fix).replace(chr(10), chr(10) + "  ")}
+END WHILE;"""
+
+
+def _final_merge(tile_expr: str, columns: str = "p1") -> str:
+    """The one write to the target: the keys that never entered the tree as they are, the others from their last level."""
+    return f"""MERGE INTO IDENTIFIER(target_table) AS t
 USING (
-{sel}
+  SELECT s.tile_key, s.tile FROM IDENTIFIER(source_table) AS s
+  LEFT ANTI JOIN (SELECT DISTINCT tile_key FROM IDENTIFIER(v_scratch)) AS k ON s.tile_key <=> k.tile_key
+  UNION ALL
+  SELECT tile_key, {tile_expr} AS tile
+  FROM (SELECT tile_key, lvl, {columns}, max(lvl) OVER (PARTITION BY tile_key) AS top FROM IDENTIFIER(v_scratch))
+  WHERE lvl = top
 ) AS s
 ON t.tile_key <=> s.tile_key
 WHEN MATCHED THEN UPDATE SET *
 WHEN NOT MATCHED THEN INSERT *;"""
+
+
+# the order in which the members of a key are grouped: by content, so a re-run groups the same way
+_MEMBER_ORDER = "xxhash64(tile.raster, tile.path)"
+
+
+# --- mosaic by key ----------------------------------------------------------------------------------------------------
+def mosaic_by_key(catalog: str, schema: str) -> str:
+    _need("gbx_rst_merge")
+    q = _q(catalog, schema)
+    merge = f"{q}.gbx_rst_merge(collect_list(%s))"
+    fix = (
+        "gbx_mosaic_by_key: the merged tile of a key is over 64 MiB, more than a Unity Catalog function returns. "
+        "Fix: mosaic that key as a virtual raster. Keep its tiles as files on a Volume and build the mosaic with "
+        "mint_vrt (the VRT mosaic page), or split the key into smaller areas."
+    )
+    first = (
+        "INSERT INTO IDENTIFIER(v_scratch) (tile_key, lvl, bucket, p1)\n"
+        f"SELECT tile_key, 1, bucket, {merge % 'tile'}\n"
+        "FROM (\n"
+        f"{_ranked('tile', 'IDENTIFIER(source_table)', _MEMBER_ORDER)}\n"
+        ") GROUP BY tile_key, bucket;"
+    )
+    nxt = (
+        "  INSERT INTO IDENTIFIER(v_scratch) (tile_key, lvl, bucket, p1)\n"
+        f"  SELECT tile_key, v_lvl + 1, bucket, {merge % 'p1'}\n"
+        "  FROM (\n"
+        f"{_ranked('p1', 'IDENTIFIER(v_scratch)', 'bucket')}\n"
+        "  ) GROUP BY tile_key, bucket;"
+    ).replace(
+        "FROM IDENTIFIER(v_scratch)\n", "FROM IDENTIFIER(v_scratch) WHERE lvl = v_lvl\n"
+    )
+    create = _create_table(
+        "target_table", f"tile_key, CAST(NULL AS {manifest.TILE_SQL}) AS tile"
+    )
+    body = f"""
+DECLARE v_lvl INT DEFAULT 1;
+{_SCRATCH_DECLARE}
+{_SCRATCH_HANDLER}
+{create}
+{_scratch_create(1)}
+-- level 1
+{first}
+{_size_check("1", fix)}
+{_tree_loop(nxt, fix, "gbx_mosaic_by_key")}
+-- result
+{_final_merge("p1")}
+{_SCRATCH_DROP}"""
     return _ddl(
         catalog,
         schema,
         "gbx_mosaic_by_key",
-        f"Merge the tiles of a table (columns tile_key, tile) into one tile per key, at most {MOSAIC_MAX_TILES} "
-        "tiles per key. " + _UPSERTS,
+        f"Merge the tiles of a table (columns tile_key, tile) into one tile per key, in a tree of merges of at most "
+        f"{TREE_FAN_IN} tiles each, so a key may have any number of tiles. A merged tile over 64 MiB is refused. "
+        "The tiles of a key should not overlap: which of two overlapping tiles shows is not defined. "
+        + _UPSERTS,
         [SRC, TGT],
         body,
     )

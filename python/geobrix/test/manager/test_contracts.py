@@ -3682,13 +3682,6 @@ def test_the_zarr_procedures_check_the_tag_name_and_untag_checks_the_tag_exists(
     assert "does not exist. Fix: pass an existing tag name." in untag
 
 
-def test_mosaic_by_key_refuses_a_key_with_more_than_ten_tiles_before_it_writes():
-    text = _procedure("gbx_mosaic_by_key")
-    guard = text.index("GROUP BY tile_key HAVING count(*) > 10")
-    assert guard < text.index("CREATE TABLE IF NOT EXISTS")
-    assert "has more than 10 tiles" in text and "gbx_rst_merge_agg" in text
-
-
 def test_the_merge_only_procedures_say_they_upsert_and_which_key_must_be_unique():
     for name in (
         "gbx_polygons_to_bng",

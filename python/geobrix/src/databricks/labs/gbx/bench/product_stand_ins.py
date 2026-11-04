@@ -27,7 +27,8 @@ _CALL = re.compile(r"\b([a-z][a-z0-9_]*)\s*\(")
 def _ring_case(radius: int = 3):
     """The expansion of `h3_kringdistances(cell, k)`: a function of the two argument texts that returns a CASE over the
     cell and k, built with the h3 library for the cells the oracle rows use (the disk of ``radius`` around the table's
-    base cell and around the first pentagon of its resolution). A cell or k outside the table raises, so a row cannot
+    base cell and around the first pentagon of its resolution). A cell or k outside the table raises (a NULL k is NULL, as the
+    product's is), so a row cannot
     pass on a ring the stand-in never built."""
     import h3
 
@@ -51,7 +52,9 @@ def _ring_case(radius: int = 3):
         whens = " ".join(
             f"WHEN {h3.str_to_int(c)} THEN CASE ({k_text}) "
             + " ".join(f"WHEN {k} THEN {literal(c, k)}" for k in range(radius + 1))
-            + " END"
+            + f" ELSE CASE WHEN ({k_text}) IS NULL THEN NULL ELSE raise_error(concat("
+            f"'h3_kringdistances stand-in: no ring built for k = ', CAST(({k_text}) AS STRING), "
+            f"' (built to {radius})')) END END"
             for c in universe
         )
         return (

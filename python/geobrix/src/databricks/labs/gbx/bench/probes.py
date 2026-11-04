@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from collections import Counter
 from typing import List, Sequence, Tuple
 
 
@@ -1161,6 +1162,27 @@ def _diff_sql(out: str, ref: str) -> str:
     )
 
 
+def _merge_tree_sql(q: str, source: str, largest_key: int) -> str:
+    """The merged tile of each key of ``source`` (columns tile_key, tile) from the UC ``gbx_rst_merge``, which takes at
+    most TREE_FAN_IN tiles per call: the tiles of a key are merged in buckets of that size, level by level, until a key
+    has no more than one call's worth, then once more. ``largest_key`` is the most tiles any key holds. The merge of
+    tiles that do not overlap does not depend on their order, so the reference of the procedure's own tree is exact.
+    """
+    from databricks.labs.gbx.uc.procedures import TREE_FAN_IN
+
+    level = f"SELECT tile_key, tile FROM {source}"
+    n = largest_key
+    while n > TREE_FAN_IN:
+        level = (
+            f"SELECT tile_key, {q}.gbx_rst_merge(collect_list(tile)) AS tile FROM ("
+            "SELECT tile_key, tile, (row_number() OVER (PARTITION BY tile_key "
+            f"ORDER BY xxhash64(tile.raster, tile.path)) - 1) DIV {TREE_FAN_IN} AS bucket FROM ({level})"
+            ") GROUP BY tile_key, bucket"
+        )
+        n = -(-n // TREE_FAN_IN)
+    return f"SELECT tile_key, {q}.gbx_rst_merge(collect_list(tile)) AS c FROM ({level}) GROUP BY tile_key"
+
+
 def proc_warehouse_statements(
     catalog: str, schema: str, tmpdir: str
 ) -> List[Tuple[str, str]]:
@@ -1308,8 +1330,7 @@ def proc_warehouse_statements(
         ],
         {"source_table": lit("mos_src"), "target_table": lit("mos_tgt")},
         f"SELECT tile_key, {stat('tile')} FROM {t('mos_tgt')}",
-        f"SELECT tile_key, {stat('c')} FROM (SELECT tile_key, {q}.gbx_rst_merge(collect_list(tile)) AS c "
-        f"FROM {t('mos_src')} GROUP BY tile_key)",
+        f"SELECT tile_key, {stat('c')} FROM ({_merge_tree_sql(q, t('mos_src'), max(Counter(k for k, _ in mosaic).values()))})",
     )  # fmt: skip
     # combine by key: one source table, one CALL and one stats compare per op (the bytes of a tile that went through the
     # map algebra differ from the session's, the band statistics do not)

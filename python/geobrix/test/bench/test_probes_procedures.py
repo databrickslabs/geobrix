@@ -570,3 +570,26 @@ def test_a_zarr_tag_that_errors_is_an_error_not_an_empty_compare(monkeypatch, tm
     assert (
         rec["second_tag_refused"] is False
     )  # it did not fail for the reason a tag that exists does
+
+
+def test_the_mosaic_reference_merges_at_most_one_call_of_tiles_at_a_time(spark):
+    """The UC merge takes TREE_FAN_IN tiles per call: the warehouse reference of keys of 12 and 70 tiles is a tree of
+    such calls, not one call over the whole key."""
+    fan = procedures.TREE_FAN_IN
+    sql = dict(probes.proc_warehouse_statements("c", "s", "/Volumes/c/s/v/scratch"))[
+        "gbx_mosaic_by_key:diff"
+    ]
+    # the largest key has 70 tiles: 70 -> 9 -> (at most 8, merged once more), so two bucket levels and a last merge
+    tree = probes._merge_tree_sql("`c`.`s`", "`c`.`s`.gbxproc_mos_src", 70)
+    assert tree in sql
+    assert tree.count(f") - 1) DIV {fan} AS bucket") == 2
+    assert tree.count("gbx_rst_merge(collect_list(tile))") == 3
+    # no call merges a whole key: every merge sits over a bucket level or the last level
+    assert "FROM `c`.`s`.gbxproc_mos_src GROUP BY tile_key)" not in sql
+    # a key of at most one call's worth is merged once, with no bucket level
+    flat = probes._merge_tree_sql("`c`.`s`", "t", fan)
+    assert "bucket" not in flat and flat.count("gbx_rst_merge") == 1
+    # the statement is valid SQL
+    spark._jsparkSession.sessionState().sqlParser().parsePlan(
+        probes._merge_tree_sql("`c`.`s`", "t", 70)
+    )

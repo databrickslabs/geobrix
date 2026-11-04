@@ -164,6 +164,22 @@ def test_the_h3_ring_stand_in_expands_the_call_in_the_text_and_refuses_a_ring_it
     unknown = product_stand_ins.rewrite("h3_kringdistances(CAST(1 AS BIGINT), 1)")
     with pytest.raises(Exception, match="no ring built"):
         spark.sql(f"SELECT {unknown}").collect()
+    # a k above the radius it was built to fails loudly, where it used to be a silent NULL; a NULL k is still NULL
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import H3_CELL
+
+    above = product_stand_ins.rewrite(
+        f"h3_kringdistances(CAST({H3_CELL} AS BIGINT), 4)"
+    )
+    with pytest.raises(Exception, match="no ring built for k = 4"):
+        spark.sql(f"SELECT {above}").collect()
+    null_k = product_stand_ins.rewrite(
+        f"h3_kringdistances(CAST({H3_CELL} AS BIGINT), CAST(NULL AS INT))"
+    )
+    assert spark.sql(f"SELECT {null_k} AS r").first()["r"] is None
+    inside = product_stand_ins.rewrite(
+        f"h3_kringdistances(CAST({H3_CELL} AS BIGINT), 1)"
+    )
+    assert len(spark.sql(f"SELECT {inside} AS r").first()["r"]) == 7
     with pytest.raises(ValueError, match="takes 2 arguments"):
         product_stand_ins.rewrite("h3_kringdistances(x)")
 

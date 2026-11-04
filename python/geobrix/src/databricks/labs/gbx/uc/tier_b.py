@@ -294,11 +294,18 @@ HANDLERS["gbx_rst_tryopen"] = rst_tryopen
 
 
 # --- tile-returning functions -------------------------------------------------------------------------------------
-def result_refusal(fn: str, decoded: int, cap: int) -> _Refusal:
-    """A result decoded over the cap (an operation can grow a tile): never truncated, refused with a Fix."""
+def result_refusal(
+    fn: str, decoded: int, cap: int, fix: Optional[str] = None
+) -> _Refusal:
+    """A result decoded over the cap (an operation can grow a tile): never truncated, refused with a Fix. ``fix``
+    replaces the generic Fix for a function that retiling does not help (raw content).
+    """
+    fix = fix or (
+        f"run {fn} in a notebook or job session, or retile first (gbx_rst_retile) so each tile is smaller"
+    )
     return _Refusal(
         f"{fn}: the result would be {size_text(decoded)} decoded, over the {size_text(cap)} a Unity Catalog function "
-        f"returns. Fix: run {fn} in a notebook or job session, or retile first (gbx_rst_retile) so each tile is smaller"
+        f"returns. Fix: {fix}"
     )
 
 
@@ -342,10 +349,15 @@ def gate(fn: str, *tiles):
 
 
 def tile_row(
-    fn: str, tile, raster: Optional[bytes], driver: str = "GTiff"
+    fn: str,
+    tile,
+    raster: Optional[bytes],
+    driver: str = "GTiff",
+    over_cap_fix: Optional[str] = None,
 ) -> Optional[dict]:
     """The tile a function returns for the raster bytes it made: the metadata the session tile carries (driver, size,
-    band count) and the integer SRID of the raster's CRS. A raster decoded over the cap is refused with a Fix.
+    band count) and the integer SRID of the raster's CRS. A raster decoded over the cap is refused with a Fix
+    (``over_cap_fix`` when the function has a purpose one).
     """
     if raster is None:
         return None
@@ -358,7 +370,7 @@ def tile_row(
     with MemoryFile(raster) as mf, open_bytes(mf) as ds:
         decoded = decoded_bytes(ds)
         if decoded > DECODED_CAP:
-            raise result_refusal(fn, decoded, DECODED_CAP)
+            raise result_refusal(fn, decoded, DECODED_CAP, over_cap_fix)
         meta = {
             "driver": driver or ds.driver,
             "width": str(ds.width),
@@ -889,7 +901,9 @@ HANDLERS["gbx_rst_index"] = rst_index
 
 # --- other tile to tile ------------------------------------------------------------------------------------------
 def rst_chm(dsm_tile, dem_tile):
-    """gbx_rst_chm: the canopy height model, the DSM aligned to the DEM's grid minus the DEM, negatives clamped to 0."""
+    """gbx_rst_chm: the canopy height model, the DSM aligned to the DEM's grid minus the DEM, negatives clamped to 0.
+    Refused before any pixel is made when its rasters or the kernel's float64 working set are over the cap.
+    """
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx._gdal_policy import open_bytes
@@ -914,6 +928,15 @@ def rst_chm(dsm_tile, dem_tile):
                 dem_ds.width,
                 dem_ds.height,
                 [*(dsm_ds.dtypes[:1] * dsm_ds.count), "float32"],
+            )
+            # the kernel works in float64 arrays and temporaries, which hold more than the rasters do
+            check_made(
+                fn,
+                dem_ds.width,
+                dem_ds.height,
+                ["float32"],
+                _kernel("chm", "chm_working_bytes")(dem_ds.width, dem_ds.height),
+                ask="retile the DEM first (gbx_rst_retile) so each tile is smaller",
             )
         return _kernel("chm", "chm")(dsm, dem)
 
@@ -1175,6 +1198,8 @@ def rst_merge(tiles):
     mixed = agg._mixed_grid(hdrs, ref_crs)
     try:
         union = agg._union_decoded_bytes(hdrs, ref_crs)
+    except (MemoryError, RecursionError):
+        raise
     except (
         Exception
     ) as exc:  # noqa: BLE001 - a mosaic of unknown size is not built in the sandbox
@@ -1618,7 +1643,13 @@ def rst_fromcontent(content, driver):
     except ValueError as exc:
         raise _Parameter(str(exc)) from exc
     try:
-        return tile_row(fn, {"cellid": 0}, bytes(content), known)
+        return tile_row(
+            fn,
+            {"cellid": 0},
+            bytes(content),
+            known,
+            over_cap_fix="write the bytes to a Volume and read them with the raster_gbx reader in a notebook or job session",
+        )
     except (MemoryError, RecursionError, ImportError, _Refusal):
         raise
     except (

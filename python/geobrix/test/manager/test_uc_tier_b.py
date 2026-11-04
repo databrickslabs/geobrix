@@ -371,6 +371,40 @@ def test_chm_refuses_a_dsm_whose_aligned_grid_is_over_the_cap_before_it_is_made(
         tier_b.HANDLERS["gbx_rst_chm"](dsm, dem)
 
 
+def test_chm_refuses_a_dem_whose_rasters_fit_the_cap_but_whose_working_set_does_not(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.pyrx.core import chm
+
+    def never(*_a, **_k):
+        raise AssertionError("the chm kernel ran for a working set over the cap")
+
+    monkeypatch.setattr(chm, "chm", never)
+    tile = _tile(tmp_path)  # 64 x 48 float32: the two rasters and the result are 36 KiB
+    monkeypatch.setattr(
+        tier_b, "DECODED_CAP", 64 * 1024
+    )  # over the rasters, under 55 B a pixel (165 KiB)
+    with pytest.raises(
+        ValueError,
+        match=r"gbx_rst_chm: the 64 x 48 grid is 12 KiB decoded and takes about 165 KiB to make, over the 64 KiB.*"
+        r"Fix: ask for fewer pixels \(retile the DEM first.*or run gbx_rst_chm",
+    ):
+        tier_b.HANDLERS["gbx_rst_chm"](tile, tile)
+
+
+def test_a_memory_error_while_sizing_a_mosaic_is_not_turned_into_a_size_refusal(
+    tmp_path, monkeypatch
+):
+    from databricks.labs.gbx.pyrx.core import agg
+
+    def exhausted(*_a, **_k):
+        raise MemoryError
+
+    monkeypatch.setattr(agg, "_union_decoded_bytes", exhausted)
+    with pytest.raises(MemoryError):
+        tier_b.HANDLERS["gbx_rst_merge"](_built("quad_tiles", tmp_path))
+
+
 # --- constructors: geometries or points to a tile --------------------------------------------------------------------
 def _square():
     import shapely
@@ -511,7 +545,9 @@ def test_fromcontent_builds_a_uc_tile_and_refuses_bytes_it_cannot_open_with_the_
         tier_b.HANDLERS["gbx_rst_fromcontent"](b"not a raster", "GTiff")
     monkeypatch.setattr(tier_b, "DECODED_CAP", 1024)
     with pytest.raises(
-        ValueError, match=r"the result would be 12 KiB.*Fix: run gbx_rst_fromcontent"
+        ValueError,
+        match=r"the result would be 12 KiB.*Fix: write the bytes to a Volume and read them with the raster_gbx reader "
+        r"in a notebook or job session$",
     ):
         tier_b.HANDLERS["gbx_rst_fromcontent"](raster, "GTiff")
 

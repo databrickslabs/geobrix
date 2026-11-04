@@ -16,6 +16,14 @@ from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 _NODATA = -9999.0
 
 
+def chm_working_bytes(width_px: int, height_px: int) -> int:
+    """An upper estimate of the memory :func:`chm` holds besides the two rasters it reads: the float64 DSM and DEM
+    arrays (16 bytes a pixel), the three validity masks (3), the ``A - D``, ``maximum`` and ``where`` temporaries
+    (24), the Float32 result (4) and its copy for the encoder with the encoded bytes (8): 55 bytes a pixel.
+    """
+    return int(width_px) * int(height_px) * 55
+
+
 def chm(dsm_bytes: bytes, dem_bytes: bytes) -> bytes:
     """Compute Canopy Height Model: clamp(align(DSM->DEM) - DEM, min=0).
 

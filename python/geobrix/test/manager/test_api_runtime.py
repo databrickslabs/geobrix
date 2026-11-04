@@ -3,6 +3,7 @@ refusal when a level cannot run, SQL literals, and the argument rules of the tab
 """
 
 import dataclasses
+import importlib.util
 import string
 
 import pytest
@@ -35,6 +36,7 @@ def test_a_missing_light_dependency_is_named_with_a_fix(monkeypatch):
         raise ModuleNotFoundError("No module named 'pandas'", name="pandas")
 
     monkeypatch.setattr(l3, "resolve_ref", no_pandas)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: None)  # truly absent
     with pytest.raises(ImportError) as err:
         manager.register(ConnectStub(), only=["gbx_bng_eastnorthasbng"])
     text = str(err.value)
@@ -42,6 +44,30 @@ def test_a_missing_light_dependency_is_named_with_a_fix(monkeypatch):
     assert "gbx_bng_eastnorthasbng" in text and "grid-scalar" in text
     assert "Fix: install the geobrix env wheel" in text and "pip install pandas" in text
     assert isinstance(err.value.__cause__, ModuleNotFoundError)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ImportError("cannot import name 'x' from 'pandas'", name="pandas"),
+        ModuleNotFoundError("No module named 'pandas.nope'", name="pandas.nope"),
+    ],
+    ids=["cannot-import-name", "missing-submodule-of-an-installed-package"],
+)
+def test_an_import_error_of_an_installed_package_passes_through_unchanged(
+    monkeypatch, error
+):
+    # pandas is installed here: the error is its own, not "pandas is not installed", so it is not rewritten
+    from databricks.labs.gbx.manager import l3
+
+    def broken(ref):
+        raise error
+
+    monkeypatch.setattr(l3, "resolve_ref", broken)
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    with pytest.raises(ImportError) as err:
+        manager.register(ConnectStub(), only=["gbx_bng_eastnorthasbng"])
+    assert err.value is error and "lightweight functions need" not in str(err.value)
 
 
 def test_ensure_refuses_a_name_the_manager_did_not_register(monkeypatch):

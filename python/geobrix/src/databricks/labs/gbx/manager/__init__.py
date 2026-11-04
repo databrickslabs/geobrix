@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib.util
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from databricks.labs.gbx import manifest
@@ -289,11 +290,22 @@ def _light_deps(fn):
     """
     try:
         yield
-    except ImportError as exc:
+    except ModuleNotFoundError as exc:
         pkg = (exc.name or "").split(".")[0]
         if (
             not pkg or pkg == "databricks"
         ):  # not a missing dependency: a defect in our own import chain
+            raise
+        try:
+            absent = importlib.util.find_spec(pkg) is None
+        except (
+            ImportError,
+            ValueError,
+        ):  # a package that cannot even be probed is not "not installed"
+            absent = False
+        if (
+            not absent
+        ):  # installed: the error is its own (a missing submodule), so say it as it is
             raise
         raise ImportError(
             f"geobrix: the lightweight functions need {pkg}, which is not installed ({fn.sql_name}, a "

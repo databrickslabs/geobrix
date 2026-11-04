@@ -8,6 +8,7 @@ decoded size (w*h*bands*itemsize), never encoded bytes.
 
 from __future__ import annotations
 
+import functools
 import math
 import os
 from dataclasses import dataclass
@@ -139,6 +140,38 @@ def decoded_bytes(ds) -> int:
 def size_text(n: int) -> str:
     """A byte count as the refusal texts print it: whole MiB, or KiB under one MiB."""
     return f"{n >> 20} MiB" if n >= (1 << 20) else f"{n >> 10} KiB"
+
+
+def tile_read_cap() -> int:
+    """Worker side: the decoded size, in bytes, a materialized tile may have where its bytes are read: the cap the
+    registration carried (:func:`session_read_cap`), else this process's decoded budget (``decoded_budget_bytes``).
+    It lives here, free of pyspark, so a function that runs in a Unity Catalog sandbox can read it.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+
+    carried = carried_read_cap()
+    return carried if carried is not None else process_read_cap()
+
+
+@functools.lru_cache(maxsize=1)
+def process_read_cap() -> int:
+    """This process's decoded budget, read once (it reads the task's cgroup limit on Serverless)."""
+    return decoded_budget_bytes("auto")
+
+
+def read_cap_refusal(decoded: int, cap: int) -> str:
+    """The reason of a tile decoded over the read cap, the same text on every level (the JVM's TileBytes)."""
+
+    return (
+        f"the tile is {size_text(decoded)} decoded, over this compute's read cap ({size_text(cap)}). "
+        "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
+    )
+
+
+def over_read_cap(ds) -> Optional[str]:
+    """The refusal (reason and Fix, the text every level gives) when ``ds`` is decoded over the read cap, else None."""
+    decoded, cap = decoded_bytes(ds), tile_read_cap()
+    return read_cap_refusal(decoded, cap) if decoded > cap else None
 
 
 # GDAL's raster block cache, for the sites that cap it (the raster reader's opens, the STAC window
@@ -419,7 +452,7 @@ def session_read_cap(spark) -> Optional[int]:
     JVM reads there). On a Spark Connect session, whose configuration is not read here, it is the classic budget when the
     DRIVER's compute is not Serverless (standard access mode is Connect too, and its workers can read neither
     ``SPARK_WORKER_MEMORY`` nor a cgroup limit, so their own budget would be Serverless's 64 MiB), else None: a
-    Serverless worker then uses its own budget (``ds.file_gbx.tile_read_cap``), which is the right one there.
+    Serverless worker then uses its own budget (``pyrx.core.budget.tile_read_cap``), which is the right one there.
 
     The light tier keeps the cap it was registered with: it is read here, once per registration, and travels with the
     function. Changing :data:`READ_CAP_KEY` afterwards does not reach a function already registered (the JVM reads

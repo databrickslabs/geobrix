@@ -18,7 +18,6 @@ Exports:
 from __future__ import annotations
 
 import fnmatch
-import functools
 import os
 import re as _re
 import shutil
@@ -39,8 +38,10 @@ from databricks.labs.gbx.ds._listing import (  # re-exported for backward compat
 )
 from databricks.labs.gbx.pyrx.core.budget import (  # noqa: F401  (re-exported)
     READ_CAP_KEY,
+    read_cap_refusal,
     session_read_cap,
     size_text,
+    tile_read_cap,
 )
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
@@ -1037,24 +1038,6 @@ def file_ref_arg(tile_col: Column, spark: Optional["SparkSession"] = None) -> Co
     return F.lit(None)
 
 
-def tile_read_cap() -> int:
-    """Worker side: the decoded size, in bytes, a materialized tile may have where its bytes are read: the cap the
-    registration carried (:func:`session_read_cap`), else this process's decoded budget (``decoded_budget_bytes``).
-    """
-    from databricks.labs.gbx._gdal_policy import carried_read_cap
-
-    carried = carried_read_cap()
-    return carried if carried is not None else _process_read_cap()
-
-
-@functools.lru_cache(maxsize=1)
-def _process_read_cap() -> int:
-    """This process's decoded budget, read once (it reads the task's cgroup limit on Serverless)."""
-    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
-
-    return decoded_budget_bytes("auto")
-
-
 def lazy_read_cap() -> int:
     """The read cap of a reader no registration carried one into, resolved where it runs. With a session (the driver)
     it is :func:`report_detected_cap`. With none (a Spark task on a worker) the process cannot tell Serverless from
@@ -1062,15 +1045,6 @@ def lazy_read_cap() -> int:
     Serverless task. ``GBX_STREAM_MAX_BYTES`` still wins."""
     sess = _resolve_session_for_cap()
     return report_detected_cap(sess) if sess is not None else _lru_sizing(True)[0]
-
-
-def read_cap_refusal(decoded: int, cap: int) -> str:
-    """The reason of a tile decoded over the read cap, the same text on every level (the JVM's TileBytes)."""
-
-    return (
-        f"the tile is {size_text(decoded)} decoded, over this compute's read cap ({size_text(cap)}). "
-        "Fix: retile it first (gbx_rst_retile) so each tile is smaller"
-    )
 
 
 def file_ref_sql(tile_sql: str, spark: Optional["SparkSession"] = None) -> str:

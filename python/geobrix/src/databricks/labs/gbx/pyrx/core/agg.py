@@ -36,18 +36,35 @@ from databricks.labs.gbx._gdal_policy import (
     open_bytes,
     open_data,
 )
-from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
 from databricks.labs.gbx.pyrx._env import capped_block_cache
 from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
 from databricks.labs.gbx.pyrx.core import warp as _warp
+from databricks.labs.gbx.pyrx.core._util import snap_bounds
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 from databricks.labs.gbx.pyrx.core.budget import block_cache_for
-from databricks.labs.gbx.pyrx.core.cellraster import snap_bounds
+from databricks.labs.gbx.pyrx.core.budget import decoded_bytes as _decoded_bytes
+from databricks.labs.gbx.pyrx.core.budget import (
+    over_read_cap,
+    read_cap_refusal,
+    size_text,
+    tile_read_cap,
+)
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 _log = logging.getLogger(__name__)
+
+
+def _build_mosaic_vrt(*args, **kwargs):
+    """``ds.cog_writer._build_mosaic_vrt``, imported where it is used: the writer module needs pyspark, which a Unity
+    Catalog sandbox does not have, and only the streamed merge (a session) builds a VRT.
+    """
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt as build
+
+    return build(*args, **kwargs)
+
+
 _NODATA = -9999.0
 
 
@@ -65,8 +82,6 @@ def _open_all(rasters: List[bytes], gate: bool = True):
     memfiles = []
     datasets = []
     try:
-        from databricks.labs.gbx.pyrx._serde import over_read_cap
-
         for b in rasters:
             mf = MemoryFile(bytes(b))
             memfiles.append(mf)
@@ -327,13 +342,11 @@ def _union_decoded_bytes(datasets, ref_crs) -> int:
 
 
 def _merge_budget() -> int:
-    """Bytes of memory one merge or combine may work in, on this worker: the read cap (``ds.file_gbx.tile_read_cap``), the
+    """Bytes of memory one merge or combine may work in, on this worker: the read cap (``pyrx.core.budget.tile_read_cap``), the
     one number the read gate of every member also judges by (the cap the driver carried into the call, which a worker
     cannot work out for itself, else this process's own budget). A group whose working set is over it is folded window by
     window or streamed through a VRT, so the peak does not grow with the number of members.
     """
-    from databricks.labs.gbx.ds.file_gbx import tile_read_cap
-
     return tile_read_cap()
 
 
@@ -414,15 +427,13 @@ class _Hdr:
 
 def _scan_headers(rasters: List[bytes]) -> List[_Hdr]:
     """The header of each member, opened one at a time (no pixel is read, and one copy of one member is in memory)."""
-    from databricks.labs.gbx.pyrx._serde import decoded_bytes
-
     out = []
     for b in rasters:
         with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
             h = _Hdr()
             h.crs, h.bounds, h.transform = ds.crs, tuple(ds.bounds), ds.transform
             h.count, h.dtypes = ds.count, tuple(ds.dtypes)
-            h.width, h.height, h.decoded = ds.width, ds.height, decoded_bytes(ds)
+            h.width, h.height, h.decoded = ds.width, ds.height, _decoded_bytes(ds)
             h.own_mask, h.alpha = _nodata.has_own_mask(ds), _nodata.has_alpha(ds)
             h.fill_as_data = _fill_reads_as_data(ds)
             h.encoded = len(b)
@@ -490,8 +501,6 @@ def _merge_refusal(decoded: int, cap: int, mixed: bool = False) -> str:
     """A member that must be decoded whole (reprojected, or rewritten with its mask) is over the budget (*decoded* is
     the size it is decoded at: for a reprojected one, the reprojected tile). *mixed*: the group is not on one CRS and
     pixel size, which its VRT route needs first."""
-    from databricks.labs.gbx.ds.file_gbx import read_cap_refusal
-
     return f"{read_cap_refusal(decoded, cap)}, or {_vrt_fix(_VRT_ROUTE, mixed)}"
 
 
@@ -671,9 +680,57 @@ class MosaicTooLarge(ValueError):
     aggregate whose result is bytes raises it."""
 
 
-def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
+def _merge_route(hdrs, ref_crs, mixed: bool, n: int, stream: bool) -> str:
+    """How a merge of the members whose headers are *hdrs* is built: ``"stream"`` is the in-RAM merge (the name is the
+    COG decision's), ``"driver"`` the streamed one through a VRT and a COG. Raises :class:`MosaicTooLarge` for a mosaic
+    past what a merge can stream; with ``stream=False`` a mosaic that would need streaming raises
+    :class:`ReadCapRefused` instead. A failure to work out the size falls back to the in-RAM path.
+    """
+    union = None
+    try:
+        union = _union_decoded_bytes(hdrs, ref_crs)
+    except Exception:
+        _log.debug(
+            "merge_tiles: size-gate computation failed; falling back to in-RAM path",
+            exc_info=True,
+        )
+    if union is None:
+        return "stream"
+    budget = _merge_budget()
+    how = "stream"
+    if stream:
+        from databricks.labs.gbx.ds.file_gbx import (
+            _COG_DRIVER_MAX_BYTES,
+            materialize_decision,
+        )
+
+        how = materialize_decision(union, "cog_write", cap_bytes=budget)
+        if how == "error":
+            raise MosaicTooLarge(
+                f"the mosaic of these {n} tiles would be {union / 2**30:.0f} GiB decoded, over the "
+                f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
+                f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "
+                f"place and one CRS together (key the group by them), or retile first; to mosaic the files of "
+                f"one place, {_vrt_fix(_MOSAIC_ROUTE, mixed)}"
+            )
+    elif union > budget:
+        how = "driver"
+    if how == "stream" and _in_ram_bytes(hdrs, ref_crs, union) > budget:
+        how = "driver"
+    if how == "driver" and not stream:
+        raise ReadCapRefused(
+            f"the mosaic of these {n} tiles is over this compute's memory budget "
+            f"({size_text(budget)}) for one call. Fix: {_vrt_fix(_MOSAIC_ROUTE, mixed)}"
+        )
+    return how
+
+
+def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> bytes:
     """Merge the group's tile rasters into one spatial mosaic (GTiff bytes). ``max_out`` bounds the encoded result: a
     BINARY aggregate returns it whole in a row, so a larger one raises :class:`OutputOverBudget` with a Fix.
+    ``stream=False`` is for a caller that cannot stream (a Unity Catalog function: no scratch COG, no pyspark): a group
+    the merge would stream, or a member it must decode over the budget, raises :class:`ReadCapRefused` with the same
+    Fix instead, and nothing outside this module's pyspark-free imports is read.
 
     Each GTiff carries its own georef/CRS, so ``rasterio.merge.merge`` places
     them by extent and the output spans the union extent (mirrors the
@@ -752,40 +809,18 @@ def merge_tiles(rasters: List[bytes], max_out=None) -> bytes:
         hdrs = _scan_headers(rasters)
         ref_crs = _pick_ref_crs(hdrs)
         mixed = _mixed_grid(hdrs, ref_crs)
-        union = None
-        try:
-            union = _union_decoded_bytes(hdrs, ref_crs)
-        except Exception:
-            _log.debug(
-                "merge_tiles: size-gate computation failed; falling back to in-RAM path",
-                exc_info=True,
-            )
-        how = "stream"
-        if union is not None:
-            from databricks.labs.gbx.ds.file_gbx import (
-                _COG_DRIVER_MAX_BYTES,
-                materialize_decision,
-            )
-
-            budget = _merge_budget()
-            how = materialize_decision(union, "cog_write", cap_bytes=budget)
-            if how == "error":
-                raise MosaicTooLarge(
-                    f"the mosaic of these {len(rasters)} tiles would be {union / 2**30:.0f} GiB decoded, over the "
-                    f"{_COG_DRIVER_MAX_BYTES / 2**30:.0f} GiB a merge can stream: tiles far apart (or far apart "
-                    f"once in one CRS) make an extent that is almost all NoData. Fix: merge the tiles of one "
-                    f"place and one CRS together (key the group by them), or retile first; to mosaic the files of "
-                    f"one place, {_vrt_fix(_MOSAIC_ROUTE, mixed)}"
-                )
-            if how == "stream" and _in_ram_bytes(hdrs, ref_crs, union) > budget:
-                how = "driver"
+        how = _merge_route(hdrs, ref_crs, mixed, len(rasters), stream)
         streaming = {} if max_out is None else {"max_out": max_out}
         if how == "driver":
             # Delegate to the streaming path: it reads the headers again, one member at a time.
             return _merge_tiles_streaming(rasters, **streaming)
         try:
             memfiles, datasets = _open_all(rasters)
-        except ReadCapRefused:
+        except ReadCapRefused as exc:
+            if not stream:
+                raise ReadCapRefused(
+                    f"{exc}, or {_vrt_fix(_VRT_ROUTE, mixed)}"
+                ) from exc
             # a member decoded over the read cap that the in-RAM path would hold whole: the streaming path copies it as
             # it is (or refuses it with its own Fix if it must be decoded whole there)
             return _merge_tiles_streaming(rasters, **streaming)

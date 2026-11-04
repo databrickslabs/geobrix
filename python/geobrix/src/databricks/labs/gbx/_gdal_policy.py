@@ -180,7 +180,7 @@ _CARRIED: contextvars.ContextVar = contextvars.ContextVar(
     "gbx_remote_paths", default=None
 )
 # The session's read cap (``ds.file_gbx.session_read_cap``), carried from the registration like the switch: None
-# where the driver carried none (each worker then uses its own budget, ``ds.file_gbx.tile_read_cap``).
+# where the driver carried none (each worker then uses its own budget, ``pyrx.core.budget.tile_read_cap``).
 _CARRIED_CAP: contextvars.ContextVar = contextvars.ContextVar(
     "gbx_carried_read_cap", default=None
 )

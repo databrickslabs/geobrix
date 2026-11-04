@@ -37,7 +37,10 @@ from pyspark.sql.types import (
 from rasterio.io import DatasetReader, MemoryFile
 
 from databricks.labs.gbx._gdal_policy import open_bytes
-from databricks.labs.gbx.pyrx.core.budget import decoded_bytes
+from databricks.labs.gbx.pyrx.core.budget import (  # noqa: F401  (over_read_cap re-exported)
+    decoded_bytes,
+    over_read_cap,
+)
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
 # Legacy 3-field tile struct — INPUT-ONLY (reader/writer v1 read/load path).
@@ -52,19 +55,11 @@ TILE_SCHEMA = StructType(
 )
 
 
-def over_read_cap(ds) -> Optional[str]:
-    """The refusal (reason and Fix, the text every level gives) when ``ds`` is decoded over the read cap, else None."""
-    from databricks.labs.gbx.ds.file_gbx import read_cap_refusal, tile_read_cap
-
-    decoded, cap = decoded_bytes(ds), tile_read_cap()
-    return read_cap_refusal(decoded, cap) if decoded > cap else None
-
-
 @contextmanager
 def open_tile(raster_bytes: bytes, gate: bool = True) -> Iterator[DatasetReader]:
     """Open raster BINARY content as a rasterio DatasetReader (in-memory).
 
-    A tile decoded over the read cap (``ds.file_gbx.tile_read_cap``; width x height x bands x the band type's size,
+    A tile decoded over the read cap (``pyrx.core.budget.tile_read_cap``; width x height x bands x the band type's size,
     from the header, before any pixel is read) raises with the reason every level gives and its Fix.
 
     ``gate=False`` skips that check, for the callers that never decode the whole tile: a header answer, and the

@@ -49,6 +49,7 @@ from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import _nodata, accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
+from databricks.labs.gbx.pyrx.core import arrays as arrays_core
 from databricks.labs.gbx.pyrx.core import binning
 from databricks.labs.gbx.pyrx.core import cellraster as cellraster_core
 from databricks.labs.gbx.pyrx.core import chm as chm_core
@@ -1179,29 +1180,10 @@ def _merge_bytes(tiles):
     elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
     if not elems:
         return None
-    rasters = []
-    dropped = 0
-    for t in elems:
-        try:
-            vt = ot._to_virtual_tile(t)
-            if vt.is_virtual():
-                # Only virtual tiles (path+window, no bytes) need materializing.
-                candidate = ot.materialize_to_bytes(vt).raster
-            else:
-                # Verbatim original bytes — preserves the sort key + heavy parity.
-                candidate = bytes(vt.raster)
-            # Validate the bytes are openable before collecting them; a corrupt
-            # member that passes the empty/None filter but cannot be opened by
-            # rasterio must be skipped here, not inside agg_core.merge_tiles
-            # (which opens every member and re-raises on the first failure).
-            with _serde.open_tile(
-                candidate, gate=False
-            ):  # a validity probe: the merge streams a group past the budget
-                pass
-            rasters.append(candidate)
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
+    # Validate the bytes are openable before collecting them; a corrupt member that passes the empty/None filter but
+    # cannot be opened by rasterio must be skipped here, not inside agg_core.merge_tiles (which opens every member and
+    # re-raises on the first failure).
+    rasters, _, dropped = arrays_core.collect_members(elems, _array_member_bytes)
     if not rasters:
         return None
     return agg_core.merge_tiles(rasters), dropped
@@ -1305,6 +1287,14 @@ def _uf_merge(tiles, file_refs):
     return tile
 
 
+def _array_member_bytes(tile):
+    """The GTiff bytes of one member of an array: a materialized member passes its ORIGINAL bytes verbatim (no
+    re-encode); only a VIRTUAL one (path, no bytes) is materialized through the front door.
+    """
+    vt = ot._to_virtual_tile(tile)
+    return ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
+
+
 # rst_combineavg: single ARRAY<tile struct> arg -> per-pixel mean tile.
 # Mirrors gbx_rst_combineavg: NoData-aware per-pixel mean across the stack
 # (reuses core.agg.combineavg_tiles). cellid follows the heavyweight rule —
@@ -1322,31 +1312,14 @@ def _combineavg_bytes(tiles):
     elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
     if not elems:
         return None
-    rasters = []
-    good_elems = []
-    dropped = 0
-    for t in elems:
-        try:
-            vt = ot._to_virtual_tile(t)
-            if vt.is_virtual():
-                candidate = ot.materialize_to_bytes(vt).raster
-            else:
-                candidate = bytes(vt.raster)
-            # Validate openability before collecting — corrupt bytes must be
-            # dropped here, not inside agg_core which opens all at once.
-            with _serde.open_tile(
-                candidate, gate=False
-            ):  # a validity probe: the combine folds a group past the budget window by window
-                pass
-            rasters.append(candidate)
-            good_elems.append(t)
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
+    # Validate openability before collecting: corrupt bytes are dropped here, not inside agg_core, which opens all
+    # of them at once.
+    rasters, good_elems, dropped = arrays_core.collect_members(
+        elems, _array_member_bytes
+    )
     if not rasters:
         return None
-    cellids = {_tile_cellid(t) for t in good_elems}
-    cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
+    cellid = arrays_core.shared_cellid([_tile_cellid(t) for t in good_elems])
     return agg_core.combineavg_tiles(rasters), cellid, dropped
 
 
@@ -1459,29 +1432,14 @@ def _combine_stat_bytes(tiles, stat: str):
     elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
     if not elems:
         return None
-    rasters = []
-    good_elems = []
-    dropped = 0
-    for t in elems:
-        try:
-            vt = ot._to_virtual_tile(t)
-            if vt.is_virtual():
-                candidate = ot.materialize_to_bytes(vt).raster
-            else:
-                candidate = bytes(vt.raster)
-            with _serde.open_tile(
-                candidate, gate=False
-            ):  # a validity probe: the combine folds a group past the budget window by window
-                pass
-            rasters.append(candidate)
-            good_elems.append(t)
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
+    # Validate openability before collecting: corrupt bytes are dropped here, not inside agg_core, which opens all
+    # of them at once.
+    rasters, good_elems, dropped = arrays_core.collect_members(
+        elems, _array_member_bytes
+    )
     if not rasters:
         return None
-    cellids = {_tile_cellid(t) for t in good_elems}
-    cellid = _tile_cellid(good_elems[0]) if len(cellids) == 1 else -1
+    cellid = arrays_core.shared_cellid([_tile_cellid(t) for t in good_elems])
     _reducer = {
         "min": agg_core.combine_min_tiles,
         "max": agg_core.combine_max_tiles,
@@ -1647,31 +1605,16 @@ def _frombands_bytes(bands):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    indexed = []
-    dropped = 0
-    first_good = None
-    for i, t in enumerate(bands):
-        if t is None or _tile_is_empty(t):
-            continue
-        try:
-            vt = ot._to_virtual_tile(t)
-            candidate = (
-                ot.materialize_to_bytes(vt).raster
-                if vt.is_virtual()
-                else bytes(vt.raster)
-            )
-            # Validate openability before collecting — corrupt bytes must be
-            # dropped here, not inside agg_core which opens all at once.
-            with _serde.open_tile(
-                candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
-            indexed.append((i, candidate))
-            if first_good is None:
-                first_good = t
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
+    # Validate openability before collecting: corrupt bytes are dropped here, not inside agg_core, which opens all of
+    # them at once. Each member is paired with its 0-based position in the array (its band index).
+    members = [
+        (i, t) for i, t in enumerate(bands) if not (t is None or _tile_is_empty(t))
+    ]
+    rasters, kept, dropped = arrays_core.collect_members(
+        members, lambda it: _array_member_bytes(it[1])
+    )
+    indexed = [(i, raster) for (i, _), raster in zip(kept, rasters)]
+    first_good = kept[0][1] if kept else None
     if not indexed:
         return None
     cellid = _tile_cellid(first_good) if first_good is not None else 0
@@ -4962,19 +4905,9 @@ def _only_error_tiles(tiles):
 
 
 def _error_tile_of_group(errors):
-    """The first of a group's error tiles (`errors`, from :func:`_error_tile_of`), as it is. "First" is
-    canonical, not arrival order: the least by cell id, then by the metadata sorted (the heavy tier orders them the
-    same way). None for no errors."""
-
-    def order(e):
-        md = e.get("metadata") or {}
-        cellid = e.get("cellid")
-        return (
-            -1 if cellid is None else int(cellid),
-            "\0".join(f"{k}={v}" for k, v in sorted(md.items())),
-        )
-
-    return min(errors, key=order, default=None)
+    """The first of a group's error tiles (`errors`, from :func:`_error_tile_of`), as it is (the rule is
+    ``core.arrays.first_error``). None for no errors."""
+    return arrays_core.first_error(errors)
 
 
 def _error_payload(errors):

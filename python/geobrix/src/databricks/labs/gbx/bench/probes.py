@@ -1522,3 +1522,33 @@ def _proc_zarr(
     except Exception as exc:  # noqa: BLE001 - the error is the measurement
         rec["error"] = f"{type(exc).__name__}: {str(exc)[:600]}"
     return rec
+
+
+# --- the Unity Catalog performance measurements (bench.uc_perf) -------------------------------------------------------
+
+
+def uc_perf_sql(
+    catalog: str, schema: str, jar_path, wheel_path: str, **kw
+) -> List[Tuple[str, str]]:
+    """The warehouse statements of the UC performance measurements as ``(cid, sql)`` for ``gbx-uc-sql``
+    (``bench.uc_perf.uc_perf_sql``): floors, SQL inlining, SQL vs Scala vs Python vs batch, sandbox sharing, raster to
+    grid, cell fill, points to raster, tree merge, decode cap, zonal, chain, MVT. ``oracles.uc_sql_text`` writes the file.
+    """
+    from databricks.labs.gbx.bench import uc_perf
+
+    return uc_perf.uc_perf_sql(catalog, schema, jar_path, wheel_path, **kw)
+
+
+def run_uc_perf(spark, catalog: str, schema: str, volume_dir: str, **kw) -> dict:
+    """The same measurements on Serverless env 6 (``bench.uc_perf.run_uc_perf``), with START / RUNNING / DONE lines."""
+    from databricks.labs.gbx.bench import uc_perf
+
+    return uc_perf.run_uc_perf(spark, catalog, schema, volume_dir, **kw)
+
+
+def run_proc_warm(spark, catalog: str, schema: str, **kw) -> dict:
+    """The procedure CALL cold, warm and after an idle gap, and the two target-creation forms
+    (``bench.uc_perf.run_proc_warm``)."""
+    from databricks.labs.gbx.bench import uc_perf
+
+    return uc_perf.run_proc_warm(spark, catalog, schema, **kw)

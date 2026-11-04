@@ -61,7 +61,9 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     assert (
         "m6" not in missing
     )  # the SQL fill, the quadbin union and the BNG chip union all exist
-    assert "m7" not in missing  # the partial and the finalize exist, so the recipe legs are built
+    assert (
+        "m7" not in missing
+    )  # the partial and the finalize exist, so the recipe legs are built
     assert "m8" not in missing  # both tree procedures exist, so the tree leg is built
     assert "gbx_rst_zonalstats_partial" in missing["m11"]["partial"]
     assert not {"m0", "m1", "m12", "m13"} & set(missing)

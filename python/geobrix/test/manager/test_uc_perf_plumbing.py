@@ -336,7 +336,9 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
     assert "L4" not in man.functions["gbx_st_crs"].levels  # a stub is no UC function
     assert "uc" not in man.functions["gbx_st_crs"].surfaces
     plain = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True)
-    assert not any("runs in a notebook or job session" in s for s in plain)  # no stub text
+    assert not any(
+        "runs in a notebook or job session" in s for s in plain
+    )  # no stub text
     assert not any("gbx_st_crs(" in s.split("\n")[0] for s in plain)
     with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)
     assert with_stubs[: len(plain)] == plain  # the same statements, then the stubs
@@ -527,7 +529,7 @@ def test_l0_is_chosen_only_where_the_level_table_prefers_it_and_installs_a_tempo
     assert spark.stmts == [
         "DROP TEMPORARY FUNCTION IF EXISTS gbx_quadbin_resolution",
         "CREATE OR REPLACE TEMPORARY FUNCTION gbx_quadbin_resolution(cell BIGINT) "
-        "RETURNS INT RETURN (CAST(((cell) >> 52) & 31 AS INT))"
+        "RETURNS INT RETURN (CAST(((cell) >> 52) & 31 AS INT))",
     ]
     assert not lines
 

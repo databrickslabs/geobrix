@@ -393,6 +393,7 @@ def bng_polyfill(geom, resolution):
     g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
     if g is None:
         return None
+    _precheck(fn, lambda: _bng_cells_bound(g, res, 0))
     try:
         cells = _bng.polyfill_str(g, res)
     except (MemoryError, RecursionError, ImportError):
@@ -416,6 +417,7 @@ def bng_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     g = _grid_geometry(fn, geom, BNG_SRID, "BNG")
     if g is None or not _finite(g):
         return None  # a non-finite coordinate has no cell
+    _precheck(fn, lambda: _bng_cells_bound(g, res, k, interior=False))
     try:
         cells = sorted(
             _bng.geometry_k_ring_str(g, res, k, mode or "boundary-out", coverage)
@@ -531,6 +533,7 @@ def h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     g = _grid_geometry(fn, geom, WGS84_SRID, "H3")
     if g is None or not _finite(g):
         return None
+    _precheck(fn, lambda: _h3_cells_bound(g, res, k))
     try:
         cells = sorted(
             _h3.geom_expand("ring", g, res, k, mode or "boundary-out", coverage)
@@ -587,6 +590,161 @@ def _check_array(fn: str, count: int, what: str = "the array of cells", **kw) ->
 
 _FILL_LOWER = "use a coarser resolution, or split the geometry into smaller parts"
 
+# --- the size of a cell array, estimated BEFORE the kernel builds it ----------------------------------------------------
+# An upper estimate from the geometry's parts alone (their boxes, areas and lengths) and the cell size: it never falls
+# under what the kernel makes, so a request it refuses would have been refused after the work too, and one it lets
+# through is still judged on the real cells afterwards (the backstop). A part is bounded twice, by the cells its box
+# covers and by the cells its area grown by the reach of the cells could hold; the smaller counts.
+
+_EARTH_RADIUS_KM = 6371.0088
+_KM_PER_DEGREE = 111.195
+# The least H3 hexagon is 0.61 of the average area at every resolution (the twelve pentagons, 0.5, are added as slack): cells
+# are counted at 0.6 of it so an estimate never falls under the cells that fit in an area.
+_H3_MIN_AREA_FRACTION = 0.6
+_H3_PENTAGONS = 12
+# A cell's reach, in edge lengths: the cells that meet a shape lie inside it grown by two edges (a cell is at most two
+# edges across), and each ring beyond the first adds the distance between neighbouring centres, 1.73 edges.
+_H3_REACH_EDGES = 2.2
+_H3_RING_EDGES = 1.8
+
+
+def _precheck(fn: str, estimate, what="the cells of the geometry", lower=None) -> None:
+    """Refuse, before the kernel runs, an array whose ``estimate()`` (a count of cells) is over the cap. An estimate that
+    cannot be made (an odd geometry) is no estimate: the check after the kernel still bounds the result.
+    """
+    try:
+        count = estimate()
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - no estimate; the cells are judged after the kernel
+        return
+    _check_array(fn, count, what, lower=lower or _FILL_LOWER)
+
+
+def _parts_of(g):
+    """The non-empty parts of a geometry and their boxes ``(west, south, east, north)`` as an ``(n, 4)`` array."""
+    import shapely
+
+    parts = shapely.get_parts(g)
+    parts = parts[~shapely.is_empty(parts)]
+    return parts, shapely.bounds(parts)
+
+
+def _square_cells_bound(
+    g, x0, y0, cell_w, cell_h, cells_x, cells_y, pad, interior=True
+) -> int:
+    """The most cells of a grid of squares (origin ``x0, y0``, ``cells_x`` by ``cells_y`` cells of ``cell_w`` by
+    ``cell_h``) that cover the geometry and the ``pad`` cells around each part, cut to the grid. With ``interior`` False
+    the cells are those within the reach of the parts' outlines only (what a dilation of a boundary makes).
+    """
+    import math
+
+    import numpy as np
+    import shapely
+
+    parts, box = _parts_of(g)
+    if not len(parts):
+        return 0
+    lo_x = np.floor((box[:, 0] - x0) / cell_w) - pad
+    hi_x = np.floor((box[:, 2] - x0) / cell_w) + pad
+    lo_y = np.floor((box[:, 1] - y0) / cell_h) - pad
+    hi_y = np.floor((box[:, 3] - y0) / cell_h) + pad
+    nx = np.maximum(np.minimum(hi_x, cells_x - 1) - np.maximum(lo_x, 0) + 1, 0)
+    ny = np.maximum(np.minimum(hi_y, cells_y - 1) - np.maximum(lo_y, 0) + 1, 0)
+    reach = (pad + 1) * math.hypot(
+        cell_w, cell_h
+    )  # a cell that meets a part lies inside its buffer by this
+    inside = shapely.area(parts) if interior else 0.0
+    grown = (inside + 2 * shapely.length(parts) * reach + math.pi * reach**2) / (
+        cell_w * cell_h
+    )
+    return int(math.ceil(float(np.minimum(nx * ny, grown).sum())))
+
+
+def _h3_box_cells(box, resolution: int, rings: int = 0):
+    """Per lon/lat box (an ``(n, 4)`` array of west, south, east, north), the most H3 cells that meet it or lie within
+    ``rings`` rings of a cell that does, and the reach in km that bounds them: those cells are disjoint and inside the box
+    grown by their reach, so their count is at most the grown area over the least cell area.
+    """
+    import h3
+    import numpy as np
+
+    reach_km = (
+        _H3_REACH_EDGES + _H3_RING_EDGES * rings
+    ) * h3.average_hexagon_edge_length(resolution, "km")
+    grow = reach_km / _KM_PER_DEGREE
+    south = np.maximum(box[:, 1] - grow, -90.0)
+    north = np.minimum(box[:, 3] + grow, 90.0)
+    reach_cos = np.maximum(
+        np.cos(np.radians(np.maximum(np.abs(south), np.abs(north)))), 0.05
+    )
+    dlon = np.radians(np.minimum(box[:, 2] - box[:, 0] + 2 * grow / reach_cos, 360.0))
+    area = (
+        _EARTH_RADIUS_KM**2
+        * dlon
+        * (np.sin(np.radians(north)) - np.sin(np.radians(south)))
+    )
+    least = h3.average_hexagon_area(resolution, "km^2") * _H3_MIN_AREA_FRACTION
+    return area / least, reach_km, least
+
+
+def _h3_boxes_cells(box, resolution: int, rings: int = 0) -> float:
+    """The most H3 cells that meet the boxes (see :func:`_h3_box_cells`), plus the twelve pentagons."""
+    cells, _, _ = _h3_box_cells(box, resolution, rings)
+    return float(cells.sum()) + _H3_PENTAGONS
+
+
+def _h3_cells_bound(g, resolution: int, k: int) -> int:
+    """The most H3 cells a geometry's dilation by ``k`` rings holds. A dilation makes the cells near the outlines of the
+    parts (the modes work from the boundary and the holes), so each part is bounded by its box and by the band of its
+    outline: its length (in degrees, which only overstates it) times the reach, both sides.
+    """
+    import math
+
+    import numpy as np
+    import shapely
+
+    parts, box = _parts_of(g)
+    if not len(parts):
+        return 0
+    boxed, reach_km, least = _h3_box_cells(box, resolution, k)
+    outline_km = shapely.length(parts) * _KM_PER_DEGREE
+    band = (2 * outline_km * reach_km + math.pi * reach_km**2) / least
+    return int(math.ceil(float(np.minimum(boxed, band).sum()) + _H3_PENTAGONS))
+
+
+def _bng_cells_bound(g, resolution: int, pad: int, interior: bool = True) -> int:
+    """The most BNG cells that cover a geometry and ``pad`` rings around it, cut to the grid (0..700000 by 0..1300000 m).
+    ``interior`` False: only the cells near its outlines (a dilation)."""
+    from databricks.labs.gbx.pygx import _bng
+
+    edge = _bng.get_edge_size(resolution)
+    return _square_cells_bound(
+        g, 0.0, 0.0, edge, edge, 700000 // edge + 1, 1300000 // edge + 1, pad, interior
+    )
+
+
+def _custom_cells_bound(
+    conf, g, resolution: int, pad: int, interior: bool = True
+) -> int:
+    """The most cells of a custom grid that cover a geometry and ``pad`` rings around it, cut to the grid. ``interior``
+    False: only the cells near its outlines (a dilation)."""
+    from databricks.labs.gbx.pygx import _custom
+
+    return _square_cells_bound(
+        g,
+        conf.bound_x_min,
+        conf.bound_y_min,
+        _custom.cell_width(conf, resolution),
+        _custom.cell_height(conf, resolution),
+        _custom.total_cells_x(conf, resolution),
+        _custom.total_cells_y(conf, resolution),
+        pad,
+        interior,
+    )
+
 
 def _le(wkb: bytes) -> bytes:
     """A WKB or EWKB as little-endian bytes (the byte order the UC Scala handlers write); little-endian input is as is."""
@@ -609,10 +767,14 @@ def _dilation(fn: str, mode, coverage, k):
     return mode or "boundary-out", _coverage(fn, coverage), _ring_k(fn, k)
 
 
-def _cells_of(fn: str, g, run):
-    """``run(g)`` as a cell array: NULL for a NULL, non-finite or unreadable geometry (data), else bounded by the cap."""
+def _cells_of(fn: str, g, run, bound=None):
+    """``run(g)`` as a cell array: NULL for a NULL, non-finite or unreadable geometry (data), else bounded by the cap:
+    before ``run`` by ``bound(g)`` (an upper estimate of the cells, when the grid has one), after it by their count.
+    """
     if g is None or not _finite(g):
         return None  # a non-finite coordinate has no cell
+    if bound is not None:
+        _precheck(fn, lambda: bound(g))
     try:
         cells = run(g)
     except (MemoryError, RecursionError, ImportError):
@@ -1002,6 +1164,8 @@ def custom_polyfill(geom, grid, resolution):
     g = _custom_geometry(fn, geom, conf)
     if g is None:
         return None
+    # the fill tests the cells of the box and one more on each side, so it is counted with a pad of one
+    _precheck(fn, lambda: _custom_cells_bound(conf, g, res, 1))
     try:
         cells = _custom.polyfill(conf, g, res)
     except (MemoryError, RecursionError, ImportError):
@@ -1021,7 +1185,12 @@ def _custom_geom_ring(fn: str, geom, grid, resolution, k, mode, coverage, kernel
     mode, coverage, kk = _dilation(fn, mode, coverage, k)
     res = _custom_res(fn, conf, resolution)
     g = _custom_geometry(fn, geom, conf)
-    return _cells_of(fn, g, lambda g: kernel(conf, g, res, kk, mode, coverage))
+    return _cells_of(
+        fn,
+        g,
+        lambda g: kernel(conf, g, res, kk, mode, coverage),
+        bound=lambda g: _custom_cells_bound(conf, g, res, kk, interior=False),
+    )
 
 
 def custom_geomkring(
@@ -1114,6 +1283,7 @@ def bng_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         fn,
         g,
         lambda g: sorted(_bng.geometry_k_loop_str(g, res, kk, mode, coverage)),
+        bound=lambda g: _bng_cells_bound(g, res, kk, interior=False),
     )
 
 
@@ -1188,6 +1358,7 @@ def h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
         fn,
         g,
         lambda g: sorted(_h3.geom_expand("loop", g, res, kk, mode, coverage)),
+        bound=lambda g: _h3_cells_bound(g, res, kk),
     )
 
 

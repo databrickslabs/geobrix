@@ -49,6 +49,13 @@ def _rtg_bng(tmpdir):
     )
 
 
+@builder("rtg_ll_world")
+def _rtg_ll_world(tmpdir):
+    """A tile of 8 x 4 pixels over the whole globe: a few bytes, but at a fine resolution it covers more cells than a
+    Unity Catalog function returns."""
+    return _tile(_gtiff(_bands(4, 8), "EPSG:4326", origin=(-180.0, 90.0), px=45.0))
+
+
 @builder("rtg_ll_west")
 def _rtg_ll_west(tmpdir):
     """The west 40 columns of `rtg_ll`: the same pixel grid, cut in two, so the cells on the seam hold pixels of both."""
@@ -298,6 +305,15 @@ _PARTIAL_ROWS = (
     Case("h3_rtgp_bad_res_error_tile", H3P, (ERR, 16), "raises", "16", BOTH),
     # UC only: a virtual tile is session-only, refused with a Fix naming the function
     Case("uc_h3_rtgp_virtual_refused", H3P, (VIRTUAL, 5), "uc_refused", None, ("uc",)),
+    # the cells the tile covers are counted from its bounds BEFORE the pixels are binned: refused with a Fix
+    Case(
+        "uc_h3_rtgp_over_cap",
+        H3P,
+        (Build("rtg_ll_world"), 15),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
 )
 
 # every statistic's table function: a NULL tile gives no rows, a virtual tile is refused with a Fix naming the function

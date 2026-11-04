@@ -413,6 +413,86 @@ GRID_ARRAY += (
     Case("uc_kring_over_cap", KR, ("TQ3080", 10_000_000), "uc_refused", None, ("uc",)),
 )
 
+# --- a geometry array is judged BEFORE the kernel builds it where its size can be estimated from the geometry's boxes,
+# lengths and the cell size (never under the real count): a fine resolution over a large geometry is refused with a Fix.
+GB_UK = "POLYGON((0 0, 700000 0, 700000 1300000, 0 1300000, 0 0))"
+GB_LINE = "LINESTRING(0 0, 700000 1300000)"
+GRID_ARRAY += (
+    Case(
+        "uc_bng_polyfill_over_cap",
+        PF,
+        (GB_UK, 6),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_bng_geomkring_over_cap",
+        GKR,
+        (GB_LINE, 6, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_bng_geomkloop_over_cap",
+        GKL,
+        (GB_LINE, 6, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_h3_geomkring_over_cap",
+        HGKR,
+        (QB_WORLD, 12, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_h3_geomkloop_over_cap",
+        HGKL,
+        (QB_WORLD, 12, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    # the 2000 m square at the finest resolution the custom grid serves is billions of cells
+    Case(
+        "uc_cg_polyfill_over_cap",
+        CPF,
+        (CG_SQ2, G, 15),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_cg_geomkring_over_cap",
+        CGKR,
+        (CG_SQ2, G, 20, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+    Case(
+        "uc_cg_geomkloop_over_cap",
+        CGKL,
+        (CG_SQ2, G, 20, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
+)
+
 # --- custom grid on UC: a cell that is no cell is NULL, a wrong k raises, a geometry in another SRID is refused, an array
 # over the cap is refused. A grid with no CRS takes a geometry with SRID 0.
 GRID_ARRAY += (

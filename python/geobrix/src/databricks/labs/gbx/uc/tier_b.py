@@ -1781,6 +1781,45 @@ HANDLERS["gbx_rst_tilexyz"] = rst_tilexyz
 _PARTIAL_ROW_BYTES = 64
 
 
+def _lonlat_bounds(ds):
+    """The tile's bounds as ``(west, south, east, north)`` in degrees, or None when they cannot be found (a CRS-less tile
+    is read as lon/lat, as the kernel reads it; a tile that cannot be reprojected has no estimate).
+    """
+    left, bottom, right, top = ds.bounds
+    if ds.crs is not None and ds.crs.to_epsg() != 4326:
+        from rasterio.warp import transform_bounds
+
+        try:
+            left, bottom, right, top = transform_bounds(
+                ds.crs, "EPSG:4326", left, bottom, right, top, densify_pts=21
+            )
+        except (
+            Exception
+        ):  # noqa: BLE001 - no estimate: the check after the kernel still bounds the result
+            return None
+    return left, max(bottom, -90.0), right, min(top, 90.0)
+
+
+def h3_cover_cells_bound(ds, resolution: int, coverage: str, assignment: str):
+    """An upper bound of the H3 cells a tile covers at ``resolution`` in one band, from its bounds alone: the area of the
+    lon/lat box, grown by a cell's reach, over the least cell area. None when the bounds cannot be found. A
+    sparse, centroid fill holds a cell only where a pixel falls, so its bound is also the pixel count.
+    """
+    import math
+
+    import numpy as np
+
+    from databricks.labs.gbx.uc.handlers import _h3_boxes_cells
+
+    box = _lonlat_bounds(ds)
+    if box is None:
+        return None
+    cells = math.ceil(_h3_boxes_cells(np.array([box], dtype="float64"), resolution))
+    if coverage == "sparse" and assignment == "centroid":
+        cells = min(cells, ds.width * ds.height)
+    return cells
+
+
 def rst_h3_rastertogrid_partial(tile, resolution, coverage, assignment):
     """gbx_rst_h3_rastertogrid_partial: the mergeable state of every H3 cell the tile covers, per band, in one pass over
     the pixels (core.gridagg.raster_to_grid_partial, the pass every session statistic is read from). NULL for a NULL tile
@@ -1805,6 +1844,15 @@ def rst_h3_rastertogrid_partial(tile, resolution, coverage, assignment):
         ) from exc
 
     def kernel(ds):
+        # before any pixel is binned: the most rows the tile can make, from its bounds and the resolution
+        cells = h3_cover_cells_bound(ds, int(resolution), coverage, assignment)
+        if cells is not None:
+            _check_bytes(
+                fn,
+                cells * ds.count * _PARTIAL_ROW_BYTES,
+                "the cells of the tile (an upper estimate)",
+                lower="use a coarser resolution, or retile the raster first (gbx_rst_retile) so each tile covers fewer cells",
+            )
         rows = [
             {"band": band, "cellid": int(c["cellID"]), **{k: c[k] for k in _FIELDS}}
             for band, cells in enumerate(

@@ -499,3 +499,74 @@ def test_the_h3_reference_pads_the_session_fill_input_with_the_h3_library():
     assert sum(1 for _c, v in padded if v is not None) == 1
 
 
+def test_the_clean_geometries_rejects_are_compared_and_a_missing_one_is_a_mismatch(
+    monkeypatch, tmp_path
+):
+    import databricks.labs.gbx as gbx
+
+    class Spark(_Spark):
+        def __init__(self, rejects):
+            super().__init__()
+            self.rejects = rejects
+
+        def sql(self, text):
+            self.stmts.append(text)
+            rows = []
+            if "FROM `c`.`s`.gbxproc_cg_tgt" in text or "gbx_st_makevalid" in text:
+                rows = [_Row(id=2, wkt="POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))")]
+            elif "FROM `c`.`s`.gbxproc_cg_rej" in text:
+                rows = self.rejects
+            elif "'the geometry is NULL' AS reason" in text:
+                rows = [_Row(id=3, reason="the geometry is NULL")]
+            return type(
+                "R", (), {"collect": lambda _s: rows, "first": lambda _s: None}
+            )()
+
+    monkeypatch.setattr(gbx, "register", lambda *_a, **_k: {})
+    monkeypatch.setattr(probes, "_proc_tile_cases", lambda *_a: [])
+    reject = [_Row(id=3, reason="the geometry is NULL")]
+    ok = probes.run_procedures(Spark(reject), "c", "s", str(tmp_path))["recipes"][
+        "gbx_clean_geometries"
+    ]
+    assert (
+        ok["status"] == "match"
+        and ok["also_status"] == "match"
+        and ok["match_also"] is True
+    )
+    # the target is right but a rejected row is missing: the call is a mismatch of the rejects, not of the target
+    bad = probes.run_procedures(Spark([]), "c", "s", str(tmp_path))["recipes"][
+        "gbx_clean_geometries"
+    ]
+    assert (
+        bad["status"] == "match"
+        and bad["also_status"] == "mismatch"
+        and bad["match_also"] is False
+    )
+
+
+def test_a_zarr_tag_that_errors_is_an_error_not_an_empty_compare(monkeypatch, tmp_path):
+    from databricks.labs.gbx.zarr import _maint
+    from databricks.labs.gbx.zarr import _manifest as M
+
+    class Spark(_Spark):
+        def sql(self, text):
+            self.stmts.append(text)
+            if text.startswith("CALL ") and "gbx_zarr_tag_version" in text:
+                raise RuntimeError("boom")
+            return type("R", (), {"collect": lambda _s: [], "first": lambda _s: None})()
+
+    monkeypatch.setattr(M, "create_manifest", lambda *_a, **_k: None)
+    monkeypatch.setattr(_maint, "gbx_zarr_tag", lambda *_a, **_k: None)
+
+    def step(_label, _surface, fn):
+        try:
+            return fn(), None, 0.0
+        except Exception as exc:  # noqa: BLE001
+            return None, f"{type(exc).__name__}: {exc}", 0.0
+
+    rec = probes._proc_zarr(Spark(), "c", "s", str(tmp_path), step, [])
+    assert rec["tag_status"] == "error" and rec["tag_match"] is False
+    assert "boom" in rec["error"]
+    assert (
+        rec["second_tag_refused"] is False
+    )  # it did not fail for the reason a tag that exists does

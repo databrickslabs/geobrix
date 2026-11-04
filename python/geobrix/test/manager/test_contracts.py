@@ -3581,18 +3581,18 @@ def test_no_procedure_makes_a_table_column_of_an_unspecified_srid():
         "CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS\n"
         "SELECT id, geom FROM IDENTIFIER(source_table) WHERE false;" in clean
     )
-    assert "st_geomfromwkb(st_asbinary(geom), ', CAST(v_srid AS STRING), ')" in clean
+    assert "st_geomfromwkb(wkb, ', CAST(v_srid AS STRING), ')" in clean
     migrate = procedures.migrate_mosaic_geometry("cat", "sch")
     assert "CAST(NULL AS GEOMETRY(', CAST(v_srid AS STRING), ')) AS geom" in migrate
     assert "st_geomfromwkb(st_asbinary(`cat`.`sch`.gbx_st_legacyaswkb(geom))" in migrate
-    for text in (clean, migrate):
+    for text, source in ((clean, "v_scratch"), (migrate, "source_table")):
         assert "more than one SRID" in text
         # the dynamic statements name their tables by parameter marker, never by text
-        assert "USING target_table AS t, source_table AS s" in text
+        assert f"USING target_table AS t, {source} AS s" in text
         assert re.search(r"EXECUTE IMMEDIATE concat\('[^']*IDENTIFIER\(:t\)", text)
     # a function that takes GEOMETRY(ANY) is given the source column cast to it
     assert "gbx_st_makevalid(CAST(geom AS GEOMETRY(ANY))" in clean
-    assert "gbx_st_explainvalidity(CAST(original AS GEOMETRY(ANY)))" in clean
+    assert "gbx_st_explainvalidity(CAST(geom AS GEOMETRY(ANY)))" in clean
 
 
 def test_a_procedure_name_is_quoted_and_validated_before_any_text_is_built():
@@ -3656,17 +3656,17 @@ def _procedure(name):
     return dict(PROCEDURES)[name]
 
 
-def test_zarr_tag_version_refuses_an_existing_tag_before_the_merge_and_a_null_name():
+def test_zarr_tag_version_refuses_an_existing_tag_in_its_merge_and_a_null_name():
     text = _procedure("gbx_zarr_tag_version")
-    exists = text.index(
-        "IF EXISTS (SELECT 1 FROM IDENTIFIER(manifest_table) WHERE tag = tag_name)"
-    )
-    assert exists < text.index("MERGE INTO IDENTIFIER(manifest_table)")
-    assert "already exists. Fix:" in text[exists : text.index("MERGE INTO")]
-    assert "IF tag_name IS NULL OR NOT regexp_like(tag_name" in text
+    # one statement reads the manifest (rows to copy, the version they copy, the tag that may exist): one snapshot
+    merge = text.index("MERGE INTO IDENTIFIER(manifest_table)")
+    assert text.index("IF tag_name IS NULL OR NOT regexp_like(tag_name") < merge
+    assert "already exists. Fix:" in text[merge:]
     # the commit row records the version it copied, as the Python tag does
-    assert "'write_id', v_write_id, 'from', v_from" in text
-    assert "SET v_from = (SELECT max(_metadata.row_commit_version)" in text
+    assert (
+        "'write_id', v_write_id, 'from', (SELECT max(_metadata.row_commit_version)"
+        in text
+    )
 
 
 def test_the_zarr_procedures_check_the_tag_name_and_untag_checks_the_tag_exists():
@@ -3706,13 +3706,14 @@ def test_the_merge_only_procedures_say_they_upsert_and_which_key_must_be_unique(
 
 def test_clean_geometries_leaves_each_id_in_one_table_per_call():
     text = _procedure("gbx_clean_geometries")
-    # a valid id is merged into the target and leaves the rejects; an invalid one is merged into the rejects and
-    # leaves the target
+    # the repair is staged once; a valid id is merged into the target and leaves the rejects; an invalid one is
+    # merged into the rejects and leaves the target
+    stage = text.index("CREATE TABLE IDENTIFIER(v_scratch)")
     merge_target = text.index("EXECUTE IMMEDIATE")
-    delete_target = text.index("DELETE FROM IDENTIFIER(target_table) WHERE id IN")
+    delete_target = text.index("DELETE FROM IDENTIFIER(target_table)")
     merge_rejects = text.index("MERGE INTO IDENTIFIER(rejects_table)")
-    delete_rejects = text.index("DELETE FROM IDENTIFIER(rejects_table) WHERE id IN")
-    assert merge_target < delete_target < merge_rejects < delete_rejects
+    delete_rejects = text.index("DELETE FROM IDENTIFIER(rejects_table)")
+    assert stage < merge_target < delete_target < merge_rejects < delete_rejects
     assert (
         "INSERT INTO IDENTIFIER(rejects_table)" not in text
     )  # no wholesale rewrite of the rejects

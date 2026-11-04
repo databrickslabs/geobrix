@@ -109,14 +109,6 @@ def _create_table(
     )
 
 
-def _create_like(select: str) -> str:
-    """CREATE TABLE IF NOT EXISTS target with the columns of ``select`` and no row."""
-    return (
-        "CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS\n"
-        f"SELECT * FROM (\n{select}\n) WHERE false;"
-    )
-
-
 def _with_srid(sql: str) -> str:
     """The SQL expression for ``sql`` as a STRING, its ``@SRID@`` marks replaced by the local variable ``v_srid``.
 
@@ -142,8 +134,12 @@ def polygons_to_bng(catalog: str, schema: str) -> str:
         f"FROM IDENTIFIER(source_table) AS s,\n"
         f"LATERAL {q}.gbx_bng_tessellateexplode(CAST(s.geom AS GEOMETRY(ANY)), bng_resolution, keep_core_geom) AS t"
     )
+    create = _create_table(
+        "target_table",
+        "id, CAST(NULL AS STRING) AS cellid, CAST(NULL AS BOOLEAN) AS core, CAST(NULL AS BINARY) AS chip",
+    )
     body = f"""
-{_create_like(sel)}
+{create}
 MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
@@ -194,63 +190,56 @@ _SCRATCH_DROP = "DROP TABLE IF EXISTS IDENTIFIER(v_scratch);"
 # --- clean geometries --------------------------------------------------------------------------------------------
 def clean_geometries(catalog: str, schema: str) -> str:
     q = _q(catalog, schema)
-
-    def fixed(src: str, level: str) -> str:
-        return (
-            f"SELECT id, {q}.gbx_st_makevalid(CAST(geom AS GEOMETRY(ANY)), {level}) AS geom, geom AS original\n"
-            f"FROM {src} WHERE geom IS NOT NULL"
-        )
-
-    def good(src: str, level: str) -> str:
-        return (
-            f"SELECT id, st_geomfromwkb(st_asbinary(geom), @SRID@) AS geom FROM (\n{fixed(src, level)}\n) "
-            "WHERE geom IS NOT NULL AND st_isvalid(geom)"
-        )
-
-    bad = (
-        f"SELECT id, original AS geom, "
-        f"coalesce({q}.gbx_st_explainvalidity(CAST(original AS GEOMETRY(ANY))), "
-        f"'the geometry could not be repaired') AS reason\n"
-        f"FROM (\n{fixed('IDENTIFIER(source_table)', 'repair_level')}\n) WHERE geom IS NULL OR NOT st_isvalid(geom)\n"
-        f"UNION ALL\nSELECT id, geom, 'the geometry is NULL' AS reason\n"
-        f"FROM IDENTIFIER(source_table) WHERE geom IS NULL"
-    )
-    good_ids = (
-        f"SELECT id FROM (\n{fixed('IDENTIFIER(source_table)', 'repair_level')}\n) "
-        "WHERE geom IS NOT NULL AND st_isvalid(geom)"
+    # Every row is repaired ONCE, into a scratch table; the four statements after it read the scratch rows. The repaired
+    # geometry is kept as WKB (a GEOMETRY(ANY) is no table column) and given the source's SRID where it is merged.
+    stage = (
+        "CREATE TABLE IDENTIFIER(v_scratch) AS\n"
+        "SELECT id, geom AS original, st_asbinary(fixed) AS wkb,\n"
+        "  geom IS NOT NULL AND fixed IS NOT NULL AND st_isvalid(fixed) AS ok,\n"
+        "  CASE WHEN geom IS NULL THEN 'the geometry is NULL'\n"
+        "    WHEN fixed IS NULL OR NOT st_isvalid(fixed) THEN\n"
+        f"      coalesce({q}.gbx_st_explainvalidity(CAST(geom AS GEOMETRY(ANY))), 'the geometry could not be repaired')\n"
+        "  END AS reason\n"
+        "FROM (\n"
+        f"  SELECT id, geom, {q}.gbx_st_makevalid(CAST(geom AS GEOMETRY(ANY)), repair_level) AS fixed\n"
+        "  FROM IDENTIFIER(source_table)\n"
+        ");"
     )
     merge = (
         "MERGE INTO IDENTIFIER(:t) AS t USING (\n"
-        f"{good('IDENTIFIER(:s)', ':r')}\n"
+        "SELECT id, st_geomfromwkb(wkb, @SRID@) AS geom FROM IDENTIFIER(:s) WHERE ok\n"
         ") AS s ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *"
     )
     fix = (
         "gbx_clean_geometries: the geometries of the source have more than one SRID. Fix: clean the rows of each "
         "SRID into a table of their own."
     )
+    create_target = _create_table("target_table", "id, geom")
+    create_rejects = _create_table(
+        "rejects_table", "id, geom, CAST(NULL AS STRING) AS reason"
+    )
     # The target keeps the type of the source column (GEOMETRY(<srid>)); the repaired geometry is given that SRID.
+    # The ids are matched null-safe: a NULL id is a row like any other (EXISTS with <=>; an IN never matches NULL).
     body = f"""
 DECLARE v_srid INT;
+{_SCRATCH_DECLARE}
+{_SCRATCH_HANDLER}
 SET v_srid = coalesce((SELECT min(st_srid(geom)) FROM IDENTIFIER(source_table)), 4326);
 IF coalesce((SELECT max(st_srid(geom)) FROM IDENTIFIER(source_table)), v_srid) <> v_srid THEN
   SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = {ddl.quote_str(fix)};
 END IF;
-CREATE TABLE IF NOT EXISTS IDENTIFIER(target_table) AS
-SELECT id, geom FROM IDENTIFIER(source_table) WHERE false;
-CREATE TABLE IF NOT EXISTS IDENTIFIER(rejects_table) AS
-SELECT * FROM (
-{bad}
-) WHERE false;
-EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, source_table AS s, repair_level AS r;
-DELETE FROM IDENTIFIER(target_table) WHERE id IN (SELECT id FROM (
-{bad}
-));
+{create_target}
+{create_rejects}
+{stage}
+EXECUTE IMMEDIATE {_with_srid(merge)} USING target_table AS t, v_scratch AS s;
+DELETE FROM IDENTIFIER(target_table) AS t
+WHERE EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) AS b WHERE NOT b.ok AND b.id <=> t.id);
 MERGE INTO IDENTIFIER(rejects_table) AS t USING (
-{bad}
+SELECT id, original AS geom, reason FROM IDENTIFIER(v_scratch) WHERE NOT ok
 ) AS s ON t.id <=> s.id WHEN MATCHED THEN UPDATE SET * WHEN NOT MATCHED THEN INSERT *;
-DELETE FROM IDENTIFIER(rejects_table) WHERE id IN (SELECT id FROM (
-{good_ids}
-));"""
+DELETE FROM IDENTIFIER(rejects_table) AS t
+WHERE EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) AS g WHERE g.ok AND g.id <=> t.id);
+{_SCRATCH_DROP}"""
     return _ddl(
         catalog,
         schema,
@@ -258,7 +247,8 @@ DELETE FROM IDENTIFIER(rejects_table) WHERE id IN (SELECT id FROM (
         "Repair the geometries of a table (columns id, geom, one SRID), merge the valid ones into a target table and "
         "merge the rest, with the reason, into a rejects table. Each id ends up in one table only: a valid id leaves "
         "the rejects, an invalid one leaves the target. Other rows of both tables stay. "
-        + _UNIQUE_ID,
+        "The four writes are not one transaction: they hold when the call succeeds, and when it fails part-way "
+        "run it again to repair the tables. " + _UNIQUE_ID,
         [
             SRC,
             TGT,
@@ -344,7 +334,9 @@ def points_to_h3_surface(catalog: str, schema: str) -> str:
         f"    CAST(NULL AS DOUBLE), CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 0, CAST(NULL AS STRING)) AS tile\n"
         f"FROM (SELECT collect_list(struct(cellid, value)) AS cells FROM (\n{padded}\n)) AS g"
     )
-    create = _create_like(sel)
+    create = _create_table(
+        "target_table", "CAST(NULL AS STRING) AS surface, CAST(NULL AS BINARY) AS tile"
+    )
     body = f"""
 {create}
 MERGE INTO IDENTIFIER(target_table) AS t
@@ -394,8 +386,12 @@ def features_to_mvt(catalog: str, schema: str) -> str:
         f"mvt_layer, 4096) AS p\n"
         f"GROUP BY p.z, p.x, p.y"
     )
+    create = _create_table(
+        "target_table",
+        "CAST(NULL AS INT) AS z, CAST(NULL AS INT) AS x, CAST(NULL AS INT) AS y, CAST(NULL AS BINARY) AS mvt",
+    )
     body = f"""
-{_create_like(sel)}
+{create}
 MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
@@ -712,8 +708,13 @@ def zonal_stats(catalog: str, schema: str) -> str:
         f"FROM IDENTIFIER(zones_table) AS z\n"
         f"JOIN IDENTIFIER(source_table) AS t ON st_intersects(z.geom, t.bbox)"
     )
+    create = _create_table(
+        "target_table",
+        "z.zone_id, t.tile_id, CAST(NULL AS STRING) AS summary",
+        "IDENTIFIER(zones_table) AS z CROSS JOIN IDENTIFIER(source_table) AS t",
+    )
     body = f"""
-{_create_like(sel)}
+{create}
 MERGE INTO IDENTIFIER(target_table) AS t
 USING (
 {sel}
@@ -772,16 +773,14 @@ def zarr_tag_version(catalog: str, schema: str) -> str:
     names = ", ".join(cols)
     values = ", ".join(f"s.{c}" for c in cols)
     pick = ", ".join(c for c in cols if c not in ("tag", "write_id", "meta"))
-    # `from` is the version of the manifest the tag copies, as the Python tag records it (the latest commit)
-    meta = "to_json(named_struct('mode', 'tag', 'tag', tag_name, 'write_id', v_write_id, 'from', v_from))"
+    # `from` is the version of the manifest the tag copies, as the Python tag records it (the latest commit). It is read
+    # in the same statement as the rows the tag copies, so both come from one snapshot of the manifest (a commit that
+    # lands between two statements cannot make `from` name a version the copied rows do not have).
+    latest = "(SELECT max(_metadata.row_commit_version) FROM IDENTIFIER(manifest_table) WHERE tag IS NULL)"
+    meta = f"to_json(named_struct('mode', 'tag', 'tag', tag_name, 'write_id', v_write_id, 'from', {latest}))"
     body = f"""
 DECLARE v_write_id STRING DEFAULT replace(uuid(), '-', '');
-DECLARE v_from BIGINT;
 {_tag_check()}
-IF EXISTS (SELECT 1 FROM IDENTIFIER(manifest_table) WHERE tag = tag_name) THEN
-  SIGNAL SQLSTATE '22023' SET MESSAGE_TEXT = concat('tag ', tag_name, ' already exists. Fix: pick another name, or remove it with gbx_zarr_untag_version.');
-END IF;
-SET v_from = (SELECT max(_metadata.row_commit_version) FROM IDENTIFIER(manifest_table) WHERE tag IS NULL);
 MERGE INTO IDENTIFIER(manifest_table) AS t
 USING (
   SELECT {pick}, write_id, tag_name AS tag, meta
@@ -916,7 +915,8 @@ def build_all(
             ]
             if missing:
                 skipped[name] = (
-                    f"needs {', '.join(missing)}, which are not being installed"
+                    f"needs {', '.join(missing)}, which are not being installed. "
+                    "Fix: add them to only=, or install without only to create every procedure"
                 )
                 continue
         try:

@@ -1797,13 +1797,19 @@ def _lonlat_bounds(ds):
             Exception
         ):  # noqa: BLE001 - no estimate: the check after the kernel still bounds the result
             return None
-    return left, max(bottom, -90.0), right, min(top, 90.0)
+    if left > right:
+        # a tile across the antimeridian: transform_bounds gives west > east. The box is east + 360 - west wide, so
+        # the east is lifted past 180 (the estimate reads the width, and a negative one would disable the check)
+        right += 360.0
+    return left, max(bottom, -90.0), min(right, left + 360.0), min(top, 90.0)
 
 
 def h3_cover_cells_bound(ds, resolution: int, coverage: str, assignment: str):
     """An upper bound of the H3 cells a tile covers at ``resolution`` in one band, from its bounds alone: the area of the
     lon/lat box, grown by a cell's reach, over the least cell area. None when the bounds cannot be found. A
-    sparse, centroid fill holds a cell only where a pixel falls, so its bound is also the pixel count.
+    sparse, centroid fill holds a cell only where a pixel falls, so its bound is also the pixel count. It is an upper
+    bound, not the count: it can be well over what the tile makes, and a check on it can refuse a tile whose rows would
+    have fitted.
     """
     import math
 
@@ -1844,7 +1850,9 @@ def rst_h3_rastertogrid_partial(tile, resolution, coverage, assignment):
         ) from exc
 
     def kernel(ds):
-        # before any pixel is binned: the most rows the tile can make, from its bounds and the resolution
+        # before any pixel is binned: the most rows the tile can make, from its bounds and the resolution. It is an upper
+        # bound, so it can refuse a tile whose real rows would have fitted (it trades that for never building rows over
+        # the cap); the check after the pass judges the real rows.
         cells = h3_cover_cells_bound(ds, int(resolution), coverage, assignment)
         if cells is not None:
             _check_bytes(

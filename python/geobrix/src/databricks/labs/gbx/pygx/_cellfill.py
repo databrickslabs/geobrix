@@ -125,7 +125,8 @@ def fill_cells(
     id order, or None when no row has a cell id. A NULL ``k``, ``method`` or ``power`` takes 1, ``'mean'`` and 2.0;
     a NaN value is a missing one. One kernel for the session UDFs and the Unity Catalog handlers of every grid.
     ``before_fill(k)``, when given, is called with the radius after the arguments are checked and before any
-    ring is built: a caller bounds the ring there by raising.
+    ring is built, and only when at least one cell is NULL (an all-valid array builds no ring): a caller bounds the
+    work there by raising.
     """
     k = 1 if k is None else int(k)
     method = "mean" if method is None else str(method)
@@ -137,7 +138,7 @@ def fill_cells(
     )
     if not cells:
         return None
-    if before_fill is not None:
+    if before_fill is not None and any(v is None for v in cells.values()):
         before_fill(k)
     return fill(cells, k, method, 2.0 if power is None else float(power), k_loop_fn)
 

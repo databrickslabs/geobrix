@@ -242,3 +242,18 @@ def test_an_invalid_h3_cell_id_raises_with_a_fix_and_keeps_the_h3_error():
     with pytest.raises(ValueError, match="not a valid H3 cell id.*Fix:") as err:
         forms.h3_cellfill_cells(cells, 1, "mean", 2.0)
     assert err.value.__cause__ is not None
+
+
+def test_an_all_valid_array_passes_a_large_k_since_no_ring_is_built():
+    """The per-ring bound runs only when a cell is NULL: an all-valid array is returned as it is, whatever k is."""
+    centre = h3.str_to_int(h3.latlng_to_cell(37.77, -122.42, 8))
+    near = h3.str_to_int(h3.grid_ring(h3.int_to_str(centre), 1)[0])
+    cells = [{"cellid": centre, "value": 2.0}, {"cellid": near, "value": 1.0}]
+    # k = 1000 is (2001)^2 neighbours of a NULL cell, over the cap: refused for a NULL cell, not for none
+    with pytest.raises(_Refusal, match="Fix: lower k"):
+        forms._check_fill_work("gbx_h3_cellfill", 1000)
+    got = forms.h3_cellfill_cells(cells, 1000, "mean", 2.0)
+    assert {r["cellid"]: r["value"] for r in got} == {centre: 2.0, near: 1.0}
+    q = [{"cellid": 5192650370358181887, "value": 3.0}]
+    got = forms.quadbin_cellfill_array(q, 1000, "mean", 2.0)
+    assert [(r["cellid"], r["value"]) for r in got] == [(5192650370358181887, 3.0)]

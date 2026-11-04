@@ -592,9 +592,11 @@ _FILL_LOWER = "use a coarser resolution, or split the geometry into smaller part
 
 # --- the size of a cell array, estimated BEFORE the kernel builds it ----------------------------------------------------
 # An upper estimate from the geometry's parts alone (their boxes, areas and lengths) and the cell size: it never falls
-# under what the kernel makes, so a request it refuses would have been refused after the work too, and one it lets
-# through is still judged on the real cells afterwards (the backstop). A part is bounded twice, by the cells its box
-# covers and by the cells its area grown by the reach of the cells could hold; the smaller counts.
+# under what the kernel makes, so a result is never allocated over the cap. The price is that it is an upper bound, not
+# the count: it can refuse a request whose real result would have fitted (measured 1.5 to 2.9 times over in some
+# shapes), and the Fix names the session function for that case. A request it lets through is still judged on the real
+# cells afterwards (the backstop). A part is bounded twice, by the cells its box covers and by the cells its area grown
+# by the reach of the cells could hold; the smaller counts.
 
 _EARTH_RADIUS_KM = 6371.0088
 _KM_PER_DEGREE = 111.195
@@ -633,11 +635,12 @@ def _parts_of(g):
 
 
 def _square_cells_bound(
-    g, x0, y0, cell_w, cell_h, cells_x, cells_y, pad, interior=True
+    g, x0, y0, cell_w, cell_h, cells_x, cells_y, pad, interior=True, clip=True
 ) -> int:
     """The most cells of a grid of squares (origin ``x0, y0``, ``cells_x`` by ``cells_y`` cells of ``cell_w`` by
-    ``cell_h``) that cover the geometry and the ``pad`` cells around each part, cut to the grid. With ``interior`` False
-    the cells are those within the reach of the parts' outlines only (what a dilation of a boundary makes).
+    ``cell_h``) that cover the geometry and the ``pad`` cells around each part, cut to the grid unless ``clip`` is False
+    (for a kernel that does not drop the cells past the grid). With ``interior`` False the cells are those within the
+    reach of the parts' outlines only (what a dilation of a boundary makes).
     """
     import math
 
@@ -651,8 +654,11 @@ def _square_cells_bound(
     hi_x = np.floor((box[:, 2] - x0) / cell_w) + pad
     lo_y = np.floor((box[:, 1] - y0) / cell_h) - pad
     hi_y = np.floor((box[:, 3] - y0) / cell_h) + pad
-    nx = np.maximum(np.minimum(hi_x, cells_x - 1) - np.maximum(lo_x, 0) + 1, 0)
-    ny = np.maximum(np.minimum(hi_y, cells_y - 1) - np.maximum(lo_y, 0) + 1, 0)
+    if clip:
+        lo_x, hi_x = np.maximum(lo_x, 0), np.minimum(hi_x, cells_x - 1)
+        lo_y, hi_y = np.maximum(lo_y, 0), np.minimum(hi_y, cells_y - 1)
+    nx = np.maximum(hi_x - lo_x + 1, 0)
+    ny = np.maximum(hi_y - lo_y + 1, 0)
     reach = (pad + 1) * math.hypot(
         cell_w, cell_h
     )  # a cell that meets a part lies inside its buffer by this
@@ -727,10 +733,12 @@ def _bng_cells_bound(g, resolution: int, pad: int, interior: bool = True) -> int
 
 
 def _custom_cells_bound(
-    conf, g, resolution: int, pad: int, interior: bool = True
+    conf, g, resolution: int, pad: int, interior: bool = True, clip: bool = True
 ) -> int:
-    """The most cells of a custom grid that cover a geometry and ``pad`` rings around it, cut to the grid. ``interior``
-    False: only the cells near its outlines (a dilation)."""
+    """The most cells of a custom grid that cover a geometry and ``pad`` rings around it, cut to the grid unless ``clip``
+    is False. ``interior`` False: only the cells near its outlines (a dilation). The custom ring kernel does not drop
+    the cells past the grid (its ring runs to ``total_cells`` inclusive, one past the last cell), so a ring is bounded
+    with ``clip`` False; a fill drops them and is bounded with ``clip`` True."""
     from databricks.labs.gbx.pygx import _custom
 
     return _square_cells_bound(
@@ -743,6 +751,7 @@ def _custom_cells_bound(
         _custom.total_cells_y(conf, resolution),
         pad,
         interior,
+        clip,
     )
 
 
@@ -1189,7 +1198,9 @@ def _custom_geom_ring(fn: str, geom, grid, resolution, k, mode, coverage, kernel
         fn,
         g,
         lambda g: kernel(conf, g, res, kk, mode, coverage),
-        bound=lambda g: _custom_cells_bound(conf, g, res, kk, interior=False),
+        bound=lambda g: _custom_cells_bound(
+            conf, g, res, kk, interior=False, clip=False
+        ),
     )
 
 

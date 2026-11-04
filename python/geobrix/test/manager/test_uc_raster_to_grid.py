@@ -6,6 +6,7 @@ Chan's term, the cap refuses and never truncates, and the DDL text that only the
 
 import itertools
 
+import h3
 import pytest
 
 from databricks.labs.gbx import manifest, register
@@ -216,3 +217,39 @@ def test_a_bad_argument_raises_before_the_tile_is_read(ll):
         tier_b.rst_h3_rastertogrid_partial({**tile, "raster": b"junk"}, 5, None, None)
         is None
     )  # unreadable bytes are NULL (the defaults a NULL means)
+
+
+def test_a_tile_across_the_antimeridian_has_a_positive_estimate_not_under_the_cells():
+    """EPSG:32660 from x 600000 to 1000000 reaches past 180 degrees: transform_bounds gives west > east, which would make
+    the width negative and the pre-check blind."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    data = np.arange(1600, dtype="float32").reshape(1, 40, 40)
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=40,
+            height=40,
+            count=1,
+            dtype="float32",
+            crs="EPSG:32660",
+            transform=from_origin(600000, 5000000, 10000, 10000),
+        ) as w:
+            w.write(data)
+        with mf.open() as ds:
+            west, south, east, north = tier_b._lonlat_bounds(ds)
+            assert 0 < east - west <= 360  # was negative
+            # the kernel cannot bin a tile across the antimeridian, so the cells are those of the pixel centres
+            from rasterio.warp import transform
+
+            cols, rows = np.meshgrid(np.arange(40) + 0.5, np.arange(40) + 0.5)
+            xs, ys = ds.transform * (cols.ravel(), rows.ravel())
+            lons, lats = transform(ds.crs, "EPSG:4326", list(xs), list(ys))
+            for res in (2, 3):
+                bound = tier_b.h3_cover_cells_bound(ds, res, "complete", "centroid")
+                made = len(
+                    {h3.latlng_to_cell(la, lo, res) for lo, la in zip(lons, lats)}
+                )
+                assert bound > 0 and bound >= made, (res, bound, made)

@@ -88,3 +88,23 @@ def test_a_wide_geometry_with_a_short_outline_is_not_refused_for_its_area(monkey
     )
     uk = UcGeometry(shapely.to_wkb(shapely.box(100000, 100000, 600000, 1200000)), 27700)
     assert H.bng_geomkring(uk, 4, 1) == ["TQ3080"] and seen
+
+
+def test_a_custom_ring_bound_is_not_cut_to_a_grid_the_kernel_does_not_cut_to():
+    """In a corner the custom ring runs to the last position inclusive (one past the grid), so a bound cut to the grid was
+    under the cells the kernel makes (36 against 47)."""
+    conf = _custom.CustomGridConf(
+        bound_x_min=0,
+        bound_x_max=100000,
+        bound_y_min=0,
+        bound_y_max=60000,
+        cell_splits=2,
+        root_cell_size_x=10000,
+        root_cell_size_y=10000,
+        srid=-1,
+    )
+    g = shapely.box(90000, 50000, 100000, 60000)
+    made = len(_custom.geometry_k_ring(conf, g, 2, 2))
+    assert H._custom_cells_bound(conf, g, 2, 2, interior=False, clip=False) >= made
+    # the fill drops the cells past the grid, so its bound stays cut to it
+    assert H._custom_cells_bound(conf, g, 2, 2, interior=False) < made

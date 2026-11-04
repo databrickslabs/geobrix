@@ -233,9 +233,10 @@ def _check_h3_ids(fn: str, ids) -> None:
 
 
 def _check_fill_work(fn: str, k: int) -> None:
-    """Refuse a cell fill whose largest ring is over the cap, before any ring is built. The fill builds one NULL cell's
-    ``(2k+1)^2`` cells at a time and the output is as long as the input (already bounded), so the memory peak is a
-    single ring, not the sum over the NULL cells: only k is bounded here."""
+    """Refuse a cell fill whose work for one NULL cell is over the cap, before any ring is built. A NULL cell looks at
+    ``(2k+1)^2`` cells in all, built as hollow rings one at a time, and the output is as long as the input (already
+    bounded): this is a bound on that work per NULL cell, not a single-ring memory peak. Call it only when a cell is
+    NULL; an all-valid array builds no ring."""
     _check_array(
         fn,
         (2 * k + 1) ** 2,
@@ -264,7 +265,8 @@ def h3_cellfill_cells(cells, k, method, power):
     collected = _cellfill.collect(
         (int(c), None if v is None or v != v else float(v)) for c, v in zip(ids, values)
     )
-    if int(ring) >= 0:  # a negative k is the fill's own error, below
+    # a negative k is the fill's own error, below; an all-valid array builds no ring, so any k passes
+    if int(ring) >= 0 and any(v is None for v in collected.values()):
         _check_fill_work(fn, int(ring))
     try:
         filled = _cellfill.fill(collected, int(ring), how, exponent, _h3_ring)

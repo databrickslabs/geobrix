@@ -11,6 +11,7 @@ and the spec's directory layout."""
 
 import math
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
 TXYZ, PYR, PMA = "gbx_rst_tilexyz", "gbx_rst_xyzpyramid", "gbx_pmtiles_agg"
@@ -69,7 +70,7 @@ TILES = (
     (_payload(PNG, 1), 1, 0, 0),
     (_payload(PNG, 2), 1, 1, 1),
 )
-WEB_TILES = (
+_SESSION_ROWS = (
     # --- tilexyz: a web tile of the raster, as image bytes
     Case(
         "tilexyz_covered",
@@ -250,3 +251,14 @@ WEB_TILES = (
         ONLY,
     ),
 )
+
+# Unity Catalog serves tilexyz for a materialized tile: a virtual tile is refused with a Fix, a tile that is NULL, an error
+# or unreadable is the transparent image (as in the session), and an image too big to render in memory is refused.
+WEB_TILES = share(
+    _SESSION_ROWS,
+    "tilexyz_covered", "tilexyz_partial", "tilexyz_out_of_extent", "tilexyz_jpeg", "tilexyz_size",
+    "tilexyz_null_tile", "tilexyz_error_tile", "tilexyz_corrupt_tile", "tilexyz_null_coordinate",
+    "tilexyz_rescale_pair", "tilexyz_rescale_reversed", "tilexyz_bad_format", "tilexyz_bad_size",
+) + edges(_not_null=("tilexyz",), tilexyz=(11, 1020, 678)) + (
+    Case("uc_tilexyz_size_over_cap_refused", TXYZ, (TILE, 11, 1020, 678, "PNG", 4096), "uc_refused", None, ("uc",)),
+)  # fmt: skip

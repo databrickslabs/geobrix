@@ -6,6 +6,7 @@ of `tile_4326` (EPSG:4326, NoData -9999) and a 16 x 12 UInt8 PNG are the files a
 raster must open as exactly those (format, size, type, CRS) with the pixels unchanged. `fromfile` has one level (the
 light file reader) and reads the file `tile_virtual` is a window of."""
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import share
 from databricks.labs.gbx.bench.oracles import Build, Case, builder
 
 FC, FF = "gbx_rst_fromcontent", "gbx_rst_fromfile"
@@ -93,7 +94,7 @@ def _rc_garbage_file(tmpdir):
     return _write(tmpdir, "rc_oracle_garbage.tif", b"II*\x00not-a-real-tiff")
 
 
-RASTER_CONSTRUCTOR = (
+_SESSION_ROWS = (
     # --- fromcontent: the bytes of a file become a tile that opens as that file
     Case(
         "fromcontent_gtiff",
@@ -225,3 +226,14 @@ RASTER_CONSTRUCTOR = (
         ONLY,
     ),
 )
+
+# Unity Catalog serves fromcontent (the bytes are the argument; fromfile reads a path, which it does not). Bytes GDAL
+# cannot open are refused with the reason and a Fix, where the session answers an error tile.
+RASTER_CONSTRUCTOR = share(
+    _SESSION_ROWS,
+    "fromcontent_gtiff", "fromcontent_png", "fromcontent_lower_case_driver", "fromcontent_bad_driver",
+    "fromcontent_vector_driver", "fromcontent_null_content", "fromcontent_null_driver",
+) + (
+    Case("uc_fromcontent_corrupt_refused", FC, (GARBAGE, "GTiff"), "uc_refused", None, ("uc",)),
+    Case("uc_fromcontent_vrt_refused", FC, (VRT, "VRT"), "uc_refused", None, ("uc",)),
+)  # fmt: skip

@@ -1951,17 +1951,18 @@ _Constructor — stacks per-band tiles into a multi-band tile. Example splits th
 ### rst_fromcontent
 
 {/* BEGIN GENERATED gbx_rst_fromcontent: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_fromcontent(content, driver)` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_fromcontent(content, driver)` | `TILE` |
 | Python | `rasterx.functions.rst_fromcontent(content, driver)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `content` | `BINARY` |  | The raster file's bytes, for example the `content` column of the `binaryFile` reader. |
-| `driver` | `STRING` |  | The GDAL driver short name the bytes are in, for example `'GTiff'`, in any case. It goes into the tile's `driver` metadata; a name that is no raster driver (no driver of that name, or a vector-only one such as `'GeoJSON'`) raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `content` | `BINARY` | `BINARY` |  | The raster file's bytes, for example the `content` column of the `binaryFile` reader. |
+| `driver` | `STRING` | `STRING` |  | The GDAL driver short name the bytes are in, for example `'GTiff'`, in any case. It goes into the tile's `driver` metadata; a name that is no raster driver (no driver of that name, or a vector-only one such as `'GeoJSON'`) raises. |
 {/* END GENERATED gbx_rst_fromcontent */}
 
 :::note Implementation
@@ -4895,23 +4896,24 @@ Pixel column / row for a world coordinate.
 ### rst_tilexyz
 
 {/* BEGIN GENERATED gbx_rst_tilexyz: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_tilexyz(tile, z, x, y, [format], [size], [resampling], [rescale])` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_tilexyz(tile, z, x, y, [format], [size], [resampling], [rescale])` | `BINARY` |
 | Python | `rasterx.functions.rst_tilexyz(tile, z, x, y, format=None, size=None, resampling=None, rescale=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to render. |
-| `z` | `INT` |  | The zoom level of the web tile, from 0. |
-| `x` | `INT` |  | The tile column, from 0 to 2^z - 1. |
-| `y` | `INT` |  | The tile row (north-down slippy-map order), from 0 to 2^z - 1. |
-| `format` | `STRING` | `'PNG'` | `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. |
-| `size` | `INT` | `256` | The side of the output tile in pixels, in (0, 4096]. Any other value raises. |
-| `resampling` | `STRING` | `'bilinear'` | The GDAL warp resampling: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`. Any other word raises. |
-| `rescale` | `STRING` | `'auto'` | The 8-bit contrast: `'auto'` rescales a tile that is not 8-bit by its band minimum and maximum and passes an 8-bit one through, `'none'` keeps the full range of the data type, and `'min,max'` rescales between two numbers. Any other text raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to render. |
+| `z` | `INT` | `INT` |  | The zoom level of the web tile, from 0. |
+| `x` | `INT` | `INT` |  | The tile column, from 0 to 2^z - 1. |
+| `y` | `INT` | `INT` |  | The tile row (north-down slippy-map order), from 0 to 2^z - 1. |
+| `format` | `STRING` | `STRING` | `'PNG'` | `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. |
+| `size` | `INT` | `INT` | `256` | The side of the output tile in pixels, in (0, 4096]. Any other value raises. |
+| `resampling` | `STRING` | `STRING` | `'bilinear'` | The GDAL warp resampling: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`, `mode`, `max`, `min`, `med`, `q1` or `q3`. Any other word raises. |
+| `rescale` | `STRING` | `STRING` | `'auto'` | The 8-bit contrast: `'auto'` rescales a tile that is not 8-bit by its band minimum and maximum and passes an 8-bit one through, `'none'` keeps the full range of the data type, and `'min,max'` rescales between two numbers. Any other text raises. |
 {/* END GENERATED gbx_rst_tilexyz */}
 
 :::note Implementation

@@ -911,7 +911,7 @@ def _uc_handler_groups():
 )
 def test_uc_handlers_import_only_the_dependencies_they_declare(deps, names):
     """Every oracle row of a UC function runs in a process where pyspark, pandas and every optional dependency its
-    manifest block does not declare (h3, quadbin, rasterio, pyproj, scipy, numexpr, scikit-image) cannot be imported:
+    manifest block does not declare (h3, quadbin, rasterio, pyproj, scipy, numexpr, scikit-image, morecantile) cannot be imported:
     the sandbox installs the declared list and nothing else."""
     import os
     import subprocess
@@ -922,7 +922,16 @@ def test_uc_handlers_import_only_the_dependencies_they_declare(deps, names):
         "scikit-image": "skimage"
     }  # the import name of a dependency whose name differs
     optional = sorted(
-        {"h3", "quadbin", "rasterio", "pyproj", "scipy", "numexpr", "skimage"}
+        {
+            "h3",
+            "quadbin",
+            "rasterio",
+            "pyproj",
+            "scipy",
+            "numexpr",
+            "skimage",
+            "morecantile",
+        }
         - {declared.get(d, d) for d in deps}
     )
     code = (

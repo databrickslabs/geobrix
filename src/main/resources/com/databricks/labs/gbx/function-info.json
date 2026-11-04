@@ -647,6 +647,7 @@
       "description": "Build a tile from the bytes of a raster file.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1560,6 +1561,7 @@
       "description": "Render one web-mercator XYZ slippy-map tile of the raster as image bytes.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

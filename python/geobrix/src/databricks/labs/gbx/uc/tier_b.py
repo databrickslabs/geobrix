@@ -1185,23 +1185,27 @@ HANDLERS["gbx_rst_mapalgebra"] = rst_mapalgebra
 # --- constructors: geometries or points to a tile (no input tile) ------------------------------------------------------
 # There is no tile to gate, so the order is: NULL in is NULL out, a wrong argument raises, the grid to be made is checked
 # against the cap before any of it is allocated (its working set, not only its pixels), then the kernel runs.
+_ASK_FEWER = "a smaller width_px and height_px, or one call for each part of the extent"
+
+
 def grid_refusal(
-    fn: str, width: int, height: int, decoded: int, working: int
+    fn: str, width: int, height: int, decoded: int, working: int, ask: str = _ASK_FEWER
 ) -> _Refusal:
     """A grid too big for a Unity Catalog function to make: never truncated, refused with a Fix."""
     return _Refusal(
         f"{fn}: the {int(width)} x {int(height)} grid is {size_text(decoded)} decoded and takes about "
         f"{size_text(working)} to make, over the {size_text(DECODED_CAP)} a Unity Catalog function holds. "
-        f"Fix: ask for fewer pixels (a smaller width_px and height_px, or one call for each part of the extent), "
-        f"or run {fn} in a notebook or job session"
+        f"Fix: ask for fewer pixels ({ask}), or run {fn} in a notebook or job session"
     )
 
 
-def check_made(fn: str, width, height, dtypes, working: int) -> None:
+def check_made(
+    fn: str, width, height, dtypes, working: int, ask: str = _ASK_FEWER
+) -> None:
     """Refuse, before anything is allocated, a grid whose pixels or whose working set are over the cap."""
     decoded = grid_bytes(width, height, dtypes)
     if max(decoded, working) > DECODED_CAP:
-        raise grid_refusal(fn, width, height, decoded, working)
+        raise grid_refusal(fn, width, height, decoded, working, ask)
 
 
 def _grid_args(fn: str, xmin, ymin, xmax, ymax, width_px, height_px) -> None:
@@ -1548,3 +1552,68 @@ def rst_isoband(tile, breaks):
 
 
 HANDLERS["gbx_rst_isoband"] = rst_isoband
+
+
+# --- from bytes, and to an image -------------------------------------------------------------------------------------
+def rst_fromcontent(content, driver):
+    """gbx_rst_fromcontent: a tile that holds the bytes of a raster file, with the driver, size and band count in its
+    metadata. Bytes GDAL cannot open (or a format that can name other files) are refused with the reason and a Fix: the
+    session answers an error tile, which a Unity Catalog function has no place for."""
+    fn = "gbx_rst_fromcontent"
+    if content is None or driver is None:
+        return None
+    try:
+        known = _kernel("ops", "known_driver")(driver, "rst_fromcontent")
+    except ValueError as exc:
+        raise _Parameter(str(exc)) from exc
+    try:
+        return tile_row(fn, {"cellid": 0}, bytes(content), known)
+    except (MemoryError, RecursionError, ImportError, _Refusal):
+        raise
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - what GDAL or the driver policy says is the content's reason
+        raise _Refusal(_kernel("ops", "content_refusal")(exc)) from exc
+
+
+HANDLERS["gbx_rst_fromcontent"] = rst_fromcontent
+
+
+def rst_tilexyz(tile, z, x, y, format, size, resampling, rescale):
+    """gbx_rst_tilexyz: the image bytes of web tile (z, x, y) of the tile. As the session does, it never answers NULL for
+    a tile: a NULL, error or unreadable tile, and a tile outside the raster, give a transparent image of the size.
+    """
+    fn = "gbx_rst_tilexyz"
+    xyz = _kernel("xyz", "render_args")
+    if z is None or x is None or y is None:
+        return None
+    try:
+        fmt, sz, resamp, rsc = xyz(format, size, resampling, rescale)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: use a format of PNG, JPEG or WEBP, a size in (0, 4096], a GDAL resampling word and a "
+            "rescale of 'auto', 'none' or 'min,max'"
+        ) from exc
+    transparent = _kernel("xyz", "transparent_png")
+    raster = raster_of(fn, tile)
+    if raster is None:
+        return transparent(sz)
+
+    def render(ds):
+        check_made(
+            fn,
+            sz,
+            sz,
+            ["uint8"] * 4,
+            _kernel("xyz", "render_working_bytes")(sz, ds.count),
+            ask="a smaller size",
+        )
+        return _kernel("xyz", "render_tile")(
+            ds, int(z), int(x), int(y), fmt, sz, resamp, rescale=rsc
+        )
+
+    made = with_dataset(fn, tile, render)
+    return transparent(sz) if made is None else made
+
+
+HANDLERS["gbx_rst_tilexyz"] = rst_tilexyz

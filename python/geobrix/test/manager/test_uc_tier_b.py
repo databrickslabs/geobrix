@@ -387,3 +387,72 @@ def test_a_vector_result_over_the_cap_is_refused_not_truncated(tmp_path, monkeyp
         tier_b.HANDLERS["gbx_rst_contour"](
             tile, [0.5, 1.5, 2.5, 3.5, 4.5], 0.0, 0.0, "elev"
         )
+
+
+# --- from bytes, and to an image ---------------------------------------------------------------------------------------
+def test_fromcontent_builds_a_uc_tile_and_refuses_bytes_it_cannot_open_with_the_sessions_reason(
+    tmp_path, monkeypatch
+):
+    raster = _tile(tmp_path)["raster"]
+    out = tier_b.HANDLERS["gbx_rst_fromcontent"](raster, "gtiff")
+    assert set(out) == TILE_KEYS and out["metadata"]["driver"] == "GTiff"
+    assert out["crs"] == "4326" and out["metadata"]["width"] == "64"
+    with pytest.raises(
+        ValueError,
+        match=r"the content cannot be opened as a raster: .*Fix: pass the bytes of a whole raster file",
+    ):
+        tier_b.HANDLERS["gbx_rst_fromcontent"](b"not a raster", "GTiff")
+    monkeypatch.setattr(tier_b, "DECODED_CAP", 1024)
+    with pytest.raises(
+        ValueError, match=r"the result would be 12 KiB.*Fix: run gbx_rst_fromcontent"
+    ):
+        tier_b.HANDLERS["gbx_rst_fromcontent"](raster, "GTiff")
+
+
+def test_tilexyz_answers_a_transparent_image_for_a_tile_with_nothing_to_render_and_refuses_a_virtual_one(
+    tmp_path,
+):
+    from rasterio.io import MemoryFile
+
+    err = {"cellid": 0, "raster": None, "path": None, "metadata": {"last_error": "x"}}
+    for tile in (None, err, _built("tile_corrupt", tmp_path)):
+        png = tier_b.HANDLERS["gbx_rst_tilexyz"](
+            tile, 3, 1, 1, "PNG", 64, "bilinear", "auto"
+        )
+        with MemoryFile(png) as mf, mf.open() as ds:
+            assert (ds.width, ds.height, ds.count) == (64, 64, 4) and ds.read(
+                4
+            ).max() == 0
+    with pytest.raises(
+        ValueError,
+        match=r"virtual tiles.*Fix: use the session function gbx_rst_tilexyz",
+    ):
+        tier_b.HANDLERS["gbx_rst_tilexyz"](
+            _built("tile_virtual", tmp_path), 3, 1, 1, "PNG", 64, "bilinear", "auto"
+        )
+    assert (
+        tier_b.HANDLERS["gbx_rst_tilexyz"](
+            _tile(tmp_path), None, 1, 1, "PNG", 64, "bilinear", "auto"
+        )
+        is None
+    )
+
+
+def test_tilexyz_refuses_a_wrong_argument_with_a_fix_and_an_image_too_big_to_render(
+    tmp_path,
+):
+    tile = _tile(tmp_path)
+    with pytest.raises(
+        ValueError,
+        match=r"format must be one of.*Fix: use a format of PNG, JPEG or WEBP",
+    ):
+        tier_b.HANDLERS["gbx_rst_tilexyz"](
+            tile, 3, 1, 1, "TIFF", 64, "bilinear", "auto"
+        )
+    with pytest.raises(
+        ValueError,
+        match=r"the 4096 x 4096 grid .* Fix: ask for fewer pixels \(a smaller size\)",
+    ):
+        tier_b.HANDLERS["gbx_rst_tilexyz"](
+            tile, 3, 1, 1, "PNG", 4096, "bilinear", "auto"
+        )

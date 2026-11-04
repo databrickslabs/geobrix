@@ -62,10 +62,10 @@ A warehouse reads rasters and vector files through the session readers. Ingest t
 
 | Family | Functions |
 |---|---|
-| BNG cells | `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_kloop`, `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_cellarea`, `gbx_bng_aswkb`, `gbx_bng_aswkt`, `gbx_bng_centroid`, `gbx_bng_distance`, `gbx_bng_euclideandistance`, `gbx_bng_cellunion`, `gbx_bng_cellintersection` |
-| Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill`, `gbx_quadbin_tessellate`, `gbx_quadbin_resolution`, `gbx_quadbin_kring`, `gbx_quadbin_kloop`, `gbx_quadbin_geomkring`, `gbx_quadbin_geomkloop`, `gbx_quadbin_aswkb`, `gbx_quadbin_centroid`, `gbx_quadbin_distance`, `gbx_quadbin_cellunion` |
-| H3 cells | `gbx_h3_geomkring`, `gbx_h3_geomkloop`, `gbx_h3_cell_bbox` |
-| Custom grid cells | `gbx_custom_grid`, `gbx_custom_pointascell`, `gbx_custom_polyfill`, `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_cellaswkb`, `gbx_custom_cellaswkt`, `gbx_custom_centroid`, `gbx_custom_distance` |
+| BNG cells | `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_kloop`, `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_bng_cellarea`, `gbx_bng_aswkb`, `gbx_bng_aswkt`, `gbx_bng_centroid`, `gbx_bng_distance`, `gbx_bng_euclideandistance`, `gbx_bng_cellunion`, `gbx_bng_cellintersection`, `gbx_bng_cellunion_array`, `gbx_bng_cellintersection_array`, `gbx_bng_cellfill_array` |
+| Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill`, `gbx_quadbin_tessellate`, `gbx_quadbin_resolution`, `gbx_quadbin_kring`, `gbx_quadbin_kloop`, `gbx_quadbin_geomkring`, `gbx_quadbin_geomkloop`, `gbx_quadbin_aswkb`, `gbx_quadbin_centroid`, `gbx_quadbin_distance`, `gbx_quadbin_cellunion`, `gbx_quadbin_cellfill_array` |
+| H3 cells | `gbx_h3_geomkring`, `gbx_h3_geomkloop`, `gbx_h3_cell_bbox`, `gbx_h3_cellfill_array` |
+| Custom grid cells | `gbx_custom_grid`, `gbx_custom_pointascell`, `gbx_custom_polyfill`, `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_cellaswkb`, `gbx_custom_cellaswkt`, `gbx_custom_centroid`, `gbx_custom_distance`, `gbx_custom_cellfill_array` |
 | Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` |
 | Raster | See [Raster functions](#raster-functions) |
 | Table functions | `gbx_bng_kringexplode`, `gbx_bng_kloopexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_geomkloopexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_h3_geomkloopexplode`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode`, `gbx_st_asmvt_pyramid` |
@@ -177,10 +177,22 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Tile operations: other | `gbx_rst_chm`, `gbx_rst_land_cover`, `gbx_rst_percentile_stretch`, `gbx_rst_proximity` |
 | Tile arrays: combiners | `gbx_rst_combineavg`, `gbx_rst_combinecount`, `gbx_rst_combinemax`, `gbx_rst_combinemedian`, `gbx_rst_combinemin`, `gbx_rst_combinestddev`, `gbx_rst_combinesum` |
 | Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
-| Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize` |
+| Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize`, `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` |
 | Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
 | From file bytes | `gbx_rst_fromcontent` |
 | Web tiles | `gbx_rst_tilexyz` |
+
+### Array and partial forms
+
+A SQL warehouse function cannot be an aggregate. These functions replace the session aggregates.
+
+| Function | How to call it |
+|---|---|
+| `gbx_h3_cellfill_array`, `gbx_quadbin_cellfill_array`, `gbx_bng_cellfill_array`, `gbx_custom_cellfill_array` | `GROUP BY` the group key, and pass `collect_list(struct(cellid, value))`. |
+| `gbx_bng_cellunion_array`, `gbx_bng_cellintersection_array` | `GROUP BY` the cell, and pass `collect_list(struct(cellid, core, chip))`. |
+| `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` | Call `gbx_rst_binpoints_partial(x, y, ...)` for each point, then `GROUP BY` the `(col, row)` key and reduce `z` with `max`, `min`, `avg`, `median` or `percentile`. Pass `collect_list(struct(col, row, value))` to `gbx_rst_binpoints_finalize`. |
+
+An array form takes the whole group in one call, and a UC function limits an array to 64 MiB. A larger array is refused with a `Fix:`. The binpoints pair has no such limit on the number of points, because the points never reach Python. The finalize input has one entry for each occupied pixel. The [binpoints page](./raster-functions#rst_binpoints_partial) has the full statement.
 
 ## Python and Scala handlers
 

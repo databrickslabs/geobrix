@@ -13,6 +13,7 @@ ex = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ex)
 
 from databricks.labs.gbx import __version__, manifest  # noqa: E402
+from databricks.labs.gbx.uc import sqlbody  # noqa: E402
 
 VERSION = __version__.split("+", 1)[0]
 
@@ -25,12 +26,16 @@ def test_the_install_preview_is_one_create_per_function_plus_default_wrappers():
     statements = ex.preview_install()
     man = manifest.load()
     expected = 0
+    helpers = set()  # a SQL kernel also installs the private SQL helpers it calls, once each (two kernels may share one)
     for n in _uc_names():
         fn = man.functions[n]
         # a SQL kernel carries its defaults itself; a Python or Scala handler sits behind a SQL wrapper that does
         wrapped = any(p.default for p in fn.params) and not {"tvf_over", "sql"} & set(fn.levels["L4"])
         expected += 2 if wrapped else 1
+        kernel = sqlbody.l4_source(fn)
+        helpers.update(h["name"] for h in (kernel[1] if kernel else ()))
     expected += len({f.levels["L4"]["tvf_over"] for f in man.functions.values() if f.levels.get("L4", {}).get("tvf_over") in man.private})
+    expected += len(helpers)
     assert len(statements) == expected
     assert all(s.startswith("CREATE OR REPLACE FUNCTION `main`.`geobrix`.") for s in statements)
     assert not any("LANGUAGE SCALA" in s for s in statements)

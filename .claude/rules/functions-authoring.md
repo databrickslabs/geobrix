@@ -52,6 +52,15 @@ Python-only keywords (the force-output trio) are declared in the row's `python` 
   (`scripts/manifest/check_surfaces.py` `form_findings`) enforces this and the helper names.
 - A UC form with another name or shape than its session row takes `twin()` rows (`bench/oracle_tables/_uc_tile.py`),
   not `share()`.
+- A SQL body that may beat a Scala or Python handler but is not yet measured goes in `uc/candidates.py`, not on the row
+  (a row with a `sql` key installs as a SQL function at once). The M2 probe builds its `sql` leg from it; move the body
+  onto the row only after the numbers and the oracle rows agree, and delete the candidate.
+- Run a SQL kernel's UC rows on the host with `oracles.run_sql_kernels(spark, cases)` (the kernel becomes a temporary
+  function with the UC signature; `sources={name: (body, helpers)}` judges a candidate the same way). The host has no
+  `h3_*` or `st_*`, so a body that calls one is judged on the workspace, not there. A statement a user writes (not one
+  function call) is a recipe row: `_uc_tile.recipe(cid, fn, "SELECT ... AS out", kind, expect)`, `{q}` the schema qualifier.
+- Keep `;` out of a probe function's text (a candidate body, helper summary or message): the warehouse statement file
+  splits on it.
 - Known limits (documented, not fixed): `install` does not check that a form the caller forces is one the row can be
   (the DDL builder raises instead); a kernel rename of a parameter reaches a helper's body only through inlining, so a
   helper that spells the same name for another purpose is rewritten too; code that reads `functions.json` directly sees

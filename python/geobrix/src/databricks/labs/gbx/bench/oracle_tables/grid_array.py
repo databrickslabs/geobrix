@@ -9,6 +9,9 @@ under test. A 1 km BNG cell inside the 100 km square `TQ` (south-west corner (50
 import struct
 
 from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
+    CG_CELL,
+    CG_NOT_A_CELL,
+    GN,
     QB_C,
     QB_E,
     QB_PT,
@@ -286,13 +289,21 @@ GRID_ARRAY += (
 
 GRID_ARRAY = uc_view(
     GRID_ARRAY,
-    {"gbx_bng_polyfill": 27700, "gbx_bng_geomkring": 27700},
+    {
+        "gbx_bng_polyfill": 27700,
+        "gbx_bng_geomkring": 27700,
+        CPF: 27700,
+        CGKR: 27700,
+        CGKL: 27700,
+    },
     session_only=(
         "polyfill_bad_geom",
         "qb_polyfill_bad_geom",
         "bng_inf_point_array",
         "h3_inf_point",
         "quadbin_inf_point_geomk",
+        "cg_polyfill_bad_geom",
+        "custom_inf_point",
     ),
 )
 
@@ -374,4 +385,61 @@ GRID_ARRAY += (
     ),
     # a zoom the quadbin tessellation does not serve is a parameter error
     Case("uc_qb_tessellate_zoom_21", QTS, (QB_IN, 21), "raises", "21", ("uc",)),
+)
+
+# --- custom grid on UC: a cell that is no cell is NULL, a wrong k raises, a geometry in another SRID is refused, an array
+# over the cap is refused. A grid with no CRS takes a geometry with SRID 0.
+GRID_ARRAY += (
+    Case("uc_cg_kring_not_a_cell", CKR, (CG_NOT_A_CELL, G, 1), "null", None, ("uc",)),
+    Case("uc_cg_kloop_not_a_cell", CKL, (CG_NOT_A_CELL, G, 1), "null", None, ("uc",)),
+    Case("uc_cg_kring_negative_k", CKR, (CG0, G, -1), "raises", "-1", ("uc",)),
+    Case("uc_cg_kloop_negative_k", CKL, (CG0, G, -1), "raises", "-1", ("uc",)),
+    # the 500 m cells of resolution 1 are 2000 x 2000: a ring of 5000 is the whole grid, 4M cells
+    Case("uc_cg_kring_over_cap", CKR, (CG_CELL, G, 5000), "uc_refused", None, ("uc",)),
+    Case("uc_cg_kloop_over_cap", CKL, (CG_CELL, G, 5000), "uc_refused", None, ("uc",)),
+    Case(
+        "uc_cg_polyfill_wrong_srid",
+        CPF,
+        (CG_SQ2, G, 0),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkring_wrong_srid",
+        CGKR,
+        (CG0_PT, G, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkloop_wrong_srid",
+        CGKL,
+        (CG0_PT, G, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_geomkring_no_crs_srid0",
+        CGKR,
+        (CG0_PT, GN, 0, 1),
+        "cell_set",
+        CG_RING1,
+        ("uc",),
+        geom_srid=0,
+    ),
+    Case(
+        "uc_cg_geomkring_no_crs_wrong_srid",
+        CGKR,
+        (CG0_PT, GN, 0, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=27700,
+    ),
 )

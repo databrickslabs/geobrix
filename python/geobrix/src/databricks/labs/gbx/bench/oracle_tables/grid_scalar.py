@@ -296,6 +296,16 @@ def _custom_grid_27700(tmpdir):
     return dict(CUSTOM_GRID)
 
 
+@builder("custom_grid_zero_splits")
+def _custom_grid_zero_splits(tmpdir):
+    return {**CUSTOM_GRID, "cell_splits": 1}
+
+
+@builder("custom_grid_no_crs")
+def _custom_grid_no_crs(tmpdir):
+    return {**CUSTOM_GRID, "srid": -1}
+
+
 def cg_id(col, row, res):
     """The id of the cell at (col, row) of resolution res on CUSTOM_GRID: 1000 root columns, each split in two
     per resolution."""
@@ -306,6 +316,9 @@ def cg_id(col, row, res):
 CG_CELL = cg_id(1061, 361, 1)
 CG_BOX = "POLYGON((530500 180500, 531000 180500, 531000 181000, 530500 181000, 530500 180500))"
 CG_PT = "POINT(530750 180750)"
+# A cell id that is no cell of CUSTOM_GRID: a resolution byte of 99, and the position just past the last cell of resolution 0.
+CG_NOT_A_CELL = 99 << 56
+CG_PAST_END = cg_id(0, 1000, 0)
 CGRID, CPAC, CAWKB, CAWKT, CCENT, CDIST = (
     "gbx_custom_grid",
     "gbx_custom_pointascell",
@@ -315,6 +328,7 @@ CGRID, CPAC, CAWKB, CAWKT, CCENT, CDIST = (
     "gbx_custom_distance",
 )
 G = Build("custom_grid_27700")
+GN = Build("custom_grid_no_crs")  # the same grid, with no CRS (srid -1)
 
 # ---------------------------------------------------------------------------------------------- H3
 H3_CELL = 613196570331971583  # h3.latlng_to_cell(37.7749, -122.4194, 8)
@@ -534,8 +548,8 @@ GRID_SCALAR += (
 
 GRID_SCALAR = uc_view(
     GRID_SCALAR,
-    {PAC: 27700},
-    session_only=("pac_point_wkb", "bng_inf_point"),
+    {PAC: 27700, CPAC: 27700},
+    session_only=("pac_point_wkb", "bng_inf_point", "cg_pac_wkb", "custom_inf_point"),
 )
 
 GRID_SCALAR += (
@@ -610,6 +624,83 @@ GRID_SCALAR += (
     ),
     Case("uc_qb_cellunion_not_a_cell", QUNI, ([QB_C, 0],), "null", None, ("uc",)),
     Case("uc_qb_cellunion_empty", QUNI, ([],), "null", None, ("uc",)),
+    # A custom grid is defined in its own SRID: a geometry in another one is refused with a Fix:. A grid with no CRS
+    # (srid -1) takes a geometry with SRID 0 and no other.
+    Case(
+        "uc_cg_pac_wrong_srid",
+        CPAC,
+        (CG_PT, G, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    Case(
+        "uc_cg_pac_no_crs_srid0",
+        CPAC,
+        (CG_PT, GN, 1),
+        "exact",
+        CG_CELL,
+        ("uc",),
+        geom_srid=0,
+    ),
+    Case(
+        "uc_cg_pac_no_crs_wrong_srid",
+        CPAC,
+        (CG_PT, GN, 1),
+        "uc_refused",
+        None,
+        ("uc",),
+        geom_srid=4326,
+    ),
+    # a resolution the grid does not have is a parameter error (the grid reaches 20 at most)
+    Case(
+        "uc_cg_pac_res_past_max",
+        CPAC,
+        (CG_PT, G, 99),
+        "raises",
+        "99",
+        ("uc",),
+        geom_srid=27700,
+    ),
+    # A cell id that is no cell of the grid (a resolution it does not have, a position past its last cell) is NULL.
+    Case(
+        "uc_cg_cell_not_a_cell",
+        CAWKB,
+        (CG_NOT_A_CELL, G),
+        "null",
+        None,
+        ("uc",),
+        variants=((CG_PAST_END, G),),
+    ),
+    Case("uc_cg_aswkt_not_a_cell", CAWKT, (CG_NOT_A_CELL, G), "null", None, ("uc",)),
+    Case("uc_cg_centroid_not_a_cell", CCENT, (CG_NOT_A_CELL, G), "null", None, ("uc",)),
+    Case(
+        "uc_cg_distance_not_a_cell",
+        CDIST,
+        (CG_NOT_A_CELL, G, CG_CELL),
+        "null",
+        None,
+        ("uc",),
+        variants=((CG_CELL, G, CG_PAST_END),),
+    ),
+    # A grid that gbx_custom_grid would refuse is a parameter error, not a wrong answer
+    Case(
+        "uc_cg_grid_not_a_grid",
+        CAWKB,
+        (CG_CELL, Build("custom_grid_zero_splits")),
+        "raises",
+        "cell_splits",
+        ("uc",),
+    ),
+    # The UC BINARY result carries the grid's SRID (the session's WKB carries none); a grid with no CRS has none.
+    Case(
+        "uc_cg_aswkb_srid", CAWKB, (CG_CELL, G), "geom_srid", (CG_BOX, 27700), ("uc",)
+    ),
+    Case(
+        "uc_cg_centroid_srid", CCENT, (CG_CELL, G), "geom_srid", (CG_PT, 27700), ("uc",)
+    ),
+    Case("uc_cg_aswkb_no_crs", CAWKB, (CG_CELL, GN), "geom_srid", (CG_BOX, 0), ("uc",)),
     # A UC BINARY result carries the integer SRID: EWKB with 27700 (the session's WKB carries none).
     Case("uc_bng_aswkb_srid", AWKB, ("TQ3080",), "geom_srid", (TQ3080, 27700), ("uc",)),
     Case(

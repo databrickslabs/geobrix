@@ -2116,6 +2116,7 @@
       "description": "Return the footprint of a custom-grid cell as a WKB polygon.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2127,6 +2128,7 @@
       "description": "Return the footprint of a custom-grid cell as WKT.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2149,6 +2151,7 @@
       "description": "Return the centre of a custom-grid cell as a WKB point.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2160,6 +2163,7 @@
       "description": "Return the distance in cells between two custom-grid cells of the same resolution.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2171,6 +2175,7 @@
       "description": "Return the custom-grid cells at exactly k rings from a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2193,6 +2198,7 @@
       "description": "Return the custom-grid cells of a geometry dilated by k rings.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2227,6 +2233,7 @@
       "description": "Return the custom-grid cells at exactly ring distance k from a cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2238,6 +2245,7 @@
       "description": "Return the custom-grid cells within ring distance k of a cell, the cell included.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2249,6 +2257,7 @@
       "description": "Return the custom-grid cell that holds the first coordinate of a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2260,6 +2269,7 @@
       "description": "Return the custom-grid cells whose centre lies inside a geometry.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

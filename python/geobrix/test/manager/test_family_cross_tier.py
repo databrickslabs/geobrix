@@ -259,7 +259,7 @@ def test_every_uc_function_of_the_slice_has_its_uc_rows():
             assert "null" in kinds or any(c.kind in ("no_rows",) for c in rows), name
             if any(
                 p.uc == "GEOMETRY" for p in man.functions[name].params
-            ) and name.split("_")[1] in ("bng", "h3", "quadbin"):
+            ) and name.split("_")[1] in ("bng", "h3", "quadbin", "custom"):
                 assert "uc_refused" in kinds, name
     ids = {c.cid for c in oracles.TABLES["GRID_SCALAR"] if "uc" in c.surfaces}
     assert {"uc_wkb_into_geometry_refused", "uc_bng_aswkb_srid"} <= ids

@@ -753,6 +753,259 @@ def quadbin_cellunion(cells):
     return _le(_quadbin.cell_union(ids))
 
 
+# --- custom grid ----------------------------------------------------------------------------------------------------
+# The grid is a struct from gbx_custom_grid. Its srid is the SRID of the cells it makes (-1: the grid has no CRS), and a
+# geometry given with it must carry that SRID (0 for a grid with no CRS): the cells are metres or degrees of that CRS.
+
+
+def _custom_conf(fn: str, grid):
+    """The grid struct as the kernel's configuration; one that gbx_custom_grid would refuse is a PARAMETER error."""
+    from databricks.labs.gbx.pygx import _custom
+
+    try:
+        conf = _custom.conf_from_row(grid)
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise ValueError(
+            f"{fn}: the grid is not a custom grid ({exc}). Fix: build it with gbx_custom_grid."
+        ) from exc
+    problem = next(
+        (
+            text
+            for bad, text in (
+                (
+                    conf.bound_x_max <= conf.bound_x_min,
+                    "bound_x_max must be greater than bound_x_min",
+                ),
+                (
+                    conf.bound_y_max <= conf.bound_y_min,
+                    "bound_y_max must be greater than bound_y_min",
+                ),
+                (conf.cell_splits < 2, "cell_splits must be >= 2"),
+                (
+                    conf.root_cell_size_x <= 0 or conf.root_cell_size_y <= 0,
+                    "root_cell_size_x and root_cell_size_y must be > 0",
+                ),
+            )
+            if bad
+        ),
+        "",
+    )
+    if problem:
+        raise ValueError(
+            f"{fn}: the grid is not a custom grid ({problem}). Fix: build it with gbx_custom_grid."
+        )
+    return conf
+
+
+def _custom_srid(conf) -> int:
+    """The SRID of the grid's cells and geometries: its srid, or 0 for a grid with no CRS (srid -1)."""
+    return conf.srid if conf.srid > 0 else 0
+
+
+def _custom_geometry(fn: str, geom, conf):
+    srid = _custom_srid(conf)
+    hint = (
+        f"st_transform(geom, {srid}) first"
+        if srid
+        else "the grid has no CRS, so give a geometry with SRID 0, for example st_setsrid(geom, 0)"
+    )
+    return _grid_geometry(fn, geom, srid, "the custom grid", hint)
+
+
+def _custom_res(fn: str, conf, resolution) -> int:
+    return _range(fn, "resolution", _whole(fn, resolution), 0, conf.max_resolution)
+
+
+def _custom_cell(conf, cell):
+    """A custom cell id as an int, or None when it is no cell of this grid (data): a resolution the grid does not have,
+    or a position past its last cell."""
+    from databricks.labs.gbx.pygx import _custom
+
+    if cell is None:
+        return None
+    try:
+        c = int(cell)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if c < 0:
+        return None
+    res = _custom.get_cell_resolution(c)
+    if res > conf.max_resolution:
+        return None
+    cells = _custom.total_cells_x(conf, res) * _custom.total_cells_y(conf, res)
+    return c if _custom.get_cell_position(c) < cells else None
+
+
+def custom_pointascell(point, grid, resolution):
+    import shapely
+
+    from databricks.labs.gbx.pygx import _custom
+
+    fn = "gbx_custom_pointascell"
+    if point is None or grid is None or resolution is None:
+        return None
+    conf = _custom_conf(fn, grid)
+    res = _custom_res(fn, conf, resolution)
+    g = _custom_geometry(fn, point, conf)
+    if g is None or g.is_empty:
+        return None
+    x, y = (
+        float(v) for v in shapely.get_coordinates(g)[0]
+    )  # the first coordinate, not the centroid
+    if not (math.isfinite(x) and math.isfinite(y)):
+        return None
+    return _custom.point_to_cell_id_or_none(conf, x, y, res)
+
+
+def custom_cellaswkb(cell, grid):
+    """The cell polygon as EWKB with the grid's SRID (plain WKB for a grid with no CRS)."""
+    from databricks.labs.gbx.pygx import _custom
+
+    if cell is None or grid is None:
+        return None
+    conf = _custom_conf("gbx_custom_cellaswkb", grid)
+    c = _custom_cell(conf, cell)
+    if c is None:
+        return None
+    return _ewkb(_custom.cell_id_to_polygon(conf, c), _custom_srid(conf))
+
+
+def custom_cellaswkt(cell, grid):
+    from databricks.labs.gbx.pygx import _custom
+
+    if cell is None or grid is None:
+        return None
+    conf = _custom_conf("gbx_custom_cellaswkt", grid)
+    c = _custom_cell(conf, cell)
+    return None if c is None else _custom.cell_aswkt(conf, c)
+
+
+def custom_centroid(cell, grid):
+    """The cell centre as EWKB with the grid's SRID (plain WKB for a grid with no CRS)."""
+    from databricks.labs.gbx.pygx import _custom
+
+    if cell is None or grid is None:
+        return None
+    conf = _custom_conf("gbx_custom_centroid", grid)
+    c = _custom_cell(conf, cell)
+    if c is None:
+        return None
+    return _ewkb(_custom.cell_id_to_centroid(conf, c), _custom_srid(conf))
+
+
+def custom_distance(cellid1, grid, cellid2):
+    from databricks.labs.gbx.pygx import _custom
+
+    if cellid1 is None or grid is None or cellid2 is None:
+        return None
+    conf = _custom_conf("gbx_custom_distance", grid)
+    a, b = _custom_cell(conf, cellid1), _custom_cell(conf, cellid2)
+    return None if a is None or b is None else int(_custom.distance(conf, a, b))
+
+
+def _custom_ring(fn: str, cell, grid, k, kernel):
+    """kring and kloop of a cell: the arguments checked, the ring's size (cut to the grid, as the kernel cuts it) bounded
+    before the kernel builds it."""
+    from databricks.labs.gbx.pygx import _custom
+
+    if cell is None or grid is None or k is None:
+        return None
+    conf = _custom_conf(fn, grid)
+    kk = _ring_k(fn, k)
+    c = _custom_cell(conf, cell)
+    if c is None:
+        return None
+    res = _custom.get_cell_resolution(c)
+    pos = _custom.get_cell_position(c)
+    px, py = (
+        _custom.get_cell_position_x(conf, pos, res),
+        _custom.get_cell_position_y(conf, pos, res),
+    )
+    nx = min(px + kk, _custom.total_cells_x(conf, res)) - max(px - kk, 0) + 1
+    ny = min(py + kk, _custom.total_cells_y(conf, res)) - max(py - kk, 0) + 1
+    _check_array(fn, nx * ny)  # a loop is built as the ring minus the one inside it
+    return kernel(conf, c, kk)
+
+
+def custom_kring(cell, grid, k):
+    from databricks.labs.gbx.pygx import _custom
+
+    return _custom_ring("gbx_custom_kring", cell, grid, k, _custom.k_ring)
+
+
+def custom_kloop(cell, grid, k):
+    from databricks.labs.gbx.pygx import _custom
+
+    return _custom_ring("gbx_custom_kloop", cell, grid, k, _custom.k_loop)
+
+
+def custom_polyfill(geom, grid, resolution):
+    from databricks.labs.gbx.pygx import _custom
+
+    fn = "gbx_custom_polyfill"
+    if geom is None or grid is None or resolution is None:
+        return None
+    conf = _custom_conf(fn, grid)
+    res = _custom_res(fn, conf, resolution)
+    g = _custom_geometry(fn, geom, conf)
+    if g is None:
+        return None
+    try:
+        cells = _custom.polyfill(conf, g, res)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - the resolution is checked above: a geometry that cannot be filled is NULL
+        return None
+    _check_array(fn, len(cells))
+    return cells
+
+
+def _custom_geom_ring(fn: str, geom, grid, resolution, k, mode, coverage, kernel):
+    if geom is None or grid is None or resolution is None or k is None:
+        return None
+    conf = _custom_conf(fn, grid)
+    mode, coverage, kk = _dilation(fn, mode, coverage, k)
+    res = _custom_res(fn, conf, resolution)
+    g = _custom_geometry(fn, geom, conf)
+    return _cells_of(fn, g, lambda g: kernel(conf, g, res, kk, mode, coverage))
+
+
+def custom_geomkring(
+    geom, grid, resolution, k, mode="boundary-out", coverage="coveras"
+):
+    from databricks.labs.gbx.pygx import _custom
+
+    return _custom_geom_ring(
+        "gbx_custom_geomkring",
+        geom,
+        grid,
+        resolution,
+        k,
+        mode,
+        coverage,
+        _custom.geometry_k_ring,
+    )
+
+
+def custom_geomkloop(
+    geom, grid, resolution, k, mode="boundary-out", coverage="coveras"
+):
+    from databricks.labs.gbx.pygx import _custom
+
+    return _custom_geom_ring(
+        "gbx_custom_geomkloop",
+        geom,
+        grid,
+        resolution,
+        k,
+        mode,
+        coverage,
+        _custom.geometry_k_loop,
+    )
+
+
 def st_explainvalidity(geom):
     from databricks.labs.gbx.pyvx._validity import explain_validity
 

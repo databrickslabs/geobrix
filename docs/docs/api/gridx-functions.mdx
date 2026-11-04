@@ -1850,18 +1850,19 @@ Define a user-specified regular grid from an origin, extent, cell size, split fa
 ### custom_pointascell
 
 {/* BEGIN GENERATED gbx_custom_pointascell: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_pointascell(point, grid, resolution)` | `BIGINT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_pointascell(point, grid, resolution)` | `BIGINT` |
 | Python | `gridx.custom.functions.custom_pointascell(point, grid, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `point` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `point` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
 {/* END GENERATED gbx_custom_pointascell */}
 
 Index a point geometry into a custom grid cell ID at the specified resolution level.
@@ -1882,17 +1883,18 @@ Index a point geometry into a custom grid cell ID at the specified resolution le
 ### custom_cellaswkb
 
 {/* BEGIN GENERATED gbx_custom_cellaswkb: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_cellaswkb(cell, grid)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_cellaswkb(cell, grid)` | `BINARY` |
 | Python | `gridx.custom.functions.custom_cellaswkb(cell, grid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The custom-grid cell id. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
 {/* END GENERATED gbx_custom_cellaswkb */}
 
 Return the WKB footprint polygon of a custom grid cell.
@@ -1913,17 +1915,18 @@ Return the WKB footprint polygon of a custom grid cell.
 ### custom_cellaswkt
 
 {/* BEGIN GENERATED gbx_custom_cellaswkt: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_cellaswkt(cell, grid)` | `STRING` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_cellaswkt(cell, grid)` | `STRING` |
 | Python | `gridx.custom.functions.custom_cellaswkt(cell, grid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The custom-grid cell id. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
 {/* END GENERATED gbx_custom_cellaswkt */}
 
 Return the WKT footprint polygon of a custom grid cell.
@@ -1944,17 +1947,18 @@ Return the WKT footprint polygon of a custom grid cell.
 ### custom_centroid
 
 {/* BEGIN GENERATED gbx_custom_centroid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_centroid(cell, grid)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_centroid(cell, grid)` | `BINARY` |
 | Python | `gridx.custom.functions.custom_centroid(cell, grid)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The custom-grid cell id. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
 {/* END GENERATED gbx_custom_centroid */}
 
 Return the centroid of a custom grid cell as a WKB point.
@@ -1975,18 +1979,19 @@ Return the centroid of a custom grid cell as a WKB point.
 ### custom_polyfill
 
 {/* BEGIN GENERATED gbx_custom_polyfill: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_polyfill(geom, grid, resolution)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_polyfill(geom, grid, resolution)` | `array<bigint>` |
 | Python | `gridx.custom.functions.custom_polyfill(geom, grid, resolution)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
 {/* END GENERATED gbx_custom_polyfill */}
 
 Fill a geometry with all custom grid cell IDs at the specified resolution.
@@ -2007,18 +2012,19 @@ Fill a geometry with all custom grid cell IDs at the specified resolution.
 ### custom_kring
 
 {/* BEGIN GENERATED gbx_custom_kring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_kring(cell, grid, k)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_kring(cell, grid, k)` | `array<bigint>` |
 | Python | `gridx.custom.functions.custom_kring(cell, grid, k)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The custom-grid cell id. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `k` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the cell alone, 1 adds its eight neighbours. |
 {/* END GENERATED gbx_custom_kring */}
 
 Return all custom grid cells within `k` steps of a center cell (filled neighborhood, Chebyshev distance).
@@ -2039,18 +2045,19 @@ Return all custom grid cells within `k` steps of a center cell (filled neighborh
 ### custom_kloop
 
 {/* BEGIN GENERATED gbx_custom_kloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_kloop(cell, grid, k)` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_kloop(cell, grid, k)` | `array<bigint>` |
 | Python | `gridx.custom.functions.custom_kloop(cell, grid, k)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cell` | `BIGINT` |  | The custom-grid cell id. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this distance are returned. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cell` | `BIGINT` | `BIGINT` |  | The custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this distance are returned. |
 {/* END GENERATED gbx_custom_kloop */}
 
 Return the hollow ring of custom grid cells at exactly `k` steps from the center cell. The ring at distance `k` is the set of cells in `kRing(k)` but not in `kRing(k-1)`, clamped to the grid boundary. At `k=0` the result contains only the center cell.
@@ -2075,21 +2082,22 @@ Geometry-aware functions polyfill a geometry into the custom grid and then expan
 ### custom_geomkring
 
 {/* BEGIN GENERATED gbx_custom_geomkring: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_geomkring(geom, grid, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_geomkring(geom, grid, resolution, k, [mode], [coverage])` | `array<bigint>` |
 | Python | `gridx.custom.functions.custom_geomkring(geom, grid, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
-| `k` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` | `INT` |  | The ring distance: 0 is the covering cells alone, 1 adds the cells around them. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_custom_geomkring */}
 
 Polyfill a geometry at a given custom grid resolution then expand by `k` ring steps.
@@ -2110,21 +2118,22 @@ Polyfill a geometry at a given custom grid resolution then expand by `k` ring st
 ### custom_geomkloop
 
 {/* BEGIN GENERATED gbx_custom_geomkloop: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_geomkloop(geom, grid, resolution, k, [mode], [coverage])` | `array<bigint>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_geomkloop(geom, grid, resolution, k, [mode], [coverage])` | `array<bigint>` |
 | Python | `gridx.custom.functions.custom_geomkloop(geom, grid, resolution, k, mode=None, coverage=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` or `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
-| `k` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
-| `mode` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
-| `coverage` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT, in the grid's coordinates. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `k` | `INT` | `INT` |  | The loop distance: only the cells at exactly this ring distance from the covering cells are returned. |
+| `mode` | `STRING` | `STRING` | `'boundary-out'` | The dilation mode: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'` or `'hole-out-ignore-geom'`. |
+| `coverage` | `STRING` | `STRING` | `'coveras'` | How a cell belongs to the geometry: `'coveras'` (it overlaps), `'polyfill'` (its centre is inside) or `'core'` (it is inside). |
 {/* END GENERATED gbx_custom_geomkloop */}
 
 Polyfill a geometry at a given custom grid resolution then return only the hollow outer ring at exactly `k` steps.
@@ -2223,18 +2232,19 @@ Streaming version of `custom_geomkloop` — one row per cell at exactly `k` step
 ### custom_distance
 
 {/* BEGIN GENERATED gbx_custom_distance: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_custom_distance(cellid1, grid, cellid2)` | `BIGINT` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_custom_distance(cellid1, grid, cellid2)` | `BIGINT` |
 | Python | `gridx.custom.functions.custom_distance(cellid1, grid, cellid2)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `cellid1` | `BIGINT` |  | The first custom-grid cell id. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `cellid2` | `BIGINT` |  | The second custom-grid cell id, at the same resolution. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `cellid1` | `BIGINT` | `BIGINT` |  | The first custom-grid cell id. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `cellid2` | `BIGINT` | `BIGINT` |  | The second custom-grid cell id, at the same resolution. |
 {/* END GENERATED gbx_custom_distance */}
 
 Chebyshev (king-move) distance in grid steps between two custom grid cells. Returns the minimum `k` such that the second cell appears in `kRing(firstCell, k)`, i.e. `max(|dx|, |dy|)` in cell-position units. Both cells must be at the same resolution; the grid spec enforces consistent encoding.

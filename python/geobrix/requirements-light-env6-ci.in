@@ -125,7 +125,7 @@ matplotlib==3.10.9
 geopandas==1.1.4
 mapclassify==2.10.0
 contextily==1.6.2
-anywidget==0.9.18
+anywidget==0.11.0
 tippecanoe==2.45.0
 # IPython is what the Databricks/Jupyter runtime provides; gbx.vizx.plot_interactive
 # reaches displayHTML through it (IPython.get_ipython user_ns) and falls back to

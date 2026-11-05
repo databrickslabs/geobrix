@@ -136,3 +136,14 @@ def test_bng_chip_results_are_ewkb_with_srid_27700_and_a_tuple_chip_is_read_by_p
         g = shapely.from_wkb(out["chip"])
         assert out["chip"][:1] == b"\x01" and shapely.get_srid(g) == 27700
         assert abs(g.area - area) < 1e-6
+
+
+def test_a_whole_decimal_double_or_dotted_resolution_is_read_like_the_session():
+    """SQL types 3.0 as DECIMAL; the warehouse row bng_res_whole_double failed on Decimal('3.0')."""
+    from decimal import Decimal
+
+    pt = UcGeometry(shapely.to_wkb(shapely.from_wkt("POINT(530500 180500)")), 27700)
+    for res in (Decimal("3.0"), 3.0, "3.0", " 3 ", "1km"):
+        assert handlers.bng_pointascell(pt, res) == "TQ3080", res
+    with pytest.raises(Exception, match="3.5"):
+        handlers.bng_pointascell(pt, Decimal("3.5"))

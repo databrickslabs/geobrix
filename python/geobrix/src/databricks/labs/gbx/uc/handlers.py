@@ -10,6 +10,7 @@ and propagate (as the JVM's NonFatal).
 from __future__ import annotations
 
 import math
+import re
 from typing import Optional
 
 from databricks.labs.gbx._gdal_policy import open_bytes
@@ -52,9 +53,19 @@ def bng_eastnorthasbng(easting, northing, resolution):
 
 def _res(raw):
     """A UC resolution (STRING: '3', '1km', '-3') as a BNG index; one that BNG does not define raises."""
+    from decimal import Decimal
+
     from databricks.labs.gbx.pygx import _bng
 
-    return _bng.get_resolution(raw.strip() if isinstance(raw, str) else raw)
+    if isinstance(raw, str):
+        raw = raw.strip()
+        if re.fullmatch(
+            r"-?\d+\.0*", raw
+        ):  # '3.0': a whole number, like the session's 3.0
+            raw = raw.split(".")[0]
+    elif isinstance(raw, (Decimal, float)) and float(raw).is_integer():
+        raw = int(raw)  # a SQL literal 3.0 is DECIMAL; the session takes a whole double
+    return _bng.get_resolution(raw)
 
 
 def bng_eastnorthasbng_batch(batches):
@@ -269,6 +280,12 @@ def _grid_geometry(fn: str, geom, srid: int, grid: str, hint: str = ""):
 
 
 def _bng_res(fn: str, raw):
+    from decimal import Decimal
+
+    if isinstance(
+        raw, Decimal
+    ):  # a SQL literal 3.0 reaches a UC function as DECIMAL, not DOUBLE
+        raw = float(raw)
     try:
         return _res(raw)
     except (MemoryError, RecursionError, ImportError):

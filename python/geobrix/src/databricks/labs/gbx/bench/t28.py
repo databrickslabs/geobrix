@@ -217,12 +217,12 @@ def _cleanup_pairs(p: Params) -> List[Tuple[str, str]]:
 # ---- notebooks -----------------------------------------------------------------------------------------------------
 
 
-def _calls_nb(path: str, calls, wheel: str) -> str:
+def _calls_nb(path: str, calls, wheel: str, extras: str = "") -> str:
     from databricks.labs.gbx.bench import probes
 
     with tempfile.TemporaryDirectory() as d:
         f = os.path.join(d, "nb.ipynb")
-        probes.write_calls_notebook(f, calls, wheel)
+        probes.write_calls_notebook(f, calls, wheel, extras)
         return open(f).read()
 
 
@@ -508,7 +508,7 @@ def build(p: Params) -> Tuple[List[File], List[Run]]:
     ]
     nb(
         "register_ded.ipynb",
-        _calls_nb("", reg_ded, wheel6),
+        _calls_nb("", reg_ded, wheel6, "vizx"),
         "register at L1 where the table says, and the L1 legs of the oracles",
     )
     nb(
@@ -566,7 +566,7 @@ def build(p: Params) -> Tuple[List[File], List[Run]]:
     ]
     nb(
         "register_std.ipynb",
-        _calls_nb("", reg_std, wheel6),
+        _calls_nb("", reg_std, wheel6, "vizx"),
         "register on standard access (no _jvm), GRID_SCALAR at L2",
     )
     nb(

@@ -509,3 +509,11 @@ def test_nested_cells_of_a_statement_result_get_their_declared_types():
         and tile["raster"] == b"\x01"
         and tile["metadata"] == {"a": "b"}
     )
+
+
+def test_the_classic_cluster_oracle_notebooks_install_the_vizx_extra(plan):
+    """A job cluster keeps the notebook's own %pip cell, and the oracles import mercantile, which only [vizx] brings."""
+    _p, files, _runs = plan
+    by = {f.name: f for f in files}
+    for name in ("register_ded.ipynb", "register_std.ipynb"):
+        assert "[vizx]" in by[name].content, name

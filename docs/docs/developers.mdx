@@ -218,6 +218,10 @@ Workflows live in **`.github/workflows/`**. They define when and how tests and b
 - **CodeQL** (`codeql-analysis.yml`) — Security analysis on push and pull_request to `main`.
 - **Publish / release** — Triggered by release or publish events (see the workflow files).
 
+### Before a pull request
+
+Run `gbx:test:uc-integration --profile <name>` before you open a pull request or push to main. The command installs the Unity Catalog functions into a scratch schema on Databricks. It runs the UC oracle slice and the example files against that schema, then drops the schema. The result goes to `test-logs/uc-integration/evidence.json`. A QC check reads that file on `gh pr create` and on a push to main. It fails when the file is missing, failed, or older than the UC sources. The pull request template asks you to paste the summary line. Pushes to development branches are not gated.
+
 ### Initiating a build from a branch
 
 Pushing to a branch (except `python/**` and `scala/**`) **successfully triggers** the **build main** workflow. To run the main build on your current branch (e.g. `beta/0.4.0`):

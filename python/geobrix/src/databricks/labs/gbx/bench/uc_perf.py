@@ -1311,11 +1311,13 @@ def _side(mib: int) -> int:
 
 
 def write_via_local(path: str, write: Callable[[str], None]) -> int:
-    """``write(local_path)`` on a local temp file, then copy it to ``path``: the file's size.
+    """``write(local_path)`` on a local temp file (same extension as ``path``), then copy it to ``path``: the file's size.
 
-    GDAL seeks back to rewrite a GeoTIFF's header, which a FUSE Volume refuses (``_tiffSeekProc: Input/output error``,
-    and a file that does not open). A sequential copy of a finished file works."""
-    fd, local = tempfile.mkstemp(suffix=".tif")
+    GDAL seeks back to rewrite a GeoTIFF's header, and netCDF, PNG and GeoPackage writers seek and re-open too; a FUSE
+    Volume refuses (``_tiffSeekProc: Input/output error``, ``CPLE_OpenFailedError``, a file that does not open). A
+    sequential copy of a finished file works. Every fixture builder that writes a GDAL or OGR file onto a Volume goes
+    through here."""
+    fd, local = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")
     os.close(fd)
     try:
         write(local)

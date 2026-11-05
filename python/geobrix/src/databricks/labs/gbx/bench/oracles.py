@@ -1735,24 +1735,31 @@ def _gti_index(path: str, location: str) -> str:
     """A GeoPackage tile index (GTI's `location` field) with one tile over the DEM's extent, located at `location`."""
     from osgeo import ogr, osr
 
+    from databricks.labs.gbx.bench import uc_perf
+
+    def build(local: str) -> None:
+        os.remove(local)  # the temp file exists (empty); OGR creates its own
+        ds = ogr.GetDriverByName("GPKG").CreateDataSource(local)
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(3857)
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        lyr = ds.CreateLayer("tiles", srs, ogr.wkbPolygon)
+        lyr.CreateField(ogr.FieldDefn("location", ogr.OFTString))
+        feat = ogr.Feature(lyr.GetLayerDefn())
+        feat.SetField("location", location)
+        feat.SetGeometry(
+            ogr.CreateGeometryFromWkt(
+                "POLYGON((400000 5759360,400640 5759360,400640 5760000,400000 5760000,400000 5759360))"
+            )
+        )
+        lyr.CreateFeature(feat)
+        feat = None
+        ds = None  # closing flushes the GeoPackage before the copy
+
     if os.path.exists(path):
         os.remove(path)
-    ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
-    srs = osr.SpatialReference()
-    srs.ImportFromEPSG(3857)
-    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    lyr = ds.CreateLayer("tiles", srs, ogr.wkbPolygon)
-    lyr.CreateField(ogr.FieldDefn("location", ogr.OFTString))
-    feat = ogr.Feature(lyr.GetLayerDefn())
-    feat.SetField("location", location)
-    feat.SetGeometry(
-        ogr.CreateGeometryFromWkt(
-            "POLYGON((400000 5759360,400640 5759360,400640 5760000,400000 5760000,400000 5759360))"
-        )
-    )
-    lyr.CreateFeature(feat)
-    feat = None
-    ds = None
+    # SQLite cannot be written in place on a Volume
+    uc_perf.write_via_local(path, build)
     return path
 
 
@@ -1823,11 +1830,17 @@ def _se_virtual(name: str, tmpdir: str):
     ):  # a driver GeoBrix does not emit virtual tiles for (not on the allowlist)
         import numpy as np
 
+        from databricks.labs.gbx.bench import uc_perf
+
         path = os.path.join(tmpdir, "se_dem.png")
-        with open_data(
-            path, "w", driver="PNG", width=64, height=64, count=1, dtype="uint8"
-        ) as dst:
-            dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64))
+
+        def build_png(local: str) -> None:
+            with open_data(
+                local, "w", driver="PNG", width=64, height=64, count=1, dtype="uint8"
+            ) as dst:
+                dst.write(np.arange(64 * 64, dtype="uint8").reshape(1, 64, 64))
+
+        uc_perf.write_via_local(path, build_png)
         return _tile(None, path, None)
     if (
         name == "dem_inline_raw"
@@ -1946,8 +1959,13 @@ def to_netcdf(tif: str, nc: str) -> None:
     becomes a variable)."""
     import rasterio.shutil
 
+    from databricks.labs.gbx.bench import uc_perf
+
     with open_data(tif) as src:  # the copy reads this dataset, not the name
-        rasterio.shutil.copy(src, nc, driver="netCDF")
+        # netCDF is written by seeks and a re-open (CPLE_OpenFailedError on a Volume): build locally, then copy
+        uc_perf.write_via_local(
+            nc, lambda local: rasterio.shutil.copy(src, local, driver="netCDF")
+        )
 
 
 def _bytes_class_build(name: str, tmpdir: str):

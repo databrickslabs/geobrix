@@ -981,3 +981,55 @@ def test_a_kept_tile_that_does_not_open_is_written_again(tmp_path):
     bad.write_bytes(b"II*\x00 half a header")  # what a seek-refused Volume write leaves
     assert not uc_perf.tile_readable(str(bad))
     assert not uc_perf.tile_readable(str(tmp_path / "missing.tif"))
+
+
+# ---- oracle fixture builders: GDAL / OGR files are built locally, then copied ------------------------------------
+
+
+def _spy_local_writes(monkeypatch):
+    """Record (final path, local path) of every ``write_via_local`` call, and call through."""
+    from databricks.labs.gbx.bench import uc_perf
+
+    real, calls = uc_perf.write_via_local, []
+
+    def spy(path, write):
+        def local_write(local):
+            calls.append((path, local))
+            return write(local)
+
+        return real(path, local_write)
+
+    monkeypatch.setattr(uc_perf, "write_via_local", spy)
+    return calls
+
+
+def _assert_built_locally(calls, volume, name):
+    paths = [(p, loc) for p, loc in calls if p.endswith(name)]
+    assert paths, f"{name} was not written through write_via_local"
+    final, local = paths[0]
+    assert final.startswith(str(volume))  # the Volume path is what the tile names
+    assert not local.startswith(str(volume))  # GDAL never writes there
+    assert local.endswith(name[name.rindex(".") :])  # the driver sees its extension
+    assert (volume / name).stat().st_size > 0
+
+
+def test_the_netcdf_fixture_is_built_locally_then_copied(tmp_path, monkeypatch):
+    calls = _spy_local_writes(monkeypatch)
+    volume = tmp_path / "volume"
+    volume.mkdir()
+    tif, nc = volume / "a.tif", volume / "a.nc"
+    tif.write_bytes(oracles._tile_bytes("EPSG:4326"))
+    oracles.to_netcdf(str(tif), str(nc))
+    _assert_built_locally(calls, volume, "a.nc")
+
+
+def test_the_tile_index_and_png_fixtures_are_built_locally_then_copied(
+    tmp_path, monkeypatch
+):
+    calls = _spy_local_writes(monkeypatch)
+    volume = tmp_path / "volume"
+    volume.mkdir()
+    oracles._gti_index(str(volume / "idx.gpkg"), "x.tif")
+    _assert_built_locally(calls, volume, "idx.gpkg")
+    oracles._se_virtual("dem_png", str(volume))
+    _assert_built_locally(calls, volume, "se_dem.png")

@@ -222,6 +222,7 @@ def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) ->
     from databricks.labs.gbx.bench import oracles
     from databricks.labs.gbx.uc import ddl
 
+    os.makedirs(tmpdir, exist_ok=True)
     t = time.time()
     stmts = uc.install(catalog, schema, volume_dir, spark=spark)
     out = {"install_s": time.time() - t, "statements": len(stmts)}
@@ -330,6 +331,9 @@ def run_uc_slice(
     from databricks.labs.gbx.bench.uc_perf import _Run
 
     man = manifest.load()
+    os.makedirs(
+        tmpdir, exist_ok=True
+    )  # the fixtures of the file-reading rows are written here
     cases = uc_slice_cases(tables)
     run_ = _Run("T28 slice", "t28-slice", 4, 7200.0)
     spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")

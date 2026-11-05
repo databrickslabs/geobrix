@@ -64,7 +64,7 @@ class _Spark:
 
 
 def test_run_uc_slice_installs_from_the_named_jar_and_routes_recipes_to_the_scalar_runner(
-    monkeypatch,
+    monkeypatch, tmp_path
 ):
     from databricks.labs.gbx import uc
 
@@ -89,9 +89,11 @@ def test_run_uc_slice_installs_from_the_named_jar_and_routes_recipes_to_the_scal
         "run_rows",
         lambda spark, cases, **kw: seen.setdefault("rows", list(cases)) and [],
     )
+    scratch = tmp_path / "fresh" / "driver"  # a fresh Serverless driver has no /tmp/t28
     out = probes.run_uc_slice(
-        _Spark(), "c", "s", "/Volumes/c/s/v/f", "/tmp/x", jar="/Volumes/c/s/v/j.jar"
+        _Spark(), "c", "s", "/Volumes/c/s/v/f", str(scratch), jar="/Volumes/c/s/v/j.jar"
     )
+    assert scratch.is_dir()
     assert seen["install"][3]["jar"] == "/Volumes/c/s/v/j.jar"
     assert out["scala"] == 1 and out["statements"] == 2 and out["failures"] == []
     man = manifest.load()
@@ -100,7 +102,7 @@ def test_run_uc_slice_installs_from_the_named_jar_and_routes_recipes_to_the_scal
     )  # a recipe is a statement, never a table-function shape
     assert all(man.functions[c.fn].kind == "generator" for c in seen["rows"])
     assert any(c.sql is not None for c in seen["scalar"])
-    probes.run_uc_slice(_Spark(), "c", "s", "/Volumes/c/s/v/f", "/tmp/x")
+    probes.run_uc_slice(_Spark(), "c", "s", "/Volumes/c/s/v/f", str(scratch))
     assert seen["install"][3]["jar"] is None  # no jar: the folder's own, as before
 
 

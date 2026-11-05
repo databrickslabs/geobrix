@@ -123,8 +123,6 @@ FILES=(
     ".github/actions/scala_build/action.yml"
     ".github/actions/python_build/action.yml"
     ".github/workflows/build_main.yml"
-    ".github/workflows/build_python.yml"
-    ".github/workflows/build_scala.yml"
     ".github/workflows/build_scala_by_package.yml"
     ".github/workflows/codecov-scala-parallel.yml"
     "scripts/docker/Dockerfile"

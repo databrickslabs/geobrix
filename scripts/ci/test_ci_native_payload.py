@@ -250,7 +250,7 @@ def test_every_jvm_job_links_the_payload_jni_before_its_tests():
     in this run, and scala_build links /usr/lib/libgdalalljni.so to its JNI before any test; GDAL 3.11's JNI is not
     put on a JVM's library path anywhere in CI."""
     found = list(_jvm_jobs())
-    assert {w for w, *_ in found} >= {"build_main.yml", "build_python.yml", "build_scala.yml"}
+    assert {w for w, *_ in found} >= {"build_main.yml"}
     builder_group = _load(BUILDER)["jobs"]["build-x86_64"]["runs-on"]
     for wf, name, job, jobs in found:
         where = f"{wf}:{name}"

@@ -426,6 +426,8 @@ class Gate:
             if name != "examples" and out.is_file():
                 merged.update(oracles_load(out))
         cases = probes.uc_slice_cases(tables)
+        ran = {cid for cid, _ in pairs}
+        cases = [c for c in cases if c.cid in ran or "uc" not in c.surfaces]  # a smoke run judges only what it ran
         with tempfile.TemporaryDirectory(prefix="uc-it-judge-") as d:
             from databricks.labs.gbx.bench import oracles
 

@@ -9,7 +9,8 @@ Rust module (the `light-payload` job). These tests read the workflow and the CI 
   the oracle tables of test_family_cross_tier.py (`oracle_tables`: that one file runs once per table, every oracle
   table of the manifest in exactly one shard);
 * the heavy build ignores the same dirs (`LIGHT_IGNORES`) and the unsharded fallback line of the light action lists them;
-* `pyvx` runs before `bench` in the same shard (the PROJ state bench relies on);
+* `test/bench` runs as exactly two shards, `bench 1/2` and `bench 2/2`, each on its own (bench relies on no state another
+  dir leaves in the process): test_levels.py, the one ~8 min file, is pinned to the first so the halves stay balanced;
 * the heavy build waits only for the native payload (it is no longer behind the light shards), and nothing can quietly
   drop a shard, a path or the native bindings: the matrix has no `exclude`/`include`, and the job and the action step
   carry no `if`, `continue-on-error` or skip input; the action fails a shard whose bindings do not load from the payload.
@@ -163,10 +164,27 @@ def test_the_heavy_build_ignores_the_light_dirs_and_the_fallback_lists_them():
     assert sorted(d.removeprefix("test/") for d in fallback.split()) == light
 
 
-def test_pyvx_runs_before_bench_in_the_same_shard():
-    # pyvx registers the PROJ grids that bench's raster builds on worker threads rely on.
-    (paths,) = [s["paths"].split() for s in _shards() if "test/bench" in s["paths"].split()]
-    assert "test/pyvx" in paths and paths.index("test/pyvx") < paths.index("test/bench")
+_BENCH_SHARDS = ["bench 1/2", "bench 2/2"]
+_BENCH_PINNED = "test/bench/test_levels.py"
+
+
+def test_bench_runs_as_two_self_sufficient_shards_with_the_long_file_pinned():
+    shards = [s for s in _shards() if s["name"].startswith("bench")]
+    assert [s["name"] for s in shards] == _BENCH_SHARDS
+    first, second = (_files_of(s) for s in shards)
+    bench = _test_files("test/bench")
+    # together they are all of bench; the shard-wide check above proves each file is in exactly one
+    assert (first | second) >= bench
+    # the ~8 min file is alone with pyvx (first shard); the second shard is the rest of the dir
+    assert _BENCH_PINNED in first and first & bench == {_BENCH_PINNED}
+    assert second == bench - {_BENCH_PINNED}
+    # self-sufficient: no bench shard needs a dir another shard leaves behind, so the other dirs of a shard are only
+    # pyvx, and the shard without pyvx (the second) still holds all of bench but the pinned file
+    assert {f.split("/")[1] for f in first | second} == {"bench", "pyvx"}
+    # a bench test that imports a pyvx test module would reintroduce a cross-dir dependency
+    for f in bench:
+        text = (PKG / f).read_text()
+        assert not re.search(r"^\s*(from|import)\s+(test\.)?pyvx\.test_", text, re.M), f
 
 
 def test_the_graph_and_the_labels():

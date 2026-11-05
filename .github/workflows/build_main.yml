@@ -143,8 +143,7 @@ jobs:
   # file test_family_cross_tier.py (`oracle_tables`). scripts/ci/test_ci_light_shards.py fails unless the shards
   # together run every test file of the light dirs of python/geobrix/test/conftest.py (_LIGHT_TEST_DIRS) exactly once
   # (that file once per oracle table), and the heavy build's LIGHT_IGNORES lists the same dirs. A new light dir, file or
-  # oracle table goes into ONE shard here. Keep pyvx before bench in one shard (pyvx leaves the PROJ grids bench relies
-  # on; the guard checks that too). Every shard always runs; there is no matrix exclude/include and no path filter, so a
+  # oracle table goes into ONE shard here. Every shard always runs; there is no matrix exclude/include and no path filter, so a
   # red test at HEAD can never be hidden (the guard checks that as well).
   light:
     name: Light tests - ${{ matrix.shard.name }} (py${{ matrix.python }})
@@ -205,9 +204,14 @@ jobs:
           - name: manager
             paths: test/manager
             ignore: test/manager/test_family_cross_tier.py
-          # pyvx before bench: one process, in this order (see above).
-          - name: bench
-            paths: test/pyvx test/bench
+          # test/bench (~17 min) in two: test_levels.py alone is ~8.5 min, so it is pinned to the first shard (with
+          # test/pyvx, ~1 min) and the second runs the rest of the dir. A hashed split would put both long halves
+          # together. Each shard is self-sufficient: bench needs nothing a previous test dir left in the process.
+          - name: bench 1/2
+            paths: test/pyvx test/bench/test_levels.py
+          - name: bench 2/2
+            paths: test/bench
+            ignore: test/bench/test_levels.py
           - name: other dirs
             paths: test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models test/engine
     steps:

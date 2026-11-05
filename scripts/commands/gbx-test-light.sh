@@ -2,8 +2,7 @@
 # gbx:test:light - Run the light-tier Python tests (pyrx, pyvx, pygx, ds, zarr, ...) natively on
 # the host. A thin front for gbx:test:pyrx, whose default is only test/pyrx: with no --path this
 # runs every light dir in one pytest process, in the order of the unsharded pytest line
-# of the light CI action (.github/actions/pyrx_build/action.yml; CI itself runs the dirs as parallel shards). The order matters: the dirs share a process, and
-# test/pyvx registers PROJ grids before test/bench builds rasters on worker threads.
+# of the light CI action (.github/actions/pyrx_build/action.yml; CI itself runs the dirs as parallel shards).
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"

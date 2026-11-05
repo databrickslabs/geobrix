@@ -171,9 +171,7 @@ runs:
         # The lightweight tier is exercised ONLY here (the heavy phase skips these dirs via test/conftest.py
         # collect_ignore). Every light test dir must be in a shard (see test/conftest.py for the three places a new
         # light dir goes): pyrx, ds, pyvx, pygx, pmtiles_light, zarr, stac, earthdata, vizx, sample, bench, models,
-        # core, manager, engine. Two of them reach into each other through the one process they share: test/pyvx
-        # registers PROJ grids before test/bench builds rasters on worker threads, so those two stay in one shard,
-        # pyvx first.
+        # core, manager, engine. No dir relies on state another dir leaves in the process (bench passes alone).
         #
         # CI shards the light tier: each parallel job passes its paths here, and scripts/ci/test_ci_light_shards.py
         # fails unless the shards together cover every test file of _LIGHT_TEST_DIRS exactly once (test/pyrx and

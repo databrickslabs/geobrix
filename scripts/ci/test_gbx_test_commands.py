@@ -729,9 +729,6 @@ def test_the_light_command_runs_every_light_dir_in_the_ci_order(sandbox):
     ran = [a.rstrip("/") for a in argv.split() if a.startswith("python/geobrix/test/")]
     ci = _ci_light_dirs()
     assert ran == [f"python/geobrix/test/{d}" for d in ci]
-    # The order is deliberate: all dirs share one process, and pyvx registers the PROJ grids
-    # that bench's raster builds on worker threads rely on (see the CI action's comment).
-    assert ci.index("pyvx") < ci.index("bench")
     # ... and it covers exactly the dirs the heavy phase ignores.
     assert sorted(ci) == sorted(_light_dirs_conftest_lists())
 

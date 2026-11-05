@@ -24,6 +24,7 @@ import json
 import math
 import os
 import re
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -1309,9 +1310,45 @@ def _side(mib: int) -> int:
     return math.isqrt(mib * 1024 * 1024 // 4)
 
 
+def write_via_local(path: str, write: Callable[[str], None]) -> int:
+    """``write(local_path)`` on a local temp file, then copy it to ``path``: the file's size.
+
+    GDAL seeks back to rewrite a GeoTIFF's header, which a FUSE Volume refuses (``_tiffSeekProc: Input/output error``,
+    and a file that does not open). A sequential copy of a finished file works."""
+    fd, local = tempfile.mkstemp(suffix=".tif")
+    os.close(fd)
+    try:
+        write(local)
+        shutil.copyfile(local, path + ".part")
+        os.replace(path + ".part", path)
+    finally:
+        if os.path.exists(local):
+            os.unlink(local)
+    return os.path.getsize(path)
+
+
+def tile_readable(path: str) -> bool:
+    """Whether ``path`` exists and GDAL opens it: a kept file that does not open is written again."""
+    if not os.path.exists(path):
+        return False
+    try:
+        from databricks.labs.gbx._gdal_policy import open_data
+
+        with open_data(path) as src:
+            return src.width > 0
+    except (
+        Exception
+    ):  # noqa: BLE001 - any failure to open means the file is not a usable raster
+        return False
+
+
 def _write_gradient(path: str, side: int, bands: int = 1) -> int:
     """A ZSTD GeoTIFF of ``side`` x ``side`` x ``bands`` Float32 (a gradient, so the file is small and the decode is not),
     written a block row at a time; the file's size."""
+    return write_via_local(path, lambda local: _gradient_to(local, side, bands))
+
+
+def _gradient_to(local: str, side: int, bands: int) -> None:
     import numpy as np
     from rasterio.transform import from_origin
     from rasterio.windows import Window
@@ -1320,7 +1357,7 @@ def _write_gradient(path: str, side: int, bands: int = 1) -> int:
 
     block = min(512, side)
     with open_data(
-        path + ".part",
+        local,
         "w",
         driver="GTiff",
         width=side,
@@ -1344,8 +1381,6 @@ def _write_gradient(path: str, side: int, bands: int = 1) -> int:
                     b,
                     window=Window(0, row, side, h),
                 )
-    os.replace(path + ".part", path)
-    return os.path.getsize(path)
 
 
 def perf_stage_tiles(
@@ -1363,7 +1398,7 @@ def perf_stage_tiles(
         path = f"{tile_dir}/{name}"
         size = (
             os.path.getsize(path)
-            if os.path.exists(path)
+            if tile_readable(path)
             else _write_gradient(path, side, bands)
         )
         out[name] = {"path": path, "bytes": size, "side": side, "bands": bands}

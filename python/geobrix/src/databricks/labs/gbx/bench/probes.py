@@ -2467,6 +2467,12 @@ def run_m6(spark, catalog: str, schema: str, volume_dir: str) -> dict:
 
 def _write_raw_tiff(path: str, mib: int) -> int:
     """An uncompressed single-band Float32 GeoTIFF of about ``mib`` MiB on disk (a gradient): the file's size."""
+    from databricks.labs.gbx.bench import uc_perf
+
+    return uc_perf.write_via_local(path, lambda local: _raw_tiff_to(local, mib))
+
+
+def _raw_tiff_to(local: str, mib: int) -> None:
     import math as _math
 
     import numpy as np
@@ -2477,7 +2483,7 @@ def _write_raw_tiff(path: str, mib: int) -> int:
 
     side = _math.isqrt(mib * 1024 * 1024 // 4)
     with open_data(
-        path + ".part", "w", driver="GTiff", width=side, height=side, count=1, dtype="float32",
+        local, "w", driver="GTiff", width=side, height=side, count=1, dtype="float32",
         crs="EPSG:32633", transform=from_origin(500000.0, 5000000.0, 10.0, 10.0),
     ) as dst:  # fmt: skip
         cols = np.arange(side, dtype="float32")
@@ -2487,8 +2493,6 @@ def _write_raw_tiff(path: str, mib: int) -> int:
             dst.write(
                 rows * 0.001 + cols[None, :] * 0.0001, 1, window=Window(0, row, side, h)
             )
-    os.replace(path + ".part", path)
-    return os.path.getsize(path)
 
 
 def stage_mech_tiles(tile_dir: str, mibs: Sequence[int] = MECH_MIB) -> dict:
@@ -2503,7 +2507,7 @@ def stage_mech_tiles(tile_dir: str, mibs: Sequence[int] = MECH_MIB) -> dict:
         path = f"{tile_dir}/mech_{mib}MiB.tif"
         size = (
             os.path.getsize(path)
-            if os.path.exists(path)
+            if uc_perf.tile_readable(path)
             else _write_raw_tiff(path, mib)
         )
         out[f"mech_{mib}MiB.tif"] = {"path": path, "bytes": size}

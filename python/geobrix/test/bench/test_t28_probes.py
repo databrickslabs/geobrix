@@ -947,3 +947,37 @@ def test_oracle_capped_lowers_the_cap_per_row_runs_it_and_restores_it(monkeypatc
         ("unset", READ_CAP_KEY),
         ("register", ["gbx_rst_x"], {"_levels": 1}),
     ]
+
+
+# ---- staging writes go through a local file ----------------------------------------------------------------------
+
+
+def test_a_staged_tile_is_written_locally_then_copied_to_the_volume(tmp_path):
+    from databricks.labs.gbx.bench import uc_perf
+
+    seen = {}
+
+    def write(local):
+        seen["local"] = local
+        with open(
+            local, "wb"
+        ) as fh:  # GDAL seeks back to the header: only a local file allows it
+            fh.write(b"abc")
+            fh.seek(0)
+            fh.write(b"X")
+
+    target = tmp_path / "volume" / "t.tif"
+    target.parent.mkdir()
+    assert uc_perf.write_via_local(str(target), write) == 3
+    assert target.read_bytes() == b"Xbc"
+    assert not seen["local"].startswith(str(tmp_path))  # never the Volume path
+    assert not (tmp_path / "volume" / "t.tif.part").exists()
+
+
+def test_a_kept_tile_that_does_not_open_is_written_again(tmp_path):
+    from databricks.labs.gbx.bench import uc_perf
+
+    bad = tmp_path / "bad.tif"
+    bad.write_bytes(b"II*\x00 half a header")  # what a seek-refused Volume write leaves
+    assert not uc_perf.tile_readable(str(bad))
+    assert not uc_perf.tile_readable(str(tmp_path / "missing.tif"))

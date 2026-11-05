@@ -847,3 +847,11 @@ HANDLERS = {
     "gbx__rst_tooverlappingtiles_tiles": rst_tooverlappingtiles_tiles,
     "gbx__rst_separatebands_tiles": rst_separatebands_tiles,
 }
+
+
+# the private routines of raster to grid (one per grid and statistic) live in uc.rastertogrid
+from databricks.labs.gbx.uc import rastertogrid as _rastertogrid  # noqa: E402
+
+HANDLERS.update(
+    {k: v for k, v in _rastertogrid.HANDLERS.items() if k.startswith("gbx__")}
+)

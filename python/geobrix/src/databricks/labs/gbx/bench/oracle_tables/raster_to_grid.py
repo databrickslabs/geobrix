@@ -222,13 +222,13 @@ _SESSION_ROWS = _stat_rows() + (
 
 
 # ------------------------------------------------------------------------------------------------ Unity Catalog
-# The seven H3 statistics that split (every one but the median) are table functions on UC too: a projection of the one
-# partial the kernel makes (`gbx_rst_h3_rastertogrid_partial`). Their rows are the session's: the same tile, the same
-# numpy reference. The median keeps its per-tile kernel and is a later form.
+# The eight H3 statistics are table functions on UC too. Each is `inline` of a private routine that computes ONLY its
+# statistic (the median included, which does not split). Their rows are the session's: the same tile, the same numpy
+# reference. `gbx_rst_h3_rastertogrid_partial` is the other route: one pass for several statistics, or one across tiles.
 H3P = "gbx_rst_h3_rastertogrid_partial"
 H3_SPLIT = tuple(s for s in STATS if s != "median")
 _H3_SHARED = (
-    *(f"h3_rtg_{s}" for s in H3_SPLIT),
+    *(f"h3_rtg_{s}" for s in STATS),
     "h3_rtg_sparse",
     "h3_rtg_null_tile",
     "h3_rtg_null_res",
@@ -319,7 +319,7 @@ _PARTIAL_ROWS = (
 # every statistic's table function: a NULL tile gives no rows, a virtual tile is refused with a Fix naming the function
 _TVF_EDGES = tuple(
     row
-    for stat in H3_SPLIT
+    for stat in STATS
     for row in (
         Case(
             f"uc_h3_rtg_{stat}_null",

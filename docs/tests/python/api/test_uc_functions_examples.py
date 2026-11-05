@@ -304,15 +304,15 @@ def test_an_overview_level_below_2_raises_with_a_fix():
     assert "each level must be >= 2" in message and "Fix: " in message
 
 
-def test_the_seven_h3_statistics_are_table_functions_over_the_one_partial():
+def test_the_eight_h3_statistics_are_table_functions_each_over_a_kernel_of_its_own():
     man = manifest.load()
     tvfs = [n for n in _uc_names() if n.startswith("gbx_rst_h3_rastertogrid") and n != "gbx_rst_h3_rastertogrid_partial"]
-    assert sorted(t[len("gbx_rst_h3_rastertogrid"):] for t in tvfs) == [
-        "avg", "count", "max", "min", "stddev", "sum", "variance",
-    ]  # fmt: skip
-    assert all(man.functions[t].levels["L4"]["tvf_over"] == "gbx_rst_h3_rastertogrid_partial" for t in tvfs)
+    stats = sorted(t[len("gbx_rst_h3_rastertogrid"):] for t in tvfs)
+    assert stats == ["avg", "count", "max", "median", "min", "stddev", "sum", "variance"]
+    for t in tvfs:
+        assert man.functions[t].levels["L4"]["tvf_over"] == f"gbx__rst_h3_rastertogrid{t[len('gbx_rst_h3_rastertogrid'):]}_cells"
     stmts = [s for s in ex.preview_install() if ".gbx_rst_h3_rastertogridvariance(" in s]
-    assert "try_divide(m2, count) AS measure" in stmts[0]
+    assert "gbx__rst_h3_rastertogridvariance_cells(tile, resolution, coverage, assignment)" in stmts[0]
 
 
 def test_a_virtual_tile_is_refused_with_a_fix_naming_the_session_function():

@@ -589,6 +589,27 @@ def raster_to_grid(
     ]
 
 
+def raster_to_grid_single(
+    ds,
+    resolution: int,
+    grid: str,
+    stat: str,
+    coverage: str = "complete",
+    assignment: str = "centroid",
+    crs=None,
+    grid_conf=None,
+) -> list:
+    """ONE statistic of every cell, per band, computed on its own: the pass of ``stat`` alone, with no count, sum, M2, minimum
+    or maximum made for the others. It returns what :func:`raster_to_grid` returns (a test holds the two equal, bit for bit,
+    for every statistic, coverage and assignment); the Unity Catalog table functions call this one, because a statistic read
+    from the partial state costs the whole state, about twice a sum or a count.
+    """
+    check_arguments(resolution, grid, stat, coverage, assignment, grid_conf)
+    return _raster_to_grid(
+        ds, resolution, grid, stat, coverage, assignment, crs, grid_conf
+    )
+
+
 def _partial_states(ds, resolution, grid, coverage, assignment, crs, grid_conf):
     """One list per band of ``{"cellID", "state"}`` (the state is the tuple of :data:`PARTIAL_FIELDS`)."""
     return [

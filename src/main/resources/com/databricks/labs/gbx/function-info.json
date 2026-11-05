@@ -817,6 +817,7 @@
       "description": "Median of the pixel values in each H3 cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.2.0"

@@ -78,34 +78,94 @@ def test_the_statistics_read_from_the_partial_are_the_values_of_the_pass_of_thei
     assert now == before
 
 
-def test_each_table_function_reads_the_one_partial_and_has_no_kernel_of_its_own():
-    partial_impl = f"gbx__{H3P[len('gbx_'):]}"
-    for stat in SPLIT:
-        fn = MAN.functions[f"gbx_rst_h3_rastertogrid{stat}"]
-        l4 = fn.levels["L4"]
-        assert l4["tvf_over"] == H3P and "handler" not in l4
-        (stmt,) = ddl.function_ddl(
-            fn, "c", "s", "file:///w.whl", MAN.uc_dependencies, "0.6"
-        )
-        # one call of the Python function; a generator in a subquery; the projection outside it
-        assert stmt.count(partial_impl) == 1 and "LANGUAGE PYTHON" not in stmt
-        assert (
-            f"FROM (SELECT inline(`c`.`s`.{partial_impl}(tile, resolution, coverage, assignment)))"
-            in stmt
-        )
+GRIDS = ("h3",)  # the grids whose table functions have a kernel of their own
+ALL_STATS = rtg.STATS
 
 
-def test_the_projected_table_function_text_waits_for_the_workspace():
-    """Spec: a SQL table function whose body projects over the generator of a PYTHON function. UC accepts a bare
-    `SELECT inline(python_fn(...))` (the other table functions); the projection over it is proven only on the workspace.
-    The text is pinned so the pass runs what the host judged."""
+@pytest.mark.parametrize("grid", GRIDS)
+@pytest.mark.parametrize("stat", ALL_STATS)
+def test_each_table_function_is_inline_of_a_private_routine_of_its_own_statistic(
+    grid, stat
+):
+    fn = MAN.functions[f"gbx_rst_{grid}_rastertogrid{stat}"]
+    private = f"gbx__rst_{grid}_rastertogrid{stat}_cells"
+    l4 = fn.levels["L4"]
+    assert l4["tvf_over"] == private and "handler" not in l4 and "tvf_select" not in l4
+    assert MAN.private[private].handler.endswith(
+        f":rst_{grid}_rastertogrid{stat}_cells"
+    )
+    (stmt,) = ddl.function_ddl(
+        fn, "c", "s", "file:///w.whl", MAN.uc_dependencies, "0.6"
+    )
+    args = ", ".join(p.name for p in fn.params)
+    assert stmt.endswith(f"RETURN SELECT inline(`c`.`s`.{private}({args}))")
+    assert "LANGUAGE PYTHON" not in stmt
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+@pytest.mark.parametrize("stat", ALL_STATS)
+def test_a_table_function_makes_only_its_own_statistic(ll, monkeypatch, grid, stat):
+    """The pass of a table function is asked for `stat` and for nothing else: not for the partial state (count, sum, M2, min
+    and max), which costs about twice a sum or a count. Reverting the routine to read the partial makes this fail.
+    """
+    _, tile = ll if grid != "bng" else (None, oracles._build("rtg_bng", "/tmp"))
+    passes = []
+    real = gridagg._raster_to_grid
+
+    def spy(ds_, resolution, grid_, agg, *a, **kw):
+        passes.append(agg)
+        return real(ds_, resolution, grid_, agg, *a, **kw)
+
+    monkeypatch.setattr(gridagg, "_raster_to_grid", spy)
+    handler = manifest.resolve_ref(
+        MAN.private[f"gbx__rst_{grid}_rastertogrid{stat}_cells"].handler
+    )
+    rows = handler(*_args(grid, tile))
+    assert rows and passes == [stat]
+
+
+def _args(grid, tile):
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import G
+
+    return {
+        "h3": (tile, 5, "complete", "centroid"),
+        "quadbin": (tile, 11, "complete", "centroid"),
+        "bng": (tile, "1km", "complete", "centroid"),
+        "custom": (tile, G, 1, "complete", "centroid"),
+    }[grid]
+
+
+@pytest.mark.parametrize("stat", ALL_STATS)
+@pytest.mark.parametrize(
+    "coverage,assignment",
+    list(itertools.product(("complete", "sparse"), ("centroid", "covering"))),
+)
+def test_the_single_statistic_pass_is_the_session_value_bit_for_bit(
+    ll, stat, coverage, assignment
+):
+    """`raster_to_grid_single` (a pass of the statistic alone) and `raster_to_grid` (the partial state, or the median's own
+    pass) give the same cells and the same doubles."""
+    ds, _ = ll
+    assert gridagg.raster_to_grid_single(
+        ds, 3, "h3", stat, coverage, assignment
+    ) == gridagg.raster_to_grid(ds, 3, "h3", stat, coverage, assignment)
+
+
+def test_the_partial_stays_public_and_unchanged_for_the_several_statistic_route():
+    fn = MAN.functions[H3P]
+    assert fn.levels["L4"]["handler"].endswith(":rst_h3_rastertogrid_partial")
+    assert fn.kind == "scalar" and [p.name for p in fn.params] == [
+        "tile", "resolution", "coverage", "assignment",
+    ]  # fmt: skip
+
+
+def test_the_table_function_text_has_the_defaults_and_the_columns():
     fn = MAN.functions["gbx_rst_h3_rastertogridvariance"]
     (stmt,) = ddl.function_ddl(
         fn, "c", "s", "file:///w.whl", MAN.uc_dependencies, "0.6"
     )
     assert stmt.endswith(
-        "RETURN SELECT band, cellid AS cellID, try_divide(m2, count) AS measure "
-        "FROM (SELECT inline(`c`.`s`.gbx__rst_h3_rastertogrid_partial(tile, resolution, coverage, assignment)))"
+        "RETURN SELECT inline(`c`.`s`.gbx__rst_h3_rastertogridvariance_cells(tile, resolution, coverage, assignment))"
     )
     assert "RETURNS TABLE (band INT, cellID BIGINT, measure DOUBLE)" in stmt
     assert (
@@ -122,42 +182,6 @@ def test_tvf_select_needs_the_rows_it_projects():
     }
     with pytest.raises(ValueError, match="tvf_select needs tvf_over"):
         manifest._check_sql_levels("gbx_x", raw["levels"], "generator")
-
-
-# --- the SQL projection is the Python twin ------------------------------------------------------------------------------
-STATES = [
-    (4.0, 10.0, 5.0, 1.0, 4.0),  # a cell of four pixels
-    (1.0, 7.5, 0.0, 7.5, 7.5),  # one pixel: variance 0
-    (2.5, 12.5, 3.25, 1.0, 9.0),  # a covering cell: fractional weights
-    (0.0, None, None, None, None),  # covered, no valid pixel
-]
-
-
-@pytest.mark.parametrize("stat", SPLIT)
-def test_the_sql_projection_of_a_table_function_equals_measure_of_on_every_cell_state(
-    spark, stat
-):
-    """The warehouse runs `tvf_select`; the oracle's handler rows read the measure from `gridagg.measure_of`. They are the
-    same function on every state a cell can have, the empty one included (count 0.0, every other measure NULL).
-    """
-    from pyspark.sql import Row
-
-    select = MAN.functions[f"gbx_rst_h3_rastertogrid{stat}"].levels["L4"]["tvf_select"]
-    rows = [
-        Row(band=1, cellid=i, **dict(zip(gridagg.PARTIAL_FIELDS, s)))
-        for i, s in enumerate(STATES)
-    ]
-    schema = "band int, cellid bigint, count double, sum double, m2 double, min double, max double"
-    spark.createDataFrame(rows, schema).createOrReplaceTempView("_gbx_partial")
-    got = {
-        r["cellID"]: r["measure"]
-        for r in spark.sql(f"SELECT {select} FROM _gbx_partial").collect()
-    }
-    for i, state in enumerate(STATES):
-        want = gridagg.measure_of(stat, state)
-        assert got[i] == want or (
-            want is not None and abs(got[i] - want) <= 1e-15 * max(1.0, abs(want))
-        ), (stat, state, got[i], want)
 
 
 # --- the merge across tiles needs Chan's term ----------------------------------------------------------------------------

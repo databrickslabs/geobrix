@@ -595,6 +595,254 @@
       ],
       "returns": "ARRAY<TILE>",
       "summary": "The sub-tiles of a tile cut into overlapping windows of a pixel size, as an array (the table function gbx_rst_tooverlappingtiles reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridavg_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridavg_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The avg of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridavg reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridcount_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridcount_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The count of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridcount reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridmax_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridmax_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The max of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridmax reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridmedian_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridmedian_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The median of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridmedian reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridmin_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridmin_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The min of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridmin reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridstddev_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridstddev_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The stddev of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridstddev reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridsum_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridsum_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The sum of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridsum reads it)."
+    },
+    {
+      "name": "gbx__rst_h3_rastertogridvariance_cells",
+      "handler": "databricks.labs.gbx.uc.rastertogrid:rst_h3_rastertogridvariance_cells",
+      "deps": [
+        "h3",
+        "quadbin",
+        "rasterio",
+        "pyproj",
+        "shapely"
+      ],
+      "params": [
+        [
+          "tile",
+          "TILE"
+        ],
+        [
+          "resolution",
+          "INT"
+        ],
+        [
+          "coverage",
+          "STRING"
+        ],
+        [
+          "assignment",
+          "STRING"
+        ]
+      ],
+      "returns": "array<struct<band:int,cellID:bigint,measure:double>>",
+      "summary": "The variance of each H3 cell of a tile, per band, as an array (the table function gbx_rst_h3_rastertogridvariance reads it)."
     }
   ],
   "functions": [
@@ -805,14 +1053,14 @@
     {"sql_name": "gbx_rst_custom_rastertogridsum", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate."}, {"name": "grid", "session": ["struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>"], "doc": "The grid, as built by `gbx_custom_grid`."}, {"name": "resolution", "session": ["INT"], "doc": "The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`."}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit"}], "min_args": 3, "returns": {"session": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstCustomRasterToGridSumUDTF", "needs": ["rasterio"]}}, "oracle": "RASTER_TO_GRID", "example": "cg_rtg_sum", "since": "0.5.1", "doc": {"summary": "Sum of the pixel values in each custom-grid cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution or grid, an error tile and a tile that cannot be read give no rows. The raster is not reprojected: it must already be in the grid's CRS.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
     {"sql_name": "gbx_rst_custom_rastertogridvariance", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate."}, {"name": "grid", "session": ["struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>"], "doc": "The grid, as built by `gbx_custom_grid`."}, {"name": "resolution", "session": ["INT"], "doc": "The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`."}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit"}], "min_args": 3, "returns": {"session": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstCustomRasterToGridVarianceUDTF", "needs": ["rasterio"]}}, "oracle": "RASTER_TO_GRID", "example": "cg_rtg_variance", "since": "0.5.1", "doc": {"summary": "Population variance of the pixel values in each custom-grid cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the population variance (divisor n) of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution or grid, an error tile and a tile that cannot be read give no rows. The raster is not reprojected: it must already be in the grid's CRS.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
     {"sql_name": "gbx_rst_h3_rastertogrid_partial", "family": "raster-to-grid", "kind": "scalar", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "array<struct<band:int,cellid:bigint,count:double,sum:double,m2:double,min:double,max:double>>", "uc": "array<struct<band:int,cellid:bigint,count:double,sum:double,m2:double,min:double,max:double>>"}, "levels": {"L3": {"register": "udf", "variants": {"c0": "databricks.labs.gbx.pyrx.functions:_h3_rastertogrid_partial_udf"}, "needs": ["rasterio"], "returns": "array<struct<band:int,cellid:bigint,count:double,sum:double,m2:double,min:double,max:double>>"}, "L4": {"handler": "databricks.labs.gbx.uc.tier_b:rst_h3_rastertogrid_partial", "deps": ["h3", "quadbin", "rasterio", "pyproj", "shapely"]}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtgp_value", "since": "0.6.0", "doc": {"summary": "Give the mergeable state of every H3 cell the raster covers, so one pass serves every statistic.", "returns": "An array of structs, one per band and cell: `band` (from 1), `cellid`, `count`, `sum`, `m2`, `min` and `max`. `m2` is the sum of the squared deviations from the cell's mean. A cell that holds no valid pixel (with `'complete'` coverage) has a `count` of 0 and NULL for the rest. The average of a cell is `sum / count`, its variance `m2 / count`, and its standard deviation the square root of that. Tiles of one table merge by summing `count` and `sum`, taking the least `min` and the greatest `max`, and combining `m2` as the recipe on the Unity Catalog page shows. NULL for a NULL tile, a NULL resolution, an error tile or a tile that cannot be read.", "page": "api/raster-functions"}},
-    {"sql_name": "gbx_rst_h3_rastertogridavg", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridAvgUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, try_divide(sum, count) AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_avg", "since": "0.2.0", "doc": {"summary": "Mean of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridcount", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridCountUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, count AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_count", "since": "0.2.0", "doc": {"summary": "Count the pixels in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the number of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of their area shares). A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridmax", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridMaxUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, max AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_max", "since": "0.2.0", "doc": {"summary": "Maximum of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest value of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridmedian", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate."}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15."}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit"}], "min_args": 2, "returns": {"session": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridMedianUDTF", "needs": ["rasterio"]}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_median", "since": "0.2.0", "doc": {"summary": "Median of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the median of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridmin", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridMinUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, min AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_min", "since": "0.2.0", "doc": {"summary": "Minimum of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest value of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridstddev", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridStddevUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, sqrt(try_divide(m2, count)) AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_stddev", "since": "0.4.3", "doc": {"summary": "Population standard deviation of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the population standard deviation (divisor n) of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridsum", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridSumUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, sum AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_sum", "since": "0.4.3", "doc": {"summary": "Sum of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
-    {"sql_name": "gbx_rst_h3_rastertogridvariance", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridVarianceUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx_rst_h3_rastertogrid_partial", "tvf_select": "band, cellid AS cellID, try_divide(m2, count) AS measure"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_variance", "since": "0.4.3", "doc": {"summary": "Population variance of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the population variance (divisor n) of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridavg", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridAvgUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridavg_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_avg", "since": "0.2.0", "doc": {"summary": "Mean of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridcount", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridCountUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridcount_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_count", "since": "0.2.0", "doc": {"summary": "Count the pixels in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the number of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of their area shares). A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridmax", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridMaxUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridmax_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_max", "since": "0.2.0", "doc": {"summary": "Maximum of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest value of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridmedian", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridMedianUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridmedian_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_median", "since": "0.2.0", "doc": {"summary": "Median of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the median of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridmin", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridMinUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridmin_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_min", "since": "0.2.0", "doc": {"summary": "Minimum of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the smallest value of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridstddev", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridStddevUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridstddev_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_stddev", "since": "0.4.3", "doc": {"summary": "Population standard deviation of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the population standard deviation (divisor n) of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridsum", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridSumUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridsum_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_sum", "since": "0.4.3", "doc": {"summary": "Sum of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the sum of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
+    {"sql_name": "gbx_rst_h3_rastertogridvariance", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate.", "uc": "TILE"}, {"name": "resolution", "session": ["INT"], "doc": "The H3 resolution, a whole number from 0 to 15.", "uc": "INT"}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit", "uc": "STRING"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit", "uc": "STRING"}], "min_args": 2, "returns": {"session": "ROWS", "uc": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstH3RasterToGridVarianceUDTF", "needs": ["rasterio"]}, "L4": {"tvf_over": "gbx__rst_h3_rastertogridvariance_cells"}}, "oracle": "RASTER_TO_GRID", "example": "h3_rtg_variance", "since": "0.4.3", "doc": {"summary": "Population variance of the pixel values in each H3 cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the population variance (divisor n) of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
     {"sql_name": "gbx_rst_quadbin_rastertogridavg", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate."}, {"name": "resolution", "session": ["INT"], "doc": "The quadbin zoom level, a whole number from 0 to 20."}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit"}], "min_args": 2, "returns": {"session": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstQuadbinRasterToGridAvgUDTF", "needs": ["rasterio"]}}, "oracle": "RASTER_TO_GRID", "example": "qb_rtg_avg", "since": "0.4.0", "doc": {"summary": "Mean of the pixel values in each quadbin cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the mean of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
     {"sql_name": "gbx_rst_quadbin_rastertogridcount", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate."}, {"name": "resolution", "session": ["INT"], "doc": "The quadbin zoom level, a whole number from 0 to 20."}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit"}], "min_args": 2, "returns": {"session": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstQuadbinRasterToGridCountUDTF", "needs": ["rasterio"]}}, "oracle": "RASTER_TO_GRID", "example": "qb_rtg_count", "since": "0.4.0", "doc": {"summary": "Count the pixels in each quadbin cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the number of the band's valid pixels in the cell (a DOUBLE; with `covering`, the sum of their area shares). A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},
     {"sql_name": "gbx_rst_quadbin_rastertogridmax", "family": "raster-to-grid", "kind": "generator", "status": "stable", "params": [{"name": "tile", "session": ["TILE"], "doc": "The tile to aggregate."}, {"name": "resolution", "session": ["INT"], "doc": "The quadbin zoom level, a whole number from 0 to 20."}, {"name": "coverage", "session": ["STRING"], "doc": "`'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises.", "default": "'complete'", "py": "lit"}, {"name": "assignment", "session": ["STRING"], "doc": "How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises.", "default": "'centroid'", "py": "lit"}], "min_args": 2, "returns": {"session": "ROWS"}, "levels": {"L3": {"register": "udtf", "udtf": "databricks.labs.gbx.pyrx.functions:_RstQuadbinRasterToGridMaxUDTF", "needs": ["rasterio"]}}, "oracle": "RASTER_TO_GRID", "example": "qb_rtg_max", "since": "0.4.0", "doc": {"summary": "Maximum of the pixel values in each quadbin cell, per band.", "returns": "One row per band and cell: `band` (from 1), `cellID` and `measure`, the largest value of the band's valid pixels in the cell. A pixel is valid when the band's NoData and mask (and the alpha band, if the raster has one) say so. A NULL tile, a NULL resolution, an error tile and a tile that cannot be read give no rows. A raster in another CRS is reprojected to EPSG:4326 (nearest neighbour, so values are never interpolated); a raster with no CRS is taken as already in EPSG:4326.", "page": "api/raster-functions"}, "columns": [["band", "INT"], ["cellID", "BIGINT"], ["measure", "DOUBLE"]]},

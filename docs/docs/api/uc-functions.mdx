@@ -199,7 +199,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
 | Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize`, `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` |
 | Tile splitting (table functions) | `gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles`, `gbx_rst_separatebands` |
-| Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance` |
+| Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmedian`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance` |
 | Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
 | From file bytes | `gbx_rst_fromcontent` |
 | Web tiles | `gbx_rst_tilexyz` |
@@ -233,9 +233,10 @@ An array form takes the whole group in one call, and a UC function limits an arr
 
 ### Raster to grid
 
-A table function such as `gbx_rst_h3_rastertogridavg(tile, 7)` gives one statistic for each cell of one tile. It reads the pixels again for each statistic you ask for.
-Seven H3 statistics are table functions on UC: `avg`, `count`, `max`, `min`, `stddev`, `sum` and `variance`. The median runs in a session.
-All seven read the state that `gbx_rst_h3_rastertogrid_partial` gives, so one Python call serves any of them.
+A table function such as `gbx_rst_h3_rastertogridavg(tile, 7)` gives one statistic for each cell of one tile.
+Eight H3 statistics are table functions on UC: `avg`, `count`, `max`, `median`, `min`, `stddev`, `sum` and `variance`.
+Each computes only its own statistic, so a sum or a count costs about half of what the full state costs.
+Use `gbx_rst_h3_rastertogrid_partial` when you want several statistics from one pass, or one statistic across many tiles.
 
 To get a statistic across many tiles, call the partial once for each tile and merge the rows with `GROUP BY`. The average of the per-tile averages is not the average of the cell.
 Sum `count` and `sum` instead. The variance also needs the squared distance of each tile's mean from the merged mean.

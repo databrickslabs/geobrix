@@ -2954,21 +2954,22 @@ Max value per H3 cell.
 ### rst_h3_rastertogridmedian
 
 {/* BEGIN GENERATED gbx_rst_h3_rastertogridmedian: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_rastertogridmedian(tile, resolution, [coverage], [assignment])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_rastertogridmedian(tile, resolution, [coverage], [assignment])` | rows |
 | Python | `rasterx.functions.rst_h3_rastertogridmedian(df, tile, resolution, coverage=None, assignment=None)` | DataFrame |
 
 Rows: `band` `INT`, `cellID` `BIGINT`, `measure` `DOUBLE`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to aggregate. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to aggregate. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, with a NULL measure (0 for a count); `'sparse'` gives only the cells that hold a valid pixel. Any other word raises. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps, in proportion to the overlapping area). Any other word raises. |
 {/* END GENERATED gbx_rst_h3_rastertogridmedian */}
 
 <Impl udtf/>

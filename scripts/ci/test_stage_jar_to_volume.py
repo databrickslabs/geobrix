@@ -173,8 +173,11 @@ def from_wheel(stage, monkeypatch, tmp_path):
     """``run(wheel, files=None)`` -> exit code of ``main()`` for ``--from-wheel <wheel>``; files: a fake Files API."""
     module, root = stage
 
-    def run(wheel, files=None):
-        monkeypatch.setattr(sys, "argv", ["stage_jar_to_volume.py", "--from-wheel", str(wheel)])
+    def run(wheel, files=None, dest=None, argv=None):
+        monkeypatch.setattr(
+            sys, "argv",
+            ["stage_jar_to_volume.py", "--from-wheel", str(wheel)] + (["--dest", dest] if dest else []) + (argv or []),
+        )  # fmt: skip
         if files is None:
             monkeypatch.setenv("GBX_BUNDLE_SKIP_JAR_UPLOAD", "1")
         else:
@@ -295,3 +298,61 @@ def test_from_wheel_runs_even_when_skip_jar_is_set(from_wheel, tmp_path, monkeyp
     assert from_wheel(whl) == 0
     out = capsys.readouterr().out
     assert sha in out and "skipping JAR build" not in out
+
+
+class _FolderFiles(_Files):
+    """A Files API with a folder listing: ``present`` are the names already in the folder."""
+
+    def __init__(self, present=(), short=()):
+        super().__init__(short)
+        self.present = list(present)
+
+    def list_directory_contents(self, path):
+        return [
+            types.SimpleNamespace(is_directory=False, name=n, path=f"{path}/{n}") for n in self.present
+        ]
+
+    def delete(self, path):
+        self.calls.append(("delete", path))
+
+
+def test_dest_stages_the_jar_and_sidecar_to_that_folder_then_removes_the_other_jars_only(from_wheel, tmp_path):
+    whl, sha, _ = _wheel(tmp_path)
+    old = "geobrix-0.5.2-jar-with-dependencies.jar"
+    files = _FolderFiles(
+        present=[old, old + ".sha256", "geobrix-0.6.0+env6-py3-none-any.whl", "notes.txt",
+                 "geobrix-0.6.0-jar-with-dependencies.jar", "geobrix-0.6.0-jar-with-dependencies.jar.sha256"],
+    )  # fmt: skip
+    assert from_wheel(whl, files, dest="/Volumes/c/s/v/t28/uc-scala/") == 0
+    name = "geobrix-0.6.0-jar-with-dependencies.jar"
+    folder = "/Volumes/c/s/v/t28/uc-scala"
+    kinds = [(c[0], c[1]) for c in files.calls]
+    assert kinds[:3] == [("mkdir", folder), ("upload", f"{folder}/{name}"), ("upload", f"{folder}/{name}.sha256")]
+    # the stale JAR and its sidecar go, after both uploads; the wheel, the new JAR and a stranger file stay
+    assert kinds[3:] == [("delete", f"{folder}/{old}"), ("delete", f"{folder}/{old}.sha256")]
+    assert files.calls[2][2] == f"{sha}  {name}\n".encode()
+
+
+def test_dest_removes_nothing_when_the_upload_did_not_land(from_wheel, tmp_path, capsys):
+    whl, _, _ = _wheel(tmp_path)
+    files = _FolderFiles(present=["geobrix-0.5.2-jar-with-dependencies.jar"],
+                         short={"geobrix-0.6.0-jar-with-dependencies.jar"})  # fmt: skip
+    assert from_wheel(whl, files, dest="/Volumes/c/s/v/t28/uc-scala") == 1
+    assert not [c for c in files.calls if c[0] == "delete"]  # the JAR already there survives a failed upload
+
+
+@pytest.mark.parametrize("dest", ["", "/tmp/not-a-volume", "/Volumes/c/s/v"])
+def test_dest_must_be_a_volume_folder_and_needs_from_wheel(from_wheel, stage, tmp_path, monkeypatch, capsys, dest):
+    whl, _, _ = _wheel(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["stage_jar_to_volume.py", "--from-wheel", str(whl), "--dest", dest])
+    monkeypatch.setenv("GBX_BUNDLE_SKIP_JAR_UPLOAD", "1")
+    assert from_wheel.module.main() == 2
+    assert "--dest needs a Volume folder" in capsys.readouterr().err
+
+
+def test_dest_without_from_wheel_is_refused_before_any_build(stage, monkeypatch, capsys):
+    module, _root = stage
+    monkeypatch.setattr(sys, "argv", ["stage_jar_to_volume.py", "--dest", "/Volumes/c/s/v/t28/f"])
+    assert module.main() == 2
+    assert "--dest stages the JAR of an env wheel" in capsys.readouterr().err
+    assert module.docker_calls == []  # no Maven

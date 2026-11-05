@@ -9,7 +9,7 @@ Runs **mvn clean package -DskipTests** and stages **both** jars it produces (one
 ## Usage
 
 ```bash
-bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl>] [--profile NAME] [--log <path>] [--no-wait]
+bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl> [--dest DIR]] [--profile NAME] [--log <path>] [--no-wait]
 ```
 
 ## Options
@@ -20,6 +20,12 @@ bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl>] [--profile NAME
   - It runs the packaging guard on the JAR.
   - It uploads the JAR, then `<jar>.sha256` (`sha256sum` format), to `<volroot>/geobrix/<version>/jar/`, checking each size.
   - `GBX_ARTIFACT_VOLUME` is not used. `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` does the checks and stops before the upload.
+- `--dest DIR` - with `--from-wheel`: stage the JAR to the Volume folder `DIR`, not the versioned `jar/` folder.
+  - `DIR` is `/Volumes/<catalog>/<schema>/<volume>/<folder>`. It is created when missing.
+  - It uploads the JAR, then its `.sha256` sidecar, and checks each uploaded size.
+  - It then removes every other `geobrix-*-jar-with-dependencies.jar` and sidecar in `DIR`.
+  - Other files stay, so the folder can also hold the env wheel: `gbx.uc.install` then finds the JAR with no `jar=` argument.
+  - It exits 2 without `--from-wheel`, or when `DIR` is not a Volume folder.
 - `--profile NAME` - the Databricks config profile for the upload. Default: `DATABRICKS_CONFIG_PROFILE` from the environment, else from `examples/tests/databricks_cluster_config.env`.
 - `--log <path>`, `--no-wait` - as in the other commands.
 

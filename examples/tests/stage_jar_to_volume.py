@@ -13,6 +13,11 @@ from examples/tests/databricks_cluster_config.env. Overwrites if file already ex
 RECORD, runs the packaging guard on it, and stages it with a <jar>.sha256 sidecar to
 <volroot>/geobrix/<version>/jar/ (the bundle volroot; GBX_ARTIFACT_VOLUME is not used or touched).
 GBX_BUNDLE_SKIP_JAR_UPLOAD=1 does the checks and stops before the upload.
+
+--dest DIR (with --from-wheel) stages the JAR and its sidecar to the Volume folder DIR instead (created if missing), then
+removes every other geobrix-*-jar-with-dependencies.jar (and its sidecar) there and verifies each uploaded size. The
+folder's other files stay, so it can hold the env wheel too: an install folder that names the Scala functions' JAR
+without a ``jar=`` argument. DIR is /Volumes/<catalog>/<schema>/<volume>/<folder>.
 """
 from __future__ import annotations
 
@@ -26,6 +31,7 @@ import tempfile
 import zipfile
 import zlib
 from pathlib import Path
+from typing import Optional
 
 from _artifact_volume import bundle_root, prune_stale, upload_verified, versioned_dir, wheel_version
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
@@ -158,9 +164,21 @@ def _workspace_client():
     return (WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)), 0
 
 
-def _stage_from_wheel(wheel: Path, project_root: Path, skip_upload: bool) -> int:
+def _prune_other_jars(w, folder: str, jar_name: str) -> int:
+    """Remove every other geobrix JAR and JAR sidecar in ``folder`` (the files of ``jar_name`` stay); 0, or 1 after
+    one line on stderr. Run only after the new JAR and its sidecar have landed."""
+    try:
+        prune_stale(w, folder, "geobrix-", "-jar-with-dependencies.jar", jar_name)
+        prune_stale(w, folder, "geobrix-", "-jar-with-dependencies.jar.sha256", jar_name + ".sha256")
+    except Exception as e:
+        print(f"Error: uploaded {jar_name} but could not remove the other JARs in {folder}: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _stage_from_wheel(wheel: Path, project_root: Path, skip_upload: bool, dest: Optional[str] = None) -> int:
     """--from-wheel: check the JAR bundled in an env wheel and stage it, with its sha256 sidecar, to
-    ``<volroot>/geobrix/<version>/jar/``. No build, no container."""
+    ``<volroot>/geobrix/<version>/jar/`` (or ``dest``, which then keeps no other geobrix JAR). No build, no container."""
     if not wheel.is_file():
         print(f"PRECONDITION MISSING: {wheel} is not a file; gbx:data:stage-jar --from-wheel not run", file=sys.stderr)
         return 1
@@ -179,7 +197,7 @@ def _stage_from_wheel(wheel: Path, project_root: Path, skip_upload: bool) -> int
         w, rc = _workspace_client()
         if w is None:
             return rc
-        folder = versioned_dir(bundle_root(), wheel_version(wheel.name), "jar")
+        folder = dest or versioned_dir(bundle_root(), wheel_version(wheel.name), "jar")
         try:
             w.files.create_directory(folder)  # also creates its parents
         except Exception as e:
@@ -188,7 +206,8 @@ def _stage_from_wheel(wheel: Path, project_root: Path, skip_upload: bool) -> int
         sidecar = Path(tmp) / (jar.name + ".sha256")
         sidecar.write_text(f"{sha}  {jar.name}\n")  # sha256sum's format
         # the JAR first: a sidecar on the Volume then means the JAR before it landed
-        return upload_verified(w, jar, f"{folder}/{jar.name}") or upload_verified(w, sidecar, f"{folder}/{sidecar.name}")
+        rc = upload_verified(w, jar, f"{folder}/{jar.name}") or upload_verified(w, sidecar, f"{folder}/{sidecar.name}")
+        return rc or (_prune_other_jars(w, folder, jar.name) if dest else 0)
 
 
 def main() -> int:
@@ -196,6 +215,17 @@ def main() -> int:
     skip_jar_upload = os.environ.get("GBX_BUNDLE_SKIP_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent
+
+    dest = None
+    if "--dest" in sys.argv:
+        i = sys.argv.index("--dest")
+        dest = (sys.argv[i + 1] if i + 1 < len(sys.argv) else "").rstrip("/")
+        if not dest.startswith("/Volumes/") or dest.count("/") < 5:
+            print("--dest needs a Volume folder: /Volumes/<catalog>/<schema>/<volume>/<folder>", file=sys.stderr)
+            return 2
+        if "--from-wheel" not in sys.argv:
+            print("--dest stages the JAR of an env wheel: pass --from-wheel <env wheel>", file=sys.stderr)
+            return 2
 
     # --from-wheel is asked for by name, so it runs even when GBX_BUNDLE_SKIP_JAR=1 is in the environment
     # (that flag skips the JAR *build*, which this mode does not have).
@@ -205,7 +235,7 @@ def main() -> int:
         if not value or value.startswith("--"):
             print("--from-wheel needs the path of an env wheel", file=sys.stderr)
             return 2
-        return _stage_from_wheel(Path(value), project_root, skip_jar_upload)
+        return _stage_from_wheel(Path(value), project_root, skip_jar_upload, dest)
 
     # GBX_BUNDLE_SKIP_JAR: skip the JAR step ENTIRELY (no Maven build, no upload) —
     # for light-tier-only changes (pyrx/pyvx/pygx wheel) where the staged JAR is

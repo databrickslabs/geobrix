@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 show_help() {
-    echo "Usage: bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl>] [--profile <name>] [--log <path>] [--no-wait] [--help]"
+    echo "Usage: bash scripts/commands/gbx-data-stage-jar.sh [--from-wheel <whl> [--dest DIR]] [--profile <name>] [--log <path>] [--no-wait] [--help]"
     echo ""
     echo "Build the GeoBrix JAR (in Docker) and stage both JARs to Databricks Volumes."
     echo "With --from-wheel, stage the JAR bundled in an env wheel instead (no build, no Docker, no lock)."
@@ -20,6 +20,9 @@ show_help() {
     echo "  --from-wheel <whl>  Stage the JAR bundled in this env wheel to <bundle volroot>/geobrix/<version>/jar/"
     echo "              with a <jar>.sha256 sidecar. Refused unless the JAR is the wheel's version and its"
     echo "              sha256 is the one in the wheel's RECORD. GBX_ARTIFACT_VOLUME is not used."
+    echo "  --dest DIR  With --from-wheel: stage the JAR and its sidecar to the Volume folder DIR (created when missing)"
+    echo "              instead, then remove every other geobrix JAR there. Other files stay, so DIR can hold the env"
+    echo "              wheel too. DIR is /Volumes/<catalog>/<schema>/<volume>/<folder>. Refused without --from-wheel."
     echo "  --profile <name>  Databricks config profile for the upload (default: DATABRICKS_CONFIG_PROFILE"
     echo "              in the environment or examples/tests/databricks_cluster_config.env)"
     echo "  --log <path>  Write output to a log file (filename → test-logs/<name>)"
@@ -38,11 +41,13 @@ show_help() {
     echo "Examples:"
     echo "  bash scripts/commands/gbx-data-stage-jar.sh"
     echo "  bash scripts/commands/gbx-data-stage-jar.sh --from-wheel dist/env6/geobrix-0.6.0+env6-py3-none-any.whl"
+    echo "  bash scripts/commands/gbx-data-stage-jar.sh --from-wheel dist/env6/geobrix-0.6.0+env6-py3-none-any.whl --dest /Volumes/c/s/v/t28/uc-scala"
     echo "  GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD=1 bash scripts/commands/gbx-data-stage-jar.sh"
 }
 
 LOG_PATH=""
 FROM_WHEEL=""
+DEST=""
 PROFILE=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -55,6 +60,12 @@ while [[ $# -gt 0 ]]; do
             # absolute now: the command changes to the project root below
             FROM_WHEEL="$(cd "$(dirname "$2")" 2>/dev/null && pwd)/$(basename "$2")"
             shift 2 ;;
+        --dest)
+            if [[ -z "${2:-}" || "$2" == --* ]]; then
+                echo "--dest needs a Volume folder" >&2
+                exit 2
+            fi
+            DEST="$2"; shift 2 ;;
         --profile)
             if [[ -z "${2:-}" || "$2" == --* ]]; then
                 echo "--profile needs a profile name" >&2
@@ -67,6 +78,11 @@ while [[ $# -gt 0 ]]; do
         *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
     esac
 done
+
+if [[ -n "$DEST" && -z "$FROM_WHEEL" ]]; then
+    echo "--dest stages the JAR of an env wheel: pass --from-wheel <env wheel>" >&2
+    exit 2
+fi
 
 cd "$PROJECT_ROOT" || exit 1
 setup_log_file "$LOG_PATH"
@@ -85,6 +101,7 @@ esac
 # --from-wheel without an upload import no SDK, so they keep system python3 and need neither network nor uv.
 PY_ARGS=()
 [[ -n "$FROM_WHEEL" ]] && PY_ARGS+=(--from-wheel "$FROM_WHEEL")
+[[ -n "$DEST" ]] && PY_ARGS+=(--dest "$DEST")
 SKIP_UPLOAD=false
 case "$(printf '%s' "${GBX_BUNDLE_SKIP_JAR_UPLOAD:-}" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes) SKIP_UPLOAD=true ;;

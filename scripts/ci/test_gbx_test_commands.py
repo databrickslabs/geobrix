@@ -1459,6 +1459,24 @@ def test_stage_jar_from_wheel_takes_no_lock_and_passes_the_wheel_by_absolute_pat
     assert Path(path).is_absolute() and Path(path).resolve() == wheel.resolve()  # not relative to the project root
 
 
+def test_stage_jar_dest_reaches_the_launcher_only_with_from_wheel(sandbox):
+    log = _python3_logging_args(sandbox)
+    wheel = sandbox.root / "w" / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.parent.mkdir()
+    wheel.write_bytes(b"w")
+    for args in (["--dest", "/Volumes/c/s/v/f"], ["--dest"], ["--dest", "--from-wheel", str(wheel)]):
+        res = sandbox.run("gbx-data-stage-jar.sh", *args, GBX_BUNDLE_SKIP_JAR_UPLOAD="1")
+        assert res.returncode == 2 and "--dest" in res.output, (args, res.output)
+        assert not log.exists(), args  # neither the launcher nor a build ran
+    res = sandbox.run("gbx-data-stage-jar.sh", "--from-wheel", str(wheel), "--dest", "/Volumes/c/s/v/f",
+                      GBX_BUNDLE_SKIP_JAR_UPLOAD="1")  # fmt: skip
+    assert res.returncode == 0, res.output
+    profile, script, *rest = log.read_text().split()
+    assert script.endswith("examples/tests/stage_jar_to_volume.py")
+    assert rest[0] == "--from-wheel" and Path(rest[1]).resolve() == wheel.resolve()
+    assert rest[2:] == ["--dest", "/Volumes/c/s/v/f"], rest
+
+
 @pytest.mark.parametrize("args", [["--from-wheel"], ["--from-wheel", "--no-wait"], ["--profile"], ["--profile", "--no-wait"]])
 def test_stage_jar_options_that_need_a_value_are_refused(sandbox, args):
     log = _python3_logging_args(sandbox)

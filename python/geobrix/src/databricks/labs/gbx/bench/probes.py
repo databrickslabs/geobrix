@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections import Counter
@@ -1002,6 +1003,64 @@ _COMBINE_PROBE = (
 )  # fmt: skip
 
 
+# The key of the combine input that holds more tiles than one UC function call takes (12 > 8).
+_COMBINE_WIDE_KEY = "many"
+
+
+def _wide_stats_expr(prefix: str, tile: str) -> str:
+    """One string of a tile's size and band statistics (rounded to 3 digits): the cell both surfaces write for the key
+    that the UC reference cannot combine in one call. ``prefix`` is the schema qualifier ("" in a session).
+    """
+    parts = [
+        f"CAST({prefix}gbx_rst_width({tile}) AS STRING)",
+        f"CAST({prefix}gbx_rst_height({tile}) AS STRING)",
+    ]
+    parts += [
+        f"to_json(transform({prefix}gbx_rst_{fn}({tile}), x -> round(x, 3)))"
+        for fn in ("avg", "min", "max")
+    ]
+    return "concat_ws('|', " + ", ".join(parts) + ")"
+
+
+def _wide_session_stats(spark, catalog: str, schema: str, label: str) -> dict:
+    """``{"wide_stats": ..}`` (or ``{"wide_error": ..}``): the band statistics of the wide key combined in one session
+    call, which is what the warehouse leg cannot compute and ``compare_combine_many`` holds its target to.
+    """
+    op = label.split(":", 1)[1]
+    src = f"`{catalog}`.`{schema}`.{PROC_PREFIX}cmb_src"
+    try:
+        value = spark.sql(
+            f"SELECT {_wide_stats_expr('', 'c')} FROM (SELECT gbx_rst_combine{op}(collect_list(tile)) AS c "
+            f"FROM {src} WHERE tile_key = '{_COMBINE_WIDE_KEY}')"
+        ).first()[0]
+        return {"wide_stats": value}
+    except Exception as exc:  # noqa: BLE001 - recorded, the run goes on
+        return {"wide_error": f"{type(exc).__name__}: {str(exc)[:300]}"}
+
+
+def compare_combine_many(warehouse: dict, serverless: dict) -> List[str]:
+    """The warehouse's band statistics of the wide combine key against the Serverless run's session result, per op.
+
+    ``warehouse`` is the results file of the procedure statements (``gbx-uc-sql --out``), ``serverless`` the dict
+    ``run_procedures`` returned. One line per op that differs or is missing; an empty list means they agree.
+    """
+    bad = []
+    for op, _decimals in _COMBINE_PROBE:
+        got = (
+            warehouse.get(f"gbx_combine_by_key:{op}:{_COMBINE_WIDE_KEY}_stats") or {}
+        ).get("value")
+        want = (
+            (serverless.get("recipes") or {}).get(f"gbx_combine_by_key:{op}") or {}
+        ).get("wide_stats")
+        if got is None or want is None:
+            bad.append(
+                f"{op}: missing ({'warehouse' if got is None else 'serverless'} result)"
+            )
+        elif str(got) != str(want):
+            bad.append(f"{op}: warehouse {got} != session {want}")
+    return bad
+
+
 def _proc_tile_inputs():
     """The tile inputs of the tile cases: ``([(tile_key, tile)], zone tile)``, each tile the v2 tile dict of a 4 x 4
     GeoTIFF. Session and warehouse build the same bytes. The mosaic keys: ``a`` (two tiles side by side), ``b`` (one),
@@ -1402,15 +1461,25 @@ def proc_warehouse_statements(
                 f"INSERT INTO {t('cmb_src')} VALUES {cvalues}",
             ]
         setup.append(f"DROP TABLE IF EXISTS {t('cmb_' + op)}")
+        # The reference is one UC combine call per key, which takes at most 8 tiles: the key past that (``many``, 12
+        # tiles, two levels of the procedure's tree) is left out of the diff, and its band statistics are written as
+        # one cell for `compare_combine_many` to hold against the session result of the Serverless run.
         case(
             "gbx_combine_by_key",
             setup,
             {"source_table": lit("cmb_src"), "target_table": lit("cmb_" + op), "op": f"'{op}'"},
-            f"SELECT tile_key, {stat('tile')} FROM {t('cmb_' + op)}",
+            f"SELECT tile_key, {stat('tile')} FROM {t('cmb_' + op)} WHERE tile_key <> '{_COMBINE_WIDE_KEY}'",
             f"SELECT tile_key, {stat('c')} FROM (SELECT tile_key, {q}.gbx_rst_combine{op}(collect_list(tile)) AS c "
-            f"FROM {t('cmb_src')} GROUP BY tile_key)",
+            f"FROM {t('cmb_src')} WHERE tile_key <> '{_COMBINE_WIDE_KEY}' GROUP BY tile_key)",
             label=f"gbx_combine_by_key:{op}",
         )  # fmt: skip
+        out.append(
+            (
+                f"gbx_combine_by_key:{op}:{_COMBINE_WIDE_KEY}_stats",
+                f"SELECT {_wide_stats_expr(q + '.', 'tile')} AS stats FROM {t('cmb_' + op)} "
+                f"WHERE tile_key = '{_COMBINE_WIDE_KEY}'",
+            )
+        )
     case(
         "gbx_zonal_stats",
         [
@@ -1676,6 +1745,8 @@ def run_procedures(
                 ),
             )  # fmt: skip
             rec["session_s"], rec["rows"] = round(rwall, 2), len(got)
+            if name == "gbx_combine_by_key":
+                rec.update(_wide_session_stats(spark, catalog, schema, label))
             if rerr:
                 rec["error"] = rerr
                 continue
@@ -2206,3 +2277,514 @@ def run_p1(
         return out
     finally:
         run_.stop()
+
+
+# --- the workspace mechanism checks (Task 28 run F) and the engine L4 probe (M-6) ---------------------------------------
+
+MECH = "gbx_mvp_t28_"
+MECH_MIB = (1, 16, 64)
+MECH_ENGINE_DEPS = ("rasterio", "pyproj", "shapely")  # the pins of the probe sandboxes
+M6_FN = "gbx_mvp_se_l4_probe"
+M6_TILE = ("1MiB", 1 << 20)  # the reference tile: a 512 x 512 Float32 ZSTD GeoTIFF
+
+_M6_BODY = (
+    "import sys\n"
+    "from databricks.labs.gbx import manifest\n"
+    "from databricks.labs.gbx._gdal_policy import open_bytes\n"
+    "from databricks.labs.gbx.engine import run as engine_run\n"
+    "d = t.asDict(recursive=True) if hasattr(t, 'asDict') else dict(t)\n"
+    "md = dict(d.get('metadata') or {})\n"
+    "res = engine_run.run(manifest.load().functions['gbx_rst_slope'], [bytes(d['raster'])], {'unit': 'degrees'})\n"
+    "if res is None or res.raster is None:\n"
+    "    md['m6'] = 'error|' + str(None if res is None else res.error)[:200]\n"
+    "else:\n"
+    "    with open_bytes(bytes(res.raster)) as ds:\n"
+    "        a = ds.read(1, masked=True)\n"
+    "        stats = f'{int(a.count())}:{float(a.min()):.3f}:{float(a.max()):.3f}'\n"
+    "    md['m6'] = f\"ok|valid:min:max={stats}|pyspark_imported={'pyspark' in sys.modules}\"\n"
+    "    d['raster'] = res.raster\n"
+    "d['metadata'] = md\n"
+    "return d"
+)
+
+
+def _env(wheel_uri: str, deps: dict, names: Sequence[str] = MECH_ENGINE_DEPS) -> str:
+    from databricks.labs.gbx.uc.ddl import quote_str
+
+    return (
+        "ENVIRONMENT (dependencies = "
+        + quote_str(
+            json.dumps([f"geobrix @ {wheel_uri}"] + [f"{k}=={deps[k]}" for k in names])
+        )
+        + ", environment_version = '6')"
+    )
+
+
+def _tile_from_content() -> str:
+    """The v2 tile struct built from the ``content`` column of ``read_files(..., format => 'binaryFile')``."""
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    return (
+        "CAST(named_struct('cellid', CAST(0 AS BIGINT), 'raster', content, 'path', NULL, 'path_mode', NULL, "
+        "'window', NULL, 'clip_polygon', NULL, 'clip_crs', NULL, 'crs', 'EPSG:32633', "
+        f"'metadata', map('src', 'm6')) AS {TILE_SQL})"
+    )
+
+
+def m6_statements(
+    catalog: str, schema: str, tile_dir: str, wheel_uri: str, deps: dict
+) -> List[Tuple[str, str]]:
+    """M-6 (engine L4): a UC Python function ``gbx_mvp_se_l4_probe(t TILE) RETURNS TILE`` whose handler runs the GDAL spec
+    engine for ``gbx_rst_slope`` on the 1 MiB reference tile as ``(cid, sql)``: the CREATE, the call and the DROP. Pass: the
+    call answers ``ok|valid:min:max=...|pyspark_imported=False``. The Serverless notebook and the warehouse run the same text.
+    """
+    from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.uc.ddl import quote_ident, quote_str
+
+    q = f"{quote_ident('catalog', catalog)}.{quote_ident('schema', schema)}"
+    src = quote_str(f"{tile_dir}/p2_{M6_TILE[0]}.bin")
+    return [
+        (
+            "m6:create",
+            f"CREATE OR REPLACE FUNCTION {q}.{M6_FN}(t {TILE_SQL}) RETURNS {TILE_SQL} LANGUAGE PYTHON\n"
+            f"{_env(wheel_uri, deps)}\nAS $$\n{_M6_BODY}\n$$",
+        ),
+        (
+            "m6:call",
+            "SELECT concat_ws('|', CAST(length(r.t.raster) AS STRING), r.t.metadata['m6']) AS out FROM "
+            f"(SELECT {q}.{M6_FN}({_tile_from_content()}) AS t FROM read_files({src}, format => 'binaryFile')) r",
+        ),
+        ("m6:drop", f"DROP FUNCTION IF EXISTS {q}.{M6_FN}"),
+    ]
+
+
+def m6_ok(value) -> bool:
+    """The M-6 pass: a slope tile came back and ``pyspark`` was never imported by the handler."""
+    text = str(value)
+    return "|ok|valid:min:max=" in "|" + text and "pyspark_imported=False" in text
+
+
+def run_m6(spark, catalog: str, schema: str, volume_dir: str) -> dict:
+    """M-6, Serverless leg: create the probe, call it on the 1 MiB reference tile, drop it. The tile is written to
+    ``<volume_dir>/m6_tiles``; ``volume_dir`` holds the one env 6 wheel. Prints ``[T28 M6] <step> START`` / ``DONE`` lines.
+
+    Returns ``{"wheel", "call": value, "pass": bool, "errors": {step: message}, "dropped"}``.
+    """
+    from databricks.labs.gbx import manifest, uc
+    from databricks.labs.gbx.bench.uc_perf import _Run
+
+    wheel = uc._single_wheel(volume_dir)
+    tile_dir = f"{volume_dir.rstrip('/')}/m6_tiles"
+    stmts = dict(
+        m6_statements(
+            catalog,
+            schema,
+            tile_dir,
+            "file://" + wheel,
+            manifest.load().uc_dependencies,
+        )
+    )
+    run_ = _Run("T28 M6", "t28-m6", 4, 1800.0)
+    out: dict = {"wheel": wheel, "errors": {}, "dropped": False}
+    try:
+        _, err, _ = run_.step("stage", lambda: p2_stage_tiles(tile_dir, (M6_TILE,)))
+        if err:
+            out["errors"]["stage"] = err
+        _, err, _ = run_.step("create", lambda: spark.sql(stmts["m6:create"]))
+        if err:
+            out["errors"]["create"] = err
+        else:
+            val, err, _ = run_.step(
+                "call", lambda: spark.sql(stmts["m6:call"]).first()[0]
+            )
+            out["call"] = val
+            if err:
+                out["errors"]["call"] = err
+    finally:
+        _, err, _ = run_.step("drop", lambda: spark.sql(stmts["m6:drop"]))
+        out["dropped"] = err is None
+        run_.stop()
+    out["pass"] = not out["errors"] and m6_ok(out.get("call"))
+    return out
+
+
+def _write_raw_tiff(path: str, mib: int) -> int:
+    """An uncompressed single-band Float32 GeoTIFF of about ``mib`` MiB on disk (a gradient): the file's size."""
+    import math as _math
+
+    import numpy as np
+    from rasterio.transform import from_origin
+    from rasterio.windows import Window
+
+    from databricks.labs.gbx._gdal_policy import open_data
+
+    side = _math.isqrt(mib * 1024 * 1024 // 4)
+    with open_data(
+        path + ".part", "w", driver="GTiff", width=side, height=side, count=1, dtype="float32",
+        crs="EPSG:32633", transform=from_origin(500000.0, 5000000.0, 10.0, 10.0),
+    ) as dst:  # fmt: skip
+        cols = np.arange(side, dtype="float32")
+        for row in range(0, side, 256):
+            h = min(256, side - row)
+            rows = np.arange(row, row + h, dtype="float32")[:, None]
+            dst.write(
+                rows * 0.001 + cols[None, :] * 0.0001, 1, window=Window(0, row, side, h)
+            )
+    os.replace(path + ".part", path)
+    return os.path.getsize(path)
+
+
+def stage_mech_tiles(tile_dir: str, mibs: Sequence[int] = MECH_MIB) -> dict:
+    """Write what the mechanism checks read into ``tile_dir``: ``mech_<n>MiB.tif`` (uncompressed, about ``n`` MiB ON DISK,
+    for the ``read_files`` route) and ``perf_<n>MiB.tif`` (decoded ``n`` MiB, small on disk, for the merge at size). A
+    file that is already there is kept."""
+    from databricks.labs.gbx.bench import uc_perf
+
+    os.makedirs(tile_dir, exist_ok=True)
+    out = dict(uc_perf.perf_stage_tiles(tile_dir, tuple(mibs)))
+    for mib in mibs:
+        path = f"{tile_dir}/mech_{mib}MiB.tif"
+        size = (
+            os.path.getsize(path)
+            if os.path.exists(path)
+            else _write_raw_tiff(path, mib)
+        )
+        out[f"mech_{mib}MiB.tif"] = {"path": path, "bytes": size}
+    return out
+
+
+def _mech_python_fn(
+    q: str, name: str, params: str, returns: str, body: str, env: str
+) -> str:
+    return (
+        f"CREATE OR REPLACE FUNCTION {q}.{name}({params}) RETURNS {returns} LANGUAGE PYTHON\n"
+        f"{env}\nAS $$\n{body}\n$$"
+    )
+
+
+_MECH_GEOM_BODY = (
+    "import shapely\n"
+    "out = []\n"
+    "for g in gs:\n"
+    "    kind = type(g).__module__ + '.' + type(g).__name__\n"
+    "    z = 'unknown'\n"
+    "    try:\n"
+    "        raw = g if isinstance(g, (bytes, bytearray)) else getattr(g, 'wkb', None)\n"
+    "        if raw is not None:\n"
+    "            z = str(bool(shapely.has_z(shapely.from_wkb(bytes(raw)))))\n"
+    "    except Exception as exc:\n"
+    "        z = 'error:' + type(exc).__name__\n"
+    "    out.append(kind + '|' + z)\n"
+    "return '~'.join(out)"
+)
+_MECH_PARTIAL_BODY = (
+    "return [{'band': 1, 'cellid': 7, 'count': 4.0, 'sum': 10.0}, "
+    "{'band': 1, 'cellid': 8, 'count': 2.0, 'sum': 3.0}]"
+)
+# (cid suffix, statement, expectation): expectation is ("any",), ("eq", text), ("contains", text) or ("error", text)
+Stmt = Tuple[str, str, tuple]
+
+
+def t28_mech_units(
+    catalog: str, schema: str, tile_dir: str, wheel_uri: str, deps: dict
+) -> List[dict]:
+    """The workspace mechanism checks of the Task 28 pass, as units of statements with the result each one expects.
+
+    A unit is ``{"id", "title", "surfaces", "statements": [(cid, sql, expect)], "drops": [(cid, sql)]}``. ``surfaces``
+    names where it runs: ``s6`` (a Serverless notebook) and ``w`` (the warehouse). The statements of a unit run in order;
+    a unit is ``ok`` when every expectation holds. Every routine is named ``gbx_mvp_t28_*`` and dropped at the end.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx import uc as _uc
+    from databricks.labs.gbx.uc import ddl
+    from databricks.labs.gbx.uc.ddl import quote_ident, quote_str
+
+    q = f"{quote_ident('catalog', catalog)}.{quote_ident('schema', schema)}"
+    man = manifest.load()
+    bare = ddl.sql_type("ARRAY<STRUCT<band:INT,cellid:BIGINT,count:DOUBLE,sum:DOUBLE>>")
+    lean_env = "ENVIRONMENT (environment_version = '6')"
+    units: List[dict] = []
+
+    def unit(uid, title, surfaces, statements, drops=()):
+        units.append(
+            {"id": uid, "title": title, "surfaces": tuple(surfaces), "statements": [
+                (f"{uid}:{c}", s, e) for c, s, e in statements
+            ], "drops": [(f"{uid}:{c}", s) for c, s in drops]}
+        )  # fmt: skip
+
+    t_add, t_shadow = f"{MECH}tmp_add", f"{MECH}shadow"
+    unit(
+        "f1", "a bodied CREATE TEMPORARY FUNCTION under Spark Connect", ("s6",),
+        [
+            ("create", f"CREATE OR REPLACE TEMPORARY FUNCTION {t_add}(x INT) RETURNS INT RETURN x + 1", ("any",)),
+            ("call", f"SELECT {t_add}(41) AS out", ("eq", "42")),
+        ],
+        [("drop", f"DROP TEMPORARY FUNCTION IF EXISTS {t_add}")],
+    )  # fmt: skip
+    unit(
+        "f2", "an unqualified name: the session temporary function, not the schema function", ("s6",),
+        [
+            ("create_schema", f"CREATE OR REPLACE FUNCTION {q}.{t_shadow}(x INT) RETURNS STRING RETURN 'schema'", ("any",)),
+            ("create_temp", f"CREATE OR REPLACE TEMPORARY FUNCTION {t_shadow}(x INT) RETURNS STRING RETURN 'temp'", ("any",)),
+            ("use", f"USE {q}", ("any",)),
+            ("call_unqualified", f"SELECT {t_shadow}(1) AS out", ("eq", "temp")),
+            ("call_qualified", f"SELECT {q}.{t_shadow}(1) AS out", ("eq", "schema")),
+        ],
+        [("drop_temp", f"DROP TEMPORARY FUNCTION IF EXISTS {t_shadow}"), ("drop_schema", f"DROP FUNCTION IF EXISTS {q}.{t_shadow}")],
+    )  # fmt: skip
+    stub = f"{MECH}tvf_stub"
+    unit(
+        "f3", "a SQL table function whose body raises (a TVF stub)", ("s6", "w"),
+        [
+            ("create", f"CREATE OR REPLACE FUNCTION {q}.{stub}(x INT) RETURNS TABLE (a INT) RETURN SELECT CAST(raise_error('gbx_mvp_t28 stub: runs in a session') AS INT) AS a", ("any",)),
+            ("call", f"SELECT * FROM {q}.{stub}(1)", ("error", "stub: runs in a session")),
+        ],
+        [("drop", f"DROP FUNCTION IF EXISTS {q}.{stub}")],
+    )  # fmt: skip
+    part, proj = f"{MECH}partial", f"{MECH}proj"
+    unit(
+        "f4", "a projection over a generator over a Python function, as a table function", ("s6", "w"),
+        [
+            ("create_python", _mech_python_fn(q, part, "n INT", bare, _MECH_PARTIAL_BODY, lean_env), ("any",)),
+            ("create_tvf", f"CREATE OR REPLACE FUNCTION {q}.{proj}(n INT) RETURNS TABLE (band INT, cellID BIGINT, measure DOUBLE) RETURN SELECT band, cellid AS cellID, try_divide(sum, count) AS measure FROM (SELECT inline({q}.{part}(n)))", ("any",)),
+            ("call", f"SELECT concat_ws('|', CAST(count(*) AS STRING), CAST(sum(measure) AS STRING)) AS out FROM {q}.{proj}(3)", ("eq", "2|4.0")),
+        ],
+        [("drop_tvf", f"DROP FUNCTION IF EXISTS {q}.{proj}"), ("drop_python", f"DROP FUNCTION IF EXISTS {q}.{part}")],
+    )  # fmt: skip
+    geom = f"{MECH}geom_array"
+    pt = "CAST(st_geomfromewkt('SRID=4326;POINT Z (1 2 3)') AS GEOMETRY(ANY))"
+    unit(
+        "f5", "an ARRAY<GEOMETRY(ANY)> parameter: what the handler gets, and whether it keeps Z", ("s6", "w"),
+        [
+            ("create", _mech_python_fn(q, geom, f"gs {ddl.sql_type('ARRAY<GEOMETRY(ANY)>')}", "STRING", _MECH_GEOM_BODY, _env(wheel_uri, deps, ("shapely",))), ("any",)),
+            ("call", f"SELECT {q}.{geom}(array({pt}, {pt})) AS out", ("contains", "|True")),
+        ],
+        [("drop", f"DROP FUNCTION IF EXISTS {q}.{geom}")],
+    )  # fmt: skip
+    proc = f"{MECH}proc_temp"
+    unit(
+        "f6", "a temporary table inside a procedure", ("s6", "w"),
+        [
+            ("create", f"CREATE OR REPLACE PROCEDURE {q}.{proc}()\nLANGUAGE SQL\nSQL SECURITY INVOKER\nAS BEGIN\nCREATE TEMPORARY TABLE {MECH}tmp_t AS SELECT 1 AS a;\nSELECT count(*) FROM {MECH}tmp_t;\nEND", ("any",)),
+            ("call", f"CALL {q}.{proc}()", ("any",)),
+        ],
+        [("drop", f"DROP PROCEDURE IF EXISTS {q}.{proc}")],
+    )  # fmt: skip
+    width, fromc = f"{q}.gbx_rst_width", f"{q}.gbx_rst_fromcontent"
+    unit(
+        "f7",
+        "read_files(binaryFile) into gbx_rst_fromcontent at 1, 16 and 64 MiB",
+        ("s6", "w"),
+        [
+            (
+                f"{mib}MiB",
+                "SELECT concat_ws('|', CAST(length(content) AS STRING), CAST("
+                f"{width}({fromc}(content, 'GTiff')) AS STRING)) AS out FROM read_files("
+                f"{quote_str(f'{tile_dir}/mech_{mib}MiB.tif')}, format => 'binaryFile')",
+                ("any",),
+            )
+            for mib in MECH_MIB
+        ],
+    )
+    lean, allp = f"{MECH}deps_lean", f"{MECH}deps_all"
+    width_fn = man.functions["gbx_rst_width"]
+    ver = _uc._public_version()
+
+    def probe_copy(name, shared):
+        (create,) = ddl.function_ddl(
+            width_fn, catalog, schema, wheel_uri, man.uc_dependencies, ver,
+            name=name, shared_deps=shared, helpers=False,
+        )  # fmt: skip
+        return create
+
+    tile = f"(SELECT {_tile_from_content()} AS t FROM read_files({quote_str(f'{tile_dir}/mech_1MiB.tif')}, format => 'binaryFile'))"
+    unit(
+        "f8", "install and first-call time: one function's own packages vs every package of the manifest", ("s6", "w"),
+        [
+            ("create_lean", probe_copy(lean, False), ("any",)),
+            ("call_lean", f"SELECT {q}.{lean}(t) AS out FROM {tile}", ("any",)),
+            ("create_all", probe_copy(allp, True), ("any",)),
+            ("call_all", f"SELECT {q}.{allp}(t) AS out FROM {tile}", ("any",)),
+        ],
+        [("drop_lean", f"DROP FUNCTION IF EXISTS {q}.{lean}"), ("drop_all", f"DROP FUNCTION IF EXISTS {q}.{allp}")],
+    )  # fmt: skip
+    unit(
+        "f9",
+        "ESCAPE '!' in the version-check LIKE",
+        ("s6", "w"),
+        [
+            (
+                "like",
+                f"SELECT count(*) AS out FROM {quote_ident('catalog', catalog)}.information_schema.routines "
+                f"WHERE lower(routine_schema) = {quote_str(schema.lower())} AND routine_name LIKE 'gbx!_%' ESCAPE '!'",
+                ("any",),
+            )
+        ],
+    )
+    merge_src = (
+        lambda mib: f"read_files({quote_str(f'{tile_dir}/perf_{mib}MiB.tif')}, format => 'binaryFile')"
+    )  # noqa: E731
+    merge = f"{q}.gbx_rst_merge"
+    unit(
+        "f10",
+        "one merge of two tiles at size (decoded 16 and 64 MiB each)",
+        ("s6", "w"),
+        [
+            (
+                f"merge_{mib}MiB",
+                f"SELECT {width}({merge}(array(t, t))) AS out FROM (SELECT {fromc}(content, 'GTiff') AS t FROM {merge_src(mib)})",
+                ("any",),
+            )
+            for mib in (16, 64)
+        ],
+    )
+    return units
+
+
+def mech_expectation(expect: tuple, entry: Optional[dict]) -> Optional[str]:
+    """None when a statement's result ``entry`` (``{"value": ..}`` or ``{"error": ..}``, as ``gbx-uc-sql`` writes it) meets
+    its expectation; else one line saying how it did not."""
+    if entry is None:
+        return "no result"
+    kind = expect[0]
+    if kind == "error":
+        if "error" not in entry:
+            return f"expected an error with {expect[1]!r}, got a value {str(entry.get('value'))[:80]!r}"
+        return (
+            None
+            if expect[1] in entry["error"]
+            else f"error without {expect[1]!r}: {entry['error'][:160]}"
+        )
+    if "error" in entry:
+        return f"error: {entry['error'][:200]}"
+    value = str(entry.get("value"))
+    if kind == "eq" and value != expect[1]:
+        return f"got {value[:80]!r}, want {expect[1]!r}"
+    if kind == "contains" and expect[1] not in value:
+        return f"got {value[:120]!r}, want it to contain {expect[1]!r}"
+    return None
+
+
+def mech_statements(
+    catalog: str,
+    schema: str,
+    tile_dir: str,
+    wheel_uri: str,
+    deps: dict,
+    surface: str = "w",
+) -> List[Tuple[str, str]]:
+    """The mechanism checks of one surface (``w``: the warehouse, ``s6``) as ``(cid, sql)`` for ``gbx-uc-sql``: each unit's
+    statements in order, then every DROP. The product functions the f7, f8 and f10 statements call must be installed, and
+    the tiles of :func:`stage_mech_tiles` must be in ``tile_dir`` (the Serverless run stages them).
+    """
+    units = [
+        u
+        for u in t28_mech_units(catalog, schema, tile_dir, wheel_uri, deps)
+        if surface in u["surfaces"]
+    ]
+    out = [(cid, sql) for u in units for cid, sql, _ in u["statements"]]
+    return out + [d for u in units for d in u["drops"]]
+
+
+def check_mech_results(
+    results: dict,
+    catalog: str,
+    schema: str,
+    tile_dir: str,
+    wheel_uri: str,
+    deps: dict,
+    surface: str = "w",
+) -> dict:
+    """``{unit id: {"title", "ok", "failures": {cid: why}}}`` for a results file of :func:`mech_statements`."""
+    out = {}
+    for u in t28_mech_units(catalog, schema, tile_dir, wheel_uri, deps):
+        if surface not in u["surfaces"]:
+            continue
+        bad = {}
+        for cid, _sql, expect in u["statements"]:
+            why = mech_expectation(expect, results.get(cid))
+            if why:
+                bad[cid] = why
+        out[u["id"]] = {"title": u["title"], "ok": not bad, "failures": bad}
+    return out
+
+
+def run_t28_mechanisms(spark, catalog: str, schema: str, volume_dir: str) -> dict:
+    """The workspace mechanism checks on Serverless env 6 (Task 28 run F): each unit of :func:`t28_mech_units` in order, the
+    error of a statement recorded as the measurement, every probe dropped at the end. ``volume_dir`` holds the one env 6
+    wheel and gets a ``mech_tiles/`` folder. Needs the product UC functions installed in ``catalog.schema``.
+
+    Prints ``[T28 mech] <unit> START`` and ``DONE <s>s ...`` per unit and a RUNNING line every 60 s.
+
+    Returns ``{"wheel", "staged", "units": {id: {"title", "ok", "statements": {cid: {"value"|"error", "wall_s"}},
+    "failures"}}, "dropped", "ok"}``.
+    """
+    from databricks.labs.gbx import manifest, uc
+    from databricks.labs.gbx.bench.uc_perf import _Run
+
+    wheel = uc._single_wheel(volume_dir)
+    tile_dir = f"{volume_dir.rstrip('/')}/mech_tiles"
+    units = [
+        u
+        for u in t28_mech_units(
+            catalog,
+            schema,
+            tile_dir,
+            "file://" + wheel,
+            manifest.load().uc_dependencies,
+        )
+        if "s6" in u["surfaces"]
+    ]
+    run_ = _Run("T28 mech", "t28-mech", len(units) + 3, 1800.0)
+    out: dict = {"wheel": wheel, "units": {}, "dropped": []}
+    prev, _, _ = run_.step(
+        "session",
+        lambda: spark.sql("SELECT current_catalog(), current_schema()").first(),
+    )
+
+    def first_cell(sql):
+        rows = spark.sql(sql).collect()
+        return str(rows[0][0]) if rows and len(rows[0]) else None
+
+    def run_unit(u):
+        rec = {"title": u["title"], "statements": {}, "failures": {}}
+        for cid, sql, expect in u["statements"]:
+            t0 = time.time()
+            try:
+                entry = {"value": first_cell(sql)}
+            except Exception as exc:  # noqa: BLE001 - the error is the measurement
+                entry = {"error": " ".join(str(exc).split())[:600]}
+            entry["wall_s"] = [round(time.time() - t0, 2)]
+            rec["statements"][cid] = entry
+            why = mech_expectation(expect, entry)
+            if why:
+                rec["failures"][cid] = why
+        rec["ok"] = not rec["failures"]
+        return rec
+
+    try:
+        out["staged"], err, _ = run_.step("stage", lambda: stage_mech_tiles(tile_dir))
+        if err:
+            out["staged"] = {"error": err}
+        for u in units:
+            rec, err, _ = run_.step(u["id"], lambda u=u: run_unit(u))
+            out["units"][u["id"]] = (
+                rec if err is None else {"title": u["title"], "ok": False, "error": err}
+            )
+    finally:
+
+        def drop():
+            if prev is not None:
+                spark.sql(f"USE `{prev[0]}`.`{prev[1]}`")
+            for u in units:
+                for cid, sql in u["drops"]:
+                    try:
+                        spark.sql(sql)
+                        out["dropped"].append(cid)
+                    except Exception as exc:  # noqa: BLE001 - keep dropping the rest
+                        out["dropped"].append(f"{cid}: ERROR {type(exc).__name__}")
+
+        run_.step("cleanup", drop)
+        run_.stop()
+    out["ok"] = all(r.get("ok") for r in out["units"].values())
+    return out

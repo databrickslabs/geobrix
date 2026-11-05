@@ -297,3 +297,339 @@ def test_a_step_that_returns_counts_prints_them_on_its_done_line(capsys):
     out = capsys.readouterr().out
     assert "[T28 oracles] GRID_SCALAR START" in out
     assert "DONE" in out and "ok failures=0 cases=9 functions=2" in out
+
+
+# ---- the mechanism checks and the engine probe ------------------------------------------------------------------
+
+import re  # noqa: E402
+
+import pytest  # noqa: E402
+
+WHEEL_URI = "file:///Volumes/c/s/v/f/geobrix-0.6.0+env6-py3-none-any.whl"
+TILE_DIR = "/Volumes/c/s/v/f/mech_tiles"
+
+
+def _units():
+    return probes.t28_mech_units(
+        "cat", "sch", TILE_DIR, WHEEL_URI, manifest.load().uc_dependencies
+    )
+
+
+def test_mechanism_units_have_unique_ids_and_statement_ids():
+    units = _units()
+    ids = [u["id"] for u in units]
+    assert ids == [f"f{i}" for i in range(1, 11)]
+    cids = [c for u in units for c, _s, _e in u["statements"]] + [
+        c for u in units for c, _s in u["drops"]
+    ]
+    assert len(cids) == len(set(cids))
+    # START/DONE labels of the runner are the unit ids: one pair each
+    assert len({u["id"] for u in units}) == len(units)
+
+
+def _outside_literals(sql: str) -> str:
+    """The statement without its $$ bodies and quoted strings (a ';' inside either is data, not a separator)."""
+    return re.sub(
+        r"'(?:[^']|'')*'", "''", re.sub(r"\$\$.*?\$\$", "$$$$", sql, flags=re.S)
+    )
+
+
+def test_every_mechanism_statement_is_one_statement_and_every_routine_a_probe():
+    for u in _units():
+        for cid, sql, _e in u["statements"]:
+            assert "\n\n" not in sql, cid
+            assert not any(ln.lstrip().startswith("--") for ln in sql.splitlines()), cid
+            if cid != "f6:create":  # a procedure body holds statements of its own
+                assert ";" not in _outside_literals(sql), cid
+        for cid, sql in u["drops"]:
+            assert sql.startswith(
+                (
+                    "DROP FUNCTION IF EXISTS",
+                    "DROP TEMPORARY FUNCTION IF EXISTS",
+                    "DROP PROCEDURE IF EXISTS",
+                )
+            ), cid
+        for cid, sql, _e in u["statements"]:
+            m = re.match(
+                r"CREATE OR REPLACE (?:TEMPORARY )?(?:FUNCTION|PROCEDURE) (\S+?)[( ]",
+                sql,
+            )
+            if m:
+                assert m.group(1).split(".")[-1].startswith("gbx_mvp_t28_"), cid
+        for _cid, sql in u["drops"]:
+            assert re.search(r"gbx_mvp_t28_", sql)
+
+
+def test_product_functions_named_by_the_mechanism_checks_exist_and_are_qualified():
+    man = manifest.load()
+    for u in _units():
+        for cid, sql, _e in u["statements"]:
+            code = re.sub(r"\$\$.*?\$\$", "", _outside_literals(sql), flags=re.S)
+            for m in re.finditer(r"(?<![\w.])(`cat`\.`sch`\.)?(gbx_[a-z0-9_]+)", code):
+                qual, name = m.groups()
+                if name.startswith("gbx_mvp_t28_"):
+                    continue
+                assert name in man.functions and "L4" in man.functions[name].levels, (
+                    cid,
+                    name,
+                )
+                assert qual, (cid, name)  # 3-level where it is a schema function
+
+
+def test_the_surfaces_are_where_the_checklist_runs_them():
+    on = {u["id"]: u["surfaces"] for u in _units()}
+    assert (
+        on["f1"] == on["f2"] == ("s6",)
+    )  # a session temporary function has no warehouse form
+    assert all(on[f"f{i}"] == ("s6", "w") for i in range(3, 11))
+    w = probes.mech_statements(
+        "cat", "sch", TILE_DIR, WHEEL_URI, manifest.load().uc_dependencies
+    )
+    assert not any(c.startswith(("f1:", "f2:")) for c, _ in w)
+    kinds = [sql.startswith("DROP") for _c, sql in w]
+    assert any(kinds) and kinds == sorted(
+        kinds
+    )  # every DROP comes after every statement
+
+
+def test_mech_expectation_kinds():
+    ok = probes.mech_expectation
+    assert ok(("eq", "42"), {"value": 42}) is None
+    assert "want '42'" in ok(("eq", "42"), {"value": "41"})
+    assert ok(("error", "stub"), {"error": "x stub y"}) is None
+    assert "expected an error" in ok(("error", "stub"), {"value": 1})
+    assert "without" in ok(("error", "stub"), {"error": "other"})
+    assert ok(("contains", "|True"), {"value": "a.B|True"}) is None
+    assert ok(("any",), {"value": None}) is None
+    assert "error" in ok(("any",), {"error": "boom"})
+    assert ok(("any",), None) == "no result"
+
+
+def test_check_mech_results_names_the_failed_statement_of_a_unit():
+    args = ("cat", "sch", TILE_DIR, WHEEL_URI, manifest.load().uc_dependencies)
+    pairs = probes.mech_statements(*args)
+    good = {c: {"value": "x"} for c, _ in pairs}
+    good["f3:call"] = {"error": "gbx_mvp_t28 stub: runs in a session"}
+    good["f4:call"] = {"value": "2|4.0"}
+    good["f5:call"] = {"value": "m.Geom|True~m.Geom|True"}
+    done = probes.check_mech_results(good, *args)
+    assert all(r["ok"] for r in done.values()), done
+    bad = dict(good, **{"f4:call": {"error": "UNSUPPORTED_SQL_UDF_USAGE"}})
+    done = probes.check_mech_results(bad, *args)
+    assert done["f4"]["ok"] is False and "f4:call" in done["f4"]["failures"]
+    assert done["f3"]["ok"] is True  # one unit's failure does not spread
+
+
+class _Rows:
+    def __init__(self, rows):
+        self.rows = rows
+
+    def collect(self):
+        return self.rows
+
+    def first(self):
+        return self.rows[0]
+
+
+class _MechSpark:
+    """Answers each mechanism statement as a good workspace would, and records them."""
+
+    def __init__(self, fail=()):
+        self.seen, self.fail = [], fail
+
+    def sql(self, text):
+        self.seen.append(text)
+        if any(f in text for f in self.fail):
+            raise RuntimeError("UNSUPPORTED_SQL_UDF_USAGE " + text[:40])
+        if "current_catalog()" in text:
+            return _Rows([("cat0", "sch0")])
+        if "gbx_mvp_t28_tvf_stub(1)" in text:
+            raise RuntimeError("gbx_mvp_t28 stub: runs in a session")
+        if "tmp_add(41)" in text:
+            return _Rows([("42",)])
+        if "shadow(1)" in text:
+            return _Rows([("schema" if "`sch`." in text else "temp",)])
+        if "proj(3)" in text:
+            return _Rows([("2|4.0",)])
+        if "geom_array" in text and text.startswith("SELECT"):
+            return _Rows([("m.Geom|True~m.Geom|True",)])
+        return _Rows([("x",)])
+
+
+def test_run_t28_mechanisms_runs_every_serverless_unit_and_drops_every_probe(
+    monkeypatch, tmp_path
+):
+    from databricks.labs.gbx import uc
+
+    wheel = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.write_bytes(b"w")
+    monkeypatch.setattr(uc, "_single_wheel", lambda d: str(wheel))
+    monkeypatch.setattr(probes, "stage_mech_tiles", lambda d, mibs=(): {"ok": 1})
+    spark = _MechSpark()
+    out = probes.run_t28_mechanisms(spark, "cat", "sch", str(tmp_path))
+    assert out["ok"] is True and set(out["units"]) == {f"f{i}" for i in range(1, 11)}
+    assert out["units"]["f3"]["statements"]["f3:call"]["error"].startswith(
+        "gbx_mvp_t28 stub"
+    )
+    drops = [t for t in spark.seen if t.startswith("DROP")]
+    creates = {
+        m.group(1)
+        for t in spark.seen
+        if (
+            m := re.match(
+                r"CREATE OR REPLACE (?:TEMPORARY )?(?:FUNCTION|PROCEDURE) (\S+?)[( ]", t
+            )
+        )
+    }
+    dropped = {m.group(1) for t in drops if (m := re.search(r"IF EXISTS (\S+)", t))}
+    assert creates == dropped  # nothing created is left behind
+    assert spark.seen[-1].startswith("DROP") or any(
+        t.startswith("USE `cat0`") for t in spark.seen
+    )
+
+
+def test_run_t28_mechanisms_records_a_refused_shape_and_still_drops(
+    monkeypatch, tmp_path
+):
+    from databricks.labs.gbx import uc
+
+    wheel = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.write_bytes(b"w")
+    monkeypatch.setattr(uc, "_single_wheel", lambda d: str(wheel))
+    monkeypatch.setattr(probes, "stage_mech_tiles", lambda d, mibs=(): {})
+    spark = _MechSpark(fail=("proj(n INT)",))
+    out = probes.run_t28_mechanisms(spark, "cat", "sch", str(tmp_path))
+    assert (
+        out["units"]["f4"]["ok"] is False
+        and "f4:create_tvf" in out["units"]["f4"]["failures"]
+    )
+    assert out["units"]["f1"]["ok"] is True and out["ok"] is False
+    assert any(
+        "DROP FUNCTION IF EXISTS" in t and "gbx_mvp_t28_partial" in t
+        for t in spark.seen
+    )
+
+
+def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dropped():
+    stmts = dict(
+        probes.m6_statements(
+            "cat",
+            "sch",
+            "/Volumes/c/s/v/f/m6_tiles",
+            WHEEL_URI,
+            manifest.load().uc_dependencies,
+        )
+    )
+    assert list(stmts) == ["m6:create", "m6:call", "m6:drop"]
+    assert (
+        "gbx_mvp_se_l4_probe" in stmts["m6:create"] and "RETURNS " in stmts["m6:create"]
+    )
+    assert (
+        "functions['gbx_rst_slope']" in stmts["m6:create"]
+        and "engine_run.run(" in stmts["m6:create"]
+    )
+    assert (
+        "'unit': 'degrees'" in stmts["m6:create"]
+        and "environment_version = '6'" in stmts["m6:create"]
+    )
+    assert "p2_1MiB.bin" in stmts["m6:call"] and "binaryFile" in stmts["m6:call"]
+    assert stmts["m6:drop"] == "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_se_l4_probe"
+    assert probes.m6_ok("123456|ok|valid:min:max=1000:0.0:12.5|pyspark_imported=False")
+    assert not probes.m6_ok("123|ok|valid:min:max=1:0:1|pyspark_imported=True")
+    assert not probes.m6_ok("123|error|a GDAL failure")
+
+
+def test_the_m6_handler_runs_the_engine_on_the_reference_tile_when_gdal_is_at_the_pin():
+    from databricks.labs.gbx.engine import run as engine_run
+
+    why = engine_run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+    body = probes._M6_BODY
+    ns = {}
+    exec(
+        "def handler(t):\n" + "".join("    " + ln + "\n" for ln in body.splitlines()),
+        ns,
+    )  # noqa: S102
+    out = ns["handler"](
+        {"raster": probes.p2_tile_bytes("1MiB", 1 << 20), "metadata": {"src": "m6"}}
+    )
+    assert out["metadata"]["m6"].startswith("ok|valid:min:max=")
+    assert probes.m6_ok("1|" + out["metadata"]["m6"])
+
+
+# ---- the warehouse combine reference ---------------------------------------------------------------------------
+
+
+def test_no_warehouse_combine_reference_combines_more_tiles_than_one_uc_call_takes():
+    from collections import Counter
+
+    from databricks.labs.gbx.uc.procedures import TREE_FAN_IN
+
+    sizes = Counter(k for k, _ in probes._proc_combine_inputs())
+    wide = probes._COMBINE_WIDE_KEY
+    assert sizes[wide] > TREE_FAN_IN  # the key that cannot have a one-call reference
+    assert max(n for k, n in sizes.items() if k != wide) <= TREE_FAN_IN
+    stmts = dict(probes.proc_warehouse_statements("c", "s", "/Volumes/c/s/v/scratch"))
+    for op, _d in probes._COMBINE_PROBE:
+        diff = stmts[f"gbx_combine_by_key:{op}:diff"]
+        assert diff.count(f"tile_key <> '{wide}'") == 4  # both sides of the two EXCEPTs
+        stats = stmts[f"gbx_combine_by_key:{op}:{wide}_stats"]
+        assert f"tile_key = '{wide}'" in stats
+        assert f"`c`.`s`.gbxproc_cmb_{op}" in stats
+
+
+def test_the_wide_key_statistics_are_the_same_cell_on_both_surfaces():
+    warehouse = probes._wide_stats_expr("`c`.`s`.", "tile")
+    session = probes._wide_stats_expr("", "c")
+    assert warehouse.replace("`c`.`s`.", "").replace("tile", "c") == session
+
+
+def test_compare_combine_many_holds_the_warehouse_to_the_session_result():
+    ops = [op for op, _d in probes._COMBINE_PROBE]
+    wh = {
+        f"gbx_combine_by_key:{op}:many_stats": {"value": f"4|4|[1.0]|[0.0]|[2.0]{op}"}
+        for op in ops
+    }
+    s6 = {
+        "recipes": {
+            f"gbx_combine_by_key:{op}": {"wide_stats": f"4|4|[1.0]|[0.0]|[2.0]{op}"}
+            for op in ops
+        }
+    }
+    assert probes.compare_combine_many(wh, s6) == []
+    wh["gbx_combine_by_key:sum:many_stats"] = {"value": "4|4|[9.0]|[0.0]|[2.0]sum"}
+    del s6["recipes"]["gbx_combine_by_key:min"]
+    del wh["gbx_combine_by_key:max:many_stats"]
+    bad = probes.compare_combine_many(wh, s6)
+    assert len(bad) == 3
+    assert any(b.startswith("sum: warehouse") for b in bad)
+    assert any(b.startswith("min: missing (serverless") for b in bad)
+    assert any(b.startswith("max: missing (warehouse") for b in bad)
+
+
+def test_the_serverless_run_records_the_session_statistics_of_the_wide_key():
+    seen = []
+
+    class S:
+        def sql(self, text):
+            seen.append(text)
+            return _Rows([("4|4|[1.0]|[0.0]|[2.0]",)])
+
+    out = probes._wide_session_stats(S(), "c", "s", "gbx_combine_by_key:avg")
+    assert out == {"wide_stats": "4|4|[1.0]|[0.0]|[2.0]"}
+    assert (
+        "gbx_rst_combineavg(collect_list(tile))" in seen[0]
+        and "`c`.`s`.gbxproc_cmb_src" in seen[0]
+    )
+
+    class Bad:
+        def sql(self, text):
+            raise RuntimeError("boom")
+
+    assert (
+        "boom"
+        in probes._wide_session_stats(Bad(), "c", "s", "gbx_combine_by_key:avg")[
+            "wide_error"
+        ]
+    )

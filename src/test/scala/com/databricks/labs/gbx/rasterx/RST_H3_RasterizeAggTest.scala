@@ -227,4 +227,18 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
         row should not be null
     }
+
+    test("gbx_h3_cell_bbox starts GDAL from its config, so an executor's first GDAL use is not the osr natives") {
+        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
+        val plain = RST_H3_CellBBox(
+          Literal(cell), Literal(4326), Literal("centroids"), Literal(0), Literal("EPSG:3857"))
+        val withConf = plain.copy(exprConfExpr = Literal(encodedEmpty(), StringType))
+        // the config is a child, so a plan hands it to the executor (the default is replaced by the optimizer)
+        withConf.children.last shouldBe Literal(encodedEmpty(), StringType)
+        withConf.withNewChildren(withConf.children).asInstanceOf[RST_H3_CellBBox].exprConfExpr shouldBe withConf.exprConfExpr
+        val a = plain.eval(InternalRow.empty).asInstanceOf[InternalRow]
+        val b = withConf.eval(InternalRow.empty).asInstanceOf[InternalRow]
+        GDALManager.isEnabled shouldBe true
+        (0 until 4).map(b.getDouble) shouldBe (0 until 4).map(a.getDouble)
+    }
 }

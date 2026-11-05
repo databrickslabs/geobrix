@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.rasterx.expressions.grid
 
-import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.H3
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operations.{OSRTransformGeometry, SpatialRefOps}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -26,17 +27,23 @@ import scala.collection.mutable.ArrayBuffer
  *  degenerate point bbox); in `"spatial_envelope"` mode from the hexagon boundary.
  *  When `kring_pad > 0` the cell is expanded to its k-ring neighbourhood first.
  *  Matches the lightweight tier (`pyrx.functions._h3_cell_bbox_udf`).
+ *
+ *  The CRS work uses GDAL's `osr` bindings, so the expression carries the serialised config (`exprConfExpr`, as the
+ *  tile expressions do) and starts GDAL on whichever JVM evaluates it. Without that, the first GDAL use of an executor
+ *  JVM was this expression and it died with `UnsatisfiedLinkError: org.gdal.osr.osrJNI...` (the driver's JVM had loaded
+ *  GDAL for an earlier function, which is why a local run never saw it).
  */
 case class RST_H3_CellBBox(
     cellidExpr:   Expression,
     sridExpr:     Expression,
     modeExpr:     Expression,
     kringPadExpr: Expression,
-    outCrsExpr:   Expression
+    outCrsExpr:   Expression,
+    exprConfExpr: Expression = ExpressionConfigExpr()
 ) extends Expression with CodegenFallback {
 
     override def children: Seq[Expression] =
-        Seq(cellidExpr, sridExpr, modeExpr, kringPadExpr, outCrsExpr)
+        Seq(cellidExpr, sridExpr, modeExpr, kringPadExpr, outCrsExpr, exprConfExpr)
     override def nullable: Boolean = true
     override def foldable: Boolean = children.forall(_.foldable)
 
@@ -45,6 +52,12 @@ case class RST_H3_CellBBox(
     override def eval(input: InternalRow): Any = {
         val raw = cellidExpr.eval(input)
         if (raw == null) return null
+        // The optimizer replaces ExpressionConfigExpr with the literal config; one still unreplaced (an expression
+        // evaluated directly, outside a plan) has no config to start GDAL from.
+        RST_H3_CellBBox.initGdal(exprConfExpr match {
+            case _: ExpressionConfigExpr => null
+            case e                       => e.eval(input)
+        })
         val cellId = raw match {
             case l: Long => l
             case i: Int  => i.toLong
@@ -137,13 +150,19 @@ case class RST_H3_CellBBox(
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5))
 }
 
 /** Companion: SQL name gbx_h3_cell_bbox, 2/3/4-arg builder. */
 object RST_H3_CellBBox extends WithExpressionInfo {
 
     override def name: String = "gbx_h3_cell_bbox"
+
+    /** Start GDAL in this JVM from the serialised config (idempotent per JVM; a NULL config leaves it to the caller). */
+    private[grid] def initGdal(conf: Any): Unit = conf match {
+        case null => ()
+        case s    => GDALManager.init(ExpressionConfig.fromB64(s.toString))
+    }
 
     val BBoxType: StructType = StructType(Seq(
         StructField("xmin", DoubleType, nullable = false),

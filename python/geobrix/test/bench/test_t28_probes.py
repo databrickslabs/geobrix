@@ -859,3 +859,75 @@ def test_stage_mech_tiles_writes_the_files_with_their_sizes_through_the_guarded_
     perf = out["perf_1MiB.tif"]  # the decoded-size tile comes from the perf writer
     assert os.path.getsize(perf["path"]) == perf["bytes"]
     assert not list(tmp_path.glob("*.part"))  # the temp name was renamed away
+
+
+def test_p1_caps_forgets_the_cached_probe_then_flattens_the_capabilities(monkeypatch):
+    from databricks.labs.gbx.manager import capabilities as cap
+
+    seen = []
+    jar = cap.JarIdentity("0.6.0", "abc")
+    found = cap.Capabilities(True, False, jar, "", "", True)
+    monkeypatch.setattr(cap, "forget", lambda s: seen.append(("forget", s)))
+    monkeypatch.setattr(
+        cap, "detect", lambda s, need_jvm: seen.append(("detect", need_jvm)) or found
+    )
+    out = probes._p1_caps("sess")
+    assert seen == [("forget", "sess"), ("detect", True)]  # re-probed, JVM required
+    assert out["jar"] == {"version": "0.6.0", "sha256": "abc"}
+    assert out["jar_usable"] is True and out["connect"] is True
+    monkeypatch.setattr(
+        cap,
+        "detect",
+        lambda s, need_jvm: cap.Capabilities(True, True, None, "r", "r", False),
+    )
+    none = probes._p1_caps("sess")
+    assert none["jar"] is None and none["jar_usable"] is False
+
+
+def test_oracle_capped_lowers_the_cap_per_row_runs_it_and_restores_it(monkeypatch):
+    import databricks.labs.gbx as gbx
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+
+    events = []
+
+    class Conf:
+        calls = 0
+
+        def set(self, key, value):
+            Conf.calls += 1
+            if Conf.calls == 1:  # the first row's session refuses the cap
+                raise RuntimeError("CONFIG_NOT_AVAILABLE")
+            events.append(("set", key, value))
+
+        def unset(self, key):
+            events.append(("unset", key))
+
+    class Sess:
+        conf = Conf()
+
+    ok = type("C", (), {"cid": "decoded_over_cap_error_tile"})()
+    refused = type("C", (), {"cid": "dem_decoded_over_cap"})()
+    fn = type("F", (), {"sql_name": "gbx_rst_x"})()
+    monkeypatch.setattr(
+        gbx, "register", lambda s, only, **pin: events.append(("register", only, pin))
+    )
+    monkeypatch.setattr(
+        probes,
+        "_oracle_run_cases",
+        lambda s, f, cases, tmp: events.append(("run", [c.cid for c in cases]))
+        or [(cases[0], None)],
+    )
+    rec = {"skipped": {}}
+    ran = probes._oracle_capped(Sess(), fn, [refused, ok], {"_levels": 1}, "/t", rec)
+    cap = str(oracles.READ_CAP_ROWS["decoded_over_cap_error_tile"])
+    assert ran == [(ok, None)]  # the refused row never ran
+    assert rec["skipped"] == {
+        "dem_decoded_over_cap": "cannot lower the read cap: CONFIG_NOT_AVAILABLE"
+    }
+    assert events == [  # lowered, registered, run, then unset and registered again
+        ("set", READ_CAP_KEY, cap),
+        ("register", ["gbx_rst_x"], {"_levels": 1}),
+        ("run", ["decoded_over_cap_error_tile"]),
+        ("unset", READ_CAP_KEY),
+        ("register", ["gbx_rst_x"], {"_levels": 1}),
+    ]

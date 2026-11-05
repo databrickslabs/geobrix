@@ -152,7 +152,11 @@ See [`--levels` details](#levels-details) for the metrics.
 - `--zarr-ladder <csv>`: also run the size-ladder read legs on these rungs (`10MB` to `10GB`). Alone, it implies `--zarr-only` and drops the cases `R1` to `W2` unless `--zarr-cases` is given.
 - `--zarr-ladder-family <csv>`: `county_wind`, `global_11km`. Default: both.
 - `--zarr-ladder-root <path>`: the stores, `<family>/<rung>.zarr`, from `gbx:bench:gen-data --zarr-ladder`. Default: `<volume>/_probe/zarr/ladder`.
-- `--zarr-ladder-cases <csv>`: `ZL-R1` full table, `ZL-R2` box, `ZL-R3` 100 sites, `ZL-R4` wind speed and mean, `ZL-R5` one hour as a tile. Default: all.
+- `--zarr-ladder-cases <csv>`: the read legs `ZL-R1` full table, `ZL-R2` box, `ZL-R3` 100 sites, `ZL-R4` wind speed and mean, `ZL-R5` one hour as a tile. The write legs take a table of cells to a store: `ZL-W1` into a manifest store, `ZL-W2` into a plain store (`transactional=False`), `ZL-W3` the baseline (the tasks write the shards with zarr-python), `ZL-W4` and `ZL-W5` append one more day to the manifest and the plain store. Default: all.
+  - The write legs read the store as a table, add `wind_speed`, pack the cells into blocks on the shard grid and stage them in a Delta table. Then they write. Each write is verified by a read-back (count and sums).
+  - On a classic cluster the legs also record the busy share and peak memory from the Spark UI, and print the ladder tables and the gate verdicts at the end. The metrics are in `zarr_ladder_metrics.json` in the run's output folder.
+- `--zarr-ladder-scratch <path>`: where the write legs put their stores and staging tables' files. They empty it. Default: `<volume>/_probe/zarr/ladder_out/<run-id>`. The manifest and staging tables go to `--zarr-schema`, and the legs drop them.
+- `--zarr-ladder-generate`: the job makes the ladder stores that are missing at `--zarr-ladder-root`. It writes each on the driver's local disk, then copies the files to the root, the root `zarr.json` last. A store that is there is kept.
 - `--zarr-ladder-budget-mib <n>`: plan the reads with this decoded unit budget. Default: the runtime's own (64 MiB on Serverless, 1536 MiB on a classic cluster).
 - `--extras <csv>`: other feature extras of the env wheel (`stac`, `vizx`, `databricks`). The extras install after the wheel. A `light_*` name is refused.
 

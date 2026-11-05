@@ -128,7 +128,10 @@ def test_the_skeleton_plans_a_big_rung_without_its_data(tmp_path):
 
 
 def test_cases_are_registered_with_the_notebooks_steps():
-    assert list(zlb.LADDER_CASES) == ["ZL-R1", "ZL-R2", "ZL-R3", "ZL-R4", "ZL-R5"]
+    assert list(zlb.LADDER_CASES) == [
+        "ZL-R1", "ZL-R2", "ZL-R3", "ZL-R4", "ZL-R5",
+        "ZL-W1", "ZL-W2", "ZL-W3", "ZL-W4", "ZL-W5",
+    ]  # fmt: skip
     names = [zlb.ladder_case(c)[0] for c in zlb.LADDER_CASES]
     assert names == [
         "full_table",
@@ -136,6 +139,11 @@ def test_cases_are_registered_with_the_notebooks_steps():
         "sample_100pts",
         "wind_speed_hourly_mean",
         "one_hour_tile",
+        "table_to_zarr_managed",
+        "table_to_zarr_plain",
+        "table_to_zarr_tasks",
+        "append_day_managed",
+        "append_day_plain",
     ]
     with pytest.raises(KeyError, match="no Zarr ladder case"):
         zlb.ladder_case("ZL-R9")
@@ -235,11 +243,17 @@ def test_local_timing_runs_the_zl_set_and_the_cluster_launcher_takes_the_ladder_
         dict(
             zarr_store="s", zarr_cog_dir="c", zarr_scratch="x", zarr_schema="a.b", run_id="r", zarr_cases="",
             zarr_ladder="100MB,1GB", zarr_ladder_family="county_wind", zarr_ladder_root="/Volumes/c/s/v/zl",
-            zarr_ladder_cases="ZL-R1,ZL-R5", zarr_ladder_budget="16",
+            zarr_ladder_cases="ZL-R1,ZL-R5,ZL-W2", zarr_ladder_budget="16",
+            zarr_ladder_scratch="/Volumes/c/s/v/out", zarr_ladder_generate=True,
         )
     )  # fmt: skip
     compile(cell, "zarr_cell", "exec")
-    assert "'rungs': ('100MB', '1GB')" in cell and "'cases': ('ZL-R1', 'ZL-R5')" in cell
+    assert (
+        "'rungs': ('100MB', '1GB')" in cell
+        and "'cases': ('ZL-R1', 'ZL-R5', 'ZL-W2')" in cell
+    )
+    assert "'scratch': '/Volumes/c/s/v/out'" in cell and "'generate': True" in cell
+    assert "'schema': 'a.b'" in cell and "_zlg.generate_to" in cell
     assert "'budget_mib': 16" in cell and "'root': '/Volumes/c/s/v/zl'" in cell
     assert "if _zcfg.cases:" in cell and "run_ladder" in cell
     none = cl._zarr_cell(
@@ -253,3 +267,55 @@ def test_local_timing_runs_the_zl_set_and_the_cluster_launcher_takes_the_ladder_
         )
     )
     assert "_ZLADDER = None" in none
+
+
+def test_the_packer_cuts_cells_into_blocks_on_the_shard_grid():
+    """Cells in any order within a shard key become one block per variable, cropped to the cells that came."""
+    import numpy as np
+    import pyarrow as pa
+
+    from databricks.labs.gbx.bench import zarr_ladder_write as zw
+
+    names = ("a", "b")
+    shard = (4, 3, 3)
+    # two shards along time (ts 0 and 1), cells of the second only for hours 5 and 6 (an append into a shard)
+    ti, yi, xi, k = [], [], [], []
+    for t in (0, 1, 2, 3, 5, 6):
+        for y in range(3):
+            for x in range(3):
+                ti.append(t), yi.append(y), xi.append(x), k.append((t // 4) << 20)
+    a = np.arange(len(ti), dtype=np.float32)
+    batch = pa.RecordBatch.from_pydict(
+        {"__k": k, "__ti": ti, "__yi": yi, "__xi": xi, "a": a, "b": -a}
+    )
+    out = list(
+        zw.make_packer(names, shard, (8, 3, 3))(
+            iter([batch.slice(0, 20), batch.slice(20)])
+        )
+    )
+    rows = [r for b in out for r in b.to_pylist()]
+    assert [(r["variable"], r["start"], r["stop"]) for r in rows] == [
+        ("a", [0, 0, 0], [4, 3, 3]), ("b", [0, 0, 0], [4, 3, 3]),
+        ("a", [5, 0, 0], [7, 3, 3]), ("b", [5, 0, 0], [7, 3, 3]),
+    ]  # fmt: skip
+    first = np.frombuffer(rows[0]["data"], rows[0]["dtype"]).reshape(rows[0]["shape"])
+    assert first[2, 1, 1] == a[2 * 9 + 1 * 3 + 1]
+    second = np.frombuffer(rows[3]["data"], rows[3]["dtype"]).reshape(rows[3]["shape"])
+    assert (
+        second.shape == (2, 3, 3) and second[1, 0, 0] == -a[5 * 9 - 9 + 9]
+    )  # hour 6, cell (0,0)
+
+
+def test_write_gates_flag_a_failed_check_and_a_slow_rung():
+    from databricks.labs.gbx.bench import zarr_ladder_write as zw
+
+    def m(rung, size, wall, check="ok"):
+        return dict(family="f", workload="w", case="ZL-W1", rung=rung, store_bytes=size,
+                    wall_s=wall, cold_s=wall, s_per_gb=round(wall / (size / 1e9), 2), check=check)  # fmt: skip
+
+    ok = [m("100MB", 1e8, 10), m("1GB", 1e9, 90)]
+    assert zw.write_verdicts(ok)[0].startswith("ok")
+    slow = [m("100MB", 1e8, 10), m("1GB", 1e9, 200)]
+    assert "x the 100MB" in zw.write_verdicts(slow)[0]
+    bad = [m("100MB", 1e8, 10, check="cells 3 != 4")]
+    assert zw.write_verdicts(bad)[0].startswith("FLAG")

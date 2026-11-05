@@ -69,6 +69,11 @@ LADDER_CASES: Dict[str, Tuple[str, str, Tuple[str, ...]]] = {
         tuple(zl.FAMILIES),
     ),
 }
+# the write legs (bench.zarr_ladder_write): a table of cells to a Zarr store, three ways, and an append
+from databricks.labs.gbx.bench.zarr_ladder_write import WRITE_CASES  # noqa: E402
+
+for _c, (_w, _d) in WRITE_CASES.items():
+    LADDER_CASES[_c] = (_w, _d, tuple(zl.FAMILIES))
 GATE_PER_GB = 1.5  # time per GB within this multiple of the reference rung's
 GATE_PLAN_SHARE = 0.10
 MIN_PLAN_S = (
@@ -116,6 +121,12 @@ class LadderConfig:
     )
     budget_mib: Optional[int] = (
         None  # unit budget of the read planner, MiB (None: the runtime's own)
+    )
+    scratch: Optional[str] = (
+        None  # where the write legs put their stores (they empty it)
+    )
+    schema: Optional[str] = (
+        None  # catalog.schema of the write legs' manifest and staging tables
     )
 
 
@@ -597,6 +608,7 @@ def _run_all(spark, cfg, sink, collect) -> List[ResultRow]:
                 got.append(_missing_row(cfg, family, rung, store))
             else:
                 layout = store_layout(store, zl.VARIABLES[0])
+                got += _run_write_cases(spark, cfg, g, store, collect)
                 for leg in _legs(spark, g, store, cfg):
                     print(
                         f"ZARR-LADDER {family} {rung} {leg.case}: starting", flush=True
@@ -616,6 +628,51 @@ def _run_all(spark, cfg, sink, collect) -> List[ResultRow]:
             rows += got
             if sink is not None:
                 sink(got)
+    return rows
+
+
+def _run_write_cases(spark, cfg, g, store, collect) -> List[ResultRow]:
+    """The ``ZL-W*`` cases of one store: their rows (an error row per case when the writes failed)."""
+    from databricks.labs.gbx.bench import zarr_bench as zb
+    from databricks.labs.gbx.bench import zarr_ladder_write as zw
+
+    if not any(c in WRITE_CASES for c in cfg.cases):
+        return []
+    print(f"ZARR-LADDER {g.family} {g.rung} writes: starting", flush=True)
+    try:
+        ms = zw.run_writes(spark, cfg, g, store)
+    except Exception as e:  # noqa: BLE001
+        return [
+            _error(cfg, c, g.family, g.rung, e) for c in cfg.cases if c in WRITE_CASES
+        ]
+    zcfg = zb.ZarrBenchConfig(
+        "", "", "", "", cfg.run_id, cfg.serverless, reps=cfg.reps, where=cfg.where
+    )
+    rows = []
+    for m in ms:
+        if collect is not None:
+            collect.append(m)
+        print(
+            f"ZARR-LADDER {g.family} {g.rung} {m['case']}: wall {m['wall_s']} s, check {m['check']}",
+            flush=True,
+        )
+        fn = f"gbx_zarr_write[{m['case']} {m['family']} {m['rung']}]"
+        ok = m["check"] == "ok"
+        rows.append(
+            zb._row(
+                zcfg,
+                fn,
+                m["walls_s"],
+                int(np.prod(m["shape"])),
+                (
+                    f"{m['workload']}; metrics={zw.row_json(m)}"
+                    if m["walls_s"]
+                    else f"{m['workload']}: {m['check']}"
+                ),
+                status="ok" if ok else "error",
+                note_cap=2500,
+            )
+        )
     return rows
 
 
@@ -663,6 +720,7 @@ def _fit(points: List[Tuple[float, float]]) -> Tuple[float, float]:
 
 
 def summary_table(metrics: List[dict]) -> str:
+    metrics = [m for m in metrics if not m.get("case", "").startswith("ZL-W")]
     head = (
         "| family | rung | workload | wall s | cold s | s/GB | tasks | chunks (touched/total) | "
         "shards (touched/total) | plan s | plan share | busy | MB/s | check |\n"
@@ -702,7 +760,8 @@ def verdicts(metrics: List[dict], cores: int, reference: str = "100MB") -> List[
     out: List[str] = []
     by: Dict[Tuple[str, str], List[dict]] = {}
     for m in metrics:
-        by.setdefault((m["family"], m["workload"]), []).append(m)
+        if not m.get("case", "").startswith("ZL-W"):
+            by.setdefault((m["family"], m["workload"]), []).append(m)
     for (family, workload), ms in sorted(by.items()):
         ms = sorted(ms, key=lambda m: m["store_bytes"])
         ref = next((m for m in ms if m["rung"] == reference), ms[-1])
@@ -827,18 +886,62 @@ def plan_projection(
 # --- the local runner -----------------------------------------------------------------------------
 
 
-def _spark(cores: int):
-    from pyspark.sql import SparkSession
+def _delta_jars() -> List[str]:
+    """The delta-spark and delta-storage jars of the Maven cache (``GBX_M2_REPO``, the checkout's, the user's)."""
+    from pathlib import Path
+
+    v = "4.0.1"
+    repos = [
+        os.environ.get("GBX_M2_REPO"),
+        Path(__file__).resolve().parents[7] / "scripts" / "docker" / "m2",
+        Path.home() / ".m2" / "repository",
+    ]
+    for repo in filter(None, repos):
+        jars = [
+            Path(repo) / "io/delta/delta-spark_2.13" / v / f"delta-spark_2.13-{v}.jar",
+            Path(repo) / "io/delta/delta-storage" / v / f"delta-storage-{v}.jar",
+        ]
+        if all(j.is_file() for j in jars):
+            return [str(j) for j in jars]
+    return []
+
+
+def _spark(cores: int, delta: bool = False):
+    """A ``local[cores]`` session; with ``delta`` the OSS Delta Lake (the write legs' manifest and staging tables)."""
+    import shlex
+    import tempfile
 
     os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
-    spark = (
+    if delta and "PYSPARK_SUBMIT_ARGS" not in os.environ:
+        jars = _delta_jars()
+        if not jars:
+            raise RuntimeError(
+                "PRECONDITION MISSING: the delta-spark 4.0.1 jars are not in the Maven cache. "
+                "Fix: run scripts/ci/fetch-delta-test-jars.sh (gbx:test:python does)."
+            )
+        os.environ["PYSPARK_SUBMIT_ARGS"] = (
+            f"--driver-class-path {shlex.quote(os.pathsep.join(jars))} pyspark-shell"
+        )
+    from pyspark.sql import SparkSession
+
+    b = (
         SparkSession.builder.master(f"local[{cores}]")
         .appName("gbx-zarr-ladder")
         .config("spark.driver.memory", "6g")
         .config("spark.ui.enabled", "true")
         .config("spark.ui.port", "4050")
-        .getOrCreate()
     )
+    if delta:
+        b = (
+            b.config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
+            .config(
+                "spark.sql.catalog.spark_catalog",
+                "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+            )
+            .config("spark.sql.warehouse.dir", tempfile.mkdtemp(prefix="gbx_zl_wh_"))
+            .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        )
+    spark = b.getOrCreate()
     spark.sparkContext.setLogLevel("ERROR")
     return spark
 
@@ -853,6 +956,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--cases", default=",".join(LADDER_CASES))
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--cores", type=int, default=8)
+    ap.add_argument(
+        "--scratch", default=None, help="where the write legs put their stores"
+    )
     ap.add_argument(
         "--generate", action="store_true", help="write the missing stores first"
     )
@@ -905,21 +1011,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         cores=a.cores,
         attribution=True,
         budget_mib=a.budget_mib,
+        scratch=a.scratch,
     )
-    spark = _spark(a.cores)
+    spark = _spark(a.cores, delta=any(c in WRITE_CASES for c in cfg.cases))
     metrics: List[dict] = []
     rows = run_ladder(spark, cfg, collect=metrics)
     if a.json_out:
         with open(a.json_out, "w") as fh:
             json.dump(metrics, fh, indent=1)
-    print("\n" + summary_table(metrics))
+    from databricks.labs.gbx.bench import zarr_ladder_write as zw
+
+    if any(m["case"].startswith("ZL-R") for m in metrics):
+        print("\n" + summary_table(metrics))
+    wm = [m for m in metrics if m["case"] in WRITE_CASES]
+    if wm:
+        print("\nWRITES (table to Zarr):\n" + zw.write_table(wm))
     errors = [r for r in rows if r.status != "ok"]
     for r in errors:
         print(f"ERROR {r.fn}: {r.note}", file=sys.stderr)
     print(
         "\nGATES (s/GB within 1.5x of the 100MB rung, plan < 10%, tasks >= min(cores, chunks)):"
     )
-    lines = verdicts(metrics, a.cores)
+    lines = verdicts(metrics, a.cores) + zw.write_verdicts(wm)
     print("\n".join(lines))
     return 1 if (errors or any(line.startswith("FLAG") for line in lines)) else 0
 

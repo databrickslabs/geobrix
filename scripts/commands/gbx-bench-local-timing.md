@@ -60,10 +60,10 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 
 ## The ZL set {#the-zl-set}
 
-`--set ZL` times the Zarr ladder's read legs on `local[8]`. It takes no corpus and needs neither the JAR nor the Rust payload.
+`--set ZL` times the Zarr ladder's read and write legs on `local[8]`. The write legs need the delta-spark jars of the Maven cache (`gbx:test:python` fetches them). It takes no corpus and needs neither the JAR nor the Rust payload.
 - `--zarr-rungs <csv>`: rungs to run. Default: `10MB,50MB,100MB`. Do not generate rungs above 100 MB locally.
 - `--zarr-families <csv>`: `county_wind`, `global_11km`. Default: both.
-- `--zarr-cases <csv>`: `ZL-R1` full table, `ZL-R2` box over all time, `ZL-R3` 100 sites, `ZL-R4` wind speed and area mean, `ZL-R5` one hour as a tile. Default: all.
+- `--zarr-cases <csv>`: `ZL-R1` full table, `ZL-R2` box over all time, `ZL-R3` 100 sites, `ZL-R4` wind speed and area mean, `ZL-R5` one hour as a tile; `ZL-W1` table to a manifest store, `ZL-W2` to a plain store, `ZL-W3` baseline (tasks write the shards), `ZL-W4` / `ZL-W5` append a day to the manifest / plain store. Default: all.
 - `--zarr-reps <n>`: runs per leg, the first cold. Default: 3.
 - `--zarr-cores <n>`: task slots of `local[N]`. Default: 8.
 - `--zarr-root <dir>`: where the stores are. Default: `/tmp/gbx-local-timing/ZL` in the container.

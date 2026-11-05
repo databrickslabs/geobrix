@@ -749,7 +749,9 @@ def main(argv=None) -> int:
         "--zarr-families", default="county_wind,global_11km", help="families to run"
     )
     zl_group.add_argument(
-        "--zarr-cases", default="ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5", help="read legs to run"
+        "--zarr-cases",
+        default="ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5,ZL-W1,ZL-W2,ZL-W3,ZL-W4,ZL-W5",
+        help="read (ZL-R*) and write (ZL-W*) legs to run",
     )
     zl_group.add_argument(
         "--zarr-reps", type=int, default=3, help="runs per leg, the first cold"

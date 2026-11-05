@@ -1131,7 +1131,12 @@ def main() -> int:
     zarr_ladder = _arg("--zarr-ladder", "")
     zarr_ladder_family = _arg("--zarr-ladder-family", "county_wind,global_11km")
     zarr_ladder_root = _arg("--zarr-ladder-root", f"{volroot}/_probe/zarr/ladder")
-    zarr_ladder_cases = _arg("--zarr-ladder-cases", "ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5")
+    zarr_ladder_cases = _arg(
+        "--zarr-ladder-cases", "ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5,ZL-W1,ZL-W2,ZL-W3,ZL-W4,ZL-W5"
+    )
+    # the write legs' stores (emptied by them) and, with --zarr-ladder-generate, the job makes the missing ladder stores first
+    zarr_ladder_scratch = _arg("--zarr-ladder-scratch", f"{volroot}/_probe/zarr/ladder_out/{run_id}")
+    zarr_ladder_generate = "--zarr-ladder-generate" in sys.argv
     zarr_ladder_budget = _arg("--zarr-ladder-budget-mib", "")
     zarr_cases = _arg("--zarr-cases", "" if zarr_ladder else "R1,R2,R3,W1,W2")
     zarr_reps = int(_arg("--zarr-reps", "3"))
@@ -1301,6 +1306,8 @@ def main() -> int:
         zarr_ladder_root=zarr_ladder_root,
         zarr_ladder_cases=zarr_ladder_cases,
         zarr_ladder_budget=zarr_ladder_budget,
+        zarr_ladder_scratch=zarr_ladder_scratch,
+        zarr_ladder_generate=zarr_ladder_generate,
         #  --extras: what the install cell adds after the wheel.
         extras=extras,
     )

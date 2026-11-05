@@ -34,6 +34,7 @@ __all__ = [
     "Geometry",
     "disk_bytes",
     "generate",
+    "generate_to",
     "geometry",
     "parse_rung",
     "store_path",
@@ -244,6 +245,67 @@ def generate(
         "n_shards": g.n_shards(),
         "gen_s": round(time.perf_counter() - t0, 2),
     }
+
+
+def generate_to(
+    root: str,
+    families: Sequence[str],
+    rungs: Sequence[str],
+    *,
+    local_dir: Optional[str] = None,
+    workers: Optional[int] = None,
+) -> list:
+    """Make the stores under ``root`` (a Volume) the way a job does: write each missing store on the local disk
+    (``local_dir``, a Volume does not take the writer's many small seeks), then copy its files to ``root`` with the
+    root ``zarr.json`` last, so a store that is half copied is not mistaken for a whole one. A store that is there
+    is kept. Prints one ``ZARR-LADDER generate`` line per store."""
+    import shutil
+    import tempfile
+
+    out = []
+    for family in families:
+        for rung in rungs:
+            dest = store_path(root, family, rung)
+            if os.path.exists(os.path.join(dest, VARIABLES[0], "zarr.json")):
+                print(
+                    f"ZARR-LADDER generate {family} {rung}: kept ({disk_bytes(dest) / 1e6:.0f} MB on disk)",
+                    flush=True,
+                )
+                continue
+            tmp = tempfile.mkdtemp(prefix="gbx_zl_gen_", dir=local_dir)
+            try:
+                rec = generate(tmp, family, rung, workers=workers)
+                src = store_path(tmp, family, rung)
+                t0 = time.perf_counter()
+                files = sorted(
+                    (os.path.join(d, f) for d, _, fs in os.walk(src) for f in fs),
+                    key=lambda p: (os.path.basename(p) == "zarr.json", p),
+                )
+                for f in files:
+                    to = os.path.join(dest, os.path.relpath(f, src))
+                    os.makedirs(os.path.dirname(to), exist_ok=True)
+                    shutil.copyfile(f, to)
+                rec.update(path=dest, copy_s=round(time.perf_counter() - t0, 2))
+                print(
+                    f"ZARR-LADDER generate {family} {rung}: shape {tuple(rec['shape'])}, logical "
+                    f"{rec['logical_bytes'] / 1e6:.1f} MB, disk {rec['disk_bytes'] / 1e6:.1f} MB, "
+                    f"{rec['n_chunks']} chunks / {rec['n_shards']} shards, generated {rec['gen_s']} s, "
+                    f"copied {rec['copy_s']} s",
+                    flush=True,
+                )
+                out.append(rec)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+    if out:
+        manifest = os.path.join(root, "ladder_manifest.json")
+        old = {}
+        if os.path.exists(manifest):
+            with open(manifest) as fh:
+                old = {(r["family"], r["rung"]): r for r in json.load(fh)}
+        old.update({(r["family"], r["rung"]): r for r in out})
+        with open(manifest, "w") as fh:
+            json.dump(list(old.values()), fh, indent=1)
+    return out
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

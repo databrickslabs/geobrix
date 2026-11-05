@@ -3250,7 +3250,23 @@ else:
         if _zcfg.cases:
             _zrows += _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
         if _ZLADDER:
-            _zrows += _zlb.run_ladder(spark, _zlb.LadderConfig(**_ZLADDER), sink=_zsink)
+            _zl = dict(_ZLADDER)
+            if _zl.pop("generate", False):
+                from databricks.labs.gbx.bench import zarr_ladder as _zlg
+                _zlg.generate_to(_zl["root"], _zl["families"], _zl["rungs"], local_dir="/local_disk0" if os.path.isdir("/local_disk0") else None)
+            _zlm = []
+            if not _zcfg.serverless:  # a classic session: the task slots, and the Spark UI's worker seconds and peak memory
+                _zl["cores"] = int(spark.sparkContext.defaultParallelism)
+                _zl["attribution"] = True
+            _zrows += _zlb.run_ladder(spark, _zlb.LadderConfig(**_zl), sink=_zsink, collect=_zlm)
+            from databricks.labs.gbx.bench import zarr_ladder_write as _zlw
+            import json as _zj
+            print("ZARR-LADDER SUMMARY", flush=True)
+            print(_zlb.summary_table(_zlm), flush=True)
+            print(_zlw.write_table([m for m in _zlm if m["case"].startswith("ZL-W")]), flush=True)
+            print("\\n".join(_zlb.verdicts(_zlm, _zl.get("cores") or 8) + _zlw.write_verdicts([m for m in _zlm if m["case"].startswith("ZL-W")])), flush=True)
+            with open(f"{OUT}/zarr_ladder_metrics.json", "w") as _zf:
+                _zj.dump(_zlm, _zf, indent=1)
     finally:
         import shutil as _zsh
         _zsh.rmtree(_zcfg.scratch, ignore_errors=True)  # the legs' own scratch, emptied by them
@@ -3290,6 +3306,9 @@ def _zarr_cell(cfg: dict) -> str:
                 if cfg.get("zarr_ladder_budget")
                 else None
             ),
+            scratch=cfg.get("zarr_ladder_scratch") or None,
+            schema=cfg["zarr_schema"],
+            generate=bool(cfg.get("zarr_ladder_generate")),
         )
     return (
         "# Zarr benchmark (light tier only): R1-R3 reads, W1-W2 writes, two probes, the size-ladder reads\n"

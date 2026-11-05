@@ -351,6 +351,16 @@ MVP_S: Tuple[Case, ...] = (
     # A UC STRING parameter receives an INT literal as its digit string, so every surface
     # accepts the digit-string form of the integer resolution.
     Case("bng_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080"),
+    # UC trims every white-space character of a resolution text, as Python's strip() does (UC only: the JVM
+    # levels read the text as it is).
+    Case(
+        "bng_res_white_space",
+        B,
+        (530000.0, 180000.0, "\t1km\u00a0"),
+        "exact",
+        "TQ3080",
+        ("uc",),
+    ),
     Case("bng_digit_res_quad", B, (530000.0, 180000.0, "-3"), "exact", "TQ38SW"),
     # INT eastings, northings and resolution (columns typed INT) give the cells DOUBLE ones give, on every level.
     Case("bng_enab_int_args", B, (530000, 180000, 3), "exact", "TQ3080"),

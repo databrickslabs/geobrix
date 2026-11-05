@@ -683,7 +683,7 @@ def _w_ctx(jar=JAR):
     )
 
 
-def test_the_candidate_bodies_give_m2_its_sql_leg_with_no_manifest_sql_key():
+def test_m2_builds_its_sql_leg_from_the_rows_own_kernel():
     c = _w_ctx()
     u = uc_perf.Unit("m2", "t")
     forms = uc_perf._forms(c, u, "bng_eastnorthasbng", "gbx_bng_eastnorthasbng")
@@ -703,7 +703,10 @@ def test_the_candidate_bodies_give_m2_its_sql_leg_with_no_manifest_sql_key():
         "gbx_mvp_perf_bng_resindex" in dropped
         and "`gbx_bng_eastnorthasbng`" not in dropped
     )
-    assert "sql" not in manifest.load().functions["gbx_bng_eastnorthasbng"].levels["L4"]
+    # the row carries the kernel itself now (the candidate table is empty)
+    assert (
+        manifest.load().functions["gbx_bng_eastnorthasbng"].levels["L4"]["sql"] == "L0"
+    )
     # no candidate and no kernel: no SQL leg, with the reason
     u2 = uc_perf.Unit("m2", "t")
     forms2 = uc_perf._forms(c, u2, "bng_polyfill", "gbx_bng_polyfill")

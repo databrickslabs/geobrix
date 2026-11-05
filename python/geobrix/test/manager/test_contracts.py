@@ -254,8 +254,11 @@ def test_level_selection_contract(fn, case, monkeypatch):
     assert len(choice.reasons) == pref.index(
         choice.level
     )  # one reason per skipped, preferred level
+    no_jvm = (
+        "L0" if "L0" in pref else "L3"
+    )  # a preferred SQL kernel needs no JAR and no Catalyst
     if name in ("serverless", "no-jar", "stale-jar"):
-        assert choice.level == "L3"
+        assert choice.level == no_jvm
     if name == "standard":
         assert choice.level != "L1"  # Catalyst is never chosen on Connect
         l2 = fn.levels.get("L2", {})
@@ -264,7 +267,7 @@ def test_level_selection_contract(fn, case, monkeypatch):
             or fn.kind != "scalar"
             or (fn.min_args != fn.max_args and "wrapper" not in l2)
         ):
-            assert choice.level == "L3"
+            assert choice.level == no_jvm
     if name == "dedicated" and pref[0] == "L1":
         assert (choice.level == "L1") == _l1_shape_ok(fn)
     if name == "no-gdal" and fn.levels.get("L1", {}).get("needs_gdal"):

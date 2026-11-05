@@ -86,7 +86,7 @@ def test_an_l4_sql_row_is_a_deterministic_sql_function_after_its_helpers(kring_s
     with pytest.raises(
         ValueError
     ):  # a row with no SQL kernel cannot be forced into one
-        _ddl(manifest.load().functions["gbx_bng_cellarea"], form="sql")
+        _ddl(manifest.load().functions["gbx_bng_distance"], form="sql")
 
 
 def test_a_sql_function_declares_its_defaults_and_install_creates_helpers_once(

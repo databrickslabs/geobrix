@@ -476,7 +476,17 @@ def bng_cellarea(cellid):
     from databricks.labs.gbx.pygx import _bng
 
     cid = _bng_cell(cellid)
-    return None if cid is None else _bng.area(cid)
+    if cid is None:
+        return None
+    try:
+        return _bng.area(cid)
+    except (
+        KeyError
+    ):  # a cell finer than 1 m: the core has no size for it, on every level
+        raise ValueError(
+            f"gbx_bng_cellarea: the cell {cellid} is finer than 1 m and has no area. "
+            "Fix: pass a cell id of 1 m or coarser."
+        ) from None
 
 
 def bng_aswkb(cellid):

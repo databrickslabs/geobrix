@@ -152,6 +152,16 @@ GRID_SCALAR = (
     # TQ38SW is the south-west 5 km quadrant of the 10 km square TQ38.
     Case("cellarea_quadrant", AREA, ("TQ38SW",), "exact", 25.0),
     Case("cellarea_null", AREA, (None,), "null", variants=(("XX9999",),)),
+    # A cell finer than 1 m has no area: the SQL form and the Python handler raise and name the cell. (UC only: the
+    # session levels raise their own error, a KeyError or a missing size, that does not name it.)
+    Case(
+        "cellarea_finer_than_1m",
+        AREA,
+        ("TQ300008000012",),
+        "raises",
+        "TQ300008000012",
+        surfaces=("uc",),
+    ),
     Case("centroid_tq3080", CENT, ("TQ3080",), "geom_equals", "POINT(530500 180500)"),
     # The exact bytes (session surface only: the UC handler returns EWKB with the SRID).
     Case(

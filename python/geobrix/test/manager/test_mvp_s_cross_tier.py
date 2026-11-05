@@ -23,6 +23,12 @@ def _cases():
                     api,
                     id=f"{fn.sql_name}-L3{variant}-{api}",
                 )
+        if (
+            "L0" in fn.levels
+        ):  # the session's SQL kernel, a temporary SQL function: no JVM, no import
+            yield pytest.param(
+                fn.sql_name, "L0", "-", "sql", id=f"{fn.sql_name}-L0-sql"
+            )
         for level in ("L1", "L2"):  # the Column API reaches a JVM level through SQL
             if level in fn.levels:
                 yield pytest.param(
@@ -54,7 +60,7 @@ def _column_function(sql_name):
 def test_mvp_s_oracle_session(request, tmp_path, fn, level, variant, api):
     if (level, variant) == ("L3", "d") and _rs.unavailable_reason():
         pytest.skip(_rs.unavailable_reason())
-    spark = request.getfixturevalue("spark" if level == "L3" else "jvm_spark")
+    spark = request.getfixturevalue("spark" if level in ("L0", "L3") else "jvm_spark")
     raw = variant == "raw"
     register(spark, only=[fn], _levels={fn: (level, "-" if raw else variant)})
     rows = [

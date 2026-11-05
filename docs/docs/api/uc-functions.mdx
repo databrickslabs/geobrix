@@ -123,6 +123,13 @@ A custom grid is a struct. Build it once with `gbx_custom_grid` and pass it to t
 
 `gbx_quadbin_resolution`, `gbx_custom_grid` and `gbx_rst_memsize` run as SQL functions with no Python. They give the same answers as the session functions. `gbx_rst_memsize` returns the length of the tile's pixel bytes and refuses a virtual tile with a `Fix:`.
 
+`gbx_bng_cellarea` and `gbx_bng_eastnorthasbng` also run as SQL functions. On a SQL warehouse over 10 million rows they took about 1 s. The Scala form took 4 to 15 s and the Python form 21 to 79 s. The answers match the session functions.
+
+- `gbx_bng_cellarea` raises for a cell finer than 1 m, as the session function does.
+- `gbx_bng_cellarea` gives `NULL` for an id whose digits carry a sign, spaces or underscores. Such an id is no cell.
+- `gbx_bng_eastnorthasbng` trims every white-space character from a resolution text.
+- `gbx_bng_eastnorthasbng` reads coordinates from 100 km west or south of the grid origin up to 10 000 km. Beyond that range, use the session function.
+
 ### CRS arguments
 
 A UC function takes a CRS argument in three forms:

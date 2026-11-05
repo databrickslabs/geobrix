@@ -264,6 +264,15 @@ tile **without that provenance**. Put the provenance back with `withField("metad
 [`gbx_zarr_write`](../writers/zarr#tiles) `dim_cols` and `variables=` to say where the tile goes.
 [The Zarr Writer](../writers/zarr#tiles) shows both.
 
+## How a read is split into tasks
+
+A `blocks` or `table` read packs whole chunks into tasks of about 16 MiB decoded. A read too small for
+that is spread over the cores of the session instead, down to 4 MiB per task, so a 100 MB read does not
+run as one task. A task never holds more than the compute's decoded-data limit (64 MiB on Serverless,
+1536 MiB on a classic cluster), whatever the target. The cores are read from the session's configuration, so
+the plan is the same on Serverless, where there is no `SparkContext`. A chunk counts only the cells inside
+the array: a 24-hour chunk of a 1-hour array counts one hour.
+
 ## The `zarr_gbx` DataSource
 
 `spark.read.format("zarr_gbx")` reads a plain store with no table, no session call and no JAR.
@@ -323,9 +332,10 @@ selected position of those dimensions, so one point's time series is its rows.
   testFile="docs/tests/python/readers/test_zarr_read_examples.py"
   outputConstant="SAMPLE_PROJECTED_output" />
 
-Up to 100,000 points are collected to the driver. Suppose they lie in at most four chunks and the answer is
-small. Then the driver reads them and no Spark job runs. Otherwise Spark reads each chunk once for all its
-points. Within a chunk, scattered points are read cell by cell. A chunk's points may need a tenth or
+Up to 100,000 points are collected to the driver. Suppose the chunks they lie in hold no more than 16 MiB
+decoded and the answer is small. Then the driver reads them and no Spark job runs. Otherwise Spark reads each
+chunk once for all its points. A chunk with many time steps is split along time into tasks of whole time chunks,
+so a store with few spatial chunks (a county in one chunk, say) still uses every core. Within a chunk, scattered points are read cell by cell. A chunk's points may need a tenth or
 more of the cells of the box around them. If the box also fits in half of a task's decoded-data budget,
 the box is read once and every point takes its cells from it. The budget was 32 MiB on Serverless and
 768 MiB on Databricks Runtime 19 in these measurements. A chunk whose box is larger is read cell by cell. Take the ERA5 store

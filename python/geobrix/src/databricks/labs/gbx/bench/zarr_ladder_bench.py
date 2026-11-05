@@ -780,18 +780,21 @@ def verdicts(metrics: List[dict], cores: int, reference: str = "100MB") -> List[
     return out
 
 
-def plan_projection(root: str, families, rungs, budgets_mib=(64, 1536)) -> List[dict]:
+def plan_projection(
+    root: str, families, rungs, budgets_mib=(64, 1536), cores: int = 2
+) -> List[dict]:
     """What the driver plans for the whole ladder, with no data written: a store holding only its metadata
     (``zarr_ladder.write_skeleton``) is planned by ``gbx_zarr_read(output="table")`` exactly as a full one is (a
     plain store has no manifest to read). Records the planning seconds and the tasks (units) at each unit budget:
-    ``budgets_mib`` are the Serverless / local value and the classic-cluster value of the planner.
+    ``budgets_mib`` are the Serverless / local value and the classic-cluster value of the planner; ``cores`` the
+    task slots of the session that plans (the planner lowers a unit so each slot gets one).
     """
     import shutil
     import tempfile
 
     from databricks.labs.gbx.zarr import gbx_zarr_read
 
-    spark = _spark(2)
+    spark = _spark(cores)
     out: List[dict] = []
     scratch = tempfile.mkdtemp(
         prefix="gbx_zl_plan_", dir=root if os.path.isdir(root) else None
@@ -869,7 +872,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     a = ap.parse_args(argv)
     if a.plan_only:
         rows = plan_projection(
-            a.root, [f for f in a.families.split(",") if f], zl.RUNGS
+            a.root, [f for f in a.families.split(",") if f], zl.RUNGS, cores=a.cores
         )
         print(
             "| family | rung | store MB | chunks/var | shards/var | plan s @64MiB | tasks @64MiB | plan s @1536MiB | tasks @1536MiB |\n|---|---|---|---|---|---|---|---|---|"

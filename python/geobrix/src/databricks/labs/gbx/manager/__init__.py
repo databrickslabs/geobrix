@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import importlib.util
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, Iterable, List, Optional, Tuple
 
 from databricks.labs.gbx import manifest
@@ -87,6 +90,7 @@ def register(
     caps = capabilities.detect(spark, need_jvm)
     out: Dict[str, Choice] = {}
     lines: List[Tuple[str, str]] = []
+    chosen = []
     for n in names:
         fn = man.functions[n]
         try:
@@ -96,7 +100,16 @@ def register(
             why = "; ".join(r.removeprefix("geobrix: ") for r in exc.reasons)
             lines.append((n, f"geobrix: {n} not registered ({why})"))
             continue
-        out[n] = _install(spark, fn, choice, caps, forced=n in overrides, lines=lines)
+        chosen.append((n, fn, choice))
+    installed = _each(
+        spark,
+        [(fn, choice, n in overrides) for n, fn, choice in chosen],
+        lambda item: _install_one(spark, caps, *item),
+        prepare=lambda item: _warm_imports(item[0]),
+    )
+    for (n, _fn, _choice), (done, said) in zip(chosen, installed):
+        out[n] = done
+        lines.extend(said)
     if only is None:
         try:
             register_sources(spark)
@@ -121,6 +134,76 @@ def register(
 
     _api.mark_registered(spark, out.keys(), out)
     return out
+
+
+WORKERS_ENV = "GBX_REGISTER_WORKERS"
+_CONNECT_WORKERS = 8
+
+
+def _workers(spark, items: int) -> int:
+    """How many threads install the functions of one ``register``. On Spark Connect every registration is a network
+    round trip (a full registration makes about 300), so they overlap; on a classic session a call is a local py4j
+    call and nothing is gained. ``GBX_REGISTER_WORKERS`` sets the number (``1`` installs one after the other).
+    """
+    from databricks.labs.gbx.manager import capabilities
+
+    raw = os.environ.get(WORKERS_ENV, "").strip()
+    if raw:
+        try:
+            n = int(raw)
+        except ValueError:
+            n = 0
+        if n >= 1:
+            return min(n, max(items, 1))
+    return min(_CONNECT_WORKERS, max(items, 1)) if capabilities.is_connect(spark) else 1
+
+
+def _each(spark, items: list, work, prepare=None) -> list:
+    """``[work(item) for item in items]``, the calls overlapped when the session is remote (see ``_workers``). The
+    results come back in the order of ``items``; when several calls fail, the first failure in that order is raised
+    after every call has finished, as the one-after-the-other loop would have raised it. ``prepare(item)`` runs for
+    each item first, one after the other, only when the calls overlap (the imports they would make, so that threads
+    never meet in an import).
+    """
+    workers = _workers(spark, len(items))
+    if workers <= 1 or len(items) <= 1:
+        return [work(i) for i in items]
+    if prepare is not None:
+        for i in items:
+            prepare(i)
+    with ThreadPoolExecutor(
+        max_workers=workers, thread_name_prefix="gbx-register"
+    ) as pool:
+        futures = [pool.submit(work, i) for i in items]
+        results, first = [], None
+        for f in futures:
+            try:
+                results.append(f.result())
+            except BaseException as exc:  # noqa: BLE001 - re-raised below, in order
+                results.append(None)
+                first = first or exc
+    if first is not None:
+        raise first
+    return results
+
+
+def _warm_imports(fn) -> None:
+    """Import the modules the light level of ``fn`` resolves, ignoring a failure (the install reports it)."""
+    spec = fn.levels.get("L3") or {}
+    refs = [spec.get(k) for k in ("callable", "factory", "udtf", "file_ref")]
+    refs += list((spec.get("variants") or {}).values())
+    for ref in refs:
+        if isinstance(ref, str) and ":" in ref:
+            try:
+                importlib.import_module(ref.partition(":")[0])
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _install_one(spark, caps, fn, choice: Choice, forced: bool):
+    """``_install`` with its own lines: (the choice it made, the lines it has to say)."""
+    said: List[Tuple[str, str]] = []
+    return _install(spark, fn, choice, caps, forced=forced, lines=said), said
 
 
 def _warn_uc_version(spark, catalog: str, schema: str) -> None:
@@ -223,10 +306,13 @@ def register_sources(spark=None, only: Optional[Iterable[str]] = None) -> List[s
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
 
     cap = report_detected_cap(spark)
-    for name in selected:
-        spark.dataSource.register(
+    _each(
+        spark,
+        selected,
+        lambda name: spark.dataSource.register(
             _gdal_policy.carrying_source(by_name[name], allowed, cap)
-        )
+        ),
+    )
     return selected
 
 

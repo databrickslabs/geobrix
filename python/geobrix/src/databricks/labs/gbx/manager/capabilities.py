@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import threading
 import weakref
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -182,6 +183,9 @@ def _probe_sql_functions(spark) -> bool:
 # session -> bool: whether the session creates SQL functions. The answer is a property of the session, and the
 # installers ask it once per function (a full registration asked it ~80 times, 2 round trips each on Spark Connect).
 _SQLFN: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_SQLFN_LOCK = (
+    threading.Lock()
+)  # installs that overlap (see `register`) must not probe at the same moment
 
 
 def _sql_functions(spark) -> bool:
@@ -189,11 +193,14 @@ def _sql_functions(spark) -> bool:
     session that cannot be weakly referenced is probed every time."""
     try:
         known = _SQLFN.get(spark)
+        if known is None:
+            with _SQLFN_LOCK:
+                known = _SQLFN.get(spark)
+                if known is None:
+                    known = _SQLFN[spark] = _probe_sql_functions(spark)
+        return known
     except TypeError:
         return _probe_sql_functions(spark)
-    if known is None:
-        known = _SQLFN[spark] = _probe_sql_functions(spark)
-    return known
 
 
 # session -> {need_jvm: Capabilities}: the first-use registration of each name (`_api.ensure`) calls `detect`, and

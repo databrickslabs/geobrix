@@ -276,7 +276,8 @@ class _CountingSession:
 
 def test_the_sql_function_probe_runs_once_per_session():
     """Every installer asked "does this session create SQL functions?" with 2 statements, ~80 times in a full
-    registration (160 round trips on Spark Connect). The answer is a property of the session."""
+    registration (160 round trips on Spark Connect). The answer is a property of the session.
+    """
     from databricks.labs.gbx.manager import capabilities
 
     class Spark:
@@ -344,8 +345,114 @@ def test_a_family_registration_makes_one_statement_per_wrapper_plus_one_probe(sp
         if s.startswith("CREATE") and "gbx__probe_sqlfn" not in s
     ]
     assert len(probe) == 2
-    assert len(creates) >= 10, "the family has SQL wrappers; the count below would prove nothing"
+    assert (
+        len(creates) >= 10
+    ), "the family has SQL wrappers; the count below would prove nothing"
     others = [s for s in counting.statements if s not in probe and s not in creates]
     assert not [s for s in others if s.startswith("DROP")], others
     assert len(counting.statements) == 2 + len(creates) + len(others)
     assert len(others) <= 1, others  # the one SELECT: the FILE-reference check
+
+
+def _serverless(monkeypatch):
+    """The environment a Serverless notebook reports (no JAR can be added there)."""
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.4.0")
+
+
+def test_a_full_registration_on_connect_stays_under_its_round_trip_budget(
+    monkeypatch, capsys
+):
+    """``register(spark)`` on Serverless made 229 ``spark.sql`` calls (150 of them one repeated probe) and ~100 s of
+    network round trips. Count them on a Connect look-alike: one probe (2), one CREATE per SQL wrapper, nothing else.
+    """
+    _serverless(monkeypatch)
+    stub = ConnectStub()
+    out = manager.register(stub)
+    assert len(out) > 200
+    probes = [s for s in stub.sql_text if "gbx__probe_sqlfn" in s]
+    assert len(probes) == 2
+    drops = [s for s in stub.sql_text if s.startswith("DROP")]
+    assert drops == probes[1:], "a wrapper over a free name needs no DROP"
+    assert len(stub.sql_text) <= 60, len(stub.sql_text)
+    assert stub.sources, "the light data sources went in"
+
+
+class _SlowStub(ConnectStub):
+    """A Connect look-alike whose registrations take a moment, and which records how many ran at once."""
+
+    def __init__(self):
+        super().__init__()
+        import threading
+
+        self.lock, self.running, self.peak = threading.Lock(), 0, 0
+        self.udf = _SlowRegistration(self)
+        self.udtf = _SlowRegistration(self)
+
+    def hold(self):
+        import time
+
+        with self.lock:
+            self.running += 1
+            self.peak = max(self.peak, self.running)
+        time.sleep(0.02)
+        with self.lock:
+            self.running -= 1
+
+
+class _SlowRegistration:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def register(self, name, f, returnType=None):
+        self.owner.hold()
+        self.owner.registered.append(name)
+
+
+def test_registrations_overlap_on_connect_and_one_after_the_other_when_asked(
+    monkeypatch, capsys
+):
+    """Each registration is a round trip on Spark Connect, so they overlap there (the result is the same: the
+    same levels, in the manifest's order); ``GBX_REGISTER_WORKERS=1`` is the one-after-the-other loop.
+    """
+    from databricks.labs.gbx.manager import capabilities
+
+    _serverless(monkeypatch)
+    monkeypatch.setattr(
+        capabilities, "is_connect", lambda s: True
+    )  # _SlowStub lives outside a "connect" module
+    names = manager.names_at_level(("gbx_bng_",), "L3")[:24]
+    overlapped = _SlowStub()
+    got = manager.register(overlapped, only=names)
+    assert overlapped.peak > 1, "the registrations of one call did not overlap"
+    monkeypatch.setenv("GBX_REGISTER_WORKERS", "1")
+    serial = _SlowStub()
+    again = manager.register(serial, only=names)
+    assert serial.peak == 1
+    assert list(got) == list(again) == names
+    assert {n: (c.level, c.variant) for n, c in got.items()} == {
+        n: (c.level, c.variant) for n, c in again.items()
+    }
+
+
+def test_a_classic_session_installs_one_after_the_other():
+    from databricks.labs.gbx.manager import _workers
+
+    assert _workers(object(), 50) == 1  # a py4j call is local: nothing to overlap
+
+
+def test_the_first_failure_in_manifest_order_is_the_one_raised(monkeypatch):
+    """Overlapped installs finish in any order; the error raised is still the first name's, as in the loop."""
+    from databricks.labs.gbx.manager import _each
+
+    _serverless(monkeypatch)
+
+    def work(i):
+        if i in (3, 5):
+            raise ValueError(f"item {i}")
+        return i
+
+    with pytest.raises(ValueError, match="item 3"):
+        _each(ConnectStub(), list(range(8)), work)
+    assert _each(ConnectStub(), list(range(8)), lambda i: i * 2) == [
+        i * 2 for i in range(8)
+    ]

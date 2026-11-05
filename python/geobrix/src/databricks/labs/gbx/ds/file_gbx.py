@@ -21,6 +21,7 @@ import fnmatch
 import os
 import re as _re
 import shutil
+import threading
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -877,6 +878,9 @@ _COG_DRIVER_MAX_BYTES = int(
 # =============================================================================
 
 _FILE_SUPPORT_CACHE: dict = {}
+_FILE_SUPPORT_LOCK = (
+    threading.Lock()
+)  # installs that overlap in `register` must not probe at the same moment
 
 
 def file_supported(spark: Optional["SparkSession"] = None) -> bool:
@@ -925,9 +929,12 @@ def file_supported(spark: Optional["SparkSession"] = None) -> bool:
     if session_id in _FILE_SUPPORT_CACHE:
         return _FILE_SUPPORT_CACHE[session_id]
 
-    result = _check_file_support(spark)
-    _FILE_SUPPORT_CACHE[session_id] = result
-    return result
+    with _FILE_SUPPORT_LOCK:
+        if session_id in _FILE_SUPPORT_CACHE:
+            return _FILE_SUPPORT_CACHE[session_id]
+        result = _check_file_support(spark)
+        _FILE_SUPPORT_CACHE[session_id] = result
+        return result
 
 
 def _check_file_support(spark: "SparkSession") -> bool:

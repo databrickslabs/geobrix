@@ -63,7 +63,9 @@ def _create_wrapper(spark, fn, ddl: str) -> None:
     """
     try:
         spark.sql(ddl)
-    except Exception:  # noqa: BLE001 - a non-SQL function holds the name (or the DDL is bad, and fails again below)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a non-SQL function holds the name (or the DDL is bad, and fails again below)
         spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
         spark.sql(ddl)
 

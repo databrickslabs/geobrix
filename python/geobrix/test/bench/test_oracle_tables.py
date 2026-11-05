@@ -1,5 +1,6 @@
 """The oracle tables are found on first use of the mapping, by any read, not only by a missing-key lookup."""
 
+import dataclasses
 import struct
 import subprocess
 import sys
@@ -298,10 +299,21 @@ def test_a_list_literal_takes_the_element_type_of_its_parameter_and_ewkt_is_pars
         return oracles._sql_literal(value, man.functions[fn].params[index], case)
 
     # ARRAY<BINARY>: bytes are hex literals, a NULL element and an empty array are BINARY
-    assert literal("gbx_rst_gridfrompoints", 0, [b"\x01\xab", None]) == (
+    binary = dataclasses.replace(
+        man.functions["gbx_rst_gridfrompoints"].params[0], uc="ARRAY<BINARY>"
+    )
+    case = oracles.Case("probe", "gbx_rst_gridfrompoints", (), "null", None)
+    assert oracles._sql_literal([b"\x01\xab", None], binary, case) == (
         "array(X'01ab', CAST(NULL AS BINARY))"
     )
-    assert literal("gbx_rst_gridfrompoints", 0, []) == "CAST(array() AS ARRAY<BINARY>)"
+    assert oracles._sql_literal([], binary, case) == "CAST(array() AS ARRAY<BINARY>)"
+    # ARRAY<GEOMETRY(ANY)>: a point of WKB is built with st_geomfromwkb of ISO bytes; a NULL element is a NULL geometry
+    assert literal("gbx_rst_gridfrompoints", 0, [None]) == (
+        "array(CAST(NULL AS GEOMETRY(ANY)))"
+    )
+    assert literal("gbx_rst_gridfrompoints", 0, []) == (
+        "CAST(array() AS ARRAY<GEOMETRY(ANY)>)"
+    )
     # ARRAY<DOUBLE>
     assert literal("gbx_rst_isoband", 1, [0.0, None, 2.5]) == (
         "array(0.0, CAST(NULL AS DOUBLE), 2.5)"

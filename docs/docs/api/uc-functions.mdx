@@ -204,6 +204,18 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | From file bytes | `gbx_rst_fromcontent` |
 | Web tiles | `gbx_rst_tilexyz` |
 
+### Points as geometries
+
+`gbx_rst_dtmfromgeoms` and `gbx_rst_gridfrompoints` take their points, and the break lines of the terrain function, as `ARRAY<GEOMETRY(ANY)>`.
+The session functions take an array of WKB or WKT. On UC a `BINARY` is not a geometry, so collect `GEOMETRY` values.
+The Z of each point is kept. A point with no Z is refused by `gbx_rst_dtmfromgeoms` with a `Fix:`. A NULL element is dropped with its value.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_DTM_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The points are taken to be in the output CRS, so the SRID of a point is not read.
+
+<CodeFromTest code={ucExamples} language="python" functionName="dtm_from_geometry_points" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
 ### Array and partial forms
 
 A SQL warehouse function cannot be an aggregate. These functions replace the session aggregates.

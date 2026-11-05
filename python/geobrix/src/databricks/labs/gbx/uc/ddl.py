@@ -16,8 +16,13 @@ UC_GEOMETRY = "GEOMETRY(ANY)"
 
 
 def sql_type(t: str) -> str:
-    """The SQL type of a manifest UC type: the manifest's text, with GEOMETRY declared as GEOMETRY(ANY)."""
-    return UC_GEOMETRY if t.upper() == "GEOMETRY" else _manifest_sql_type(t)
+    """The SQL type of a manifest UC type: the manifest's text, with GEOMETRY declared as GEOMETRY(ANY), also as the element of
+    an array (ARRAY<GEOMETRY> is ARRAY<GEOMETRY(ANY)>)."""
+    if t.upper() == "GEOMETRY":
+        return UC_GEOMETRY
+    if t.upper() == "ARRAY<GEOMETRY>":
+        return f"ARRAY<{UC_GEOMETRY}>"
+    return _manifest_sql_type(t)
 
 
 # One rule for every name that reaches a statement: a catalog or schema is checked against Unity

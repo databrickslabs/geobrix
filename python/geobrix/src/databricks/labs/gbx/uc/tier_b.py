@@ -1582,6 +1582,14 @@ def rst_binpoints_finalize(cells, xmin, ymin, xmax, ymax, width_px, height_px, s
 HANDLERS["gbx_rst_binpoints_finalize"] = rst_binpoints_finalize
 
 
+def _wkb_array(points):
+    """An ``ARRAY<GEOMETRY(ANY)>`` argument as the EWKB array the kernels take: each ``Geometry`` as its WKB with the SRID, the
+    Z kept; a NULL element stays NULL (the kernel drops it, with its value)."""
+    if points is None:
+        return None
+    return [None if g is None else _geom_bytes(g) for g in points]
+
+
 def rst_gridfrompoints(
     points_array,
     values_array,
@@ -1596,8 +1604,8 @@ def rst_gridfrompoints(
     max_pts,
     out_crs,
 ):
-    """gbx_rst_gridfrompoints: a Float64 tile of the inverse-distance-weighted mean of the nearest `max_pts` points (WKB or
-    EWKB POINTs, taken to be in the output CRS) in each pixel; NoData where there are none.
+    """gbx_rst_gridfrompoints: a Float64 tile of the inverse-distance-weighted mean of the nearest `max_pts` points (an
+    ARRAY<GEOMETRY(ANY)> of POINTs, taken to be in the output CRS) in each pixel; NoData where there are none.
     """
     fn = "gbx_rst_gridfrompoints"
     if any(
@@ -1615,6 +1623,7 @@ def rst_gridfrompoints(
     ):
         return None
     _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    points_array = _wkb_array(points_array)
     try:
         _kernel("tin", "check_lengths")(points_array, values_array)
         _kernel("tin", "check_idw_args")(
@@ -1675,7 +1684,7 @@ def rst_dtmfromgeoms(
     out_crs,
 ):
     """gbx_rst_dtmfromgeoms: a Float64 tile of the height interpolated in the Delaunay triangle of each pixel (the points
-    are WKB or EWKB POINTs with a Z; the break lines' vertices are extra points), `no_data` outside their hull.
+    are an ARRAY<GEOMETRY(ANY)> of POINTs with a Z; the break lines' vertices are extra points), `no_data` outside their hull.
     """
     fn = "gbx_rst_dtmfromgeoms"
     if any(
@@ -1694,6 +1703,10 @@ def rst_dtmfromgeoms(
     ):
         return None
     _grid_args(fn, xmin, ymin, xmax, ymax, width_px, height_px)
+    points_array, breaklines_array = (
+        _wkb_array(points_array),
+        _wkb_array(breaklines_array),
+    )
     crs = _out_crs(fn, out_srid, out_crs)
     check_made(
         fn,

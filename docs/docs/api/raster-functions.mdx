@@ -1876,8 +1876,8 @@ Create or load rasters from path, binary content, or bands (4 total).
 
 | Parameter | SQL type | UC type | Default | Description |
 |---|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<BINARY>` |  | The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an array. |
-| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<BINARY>` |  | Break lines, as an array; NULL or empty for none. The Python level uses their vertices as extra points and does not enforce them as edges. |
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The points, each with a Z value: WKB, EWKB, WKT or EWKT, as an array. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | Break lines, as an array; NULL or empty for none. The Python level uses their vertices as extra points and does not enforce them as edges. |
 | `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
 | `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | Accepted for compatibility with the JVM level; not applied. |
 | `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
@@ -1902,6 +1902,8 @@ The **Python** function takes an optional trailing `out_crs` (string CRS) that S
 :::
 
 Output CRS via `out_srid` (int); input points assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+
+On Unity Catalog the points and break lines are an `ARRAY<GEOMETRY(ANY)>`, and the Z of each point is kept. See [Points as geometries](./uc-functions#points-as-geometries).
 
 <FunctionExamples
   name="rst_dtmfromgeoms"
@@ -2059,7 +2061,7 @@ df = (
 
 | Parameter | SQL type | UC type | Default | Description |
 |---|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<BINARY>` |  | The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL element is dropped with its value. |
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The points: WKB, EWKB, WKT or EWKT, as an array. An empty or NULL element is dropped with its value. |
 | `values_array` | `ARRAY<DOUBLE>` | `ARRAY<DOUBLE>` |  | The value of each point, in the same order. |
 | `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the output in the output CRS. |
 | `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the output. |
@@ -2086,6 +2088,8 @@ The **Python** function takes an optional trailing `out_crs` (string CRS) that S
 :::
 
 Output CRS via `out_srid` (int); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
+
+On Unity Catalog the points are an `ARRAY<GEOMETRY(ANY)>`. See [Points as geometries](./uc-functions#points-as-geometries).
 
 <FunctionExamples
   name="rst_gridfrompoints"

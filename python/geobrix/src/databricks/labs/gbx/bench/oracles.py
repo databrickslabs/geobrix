@@ -5061,6 +5061,16 @@ def _uc_value(arg, param, case: Case):
         from databricks.labs.gbx._geom import parse_geom
 
         return UcGeometry(to_wkb(parse_geom(arg)), case.geom_srid)
+    if param.uc == "ARRAY<GEOMETRY>" and isinstance(arg, list):
+        from shapely import to_wkb
+
+        from databricks.labs.gbx._geom import parse_geom
+
+        # each element is a Geometry (WKB beside its SRID, the Z kept); a NULL element stays NULL
+        return [
+            None if g is None else UcGeometry(to_wkb(parse_geom(g)), case.geom_srid)
+            for g in arg
+        ]
     if param.uc == "STRING" and not isinstance(arg, str):
         return str(arg)  # UC has one STRING type: an INT literal arrives as its digits
     return arg
@@ -5293,6 +5303,16 @@ def _array_element_type(param) -> str:
     return uc[len("ARRAY<") : -1]
 
 
+def _geometry_element_literal(wkb, case: Case) -> str:
+    """One element of an ``ARRAY<GEOMETRY(ANY)>`` built from WKB bytes: ``st_geomfromwkb`` of ISO WKB (the warehouse parses type
+    1001 for a point with Z and rejects the EWKB Z flag), the integer SRID of the case, cast to GEOMETRY(ANY).
+    """
+    from shapely import from_wkb, to_wkb
+
+    iso = to_wkb(from_wkb(bytes(wkb)), flavor="iso")
+    return f"CAST(st_geomfromwkb(X'{iso.hex()}', {case.geom_srid}) AS {UC_GEOMETRY})"
+
+
 def _sql_literal(value, param, case: Case) -> str:
     if value is None:
         return "NULL"
@@ -5306,7 +5326,12 @@ def _sql_literal(value, param, case: Case) -> str:
             (
                 "CAST(NULL AS " + sql_type(elem_uc) + ")"
                 if v is None
-                else _sql_literal(v, elem, case)
+                else (
+                    _geometry_element_literal(v, case)
+                    if elem_uc.upper() == "GEOMETRY"
+                    and isinstance(v, (bytes, bytearray))
+                    else _sql_literal(v, elem, case)
+                )
             )
             for v in value
         )

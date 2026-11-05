@@ -31,6 +31,7 @@ PY_END = "# END GENERATED"
 # interchange becoming GEOMETRY (UC takes GEOMETRY only), and the polymorphic BNG resolution narrowed to one type.
 UC_TYPE_OK = {
     "BINARY|STRING": frozenset({"GEOMETRY"}),
+    "ARRAY<BINARY>|ARRAY<STRING>": frozenset({"ARRAY<GEOMETRY>"}),
     "INT|STRING": frozenset({"STRING", "INT"}),
 }
 _NAME = re.compile(r"[a-z][a-z0-9_]*")

@@ -84,6 +84,13 @@ UC_RASTER_RETILE_SQL = """SELECT r.scene, t.window, t.raster
 FROM rasters AS r,
      LATERAL main.geobrix.gbx_rst_retile(r.tile, 512, 512) AS t"""
 
+# The points of a terrain are collected as GEOMETRY values; the Z of each point is kept.
+UC_RASTER_DTM_SQL = """SELECT main.geobrix.gbx_rst_dtmfromgeoms(
+           collect_list(CAST(geom AS GEOMETRY(ANY))),
+           CAST(NULL AS ARRAY<GEOMETRY(ANY)>),
+           0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 256, 256, 3857) AS dtm
+FROM spot_heights"""
+
 # A band tile records its band number in its metadata.
 UC_RASTER_BANDS_SQL = """SELECT r.scene, t.metadata['band'] AS band, t.raster
 FROM rasters AS r,
@@ -288,6 +295,33 @@ def retile_a_tile_over_the_pixel_limit():
         tier_b.HANDLERS["gbx_rst_avg"](tile)
     except ValueError as err:
         return len(pieces), str(err)
+
+
+def dtm_from_geometry_points():
+    """The Z of each Geometry point reaches the terrain: the height at the centre of a plane z = x + 2 y is 15."""
+    import numpy as np
+    import shapely
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.uc import tier_b
+
+    class Geometry:  # what a UC function receives for a GEOMETRY value
+        def __init__(self, geom, srid):
+            self._wkb, self._srid = shapely.to_wkb(geom, flavor="iso"), srid
+
+        def getBytes(self):  # noqa: N802 - the pyspark name
+            return self._wkb
+
+        def getSrid(self):  # noqa: N802
+            return self._srid
+
+    corners = [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0), (10.0, 10.0), (5.0, 5.0)]
+    points = [Geometry(shapely.Point(x, y, x + 2 * y), 3857) for x, y in corners]
+    tile = tier_b.HANDLERS["gbx_rst_dtmfromgeoms"](
+        points, None, 0.0, 0.0, 0.0, 0.0, 10.0, 10.0, 5, 5, 3857, -9999.0, None
+    )
+    with MemoryFile(tile["raster"]) as mf, mf.open() as ds:
+        return float(np.asarray(ds.read(1))[2, 2])
 
 
 def snap_across_srids_is_refused():

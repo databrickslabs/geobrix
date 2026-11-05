@@ -237,6 +237,18 @@ def test_the_tile_splitting_examples_call_a_table_function_with_a_valid_argument
     assert "LATERAL" in sql
 
 
+def test_the_terrain_example_has_a_valid_argument_count_and_geometry_arrays():
+    man = manifest.load()
+    name = "gbx_rst_dtmfromgeoms"
+    args = ex.UC_RASTER_DTM_SQL.split(f"main.geobrix.{name}(", 1)[1].rsplit(") AS dtm", 1)[0]
+    assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
+    assert "CAST(geom AS GEOMETRY(ANY))" in args and "ARRAY<GEOMETRY(ANY)>" in args
+
+
+def test_the_z_of_a_geometry_point_reaches_the_terrain():
+    assert ex.dtm_from_geometry_points() == 15.0
+
+
 def test_a_tile_over_256_mib_is_refused_by_retile_with_a_fix():
     message = ex.retile_over_the_limit()
     assert "the tile is 262 MiB decoded, over the 256 MiB" in message

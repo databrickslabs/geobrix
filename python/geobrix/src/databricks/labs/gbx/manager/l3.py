@@ -99,7 +99,13 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
             )
             return
     target = name
-    if _needs_default_wrapper(spark, fn, spec, name):
+    # a factory builds its function from the session, once: the default check reads it, the registration reuses it
+    built = (
+        resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"], spark))
+        if "factory" in spec
+        else None
+    )
+    if _needs_default_wrapper(spark, fn, spec, name, built):
         # a scalar UDF takes every argument it was written with, and a SQL call that leaves an optional one out
         # binds fewer: it registers under a private name, behind a wrapper that passes each default
         from databricks.labs.gbx.manager import jvm
@@ -108,10 +114,7 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
     if "variants" in spec:
         reg.udf.register(target, resolve_ref(spec["variants"][variant]))
     elif "factory" in spec:
-        reg.udf.register(
-            target,
-            resolve_ref(spec["factory"])(*_factory_args(spec["factory_args"], spark)),
-        )
+        reg.udf.register(target, built)
     elif "callable" in spec:
         reg.udf.register(
             target, resolve_ref(spec["callable"]), _return_type(spec["returns"])
@@ -134,7 +137,7 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
         jvm._create_wrapper(spark, fn, sqlwrap.default_wrapper(fn, target))
 
 
-def _needs_default_wrapper(spark, fn, spec, name: str) -> bool:
+def _needs_default_wrapper(spark, fn, spec, name: str, built=None) -> bool:
     """True for a scalar row with optional parameters, registered under its own SQL name where SQL functions
     exist. (A generator or an aggregate cannot sit behind a scalar SQL function; the light kernels of those rows
     take their own defaults.)"""
@@ -153,28 +156,27 @@ def _needs_default_wrapper(spark, fn, spec, name: str) -> bool:
     # A kernel that already defaults its own optional arguments needs no wrapper, and must not sit behind one:
     # Spark rejects a SQL function inside a generator, and `explode(gbx_bng_tessellate(g, 3))` is the way
     # to read the chips of an array-returning scalar.
-    return not _takes_its_defaults(fn, spec)
+    return not _takes_its_defaults(fn, spec, built)
 
 
-def _takes_its_defaults(fn, spec) -> bool:
+def _takes_its_defaults(fn, spec, built=None) -> bool:
     """True when every registered form of the row gives each optional parameter a default in its own signature
     (a UDF object is read through the function it wraps). A form that cannot be read counts as one that does not.
+    A factory row is read through `built`, the function its factory made.
     """
     import inspect
 
     from databricks.labs.gbx.manifest import resolve_ref
 
-    refs = (
-        list(spec["variants"].values())
-        if "variants" in spec
-        else [spec["callable"]] if "callable" in spec else []
-    )
-    if not refs:
-        return (
-            False  # a factory builds its function from the session; it is not read here
-        )
-    for ref in refs:
-        obj = resolve_ref(ref)
+    if "variants" in spec:
+        objs = [resolve_ref(r) for r in spec["variants"].values()]
+    elif "callable" in spec:
+        objs = [resolve_ref(spec["callable"])]
+    else:
+        objs = [built] if built is not None else []
+    if not objs:
+        return False
+    for obj in objs:
         try:
             params = list(
                 inspect.signature(getattr(obj, "func", obj)).parameters.values()

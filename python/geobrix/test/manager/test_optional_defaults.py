@@ -63,3 +63,52 @@ def test_slope_with_only_a_tile_runs_without_the_engine(spark, tmp_path):
     assert r["s"]["raster"] is not None, dict(r["s"]["metadata"])
     (r,) = spark.table("_gbx_dem").select(rx.rst_slope("tile").alias("s")).collect()
     assert r["s"]["raster"] is not None, dict(r["s"]["metadata"])
+
+
+SELF_DEFAULTING = [
+    "gbx_h3_cell_bbox",
+    "gbx_rst_evi",
+    "gbx_rst_fillnodata",
+    "gbx_rst_fromfile",
+    "gbx_rst_land_cover",
+    "gbx_rst_savi",
+]
+
+
+class _Recording:
+    """A real session whose SQL statements are kept."""
+
+    def __init__(self, spark):
+        self._spark, self.statements = spark, []
+
+    def sql(self, text, *a, **k):
+        self.statements.append(text)
+        return self._spark.sql(text, *a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._spark, name)
+
+
+def test_kernels_with_their_own_defaults_register_without_a_sql_wrapper(spark):
+    """These six registered behind a SQL wrapper only because their kernels had no defaults; a SQL function cannot sit
+    inside a LATERAL call on Serverless. Now the kernel is the registered function and takes a call without its
+    optional arguments.
+    """
+    rec = _Recording(spark)
+    out = register(
+        rec, only=SELF_DEFAULTING, _prefer={n: "L3" for n in SELF_DEFAULTING}
+    )
+    assert {n: out[n].level for n in SELF_DEFAULTING} == {
+        n: "L3" for n in SELF_DEFAULTING
+    }
+    made = [s for s in rec.statements if s.startswith("CREATE")]
+    assert not [s for s in made if "gbx__probe_sqlfn" not in s], made
+    for n in SELF_DEFAULTING:
+        _required_args_only(spark, MAN.functions[n]).collect()
+    (got,) = spark.sql(
+        "SELECT gbx_h3_cell_bbox(CAST(617700169958293503 AS BIGINT)) AS b"
+    ).collect()
+    (want,) = spark.sql(
+        "SELECT gbx_h3_cell_bbox(CAST(617700169958293503 AS BIGINT), 4326, 'centroids', 0, NULL) AS b"
+    ).collect()
+    assert got["b"] is not None and got["b"] == want["b"]

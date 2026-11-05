@@ -157,12 +157,18 @@ def _tile_op(*required, check=None, tiles=()):
     def wrap(func):
         import inspect
 
-        names = list(inspect.signature(func).parameters)
+        sig = list(inspect.signature(func).parameters.values())
+        names = [p.name for p in sig]
         at = [names.index(n) for n in required]
         tile_at = [0] + [names.index(n) for n in tiles]
 
         @functools.wraps(func)
         def run(*args):
+            # a SQL call that leaves optional arguments out binds fewer: each takes its own default here
+            if len(args) < len(sig) and all(
+                p.default is not p.empty for p in sig[len(args) :]
+            ):
+                args = args + tuple(p.default for p in sig[len(args) :])
             tile = args[0]
             if tile is None or any(args[i] is None for i in at + tile_at):
                 return None
@@ -1103,7 +1109,7 @@ def _build_fromfile_sql_materialized_udf(cap_bytes=None):
     """
 
     @f.udf(V2_TILE_SCHEMA)
-    def fromfile_sql_materialized_udf(path, driver):
+    def fromfile_sql_materialized_udf(path, driver="GTiff"):
         return _fromfile_impl(path, driver, True, cap_bytes=cap_bytes)
 
     return fromfile_sql_materialized_udf
@@ -3327,7 +3333,7 @@ def _savi_bytes(tile, red_idx, nir_idx, l_val):
 
 @f.udf(V2_TILE_SCHEMA)
 @_tile_op("red_idx", "nir_idx", "l_val")
-def _savi_udf(tile, red_idx, nir_idx, l_val):
+def _savi_udf(tile, red_idx, nir_idx, l_val=0.5):
     new_bytes = _savi_bytes(tile, red_idx, nir_idx, l_val)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
@@ -3362,7 +3368,7 @@ def _evi_bytes(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
 
 @f.udf(V2_TILE_SCHEMA)
 @_tile_op("red_idx", "nir_idx", "blue_idx", "l_val", "c1", "c2", "g")
-def _evi_udf(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g):
+def _evi_udf(tile, red_idx, nir_idx, blue_idx, l_val=1.0, c1=6.0, c2=7.5, g=2.5):
     new_bytes = _evi_bytes(tile, red_idx, nir_idx, blue_idx, l_val, c1, c2, g)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
@@ -3419,7 +3425,7 @@ def _check_land_cover(*, method, n_clusters, smooth, **_):
 
 @f.udf(V2_TILE_SCHEMA)
 @_tile_op("method", "n_clusters", "smooth", check=_check_land_cover)
-def _land_cover_udf(tile, method, n_clusters, smooth):
+def _land_cover_udf(tile, method="hybrid", n_clusters=6, smooth=3):
     new_bytes = _land_cover_bytes(tile, method, n_clusters, smooth)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
@@ -3525,7 +3531,7 @@ def _fillnodata_bytes(tile, max_search_dist, smoothing_iter):
 
 @f.udf(V2_TILE_SCHEMA)
 @_tile_op("max_search_dist", "smoothing_iter")
-def _fillnodata_udf(tile, max_search_dist, smoothing_iter):
+def _fillnodata_udf(tile, max_search_dist=100.0, smoothing_iter=0):
     new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
 
@@ -6768,7 +6774,7 @@ def _light_rst_custom_rasterize_agg(
 
 
 @f.udf(_BBOX_SCHEMA)
-def _h3_cell_bbox_udf(cellid, srid, mode, kring_pad, out_crs=None):
+def _h3_cell_bbox_udf(cellid, srid=4326, mode="centroids", kring_pad=0, out_crs=None):
     """Return STRUCT<xmin,ymin,xmax,ymax> for one H3 cell in the output CRS.
 
     When *kring_pad* > 0 the cell is expanded to its k-ring neighbourhood

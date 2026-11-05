@@ -184,7 +184,9 @@ Register once per session. One call registers every SQL function and the `*_gbx`
   testFile="docs/tests/python/installation/test_verify_installation.py"
 />
 
-`register` picks the best implementation of each function for the compute and prints one line when it falls back. The Python API also registers a function on its first call. The old per-package `register()` functions are removed; see the [migration guide](./migration-0-6).
+`register` picks the best implementation of each function for the compute and prints one line when it falls back. The Python API also registers a function on its first call.
+
+Registering every function takes about 45 seconds on Serverless. To register only the functions you call, pass their names: `gbx.register(spark, only=["rst_avg", "bng_cellarea"])`. Names may be SQL names or short names. The old per-package `register()` functions are removed; see the [migration guide](./migration-0-6).
 
 ### Verify the install
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import re
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -31,6 +32,18 @@ DEFAULT_DIR = REPO_ROOT / "examples" / "uc-functions"
 DEFAULT_OUT_DIR = REPO_ROOT / "test-logs" / "uc-examples"
 WS_SUBDIR = "geobrix/uc-function-examples"
 QUERY_WORDS = ("SELECT", "WITH")
+FILE_CATALOG = "geospatial_docs"  # the names the example files are written with
+FILE_SCHEMA = "geobrix_uc"
+
+
+def retarget(statement: str, catalog: str, schema: str) -> str:
+    """The statement with the files' catalog and schema names replaced by `catalog` and `schema`.
+
+    The files name both in `USE`, in qualified table names and in information_schema filters, so a run
+    against another install (such as the scratch schema of `gbx:test:uc-integration`) rewrites the names.
+    """
+    statement = re.sub(rf"\b{FILE_SCHEMA}\b", schema, statement)
+    return re.sub(rf"\b{FILE_CATALOG}\b", catalog, statement)
 
 
 def is_query(statement: str) -> bool:
@@ -100,8 +113,8 @@ def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--profile", default=None, help="Databricks config profile (never chosen for you)")
     p.add_argument("--warehouse-id", default=None, help="SQL warehouse id (gbx:examples:uc-sql reads GBX_UC_WAREHOUSE_ID)")
-    p.add_argument("--catalog", default="geospatial_docs", help="catalog the functions are installed in")
-    p.add_argument("--schema", default="geobrix_uc", help="schema the functions are installed in")
+    p.add_argument("--catalog", default=FILE_CATALOG, help="catalog the functions are installed in (the files' names are rewritten)")
+    p.add_argument("--schema", default=FILE_SCHEMA, help="schema the functions are installed in (the files' names are rewritten)")
     p.add_argument("--dir", default=str(DEFAULT_DIR), help="folder of example .sql files")
     p.add_argument("--files", default=None, help="comma list of file name prefixes to run, such as 00,05")
     p.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="folder for the per-file result JSON")
@@ -122,7 +135,10 @@ def main(argv=None) -> int:
     if not files:
         print(f"{args.dir}: no .sql files", file=sys.stderr)
         return 2
-    parsed = {f: oracles.parse_uc_sql(f.read_text()) for f in files}
+    parsed = {
+        f: [(cid, retarget(s, args.catalog, args.schema)) for cid, s in oracles.parse_uc_sql(f.read_text())]
+        for f in files
+    }
     empty = [f.name for f, pairs in parsed.items() if not pairs]
     if empty:
         print(f"no '-- cid: <id>' statements in: {', '.join(empty)}", file=sys.stderr)

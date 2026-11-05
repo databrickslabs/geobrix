@@ -83,3 +83,17 @@ def test_every_example_file_is_well_formed():
         assert not re.search(r"/Users/|@databricks", text), f.name
         seen.update(cids)
     assert "check_functions_installed" in seen
+
+
+def test_retarget_rewrites_every_name_of_the_files_for_another_install(runner):
+    text = (EXAMPLES / "00_setup.sql").read_text() + (EXAMPLES / "11_procedures.sql").read_text()
+    out = runner.retarget(text, "cat_x", "sch_x")
+    assert "USE CATALOG cat_x" in out and "USE SCHEMA sch_x" in out
+    assert "table_schema = 'sch_x'" in out and "cat_x.sch_x.ex_parcels" in out
+    assert "geobrix_uc" not in out and "geospatial_docs" not in out
+    assert runner.retarget(text, "geospatial_docs", "geobrix_uc") == text  # the defaults change nothing
+
+
+def test_dry_run_with_another_schema_passes(runner, capsys):
+    assert runner.main(["--dry-run", "--schema", "geobrix_uc_it_abc", "--catalog", "geospatial_docs"]) == 0
+    assert "geospatial_docs.geobrix_uc_it_abc" in capsys.readouterr().out

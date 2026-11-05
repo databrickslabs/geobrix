@@ -235,3 +235,18 @@ def test_quadbin_rings_at_the_edge_of_the_world_are_the_documented_divergence(sp
     assert sorted(got) == sorted(
         quadbin.tile_to_cell((x, y, 5)) for x in (0, 1) for y in (0, 1)
     )
+
+
+@pytest.mark.parametrize("name", [QKR, QKL])
+def test_quadbin_rings_walk_only_the_world_not_the_unclamped_square(spark, name):
+    """A huge k at a low zoom passes the size guard (the world is one tile); the loops must be clamped to the world too,
+    or Spark builds a (2k+1)^2 square first."""
+    import quadbin
+
+    world = quadbin.tile_to_cell((0, 0, 0))
+    _install(spark, name)
+    try:
+        got = spark.sql(f"SELECT {name}({world}L, 1000000) AS r").first()["r"]
+    finally:
+        _drop(spark, name)
+    assert list(got) == ([world] if name == QKR else [])

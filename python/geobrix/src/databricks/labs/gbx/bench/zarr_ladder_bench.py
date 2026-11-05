@@ -494,7 +494,11 @@ def _run_leg(
                 peaks.append(m["peak_exec_mem_bytes"])
     walls = [round(p + e, 3) for p, e in zip(plans, execs)]
     tap = taps[-1]
-    chunk_bytes = math.prod(layout["chunks"]) * zl._ITEM
+    # an inner chunk longer than the array (a 24-hour chunk of a one-hour regional cut) holds only the array's cells
+    chunk_bytes = (
+        math.prod(min(c, n) for c, n in zip(layout["chunks"], layout["shape"]))
+        * zl._ITEM
+    )
     touched = (
         leg.bytes_touched
         if leg.bytes_touched is not None

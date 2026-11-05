@@ -258,6 +258,7 @@
       "description": "Build internal pyramid overviews at the given decimation levels.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -291,6 +292,7 @@
       "description": "Convert a tile to a Cloud Optimized GeoTIFF (COG).",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

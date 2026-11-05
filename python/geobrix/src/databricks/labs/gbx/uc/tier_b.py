@@ -698,6 +698,97 @@ def rst_asformat(tile, new_format):
 HANDLERS["gbx_rst_asformat"] = rst_asformat
 
 
+# --- file writers: overviews and the COG layout ----------------------------------------------------------------------------
+# Both kernels write the raster to a local file (``/tmp``, which a UC sandbox lets a function write) so GDAL can build the
+# pyramid, and read the bytes back. Three bounds hold them under the cap:
+#   - the input is decoded at most DECODED_CAP, checked before the kernel reads a pixel (``with_dataset``);
+#   - the written bytes are at most the cap and the pyramid's third (a pyramid adds a third of the pixels), checked before
+#     the tile is built;
+#   - the decoded result is held to the cap again by ``tile_row``.
+# The peak memory of a kernel is a few times the decoded size (the pixels, the file, and the bytes read back); no kernel
+# has been measured at the cap on a UC sandbox.
+OVERVIEW_ALLOWANCE = 3  # the written bytes may exceed the cap by a third: cap + cap // OVERVIEW_ALLOWANCE
+
+
+def _written_cap(fn: str, raster: bytes) -> bytes:
+    limit = DECODED_CAP + DECODED_CAP // OVERVIEW_ALLOWANCE
+    if len(raster) > limit:
+        raise result_refusal(fn, len(raster), limit)
+    return raster
+
+
+def _kernel_args(fn: str, fix: str, check: Callable, *args):
+    """The kernel's arguments checked by the core; a wrong one raises with a Fix, whatever the tile holds."""
+    try:
+        return check(*args)
+    except ValueError as exc:
+        raise _Parameter(f"{exc}. Fix: {fix}") from exc
+
+
+def rst_buildoverviews(tile, levels, resampling=None):
+    """gbx_rst_buildoverviews: the tile with an internal overview per decimation level, the pixels unchanged."""
+    fn = "gbx_rst_buildoverviews"
+    if tile is None or levels is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    _kernel_args(
+        fn,
+        "pass levels as whole numbers of 2 or more, for example array(2, 4, 8), "
+        "and a resampling of nearest, average, gauss, cubic, cubicspline, lanczos, bilinear or mode",
+        _kernel("ops", "check_overview_args"),
+        list(levels),
+        resampling,
+    )
+    return with_tile(
+        fn,
+        tile,
+        lambda ds: _written_cap(
+            fn,
+            _kernel("ops", "build_overviews")(
+                ds, list(levels), "average" if resampling is None else str(resampling)
+            ),
+        ),
+    )
+
+
+HANDLERS["gbx_rst_buildoverviews"] = rst_buildoverviews
+
+
+def rst_cog_convert(tile, compression=None, blocksize=None, overview_resampling=None):
+    """gbx_rst_cog_convert: the tile in the Cloud Optimized GeoTIFF layout, the pixels unchanged. A NULL option is
+    its default, as in a session."""
+    fn = "gbx_rst_cog_convert"
+    if tile is None:
+        return None
+    done, early = gate(fn, tile)
+    if done:
+        return early
+    comp = "AUTO" if compression is None else str(compression)
+    size = 512 if blocksize is None else int(blocksize)
+    resamp = "AVERAGE" if overview_resampling is None else str(overview_resampling)
+    _kernel_args(
+        fn,
+        "pass a blocksize that is a multiple of 16, a compression of AUTO, ZSTD, DEFLATE, LZW, LERC, JPEG, "
+        "WEBP or NONE, and an overview resampling word such as AVERAGE",
+        _kernel("analysis", "check_cog_args"),
+        comp,
+        size,
+        resamp,
+    )
+    return with_tile(
+        fn,
+        tile,
+        lambda ds: _written_cap(
+            fn, _kernel("analysis", "cog_convert")(ds, comp, size, resamp)
+        ),
+    )
+
+
+HANDLERS["gbx_rst_cog_convert"] = rst_cog_convert
+
+
 def rst_getsubdataset(tile, subset_name):
     """gbx_rst_getsubdataset: one subdataset of a container tile (NetCDF, HDF, ...) as a tile; a name the tile does not
     have raises (gbx_rst_subdatasets lists them)."""

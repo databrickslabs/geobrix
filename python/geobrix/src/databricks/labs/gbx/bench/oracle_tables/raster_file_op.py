@@ -7,6 +7,7 @@ factors asked for, or the Cloud Optimized GeoTIFF layout with the internal block
 viewshed functions of the same family keep their rows in the GDAL spec engine tables (spec_dem.py, spec_analysis.py).
 """
 
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import UPSTREAM_ERROR, Build, Case
 
 BO, CG = "gbx_rst_buildoverviews", "gbx_rst_cog_convert"
@@ -28,7 +29,7 @@ SAME = {
     "meta_driver": "GTiff",
     "pixels_of_arg0": True,
 }
-RASTER_FILE_OP = (
+_SESSION_ROWS = (
     # --- buildoverviews: one overview per decimation factor, the pixels unchanged
     Case(
         "buildoverviews_levels",
@@ -99,3 +100,23 @@ RASTER_FILE_OP = (
     Case("cog_convert_error_tile", CG, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("cog_convert_corrupt", CG, (CORRUPT,), "error_tile", None, ONLY),
 )
+
+# Unity Catalog: both functions give the session's tile for a materialized one. A virtual tile is refused with a Fix and a
+# corrupt one is NULL (a UC function has no error tile); an error tile goes through unchanged, whatever the arguments are.
+RASTER_FILE_OP = share(
+    _SESSION_ROWS,
+    "buildoverviews_levels",
+    "buildoverviews_resampling",
+    "buildoverviews_bad_resampling",
+    "buildoverviews_bad_levels",
+    "buildoverviews_null_tile",
+    "buildoverviews_null_levels",
+    "buildoverviews_error_tile",
+    "cog_convert_layout",
+    "cog_convert_auto",
+    "cog_convert_blocksize",
+    "cog_convert_bad_blocksize",
+    "cog_convert_bad_compression",
+    "cog_convert_null_tile",
+    "cog_convert_error_tile",
+) + edges(buildoverviews=([2],), cog_convert=())

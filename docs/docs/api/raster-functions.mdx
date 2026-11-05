@@ -5783,18 +5783,19 @@ _Example uses the multiband fixture (`rgb_nir_small.tif`, 3 bands) to demonstrat
 ### rst_buildoverviews
 
 {/* BEGIN GENERATED gbx_rst_buildoverviews: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_buildoverviews(tile, levels, [resampling])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_buildoverviews(tile, levels, [resampling])` | `TILE` |
 | Python | `rasterx.functions.rst_buildoverviews(tile, levels, resampling=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to add overviews to. |
-| `levels` | `ARRAY<INT>` |  | The decimation factors, such as `array(2, 4, 8)`: each at least 2. |
-| `resampling` | `STRING` | `'average'` | The overview resampling: `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear` or `mode`. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to add overviews to. |
+| `levels` | `ARRAY<INT>` | `ARRAY<INT>` |  | The decimation factors, such as `array(2, 4, 8)`: each at least 2. |
+| `resampling` | `STRING` | `STRING` | `'average'` | The overview resampling: `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear` or `mode`. Any other word raises. |
 {/* END GENERATED gbx_rst_buildoverviews */}
 
 :::note Implementation
@@ -5806,6 +5807,8 @@ The **Python** function takes three optional keywords that SQL does not: `virtua
 :::
 
 Add pyramid overview levels to a tile via `ds.BuildOverviews`. `levels` is an `ARRAY<INT>` (e.g. `array(2, 4, 8, 16)`); `resampling` is one of `nearest`, `average`, `gauss`, `cubic`, `cubicspline`, `lanczos`, `bilinear`, `mode`.
+
+On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it to `/tmp` while GDAL builds the pyramid. A virtual tile is refused with a Fix, a tile that cannot be read gives NULL, and an error tile comes out as itself. A result of more than 64 MiB plus a third is refused with a Fix that names the session function.
 
 <FunctionExamples
   name="rst_buildoverviews"
@@ -6037,19 +6040,20 @@ Higher-level analytical transforms wrapping single GDAL primitives — COG layou
 ### rst_cog_convert
 
 {/* BEGIN GENERATED gbx_rst_cog_convert: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_cog_convert(tile, [compression], [blocksize], [overview_resampling])` | `TILE` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_cog_convert(tile, [compression], [blocksize], [overview_resampling])` | `TILE` |
 | Python | `rasterx.functions.rst_cog_convert(tile, compression=None, blocksize=None, overview_resampling=None, virtualize_dir=None, virtualize_prefix=None, materialize=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to convert. |
-| `compression` | `STRING` | `'AUTO'` | `'AUTO'` (a size-adaptive ZSTD with the predictor for the data type) or a codec: `ZSTD`, `DEFLATE`, `LZW`, `LERC`, `JPEG`, `WEBP` or `NONE`. Any other word raises. |
-| `blocksize` | `INT` | `512` | The internal block size in pixels, square: a multiple of 16. Any other value raises. |
-| `overview_resampling` | `STRING` | `'AVERAGE'` | The resampling of the overview pyramid, such as `AVERAGE`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to convert. |
+| `compression` | `STRING` | `STRING` | `'AUTO'` | `'AUTO'` (a size-adaptive ZSTD with the predictor for the data type) or a codec: `ZSTD`, `DEFLATE`, `LZW`, `LERC`, `JPEG`, `WEBP` or `NONE`. Any other word raises. |
+| `blocksize` | `INT` | `INT` | `512` | The internal block size in pixels, square: a multiple of 16. Any other value raises. |
+| `overview_resampling` | `STRING` | `STRING` | `'AVERAGE'` | The resampling of the overview pyramid, such as `AVERAGE`. |
 {/* END GENERATED gbx_rst_cog_convert */}
 
 :::note Implementation
@@ -6061,6 +6065,8 @@ The **Python** function takes three optional keywords that SQL does not: `virtua
 :::
 
 Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Every level use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec at either level (`ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP`) and `AUTO`, its default. `AUTO` is a size-adaptive ZSTD level with the dtype predictor on the Python level and ZSTD on the JVM level. `blocksize` is the internal tile size in pixels (square), any multiple of 16 down to 16, at every level. `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
+
+On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it to `/tmp` while GDAL builds the layout. A virtual tile is refused with a Fix, a tile that cannot be read gives NULL, and an error tile comes out as itself. A result of more than 64 MiB plus a third is refused with a Fix that names the session function.
 
 <FunctionExamples
   name="rst_cog_convert"

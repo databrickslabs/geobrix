@@ -277,6 +277,8 @@ See [Unity Catalog functions](./api/uc-functions) and [Installation](./installat
 - **`gbx_rst_binpoints_partial` and `gbx_rst_binpoints_finalize` bin points in two steps.** Run the partial step, then `GROUP BY`, then the finalize step.
 - **`gbx_rst_h3_rastertogrid_partial` returns the H3 cell state of one tile.** Merge the state across tiles with `GROUP BY`.
 - **`gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles` and `gbx_rst_separatebands` are table functions.** Call each with `LATERAL`. A tile over 64 MiB decoded, or a result that could not fit, is refused with a `Fix:`.
+- **`gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array` and `gbx_st_coverageinvalidedges_array` take a collected array.** Call each with `GROUP BY` and `collect_list`. They answer as the aggregates `gbx_st_asmvt`, `gbx_st_coverageisvalid` and `gbx_st_coverageinvalidedges` do. The attributes of a feature are JSON text.
+- **Seven vector functions and two raster file functions run on Unity Catalog.** They are `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints`, `gbx_st_shiftlongitude`, `gbx_rst_buildoverviews` and `gbx_rst_cog_convert`. A geometry result keeps the SRID of the first argument. Two geometries in different SRIDs are refused with a `Fix:`.
 
 ## Ingestion {#ingestion}
 

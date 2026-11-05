@@ -167,7 +167,8 @@ def _gdal(spark, connect: bool) -> Tuple[str, str]:
     return f"GDAL natives not loadable ({r[:120]})", ""
 
 
-def _sql_functions(spark) -> bool:
+def _probe_sql_functions(spark) -> bool:
+    """Two statements, each a round trip on Spark Connect: create a temporary SQL function and drop it again."""
     try:
         spark.sql(
             "CREATE OR REPLACE TEMPORARY FUNCTION gbx__probe_sqlfn() RETURNS INT RETURN 1"
@@ -176,6 +177,23 @@ def _sql_functions(spark) -> bool:
         return True
     except Exception:  # noqa: BLE001 - OSS Spark builds without SQL UDFs
         return False
+
+
+# session -> bool: whether the session creates SQL functions. The answer is a property of the session, and the
+# installers ask it once per function (a full registration asked it ~80 times, 2 round trips each on Spark Connect).
+_SQLFN: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _sql_functions(spark) -> bool:
+    """Whether ``spark`` creates temporary SQL functions, probed once per session (`forget` drops the answer). A
+    session that cannot be weakly referenced is probed every time."""
+    try:
+        known = _SQLFN.get(spark)
+    except TypeError:
+        return _probe_sql_functions(spark)
+    if known is None:
+        known = _SQLFN[spark] = _probe_sql_functions(spark)
+    return known
 
 
 # session -> {need_jvm: Capabilities}: the first-use registration of each name (`_api.ensure`) calls `detect`, and
@@ -202,6 +220,7 @@ def forget(spark) -> None:
     """Drop the probes of ``spark``, so the next ``detect`` runs them again (a forced level after a JAR is staged)."""
     try:
         _CACHE.pop(spark, None)
+        _SQLFN.pop(spark, None)
     except TypeError:
         pass
 

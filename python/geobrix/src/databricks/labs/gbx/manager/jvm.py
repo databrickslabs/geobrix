@@ -57,10 +57,15 @@ def _install_light_side(spark, fn) -> str:
 
 def _create_wrapper(spark, fn, ddl: str) -> None:
     """Install the wrapper under the SQL name. CREATE OR REPLACE cannot replace a function that
-    is not a SQL function (the light UDF an earlier registration left under the same name).
+    is not a SQL function (the light UDF an earlier registration left under the same name): the engine refuses it,
+    and only then is the name dropped and created. The common case, a name nothing holds or a SQL function, costs one
+    statement, not two (each is a round trip on Spark Connect).
     """
-    spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
-    spark.sql(ddl)
+    try:
+        spark.sql(ddl)
+    except Exception:  # noqa: BLE001 - a non-SQL function holds the name (or the DDL is bad, and fails again below)
+        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn.sql_name}")
+        spark.sql(ddl)
 
 
 def install_l1(spark, fn, caps) -> Optional[str]:

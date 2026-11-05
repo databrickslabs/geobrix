@@ -258,3 +258,94 @@ def test_a_jar_companion_a_test_installs_stays_over_a_later_ensure(monkeypatch):
         assert _heavy._TOP_LEVEL.search(f"object A {{ }}\n{decl} {{ }}\n"), decl
     # a nested declaration is not at column 0
     assert not _heavy._TOP_LEVEL.search("{\n  private object B\n}\n")
+
+
+class _CountingSession:
+    """A real session whose ``sql`` calls are recorded: on Spark Connect each one is a network round trip."""
+
+    def __init__(self, spark):
+        self._spark, self.statements = spark, []
+
+    def sql(self, text, *a, **k):
+        self.statements.append(text)
+        return self._spark.sql(text, *a, **k)
+
+    def __getattr__(self, name):
+        return getattr(self._spark, name)
+
+
+def test_the_sql_function_probe_runs_once_per_session():
+    """Every installer asked "does this session create SQL functions?" with 2 statements, ~80 times in a full
+    registration (160 round trips on Spark Connect). The answer is a property of the session."""
+    from databricks.labs.gbx.manager import capabilities
+
+    class Spark:
+        def __init__(self):
+            self.statements = []
+
+        def sql(self, text):
+            self.statements.append(text)
+
+    spark = Spark()
+    assert all(capabilities._sql_functions(spark) for _ in range(5))
+    assert len(spark.statements) == 2
+    capabilities.forget(spark)  # a forced re-registration probes again
+    assert capabilities._sql_functions(spark)
+    assert len(spark.statements) == 4
+
+    class NoSqlFunctions(Spark):
+        def sql(self, text):
+            raise RuntimeError("no SQL UDFs")
+
+    refused = NoSqlFunctions()
+    assert not capabilities._sql_functions(refused)
+    assert not capabilities._sql_functions(refused)  # a refusal is remembered too
+
+
+def test_a_wrapper_over_a_free_name_is_one_statement_and_over_a_light_udf_drops_first():
+    from databricks.labs.gbx.manager import jvm
+
+    fn = manifest.load().functions["gbx_bng_eastnorthasbng"]
+
+    class Spark:
+        def __init__(self, refuse_first):
+            self.statements, self.refuse = [], refuse_first
+
+        def sql(self, text):
+            self.statements.append(text)
+            if self.refuse and text.startswith("CREATE"):
+                self.refuse = False
+                raise RuntimeError("CANNOT_REPLACE_NON_SQL_UDF_WITH_SQL_UDF")
+
+    free = Spark(False)
+    jvm._create_wrapper(free, fn, "CREATE OR REPLACE TEMPORARY FUNCTION x() ...")
+    assert free.statements == ["CREATE OR REPLACE TEMPORARY FUNCTION x() ..."]
+    held = Spark(True)
+    jvm._create_wrapper(held, fn, "CREATE OR REPLACE TEMPORARY FUNCTION x() ...")
+    assert held.statements == [
+        "CREATE OR REPLACE TEMPORARY FUNCTION x() ...",
+        "DROP TEMPORARY FUNCTION IF EXISTS gbx_bng_eastnorthasbng",
+        "CREATE OR REPLACE TEMPORARY FUNCTION x() ...",
+    ]
+
+
+def test_a_family_registration_makes_one_statement_per_wrapper_plus_one_probe(spark):
+    """Count assertion on the SQL round trips of a registration at the light level: one probe (2 statements) and
+    one CREATE per SQL wrapper; no DROP, no further probe."""
+    names = manager.names_at_level(("gbx_bng_", "gbx_st_", "gbx_rst_"), "L3")
+    for n in names:  # nothing of an earlier test holds a name
+        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {n}")
+    counting = _CountingSession(spark)
+    manager.register_family(counting, ("gbx_bng_", "gbx_st_", "gbx_rst_"), level="L3")
+    probe = [s for s in counting.statements if "gbx__probe_sqlfn" in s]
+    creates = [
+        s
+        for s in counting.statements
+        if s.startswith("CREATE") and "gbx__probe_sqlfn" not in s
+    ]
+    assert len(probe) == 2
+    assert len(creates) >= 10, "the family has SQL wrappers; the count below would prove nothing"
+    others = [s for s in counting.statements if s not in probe and s not in creates]
+    assert not [s for s in others if s.startswith("DROP")], others
+    assert len(counting.statements) == 2 + len(creates) + len(others)
+    assert len(others) <= 1, others  # the one SELECT: the FILE-reference check

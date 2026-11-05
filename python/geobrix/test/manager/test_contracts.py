@@ -1566,8 +1566,8 @@ def test_l2_wrapper_replaces_the_sql_name_after_the_private_udf_is_registered(
 
     stub, _ = _standard_stub(monkeypatch, tmp_path)
     assert jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR)) is None
+    # one statement: the name holds no non-SQL function, so CREATE OR REPLACE is enough (no DROP round trip)
     assert stub.sql_text == [
-        "DROP TEMPORARY FUNCTION IF EXISTS gbx_bng_eastnorthasbng",
         sqlwrap.cast_call(
             BNG, "gbx__l2_bng_eastnorthasbng", ["DOUBLE", "DOUBLE", "STRING"]
         ),

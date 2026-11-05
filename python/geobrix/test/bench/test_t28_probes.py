@@ -551,23 +551,60 @@ def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dr
     assert not probes.m6_ok("123|error|a GDAL failure")
 
 
-def test_the_m6_handler_runs_the_engine_on_the_reference_tile_when_gdal_is_at_the_pin():
+def _run_m6_handler(tmp_path, block_pyspark: bool) -> str:
+    """The handler body in a fresh interpreter (the test process has pyspark loaded, which would hide the answer the probe
+    exists to give). ``block_pyspark`` makes ``import pyspark`` raise, as it does in a UC sandbox. The result line, or the
+    end of the error."""
+    import subprocess
+    import sys
+
     from databricks.labs.gbx.engine import run as engine_run
 
     why = engine_run.unavailable_reason()
     if why:
         pytest.skip(why)
-    body = probes._M6_BODY
-    ns = {}
-    exec(
-        "def handler(t):\n" + "".join("    " + ln + "\n" for ln in body.splitlines()),
-        ns,
-    )  # noqa: S102
-    out = ns["handler"](
-        {"raster": probes.p2_tile_bytes("1MiB", 1 << 20), "metadata": {"src": "m6"}}
+    tile = tmp_path / "ref.tif"
+    tile.write_bytes(probes.p2_tile_bytes("1MiB", 1 << 20))
+    block = (
+        "sys.modules['pyspark'] = None\nsys.modules['py4j'] = None\n"
+        if block_pyspark
+        else ""
     )
-    assert out["metadata"]["m6"].startswith("ok|valid:min:max=")
-    assert probes.m6_ok("1|" + out["metadata"]["m6"])
+    script = (
+        "import sys\n"
+        + block
+        + "def handler(t):\n"
+        + "".join("    " + ln + "\n" for ln in probes._M6_BODY.splitlines())
+        + f"out = handler({{'raster': open({str(tile)!r}, 'rb').read(), 'metadata': {{'src': 'm6'}}}})\n"
+        + "print('RESULT|' + out['metadata']['m6'])\n"
+    )
+    res = subprocess.run(
+        [sys.executable, "-I", "-c", script],
+        capture_output=True,
+        text=True,
+        cwd=str(tmp_path),
+    )
+    return next(
+        (ln for ln in res.stdout.splitlines() if ln.startswith("RESULT|")),
+        res.stderr[-600:],
+    )
+
+
+def test_the_m6_handler_gives_the_engine_a_slope_tile_when_pyspark_is_importable(
+    tmp_path,
+):
+    line = _run_m6_handler(tmp_path, block_pyspark=False)
+    assert line.startswith("RESULT|ok|valid:min:max="), line
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="engine.run imports ds.file_gbx for the read cap, and ds/__init__ needs pyspark: M-6 fails in a UC sandbox "
+    "until the engine plan moves the cap helpers out of ds (found by this probe's rehearsal)",
+)
+def test_the_m6_handler_needs_no_pyspark(tmp_path):
+    line = _run_m6_handler(tmp_path, block_pyspark=True)
+    assert probes.m6_ok("1|" + line[len("RESULT|") :]), line
 
 
 # ---- the warehouse combine reference ---------------------------------------------------------------------------

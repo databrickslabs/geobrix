@@ -20,6 +20,13 @@ TREES = [
 ]
 
 
+# members per function call: a merge takes 8; a combine's partial tiles are Float64, so it takes 6
+FAN_IN = {
+    "gbx_mosaic_by_key": procedures.TREE_FAN_IN,
+    "gbx_combine_by_key": procedures.COMBINE_FAN_IN,
+}
+
+
 def _text(name):
     return procedures.RECIPES[name]("cat", "sch")
 
@@ -45,9 +52,12 @@ def _bucket_formula(text):
 
 
 @pytest.mark.parametrize("name", TREES)
-def test_the_tree_groups_members_by_at_most_eight_and_never_leaves_a_lone_member(name):
+def test_the_tree_groups_members_by_at_most_its_fan_in_and_never_leaves_a_lone_member(
+    name,
+):
     fan, bucket = _bucket_formula(_text(name))
-    assert fan == procedures.TREE_FAN_IN == 8
+    assert fan == FAN_IN[name]
+    assert procedures.TREE_FAN_IN == 8 and procedures.COMBINE_FAN_IN == 6
     for n in list(range(2, 400)) + [4095, 4096, 4097, 65_537, 1_000_003]:
         sizes = {}
         last = -1
@@ -80,6 +90,26 @@ def test_the_tree_levels_end_and_the_loop_is_bounded(name):
     assert "GROUP BY tile_key HAVING count(*) > 1" in loop.group(1)
     assert f"v_lvl >= {procedures.TREE_MAX_LEVELS}" in loop.group(2)
     assert "SET v_lvl = v_lvl + 1;" in loop.group(2)
+
+
+def test_every_call_of_the_combine_tree_stays_within_the_decoded_cap_at_any_key_size():
+    """A call refuses members plus result over 64 MiB decoded. A key of 50 or 200 tiles of 1024 x 1024 (Float64 after the
+    cast: 8 MiB) was refused at a fan-in of 8 (8 x 8 + 8 = 72 MiB); no bucket of any level may reach that.
+    """
+    fan, bucket = _bucket_formula(_text("gbx_combine_by_key"))
+    member = 8 * 1024 * 1024
+    for n0 in (10, 50, 200, 1000, 12_345):
+        n, calls = n0, []
+        while n > 1:
+            sizes = {}
+            for rn in range(1, n + 1):
+                sizes[bucket(rn, n)] = sizes.get(bucket(rn, n), 0) + 1
+            calls += list(sizes.values())
+            n = len(sizes)
+        assert all((k + 1) * member <= 64 * 1024 * 1024 for k in calls), (
+            n0,
+            max(calls),
+        )
 
 
 def test_mosaic_by_key_has_no_tile_count_refusal_but_a_result_size_refusal():

@@ -21,7 +21,12 @@ from databricks.labs.gbx.uc import ddl
 # The tree procedures merge or combine at most this many tiles in one function call (an aggregate over tile structs
 # runs out of memory past about ten 512 x 512 tiles); a key of any size is a tree of such calls.
 TREE_FAN_IN = 8
-# A tree of fan-in 8 has 10 levels for 1e9 tiles; a loop that has not ended by then is stopped.
+# The combine tree takes fewer members per call: its partial tiles are Float64 (avg and stddev cast the members first, so
+# a sum does not wrap), and a call refuses members plus result over the 64 MiB a function decodes. Eight Float64 tiles of
+# 1024 x 1024 are 64 MiB with a result of 8 MiB, so a key of 50 tiles was refused. Six of them are 56 MiB: a call stays
+# within the cap for tiles up to 1.2 million pixels per band (about 1090 x 1090), and a key of 60 million tiles still ends.
+COMBINE_FAN_IN = 6
+# A tree of fan-in 8 has 10 levels for 1e9 tiles (fan-in 6, 6e7); a loop that has not ended by then is stopped.
 TREE_MAX_LEVELS = 10
 # The largest tile a Unity Catalog function returns.
 TREE_MAX_BYTES = 64 * 1024 * 1024
@@ -439,13 +444,18 @@ WHEN NOT MATCHED THEN INSERT *;"""
 # writes one row per bucket of a scratch table, and the next level reads those rows, until a key has one row. The
 # buckets of a key are contiguous runs of the same size (to within one), so no call gets a lone member: a combine
 # function returns a single tile as it is, which would make a "count" of one tile the tile itself.
-_BUCKET = f"CAST(((rn - 1) * ((n + {TREE_FAN_IN - 1}) DIV {TREE_FAN_IN})) DIV n AS INT)"
+def _bucket(fan: int) -> str:
+    """The bucket of row ``rn`` of a key of ``n`` rows: runs of at most ``fan``, at least two (to within one) each."""
+    return f"CAST(((rn - 1) * ((n + {fan - 1}) DIV {fan})) DIV n AS INT)"
 
 
-def _ranked(columns: str, source: str, order: str) -> str:
+_BUCKET = _bucket(TREE_FAN_IN)
+
+
+def _ranked(columns: str, source: str, order: str, fan: int = TREE_FAN_IN) -> str:
     """The rows of ``source`` with the bucket of each in its key; only the keys with more than one row."""
     return (
-        f"SELECT tile_key, {columns}, {_BUCKET} AS bucket\n"
+        f"SELECT tile_key, {columns}, {_bucket(fan)} AS bucket\n"
         "FROM (\n"
         f"  SELECT tile_key, {columns},\n"
         f"    row_number() OVER (PARTITION BY tile_key ORDER BY {order}) AS rn,\n"
@@ -474,10 +484,10 @@ def _size_check(level: str, fix: str) -> str:
     )
 
 
-def _tree_loop(next_level: str, fix: str, name: str) -> str:
+def _tree_loop(next_level: str, fix: str, name: str, fan: int = TREE_FAN_IN) -> str:
     """The loop over the levels. ``next_level`` is the statement (or the chain of them) that writes level v_lvl + 1."""
     cap = (
-        f"{name}: a key needs more than {TREE_MAX_LEVELS} levels of {TREE_FAN_IN} tiles. "
+        f"{name}: a key needs more than {TREE_MAX_LEVELS} levels of {fan} tiles. "
         "Fix: split the key."
     )
     return f"""WHILE EXISTS (SELECT 1 FROM IDENTIFIER(v_scratch) WHERE lvl = v_lvl GROUP BY tile_key HAVING count(*) > 1) DO
@@ -575,10 +585,10 @@ _COMBINE_OPS = ("avg", "sum", "count", "min", "max", "stddev")
 _EXPR = {"avg": "B / A", "stddev": "sqrt(abs(C / A - (B / A) ** 2))"}
 
 
-def _combine_level1(q: str, op: str) -> str:
+def _combine_level1(q: str, op: str) -> str:  # members per call: COMBINE_FAN_IN
     cols = "tile_key, lvl, bucket, p1" + (", p2" if op in ("avg", "stddev") else "")
     cols += ", p3" if op == "stddev" else ""
-    ranked = _ranked("tile", "IDENTIFIER(source_table)", _MEMBER_ORDER)
+    ranked = _ranked("tile", "IDENTIFIER(source_table)", _MEMBER_ORDER, COMBINE_FAN_IN)
     if op in ("sum", "min", "max", "count"):
         fn = "combinecount" if op == "count" else f"combine{op}"
         sel = f"SELECT tile_key, 1, bucket, {q}.gbx_rst_{fn}(collect_list(tile)) AS p1\nFROM (\n{ranked}\n) GROUP BY tile_key, bucket"
@@ -618,6 +628,7 @@ def _combine_next(q: str, op: str) -> str:
         ", ".join(f"p{i}" for i in range(1, parts + 1)),
         "IDENTIFIER(v_scratch)",
         "bucket",
+        COMBINE_FAN_IN,
     )
     ranked = ranked.replace(
         "  FROM IDENTIFIER(v_scratch)\n",
@@ -687,7 +698,7 @@ END IF;
 -- level 1
 {first}
 {_size_check("1", fix)}
-{_tree_loop(nxt, fix, "gbx_combine_by_key")}
+{_tree_loop(nxt, fix, "gbx_combine_by_key", COMBINE_FAN_IN)}
 -- result
 {_chain({op: final(op) for op in _COMBINE_OPS})}
 {_SCRATCH_DROP}"""
@@ -697,7 +708,7 @@ END IF;
         "gbx_combine_by_key",
         f"Combine the aligned tiles of a table (columns tile_key, tile) pixel by pixel into one tile per key with op "
         f"avg, sum, count, min, max or stddev (the population standard deviation), in a tree of partial tiles of at most "
-        f"{TREE_FAN_IN} members each, so a key may have any number of tiles. Pixels with no data are left out, as in the "
+        f"{COMBINE_FAN_IN} members each, so a key may have any number of tiles. Pixels with no data are left out, as in the "
         "session combine functions. avg and stddev return Float32 tiles; median is refused. A key with one tile keeps "
         "that tile. " + _UPSERTS,
         [

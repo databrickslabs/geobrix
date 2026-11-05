@@ -200,6 +200,22 @@ def test_run_family_oracles_reports_a_red_row_with_its_message(
     assert real is not broken
 
 
+def test_run_family_oracles_counts_a_table_that_raises_as_a_failure(
+    spark, tmp_path, monkeypatch
+):
+    def boom(*a, **k):
+        raise RuntimeError("table fell over")
+
+    monkeypatch.setattr(probes, "_oracle_function", boom)
+    out = probes.run_family_oracles(
+        spark, str(tmp_path), tables=["GRID_SCALAR"], only=["gbx_bng_cellarea"]
+    )
+    assert list(out["crashed"]) == ["GRID_SCALAR"]
+    assert "table fell over" in out["crashed"]["GRID_SCALAR"]
+    assert out["failures"] == 1 and out["red"] == {}
+    assert "table fell over" in out["tables"]["GRID_SCALAR"]["crashed"]
+
+
 def test_run_family_oracles_with_a_level_runs_only_functions_that_have_it(
     spark, tmp_path
 ):

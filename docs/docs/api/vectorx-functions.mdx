@@ -266,7 +266,7 @@ multiple `(z, x, y)` tiles into a single PMTiles file.
 
 Encode one tile's features from an array of `(geom, attrs)` structs, for example `collect_list(struct(geom, to_json(attrs)))` after a `GROUP BY` of the tile key. It is the array form of `gbx_st_asmvt`, so a Unity Catalog query can build a layer. The attributes are JSON object text, because a struct of any fields has no Unity Catalog type. Geometry is WKB or EWKB in tile coordinates.
 
-**Returns:** `BINARY`, the MVT protobuf of one layer. An array with no usable feature gives an empty layer, and a NULL array gives NULL. An attribute text that is not a JSON object raises with a Fix. An array of more than 64 MiB is refused with a Fix that names `gbx_st_asmvt`. Use `gbx_st_asmvt_pyramid` to cut a feature into the tiles it touches first.
+**Returns:** `BINARY`, the MVT protobuf of one layer. An array with no usable feature gives an empty layer, and a NULL array gives NULL. An attribute text that is not a JSON object raises with a Fix, and so does an extent below 1. An array of more than 64 MiB is refused with a Fix that names `gbx_st_asmvt`. Use `gbx_st_asmvt_pyramid` to cut a feature into the tiles it touches first.
 
 ---
 

@@ -719,7 +719,8 @@ def _written_cap(fn: str, raster: bytes) -> bytes:
 
 def _kernel_args(fn: str, fix: str, check: Callable, *args):
     """The kernel's arguments checked by the core. A wrong one raises with a Fix, as does one of the wrong type, such
-    as a NULL level. An error tile never reaches this check: ``gate`` returns it as itself first."""
+    as a NULL level. An error tile never reaches this check: ``gate`` returns it as itself first.
+    """
     try:
         return check(*args)
     except (ValueError, TypeError) as exc:

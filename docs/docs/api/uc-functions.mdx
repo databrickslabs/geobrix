@@ -249,7 +249,7 @@ An array over 64 MiB, attributes included, is refused with a `Fix:` that names t
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_FILES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-Both refuse a tile over 64 MiB decoded before they read a pixel. They also refuse a result that is more than a third over 64 MiB, because a pyramid adds a third. The `Fix:` names the session function. A level below 2, an unknown resampling, a block size that is not a multiple of 16 and an unknown codec raise with a `Fix:`, also for a tile with nothing to read.
+Both refuse a tile over 64 MiB decoded before they read a pixel. They also refuse a result that is more than a third over 64 MiB, because a pyramid adds a third. The `Fix:` names the session function. A wrong argument raises with a `Fix:`. That covers a level below 2, an unknown resampling, a block size that is not a multiple of 16 and an unknown codec. A tile that already holds an error comes out as itself, whatever the arguments.
 
 <CodeFromTest code={ucExamples} language="python" functionName="overview_levels_must_be_2_or_more" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 

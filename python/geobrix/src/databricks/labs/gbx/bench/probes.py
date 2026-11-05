@@ -2152,7 +2152,9 @@ def run_family_oracles(
     Prints ``[T28 oracles] <TABLE> START`` and ``DONE <s>s ...`` per table, and a RUNNING line every 60 s.
 
     Returns ``{"level", "tables": {table: {"functions", "cases", "failures": n, "skipped": {fn: why}}}, "levels":
-    {fn: "L3/c0"}, "red": {cid: message}, "pending_red": [cid], "pending_now_green": [cid], "failures": n}``.
+    {fn: "L3/c0"}, "red": {cid: message}, "pending_red": [cid], "pending_now_green": [cid], "crashed": {table: error},
+    "failures": n}``. A table that raised is in ``crashed`` and counts as a failure: ``failures`` is the red rows plus
+    the crashed tables, so a run with a crash is never zero.
     """
     from databricks.labs.gbx import manifest
     from databricks.labs.gbx.bench.uc_perf import _Run
@@ -2177,6 +2179,7 @@ def run_family_oracles(
         "red": {},
         "pending_red": [],
         "pending_now_green": [],
+        "crashed": {},
     }
 
     def one_table(table, fns):
@@ -2192,10 +2195,17 @@ def run_family_oracles(
 
     try:
         for table, fns in by_table.items():
-            run_.step(f"{table}", lambda t=table, f=fns: one_table(t, f))
+            _, err, _ = run_.step(f"{table}", lambda t=table, f=fns: one_table(t, f))
+            if (
+                err is not None
+            ):  # a table that raised ran no row to the end: it is a failure, not a clean zero
+                out["crashed"][table] = err
+                out["tables"].setdefault(
+                    table, {"functions": 0, "cases": 0, "failures": 0, "skipped": {}}
+                )["crashed"] = err
     finally:
         run_.stop()
-    out["failures"] = len(out["red"])
+    out["failures"] = len(out["red"]) + len(out["crashed"])
     return out
 
 

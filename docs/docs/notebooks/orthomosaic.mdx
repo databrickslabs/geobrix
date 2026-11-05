@@ -54,10 +54,10 @@ pass adds fidelity for measurement workflows. `02_publish` uses whichever orthom
 present (dense if `01b` ran, else sparse).
 
 **`03_segment` (optional) turns the published COG into objects AND a land-cover map.** It
-installs its own dependencies — `geobrix[vizx]` (the env5 wheel, with the GeoSAM GPU packages as a separate step) — rather than
+installs its own dependencies — `geobrix[vizx]` (the env6 wheel, with the GeoSAM GPU packages as a separate step) — rather than
 `photogrammetry`, since its **instance-objects** section needs GeoSAM's
 `torch`/`segment-geospatial`, not `pycolmap`, and runs on the **Serverless GPU AI Runtime**
-(environment 5). Its **land-cover** section is plain RasterX (`rst_land_cover`, CPU-only) and
+(environment 6). Its **land-cover** section is plain RasterX (`rst_land_cover`, CPU-only) and
 needs no GPU. The notebook is standalone (no `%run ./config_nb`) and can run any time after
 `02_publish` has written `orthomosaic_cog.tif`.
 :::

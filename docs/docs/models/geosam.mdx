@@ -25,7 +25,7 @@ imported lazily inside this call, not at module import time — a caller without
 deps installed gets a clear `ModelDepsMissing` error:
 
 ```
-GeoSAM requires the model deps: install them after the env5 wheel on Serverless GPU environment 5 (pip install torch==2.9.0 torchvision==0.24.0 segment-geospatial opencv-python-headless==4.11.0.86)
+GeoSAM requires the model deps: install them after the env wheel on Serverless GPU (env6 wheel, environment 6; pip install torch==2.9.0 torchvision==0.24.0 segment-geospatial opencv-python-headless==4.11.0.86)
 ```
 
 - `model_type` — the SAM model variant (default `"vit_h"`).

@@ -89,8 +89,8 @@ show_help() {
     echo -e "    ${YELLOW}--extras vizx${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
     echo -e "    ${YELLOW}--notebook examples/notebooks/orthomosaic/03_segment.ipynb \\${NC}"
-    echo -e "    ${YELLOW}--wheel /Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env5-py3-none-any.whl \\${NC}"
-    echo -e "    ${YELLOW}--env-version 5 --extras vizx --hardware-accelerator GPU_1xA10 \\${NC}"
+    echo -e "    ${YELLOW}--wheel /Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl \\${NC}"
+    echo -e "    ${YELLOW}--env-version 6 --extras vizx --hardware-accelerator GPU_1xA10 \\${NC}"
     echo -e "    ${YELLOW}--extra-deps 'torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86'${NC}"
     echo ""
 }

@@ -54,16 +54,17 @@ The wheel is fetched from:
 ```
 
 `03_segment` is standalone (no `%run ./config_nb`) and installs its own dependencies —
-`geobrix[vizx]` (the env5 wheel, with the GeoSAM GPU packages as a separate step) — since it needs the GeoSAM GPU model deps
+`geobrix[vizx]` (the env6 wheel, with the GeoSAM GPU packages as a separate step) — since it needs the GeoSAM GPU model deps
 (`torch`, `segment-geospatial`), not `photogrammetry`.
 
 ## Runtime
 
 **Serverless environment 5.** `config_nb`, `01a_sfm_orthomosaic`, `02_publish`, and
 `monitor` run on the **CPU** flavor. The optional `01b_sfm_orthomosaic_gpu` (dense MVS)
-and `03_segment` (GeoSAM) steps run on the **Serverless GPU AI Runtime** (same
-environment number, GPU-attached; `pycolmap-cuda12` for `01b`, `torch`/CUDA 12 for
-`03_segment`). Compute-intensive steps on the CPU path:
+and `03_segment` (GeoSAM) steps run on the **Serverless GPU AI Runtime**
+(GPU-attached; `pycolmap-cuda12` for `01b`, `torch`/CUDA 12 for `03_segment`).
+`03_segment` uses **environment 6** and the env6 wheel: the UDF workers of the GPU runtime
+run environment 6, and an env wheel refuses to import on the other environment. Compute-intensive steps on the CPU path:
 
 | Step | Typical runtime (Old Orchard, ~170 images) |
 |---|---|

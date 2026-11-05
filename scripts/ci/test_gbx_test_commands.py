@@ -3197,3 +3197,12 @@ def test_python_dbr_without_a_cluster_still_runs_the_tests_in_the_container(sand
     assert any(
         "docs/tests-dbr/python/api/ -m databricks" in c[-1] for c in sandbox.execs()
     ), (res.output, sandbox.execs())
+
+
+def test_an_env5_wheel_on_serverless_gpu_is_warned_about_the_env6_workers(runner):
+    """The UDF workers of Serverless GPU run environment 6 whatever the driver runs, so the env5 wheel's import guard
+    refuses in any UDF there (orthomosaic/03: `the runtime is env6`)."""
+    note = runner.gpu_wheel_warning(ENV5, "GPU_1xA10")
+    assert note and "env6" in note and "--env-version 6" in note
+    assert runner.gpu_wheel_warning(ENV6, "GPU_1xA10") is None
+    assert runner.gpu_wheel_warning(ENV5, None) is None  # CPU Serverless env 5 is unchanged

@@ -85,8 +85,8 @@ def wheel_env(wheel: str) -> Optional[int]:
     return int(m.group(1)) if m else None
 
 
-# The 0.5.x GPU extras are tripwires in 0.6.0 (GPU = Serverless GPU environment 5, CUDA 12): their packages
-# install as a separate step after the env5 wheel, here with --extra-deps.
+# The 0.5.x GPU extras are tripwires in 0.6.0 (GPU = CUDA 12): their packages install as a separate step after
+# the env wheel, here with --extra-deps. The UDF workers of the Serverless GPU runtime are environment 6.
 _GPU_EXTRA_DEPS = {
     "photogrammetry_gpu_env5": "pycolmap-cuda12==4.2.1",
     "models_gpu_env5": "torch==2.9.0,torchvision==0.24.0,segment-geospatial,opencv-python-headless==4.11.0.86",
@@ -104,8 +104,8 @@ def _refuse_gpu_extra(extra: str) -> None:
     key = _canon_extra(extra)
     if key in _GPU_EXTRA_DEPS:
         raise SystemExit(
-            f"--extras {extra}: a 0.5.x GPU extra, dropped in 0.6.0. Fix: --wheel <the geobrix-<version>+env5 wheel> "
-            f"--env-version 5 --extra-deps '{_GPU_EXTRA_DEPS[key]}'"
+            f"--extras {extra}: a 0.5.x GPU extra, dropped in 0.6.0. Fix: --wheel <the geobrix-<version>+env6 wheel> "
+            f"--env-version 6 --extra-deps '{_GPU_EXTRA_DEPS[key]}' (the env5 wheel only for a driver-only step)"
         )
 
 
@@ -439,7 +439,8 @@ def run_one(
     When ``hardware_accelerator`` is set (e.g. ``GPU_1xH100`` / ``GPU_8xH100``), the
     task requests Serverless GPU AI Runtime compute. Deps still come from the
     environment spec (``%pip`` is stripped for jobs, CPU and GPU alike) — pass the
-    env5 wheel and the GPU packages via ``--extra-deps`` (e.g. ``pycolmap-cuda12==4.2.1``).
+    env6 wheel (the GPU runtime's UDF workers are environment 6) and the GPU packages via
+    ``--extra-deps`` (e.g. ``pycolmap-cuda12==4.2.1``).
 
     With ``existing_cluster_id`` the run attaches to that cluster; with ``job_cluster``
     it runs on a cluster made for it (terminated when the run ends). Either way the
@@ -507,8 +508,8 @@ def run_one(
                     spec=compute.Environment(
                         environment_version=env_version,
                         # Both CPU and GPU serverless jobs install deps from the environment
-                        # spec (%pip is stripped for jobs). For GPU, pass the env5 wheel and the
-                        # GPU packages (e.g. pycolmap-cuda12==4.2.1) via --extra-deps.
+                        # spec (%pip is stripped for jobs). For GPU, pass the env6 wheel (the UDF
+                        # workers are environment 6) and the GPU packages via --extra-deps.
                         dependencies=deps,
                     ),
                 )
@@ -764,6 +765,19 @@ def runtime_env(spark_version: str) -> Optional[int]:
     return 5 if major in (17, 18) else 6 if major >= 19 else None
 
 
+def gpu_wheel_warning(wheel: str, hardware_accelerator: Optional[str]) -> Optional[str]:
+    """A note when an env5 wheel goes to Serverless GPU: the UDF workers there run environment 6 whatever the
+    driver's environment, so the wheel's import guard refuses in any UDF. (A driver-only GPU step is fine.)"""
+    if hardware_accelerator and wheel_env(wheel) == 5:
+        return (
+            f"--wheel {wheel} is the env5 wheel and the run asks for Serverless GPU ({hardware_accelerator}). The UDF "
+            "workers of Serverless GPU run environment 6 even when the driver runs environment 5, so a notebook that "
+            "runs UDFs fails with 'the runtime is env6'. Fix: pass the +env6 wheel and --env-version 6. "
+            "Ignore this for a driver-only GPU step."
+        )
+    return None
+
+
 def _check_wheel_env(wheel: str, env_version: Optional[str], runtime: Optional[str] = None) -> None:
     """Refuse an env wheel built for another environment than the run's: it refuses to import there.
 
@@ -891,7 +905,8 @@ def main() -> int:
             "Request Serverless GPU AI Runtime compute for the task, e.g. "
             "'GPU_1xH100', 'GPU_8xH100', or 'GPU_1xA10'. Omit for CPU serverless. "
             "Deps come from the environment spec as usual (%%pip stripped) — pass the "
-            "env5 wheel and the GPU packages via --extra-deps (e.g. pycolmap-cuda12==4.2.1)."
+            "env6 wheel (the UDF workers of the GPU runtime are environment 6) and the GPU packages via "
+            "--extra-deps (e.g. pycolmap-cuda12==4.2.1)."
         ),
     )
     parser.add_argument(
@@ -1133,6 +1148,10 @@ def main() -> int:
         parser.error(
             "--new-cluster is exclusive with --existing-cluster-id and --hardware-accelerator"
         )
+
+    gpu_note = gpu_wheel_warning(args.wheel, args.hardware_accelerator)
+    if gpu_note:
+        print(f"WARNING: {gpu_note}", file=sys.stderr, flush=True)
 
     notebooks = _collect_notebooks(args.notebooks, args.dirs)
     if not notebooks:

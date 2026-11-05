@@ -47,8 +47,8 @@ def load_geosam(
         backend = _import_backend(model_type, weights, device)
     except ImportError as e:
         raise ModelDepsMissing(
-            "GeoSAM requires the model deps: install them after the env5 wheel on Serverless GPU "
-            "environment 5 (pip install torch==2.9.0 torchvision==0.24.0 segment-geospatial "
+            "GeoSAM requires the model deps: install them after the env wheel on Serverless GPU "
+            "(env6 wheel, environment 6; pip install torch==2.9.0 torchvision==0.24.0 segment-geospatial "
             "opencv-python-headless==4.11.0.86)"
         ) from e
     return GeoSamHandle(backend=backend, model_type=model_type)

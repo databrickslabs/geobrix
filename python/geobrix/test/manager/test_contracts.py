@@ -91,8 +91,9 @@ def test_oracle_rows_fit_signature(fn):
         assert not c.variants or c.kind in ("exact", "null", "geom_srid"), c.cid
         if (
             c.kind == "raises"
-        ):  # an error row names the offending value, so a missing function cannot pass
-            assert isinstance(c.expect, str) and c.expect, c.cid
+        ):  # an error row names the offending value (or a tuple of alternatives), so a missing function cannot pass
+            alts = c.expect if isinstance(c.expect, tuple) else (c.expect,)
+            assert alts and all(isinstance(a, str) and a for a in alts), c.cid
 
 
 @pytest.mark.parametrize(

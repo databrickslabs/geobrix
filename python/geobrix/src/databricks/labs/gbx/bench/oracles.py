@@ -71,8 +71,8 @@ class Case:
     # `args[0]` is the group's rows. cellfill: `expect` is {cell id: value or None}, the fill payload decoded from its
     # documented layout. mvt_layer: `expect` is {"layer": name, "features": [(WKT in tile coordinates, properties)]}.
     kind: str
-    # exact: the value. raises: a substring the error message must contain (the offending
-    # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
+    # exact: the value. raises: a substring (or a tuple of alternatives) the error message must contain
+    # (the offending value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
     # error_tile: when set, the reason that must come out unchanged. error_tile_has: a substring the reason must hold.
     # tile_meta: `expect` is a dict of what the result tile's raster must be, each key optional: crs, no_crs, srid, width,
     # height, count (each a number, or a (least, most) pair), dtype, nodata (a value, or None for none declared), driver (the raster's format), meta_driver (the

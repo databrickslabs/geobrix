@@ -66,7 +66,9 @@ def _sources():
     for p in sorted(EXAMPLES.rglob("*")):
         if p.suffix == ".ipynb":
             cells = json.loads(p.read_text(encoding="utf-8"))["cells"]
-            text = "\n".join("".join(c["source"]) for c in cells if c["cell_type"] == "code")
+            text = "\n".join(
+                "".join(c["source"]) for c in cells if c["cell_type"] == "code"
+            )
         elif p.suffix == ".py":
             text = p.read_text(encoding="utf-8")
         else:

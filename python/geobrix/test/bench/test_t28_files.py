@@ -488,3 +488,24 @@ def test_the_uc_judge_reads_a_scalar_that_returns_chips_as_cells(tmp_path):
     )
     out = oracles.check_uc_results([case], {case.cid: {"value": []}}, str(tmp_path))
     assert len(out) == 1 and case.cid in out[0]
+
+
+def test_nested_cells_of_a_statement_result_get_their_declared_types():
+    """The API gives nested BINARY as base64 and nested BIGINT / BOOLEAN / DOUBLE as text; the judge needs real values."""
+    got = oracles.coerce_uc_value(
+        [{"cellid": "TQ3080", "core": "true", "chip": "AQID"}],
+        "array<struct<cellid:string,core:boolean,chip:binary>>",
+    )
+    assert got == [{"cellid": "TQ3080", "core": True, "chip": b"\x01\x02\x03"}]
+    assert oracles.coerce_uc_value(["1", "2"], "array<bigint>") == [1, 2]
+    assert oracles.coerce_uc_value({"xmin": "1.5"}, "struct<xmin:double>") == {
+        "xmin": 1.5
+    }
+    tile = oracles.coerce_uc_value(
+        {"cellid": "7", "raster": "AQ==", "metadata": {"a": "b"}}, "TILE"
+    )
+    assert (
+        tile["cellid"] == 7
+        and tile["raster"] == b"\x01"
+        and tile["metadata"] == {"a": "b"}
+    )

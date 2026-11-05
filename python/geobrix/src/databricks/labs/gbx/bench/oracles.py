@@ -5470,6 +5470,62 @@ def load_uc_results(path: str) -> dict:
         return _from_json(json.load(fh))
 
 
+def _split_type_args(text: str) -> List[str]:
+    parts, depth, cur = [], 0, ""
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append(cur)
+            cur = ""
+        else:
+            cur += ch
+    return parts + ([cur] if cur else [])
+
+
+def coerce_uc_value(value, type_text: str):
+    """A container cell of a Statement API result with every nested leaf in its declared type.
+
+    The API gives a nested BINARY as base64 text, a nested BOOLEAN / BIGINT / DOUBLE as text. ``type_text`` is the
+    function's declared return type (``struct<a:bigint,b:array<binary>>``, ``array<double>``, ``TILE``).
+    """
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    t = type_text.strip()
+    if t.upper() == "TILE":
+        t = TILE_SQL
+    low = t.lower()
+    if value is None:
+        return None
+    if low.startswith("struct<") and isinstance(value, dict):
+        fields = {}
+        for part in _split_type_args(t[len("struct<") : -1]):
+            name, _, ft = part.partition(":")
+            fields[name.strip()] = ft.strip()
+        return {
+            k: coerce_uc_value(v, fields.get(k, "string")) for k, v in value.items()
+        }
+    if low.startswith("array<") and isinstance(value, list):
+        return [coerce_uc_value(v, t[len("array<") : -1]) for v in value]
+    if low.startswith("map<") and isinstance(value, dict):
+        args = _split_type_args(t[len("map<") : -1])
+        vt = args[1] if len(args) > 1 else "string"
+        return {k: coerce_uc_value(v, vt) for k, v in value.items()}
+    if not isinstance(value, str):
+        return value
+    if low == "binary":
+        return base64.b64decode(value)
+    if low in ("tinyint", "smallint", "int", "integer", "bigint", "long"):
+        return int(value)
+    if low in ("float", "double") or low.startswith("decimal"):
+        return float(value)
+    if low == "boolean":
+        return value.lower() == "true"
+    return value
+
+
 def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
     """results: {cid: {"value": <decoded>} | {"error": "<message>"}} written by gbx-uc-sql --out.
 
@@ -5484,20 +5540,27 @@ def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
         case = by_id[cid]
         args = [resolve_arg(a, tmpdir) for a in case.args]
         fn = man.functions[case.fn]
-        if "error" in r:
-            msg = check_error(case, RuntimeError(r["error"]))
-        elif fn.kind == "generator" and case.sql is None:
-            msg = _check_rows(case, _uc_rows(fn, r["value"]), args)
-        elif fn.kind == "scalar" and case.kind == "cells":
-            # an array of chips is its elements; one chip (a struct) is one cell, as the session runner reads it
-            v = r["value"]
-            msg = _check_rows(
-                case,
-                [e for e in (v if isinstance(v, list) else [v]) if e is not None],
-                args,
-            )
-        else:
-            msg = check(case, r["value"], args)
+        if isinstance(r.get("value"), (dict, list)) and fn.returns_uc:
+            r = {**r, "value": coerce_uc_value(r["value"], fn.returns_uc)}
+        try:
+            if "error" in r:
+                msg = check_error(case, RuntimeError(r["error"]))
+            elif fn.kind == "generator" and case.sql is None:
+                msg = _check_rows(case, _uc_rows(fn, r["value"]), args)
+            elif fn.kind == "scalar" and case.kind == "cells":
+                # an array of chips is its elements; one chip (a struct) is one cell, as the session runner reads it
+                v = r["value"]
+                msg = _check_rows(
+                    case,
+                    [e for e in (v if isinstance(v, list) else [v]) if e is not None],
+                    args,
+                )
+            else:
+                msg = check(case, r["value"], args)
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - one row the judge cannot read must not hide the others
+            msg = f"{case.cid}: the judge could not read the result ({type(exc).__name__}: {str(exc)[:200]})"
         if msg:
             failures.append(msg)
     failures += [

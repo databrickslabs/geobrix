@@ -47,6 +47,7 @@ from databricks.labs.gbx.zarr._pack import (
     is_fill,
     pad_to_chunk,
 )
+from databricks.labs.gbx.zarr._write_plain import PlainSink, open_plain_array
 from databricks.labs.gbx.zarr.errors import ZarrError, ZarrGridMismatch, ZarrUnsupported
 
 __all__ = [
@@ -139,6 +140,9 @@ class TaskConfig:
     trace: bool = False  # report per-task placement and per-pack timings (_Trace)
     unsupported: dict | None = None  # name -> why the store cannot decode that array
     access: object = None  # AccessConfig: how the files are reached (holds credentials)
+    plain: bool = (
+        False  # the objects of a plain store, not pack files and manifest rows
+    )
 
 
 # --- shared helpers ----------------------------------------------------------------------
@@ -491,6 +495,13 @@ def _chunk_row(
     )
 
 
+def _plain_row(name, key, sink: PlainSink, meta, chunk, data, empty) -> dict:
+    """The row of a chunk a plain write handed to ``sink``: what the driver counts. No
+    file, offset or checksum: the object is the store's own."""
+    n = sink.add(meta, chunk, key, data, empty)
+    return _row("chunk", kind="chunk", array=name, key=key, length=n, empty=empty)
+
+
 # --- assemble ------------------------------------------------------------------------------
 
 
@@ -509,7 +520,11 @@ class _Group:
 class _Assembler:
     def __init__(self, cfg: TaskConfig):
         self.cfg = cfg
-        self.packs = _Packs(cfg)
+        self.packs = None if cfg.plain else _Packs(cfg)
+        self.sink = (
+            PlainSink(cfg.root, merge=cfg.mode == "append") if cfg.plain else None
+        )
+        self.arrays: dict = {}  # a plain append: the stored arrays chunks are read from
         self.out: list[dict] = []
         self.group: _Group | None = None
         self.pending: list[dict] = []
@@ -565,6 +580,8 @@ class _Assembler:
                 self.out.append(delete_row(group.shard))
         if group.store is not None:
             group.store.close()
+        if self.sink is not None:
+            self.sink.flush()  # the group's shard, whole
         self.group = None
 
     def chunk(self, pieces: list[dict]) -> None:
@@ -606,6 +623,9 @@ class _Assembler:
             empty = is_fill(values, meta.fill_value)
             data = _encode(cfg, meta, key, values)
         group.rewritten.add(key)
+        if self.sink is not None:
+            self.out.append(_plain_row(name, key, self.sink, meta, chunk, data, empty))
+            return
         where = self.packs.put(name, data)
         self.out.append(
             _chunk_row(
@@ -629,6 +649,8 @@ class _Assembler:
         group, cfg = self.group, self.cfg
         out = _fill_chunk(meta)
         base = cfg.base_arrays.get(meta.name)
+        if cfg.plain:
+            return self.plain_chunk(meta, chunk, base, out)
         if meta.shard is not None and key not in group.chunks:
             # the chunk comes from the shard row (or, with none, reads as fill): the commit
             # checks that row is unchanged. A chunk with its own row needs no guard: that
@@ -662,12 +684,32 @@ class _Assembler:
         out[tuple(slice(0, b - a) for a, b in box)] = values
         return out
 
+    def plain_chunk(self, meta: ArrayMeta, chunk, base, out) -> np.ndarray:
+        """The stored values of ``chunk`` in the plain store being appended to, padded with
+        fill to a whole chunk: the cells an append does not cover keep what is there."""
+        if base is None:
+            return out
+        origin = [k * c for k, c in zip(chunk, meta.chunks)]
+        box = [(o, min(o + c, n)) for o, c, n in zip(origin, meta.chunks, base.shape)]
+        if any(b <= a for a, b in box):
+            return out
+        arr = self.arrays.get(meta.name)
+        if arr is None:
+            arr = self.arrays[meta.name] = open_plain_array(self.cfg.root, base)
+        values = np.asarray(arr[tuple(slice(a, b) for a, b in box)])
+        out[tuple(slice(0, b - a) for a, b in box)] = values
+        return out
+
     def finish(self) -> None:
         self.close_group()
-        self.packs.finish()
+        if self.packs is not None:
+            self.packs.finish()
 
     def abort(self) -> None:
-        self.packs.abort()
+        if self.packs is not None:
+            self.packs.abort()
+        if self.sink is not None:
+            self.sink.abort()
         if self.group is not None and self.group.store is not None:
             self.group.store.close()
 
@@ -750,7 +792,8 @@ def pack_function(cfg: TaskConfig):
 
     def run(batches):
         trace = _Trace() if cfg.trace else None
-        packs = _Packs(cfg, trace)
+        packs = None if cfg.plain else _Packs(cfg, trace)
+        sink = PlainSink(cfg.root) if cfg.plain else None
         out: list[dict] = []
         seen = {"count": 0, "hash": 0, "region": {}, "variables": set()}
         try:
@@ -767,10 +810,16 @@ def pack_function(cfg: TaskConfig):
                     )
                     seen["hash"] = (seen["hash"] + h) & _HASH_MASK
                     for piece in _block_pieces(cfg, row, data[i].as_buffer(), seen):
-                        out.append(_packed(cfg, packs, piece))
-            packs.finish()
+                        out.append(_packed(cfg, packs, piece, sink))
+                    if sink is not None:
+                        sink.flush()  # an aligned block holds every chunk of its shards
+            if packs is not None:
+                packs.finish()
         except BaseException:
-            packs.abort()
+            if packs is not None:
+                packs.abort()
+            if sink is not None:
+                sink.abort()
             raise
         info = {
             "count": seen["count"],
@@ -786,7 +835,7 @@ def pack_function(cfg: TaskConfig):
     return run
 
 
-def _packed(cfg: TaskConfig, packs: _Packs, piece: dict) -> dict:
+def _packed(cfg: TaskConfig, packs, piece: dict, sink=None) -> dict:
     """The row of one piece of an aligned create: a coordinate block passes through, a whole
     chunk goes into the task's pack."""
     if piece["kind"] == "coord":
@@ -800,6 +849,11 @@ def _packed(cfg: TaskConfig, packs: _Packs, piece: dict) -> dict:
             "table first (write it to Delta, then pass spark.table(...))",
         )
     data = bytes(piece["data"])
+    if sink is not None:
+        meta = cfg.arrays[name]
+        return _plain_row(
+            name, key, sink, meta, tuple(piece["chunk"]), data, bool(piece["empty"])
+        )
     where = packs.put(name, data)
     return _chunk_row(
         name, key, piece["shard_key"], where, data, empty=bool(piece["empty"])

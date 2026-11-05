@@ -59,6 +59,7 @@ or ``spark.conf.set``; ``spark.sql.shuffle.partitions`` is read through a guarde
 from __future__ import annotations
 
 import dataclasses
+import itertools
 import json
 import logging
 import math
@@ -953,6 +954,7 @@ class _Plan:
     fresh: bool = False  # create: this call made the table, nothing is committed to it
     spread: dict | None = None  # create: how the input holds its blocks (_Input.spread)
     coverage: dict = field(default_factory=dict)  # variable -> _coverage of its boxes
+    plain: bool = False  # a plain store: the objects of the Zarr store, no manifest
 
 
 def _as_numbers(values):
@@ -1132,6 +1134,15 @@ def _decoded_coords(spark, docs: _Docs, base, root, base_root, names) -> dict:
     names = [n for n in names if n in docs.arrays]
     if not names:
         return {}
+    if base is None:  # a plain store: the objects are the store's own
+        from databricks.labs.gbx.zarr._write_plain import open_plain_array
+
+        return {
+            n: decode_coord(
+                np.asarray(open_plain_array(root, docs.arrays[n])[...]), docs.arrays[n]
+            )
+            for n in names
+        }
     rows = M.read_rows(spark, base, kinds=["shard", "chunk"], arrays=names).to_pylist()
     store = ManifestStore(
         docs.metas,
@@ -1341,6 +1352,39 @@ def _check_against_store(table, vars_, docs: _Docs, extents) -> None:
             )
 
 
+def _check_stored_types(path, vars_, docs: _Docs) -> None:
+    """A plain append refuses values that would be cut to fit the stored array: floats into
+    an integer or boolean array that has no packing to carry them, complex into real, and
+    numbers where the array holds CF times (or the reverse). A manifest store casts these
+    silently; a plain store's other readers would see the damage with no record of it.
+    """
+    for v in vars_:
+        meta = docs.arrays.get(v.name)
+        if meta is None or v.dtype is None:
+            continue
+        got, stored = np.dtype(v.dtype).kind, np.dtype(meta.dtype).kind
+        packed = any(k in meta.attrs for k in ("scale_factor", "add_offset"))
+        timed = (
+            is_time_coord(meta)
+            or "units" in meta.attrs
+            and " since " in str(meta.attrs["units"])
+        )
+        bad = (
+            (got in "fc" and stored in "iub" and not packed)
+            or (got == "c" and stored == "f")
+            or (got == "M" and not timed)
+            or (got != "M" and timed and got in "fcSUO")
+        )
+        if bad:
+            raise ZarrGridMismatch(
+                f"the input's {v.name!r} holds {np.dtype(v.dtype)} values, the store's "
+                f"array {meta.dtype}{' (CF times)' if timed else ''}; they would be cut "
+                "to fit",
+                fix=f"convert {v.name!r} to the store's type before appending, or write "
+                "it to a new store",
+            )
+
+
 def _default_append_dim(vars_, arrays, coords) -> str:
     """The first dimension, among those of the written variables, labelled by CF times."""
     for v in vars_:
@@ -1443,12 +1487,27 @@ def _tile_frame(spark, prep):
 
 
 def _plan_existing(
-    spark, table, write_id, mode, props, data, variables, append_dim, owner, tiles=None
+    spark,
+    table,
+    write_id,
+    mode,
+    props,
+    data,
+    variables,
+    append_dim,
+    owner,
+    tiles=None,
+    plain: _Docs | None = None,
 ) -> _Plan:
-    root, base_root = _write_roots(spark, table, props, owner)
-    files = FileLayout.of(props)
-    base = M.snapshot(spark, table, files=files)
-    docs = _docs_at(spark, base)
+    """The plan of a write into an existing store: a manifest table, or (``plain``: the
+    documents of the plain store at path ``table``) an append to a plain store."""
+    if plain is not None:
+        root, base_root, files, base, docs = table, None, None, None, plain
+    else:
+        root, base_root = _write_roots(spark, table, props, owner)
+        files = FileLayout.of(props)
+        base = M.snapshot(spark, table, files=files)
+        docs = _docs_at(spark, base)
     arrays = dict(docs.arrays)
     fmt = 3 if any(k.endswith("zarr.json") for k in docs.metas) else 2
     separator = next(
@@ -1477,6 +1536,7 @@ def _plan_existing(
         fmt=fmt,
         separator=separator,
         files=files,
+        plain=plain is not None,
     )
     labels = None
     if _is_xarray(data):
@@ -1504,6 +1564,8 @@ def _plan_existing(
         inp = _planned_blocks(data, variables)
         plan.digest = inp.digest
     _check_against_store(table, inp.vars.values(), docs, extents)
+    if plain is not None:
+        _check_stored_types(table, inp.vars.values(), docs)
     dims_in = {d for v in inp.vars.values() for d in v.dims}
     store_labels = (
         {c: labels[c] for c in sorted(coords) if c in dims_in and c in labels}
@@ -1785,7 +1847,14 @@ def _aligned(plan: _Plan) -> bool:
     shard's chunks come from one block, so they share a pack as they do after the shuffle.
     Anything else (blocks across units, overlapping blocks, an empty block) is assembled.
     """
-    if plan.mode != "create" or plan.frame is None or not plan.boxes:
+    # a plain store's tasks write whole shards, so an append into fresh units (starting on
+    # the grid, after the existing cells) is as aligned as a create; an xarray input is cut
+    # by unit, in plain writes (_xarray_frame)
+    if plan.mode != "create" and not (plan.plain and plan.mode == "append"):
+        return False
+    if (
+        plan.frame is None and not (plan.plain and plan.dataset_vars)
+    ) or not plan.boxes:
         return False
     for name, (starts, stops) in plan.boxes.items():
         meta = plan.task_arrays.get(name)
@@ -1882,10 +1951,20 @@ def _xarray_frame(spark, plan: _Plan, group_bytes: int):
         values = np.ascontiguousarray(var.values)
         start = tuple(plan.offsets.get(d, 0) for d in var.dims)
         stop = tuple(a + n for a, n in zip(start, values.shape))
-        for chunk in chunk_grid(meta, start, stop):
-            origin = tuple(k * c for k, c in zip(chunk, meta.chunks))
+        # a plain store's tasks write whole shards, so its blocks are cut by shard
+        unit = meta.chunks
+        if plan.plain and meta.shard is not None:
+            unit = tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
+        cells = itertools.product(
+            *[
+                range(a // u, (b - 1) // u + 1) if b > a else range(0)
+                for a, b, u in zip(start, stop, unit)
+            ]
+        )
+        for chunk in cells:
+            origin = tuple(k * c for k, c in zip(chunk, unit))
             lo = tuple(max(a, o) for a, o in zip(start, origin))
-            hi = tuple(min(b, o + c) for b, o, c in zip(stop, origin, meta.chunks))
+            hi = tuple(min(b, o + c) for b, o, c in zip(stop, origin, unit))
             block = np.ascontiguousarray(
                 values[tuple(slice(a - s, b - s) for a, b, s in zip(lo, hi, start))]
             )
@@ -2022,7 +2101,9 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         offsets=dict(plan.offsets) if plan.frame is not None else {},
         base_docs={
             k: v
-            for k, v in (plan.docs.metas.items() if plan.docs else ())
+            for k, v in (
+                plan.docs.metas.items() if plan.docs and not plan.plain else ()
+            )
             if k.rpartition("/")[0] in base_names
         },
         base_arrays={n: plan.docs.arrays[n] for n in base_names},
@@ -2034,6 +2115,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         fault=_FAULT,
         trace=_TRACE,
         access=plan.access,
+        plain=plan.plain,
     )
     if _aligned(plan):
         _LOG.info(
@@ -2056,7 +2138,12 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
     # ahead, else (one pass) every candidate group, narrowed after the shuffle. An
     # overwrite's untouched groups are deleted at commit (_untouched_deletes).
     unscoped = False
-    if plan.mode != "create" and base_names and (parts is None or parts):
+    if (
+        plan.mode != "create"
+        and not plan.plain
+        and base_names
+        and (parts is None or parts)
+    ):
         pieces = pieces.unionByName(_base_frame(spark, plan, base_names, parts))
         unscoped = parts is None
     n = _partitions(spark, parts, nbytes, sizes["budget"])
@@ -2846,11 +2933,10 @@ def _touched_shards(data_rows: pa.Table) -> set:
     )
 
 
-def _write(spark, plan: _Plan, optimize: bool = False) -> int:
-    """Files, then the commit; with ``optimize``, then the fold of the shards it touched."""
-    rows = _write_files(spark, plan)
-    if _BEFORE_COMMIT is not None:
-        _BEFORE_COMMIT(plan.write_id)
+def _absorb(plan: _Plan, rows: pa.Table) -> dict:
+    """What the tasks reported beside the chunks, checked against the plan: the digest of the
+    blocks they saw, the region they cover, and the coordinate blocks (applied to the plan
+    as patches, and as the arrays a new store lacks). Returns the side info."""
     side = _side_info(rows)
     if plan.digest is not None and (side["count"], side["hash"]) != tuple(plan.digest):
         raise ZarrError(
@@ -2864,6 +2950,15 @@ def _write(spark, plan: _Plan, optimize: bool = False) -> int:
         lo_hi[0] = min(lo_hi[0], patch.start)
         lo_hi[1] = max(lo_hi[1], patch.start + len(patch.values))
     _apply_coordinates(plan, side["coords"])
+    return side
+
+
+def _write(spark, plan: _Plan, optimize: bool = False) -> int:
+    """Files, then the commit; with ``optimize``, then the fold of the shards it touched."""
+    rows = _write_files(spark, plan)
+    if _BEFORE_COMMIT is not None:
+        _BEFORE_COMMIT(plan.write_id)
+    side = _absorb(plan, rows)
     written = set(side["variables"]) | set(plan.dataset_vars)
     gone = _untouched_deletes(spark, plan, rows, written)
     if gone.num_rows:
@@ -2903,6 +2998,226 @@ def _fold_touched(spark, table: str, version: int, shards: set, access=None) -> 
             f"{e.message}",
             fix=f"run gbx_zarr_optimize(spark, {table!r}); the write itself is done. {e.fix}",
         ) from e
+
+
+# --- a plain store -----------------------------------------------------------------------
+
+
+def _plain_coordinates(plan: _Plan, sink) -> None:
+    """The coordinate chunks of a plain write: each patch's labels laid into the chunks they
+    fall in (over what the store holds there, for an append), encoded and put in the sink.
+    """
+    from databricks.labs.gbx.zarr._write_plain import open_plain_array
+
+    for patch in plan.patches:
+        meta = plan.arrays[patch.name]
+        c = meta.chunks[0]
+        end = patch.start + len(patch.values)
+        chunks = list(range(patch.start // c, (end - 1) // c + 1))
+        native = np.dtype(meta.dtype).newbyteorder("=")
+        fill = 0 if meta.fill_value is None else meta.fill_value
+        base = plan.docs.arrays.get(patch.name) if plan.docs else None
+        arr = open_plain_array(plan.root, base) if base is not None else None
+        for k in chunks:
+            values = np.full(meta.chunks, fill, dtype=native)
+            if arr is not None:
+                top = min((k + 1) * c, base.shape[0])
+                if top > k * c:
+                    values[: top - k * c] = np.asarray(arr[k * c : top])
+            lo, hi = max(patch.start, k * c), min(end, (k + 1) * c)
+            values[lo - k * c : hi - k * c] = patch.values[
+                lo - patch.start : hi - patch.start
+            ]
+            sink.add(
+                meta,
+                (k,),
+                meta.key_encoding.chunk_key((k,)),
+                encode_inner_chunk(meta, values),
+                False,
+            )
+    sink.flush()
+
+
+def _plain_documents(plan: _Plan) -> dict[str, bytes]:
+    """Every metadata document of the plain store after this write: the ones it had (an
+    append), the groups and arrays this write creates, and the arrays it grows."""
+    docs = dict(plan.docs.metas) if plan.docs else {}
+    for path in plan.groups:
+        if plan.fmt == 3:
+            key = "zarr.json"
+            doc = {"zarr_format": 3, "node_type": "group", "attributes": {}}
+            if path == "":
+                doc["attributes"] = plan.group_attrs
+        else:
+            key, doc = ".zgroup", {"zarr_format": 2}
+        docs[M._store_key(path or None, key)] = json.dumps(doc, sort_keys=True).encode()
+    for name in plan.changed:
+        for key, raw in doc_bytes(plan.arrays[name]).items():
+            docs[M._store_key(name, key)] = raw
+    return docs
+
+
+_PLAIN_MODES = ("create", "append")
+
+
+def _plain_arguments(
+    target,
+    mode,
+    *,
+    root,
+    chunks,
+    shards,
+    codecs,
+    file_mode,
+    retain,
+    write_id,
+    access,
+    optimize,
+) -> None:
+    """Refuse what a plain store has no use for, each with a Fix."""
+    if mode not in _PLAIN_MODES:
+        raise ValueError(
+            f"transactional=False writes mode 'create' or 'append', got {mode!r}. Fix: "
+            "use one of those, or write a manifest table (transactional=True) to update "
+            "or overwrite."
+        )
+    if not isinstance(target, str) or not (
+        "/" in target or target.startswith(("dbfs:", "file:"))
+    ):
+        raise ValueError(
+            f"transactional=False writes to a path, and {target!r} looks like a table "
+            "name. Fix: pass the store's path, such as '/Volumes/<catalog>/<schema>/"
+            "<volume>/<name>.zarr', or drop transactional=False to write a manifest table."
+        )
+    given = [
+        n
+        for n, v, default in (
+            ("root", root, None),
+            ("file_mode", file_mode, None),
+            ("retain", retain, "7 days"),
+            ("write_id", write_id, None),
+            ("optimize", optimize, False),
+        )
+        if v != default
+    ]
+    if given:
+        raise ValueError(
+            f"{', '.join(given)} belong to manifest stores and mean nothing to a plain "
+            "store. Fix: drop them, or drop transactional=False."
+        )
+    if access == "direct":
+        raise ValueError(
+            "a plain store is written through the mount; access='direct' is for manifest "
+            "stores. Fix: drop access, or pass 'auto' or 'fuse'."
+        )
+    if mode != "create":
+        later = [
+            n
+            for n, v, default in (
+                ("chunks", chunks, "balanced"),
+                ("shards", shards, None),
+                ("codecs", codecs, None),
+            )
+            if v != default
+        ]
+        if later:
+            raise ValueError(
+                f"{', '.join(later)} apply to mode='create' only. Fix: drop them, or "
+                "create a new store."
+            )
+
+
+def _plain_write(
+    data,
+    target,
+    *,
+    mode,
+    variables,
+    append_dim,
+    dim_cols,
+    chunks,
+    shards,
+    codecs,
+    spark,
+) -> dict:
+    """``gbx_zarr_write(transactional=False)``: the planning and the task write path of a
+    manifest write, with no manifest. The tasks put the store's objects in place; the
+    driver puts the coordinate chunks, then, last, every metadata document."""
+    from databricks.labs.gbx.zarr._register import _local_root
+    from databricks.labs.gbx.zarr._write_plain import (
+        PlainSink,
+        check_absent,
+        check_no_leftovers,
+        discard,
+        read_plain_docs,
+        write_documents,
+    )
+
+    if not (_is_xarray(data) or _is_frame(data)):
+        raise ValueError(
+            f"data must be an xarray.Dataset or a blocks DataFrame, got "
+            f"{type(data).__name__}. Fix: pass gbx_zarr_read(output='blocks') output or "
+            "an xarray.Dataset."
+        )
+    spark = _session(data, spark)
+    tiles = _tile_input(data, dim_cols)
+    root = _local_root(target)
+    write_id = uuid.uuid4().hex
+    existed = os.path.isdir(root)
+    if mode == "create":
+        check_absent(root)
+        inp = _create_input(spark, data, tiles, variables)
+        plan = _plan_create(root, write_id, root, inp, chunks, shards, codecs)
+        plan.plain = True
+        check_no_leftovers(root, plan.arrays)
+    else:
+        plan = _plan_existing(
+            spark,
+            root,
+            write_id,
+            "append",
+            None,
+            data,
+            variables,
+            append_dim,
+            None,
+            tiles,
+            plain=read_plain_docs(root),
+        )
+    try:
+        rows = _write_files(spark, plan)
+        if _BEFORE_COMMIT is not None:
+            _BEFORE_COMMIT(plan.write_id)
+        _absorb(plan, rows)
+        chunk_rows = rows.filter(pc.equal(rows.column("rtype"), "chunk"))
+        sink = PlainSink(root, merge=mode == "append")
+        _plain_coordinates(plan, sink)
+        docs = _plain_documents(plan)
+        write_documents(root, docs, write_id)  # last: now it is a store
+    except BaseException:
+        if mode == "create":
+            discard(root, _written_arrays(plan), remove_root=not existed)
+        raise
+    return {
+        "path": root,
+        "mode": mode,
+        "arrays": sorted(plan.arrays),
+        "chunks": int(chunk_rows.num_rows - _count_nulls(chunk_rows) + sink.chunks),
+        "bytes": int(
+            (pc.sum(pc.fill_null(chunk_rows.column("length"), 0)).as_py() or 0)
+            + sink.bytes
+        ),
+    }
+
+
+def _count_nulls(chunk_rows: pa.Table) -> int:
+    """Chunk rows of fill that a plain write left out (they hold no bytes)."""
+    return int(
+        pc.sum(
+            pc.equal(pc.fill_null(chunk_rows.column("length"), 0), 0).cast(pa.int64())
+        ).as_py()
+        or 0
+    )
 
 
 # --- the public function ---------------------------------------------------------------
@@ -3057,10 +3372,13 @@ def gbx_zarr_write(
     write_id: str | None = None,
     access: str = "auto",
     optimize: bool = False,
+    transactional: bool = True,
     spark=None,
-) -> int:
+) -> int | dict:
     """Write ``data`` to the Zarr store whose manifest table is ``target``; returns the
-    store version (the Delta version) the write committed.
+    store version (the Delta version) the write committed. With ``transactional=False``
+    ``target`` is a path, the store is a plain Zarr store and the return is a summary
+    (below).
 
     ``data`` is a blocks DataFrame (``BLOCKS_SCHEMA``, as ``gbx_zarr_read`` returns it), a
     DataFrame with one GeoBrix tile column (below), or an ``xarray.Dataset``
@@ -3163,6 +3481,29 @@ def gbx_zarr_write(
     big shard cost one fold of that shard); the version returned is the write's own, and the
     fold, if it commits, is the next one. Content is the same either way.
 
+    **Plain stores** (``transactional=False``, opt-in). ``target`` is a path (a Volume path,
+    or any mounted path), not a manifest table, and the write makes a plain Zarr store
+    (Zarr v3) that any Zarr reader opens: no manifest table, no ownership ledger or marker,
+    no Delta commit, no versions, no retention, overlay or tombstones. ``mode`` is
+    ``"create"`` or ``"append"``; ``data``, ``variables``, ``append_dim``, ``dim_cols``,
+    ``chunks``, ``shards`` and ``codecs`` mean what they do above, with the same checks. The
+    tasks write the store's objects where the blocks are made (a chunk file per chunk, a
+    shard file per shard), with no shuffle when the blocks start and stop on the shard grid;
+    other blocks go through the same shuffle as a manifest write. ``create`` refuses a path
+    that already holds a store (a ``zarr.json``, ``.zgroup`` or ``.zarray``). ``append``
+    needs a plain store there and extends it along ``append_dim``; a chunk or shard the
+    append shares with the cells already there keeps those cells. It refuses variables on
+    other dimensions, and values that would be cut to fit the stored type. Every metadata
+    document is written after every data object, the root group's last, so a write that
+    stops part way leaves objects but no store (a failed ``create`` removes them; a
+    failed ``append`` can leave objects past the store's extent that no document names, and
+    the store reads as it did). Nothing here guards against a second writer: use one writer
+    at a time, or write a manifest store. ``file_mode``, ``retain``, ``write_id``,
+    ``optimize``, ``root`` and ``access="direct"`` are refused with ``ValueError``, as are
+    the modes ``"update"`` and ``"overwrite"`` and a table name as ``target``. Returns
+    ``{"path", "mode", "arrays", "chunks", "bytes"}``: the store's local path, the mode, the
+    arrays it holds, and the chunks and bytes this call wrote.
+
     Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
     executors. Under memory pressure Spark may write task data, those credentials included,
     to the local disk of the executors and of the driver: turn on local-disk encryption on
@@ -3184,6 +3525,34 @@ def gbx_zarr_write(
         release_root,
     )
 
+    if not transactional:
+        _plain_arguments(
+            target,
+            mode,
+            root=root,
+            chunks=chunks,
+            shards=shards,
+            codecs=codecs,
+            file_mode=file_mode,
+            retain=retain,
+            write_id=write_id,
+            access=access,
+            optimize=optimize,
+        )
+        if mode == "create":
+            _codec_chain(codecs)
+        return _plain_write(
+            data,
+            target,
+            mode=mode,
+            variables=variables,
+            append_dim=append_dim,
+            dim_cols=dim_cols,
+            chunks=chunks,
+            shards=shards,
+            codecs=codecs,
+            spark=spark,
+        )
     if mode not in _MODES:
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}. Fix: pass one.")
     if access not in _ACCESS:

@@ -2008,9 +2008,8 @@ def run_register_all(
 
 def _fromfile_cap(spark, tile_dir: str, mib: int) -> dict:
     """Read a raster decoded to ``mib`` MiB through ``gbx_rst_fromfile`` in SQL; whether the call was refused and how."""
-    from databricks.labs.gbx.bench import uc_perf
-
-    staged = uc_perf.perf_stage_tiles(tile_dir, (mib,))[f"perf_{mib}MiB.tif"]
+    # the read cap counts the FILE: an uncompressed raster ``mib`` MiB on disk (a decoded-size gradient is a few MB)
+    staged = stage_mech_tiles(tile_dir, (mib,))[f"mech_{mib}MiB.tif"]
     rec = {"path": staged["path"], "file_bytes": staged["bytes"], "decoded_mib": mib}
     try:
         spark.sql(f"SELECT gbx_rst_fromfile('{staged['path']}') AS t").collect()
@@ -2159,6 +2158,9 @@ def run_family_oracles(
     from databricks.labs.gbx import manifest
     from databricks.labs.gbx.bench.uc_perf import _Run
 
+    os.makedirs(
+        tmpdir, exist_ok=True
+    )  # the fixtures of the file-reading tables are written here
     man = manifest.load()
     wanted_only = {n if n.startswith("gbx_") else f"gbx_{n}" for n in (only or ())}
     by_table: dict = {}

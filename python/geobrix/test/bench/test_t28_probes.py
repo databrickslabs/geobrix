@@ -137,13 +137,16 @@ def test_run_register_all_names_what_no_level_served(spark, monkeypatch):
 def test_the_fromfile_cap_check_records_a_refusal_and_an_acceptance(
     monkeypatch, tmp_path
 ):
-    from databricks.labs.gbx.bench import uc_perf
-
+    staged = []
     monkeypatch.setattr(
-        uc_perf,
-        "perf_stage_tiles",
-        lambda d, mibs: {
-            f"perf_{mibs[0]}MiB.tif": {"path": "/Volumes/c/s/v/x.tif", "bytes": 5}
+        probes,
+        "stage_mech_tiles",
+        lambda d, mibs: staged.append(mibs)
+        or {
+            f"mech_{mibs[0]}MiB.tif": {
+                "path": "/Volumes/c/s/v/x.tif",
+                "bytes": 128 << 20,
+            }
         },
     )
 
@@ -163,17 +166,21 @@ def test_the_fromfile_cap_check_records_a_refusal_and_an_acceptance(
     refused = probes._fromfile_cap(Refusing(), str(tmp_path), 128)
     assert refused["refused"] is True and refused["names_cap"] is True
     assert probes._fromfile_cap(Accepting(), str(tmp_path), 128)["refused"] is False
+    # the cap counts the file, so the fixture is the one that is mib MiB ON DISK
+    assert refused["file_bytes"] == 128 << 20 and staged[0] == (128,)
 
 
 def test_run_family_oracles_runs_a_table_at_the_manager_level_and_reports_by_table(
     spark, tmp_path
 ):
+    scratch = tmp_path / "not" / "yet"  # a fresh Serverless driver has no /tmp/t28
     out = probes.run_family_oracles(
         spark,
-        str(tmp_path),
+        str(scratch),
         tables=["GRID_SCALAR"],
         only=["gbx_bng_cellarea", "gbx_bng_aswkb"],
     )
+    assert scratch.is_dir()
     rec = out["tables"]["GRID_SCALAR"]
     assert rec["functions"] == 2 and rec["cases"] > 2 and rec["skipped"] == {}
     assert out["failures"] == 0 and out["red"] == {}

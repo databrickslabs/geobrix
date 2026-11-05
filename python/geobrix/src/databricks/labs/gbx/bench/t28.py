@@ -296,7 +296,8 @@ def build(p: Params) -> Tuple[List[File], List[Run]]:
     deps = manifest.load().uc_dependencies
     wheel6, wheel5 = p.wheel(6), p.wheel(5)
     wheel_uri = "file://" + f"{p.volume_dir.rstrip('/')}/{uc._env_wheel_name()}"
-    tmp = "/tmp/t28"
+    # the fixtures of the file-reading rows: a Volume folder, which the workers see (the driver's /tmp they do not)
+    tmp = f"{p.volume_dir.rstrip('/')}/oracle_tmp"
     files: List[File] = []
     runs: List[Run] = []
 

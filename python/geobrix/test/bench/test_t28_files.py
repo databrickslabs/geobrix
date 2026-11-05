@@ -459,3 +459,17 @@ def test_ws_root_is_required_when_there_is_no_session(monkeypatch, capsys):
     monkeypatch.setattr(t28, "resolve_ws_root", _no_session)
     assert t28.main(["--dry-run"]) == 2
     assert "--ws-root" in capsys.readouterr().err
+
+
+def test_every_notebook_puts_its_oracle_fixtures_on_the_volume(plan):
+    """The workers read the virtual-tile fixtures the driver writes: on a Volume they see them, in the driver's /tmp not."""
+    p, files, _runs = plan
+    seen = 0
+    for f in files:
+        if not f.name.endswith(".ipynb"):
+            continue
+        text = f.content if isinstance(f.content, str) else json.dumps(f.content)
+        for m in re.finditer(r"'tmpdir': '([^']+)'", text):
+            assert m.group(1).startswith(p.volume_dir), (f.name, m.group(1))
+            seen += 1
+    assert seen >= 5

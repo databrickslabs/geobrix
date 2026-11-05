@@ -64,9 +64,9 @@ parameter reference.
 ## Installation
 
 - **On Databricks (Serverless GPU AI Runtime, environment 6)** — install the env6 wheel.
-  Then install the GeoSAM packages as a separate step: `%pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial"
-  "opencv-python-headless==4.11.0.86"` (the CUDA-12 torch pair of that runtime; the env wheels have no
-  models extra).
+  Then install the GeoSAM packages as a separate step. The env wheels have no models extra.
+  The torch pair is the CUDA-12 one of that runtime: `%pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial"
+  "opencv-python-headless==4.11.0.86"`.
 - **Off Databricks** — the plain wheel's **`geobrix[models]`** extra adds `segment-geospatial`, which
   pulls its own default torch/torchvision/segment-anything stack; the resolved torch build may not
   match a specific GPU's CUDA version.

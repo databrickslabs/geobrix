@@ -156,7 +156,7 @@ def install(
     jar: Optional[str] = None,
     procedures: bool = False,
     stubs: bool = False,
-    deps: str = "per-function",
+    deps: str = "shared",
 ) -> List[str]:
     """Create the UC functions in ``catalog.schema`` from the wheel in ``volume_dir``; return the DDL.
 
@@ -177,9 +177,10 @@ def install(
     signature that raises and says where the function runs (an aggregate or a generator gets none: the docs page lists
     them). With ``only``, a stub is created for each name it lists that has one.
 
-    ``deps="shared"`` gives every Python function (and private routine) the same ENVIRONMENT: the manifest's whole
-    dependency list, so a statement that calls several GeoBrix functions can share one environment. The default,
-    ``"per-function"``, gives each function only the packages it imports.
+    ``deps`` sets the ENVIRONMENT of each Python function and private routine. The default, ``"shared"``, gives every one
+    the manifest's whole dependency list, so a statement that calls several GeoBrix functions starts one sandbox and
+    installs the packages once (the install takes about 45 s longer, once). ``"per-function"`` gives each function only
+    the packages it imports: a smaller, faster install, but each distinct list is its own sandbox in a statement.
     """
     # Everything that reaches a statement is checked before any statement is built or any folder read.
     ddl.quote_ident("catalog", catalog)

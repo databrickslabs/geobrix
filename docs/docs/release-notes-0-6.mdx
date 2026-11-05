@@ -266,6 +266,7 @@ These changes affect callers that pass keywords or named arguments.
   - `gbx.uc.install` takes only `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. It refuses a folder without it, and an explicit `jar=` must be a Volume path that ends in `.jar`.
   - Stage the JAR with [`gbx.stage_jar`](#stage-jar) to use the Scala form.
 - **The SQL engine casts an argument to the parameter type before GeoBrix runs.** A string passed as an easting becomes a number there. With ANSI mode off, a string that is no number becomes NULL.
+- **`gbx.uc.install` gives every Python function the same package list by default (`deps="shared"`).** A statement that calls several GeoBrix functions then starts one sandbox. Three functions in one statement ran in 2.7 s instead of 33 s on Serverless. The first create takes about 45 s longer, once. Pass `deps="per-function"` for the old behavior.
 - **Each function's COMMENT is `geobrix <version>: <summary>`.** `gbx.register(spark, catalog=..., schema=...)` says once when that schema was made by another version.
 - **`gbx_bng_geomkring` and `gbx_h3_geomkring` raise a `Fix:` for a `k` below 0 or not whole.** They gave NULL. An empty `coverage` reads as the default, as an empty `mode` does.
 

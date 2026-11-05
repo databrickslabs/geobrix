@@ -73,6 +73,16 @@ def test_only_installs_the_table_function_and_the_function_it_calls():
     assert "gbx_bng_pointascell" not in text
 
 
+def test_the_default_install_shares_one_package_list_and_per_function_does_not():
+    import re
+
+    def lists(statements):
+        return {m for s in statements for m in re.findall(r"dependencies = '(\[.*?\])'", s)}
+
+    assert len(lists(ex.preview_install())) == 1
+    assert len(lists(ex.install_with_each_function_its_own_packages())) > 1
+
+
 def test_table_functions_are_sql_bodies_over_the_array_function():
     explode = [s for s in ex.preview_install() if ".gbx_bng_kringexplode(" in s]
     assert len(explode) == 1

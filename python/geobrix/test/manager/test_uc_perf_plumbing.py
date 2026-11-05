@@ -411,34 +411,38 @@ def test_verify_checks_the_helpers_and_the_stubs_that_install_created(monkeypatc
     assert verified == [["gbx_bng_kring", "gbx__ring_width", "gbx_st_crs"]]
 
 
-def test_shared_deps_gives_every_python_function_the_whole_list():
+def _env_of(stmt):
+    m = re.search(r"dependencies = '(\[.*?\])'", stmt)
+    return None if m is None else json.loads(m.group(1).replace("\\'", "'"))
+
+
+def test_shared_deps_is_the_default_and_per_function_keeps_each_list():
     deps = manifest.load().uc_dependencies
-    default = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, procedures=True)
-    shared = uc.install(
-        "c", "s", "/Volumes/c/s/v", dry_run=True, procedures=True, deps="shared"
-    )
-    assert len(default) == len(shared)
+    args = ("c", "s", "/Volumes/c/s/v")
+    default = uc.install(*args, dry_run=True, procedures=True)
+    shared = uc.install(*args, dry_run=True, procedures=True, deps="shared")
+    own = uc.install(*args, dry_run=True, procedures=True, deps="per-function")
+    assert default == shared
+    assert len(own) == len(shared)
 
-    def env(stmt):
-        m = re.search(r"dependencies = '(\[.*?\])'", stmt)
-        return None if m is None else json.loads(m.group(1).replace("\\'", "'"))
-
-    envs_default = {tuple(e[1:]) for e in map(env, default) if e}
-    envs_shared = {tuple(e[1:]) for e in map(env, shared) if e}
-    assert len(envs_default) > 1  # today each distinct list is its own environment
+    envs_own = {tuple(e[1:]) for e in map(_env_of, own) if e}
+    envs_shared = {tuple(e[1:]) for e in map(_env_of, shared) if e}
+    assert len(envs_own) > 1  # per-function: each distinct list is its own environment
     assert envs_shared == {tuple(f"{n}=={v}" for n, v in deps.items())}
     # only the environment text differs; names, order and every other statement are the same
-    for a, b in zip(default, shared):
+    for a, b in zip(own, shared):
         assert re.sub(r"dependencies = '.*?'", "", a) == re.sub(
             r"dependencies = '.*?'", "", b
         )
     with pytest.raises(ValueError, match="per-function"):
-        uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, deps="all")
+        uc.install(*args, dry_run=True, deps="all")
 
 
 def test_the_default_install_is_unchanged_for_every_function_without_a_sql_kernel():
     """A dry-run install with the default flags emits, for each routine it emitted before the SQL-kernel work, the same
-    statement (pinned by hash); only a row that gained an L4 `sql` key may differ."""
+    statement (pinned by hash); only a row that gained an L4 `sql` key may differ. The hashes of the Python routines
+    were refreshed when `deps="shared"` became the default: the only change is the dependency list.
+    """
     golden = json.loads(
         (Path(__file__).parent / "fixtures" / "uc_install_default.json").read_text()
     )

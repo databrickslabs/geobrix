@@ -975,7 +975,8 @@ def _uc_handler_groups():
     ids=lambda v: "+".join(v) if isinstance(v, tuple) else None,
 )
 def test_uc_handlers_import_only_the_dependencies_they_declare(deps, names):
-    """Every oracle row of a UC function runs in a process where pyspark, pandas and every optional dependency its
+    """The `deps="per-function"` install (and the cleanest check of what each handler needs): every oracle row of a UC
+    function runs in a process where pyspark, pandas and every optional dependency its
     manifest block does not declare (h3, quadbin, rasterio, pyproj, scipy, numexpr, scikit-image, morecantile) cannot be imported:
     the sandbox installs the declared list and nothing else."""
     import os

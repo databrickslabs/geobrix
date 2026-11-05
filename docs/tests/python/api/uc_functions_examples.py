@@ -169,6 +169,20 @@ def install_only_the_bng_cells():
     return statements
 
 
+def install_with_each_function_its_own_packages():
+    """Give each Python function only the packages it imports."""
+    import databricks.labs.gbx as gbx
+
+    statements = gbx.uc.install(
+        "main",
+        "geobrix",
+        "/Volumes/main/geobrix/artifacts/env6",
+        deps="per-function",
+        dry_run=True,
+    )
+    return statements
+
+
 def crs_forms():
     """The three CRS forms a UC function accepts."""
     from databricks.labs.gbx.core.crs import parse_uc_crs

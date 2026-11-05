@@ -46,6 +46,36 @@ rst_retile_python_example_output = """
 """
 
 
+def rst_retile_of_a_derived_tile_python_example(spark):
+    """Retile a tile that another function made (subquery, then LATERAL).
+
+    On Serverless a SQL function cannot be an argument of a table-function call.
+    Compute the tile in a CTE, then call the generator on that column.
+    """
+    from databricks.labs import gbx
+
+    gbx.register(spark)
+    single_band_tile_df(spark).createOrReplaceTempView("rasters")
+    return spark.sql(
+        """
+        WITH tagged AS (
+          SELECT gbx_rst_setsrid(tile, 32618) AS tile FROM rasters
+        )
+        SELECT t.* FROM tagged, LATERAL gbx_rst_retile(tile, 64, 64) t
+        """
+    ).take(3)
+
+
+rst_retile_of_a_derived_tile_python_example_output = """
++------+--------------+-----+----------------------+
+|cellid|raster        |path |...                   |
++------+--------------+-----+----------------------+
+|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
++------+--------------+-----+----------------------+
+(one row per sub-tile of the tile that gbx_rst_setsrid returned)
+"""
+
+
 def rst_tooverlappingtiles_python_example(spark):
     """Create overlapping tiles for edge-aware processing (UDTF via LATERAL).
 

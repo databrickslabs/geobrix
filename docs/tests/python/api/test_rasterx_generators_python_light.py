@@ -9,6 +9,7 @@ LATERAL syntax, not direct df.select calls.
 import pytest
 from rasterx_generators_python_light import (
     rst_retile_python_example,
+    rst_retile_of_a_derived_tile_python_example,
     rst_tooverlappingtiles_python_example,
     rst_separatebands_python_example,
     rst_polygonize_python_example,
@@ -23,6 +24,13 @@ def test_rst_retile_python_example(spark):
     assert isinstance(result, list)
     assert len(result) > 0
     assert all(hasattr(row, "asDict") or isinstance(row, dict) for row in result)
+
+
+def test_rst_retile_of_a_derived_tile_python_example(spark):
+    """A generator reads the tile column that a CTE computed with a SQL function."""
+    result = rst_retile_of_a_derived_tile_python_example(spark)
+    assert len(result) > 0
+    assert all(r["raster"] is not None for r in result)
 
 
 def test_rst_tooverlappingtiles_python_light_example(spark):

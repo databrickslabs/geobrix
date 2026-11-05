@@ -2386,6 +2386,21 @@ Produce multiple tiles or bands (7 total).
 
 The generators are table functions: call them in the `FROM` clause with `LATERAL`, at every implementation level. The Python entry takes the input DataFrame first and returns it joined with the generated rows, for example `rasterx.functions.rst_retile(df, "tile", 512, 512)`.
 
+:::tip Compute the tile first
+On Serverless, a SQL function cannot be an argument of a `LATERAL` call. This holds for functions such as `gbx_rst_setsrid`, `gbx_rst_transform` and `gbx_rst_resample`.
+Compute the tile in a subquery or CTE, then call the generator on that column, as the example does.
+:::
+
+<CodeFromTest
+  language="python"
+  title="Retile a tile that another function made"
+  source="docs/tests/python/api/rasterx_generators_python_light.py"
+  testFile="docs/tests/python/api/test_rasterx_generators_python_light.py"
+  functionName="rst_retile_of_a_derived_tile_python_example"
+  outputConstant="rst_retile_of_a_derived_tile_python_example_output"
+  code={rasterxGeneratorsLightCode}
+/>
+
 ### rst_bng_tessellate
 
 {/* BEGIN GENERATED gbx_rst_bng_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}

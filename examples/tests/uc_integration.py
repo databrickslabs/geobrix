@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the Unity Catalog integration gate on Databricks and write its evidence file.
 
-Run it through `gbx:test:uc-integration` (scripts/commands/gbx-test-uc-integration.sh), which picks an
+Run it through `gbx:uc:tests` (scripts/commands/gbx-uc-tests.sh), which picks an
 interpreter that has the Databricks SDK. Steps, each with a progress line:
 
   1. refuse when a tracked UC source is dirty (the evidence must describe committed code);
@@ -12,7 +12,12 @@ interpreter that has the Databricks SDK. Steps, each with a progress line:
   5. on the SQL warehouse, run the UC oracle slice (bench.oracles.uc_sql, split over parallel shards,
      judged by bench.oracles.check_uc_results) and the example files of examples/uc-functions, all against that schema;
   6. drop the schema and delete the Volume folder (unless --keep);
-  7. write test-logs/uc-integration/evidence.json.
+  7. write test-logs/uc-integration/evidence.json (which records the scope: core or full).
+
+`--scope smoke|core|full` picks what runs: smoke is 12 slice statements plus example files 00 and 01, core is the
+grid and vector tables, full adds the raster tables. `--against SCHEMA` runs the scope against an existing install
+(no build, stage, install or cleanup) and writes evidence-adhoc.json, never evidence.json: the installed code
+may not match HEAD, so it proves nothing about a commit.
 
 The result is "pass" when the slice has no failure outside scripts/ci/uc_integration_known_failures.txt
 and every example statement succeeded. `scripts/ci/check_uc_integration_evidence.py` reads the file.
@@ -47,6 +52,9 @@ import uc_sources_hash  # noqa: E402
 CMD = REPO_ROOT / "scripts" / "commands"
 OUT_DIR = REPO_ROOT / "test-logs" / "uc-integration"
 EVIDENCE = OUT_DIR / "evidence.json"
+ADHOC_EVIDENCE = OUT_DIR / "evidence-adhoc.json"
+SMOKE_STATEMENTS = 12
+SMOKE_EXAMPLES = "00,01"
 KNOWN_FAILURES = REPO_ROOT / "scripts" / "ci" / "uc_integration_known_failures.txt"
 CONFIG = REPO_ROOT / "examples" / "tests" / "databricks_cluster_config.env"
 DEFAULT_CATALOG = "geospatial_docs"
@@ -247,7 +255,7 @@ def slice_pairs(catalog: str, schema: str, tables) -> list:
 def slice_tables(scope: str) -> tuple:
     from databricks.labs.gbx.bench import probes
 
-    return probes.UC_CORE_TABLES if scope == "core" else probes.UC_SLICE_TABLES
+    return probes.UC_SLICE_TABLES if scope == "full" else probes.UC_CORE_TABLES  # smoke samples the core tables
 
 
 def example_pairs(catalog: str, schema: str, prefixes: Optional[str] = None) -> Dict[Path, list]:
@@ -273,12 +281,12 @@ def parse_args(argv=None):
     p.add_argument("--warehouse-id", default=None, help="SQL warehouse (default GBX_UC_WAREHOUSE_ID in the cluster config)")
     p.add_argument("--catalog", default=DEFAULT_CATALOG)
     p.add_argument("--volroot", default=DEFAULT_VOLROOT, help="Volume folder that holds the uc-it/<sha12>/ staging folder")
-    p.add_argument("--slice", choices=("core", "full"), default="core", help="oracle tables: grid and vector (core) or also raster (full)")
+    p.add_argument("--scope", choices=("smoke", "core", "full"), default="core", help="smoke: 12 slice statements and example files 00 and 01; core: grid and vector tables and all examples; full: also the raster tables")
     p.add_argument("--shards", type=int, default=8, help="parallel warehouse sessions for the slice")
     p.add_argument("--rebuild", action="store_true", help="build the wheel even when dist/env6 holds a reusable one")
     p.add_argument("--keep", action="store_true", help="keep the schema and the Volume folder")
     p.add_argument("--install-timeout-min", type=int, default=90)
-    p.add_argument("--smoke", metavar="SCHEMA", default=None, help="wiring check on an existing install in SCHEMA: no build, stage, install or cleanup; 12 slice statements and example files 00 and 01; writes evidence-smoke.json, never evidence.json")
+    p.add_argument("--against", metavar="SCHEMA", default=None, help="run the scope against the existing install in SCHEMA: no build, stage, install or cleanup; writes evidence-adhoc.json, never evidence.json")
     p.add_argument("--dry-run", action="store_true", help="print the plan (the slice and example counts); no workspace call, no build")
     return p.parse_args(argv)
 
@@ -288,7 +296,7 @@ class Gate:
         self.a = args
         self.head = uc_sources_hash.head_sha(REPO_ROOT)
         self.sha12 = self.head[:12]
-        self.schema = args.smoke or f"geobrix_uc_it_{self.sha12}"
+        self.schema = args.against or f"geobrix_uc_it_{self.sha12}"
         self.folder = f"{args.volroot.rstrip('/')}/uc-it/{self.sha12}"
         self.ws_dir: Optional[str] = None
         self.run_dir = OUT_DIR / self.sha12
@@ -393,8 +401,8 @@ class Gate:
 
         say("step 5/6: the oracle slice and the example files on the warehouse, in parallel")
         pairs = slice_pairs(self.a.catalog, self.schema, tables)
-        if self.a.smoke:
-            pairs = pairs[:12]
+        if self.a.scope == "smoke":
+            pairs = pairs[:SMOKE_STATEMENTS]
         shards = shard(pairs, self.a.shards)
         jobs: List[Tuple[str, subprocess.Popen, Path, Path, int]] = []
         for i, part in enumerate(shards):
@@ -406,9 +414,9 @@ class Gate:
                    "--schema", self.schema, "--out-dir", str(ex_dir), "--timeout-s", "900"]
         if self.warehouse:
             ex_argv += ["--warehouse-id", self.warehouse]
-        if self.a.smoke:
-            ex_argv += ["--files", "00,01"]
-        ex_pairs = example_pairs(self.a.catalog, self.schema, "00,01" if self.a.smoke else None)
+        if self.a.scope == "smoke":
+            ex_argv += ["--files", SMOKE_EXAMPLES]
+        ex_pairs = example_pairs(self.a.catalog, self.schema, SMOKE_EXAMPLES if self.a.scope == "smoke" else None)
         ex_total = sum(len(p) for p in ex_pairs.values())
         jobs.append(("examples", self._popen(ex_argv, ex_log), ex_dir, ex_log, ex_total))
         start = time.time()
@@ -494,7 +502,7 @@ class Gate:
     # -- the run --
     def write_evidence(self) -> None:
         OUT_DIR.mkdir(parents=True, exist_ok=True)
-        path = EVIDENCE.with_name("evidence-smoke.json") if self.a.smoke else EVIDENCE
+        path = ADHOC_EVIDENCE if self.a.against else EVIDENCE
         path.write_text(json.dumps(self.ev, indent=2, sort_keys=True) + "\n")
 
 
@@ -511,7 +519,11 @@ def main(argv=None) -> int:
         return 2
     g = Gate(a)
     say(f"HEAD {g.head}, schema {a.catalog}.{g.schema}, Volume folder {g.folder}")
-    dirty = uc_sources_hash.dirty_files(REPO_ROOT)
+    if a.scope == "smoke" and not a.against:
+        print("--scope smoke needs --against SCHEMA: a smoke run is a wiring check on an existing install, never a gated run", file=sys.stderr)
+        return 2
+    # An ad hoc run (--against) judges whatever is installed, so uncommitted edits do not matter; a gated run must describe committed code.
+    dirty = [] if a.against else uc_sources_hash.dirty_files(REPO_ROOT)
     if dirty:
         print("step 1/6: refused, uncommitted changes under the UC sources: " + ", ".join(dirty[:8]), file=sys.stderr)
         print("Fix: commit or stash them; the evidence must describe committed code.", file=sys.stderr)
@@ -522,10 +534,12 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    tables = slice_tables(a.slice)
+    tables = slice_tables(a.scope)
     if a.dry_run:
         pairs = slice_pairs(a.catalog, g.schema, tables)
-        ex_pairs = example_pairs(a.catalog, g.schema)
+        if a.scope == "smoke":
+            pairs = pairs[:SMOKE_STATEMENTS]
+        ex_pairs = example_pairs(a.catalog, g.schema, SMOKE_EXAMPLES if a.scope == "smoke" else None)
         wheels = sorted((REPO_ROOT / "dist" / "env6").glob("*.whl"))
         wheel_note = "none in dist/env6"
         if wheels:
@@ -533,7 +547,7 @@ def main(argv=None) -> int:
             wheel_note = f"{wheels[-1].name}: {'reusable' if ok else 'rebuild'}, {why}"
         print(
             f"dry run: sources hash {uc_sources_hash.sources_hash(REPO_ROOT)[:12]}; wheel {wheel_note}; "
-            f"slice {a.slice}: {len(pairs)} statements in {len(shard(pairs, a.shards))} shard(s); "
+            f"scope {a.scope}{' against ' + a.against if a.against else ''}: slice {len(pairs)} statements in {len(shard(pairs, a.shards))} shard(s); "
             f"examples: {sum(len(p) for p in ex_pairs.values())} statements in {len(ex_pairs)} files; "
             f"warehouse {g.warehouse or '-'}; known failures {len(known)}; no workspace call"
         )
@@ -543,16 +557,19 @@ def main(argv=None) -> int:
     g.ev = {
         "head_sha": g.head, "sources_hash": uc_sources_hash.sources_hash(REPO_ROOT), "started": started, "profile": a.profile,
         "warehouse_id": g.warehouse, "catalog": a.catalog, "schema": g.schema, "volume_dir": g.folder, "result": "fail",
+        "scope": a.scope,
     }
-    if EVIDENCE.exists() and not a.smoke:
+    if a.against:
+        g.ev["adhoc"] = True  # not evidence: the installed code may not match HEAD
+    elif EVIDENCE.exists():
         EVIDENCE.unlink()  # a run that stops early must not leave the last run's pass behind
     if not g.warehouse:
         print("--warehouse-id required (or GBX_UC_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env)", file=sys.stderr)
         return 2
     sl = ex = None
     try:
-        if a.smoke:
-            say(f"smoke: warehouse step only, against the existing install in {a.catalog}.{a.smoke}")
+        if a.against:
+            say(f"scope {a.scope}: warehouse step only, against the existing install in {a.catalog}.{a.against}")
         else:
             wheel = g.step_wheel()
             info = wheel_info(wheel)
@@ -560,11 +577,9 @@ def main(argv=None) -> int:
             volume_wheel = g.step_stage(wheel, info)
             g.step_install(volume_wheel)
         sl, ex = g.step_warehouse(tables, known)
-        g.ev.update({"slice": {**sl, "scope": a.slice, "tables": list(tables)}, "examples": {k: ex[k] for k in ("statements_ok", "total")}})
+        g.ev.update({"slice": {**sl, "scope": a.scope, "tables": list(tables)}, "examples": {k: ex[k] for k in ("statements_ok", "total")}})
         g.ev["examples"]["failed"] = ex["failures"][:40]
         g.ev["result"] = decide(sl, ex)
-        if a.smoke and g.ev["result"] == "pass":
-            g.ev["result"] = "smoke"  # a wiring check is never evidence
     except StepFailed as exc:
         g.ev["error"] = str(exc)
         print(f"FAILED: {exc}", file=sys.stderr)
@@ -575,12 +590,12 @@ def main(argv=None) -> int:
         g.ev["job_run_ids"] = g.run_ids
         g.ev["finished"] = now()
         g.write_evidence()
-        say("step 6/6: " + ("keeping the schema and the Volume folder" if a.keep or a.smoke else "dropping the schema and deleting the Volume folder"))
-        g.ev["cleanup"] = "kept" if a.smoke else g.cleanup()
+        say("step 6/6: " + ("keeping the schema and the Volume folder" if a.keep or a.against else "dropping the schema and deleting the Volume folder"))
+        g.ev["cleanup"] = "kept" if a.against else g.cleanup()
         g.ev["finished"] = now()
         g.write_evidence()
     say(gate.summary_line(g.ev) + f"; cleanup {g.ev['cleanup']}")
-    say(f"evidence: {EVIDENCE.with_name('evidence-smoke.json') if a.smoke else EVIDENCE}")
+    say(f"evidence: {ADHOC_EVIDENCE if a.against else EVIDENCE}")
     return 0 if g.ev["result"] == "pass" else 1
 
 

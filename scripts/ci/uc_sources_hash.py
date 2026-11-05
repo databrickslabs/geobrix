@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hash of the committed sources that Unity Catalog integration depends on.
 
-`gbx:test:uc-integration` stores this hash in its evidence file, and the QC check
+`gbx:uc:tests` stores this hash in its evidence file, and the QC check
 `uc-integration-evidence` compares it with the current one. A later commit that touches none of
 UC_PATHS (a docs change, a CI change) keeps the evidence valid; a commit that touches any of them
 makes it stale.

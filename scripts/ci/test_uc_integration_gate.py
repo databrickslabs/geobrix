@@ -22,19 +22,38 @@ def git(root, *args):
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
 
 
+POM = "<project>\n  <groupId>g</groupId>\n  <version>{v}</version>\n  <dependencies><dependency><version>9.9</version></dependency></dependencies>\n</project>\n"
+VERSION_INIT = "python/geobrix/src/databricks/labs/gbx/__init__.py"
+COMMIT = ("-c", "user.email=t@t", "-c", "user.name=t")
+
+
+def bump(root, version, where="both"):
+    """Commit a release version change in pom.xml and/or __init__.py."""
+    if where in ("both", "pom"):
+        (root / "pom.xml").write_text(POM.format(v=version))
+    if where in ("both", "init"):
+        (root / VERSION_INIT).write_text(f'__version__ = "{version}"\n')
+    git(root, *COMMIT, "commit", "-q", "-am", f"bump {version}")
+
+
 @pytest.fixture
 def repo(tmp_path):
     root = tmp_path / "repo"
     (root / "scripts" / "ci").mkdir(parents=True)
     for name in ("uc_sources_hash.py", "check_uc_integration_evidence.py"):
         shutil.copy(CI / name, root / "scripts" / "ci" / name)
-    for rel in ("python/geobrix/src/pkg/mod.py", "examples/uc-functions/00.sql", "src/main/scala/A.scala", "pom.xml", "docs/a.md"):
+    for rel in ("python/geobrix/src/pkg/mod.py", "examples/uc-functions/00.sql", "src/main/scala/A.scala", "docs/a.md"):
         p = root / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("v1\n")
+    (root / "pom.xml").write_text(POM.format(v="0.6.0"))
+    init = root / VERSION_INIT
+    init.parent.mkdir(parents=True, exist_ok=True)
+    init.write_text('__version__ = "0.6.0"\n')
     git(root, "init", "-q", "-b", "main")
     git(root, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A")
     git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init")
+    git(root, "update-ref", "refs/remotes/origin/main", "HEAD")  # the base a main-bound range is measured from
     return root
 
 
@@ -46,11 +65,12 @@ def run(root, script, *args, env=None):
     )
 
 
-def write_evidence(root, sources_hash, result="pass", slice_failed=0):
+def write_evidence(root, sources_hash, result="pass", slice_failed=0, scope="core"):
     ev = {
         "head_sha": "a" * 40,
         "sources_hash": sources_hash,
         "result": result,
+        "scope": scope,
         "schema": "geobrix_uc_it_aaaaaaaaaaaa",
         "finished": "2026-11-05T12:00:00Z",
         "slice": {"passed": 10, "failed": slice_failed, "failed_ids": []},
@@ -60,6 +80,10 @@ def write_evidence(root, sources_hash, result="pass", slice_failed=0):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(ev))
     return path
+
+
+def check(root, rng="origin/main..HEAD"):
+    return run(root, "check_uc_integration_evidence.py", env={"QC_RANGE": rng})
 
 
 def current_hash(root):
@@ -94,7 +118,7 @@ def test_check_clean_passes_then_fails_on_a_tracked_edit_and_ignores_untracked(r
     (repo / "pom.xml").write_text("edited\n")
     res = run(repo, "uc_sources_hash.py", "--check-clean")
     assert res.returncode == 1 and "pom.xml" in res.stderr
-    (repo / "pom.xml").write_text("v1\n")
+    (repo / "pom.xml").write_text(POM.format(v="0.6.0"))
     assert run(repo, "uc_sources_hash.py", "--check-clean").returncode == 0
 
 
@@ -129,7 +153,7 @@ def test_a_range_not_based_on_main_is_skipped_even_without_evidence(repo, rng):
 def test_main_bound_without_evidence_fails_with_a_fix(repo, rng):
     res = run(repo, "check_uc_integration_evidence.py", env={"QC_RANGE": rng})
     assert res.returncode == 1
-    assert "no UC integration evidence" in res.stderr and "gbx-test-uc-integration.sh --profile" in res.stderr
+    assert "no UC integration evidence" in res.stderr and "gbx-uc-tests.sh --profile" in res.stderr and "--scope core" in res.stderr
 
 
 @pytest.mark.parametrize("rng", MAIN_RANGES)
@@ -137,7 +161,7 @@ def test_main_bound_with_fresh_passing_evidence_passes_and_prints_the_summary(re
     write_evidence(repo, current_hash(repo))
     res = run(repo, "check_uc_integration_evidence.py", env={"QC_RANGE": rng})
     assert res.returncode == 0, res.stderr
-    assert "PASS" in res.stdout and "slice 10 passed / 0 failed" in res.stdout and "examples 156/156" in res.stdout
+    assert "PASS" in res.stdout and "scope core" in res.stdout and "slice 10 passed / 0 failed" in res.stdout and "examples 156/156" in res.stdout
 
 
 def test_stale_evidence_fails_after_a_uc_source_commit_but_not_after_a_docs_commit(repo):
@@ -200,6 +224,80 @@ def test_fail_on_revert_a_check_that_ignores_the_hash_would_pass_stale_evidence(
     assert run(repo, "check_uc_integration_evidence.py", env=env).returncode == 0
 
 
+# ---- the release rule: a version change needs the full scope ----------------------------------------------------
+
+
+@pytest.mark.parametrize("where", ["both", "pom", "init"])
+def test_a_version_change_rejects_core_evidence_and_names_the_full_scope(repo, where):
+    bump(repo, "0.6.1", where)
+    write_evidence(repo, current_hash(repo), scope="core")
+    res = check(repo)
+    assert res.returncode == 1
+    assert "scope 'core'" in res.stderr and "full UC tests" in res.stderr and "--scope full" in res.stderr
+
+
+def test_a_version_change_accepts_full_evidence(repo):
+    bump(repo, "0.6.1")
+    write_evidence(repo, current_hash(repo), scope="full")
+    res = check(repo)
+    assert res.returncode == 0, res.stderr
+    assert "scope full" in res.stdout
+
+
+def test_without_a_version_change_core_and_full_both_pass(repo):
+    (repo / "python/geobrix/src/pkg/mod.py").write_text("v2\n")
+    git(repo, *COMMIT, "commit", "-q", "-am", "src")
+    for scope in ("core", "full"):
+        write_evidence(repo, current_hash(repo), scope=scope)
+        assert check(repo).returncode == 0, scope
+
+
+def test_a_dependency_version_in_pom_is_not_a_release_version_change(repo):
+    (repo / "pom.xml").write_text(POM.format(v="0.6.0").replace("9.9", "9.10"))
+    git(repo, *COMMIT, "commit", "-q", "-am", "dep")
+    write_evidence(repo, current_hash(repo), scope="core")
+    assert check(repo).returncode == 0
+
+
+def test_the_version_is_compared_with_the_merge_base_not_the_tip_of_main(repo):
+    git(repo, "checkout", "-q", "-b", "feature")
+    git(repo, "checkout", "-q", "main")
+    bump(repo, "0.6.1")  # main moved on; the feature branch did not touch the version
+    git(repo, "checkout", "-q", "feature")
+    write_evidence(repo, current_hash(repo), scope="core")
+    assert check(repo, "main..HEAD").returncode == 0
+
+
+def test_evidence_without_a_scope_counts_as_core(repo):
+    path = write_evidence(repo, current_hash(repo))
+    ev = json.loads(path.read_text())
+    del ev["scope"]
+    path.write_text(json.dumps(ev))
+    assert check(repo).returncode == 0
+    bump(repo, "0.6.1")
+    ev["sources_hash"] = current_hash(repo)
+    path.write_text(json.dumps(ev))
+    assert check(repo).returncode == 1
+
+
+def test_a_smoke_or_unknown_scope_never_counts(repo):
+    write_evidence(repo, current_hash(repo), scope="smoke")
+    assert check(repo).returncode == 1
+
+
+def test_fail_on_revert_a_check_without_the_release_rule_would_pass_core_evidence_after_a_bump(repo):
+    """Mutation guard: with the release rule removed the version-change case passes, so the tests above are not vacuous."""
+    bump(repo, "0.6.1")
+    write_evidence(repo, current_hash(repo), scope="core")
+    assert check(repo).returncode == 1
+    script = repo / "scripts" / "ci" / "check_uc_integration_evidence.py"
+    text = script.read_text()
+    mutated = text.replace("need_full=version_changed(qc_range)", "need_full=False")
+    assert mutated != text
+    script.write_text(mutated)
+    assert check(repo).returncode == 0
+
+
 def test_the_qc_config_registers_the_check_as_a_failing_command():
     cfg = json.loads((REPO_ROOT / ".claude" / "qc-judge" / "config.json").read_text())
     spec = cfg["checks"]["uc-integration-evidence"]
@@ -260,13 +358,21 @@ def test_wheel_reuse_refuses_a_wheel_built_from_a_dirty_tree(driver):
 
 
 def test_the_help_names_the_options_and_a_missing_profile_exits_2():
-    sh = str(REPO_ROOT / "scripts" / "commands" / "gbx-test-uc-integration.sh")
+    sh = str(REPO_ROOT / "scripts" / "commands" / "gbx-uc-tests.sh")
     res = subprocess.run(["bash", sh, "--help"], capture_output=True, text=True)
     assert res.returncode == 0
-    for opt in ("--profile", "--keep", "--dry-run", "--slice", "--shards", "--warehouse-id", "--rebuild", "--smoke"):
+    for opt in ("--profile", "--keep", "--dry-run", "--scope", "--against", "--shards", "--warehouse-id", "--rebuild"):
         assert opt in res.stdout
+    for gone in ("--slice", "--smoke"):
+        assert gone not in res.stdout
     assert subprocess.run(["bash", sh, "--nope"], capture_output=True, text=True).returncode == 2
     assert subprocess.run(["bash", sh, "--profile"], capture_output=True, text=True).returncode == 2
+
+
+def test_the_old_command_files_are_gone():
+    cmds = REPO_ROOT / "scripts" / "commands"
+    assert not (cmds / "gbx-test-uc-integration.sh").exists() and not (cmds / "gbx-test-uc-integration.md").exists()
+    assert (cmds / "gbx-uc-tests.sh").exists() and (cmds / "gbx-uc-tests.md").exists()
 
 
 def test_the_driver_requires_a_profile(driver, capsys):
@@ -284,23 +390,67 @@ def test_the_driver_dry_run_reports_counts_without_a_workspace_call(driver, monk
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
     monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(20)])
-    monkeypatch.setattr(driver, "example_pairs", lambda c, s: {Path("a.sql"): [("x", "SELECT 1")] * 3})
+    monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
     assert driver.main(["--profile", "p", "--dry-run", "--shards", "4"]) == 0
     out = capsys.readouterr().out
-    assert "slice core: 20 statements in 4 shard(s)" in out and "no workspace call" in out
+    assert "scope core: slice 20 statements in 4 shard(s)" in out and "no workspace call" in out
 
 
-def test_a_smoke_run_is_never_evidence(driver, monkeypatch, tmp_path):
-    """--smoke writes evidence-smoke.json and leaves evidence.json alone, whatever the verdict."""
+def test_scope_selects_the_tables_and_the_smoke_sample(driver, monkeypatch, capsys):
+    from databricks.labs.gbx.bench import probes
+
+    assert driver.slice_tables("core") == probes.UC_CORE_TABLES
+    assert driver.slice_tables("smoke") == probes.UC_CORE_TABLES
+    assert driver.slice_tables("full") == probes.UC_SLICE_TABLES and len(probes.UC_SLICE_TABLES) > len(probes.UC_CORE_TABLES)
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(40)])
+    seen = []
+    monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: seen.append(prefixes) or {Path("a.sql"): [("x", "SELECT 1")]})
+    assert driver.main(["--profile", "p", "--dry-run", "--scope", "smoke", "--against", "sch"]) == 0
+    assert "scope smoke against sch: slice 12 statements" in capsys.readouterr().out and seen == ["00,01"]
+    assert driver.main(["--profile", "p", "--dry-run", "--scope", "full"]) == 0
+    assert "scope full: slice 40 statements" in capsys.readouterr().out and seen[-1] is None
+
+
+def test_smoke_without_against_is_refused(driver, capsys):
+    assert driver.main(["--profile", "p", "--scope", "smoke"]) == 2
+    assert "--against" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("scope", ["smoke", "core", "full"])
+def test_an_against_run_writes_only_the_adhoc_file(driver, monkeypatch, tmp_path, scope):
+    """--against writes evidence-adhoc.json (with the scope) and leaves evidence.json alone, whatever the verdict."""
     monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
     monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
-    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
-    monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
     ok = ({"total": 1, "passed": 1, "failed": 0, "failed_ids": [], "tolerated_ids": []}, {"statements_ok": 2, "total": 2, "failures": []})
     monkeypatch.setattr(driver.Gate, "step_warehouse", lambda self, tables, known: ok)
-    monkeypatch.setattr(driver.Gate, "cleanup", lambda self: pytest.fail("a smoke run cleans up nothing"))
+    for step in ("step_wheel", "step_stage", "step_install"):
+        monkeypatch.setattr(driver.Gate, step, lambda self, *a: pytest.fail("an --against run builds, stages and installs nothing"))
+    monkeypatch.setattr(driver.Gate, "cleanup", lambda self: pytest.fail("an --against run cleans up nothing"))
     (tmp_path / "evidence.json").write_text("{}")
-    rc = driver.main(["--profile", "p", "--smoke", "some_schema", "--warehouse-id", "w"])
-    assert rc == 1  # not "pass"
-    assert json.loads((tmp_path / "evidence-smoke.json").read_text())["result"] == "smoke"
+    rc = driver.main(["--profile", "p", "--scope", scope, "--against", "some_schema", "--warehouse-id", "w"])
+    assert rc == 0
+    ev = json.loads((tmp_path / "evidence-adhoc.json").read_text())
+    assert ev["scope"] == scope and ev["schema"] == "some_schema" and ev["adhoc"] is True and ev["result"] == "pass"
     assert (tmp_path / "evidence.json").read_text() == "{}"
+
+
+def test_a_gated_run_records_its_scope_in_evidence_json(driver, monkeypatch, tmp_path):
+    monkeypatch.setattr(driver, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(driver, "EVIDENCE", tmp_path / "evidence.json")
+    monkeypatch.setattr(driver, "ADHOC_EVIDENCE", tmp_path / "evidence-adhoc.json")
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda s: ("T",))
+    ok = ({"total": 1, "passed": 1, "failed": 0, "failed_ids": [], "tolerated_ids": []}, {"statements_ok": 2, "total": 2, "failures": []})
+    monkeypatch.setattr(driver.Gate, "step_wheel", lambda self: Path("w.whl"))
+    monkeypatch.setattr(driver, "wheel_info", lambda w: {"name": "w.whl"})
+    monkeypatch.setattr(driver.Gate, "step_stage", lambda self, w, i: "/v/w.whl")
+    monkeypatch.setattr(driver.Gate, "step_install", lambda self, w: None)
+    monkeypatch.setattr(driver.Gate, "step_warehouse", lambda self, tables, known: ok)
+    monkeypatch.setattr(driver.Gate, "cleanup", lambda self: "dropped")
+    assert driver.main(["--profile", "p", "--scope", "full", "--warehouse-id", "w"]) == 0
+    ev = json.loads((tmp_path / "evidence.json").read_text())
+    assert ev["scope"] == "full" and ev["slice"]["scope"] == "full" and ev["result"] == "pass" and "adhoc" not in ev
+    assert not (tmp_path / "evidence-adhoc.json").exists()

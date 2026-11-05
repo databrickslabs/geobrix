@@ -1,3 +1,3 @@
-# Slice cases that `gbx:test:uc-integration` tolerates, one per line: `<case id>: <reason>`.
+# Slice cases that `gbx:uc:tests` tolerates, one per line: `<case id>: <reason>`.
 # Empty on purpose: every slice failure fails the gate. Add a line only for a case with a recorded
 # cause that cannot be fixed yet, and write that cause after the colon. A line with no reason is an error.

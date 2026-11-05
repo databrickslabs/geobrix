@@ -1,7 +1,7 @@
 # Setting up the UC integration gate in CI
 
 This page is for a workspace and GitHub admin. Today the gate runs on a developer machine:
-`gbx:test:uc-integration` writes `test-logs/uc-integration/evidence.json`, the QC check
+`gbx:uc:tests` writes `test-logs/uc-integration/evidence.json`, the QC check
 `uc-integration-evidence` reads it on `gh pr create` and on a push to main, and the pull request
 template asks for the summary line. These steps move the same run into GitHub Actions and make it
 a required check on `main`. Nothing here is set up yet.
@@ -78,7 +78,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run the gate into the per-PR schema
         run: |
-          bash scripts/commands/gbx-test-uc-integration.sh \
+          bash scripts/commands/gbx-uc-tests.sh \
             --profile ci --catalog "$CI_CATALOG" --schema "$CI_SCHEMA" \
             --warehouse-id "${{ vars.GBX_UC_WAREHOUSE_ID }}"
       - name: Drop the per-PR schema
@@ -93,7 +93,7 @@ jobs:
 
 Gaps to close before this works. None is built yet **(unverified)**:
 
-- The command names its schema `geobrix_uc_it_<sha12>`. Add a `--schema` option to `gbx:test:uc-integration` so the run can use `geobrix_ci_pr<N>`.
+- The command names its schema `geobrix_uc_it_<sha12>`. Add a `--schema` option to `gbx:uc:tests` so the run can use `geobrix_ci_pr<N>`.
 - The command requires `--profile` and passes it to every sub-command. With OIDC the SDK reads `DATABRICKS_AUTH_TYPE`, `DATABRICKS_HOST` and `DATABRICKS_CLIENT_ID` from the environment. Allow a value that means "no profile, use the environment".
 - The runner needs the Databricks CLI and `uv`, and Docker for the wheel build.
 - The `concurrency` group cancels an older run of the same pull request. The `always()` step then drops the schema it left.
@@ -105,3 +105,5 @@ Gaps to close before this works. None is built yet **(unverified)**:
 3. Keep "Require branches to be up to date before merging" on, so the check covers the merged state.
 
 After this, the local gate is a pre-flight convenience. The QC check can stay, or move to `warn`.
+
+The nightly full run (`gbx:uc:tests --scope full`) belongs in this workflow too, as a scheduled trigger. It needs the same admin setup, so it is not built yet.

@@ -40,7 +40,7 @@ def retarget(statement: str, catalog: str, schema: str) -> str:
     """The statement with the files' catalog and schema names replaced by `catalog` and `schema`.
 
     The files name both in `USE`, in qualified table names and in information_schema filters, so a run
-    against another install (such as the scratch schema of `gbx:test:uc-integration`) rewrites the names.
+    against another install (such as the scratch schema of `gbx:uc:tests`) rewrites the names.
     """
     statement = re.sub(rf"\b{FILE_SCHEMA}\b", schema, statement)
     return re.sub(rf"\b{FILE_CATALOG}\b", catalog, statement)

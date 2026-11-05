@@ -1477,7 +1477,7 @@ def _two_srids(fn: str, first: bytes, second: bytes) -> None:
         )
 
 
-def _shapely_scalar(fn: str, kernel, geoms, *args):
+def _shapely_scalar(fn: str, kernel, geoms, *args, check=None):
     """GEOMETRY(ANY) result of ``kernel(*geoms as EWKB, *args)``; None when any geometry is NULL."""
     from shapely.errors import GeometryTypeError, ShapelyError
 
@@ -1486,6 +1486,8 @@ def _shapely_scalar(fn: str, kernel, geoms, *args):
     ewkb = [_geom_bytes(g) for g in geoms]
     if len(ewkb) > 1:
         _two_srids(fn, ewkb[0], ewkb[1])
+    if check is not None:
+        check(ewkb)
     try:
         out = kernel(*ewkb, *args)
     except (MemoryError, RecursionError, ImportError):
@@ -1560,11 +1562,28 @@ def st_snap(geom, reference, tolerance):
     )
 
 
+def _split_takes_lines_and_polygons(ewkb) -> None:
+    """A point has nothing to cut. GEOS says so in words that differ by shapely version (a type error, or an
+    IllegalArgumentException), so the handler states it once, the same on every version.
+    """
+    import shapely
+
+    kind = shapely.from_wkb(ewkb[0]).geom_type
+    if kind in ("Point", "MultiPoint"):
+        raise _Refusal(
+            f"gbx_st_split: Splitting {kind} geometry is not supported. "
+            "Fix: pass a line or a polygon to split, or use st_buffer to turn the points into polygons first"
+        )
+
+
 def st_split(input_geom, blade_geom):
     from databricks.labs.gbx.pyvx import _antimeridian
 
     return _shapely_scalar(
-        "gbx_st_split", _antimeridian.st_split, (input_geom, blade_geom)
+        "gbx_st_split",
+        _antimeridian.st_split,
+        (input_geom, blade_geom),
+        check=_split_takes_lines_and_polygons,
     )
 
 

@@ -357,6 +357,18 @@ def test_wheel_reuse_refuses_a_wheel_built_from_a_dirty_tree(driver):
     assert not ok and "dirty" in why
 
 
+def test_child_commands_do_not_see_the_drivers_throwaway_venv(driver, monkeypatch, tmp_path):
+    # Fail on revert: under `uv run --with ...` the venv has no pip and leads PATH, so gbx:build:wheel found no pip.
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    monkeypatch.setattr(driver.sys, "prefix", str(venv))
+    monkeypatch.setattr(driver.sys, "base_prefix", "/usr")
+    env = driver.child_env({"PATH": f"{venv}/bin:/usr/bin:/bin", "VIRTUAL_ENV": str(venv), "HOME": "/h"})
+    assert env["PATH"] == "/usr/bin:/bin" and "VIRTUAL_ENV" not in env and env["HOME"] == "/h"
+    monkeypatch.setattr(driver.sys, "base_prefix", str(venv))  # not in a venv: untouched
+    assert driver.child_env({"PATH": f"{venv}/bin:/usr/bin"})["PATH"] == f"{venv}/bin:/usr/bin"
+
+
 def test_the_help_names_the_options_and_a_missing_profile_exits_2():
     sh = str(REPO_ROOT / "scripts" / "commands" / "gbx-uc-tests.sh")
     res = subprocess.run(["bash", sh, "--help"], capture_output=True, text=True)

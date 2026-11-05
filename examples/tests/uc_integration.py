@@ -205,11 +205,26 @@ assert cnt > 0, "the install created no routine"
 # ---- process helpers ------------------------------------------------------------------------------------------------
 
 
+def child_env(base: Optional[dict] = None) -> dict:
+    """The environment of a child command: this interpreter's venv is dropped from PATH and VIRTUAL_ENV.
+
+    The launcher runs the driver under `uv run --with databricks-sdk`, whose throwaway venv has no pip and
+    sits first on PATH. A child such as gbx:build:wheel resolves `python3` from PATH and needs the host's.
+    """
+    env = dict(os.environ if base is None else base)
+    if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
+        return env
+    venv_bin = os.path.realpath(os.path.join(sys.prefix, "bin"))
+    env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep) if os.path.realpath(p) != venv_bin)
+    env.pop("VIRTUAL_ENV", None)
+    return env
+
+
 def run_cmd(argv: Sequence[str], log: Path, label: str, env: Optional[dict] = None, echo: bool = True) -> Tuple[int, str]:
     """Run a command, tee its output to `log` (and the console when `echo`), print a line every minute while it is quiet."""
     log.parent.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen(
-        list(argv), cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env={**os.environ, **(env or {})}
+        list(argv), cwd=REPO_ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env={**child_env(), **(env or {})}
     )
     lines: List[str] = []
     last = [time.time()]

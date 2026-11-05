@@ -1,0 +1,142 @@
+---
+sidebar_position: 2
+title: Unity Catalog SQL examples
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import CodeBlock from '@theme/CodeBlock';
+import sql00 from '!!raw-loader!../../../examples/uc-functions/00_setup.sql';
+import sql01 from '!!raw-loader!../../../examples/uc-functions/01_grids_bng.sql';
+import sql02 from '!!raw-loader!../../../examples/uc-functions/02_grids_quadbin_custom.sql';
+import sql03 from '!!raw-loader!../../../examples/uc-functions/03_grids_h3.sql';
+import sql04 from '!!raw-loader!../../../examples/uc-functions/04_vector.sql';
+import sql05 from '!!raw-loader!../../../examples/uc-functions/05_raster_accessors.sql';
+import sql06 from '!!raw-loader!../../../examples/uc-functions/06_raster_operations.sql';
+import sql07 from '!!raw-loader!../../../examples/uc-functions/07_raster_indices_and_terrain.sql';
+import sql08 from '!!raw-loader!../../../examples/uc-functions/08_raster_generators.sql';
+import sql09 from '!!raw-loader!../../../examples/uc-functions/09_raster_to_grid.sql';
+import sql10 from '!!raw-loader!../../../examples/uc-functions/10_aggregation_recipes.sql';
+import sql11 from '!!raw-loader!../../../examples/uc-functions/11_procedures.sql';
+
+# Unity Catalog SQL examples
+
+Try the GeoBrix [Unity Catalog functions](../api/uc-functions) with ready-made queries. Twelve SQL files cover every function by category, and each query uses small inputs and returns rows.
+
+## Install the functions
+
+Run `gbx.uc.install` once from an env 6 notebook or job. It creates the functions, and with `procedures=True` the procedures, in one schema. The [Unity Catalog functions](../api/uc-functions#install) page has the call and the Volume folder rules.
+
+The examples use the catalog `geospatial_docs` and the schema `geobrix_uc`. Replace both names with your own, in the `USE` lines at the top of each file and in the table names of `11_procedures.sql`.
+
+## Run the examples
+
+1. Import the files into your workspace. Run `gbx:examples:uc-sql --upload` from a GeoBrix checkout, or copy the files from [`examples/uc-functions`](https://github.com/databrickslabs/geobrix/tree/main/examples/uc-functions).
+2. Open `00_setup.sql` in the SQL editor and run it. It builds the sample tables the other files read.
+3. Open any other file and run one statement at a time.
+
+Each statement starts with a `-- cid:` comment that names it. The SQL editor ignores the comment, and the `gbx:examples:uc-sql` command uses it to run every file and check every result.
+
+A statement that calls a GeoBrix Python function takes about 10 seconds on a SQL warehouse. A full run takes about 25 minutes.
+
+## Check the whole set from a terminal
+
+```bash
+bash scripts/commands/gbx-examples-uc-sql.sh --profile <profile> --upload
+```
+
+The command runs the files in order on the warehouse. It fails when a statement errors or a query returns no rows. With `--upload` it also imports the files into `/Workspace/Users/<you>/geobrix/uc-function-examples/`.
+
+## The files
+
+<Tabs>
+<TabItem value="00" label="00 Setup">
+
+Builds the sample tables. Run it first.
+
+<CodeBlock language="sql" title="00_setup.sql" showLineNumbers>{sql00}</CodeBlock>
+
+</TabItem>
+<TabItem value="01" label="01 BNG grid">
+
+British National Grid cells: points, rings, polyfill, tessellation, chips and table functions.
+
+<CodeBlock language="sql" title="01_grids_bng.sql" showLineNumbers>{sql01}</CodeBlock>
+
+</TabItem>
+<TabItem value="02" label="02 Quadbin and custom grids">
+
+Quadbin cells in longitude and latitude, and custom grids you define once.
+
+<CodeBlock language="sql" title="02_grids_quadbin_custom.sql" showLineNumbers>{sql02}</CodeBlock>
+
+</TabItem>
+<TabItem value="03" label="03 H3">
+
+H3 rings of a geometry, cell bounding boxes and cell fill.
+
+<CodeBlock language="sql" title="03_grids_h3.sql" showLineNumbers>{sql03}</CodeBlock>
+
+</TabItem>
+<TabItem value="04" label="04 Vector">
+
+Geometry cleaners, coverage checks, vector tiles and legacy geometry migration.
+
+<CodeBlock language="sql" title="04_vector.sql" showLineNumbers>{sql04}</CodeBlock>
+
+</TabItem>
+<TabItem value="05" label="05 Raster accessors">
+
+Size, CRS, geotransform, metadata, coordinates and band statistics.
+
+<CodeBlock language="sql" title="05_raster_accessors.sql" showLineNumbers>{sql05}</CodeBlock>
+
+</TabItem>
+<TabItem value="06" label="06 Raster operations">
+
+Warp, resample, clip, filters, combine, overviews, contours and web tiles.
+
+<CodeBlock language="sql" title="06_raster_operations.sql" showLineNumbers>{sql06}</CodeBlock>
+
+</TabItem>
+<TabItem value="07" label="07 Indices and terrain">
+
+Spectral indices, slope, aspect, hillshade, canopy height and land cover.
+
+<CodeBlock language="sql" title="07_raster_indices_and_terrain.sql" showLineNumbers>{sql07}</CodeBlock>
+
+</TabItem>
+<TabItem value="08" label="08 Raster generators">
+
+Cut a tile into tiles, and build tiles from points and polygons.
+
+<CodeBlock language="sql" title="08_raster_generators.sql" showLineNumbers>{sql08}</CodeBlock>
+
+</TabItem>
+<TabItem value="09" label="09 Raster to grid">
+
+Summarize pixels into H3, quadbin, BNG and custom cells.
+
+<CodeBlock language="sql" title="09_raster_to_grid.sql" showLineNumbers>{sql09}</CodeBlock>
+
+</TabItem>
+<TabItem value="10" label="10 Aggregation recipes">
+
+Array and partial forms that replace aggregates, with their native SQL twins.
+
+<CodeBlock language="sql" title="10_aggregation_recipes.sql" showLineNumbers>{sql10}</CodeBlock>
+
+</TabItem>
+<TabItem value="11" label="11 Procedures">
+
+Whole ETL steps that run inside Unity Catalog.
+
+<CodeBlock language="sql" title="11_procedures.sql" showLineNumbers>{sql11}</CodeBlock>
+
+</TabItem>
+</Tabs>
+
+## Next steps
+
+- [Unity Catalog functions](../api/uc-functions): the full list of functions, limits and recipes.
+- [Availability matrix](../api/availability): which surfaces carry each function.

@@ -251,6 +251,7 @@ These changes affect callers that pass keywords or named arguments.
 ### Unity Catalog functions (new) {#unity-catalog-functions}
 
 - **`gbx.uc.install(catalog, schema, volume_dir)` creates GeoBrix functions in Unity Catalog.** Run it from a Serverless environment 6 or DBR 19 notebook. SQL warehouses, dashboards and Genie then call `<catalog>.<schema>.gbx_*`.
+- **Twelve SQL files of [Unity Catalog SQL examples](./examples/uc-functions) let you try the functions.** Install them into a schema, then run the queries in the SQL editor. The files cover every function by category, and `gbx:examples:uc-sql` runs them and imports them into your workspace.
 - **The install covers these functions.**
   - BNG: `gbx_bng_pointascell`, `gbx_bng_eastnorthasbng`, `gbx_bng_polyfill`, `gbx_bng_tessellate`, `gbx_bng_kring`, `gbx_bng_geomkring`, `gbx_bng_cellarea`, `gbx_bng_aswkb` and `gbx_bng_centroid`.
   - Quadbin and H3: `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill` and `gbx_h3_geomkring`.

@@ -68,6 +68,7 @@ const sidebars = {
             'examples/genie-map',
           ],
         },
+        'examples/uc-functions',
       ],
     },
     {

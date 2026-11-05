@@ -122,6 +122,25 @@ def decoded_budget_bytes(strategy: str) -> int:
     return _BUDGETS[s]
 
 
+# A Zarr read cuts its work into units (one task each). The decoded budget above is the most a task may hold, not
+# the size to cut by: on a classic cluster (1536 MiB) it put a 1 GB read in one task and a 10 GB read in seven. A
+# unit is cut to this decoded size instead, and to no more than the budget. MEASURED locally on a 100 MB county
+# read: one task 0.81 s, 16 MiB tasks (7) 0.57 s, 4 MiB tasks (35) 1.21 s.
+ZARR_READ_UNIT_TARGET = 16 * _MIB
+# A read too small for every slot to get a 16 MiB unit is spread over the slots, but never into units below this:
+# under it a task costs more to start than to run.
+ZARR_READ_UNIT_FLOOR = 4 * _MIB
+
+
+def read_unit_bytes(budget: int, total: int, slots: int = 1) -> int:
+    """Decoded bytes a Zarr read unit may hold: the target, lowered towards ``total / slots`` (so each of ``slots``
+    task slots gets a unit) but not below the floor, and never above ``budget``, the memory cap of a task.
+    ``total`` is the decoded bytes of everything the read touches."""
+    even = -(-max(0, int(total)) // max(1, int(slots)))
+    want = min(ZARR_READ_UNIT_TARGET, max(ZARR_READ_UNIT_FLOOR, even))
+    return max(1, min(int(budget), want))
+
+
 # rasterio's names for GDAL's complex integer types, which numpy has no dtype of
 _COMPLEX_INT_SIZES = {"complex_int16": 4, "complex_int32": 8}
 

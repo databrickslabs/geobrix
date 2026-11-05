@@ -20,12 +20,14 @@ the other dimensions (time, level), carrying the point's own columns:
 
 The work runs where it is cheapest:
 
-- Up to ``_POINT_LIMIT`` points are collected to the driver, which maps them. When they lie
-  in at most ``_SMALL_UNITS`` chunks and the answer is small, the driver reads and returns
-  ``spark.createDataFrame(rows, schema)``: a Spark job has a fixed cost that dwarfs a few
-  chunk reads.
+- Up to ``_POINT_LIMIT`` points are collected to the driver, which maps them. When the chunks
+  they lie in decode to no more than ``_DRIVER_BYTES`` and the answer is small, the driver reads
+  and returns ``spark.createDataFrame(rows, schema)``: a Spark job has a fixed cost that dwarfs
+  a few chunk reads.
 - Otherwise the points go through Spark, partitioned and sorted by chunk so a chunk is read
-  once, in a ``mapInArrow`` whose closure carries the units. The driver's own mapping is
+  once, in a ``mapInArrow`` whose closure carries the units. A chunk with many steps is cut
+  along the first of the other dimensions (time) into slabs of whole chunks, each its own
+  unit, so a store with few spatial chunks still fills the task slots (``_split_steps``). The driver's own mapping is
   sent as columns; more than ``_POINT_LIMIT`` points are never collected: an executor
   ``mapInArrow`` maps them (the coordinate arrays travel in its closure) and a first pass
   over the geometry column alone tells the driver which chunks to plan.
@@ -43,6 +45,7 @@ from dataclasses import dataclass
 import numpy as np
 import pyarrow as pa
 
+from databricks.labs.gbx.pyrx.core.budget import ZARR_READ_UNIT_TARGET, read_unit_bytes
 from databricks.labs.gbx.zarr._access import bounded_closure
 from databricks.labs.gbx.zarr._meta import _check_mask_flag
 from databricks.labs.gbx.zarr._plan import Unit, boxes_of, keys_of_boxes, rows_for_boxes
@@ -63,6 +66,7 @@ from databricks.labs.gbx.zarr._read import (
     _spark_type,
     _table_columns,
     _table_values,
+    _task_slots,
     _TaskConfig,
     _UnitReader,
     check_access,
@@ -80,7 +84,8 @@ __all__ = ["gbx_zarr_sample"]
 _LOG = logging.getLogger(__name__)
 
 _POINT_LIMIT = 100_000  # points the driver collects and maps itself
-_SMALL_UNITS = 4  # chunks a driver-side job may read
+# decoded bytes of chunks a driver-side job may read: under one task's worth of work
+_DRIVER_BYTES = ZARR_READ_UNIT_TARGET
 _DRIVER_ROWS = (
     1_000_000  # rows the driver may build (a driver job is small in rows too)
 )
@@ -284,6 +289,20 @@ class _SampleConfig:
     box_bytes: int = (
         0  # decoded bytes a dense unit's boxes may hold (0: never read boxes)
     )
+    # (first, last + 1) columns of ``steps`` each time slab of a chunk reads; () is one slab, all
+    slabs: tuple[tuple[int, int], ...] = ()
+
+    @property
+    def n_slabs(self) -> int:
+        return max(1, len(self.slabs))
+
+    def slab(self, key: int) -> "_SampleConfig":
+        """The config of the unit numbered ``key`` (``chunk * n_slabs + slab``): ``steps`` cut to
+        its slab. A one-slab config is its own."""
+        if self.n_slabs == 1:
+            return self
+        a, b = self.slabs[int(key) % self.n_slabs]
+        return dataclasses.replace(self, steps=self.steps[:, a:b], slabs=())
 
     @property
     def n_steps(self) -> int:
@@ -403,10 +422,70 @@ def _plan_sample(src: _Source, names, sel, crs, flag) -> _SampleConfig:
     )
 
 
+def _split_steps(
+    cfg: _SampleConfig, n_chunks: int, slots: int, budget: int
+) -> tuple[int, tuple[tuple[int, int], ...]]:
+    """``(total, slabs)``: the decoded bytes of the ``n_chunks`` spatial chunks a sample reads
+    (every variable, every selected step), and how to cut the steps into slabs.
+
+    A unit was a spatial chunk with every step, so a store with few spatial chunks (a county in
+    one) was one task. The steps are cut along the first of the other dimensions at chunk
+    boundaries, into as many slabs as it takes for the units to reach ``read_unit_bytes`` (the
+    unit target, lowered to give each of ``slots`` a unit, under ``budget``). ``()`` is one slab.
+    """
+    arrays = cfg.read.arrays
+    if not cfg.other or not cfg.n_steps or not n_chunks:
+        return 0, ()
+    ref = arrays[cfg.variables[0]]
+    first = cfg.other[0]
+    group = cfg.steps[0] // max(1, ref.chunks[first])
+    starts = np.concatenate([[0], np.flatnonzero(np.diff(group)) + 1])
+    stops = np.concatenate([starts[1:], [cfg.n_steps]])
+    other_chunks = {
+        v: np.array([arrays[v].chunks[p] for p in cfg.other])[:, None]
+        for v in cfg.variables
+    }
+    held = []  # decoded bytes of one spatial chunk over each group of steps
+    for a, b in zip(starts, stops):
+        n = 0
+        for v in cfg.variables:
+            touched = np.unique(cfg.steps[:, a:b] // other_chunks[v], axis=1)
+            n += touched.shape[1] * math.prod(arrays[v].chunks) * arrays[v].itemsize
+        held.append(n)
+    total = int(sum(held)) * n_chunks
+    want = -(-total // read_unit_bytes(budget, total, slots))
+    count = min(len(held), max(1, -(-want // n_chunks)))
+    if count == 1:
+        return total, ()
+    cum = np.cumsum(held)
+    cuts = sorted(
+        {
+            min(len(held) - 1, int(np.searchsorted(cum, cum[-1] * k / count)) + 1)
+            for k in range(1, count)
+        }
+        - {0, len(held)}
+    )
+    edges = [0, *cuts, len(held)]
+    return total, tuple(
+        (int(starts[i]), int(stops[j - 1] if j - 1 < len(stops) else cfg.n_steps))
+        for i, j in zip(edges, edges[1:])
+    )
+
+
+def _ranges(positions: np.ndarray) -> tuple[tuple[int, int], ...]:
+    """Half-open index ranges that cover the distinct ``positions``."""
+    p = np.unique(positions)
+    breaks = np.flatnonzero(np.diff(p) != 1) + 1
+    return tuple(
+        (int(p[a]), int(p[b - 1]) + 1) for a, b in zip([0, *breaks], [*breaks, len(p)])
+    )
+
+
 def _units(src: _Source, cfg: _SampleConfig, uids) -> dict[int, str]:
     """The unit of each chunk number in ``uids``, as JSON: the manifest rows of the objects
     it reads (none for a plain store). A unit is one spatial chunk of the first variable
-    with every selected position of the other dimensions."""
+    with the selected positions of the other dimensions: all of them, or those of one time
+    slab (``cfg.slabs``); its key is ``chunk * cfg.n_slabs + slab``."""
     arrays = src.arrays
     ref = arrays[cfg.variables[0]]
     axes = list(cfg.read.axes[ref.name])
@@ -419,8 +498,21 @@ def _units(src: _Source, cfg: _SampleConfig, uids) -> dict[int, str]:
             here[pos] = AxisSel(
                 ref.dims[pos], ((lo, min(lo + ref.chunks[pos], ref.shape[pos])),), False
             )
-        chunks = touched_chunks(here, ref.chunks)
-        wanted[int(uid)] = (chunks, [b for c in chunks for b in boxes_of(ref, here, c)])
+        for s in range(cfg.n_slabs):
+            part = here
+            if cfg.slabs:
+                a, b = cfg.slabs[s]
+                part = list(here)
+                part[cfg.other[0]] = AxisSel(
+                    ref.dims[cfg.other[0]],
+                    _ranges(cfg.steps[0, a:b]),
+                    False,
+                )
+            chunks = touched_chunks(part, ref.chunks)
+            wanted[int(uid) * cfg.n_slabs + s] = (
+                chunks,
+                [b for c in chunks for b in boxes_of(ref, part, c)],
+            )
     rows_of: dict[str, dict] = {}
     if src.kind == "table":
         for v in cfg.variables:
@@ -566,10 +658,10 @@ def _sample_points(
     """
     uid = np.asarray(uid, dtype=np.int64)
     row, col = np.asarray(row, dtype=np.int64), np.asarray(col, dtype=np.int64)
-    per_batch = max(1, cfg.batch_cells // max(1, cfg.n_steps * len(cfg.variables)))
     lost = np.flatnonzero(uid < 0)
-    for lo in range(0, lost.size, per_batch):
-        part = lost[lo : lo + per_batch]
+    per_lost = max(1, cfg.batch_cells // max(1, cfg.n_steps * len(cfg.variables)))
+    for lo in range(0, lost.size, per_lost):
+        part = lost[lo : lo + per_lost]
         yield np.repeat(part, cfg.n_steps), _unsampled(cfg, part.size)
     have = np.flatnonzero(uid >= 0)
     if not have.size:
@@ -588,15 +680,19 @@ def _sample_points(
                     fix="make points_df deterministic (write it to a table first), "
                     "then sample that",
                 )
-            reader = _UnitReader(cfg.read, Unit.from_json(unit), engine)
+            here = cfg.slab(uid[group[0]])  # the steps of this unit's slab
+            per_batch = max(
+                1, here.batch_cells // max(1, here.n_steps * len(here.variables))
+            )
+            reader = _UnitReader(here.read, Unit.from_json(unit), engine)
             try:
-                for name in cfg.variables:
+                for name in here.variables:
                     reader.array(name)  # open before the threads start
-                dense = _unit_boxes(cfg, reader, pool, row[group], col[group])
+                dense = _unit_boxes(here, reader, pool, row[group], col[group])
                 for lo in range(0, group.size, per_batch):
                     part = group[lo : lo + per_batch]
-                    yield np.repeat(part, cfg.n_steps), _sampled(
-                        cfg, reader, pool, row[part], col[part], dense
+                    yield np.repeat(part, here.n_steps), _sampled(
+                        here, reader, pool, row[part], col[part], dense
                     )
                 del dense
             finally:
@@ -660,11 +756,40 @@ def _spark_schema(points_df, cfg: _SampleConfig):
     )
 
 
+def _fan_out(df, n_slabs: int):
+    """``df`` with each point that has a cell once per time slab, its ``_UID`` the unit's key
+    (``chunk * n_slabs + slab``). A point with no cell (a negative ``_UID``) stays one row.
+    """
+    if n_slabs == 1:
+        return df
+    from pyspark.sql import functions as F
+
+    slab = "__gbx_slab"
+    return (
+        df.withColumn(
+            slab,
+            F.explode(
+                F.when(
+                    F.col(_UID) >= 0, F.sequence(F.lit(0), F.lit(n_slabs - 1))
+                ).otherwise(F.array(F.lit(0)))
+            ),
+        )
+        .withColumn(
+            _UID,
+            F.when(
+                F.col(_UID) >= 0, F.col(_UID) * F.lit(n_slabs) + F.col(slab)
+            ).otherwise(F.col(_UID)),
+        )
+        .drop(slab)
+    )
+
+
 def _through_spark(df, cfg, units, schema):
     """``df`` (points with ``_UID``, ``_ROW``, ``_COL``) sampled in tasks, one chunk's points
     together: hashed over at most ``_MAX_PARTITIONS`` partitions and sorted within each.
     """
     parts = max(1, min(len(units), _MAX_PARTITIONS))
+    df = _fan_out(df, cfg.n_slabs)
     task, _ = bounded_closure(
         df.sparkSession,
         cfg.read.access,
@@ -726,9 +851,10 @@ def gbx_zarr_sample(
     compute, where Unity Catalog can issue the credentials, so this applies to the default
     too; ``access="fuse"`` sends no credentials.
 
-    Up to 100,000 points are collected to the driver; if they lie in at most four chunks of
-    the grid and the answer is small the driver reads them and returns the result, with no
-    Spark job. Otherwise Spark reads each chunk once for all its points. Row order is not
+    Up to 100,000 points are collected to the driver; if the chunks they lie in are small (a
+    few MiB decoded) and the answer is small the driver reads them and returns the result, with
+    no Spark job. Otherwise Spark reads each chunk once for all its points, and cuts a chunk
+    with many time steps into several tasks so the work fills the available slots. Row order is not
     defined. ``points_df`` is read more than once when it has more than 100,000 points, so
     it must be deterministic.
     """
@@ -782,9 +908,12 @@ def gbx_zarr_sample(
         return _sample_large(spark, points_df, geom_col, src, cfg, schema)
     uid, row, col = cfg.grid.map([r[geom_col] for r in rows], crs)
     chunks = np.unique(uid[uid >= 0])
-    units = _units(src, cfg, chunks)
-    if len(chunks) <= _SMALL_UNITS and len(rows) * cfg.n_steps <= _DRIVER_ROWS:
+    total, slabs = _split_steps(cfg, len(chunks), _task_slots(spark), _budget_bytes())
+    if total <= _DRIVER_BYTES and len(rows) * cfg.n_steps <= _DRIVER_ROWS:
+        units = _units(src, cfg, chunks)
         return _sample_on_driver(spark, rows, cfg, units, (uid, row, col), schema)
+    cfg = dataclasses.replace(cfg, slabs=slabs)
+    units = _units(src, cfg, chunks)
     fields = [(_UID, T.LongType()), (_ROW, T.IntegerType()), (_COL, T.IntegerType())]
     mapped = spark.createDataFrame(
         [(*r, int(u), int(a), int(b)) for r, u, a, b in zip(rows, uid, row, col)],
@@ -826,6 +955,11 @@ def _sample_large(spark, points_df, geom_col, src, cfg, schema):
         .distinct()
         .collect()
     )
-    units = _units(src, cfg, sorted(r[_UID] for r in found))
+    chunks = sorted(r[_UID] for r in found)
+    _, slabs = _split_steps(
+        cfg, len(chunks), _task_slots(points_df.sparkSession), _budget_bytes()
+    )
+    cfg = dataclasses.replace(cfg, slabs=slabs)
+    units = _units(src, cfg, chunks)
     mapped = points_df.mapInArrow(add_cells, mapped_schema(points_df))
     return _through_spark(mapped, cfg, units, schema)

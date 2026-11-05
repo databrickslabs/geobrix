@@ -451,7 +451,7 @@ def test_small_job_runs_on_driver(spark_delta, era5_v3_sharded, monkeypatch):
 @pytest.mark.parametrize(
     "limits, stages",
     [
-        ({"_SMALL_UNITS": 0}, 1),  # tasks, the driver mapped the points
+        ({"_DRIVER_BYTES": -1}, 1),  # tasks, the driver mapped the points
         (
             {"_POINT_LIMIT": 10},
             3,
@@ -476,6 +476,40 @@ def test_tasks_agree_with_the_driver(
     assert len(calls) == stages
 
 
+def test_few_spatial_chunks_are_split_along_time_into_tasks(
+    spark_delta, era5_v3_sharded, monkeypatch
+):
+    """A store whose points all lie in few chunks still fills the slots: each chunk's 48 steps
+    are cut into slabs of whole time chunks, one unit (task) each, and the rows agree.
+    """
+    from databricks.labs.gbx.pyrx.core import budget
+
+    per = 12 * 37 * 72 * 4  # one inner chunk, decoded
+    monkeypatch.setattr(budget, "ZARR_READ_UNIT_FLOOR", 1)
+    monkeypatch.setattr(
+        budget, "ZARR_READ_UNIT_TARGET", 2 * per
+    )  # 2 variables x 1 time chunk
+    monkeypatch.setattr(_sample, "_DRIVER_BYTES", -1)
+    monkeypatch.setattr(_sample, "_task_slots", lambda spark: 1)
+    seen = []
+    real = _sample._through_spark
+
+    def tapped(df, cfg, units, schema):
+        seen.append((cfg.n_slabs, len(units)))
+        return real(df, cfg, units, schema)
+
+    monkeypatch.setattr(_sample, "_through_spark", tapped)
+    xs, ys, _ = _era5_points()
+    df = gbx_zarr_sample(
+        spark_delta, _points_df(spark_delta, xs, ys), str(era5_v3_sharded)
+    )
+    _check_against_numpy(df, era5_v3_sharded, xs, ys)
+    ((slabs, units),) = seen
+    assert (
+        slabs == 4 and units == slabs * 4
+    )  # 4 spatial chunks, a unit per time chunk each
+
+
 def test_a_managed_table_is_sampled_with_its_rows(
     spark_delta, era5_v3_sharded, monkeypatch
 ):
@@ -485,7 +519,7 @@ def test_a_managed_table_is_sampled_with_its_rows(
 
     table = f"gbx_zarr_sample_{uuid.uuid4().hex[:8]}"
     _manage(spark_delta, era5_v3_sharded, table)
-    monkeypatch.setattr(_sample, "_SMALL_UNITS", 0)
+    monkeypatch.setattr(_sample, "_DRIVER_BYTES", -1)
     xs, ys, _ = _era5_points()
     try:
         df = gbx_zarr_sample(spark_delta, _points_df(spark_delta, xs, ys), table)
@@ -501,7 +535,7 @@ def test_sample_on_a_spark_connect_client(
     ``createDataFrame`` of the points, ``repartition`` and ``sortWithinPartitions`` by chunk,
     and ``mapInArrow`` with the points' own columns carried through. Run alone:
     ``-k connect`` (a classic session in the same process makes the fixture skip)."""
-    monkeypatch.setattr(_sample, "_SMALL_UNITS", 0)
+    monkeypatch.setattr(_sample, "_DRIVER_BYTES", -1)
     xs, ys, _ = _era5_points()
     df = gbx_zarr_sample(
         spark_connect_local,

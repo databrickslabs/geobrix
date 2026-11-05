@@ -79,10 +79,14 @@ class Unit:
         )
 
 
-def chunk_bytes(meta: ArrayMeta) -> int:
-    """Decoded bytes of one whole inner chunk."""
+def chunk_bytes(meta: ArrayMeta, chunk: tuple[int, ...] | None = None) -> int:
+    """Decoded bytes of one inner chunk: the cells of ``chunk`` inside the array's shape (an edge
+    chunk, or an inner chunk longer than its array, holds fewer than a whole one), or the whole
+    inner chunk when no ``chunk`` is named."""
     n = 1
-    for c in meta.chunks:
+    for i, c in enumerate(meta.chunks):
+        if chunk is not None:
+            c = max(0, min(c, meta.shape[i] - chunk[i] * c))
         n *= c
     return n * meta.itemsize
 
@@ -146,25 +150,44 @@ def plan_units(
     axes: list[AxisSel],
     rows_by_shard: dict[str, list[dict]],
     budget_bytes: int,
+    *,
+    slots: int = 1,
+    weight: int = 1,
 ) -> list[Unit]:
-    """Pack the chunks ``axes`` select into units of at most ``budget_bytes`` decoded.
+    """Pack the chunks ``axes`` select into units of decoded size ``read_unit_bytes``.
 
     A unit holds as many whole inner chunks as fit (at least one: a chunk bigger than the
-    budget is a unit of its own). Chunks are ordered by shard, then by position, so
-    neighbours share a unit. ``rows_by_shard`` maps the key a row is grouped under (a
-    shard's key for a sharded array, the chunk key otherwise; see ``unit_key``) to its
-    rows; a unit gets those of its chunks only. Nothing selected gives ``[]``.
+    unit size is a unit of its own). The unit size is the read target (``ZARR_READ_UNIT_TARGET``),
+    lowered so each of ``slots`` task slots gets a unit when the read is big enough for that, and
+    never above ``budget_bytes``, the most a task may decode. A chunk counts the cells it holds
+    inside the array. ``weight`` is how many arrays of this shape a unit decodes at once (a table
+    read of several variables). Chunks are ordered by shard, then by position, so neighbours
+    share a unit. ``rows_by_shard`` maps the key a row is grouped under (a shard's key for a
+    sharded array, the chunk key otherwise; see ``unit_key``) to its rows; a unit gets those of
+    its chunks only. Nothing selected gives ``[]``.
     """
+    from databricks.labs.gbx.pyrx.core.budget import read_unit_bytes
+
     chunks = touched_chunks(axes, meta.chunks)
     if not chunks:
         return []
-    per_unit = max(1, int(budget_bytes) // max(1, chunk_bytes(meta)))
     if meta.shard is not None:
         chunks.sort(key=lambda c: (shard_of(c, meta.shard.cps), c))
+    sizes = [max(1, chunk_bytes(meta, c)) * max(1, weight) for c in chunks]
+    cap = read_unit_bytes(budget_bytes, sum(sizes), slots)
     units = []
-    for i in range(0, len(chunks), per_unit):
-        group = tuple(chunks[i : i + per_unit])
-        keys = dict.fromkeys(unit_key(meta, c) for c in group)
-        rows = tuple(r for k in keys for r in rows_by_shard.get(k, ()))
-        units.append(Unit(meta.name, group, rows))
+    start = held = 0
+    for i, size in enumerate(sizes):
+        if i > start and held + size > cap:
+            units.append(_unit(meta, chunks[start:i], rows_by_shard))
+            start, held = i, 0
+        held += size
+    units.append(_unit(meta, chunks[start:], rows_by_shard))
     return units
+
+
+def _unit(meta: ArrayMeta, group, rows_by_shard) -> Unit:
+    group = tuple(group)
+    keys = dict.fromkeys(unit_key(meta, c) for c in group)
+    rows = tuple(r for k in keys for r in rows_by_shard.get(k, ()))
+    return Unit(meta.name, group, rows)

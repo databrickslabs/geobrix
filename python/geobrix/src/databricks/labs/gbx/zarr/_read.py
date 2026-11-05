@@ -34,6 +34,7 @@ import itertools
 import json
 import logging
 import math
+import os
 import re
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -204,6 +205,41 @@ def _budget_bytes() -> int:
     from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
 
     return decoded_budget_bytes("auto")
+
+
+def _task_slots(spark) -> int:
+    """Tasks the session can run at once, as far as a conf says so (``1`` when none does).
+
+    Reads session confs only, so it is safe on Spark Connect (Serverless), where there is no
+    ``sparkContext``: ``spark.default.parallelism`` (a classic cluster sets it to its cores),
+    else ``spark.executor.cores`` x ``spark.executor.instances``, else the ``N`` of a
+    ``local[N]`` master (``local[*]``: this machine's cores). A conf Spark Connect does not
+    expose, or one that is not a number, counts as absent; this never raises.
+    """
+
+    def conf(key: str):
+        try:
+            return spark.conf.get(key, None)
+        except Exception:  # noqa: BLE001 - a conf the session refuses is just not there
+            return None
+
+    def count(text) -> int:
+        try:
+            return max(0, int(str(text).strip()))
+        except (TypeError, ValueError):
+            return 0
+
+    if n := count(conf("spark.default.parallelism")):
+        return n
+    if cores := count(conf("spark.executor.cores")):
+        return cores * max(1, count(conf("spark.executor.instances")))
+    master = str(conf("spark.master") or "")
+    if master.startswith("local"):
+        inside = master.partition("[")[2].partition("]")[0].partition(",")[0].strip()
+        if inside == "*":
+            return os.cpu_count() or 1
+        return count(inside) or 1
+    return 1
 
 
 # --- documents -----------------------------------------------------------------------
@@ -852,15 +888,16 @@ def _plan(
         columns = _table_columns(variables, arrays, dim_coords, typed, decode, flag)
 
     budget = _budget_bytes()
+    slots = _task_slots(spark) if units else 1
     planned: list[Unit] = []
     if units and output == "blocks":
         for v in variables:
             meta = arrays[v]
             touched = touched_chunks(axes[v], meta.chunks)
             by_key = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
-            planned += plan_units(meta, axes[v], by_key, budget)
+            planned += plan_units(meta, axes[v], by_key, budget, slots=slots)
     elif units:
-        planned = _plan_table(src, variables, axes[variables[0]], budget)
+        planned = _plan_table(src, variables, axes[variables[0]], budget, slots)
 
     read = {v: arrays[v] for v in variables}
     cfg = _TaskConfig(
@@ -889,7 +926,7 @@ def _plan(
     return planned, cfg
 
 
-def _plan_table(src: _Source, variables, axes, budget) -> list[Unit]:
+def _plan_table(src: _Source, variables, axes, budget, slots=1) -> list[Unit]:
     """Units that cover the same cells of every variable.
 
     The first variable's chunks cut the grid. Each unit also carries the rows of the other
@@ -899,7 +936,7 @@ def _plan_table(src: _Source, variables, axes, budget) -> list[Unit]:
     ref = arrays[variables[0]]
     touched = touched_chunks(axes, ref.chunks)
     ref_rows = src.rows(ref, sorted({unit_key(ref, c) for c in touched}))
-    units = plan_units(ref, axes, ref_rows, max(1, budget // len(variables)))
+    units = plan_units(ref, axes, ref_rows, budget, slots=slots, weight=len(variables))
     if len(variables) == 1 or src.kind == "plain":
         return units
     boxes = [[b for c in u.chunks for b in boxes_of(ref, axes, c)] for u in units]

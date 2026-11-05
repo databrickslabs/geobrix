@@ -24,6 +24,7 @@ from typing import Callable, Dict, Optional
 
 from databricks.labs.gbx.pyrx.core.budget import (
     UC_DECODED_CAP,
+    UC_WINDOWED_DECODED_CAP,
     decoded_bytes,
     grid_bytes,
     size_text,
@@ -32,6 +33,8 @@ from databricks.labs.gbx.uc.handlers import _field, _geom_bytes, _Refusal, _refu
 
 # The decoded size above which a tile is refused: one value for every handler (see the module doc).
 DECODED_CAP = UC_DECODED_CAP
+# The larger cap of the functions that read a tile in windows only (see uc.forms); every other handler uses DECODED_CAP.
+WINDOWED_DECODED_CAP = UC_WINDOWED_DECODED_CAP
 ERROR_KEY = "last_error"
 _CORES = "databricks.labs.gbx.pyrx.core"
 

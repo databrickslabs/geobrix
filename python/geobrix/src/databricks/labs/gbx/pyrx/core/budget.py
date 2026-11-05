@@ -32,6 +32,11 @@ _BUDGETS = {"serverless": 64 * _MIB, "classic": 1536 * _MIB, "none": 0}
 # memory is not published, and 64 MiB is what a Serverless task has been measured to hold. One value for every UC tile
 # function (uc.tier_b); a tile decoded over it is refused with a Fix, never truncated.
 UC_DECODED_CAP = _BUDGETS["serverless"]
+# The Unity Catalog functions that read a tile in windows (gbx_rst_retile, gbx_rst_maketiles, gbx_rst_tooverlappingtiles)
+# decode it up to this size: they hold one window, never the whole raster. Measured on Serverless and a SQL warehouse: a
+# retile of 16, 64 and 256 MiB decoded passes. A function that decodes a whole tile or a whole band (avg, clip,
+# separatebands) keeps UC_DECODED_CAP; a window is held to UC_DECODED_CAP too (uc.forms).
+UC_WINDOWED_DECODED_CAP = 256 * _MIB
 _MAX_TILES = 512
 
 # cgroup memory-limit paths (worker-safe: readable from any Spark task on Linux)

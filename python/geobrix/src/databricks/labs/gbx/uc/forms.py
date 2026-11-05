@@ -34,6 +34,7 @@ from databricks.labs.gbx.uc.handlers import (
 from databricks.labs.gbx.uc.tier_b import (
     _CORES,
     DECODED_CAP,
+    WINDOWED_DECODED_CAP,
     _Parameter,
     _tile_dict,
     gate,
@@ -557,6 +558,9 @@ def st_asmvt_array(features, layer_name, extent=None):
 
 
 # --- the retile family: one tile cut into an array of tiles -------------------------------------------------------
+# The window readers (retile, maketiles, tooverlappingtiles) take a tile decoded up to WINDOWED_DECODED_CAP (256 MiB), the
+# separatebands routine keeps DECODED_CAP (64 MiB) because it decodes a whole band at once. A window the readers cut is
+# held to DECODED_CAP whatever the input, so no step reads more than a pixel function does.
 # The private routines behind gbx_rst_retile, gbx_rst_maketiles, gbx_rst_tooverlappingtiles and gbx_rst_separatebands:
 # each returns the sub-tiles of one tile as an array, and the table function turns the array into rows. Three bounds
 # keep the work and the array under the cap:
@@ -638,13 +642,23 @@ def _sub_tile(
     return row
 
 
-def _tile_array(fn: str, tile, cap: int, plan: Callable, lower: str):
+def _tile_array(
+    fn: str,
+    tile,
+    cap: int,
+    plan: Callable,
+    lower: str,
+    smaller: str = "pass a smaller tile size",
+    piece_cap: Optional[int] = None,
+):
     """The pieces of ``tile`` as an array of tile rows, under the three bounds above. NULL for a NULL tile and for data
     that cannot be read (UC has no error tile); an error tile goes out as itself; a virtual tile is refused.
 
-    ``plan(ds, raster)`` returns ``(tiles, pixel_bytes, bands, whole, pieces)``: the count of tiles, the decoded bytes
-    of all of them, the bands of each, whether the one tile is the whole input, and a function ``pieces(ds)`` that yields
-    ``(window, band, raster bytes)`` one piece at a time.
+    ``plan(ds, raster)`` returns ``(tiles, pixel_bytes, bands, whole, pieces, largest)``: the count of tiles, the decoded
+    bytes of all of them, the bands of each, whether the one tile is the whole input, a function ``pieces(ds)`` that yields
+    ``(window, band, raster bytes)`` one piece at a time, and the decoded bytes of the largest piece. The input and the
+    array are held to ``cap``; a piece, which is what is read at once, to ``piece_cap`` (``cap`` or the pixel cap
+    :data:`DECODED_CAP`, the lower), refused from the arithmetic before a window is cut.
     """
     from rasterio.io import MemoryFile
 
@@ -665,7 +679,13 @@ def _tile_array(fn: str, tile, cap: int, plan: Callable, lower: str):
                     f"{fn}: the tile is {size_text(decoded)} decoded, over the {size_text(cap)} a Unity Catalog "
                     f"function decodes. Fix: run {fn} in a notebook or job session, which reads the tile in windows"
                 )
-            tiles, pixel_bytes, bands, whole, pieces = plan(ds, raster)
+            tiles, pixel_bytes, bands, whole, pieces, largest = plan(ds, raster)
+            at_once = min(cap, DECODED_CAP) if piece_cap is None else piece_cap
+            if largest > at_once:
+                raise _Refusal(
+                    f"{fn}: a window of {size_text(largest)} decoded would be read at once, over the {size_text(at_once)} "
+                    f"a Unity Catalog function holds. Fix: {smaller}, or run {fn} in a notebook or job session"
+                )
             _check_bytes(
                 fn,
                 tiles_estimate(tiles, pixel_bytes, bands),
@@ -675,7 +695,7 @@ def _tile_array(fn: str, tile, cap: int, plan: Callable, lower: str):
             )
             out, total = [], 0
             for window, band, data in pieces(ds):
-                out.append(_sub_tile(fn, tile, data, cap, window, band, whole))
+                out.append(_sub_tile(fn, tile, data, at_once, window, band, whole))
                 total += len(data) + _TILE_ROW_BYTES
                 _check_bytes(fn, total, "the tiles it returns", lower=lower, cap=cap)
             return out
@@ -699,12 +719,13 @@ def _window_plan(windows: Callable, tile_size: Callable, overlap: int = 0) -> Ca
             ds.count,
             tiling.covers_whole_input(ds, tw, th, overlap),
             lambda d: ((win, None, b) for win, b in windows(d, tw, th)),
+            min(tw, ds.width) * min(th, ds.height) * grid_bytes(1, 1, ds.dtypes),
         )
 
     return plan
 
 
-def _retile_tiles(tile, tile_width, tile_height, cap):
+def _retile_tiles(tile, tile_width, tile_height, cap, piece_cap=None):
     fn = "gbx_rst_retile"
     tiling = importlib.import_module(f"{_CORES}.tiling")
     tiling.require_window(tile_width, tile_height, fn)
@@ -717,6 +738,8 @@ def _retile_tiles(tile, tile_width, tile_height, cap):
         cap,
         _window_plan(tiling.iter_retile_located, lambda ds, raster: (w, h)),
         "pass a larger tile_width and tile_height",
+        "pass a smaller tile_width and tile_height",
+        piece_cap,
     )
 
 
@@ -724,14 +747,16 @@ def rst_retile_tiles(tile, tile_width, tile_height):
     """gbx__rst_retile_tiles: the non-overlapping windows of a tile as an array of tiles, in the session's order (rows, then
     columns; the edge tiles are smaller). A window of under one pixel raises with a Fix, also for a tile with nothing to read.
     """
-    return _retile_tiles(tile, tile_width, tile_height, DECODED_CAP)
+    return _retile_tiles(tile, tile_width, tile_height, WINDOWED_DECODED_CAP)
 
 
 def rst_retile_tiles_probe(tile, tile_width, tile_height):
     """The bench probe copy of :func:`rst_retile_tiles`: the same function with the cap raised to :data:`PROBE_DECODED_CAP`
     for the input, each tile and the array, so a timing can measure what the product function refuses. Created only under
     a ``gbx_mvp_perf_`` name; never a product routine."""
-    return _retile_tiles(tile, tile_width, tile_height, PROBE_DECODED_CAP)
+    return _retile_tiles(
+        tile, tile_width, tile_height, PROBE_DECODED_CAP, PROBE_DECODED_CAP
+    )
 
 
 def rst_tooverlappingtiles_tiles(tile, tile_width, tile_height, overlap):
@@ -748,13 +773,14 @@ def rst_tooverlappingtiles_tiles(tile, tile_width, tile_height, overlap):
     return _tile_array(
         fn,
         tile,
-        DECODED_CAP,
+        WINDOWED_DECODED_CAP,
         _window_plan(
             lambda ds, tw, th: tiling.iter_to_overlapping_tiles_located(ds, tw, th, ov),
             lambda ds, raster: (w, h),
             ov,
         ),
         "pass a larger tile size or a smaller overlap",
+        "pass a smaller tile size",
     )
 
 
@@ -770,12 +796,13 @@ def rst_maketiles_tiles(tile, size_in_mb):
     return _tile_array(
         fn,
         tile,
-        DECODED_CAP,
+        WINDOWED_DECODED_CAP,
         _window_plan(
             tiling.iter_retile_located,
             lambda ds, raster: tiling.make_tiles_size(ds, mb, size_bytes=len(raster)),
         ),
         "pass a larger size_in_mb",
+        "pass a smaller size_in_mb",
     )
 
 
@@ -796,6 +823,7 @@ def rst_separatebands_tiles(tile):
             lambda d: (
                 (None, band, b) for band, b in tiling.iter_separate_bands_indexed(d)
             ),
+            decoded_bytes(ds) // max(1, ds.count),
         )
 
     return _tile_array(

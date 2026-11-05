@@ -149,7 +149,7 @@ def test_an_array_over_the_cap_is_refused_before_any_window_is_cut(monkeypatch):
         (forms.rst_tooverlappingtiles_tiles, (600, 600, 99)),
     ):
         with pytest.raises(
-            _Refusal, match=r"upper estimate.*over the 64 MiB.*Fix: pass a larger"
+            _Refusal, match=r"upper estimate.*over the 256 MiB.*Fix: pass a larger"
         ):
             call(big, *args)
 
@@ -176,6 +176,7 @@ def test_the_refusal_names_the_remedy_of_each_function(monkeypatch):
         forms.rst_separatebands_tiles(many)
     # 1.44 MB of pixels the codec cannot shrink: over 1 MiB, so one MB cuts it in four; the cap allows the pixels, not the headers
     monkeypatch.setattr(forms, "DECODED_CAP", 1_450_000)
+    monkeypatch.setattr(forms, "WINDOWED_DECODED_CAP", 1_450_000)
     with pytest.raises(
         _Refusal, match=r"gbx_rst_maketiles:.*Fix: pass a larger size_in_mb"
     ):
@@ -213,38 +214,114 @@ def over_cap():
     return oracles._build("rg_over_cap", "/tmp")
 
 
-def test_an_input_over_the_cap_is_refused_and_the_probe_copy_takes_it(over_cap):
-    """The product function refuses a tile decoded over 64 MiB before it opens a window; the probe copy, with the cap raised,
+@pytest.fixture(scope="module")
+def over_windowed_cap():
+    return oracles._build("rg_over_windowed_cap", "/tmp")
+
+
+def test_an_input_over_the_windowed_cap_is_refused_and_the_probe_copy_takes_it(
+    over_windowed_cap,
+):
+    """The product function refuses a tile decoded over 256 MiB before it opens a window; the probe copy, with the cap raised,
     cuts the same tile (this is how the cap is measured above its value, never through a product function).
     """
     with pytest.raises(
         _Refusal,
-        match=r"gbx_rst_retile: the tile is 64 MiB decoded, over the 64 MiB.*Fix: run gbx_rst_retile in a notebook or job session",
+        match=r"gbx_rst_retile: the tile is 259 MiB decoded, over the 256 MiB.*Fix: run gbx_rst_retile in a notebook or job session",
     ):
-        forms.rst_retile_tiles(over_cap, 4100, 4100)
-    out = forms.rst_retile_tiles_probe(over_cap, 4100, 4100)
-    assert [r["window"] for r in out] == [
-        {"col_off": c, "row_off": r, "width": w, "height": h}
-        for r, h in ((0, 4100), (4100, 4100))
-        for c, w in ((0, 4100), (4100, 4100))
-    ]
+        forms.rst_retile_tiles(over_windowed_cap, 4125, 4125)
+    out = forms.rst_retile_tiles_probe(over_windowed_cap, 4125, 4125)
+    assert len(out) == 16
+    assert out[0]["window"] == {
+        "col_off": 0,
+        "row_off": 0,
+        "width": 4125,
+        "height": 4125,
+    }
 
 
 def test_the_probe_copy_still_refuses_what_is_over_its_own_cap():
-    assert forms.PROBE_DECODED_CAP > forms.DECODED_CAP
+    assert forms.PROBE_DECODED_CAP > forms.WINDOWED_DECODED_CAP > forms.DECODED_CAP
     tile = _tile(_raster(64, 64, 1, "uint8"))
     with pytest.raises(_Refusal, match="upper estimate"):
         forms._retile_tiles(tile, 1, 1, 40_000)
 
 
-def test_every_function_of_the_family_refuses_the_over_cap_input(over_cap):
+def test_every_function_of_the_family_refuses_the_over_cap_input(
+    over_cap, over_windowed_cap
+):
+    """separatebands decodes a whole band at once, so it keeps the 64 MiB cap; the three window readers refuse at 256 MiB."""
+    with pytest.raises(_Refusal, match=r"decoded, over the 64 MiB.*Fix:"):
+        forms.rst_separatebands_tiles(over_cap)
     for call, args in (
+        (forms.rst_retile_tiles, (512, 512)),
         (forms.rst_maketiles_tiles, (1,)),
         (forms.rst_tooverlappingtiles_tiles, (512, 512, 0)),
-        (forms.rst_separatebands_tiles, ()),
     ):
-        with pytest.raises(_Refusal, match=r"decoded, over the 64 MiB.*Fix:"):
-            call(over_cap, *args)
+        with pytest.raises(_Refusal, match=r"decoded, over the 256 MiB.*Fix:"):
+            call(over_windowed_cap, *args)
+
+
+# --- the windowed cap: the window readers decode up to 256 MiB, because they read it a window at a time ---------------
+def test_the_windowed_cap_is_its_own_named_value_and_every_other_cap_stays():
+    from databricks.labs.gbx.pyrx.core import budget
+
+    assert budget.UC_WINDOWED_DECODED_CAP == 256 * 1024 * 1024
+    assert tier_b.WINDOWED_DECODED_CAP == budget.UC_WINDOWED_DECODED_CAP
+    assert tier_b.DECODED_CAP == budget.UC_DECODED_CAP == 64 * 1024 * 1024
+
+
+@pytest.fixture
+def between_caps(monkeypatch):
+    """Forced sizes, not real ones: a 1.44 MB tile (1200 x 1200 uint8, incompressible) sits between a pixel cap of 500,000
+    and a windowed cap of 4 MiB, as a 100 MiB tile sits between 64 and 256 MiB."""
+    monkeypatch.setattr(forms, "DECODED_CAP", 500_000)
+    monkeypatch.setattr(forms, "WINDOWED_DECODED_CAP", 4 * 1024 * 1024)
+    return _tile(_raster(1200, 1200, 1, "uint8"))
+
+
+def test_a_tile_between_the_two_caps_passes_for_the_window_readers(between_caps):
+    for call, args in (
+        (forms.rst_retile_tiles, (600, 600)),
+        (forms.rst_maketiles_tiles, (1,)),
+        (forms.rst_tooverlappingtiles_tiles, (600, 600, 0)),
+    ):
+        out = call(between_caps, *args)
+        assert len(out) == 4, call.__name__
+
+
+def test_a_tile_between_the_two_caps_is_still_refused_by_separatebands(between_caps):
+    with pytest.raises(_Refusal, match=r"decoded, over the 488 KiB.*Fix:"):
+        forms.rst_separatebands_tiles(between_caps)
+
+
+def test_a_tile_over_the_windowed_cap_is_refused_with_the_fix(
+    between_caps, monkeypatch
+):
+    monkeypatch.setattr(forms, "WINDOWED_DECODED_CAP", 1_000_000)
+    for call, args in (
+        (forms.rst_retile_tiles, (600, 600)),
+        (forms.rst_maketiles_tiles, (1,)),
+        (forms.rst_tooverlappingtiles_tiles, (600, 600, 0)),
+    ):
+        with pytest.raises(
+            _Refusal,
+            match=r"the tile is 1 MiB decoded, over the 976 KiB.*Fix: run gbx_rst_\w+ in a notebook or job session",
+        ):
+            call(between_caps, *args)
+
+
+def test_a_window_is_never_read_over_the_pixel_cap(between_caps):
+    """A window that would hold the whole 256 MiB tile is a whole-raster decode, so it is refused before it is cut: the
+    windowed cap is for tiles read in windows, and a window stays under the pixel cap.
+    """
+    for call, args in (
+        (forms.rst_retile_tiles, (1200, 1200)),
+        (forms.rst_maketiles_tiles, (0,)),
+        (forms.rst_tooverlappingtiles_tiles, (1200, 1200, 0)),
+    ):
+        with pytest.raises(_Refusal, match=r"a window of 1 MiB.*Fix: pass a smaller"):
+            call(between_caps, *args)
 
 
 # --- NULL, error tile, virtual tile, corrupt bytes, a bad argument --------------------------------------------------------

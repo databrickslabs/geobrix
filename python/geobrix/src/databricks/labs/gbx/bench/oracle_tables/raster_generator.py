@@ -29,6 +29,7 @@ H3T, QBT, BNGT, CGT = (
 )
 T4326, ERR, CORRUPT = Build("tile_4326"), Build("tile_error"), Build("tile_corrupt")
 VIRT, OVER = Build("tile_virtual"), Build("rg_over_cap")
+OVER_WIN = Build("rg_over_windowed_cap")
 BANDS3, BIG = Build("rto_bands3"), Build("rg_big")
 RAMP4326, RAMPBNG = Build("rg_ramp_4326"), Build("rg_bng")
 ONLY = ("session",)
@@ -92,6 +93,36 @@ def _rg_over_cap(tmpdir):
     with MemoryFile() as mf:
         with mf.open(**profile) as ds:
             ds.write(np.ones((1, side, side), dtype="uint8"))
+        return _tile(mf.read())
+
+
+@builder("rg_over_windowed_cap")
+def _rg_over_windowed_cap(tmpdir):
+    """A one-band uint8 raster of 16500 x 16500 pixels: 259 MiB decoded, over the 256 MiB the window readers decode. The file
+    is sparse (no block is written), so it is a few tens of KiB and is refused from its header, never read.
+    """
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    side = 16500
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=side,
+            height=side,
+            count=1,
+            dtype="uint8",
+            crs=resolve_crs("EPSG:3857"),
+            transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+            tiled=True,
+            blockxsize=256,
+            blockysize=256,
+            compress="zstd",
+            sparse_ok=True,
+        ):
+            pass
         return _tile(mf.read())
 
 
@@ -289,7 +320,9 @@ _SHARED = (
 UC = ("uc",)
 
 
-def _uc_edges(short, fn, args, null_arg=None, over_result=None):
+def _uc_edges(
+    short, fn, args, null_arg=None, over_result=None, over=OVER, cap="64 MiB"
+):
     """The rows of one function that only the UC surface has: the refusals and the NULLs. ``args`` are the arguments after
     the tile; ``null_arg`` is a full argument row with a NULL size; ``over_result`` is a full row that fits the input cap
     and whose result does not."""
@@ -299,9 +332,9 @@ def _uc_edges(short, fn, args, null_arg=None, over_result=None):
         Case(
             f"uc_{short}_input_over_cap_refused",
             fn,
-            (OVER, *args),
+            (over, *args),
             "raises",
-            "decoded, over the 64 MiB",
+            f"decoded, over the {cap}",
             UC,
         ),
     ]
@@ -323,7 +356,9 @@ def _uc_edges(short, fn, args, null_arg=None, over_result=None):
 
 RASTER_GENERATOR = (
     share(_SESSION_ROWS, *_SHARED)
-    + tuple(_uc_edges("maketiles", MK, (1,), (T4326, None)))
+    + tuple(
+        _uc_edges("maketiles", MK, (1,), (T4326, None), over=OVER_WIN, cap="256 MiB")
+    )
     + tuple(_uc_edges("separatebands", SB, ()))
     + tuple(
         _uc_edges(
@@ -333,6 +368,8 @@ RASTER_GENERATOR = (
             (T4326, None, 32, 50),
             # 1200 x 1200 in 6 x 6 pixel steps: 40,000 windows of 600 x 600 pixels, about 58 GB
             (BIG, 600, 600, 99),
+            over=OVER_WIN,
+            cap="256 MiB",
         )
     )
 )

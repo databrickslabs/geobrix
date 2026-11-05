@@ -237,10 +237,16 @@ def test_the_tile_splitting_examples_call_a_table_function_with_a_valid_argument
     assert "LATERAL" in sql
 
 
-def test_a_tile_over_64_mib_is_refused_by_retile_with_a_fix():
+def test_a_tile_over_256_mib_is_refused_by_retile_with_a_fix():
     message = ex.retile_over_the_limit()
-    assert "the tile is 67 MiB decoded, over the 64 MiB" in message
+    assert "the tile is 262 MiB decoded, over the 256 MiB" in message
     assert "Fix: run gbx_rst_retile in a notebook or job session" in message
+
+
+def test_retile_cuts_a_tile_over_64_mib_that_a_pixel_function_refuses():
+    count, message = ex.retile_a_tile_over_the_pixel_limit()
+    assert count == 9
+    assert "the tile is 67 MiB decoded, over the 64 MiB" in message
 
 
 def test_the_four_tile_splitting_functions_are_table_functions_over_array_routines():

@@ -219,8 +219,9 @@ def bad_parameter_is_refused():
         return str(err)
 
 
-def _float_tile(width, height):
-    """A tile that carries the pixels of a width by height float32 GeoTIFF, as a Unity Catalog function receives it."""
+def _float_tile(width, height, sparse=False):
+    """A tile that carries the pixels of a width by height float32 GeoTIFF, as a Unity Catalog function receives it.
+    A sparse tile writes no block, so a tile of hundreds of MiB decoded is a few KiB of file."""
     import numpy as np
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
@@ -236,8 +237,10 @@ def _float_tile(width, height):
             transform=from_origin(0.0, 1.0, 1.0 / width, 1.0 / height),
             compress="deflate",
             tiled=True,
+            sparse_ok=sparse,
         ) as dst:
-            dst.write(np.zeros((height, width), dtype="float32"), 1)
+            if not sparse:
+                dst.write(np.zeros((height, width), dtype="float32"), 1)
         return {"cellid": 0, "raster": mf.read(), "path": None, "metadata": {}}
 
 
@@ -265,14 +268,26 @@ def tile_over_the_limit():
 
 
 def retile_over_the_limit():
-    """A tile decoded over 64 MiB is refused by retile, with a Fix. The pieces are made in a session."""
+    """A tile decoded over 256 MiB is refused by retile, with a Fix. The pieces are made in a session."""
     from databricks.labs.gbx.uc import forms
 
-    tile = _float_tile(4200, 4200)  # 67 MiB decoded
+    tile = _float_tile(8300, 8300, sparse=True)  # 262 MiB decoded
     try:
         forms.rst_retile_tiles(tile, 512, 512)
     except ValueError as err:
         return str(err)
+
+
+def retile_a_tile_over_the_pixel_limit():
+    """Retile reads a tile in windows, so it cuts a tile of 67 MiB decoded that a pixel function such as gbx_rst_avg refuses."""
+    from databricks.labs.gbx.uc import forms, tier_b
+
+    tile = _float_tile(4200, 4200)  # 67 MiB decoded
+    pieces = forms.rst_retile_tiles(tile, 1400, 1400)
+    try:
+        tier_b.HANDLERS["gbx_rst_avg"](tile)
+    except ValueError as err:
+        return len(pieces), str(err)
 
 
 def snap_across_srids_is_refused():

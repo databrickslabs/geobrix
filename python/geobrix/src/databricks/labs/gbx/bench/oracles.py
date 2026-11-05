@@ -941,9 +941,24 @@ MVP_G: Tuple[Case, ...] = (
     Case(
         "uc_rt_input_over_cap_refused",
         RT,
-        (Build("rg_over_cap"), 512, 512),
+        (Build("rg_over_windowed_cap"), 512, 512),
         "raises",
-        "decoded, over the 64 MiB",
+        "decoded, over the 256 MiB",
+        ("uc",),
+    ),
+    # A tile decoded between 64 and 256 MiB is cut in windows by the window readers (retile, maketiles, tooverlappingtiles);
+    # the pixel functions still refuse it.
+    Case(
+        "uc_rt_between_caps_cut",
+        RT,
+        (Build("rg_over_cap"), 4100, 4100),
+        "windows",
+        [
+            (0, 0, 4100, 4100),
+            (4100, 0, 4100, 4100),
+            (0, 4100, 4100, 4100),
+            (4100, 4100, 4100, 4100),
+        ],
         ("uc",),
     ),
     Case(

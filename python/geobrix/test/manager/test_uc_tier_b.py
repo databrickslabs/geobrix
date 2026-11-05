@@ -1,6 +1,7 @@
 """The shape every UC raster tile handler (uc.tier_b) shares; each function's own rows are in its oracle table."""
 
 import pytest
+import shapely
 
 from databricks.labs.gbx import manifest
 from databricks.labs.gbx.bench import oracles
@@ -54,6 +55,24 @@ def test_a_header_function_answers_a_tile_over_the_cap_and_a_pixel_function_refu
         with pytest.raises(ValueError, match=r"the tile is 12 KiB decoded, over the"):
             tier_b.HANDLERS[name](tile)
     assert tier_b.HANDLERS["gbx_rst_tryopen"](_built("tile_corrupt", tmp_path)) is False
+
+
+def test_a_raised_windowed_cap_does_not_reach_the_pixel_functions(
+    tmp_path, monkeypatch
+):
+    """avg and clip decode the whole tile, so only the window readers (uc.forms) take the 256 MiB windowed cap."""
+    monkeypatch.setattr(tier_b, "WINDOWED_DECODED_CAP", 1 << 40)
+    monkeypatch.setattr(tier_b, "DECODED_CAP", 1024)
+    tile = _tile(tmp_path)
+
+    class Geometry:  # the value a UC function receives for a GEOMETRY
+        getBytes = lambda self: shapely.box(0, 0, 1, 1).wkb  # noqa: E731,N815
+        getSrid = lambda self: 4326  # noqa: E731,N815
+
+    with pytest.raises(ValueError, match=r"the tile is 12 KiB decoded, over the 1 KiB"):
+        tier_b.HANDLERS["gbx_rst_avg"](tile)
+    with pytest.raises(ValueError, match=r"over the 1 KiB"):
+        tier_b.HANDLERS["gbx_rst_clip"](tile, Geometry(), True, None)
 
 
 def test_the_cap_is_the_serverless_worker_cap():

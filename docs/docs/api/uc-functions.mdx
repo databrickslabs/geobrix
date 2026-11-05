@@ -285,11 +285,15 @@ Each sub-tile records the pixel window it was cut from in `window`. A band tile 
 
 Three limits keep the work inside the memory of a UC function:
 
-- **The input tile is refused over 64 MiB decoded.** A session reads a tile by window, so cut a tile that large there and store the pieces in a table.
+- **The input tile is refused over 256 MiB decoded.** `gbx_rst_retile`, `gbx_rst_maketiles` and `gbx_rst_tooverlappingtiles` read the tile one window at a time, so they take a tile four times the size a pixel function takes. `gbx_rst_separatebands` reads a whole band at once and keeps the 64 MiB limit. A window is never read over 64 MiB. A session has no such limit, so cut a larger tile there and store the pieces in a table.
 - **The result is sized before any window is cut.** The estimate is the decoded size of all the tiles, plus 1 percent for the codec and a header for each tile. It is never under the real size, so it can refuse a result that would have fitted.
-- **Each tile made, and the total so far, is checked again.** Nothing is truncated. Over 64 MiB, the `Fix:` says to use larger tiles, a smaller overlap, or the session function.
+- **Each tile made, and the total so far, is checked again.** Nothing is truncated. Over the limit, the `Fix:` says to use larger tiles, a smaller overlap, or the session function.
 
 <CodeFromTest code={ucExamples} language="python" functionName="retile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A tile between 64 and 256 MiB decoded is cut by these functions. A pixel function such as `gbx_rst_avg` refuses it, so retile it first.
+
+<CodeFromTest code={ucExamples} language="python" functionName="retile_a_tile_over_the_pixel_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 A tile that cannot be read gives no rows, and so does a NULL size. The session gives one error tile for each. An error tile goes out as itself. A virtual tile is refused.
 A window below one pixel, or an overlap outside 0 to below 100, raises with a `Fix:`, also for a tile with nothing to read.

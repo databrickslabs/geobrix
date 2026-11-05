@@ -316,9 +316,12 @@ OPEN_SITES = {
         1,
         "the data generator reads the tile bytes it synthesized a few lines above",
     ),
-    ("bench/oracles.py", 'rasterio.shutil.copy(src, nc, driver="netCDF")'): (
+    (
+        "bench/oracles.py",
+        'nc, lambda local: rasterio.shutil.copy(src, local, driver="netCDF")',
+    ): (
         1,
-        "the netCDF fixture is copied from the dataset open_data opened on the line above (GDAL writes netCDF by copy); no name is opened here",
+        "the netCDF fixture is copied from the dataset open_data opened above (GDAL writes netCDF by copy, built locally then moved to the target); no name is opened here",
     ),
     ("bench/oracles.py", "a.open() as got,"): (
         2,

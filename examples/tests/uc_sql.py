@@ -49,10 +49,12 @@ def run_once(
     catalog: Optional[str],
     schema: Optional[str],
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    info: Optional[dict] = None,
 ):
     """Run one statement to a terminal state; return (state, error message, first cell, its type).
 
     Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted.
+    When `info` is a dict, it gets `rows` (the number of rows the statement returned) and `first_row`.
     """
     from databricks.sdk.service.sql import StatementState
 
@@ -83,6 +85,10 @@ def run_once(
         return state, (err.message if err and err.message else f"statement {state.value}"), None, None
     rows = (resp.result.data_array if resp.result else None) or []
     cell = rows[0][0] if rows and rows[0] else None
+    if info is not None:
+        total = getattr(resp.manifest, "total_row_count", None) if resp.manifest else None
+        info["rows"] = total if total is not None else len(rows)
+        info["first_row"] = rows[0] if rows else None
     cols = (resp.manifest.schema.columns if resp.manifest and resp.manifest.schema else None) or []
     if not cols:  # a statement with no result set (CREATE FUNCTION, DROP ...): no value
         return state, None, None, None
@@ -94,11 +100,12 @@ def run_statements(w, pairs, args) -> dict:
     results = {}
     for cid, statement in pairs:
         walls, entry = [], None
+        info = {} if getattr(args, "record_rows", False) else None
         for _ in range(args.repeat):
             t0 = time.perf_counter()
             try:
                 state, error, cell, type_name = run_once(
-                    w, statement, args.warehouse_id, args.catalog, args.schema, args.timeout_s
+                    w, statement, args.warehouse_id, args.catalog, args.schema, args.timeout_s, info
                 )
             except StatementTimeout as exc:
                 state, error, cell, type_name = None, str(exc), None, None
@@ -111,6 +118,9 @@ def run_statements(w, pairs, args) -> dict:
                 entry = {"value": value}
         if "value" in entry:
             entry["wall_s"] = walls
+            if info is not None:
+                entry["rows"] = info.get("rows", 0)
+                entry["first_row"] = info.get("first_row")
         results[cid] = entry
         print(summary_line(cid, entry), flush=True)
         if args.out:  # after every statement: a failure later in the run keeps what is already known

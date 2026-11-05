@@ -1106,6 +1106,13 @@ def test_the_sdk_is_pinned_and_an_interpreter_older_than_3_11_is_passed_over(
             "uc_sql",
             [],
         ),
+        (
+            "gbx-examples-uc-sql.sh",
+            ["--profile", "p", "--warehouse-id", "w"],
+            {},
+            "uc_examples_sql",
+            [],
+        ),
     ],
 )
 def test_the_workspace_launchers_get_the_sdk_when_the_venv_has_none(
@@ -2498,6 +2505,28 @@ def test_the_warehouse_runner_records_a_statement_with_no_result_set(monkeypatch
     assert runner.run_once(w, "CREATE FUNCTION f() RETURNS INT RETURN 1", "wh", None, None, 5) == (
         sql.StatementState.SUCCEEDED, None, None, None,
     )  # fmt: skip
+
+
+def test_the_warehouse_runner_counts_the_rows_a_statement_returned(monkeypatch):
+    """`info` gets the row count (the examples command fails a query that returns none)."""
+    from types import SimpleNamespace as NS
+
+    sql = pytest.importorskip("databricks.sdk.service.sql")
+    runner = _launcher("uc_sql", monkeypatch)
+    col = NS(type_name=NS(value="INT"))
+
+    def reply(rows, total):
+        return NS(
+            status=NS(state=sql.StatementState.SUCCEEDED),
+            result=NS(data_array=rows),
+            manifest=NS(schema=NS(columns=[col]), total_row_count=total),
+        )
+
+    for rows, total, want in (([["1"], ["2"]], 2, 2), ([], 0, 0), ([["1"]], None, 1)):
+        w = NS(statement_execution=NS(execute_statement=lambda **kw: reply(rows, total)))
+        info = {}
+        runner.run_once(w, "SELECT 1", "wh", None, None, 5, info)
+        assert info["rows"] == want
 
 
 class _FakeFiles:

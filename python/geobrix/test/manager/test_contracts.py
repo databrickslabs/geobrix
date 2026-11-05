@@ -568,14 +568,18 @@ def test_detect_points_the_jvm_at_the_wheel_natives_before_probing_gdal(monkeypa
 
 
 @pytest.mark.parametrize(
-    "runtime,reason",
+    "runtime,reason,expected",
     [
-        ("client.6.0", "Spark Connect session (Serverless)"),
-        (None, "Spark Connect session (standard access mode)"),
+        # Serverless cannot create SQL functions (`Capabilities.sql_functions` is False): light Python serves everything
+        ("client.6.0", "Spark Connect session (Serverless)", {"L3"}),
+        # standard access mode probes it: a SQL kernel (L0) serves the rows that have one, light Python the rest
+        (None, "Spark Connect session (standard access mode)", {"L0", "L3"}),
     ],
     ids=["serverless", "standard"],
 )
-def test_connect_session_never_touches_the_jvm(monkeypatch, capsys, runtime, reason):
+def test_connect_session_never_touches_the_jvm(
+    monkeypatch, capsys, runtime, reason, expected
+):
     from databricks.labs.gbx import manager
 
     if (
@@ -586,7 +590,12 @@ def test_connect_session_never_touches_the_jvm(monkeypatch, capsys, runtime, rea
         monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", runtime)
     stub = ConnectStub()
     out = manager.register(stub)
-    assert {c.level for c in out.values()} == {"L3"}
+    # L0 is a SQL kernel (a `CREATE TEMPORARY FUNCTION` statement): it does not touch the JVM
+    assert {c.level for c in out.values()} == expected
+    l0 = {n for n, c in out.items() if c.level == "L0"}
+    assert all(
+        any(f"TEMPORARY FUNCTION {n}(" in t for t in stub.sql_text) for n in l0
+    ), "an L0 name was reported without its SQL statement"
     # every manifest name, and the light data sources
     assert set(out) == set(MAN.functions) - {
         f.sql_name for f in FNS if f.status == "mvp"
@@ -646,9 +655,10 @@ def test_bad_target():
 
 
 UC_FNS = [f for f in FNS if "L4" in f.levels]
-UC_SCALA_FNS = [f for f in UC_FNS if "scala" in f.levels["L4"]]
 # rows whose UC form is a SQL kernel (L4 sql): LANGUAGE SQL, no sandbox, no Python dependency
 UC_SQL_FNS = [f for f in UC_FNS if "sql" in f.levels["L4"]]
+# rows created as Scala: a Scala handler and no SQL kernel (which is chosen first: `ddl.chosen_form`)
+UC_SCALA_FNS = [f for f in UC_FNS if "scala" in f.levels["L4"] and f not in UC_SQL_FNS]
 
 
 def tvf_inner(fn):
@@ -1250,7 +1260,9 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
     only = uc.install(
         "cat", "sch", VOLUME_DIR, only=["gbx_bng_eastnorthasbng"], dry_run=True
     )
-    assert len(only) == 1 and "gbx_bng_eastnorthasbng(" in only[0]
+    # a SQL kernel brings its private helpers along, ahead of it: the named function is the last statement
+    assert "gbx_bng_eastnorthasbng(" in only[-1]
+    assert all("gbx__bng_" in s.split("(")[0] for s in only[:-1]) and len(only) > 1
     # a table function is created after the function it wraps, which `only` brings along
     tvf = uc.install(
         "cat", "sch", VOLUME_DIR, only=["gbx_bng_tessellateexplode"], dry_run=True
@@ -1260,8 +1272,8 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
     hyphen = uc.install(
         "my-cat", "sch", VOLUME_DIR, only=["bng_eastnorthasbng"], dry_run=True
     )
-    assert (
-        "`my-cat`.`sch`.gbx_bng_eastnorthasbng(" in hyphen[0]
+    assert "`my-cat`.`sch`.gbx_bng_eastnorthasbng(" in hyphen[-1] and all(
+        "`my-cat`.`sch`." in s for s in hyphen
     )  # a name is always quoted
 
 

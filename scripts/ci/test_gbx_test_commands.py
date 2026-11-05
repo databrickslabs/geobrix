@@ -3158,7 +3158,8 @@ def test_python_dbr_with_a_cluster_runs_the_tests_there_through_the_notebook_run
     nb = json.loads((sandbox.commands / "runner-notebook.ipynb").read_text())
     source = "".join(nb["cells"][0]["source"])
     assert (
-        "GBX_DBR_CLUSTER='1'" in source
+        "os.environ['GBX_DBR_CLUSTER'] = '1'" in source
+        and "pytest.main(" in source  # in this process: the spark fixture gets the notebook's own session
         and "'python/api/'" in source
         and "'databricks'" in source
     )

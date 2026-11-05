@@ -49,7 +49,7 @@ gbx:test:python-dbr --cluster-id <id> --profile oauth-fe --path readers/
 ## Running on a cluster
 
 - The command packs `docs/tests-dbr/python` into a generated notebook and runs it with `gbx:test:notebooks-serverless --existing-cluster-id`.
-- The notebook unpacks the tests on the driver and runs pytest there with `GBX_DBR_CLUSTER=1`.
+- The notebook unpacks the tests on the driver and runs pytest there, in the notebook process, with `GBX_DBR_CLUSTER=1`.
 - With that variable the `spark` fixture uses the cluster session. It does not build a local session or look for the JAR.
 - `--path` and `--markers` apply as in a local run. A failing test fails the run.
 - The command never starts a cluster and never logs in. Use a profile that is valid.

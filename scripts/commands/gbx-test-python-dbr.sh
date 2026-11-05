@@ -170,17 +170,20 @@ if verbose == "true":
     args.append("-vv")
 args.append("--tb=short")
 src = [
-    "import base64, io, os, subprocess, sys, zipfile\n",
+    "import base64, io, os, sys, zipfile\n",
     f"BLOB = {blob!r}\n",
     "ROOT = '/tmp/gbx_dbr_tests'\n",
     "zipfile.ZipFile(io.BytesIO(base64.b64decode(BLOB))).extractall(ROOT)\n",
+    "import subprocess\n",
     "subprocess.run([sys.executable, '-m', 'pip', 'install', '-q', 'pytest'], check=True)\n",
-    "env = dict(os.environ, GBX_DBR_CLUSTER='1')\n",
-    f"proc = subprocess.run([sys.executable, '-m', 'pytest', *{args!r}], cwd=ROOT + '/tests-dbr', env=env, "
-    "capture_output=True, text=True)\n",
-    "print(proc.stdout[-60000:])\n",
-    "print(proc.stderr[-5000:])\n",
-    "assert proc.returncode == 0, f'pytest exited {proc.returncode}'\n",
+    "import importlib\n",
+    "importlib.invalidate_caches()\n",
+    "import pytest\n",
+    "# pytest runs in this process: the spark fixture's getOrCreate then returns the notebook's own session\n",
+    "os.environ['GBX_DBR_CLUSTER'] = '1'\n",
+    "os.chdir(ROOT + '/tests-dbr')\n",
+    f"rc = pytest.main({args!r})\n",
+    "assert rc == 0, f'pytest exited {int(rc)}'\n",
 ]
 nb = {
     "cells": [{"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": src}],
@@ -195,8 +198,8 @@ PY
         RUN_ARGS+=(--log "$LOG_FILE")
     fi
     echo -e "${CYAN}☁️  Running the DBR tests on cluster ${CLUSTER_ID} (profile ${PROFILE})${NC}"
-    bash "$SCRIPT_DIR/gbx-test-notebooks-serverless.sh" "${RUN_ARGS[@]}"
-    EXIT_CODE=$?
+    EXIT_CODE=0
+    bash "$SCRIPT_DIR/gbx-test-notebooks-serverless.sh" "${RUN_ARGS[@]}" || EXIT_CODE=$?
     rm -rf "$GEN_DIR"
     exit $EXIT_CODE
 fi

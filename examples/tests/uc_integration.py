@@ -206,16 +206,15 @@ assert cnt > 0, "the install created no routine"
 
 
 def child_env(base: Optional[dict] = None) -> dict:
-    """The environment of a child command: this interpreter's venv is dropped from PATH and VIRTUAL_ENV.
+    """The environment of a child command: every virtualenv is dropped from PATH, and VIRTUAL_ENV is unset.
 
-    The launcher runs the driver under `uv run --with databricks-sdk`, whose throwaway venv has no pip and
-    sits first on PATH. A child such as gbx:build:wheel resolves `python3` from PATH and needs the host's.
+    The launcher runs the driver under `uv run --with databricks-sdk`, which puts its throwaway venvs (no pip)
+    and the repo's .venv-pyrx first on PATH. A child such as gbx:build:wheel resolves `python3` from PATH and
+    needs the host's. A directory is a venv's when the folder above it holds pyvenv.cfg.
     """
     env = dict(os.environ if base is None else base)
-    if sys.prefix == getattr(sys, "base_prefix", sys.prefix):
-        return env
-    venv_bin = os.path.realpath(os.path.join(sys.prefix, "bin"))
-    env["PATH"] = os.pathsep.join(p for p in env.get("PATH", "").split(os.pathsep) if os.path.realpath(p) != venv_bin)
+    keep = [p for p in env.get("PATH", "").split(os.pathsep) if p and not (Path(p).parent / "pyvenv.cfg").exists()]
+    env["PATH"] = os.pathsep.join(keep)
     env.pop("VIRTUAL_ENV", None)
     return env
 

@@ -33,7 +33,9 @@ def test_a_sql_array_form_is_one_body_for_the_session_and_uc_and_runs_no_python(
     stmts = _uc_ddl(name)
     assert stmts[-1].count("LANGUAGE SQL") == 1 and "PYTHON" not in "".join(stmts)
     # each helper is created before the function that calls it
-    helper_names = [h["name"] for h in fn.levels["L0"]["sql_helpers"]]
+    helper_names = [
+        h["name"] for h in sqlbody.in_dependency_order(fn.levels["L0"]["sql_helpers"])
+    ]
     created = [s.split("(")[0].split(".")[-1] for s in stmts[:-1]]
     assert created == helper_names
 

@@ -1960,8 +1960,8 @@ def test_first_python_call_carries_the_remote_read_switch(spark, monkeypatch):
     monkeypatch.setenv(_gdal_policy.REMOTE_ENV, "true")
     _api._done(spark).discard("gbx_rst_fromfile")
     _api.ensure(spark, "gbx_rst_fromfile")
-    # the row has an optional driver, so the UDF sits under its private name behind a wrapper
-    assert ("gbx__l3d_rst_fromfile", True) in seen, seen
+    # the kernel carries its own defaults, so the UDF registers under the SQL name with no wrapper
+    assert ("gbx_rst_fromfile", True) in seen, seen
 
 
 def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):

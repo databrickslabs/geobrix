@@ -89,6 +89,30 @@ UC_RASTER_BANDS_SQL = """SELECT r.scene, t.metadata['band'] AS band, t.raster
 FROM rasters AS r,
      LATERAL main.geobrix.gbx_rst_separatebands(r.tile) AS t"""
 
+# A geometry cleaner takes GEOMETRY(ANY) and returns a GEOMETRY in the SRID of the first argument.
+UC_VECTOR_SNAP_SQL = """SELECT id,
+       main.geobrix.gbx_st_snap(CAST(geom AS GEOMETRY(ANY)), CAST(ref AS GEOMETRY(ANY)), 0.5) AS snapped
+FROM parcels"""
+
+# A coverage check takes the polygons of one group as an array. EWKB keeps their SRID on the edges.
+UC_VECTOR_COVERAGE_SQL = """SELECT district,
+       main.geobrix.gbx_st_coverageisvalid_array(collect_list(st_asewkb(geom)), 0.0) AS is_valid
+FROM parcels
+GROUP BY district"""
+
+# A vector tile layer is made from the features of one tile; the attributes go in as JSON text.
+UC_VECTOR_MVT_SQL = """SELECT z, x, y,
+       main.geobrix.gbx_st_asmvt_array(
+         collect_list(struct(st_asbinary(geom) AS geom, to_json(attrs) AS attrs)), 'roads') AS mvt
+FROM features
+GROUP BY z, x, y"""
+
+# A tile is laid out as a Cloud Optimized GeoTIFF, and given overviews, by a scalar function.
+UC_RASTER_FILES_SQL = """SELECT scene,
+       main.geobrix.gbx_rst_buildoverviews(
+         main.geobrix.gbx_rst_cog_convert(tile, 'AUTO', 512, 'AVERAGE'), array(2, 4, 8)) AS tile
+FROM rasters"""
+
 # Install the functions and the procedures that call them.
 INSTALL_PROCEDURES_PYTHON = '''import databricks.labs.gbx as gbx
 
@@ -233,6 +257,50 @@ def retile_over_the_limit():
     tile = _float_tile(4200, 4200)  # 67 MiB decoded
     try:
         forms.rst_retile_tiles(tile, 512, 512)
+    except ValueError as err:
+        return str(err)
+
+
+def snap_across_srids_is_refused():
+    """Two geometries in different SRIDs are refused, with the Fix to transform one of them."""
+    import shapely
+
+    from databricks.labs.gbx.uc import handlers
+
+    class Geometry:
+        def __init__(self, wkt, srid):
+            self._wkb, self._srid = shapely.from_wkt(wkt).wkb, srid
+
+        def getBytes(self):  # noqa: N802 - the pyspark name
+            return self._wkb
+
+        def getSrid(self):  # noqa: N802
+            return self._srid
+
+    try:
+        handlers.st_snap(Geometry("POINT(1 1)", 4326), Geometry("POINT(1 1)", 3857), 0.5)
+    except ValueError as err:
+        return str(err)
+
+
+def feature_attributes_must_be_json():
+    """The attributes of a feature are a JSON object text; a struct cast to text is named as such."""
+    import shapely
+
+    from databricks.labs.gbx.uc import forms
+
+    try:
+        forms.st_asmvt_array([{"geom": shapely.Point(5, 7).wkb, "attrs": "{1, a}"}], "roads")
+    except ValueError as err:
+        return str(err)
+
+
+def overview_levels_must_be_2_or_more():
+    """A level below 2 raises with a Fix, whatever the tile holds."""
+    from databricks.labs.gbx.uc import tier_b
+
+    try:
+        tier_b.rst_buildoverviews(_float_tile(64, 48), [1])
     except ValueError as err:
         return str(err)
 

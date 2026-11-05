@@ -238,6 +238,39 @@ def test_the_four_tile_splitting_functions_are_table_functions_over_array_routin
         assert any(s.startswith(f"CREATE OR REPLACE FUNCTION `main`.`geobrix`.{private}(") for s in ex.preview_install())
 
 
+@pytest.mark.parametrize(
+    "sql",
+    [ex.UC_VECTOR_SNAP_SQL, ex.UC_VECTOR_COVERAGE_SQL, ex.UC_VECTOR_MVT_SQL, ex.UC_RASTER_FILES_SQL],
+)
+def test_the_vector_and_file_examples_call_uc_functions_with_a_valid_argument_count(sql):
+    man = manifest.load()
+    calls = re.findall(r"main\.geobrix\.(gbx_\w+)\(", sql)
+    assert calls and all(name in _uc_names() for name in calls)
+    for name in calls:
+        start = sql.index(f"main.geobrix.{name}(") + len(f"main.geobrix.{name}(")
+        depth, end = 1, start
+        while depth:
+            depth += {"(": 1, ")": -1}.get(sql[end], 0)
+            end += 1
+        count = len(_split_args(sql[start : end - 1]))
+        assert man.functions[name].min_args <= count <= len(man.functions[name].params), name
+
+
+def test_two_geometries_in_different_srids_are_refused_with_a_fix():
+    message = ex.snap_across_srids_is_refused()
+    assert "4326 and 3857" in message and "Fix: st_transform one of them" in message
+
+
+def test_feature_attributes_that_are_a_struct_cast_to_text_are_named_as_such():
+    message = ex.feature_attributes_must_be_json()
+    assert "STRUCT cast to text" in message and "Fix: pass to_json(struct(" in message
+
+
+def test_an_overview_level_below_2_raises_with_a_fix():
+    message = ex.overview_levels_must_be_2_or_more()
+    assert "each level must be >= 2" in message and "Fix: " in message
+
+
 def test_the_seven_h3_statistics_are_table_functions_over_the_one_partial():
     man = manifest.load()
     tvfs = [n for n in _uc_names() if n.startswith("gbx_rst_h3_rastertogrid") and n != "gbx_rst_h3_rastertogrid_partial"]

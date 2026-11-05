@@ -66,7 +66,7 @@ A warehouse reads rasters and vector files through the session readers. Ingest t
 | Quadbin cells | `gbx_quadbin_pointascell`, `gbx_quadbin_polyfill`, `gbx_quadbin_tessellate`, `gbx_quadbin_resolution`, `gbx_quadbin_kring`, `gbx_quadbin_kloop`, `gbx_quadbin_geomkring`, `gbx_quadbin_geomkloop`, `gbx_quadbin_aswkb`, `gbx_quadbin_centroid`, `gbx_quadbin_distance`, `gbx_quadbin_cellunion`, `gbx_quadbin_cellfill_array` |
 | H3 cells | `gbx_h3_geomkring`, `gbx_h3_geomkloop`, `gbx_h3_cell_bbox`, `gbx_h3_cellfill_array` |
 | Custom grid cells | `gbx_custom_grid`, `gbx_custom_pointascell`, `gbx_custom_polyfill`, `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_cellaswkb`, `gbx_custom_cellaswkt`, `gbx_custom_centroid`, `gbx_custom_distance`, `gbx_custom_cellfill_array` |
-| Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` |
+| Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb`, `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints`, `gbx_st_shiftlongitude`, `gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array`, `gbx_st_coverageinvalidedges_array` |
 | Raster | See [Raster functions](#raster-functions) |
 | Table functions | `gbx_bng_kringexplode`, `gbx_bng_kloopexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_geomkloopexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_h3_geomkloopexplode`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode`, `gbx_st_asmvt_pyramid` |
 
@@ -92,7 +92,7 @@ A WKB `BINARY` is not a `GEOMETRY`. Build the geometry first.
 
 <CodeFromTest code={ucExamples} language="sql" functionName="UC_WKB_TO_GEOMETRY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
-The geometry functions `gbx_st_makevalid`, `gbx_st_wrapx` and `gbx_st_legacyaswkb` return a `GEOMETRY` that keeps its SRID. `gbx_bng_aswkb` and `gbx_bng_centroid` return `BINARY`. On UC that value is little-endian EWKB with SRID 27700, and a BNG cell polygon starts at its south-west corner. The bytes are the same whether the install folder holds the JAR or not.
+The geometry functions `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb` and the seven cleaners below return a `GEOMETRY` that keeps its SRID. `gbx_bng_aswkb` and `gbx_bng_centroid` return `BINARY`. On UC that value is little-endian EWKB with SRID 27700, and a BNG cell polygon starts at its south-west corner. The bytes are the same whether the install folder holds the JAR or not.
 
 ### Grid functions
 
@@ -175,6 +175,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Tile operations: terrain | `gbx_rst_slope`, `gbx_rst_aspect`, `gbx_rst_hillshade`, `gbx_rst_tpi`, `gbx_rst_tri`, `gbx_rst_roughness` |
 | Tile operations: indices | `gbx_rst_ndvi`, `gbx_rst_ndwi`, `gbx_rst_nbr`, `gbx_rst_savi`, `gbx_rst_evi`, `gbx_rst_index` |
 | Tile operations: other | `gbx_rst_chm`, `gbx_rst_land_cover`, `gbx_rst_percentile_stretch`, `gbx_rst_proximity` |
+| Tile operations: files | `gbx_rst_buildoverviews`, `gbx_rst_cog_convert` |
 | Tile arrays: combiners | `gbx_rst_combineavg`, `gbx_rst_combinecount`, `gbx_rst_combinemax`, `gbx_rst_combinemedian`, `gbx_rst_combinemin`, `gbx_rst_combinestddev`, `gbx_rst_combinesum` |
 | Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
 | Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize`, `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` |
@@ -192,6 +193,8 @@ A SQL warehouse function cannot be an aggregate. These functions replace the ses
 |---|---|
 | `gbx_h3_cellfill_array`, `gbx_quadbin_cellfill_array`, `gbx_bng_cellfill_array`, `gbx_custom_cellfill_array` | `GROUP BY` the group key, and pass `collect_list(struct(cellid, value))`. |
 | `gbx_bng_cellunion_array`, `gbx_bng_cellintersection_array` | `GROUP BY` the cell, and pass `collect_list(struct(cellid, core, chip))`. |
+| `gbx_st_coverageisvalid_array`, `gbx_st_coverageinvalidedges_array` | `GROUP BY` the district, and pass `collect_list(st_asewkb(geom))`. |
+| `gbx_st_asmvt_array` | `GROUP BY` the tile key, and pass `collect_list(struct(st_asbinary(geom) AS geom, to_json(attrs) AS attrs))`. |
 | `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` | Call `gbx_rst_binpoints_partial(x, y, ...)` for each point, then `GROUP BY` the `(col, row)` key and reduce `z` with `max`, `min`, `avg`, `median` or `percentile`. Pass `collect_list(struct(col, row, value))` to `gbx_rst_binpoints_finalize`. |
 | `gbx_rst_h3_rastertogrid_partial` | Call it once for each tile, then `GROUP BY` the band and cell. See [Raster to grid](#raster-to-grid). |
 
@@ -213,6 +216,42 @@ Tiles must not overlap. A pixel in two tiles counts twice, as it does in the out
 
 The partial has default arguments, so its public name is a SQL function. UC refuses a SQL function inside a generator, so call the partial in a subquery and explode the column, as the statement does.
 A partial over 64 MiB is refused with a `Fix:` that says to use a coarser resolution or to retile first. A virtual tile is refused.
+
+### Cleaning geometries and building vector tiles
+
+Seven geometry cleaners take `GEOMETRY(ANY)` and return a `GEOMETRY` in the SRID of the first argument: `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints` and `gbx_st_shiftlongitude`. The product has no function for any of them.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_SNAP_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_st_snap` and `gbx_st_split` take two geometries. They must share an SRID, as the product's own functions require. Two SRIDs are refused with a `Fix:`.
+
+<CodeFromTest code={ucExamples} language="python" functionName="snap_across_srids_is_refused" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A distance or grid size that is negative or not finite raises with a `Fix:`. So does a form the operation cannot take, such as splitting a point. A geometry GEOS cannot process, such as an invalid polygon given to `gbx_st_reduceprecision`, gives `NULL`. A session raises for it.
+
+Three array forms replace the session aggregates for a query that groups first. The coverage forms take the polygons of one group as an array of WKB. Pass EWKB to keep the SRID on the edges. A member that is no geometry gives `NULL`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_COVERAGE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+`gbx_st_asmvt_array` makes one vector tile layer from the features of one tile. The geometry is WKB in tile coordinates. Use `gbx_st_asmvt_pyramid` first to cut a feature into the tiles it touches.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_MVT_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The attributes are a JSON object text, because UC has no struct of any fields. Any other text raises with a `Fix:`.
+
+<CodeFromTest code={ucExamples} language="python" functionName="feature_attributes_must_be_json" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+An array over 64 MiB, attributes included, is refused with a `Fix:` that names the session aggregate. The size is checked before any member is read.
+
+### Overviews and Cloud Optimized GeoTIFF
+
+`gbx_rst_buildoverviews` and `gbx_rst_cog_convert` write the tile to `/tmp` while GDAL builds the pyramid, then return the tile.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_FILES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Both refuse a tile over 64 MiB decoded before they read a pixel. They also refuse a result that is more than a third over 64 MiB, because a pyramid adds a third. The `Fix:` names the session function. A level below 2, an unknown resampling, a block size that is not a multiple of 16 and an unknown codec raise with a `Fix:`, also for a tile with nothing to read.
+
+<CodeFromTest code={ucExamples} language="python" functionName="overview_levels_must_be_2_or_more" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 ### Cutting a tile into tiles
 

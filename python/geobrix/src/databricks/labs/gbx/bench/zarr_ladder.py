@@ -42,6 +42,10 @@ __all__ = [
 
 RUNGS = ("10MB", "50MB", "100MB", "500MB", "1GB", "2GB", "5GB", "10GB")
 VARIABLES = ("t2m", "u10", "v10", "msl")
+# The ladder's values compress like real weather data (zstd 1.5 to 3 fold; the sample cube's 50 fold would make
+# every read look cheaper than it is): more noise, rounded 20 times finer than the sample cube.
+LADDER_NOISE = 1.0
+LADDER_PRECISION = 0.05
 _ITEM = 4  # float32
 _UNITS = {"MB": 1e6, "GB": 1e9}
 
@@ -113,6 +117,8 @@ class Geometry:
             chunks=self.fam.chunks,
             shards=self.fam.shards,
             variables=VARIABLES,
+            noise=LADDER_NOISE,
+            precision=LADDER_PRECISION,
         )
 
     def axes(self):
@@ -219,6 +225,8 @@ def generate(
             shards=g.fam.shards,
             v3_name=f"{rung}.zarr",
             workers=workers,
+            noise=LADDER_NOISE,
+            precision=LADDER_PRECISION,
         )
     return {
         "family": family,

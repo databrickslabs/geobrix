@@ -272,6 +272,8 @@ def _block(g: zl.Geometry, variables, t0: int, t1: int, rows=None, cols=None):
         t1,
         lat if rows is None else lat[rows],
         lon if cols is None else lon[cols],
+        noise=g.spec.noise,
+        precision=g.spec.precision,
     )
 
 

@@ -115,6 +115,8 @@ def write_era5_cube(
     v3_name: str = V3_NAME,
     v2: Optional[bool] = None,
     workers: Optional[int] = None,
+    noise: Optional[float] = None,
+    precision: Optional[float] = None,
 ) -> Dict[str, Path]:
     """Write the cube into ``out_dir`` and return ``{name: path}``.
 
@@ -133,12 +135,19 @@ def write_era5_cube(
       cells of that window (default: the globe);
     - ``chunks`` and ``shards`` (default ``CHUNKS``, ``SHARDS``): the layout, shards whole multiples of chunks;
     - ``variables`` (default all four);
-    - ``workers``: processes that write shards in parallel (default: up to 8).
+    - ``workers``: processes that write shards in parallel (default: up to 8);
+    - ``noise``: the scale of the seeded noise (default ``NOISE``, 0.02: the cube compresses about 50 fold);
+    - ``precision``: the rounding step of each variable, as a multiple of ``QUANTUM`` (default 1.0; 0.05 rounds
+      20 times finer). A larger ``noise`` and a smaller ``precision`` make a cube that compresses like real
+      weather data, 1.5 to 3 fold with zstd, which a benchmark of reads needs; the default keeps the sample cube.
 
     The cube is streamed one shard at a time (a shard of every variable per task), so its size is limited by the
     disk, not memory. Its values are those of ``era5_block``.
     """
-    custom = any(x is not None for x in (hours, step, box, chunks, shards, variables))
+    custom = any(
+        x is not None
+        for x in (hours, step, box, chunks, shards, variables, noise, precision)
+    )
     if custom or v3_name != V3_NAME:
         if v2:
             raise ValueError(
@@ -151,6 +160,8 @@ def write_era5_cube(
             chunks=CHUNKS if chunks is None else tuple(int(c) for c in chunks),
             shards=SHARDS if shards is None else tuple(int(c) for c in shards),
             variables=VARIABLES if variables is None else tuple(variables),
+            noise=NOISE if noise is None else float(noise),
+            precision=1.0 if precision is None else float(precision),
         )
         out = Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
@@ -209,6 +220,8 @@ class _Spec:
     chunks: Tuple[int, int, int]
     shards: Tuple[int, int, int]
     variables: Tuple[str, ...]
+    noise: float = NOISE
+    precision: float = 1.0
 
     def axes(self):
         """``(latitudes, longitudes)`` of the cube, the labels ``era5_like_dataset`` gives the full grid,
@@ -237,18 +250,27 @@ class _Spec:
 
 
 def era5_block(
-    variables, t0, t1, latitude, longitude
+    variables,
+    t0,
+    t1,
+    latitude,
+    longitude,
+    *,
+    noise: float = NOISE,
+    precision: float = 1.0,
 ) -> Dict[str, "np.ndarray"]:  # noqa: F821
     """Hours ``[t0, t1)`` of ``variables`` over the given latitudes and longitudes: float32, rounded to ``QUANTUM``
-    like the sample cube. ``{name: (t1 - t0, ny, nx)}``; the numbers of a block do not depend on its neighbours.
+    (times ``precision``) like the sample cube. ``{name: (t1 - t0, ny, nx)}``; the numbers of a block do not
+    depend on its neighbours. With the default ``noise`` and ``precision`` they are the sample cube's.
     """
     import numpy as np
 
     from databricks.labs.gbx.zarr._testing import era5_like_block
 
-    raw = era5_like_block(variables, t0, t1, latitude, longitude, noise=NOISE)
+    raw = era5_like_block(variables, t0, t1, latitude, longitude, noise=noise)
+    step = {name: QUANTUM[name] * precision for name in raw}
     return {
-        name: (np.round(a.astype("float64") / QUANTUM[name]) * QUANTUM[name]).astype(
+        name: (np.round(a.astype("float64") / step[name]) * step[name]).astype(
             "float32"
         )
         for name, a in raw.items()
@@ -320,7 +342,15 @@ def _write_shard(job) -> int:
         slice(i * c, min((i + 1) * c, n)) for i, c, n in zip(idx, spec.shards, shape)
     )
     lat, lon = spec.axes()
-    block = era5_block(spec.variables, sl[0].start, sl[0].stop, lat[sl[1]], lon[sl[2]])
+    block = era5_block(
+        spec.variables,
+        sl[0].start,
+        sl[0].stop,
+        lat[sl[1]],
+        lon[sl[2]],
+        noise=spec.noise,
+        precision=spec.precision,
+    )
     dims = ("time", "latitude", "longitude")
     xr.Dataset({name: (dims, a) for name, a in block.items()}).to_zarr(
         path,

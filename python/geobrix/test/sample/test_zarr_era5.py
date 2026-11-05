@@ -201,3 +201,43 @@ def test_a_block_holds_the_same_numbers_whatever_it_is_cut_from(tmp_path):
     assert np.array_equal(part, whole["u10"][5:9, 3:11, 7:30])
     # the noise is real (not rounded away) and the fields are bounded
     assert 200.0 < float(ds.t2m.min()) and float(ds.t2m.max()) < 330.0
+
+
+def test_noise_and_precision_make_a_cube_that_compresses_like_weather_data(tmp_path):
+    """The defaults are the sample cube's; a larger noise and a finer rounding keep it exact to read back
+    (``era5_block`` with the same arguments) but cost the zstd ratio."""
+    import numpy as np
+
+    from databricks.labs.gbx.sample.zarr_era5 import era5_block
+
+    kw = dict(
+        hours=24,
+        step=1.0,
+        box=(60.0, 30.0, 0.0, 40.0),
+        chunks=(12, 16, 21),
+        shards=(24, 32, 42),
+        workers=1,
+    )
+    plain = write_era5_cube(tmp_path / "plain", v3_name="p.zarr", **kw)["p.zarr"]
+    real = write_era5_cube(
+        tmp_path / "real", v3_name="r.zarr", noise=1.0, precision=0.05, **kw
+    )["r.zarr"]
+
+    def size(path):
+        return sum(f.stat().st_size for f in Path(path).rglob("*") if f.is_file())
+
+    assert size(real) > 3 * size(plain)
+    ds = xr.open_zarr(real, consolidated=False).load()
+    want = era5_block(
+        VARIABLES,
+        0,
+        24,
+        ds.latitude.values,
+        ds.longitude.values,
+        noise=1.0,
+        precision=0.05,
+    )
+    for name in VARIABLES:
+        assert np.array_equal(ds[name].values, want[name]), name
+    default = era5_block(VARIABLES, 0, 24, ds.latitude.values, ds.longitude.values)
+    assert not np.array_equal(default["t2m"], want["t2m"])

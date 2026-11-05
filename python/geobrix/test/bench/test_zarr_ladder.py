@@ -61,6 +61,8 @@ def test_a_rung_is_a_v3_sharded_zstd_store_with_the_notebooks_variables(
     path = rec["path"]
     assert rec["shape"] == list(g.shape) and rec["n_chunks"] == g.n_chunks()
     assert abs(rec["logical_bytes"] - 1e7) < 0.01 * 1e7 and rec["disk_bytes"] > 0
+    # compresses like weather data (real ERA5: about 1.5 fold), not like the sample cube (about 50)
+    assert 1.4 < rec["logical_bytes"] / rec["disk_bytes"] < 3.2
     assert set(zl.VARIABLES) == {"t2m", "u10", "v10", "msl"}
     for v in zl.VARIABLES:
         doc = json.load(open(f"{path}/{v}/zarr.json"))
@@ -94,7 +96,13 @@ def test_stored_values_are_the_generators_and_a_rerun_is_identical(tmp_path):
     )  # processes do not change a byte
     ds = xr.open_zarr(a["path"], consolidated=False).load()
     want = era5_block(
-        zl.VARIABLES, 0, ds.time.size, ds.latitude.values, ds.longitude.values
+        zl.VARIABLES,
+        0,
+        ds.time.size,
+        ds.latitude.values,
+        ds.longitude.values,
+        noise=zl.LADDER_NOISE,
+        precision=zl.LADDER_PRECISION,
     )
     for v in zl.VARIABLES:
         assert np.array_equal(ds[v].values, want[v]), v

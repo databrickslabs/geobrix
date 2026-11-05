@@ -67,18 +67,24 @@ runs:
       id: site
       shell: bash
       run: echo "purelib=$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" >> "$GITHUB_OUTPUT"
+    # pip is not in the cache: a restore over setup-python's pip mixed two versions' files (ImportError in
+    # pip._internal.cli.spinners). Every shard bootstraps the pinned pip here, hit or miss, before the restore.
+    - name: Bootstrap the pinned pip
+      shell: bash
+      run: pip install --upgrade pip==25.0.1
     - name: Restore the installed light environment
       id: env_cache
       uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
       with:
-        path: ${{ steps.site.outputs.purelib }}
-        key: light-env-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python_version }}-${{ hashFiles('python/geobrix/requirements-light-env6-ci.txt') }}
+        path: |
+          ${{ steps.site.outputs.purelib }}
+          !${{ steps.site.outputs.purelib }}/pip
+          !${{ steps.site.outputs.purelib }}/pip-*.dist-info
+        key: light-env-v2-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python_version }}-${{ hashFiles('python/geobrix/requirements-light-env6-ci.txt') }}
     - name: Install pyrx deps (hash-pinned)
       if: steps.env_cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
-        # Bootstrap pip itself to a known version before --require-hashes.
-        pip install --upgrade pip==25.0.1
         # Hash-pinned supply chain (matches requirements-ci.txt / dev-container
         # discipline; see docs/docs/security.mdx): every wheel is sha256-verified,
         # so a compromised mirror serving same-version-different-bytes fails closed.
@@ -92,8 +98,11 @@ runs:
       if: steps.env_cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
       with:
-        path: ${{ steps.site.outputs.purelib }}
-        key: light-env-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python_version }}-${{ hashFiles('python/geobrix/requirements-light-env6-ci.txt') }}
+        path: |
+          ${{ steps.site.outputs.purelib }}
+          !${{ steps.site.outputs.purelib }}/pip
+          !${{ steps.site.outputs.purelib }}/pip-*.dist-info
+        key: light-env-v2-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python_version }}-${{ hashFiles('python/geobrix/requirements-light-env6-ci.txt') }}
     - name: Install the package
       shell: bash
       run: |

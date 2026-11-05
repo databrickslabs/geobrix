@@ -254,7 +254,7 @@ def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) ->
 
 
 # The grid and vector tables of the first slice, and the tables of the raster, cell, aggregate and vector forms that
-# came after it. Each table here has UC rows; the MVP tables and SPEC_SE run from their own files.
+# came after it. Each table here has UC rows; the MVP tables run from their own files (``run_uc_s6``).
 UC_CORE_TABLES = ("GRID_SCALAR", "GRID_ARRAY", "GRID_GENERATOR", "VECTOR_SCALAR")
 UC_TIER_B_TABLES = (
     "RASTER_ACCESSOR",
@@ -264,6 +264,7 @@ UC_TIER_B_TABLES = (
     "SPEC_WARP",
     "SPEC_CALC",
     "SPEC_DEM",
+    "SPEC_SE",
     "RASTER_ARRAY_OP",
     "RASTER_RASTERIZE",
     "RASTER_VECTORIZE",

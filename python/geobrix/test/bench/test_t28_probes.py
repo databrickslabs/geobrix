@@ -6,8 +6,8 @@ Nothing here touches Databricks.
 from databricks.labs.gbx import manifest
 from databricks.labs.gbx.bench import oracles, probes
 
-# The oracle tables that run from their own files, not from the UC slice.
-OWN_FILES = {"MVP_S", "MVP_H", "MVP_G", "MVP_A", "MVP_IO", "SPEC_SE"}
+# The MVP oracle tables run from their own probe (run_uc_s6), not from the UC slice.
+OWN_FILES = {"MVP_S", "MVP_H", "MVP_G", "MVP_A", "MVP_IO"}
 
 
 def _uc_tables():
@@ -32,6 +32,18 @@ def test_the_slice_holds_every_oracle_table_with_uc_rows():
     assert set(probes.UC_CORE_TABLES) | set(probes.UC_TIER_B_TABLES) == set(
         probes.UC_SLICE_TABLES
     )
+
+
+def test_the_slice_tables_are_the_tables_the_handler_cross_tier_test_runs():
+    """Both name the tables whose UC rows run: a table added to one and not the other is a gap the pass would carry."""
+    import re
+    from pathlib import Path
+
+    src = (
+        Path(__file__).resolve().parents[1] / "manager" / "test_family_cross_tier.py"
+    ).read_text()
+    block = re.search(r"_UC_TABLES = \((.*?)\)\n", src, re.S).group(1)
+    assert set(re.findall(r'"(\w+)"', block)) == set(probes.UC_SLICE_TABLES)
 
 
 def test_the_slice_cases_include_the_recipe_rows_of_functions_with_no_uc_form_of_their_own():

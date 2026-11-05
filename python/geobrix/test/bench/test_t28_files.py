@@ -353,20 +353,31 @@ def test_spark_view_rewrites_only_the_two_databricks_forms():
     assert t28.spark_view(scalar) == scalar  # a scalar call keeps its qualifier
 
 
-def test_the_ddl_spark_cannot_parse_is_only_the_databricks_only_forms(spark, plan):
-    p, files, _runs = plan
-    rejected = t28.parse_locally(
-        [f for f in files if f.name in ("w_install.sql", "w_mech.sql")]
-    )
-    ok_prefix = re.compile(r"^w_(install|mech)\.sql:(install:\d+:\S+|f\d+:\S+)$")
-    assert all(ok_prefix.match(k) for k in rejected)
-    parsed_in_install = len(
-        oracles.parse_uc_sql({f.name: f for f in files}["w_install.sql"].content)
-    ) - len([k for k in rejected if k.startswith("w_install.sql")])
-    assert parsed_in_install >= 2  # at least the schema and the floor parse
-    assert p.catalog in " ".join(
-        f.content[:400] for f in files if f.name == "w_install.sql"
-    )
+def test_what_sparks_parser_rejects_is_only_databricks_only_create_statements(
+    spark, plan
+):
+    """Every SELECT, DROP FUNCTION, CALL and USE of every file parses locally. What does not is CREATE FUNCTION / PROCEDURE with
+    ENVIRONMENT, PARAMETER STYLE or LANGUAGE PYTHON, and DROP PROCEDURE: the workspace is the parser for those.
+    """
+    _p, files, _runs = plan
+    rejected = t28.parse_locally(files)
+    by_cid = {
+        (f.name, c): s
+        for f in files
+        if f.kind == "sql"
+        for c, s in oracles.parse_uc_sql(f.content)
+    }
+    assert rejected
+    for key in rejected:
+        name, cid = key.split(":", 1)
+        sql = by_cid[(name, cid)]
+        assert re.match(
+            r"CREATE OR REPLACE (?:TEMPORARY )?(?:FUNCTION|PROCEDURE) |DROP PROCEDURE ",
+            sql,
+        ), key
+        assert re.search(
+            r"ENVIRONMENT|PARAMETER STYLE|LANGUAGE (?:PYTHON|SCALA)|PROCEDURE", sql
+        ), key
 
 
 # ---- judging a results file ----------------------------------------------------------------------------------------

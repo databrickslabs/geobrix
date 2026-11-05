@@ -78,7 +78,12 @@ def test_the_statistics_read_from_the_partial_are_the_values_of_the_pass_of_thei
     assert now == before
 
 
-GRIDS = ("h3",)  # the grids whose table functions have a kernel of their own
+GRIDS = (
+    "h3",
+    "quadbin",
+    "bng",
+    "custom",
+)  # every grid has a kernel of its own for each statistic
 ALL_STATS = rtg.STATS
 
 
@@ -108,7 +113,9 @@ def test_a_table_function_makes_only_its_own_statistic(ll, monkeypatch, grid, st
     """The pass of a table function is asked for `stat` and for nothing else: not for the partial state (count, sum, M2, min
     and max), which costs about twice a sum or a count. Reverting the routine to read the partial makes this fail.
     """
-    _, tile = ll if grid != "bng" else (None, oracles._build("rtg_bng", "/tmp"))
+    _, tile = (
+        ll if grid in ("h3", "quadbin") else (None, oracles._build("rtg_bng", "/tmp"))
+    )
     passes = []
     real = gridagg._raster_to_grid
 
@@ -125,7 +132,7 @@ def test_a_table_function_makes_only_its_own_statistic(ll, monkeypatch, grid, st
 
 
 def _args(grid, tile):
-    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import G
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import CUSTOM_GRID as G
 
     return {
         "h3": (tile, 5, "complete", "centroid"),
@@ -135,20 +142,67 @@ def _args(grid, tile):
     }[grid]
 
 
+# (the tile, the resolution, the grid argument) of a coarse call per grid: the covering pass is per pixel
+_COARSE = {
+    "h3": ("rtg_ll", 3, None),
+    "quadbin": ("rtg_ll", 8, None),
+    "bng": ("rtg_bng", 2, None),
+    "custom": ("rtg_bng", 0, "G"),
+}
+
+
+@pytest.mark.parametrize("grid", GRIDS)
 @pytest.mark.parametrize("stat", ALL_STATS)
 @pytest.mark.parametrize(
     "coverage,assignment",
     list(itertools.product(("complete", "sparse"), ("centroid", "covering"))),
 )
 def test_the_single_statistic_pass_is_the_session_value_bit_for_bit(
-    ll, stat, coverage, assignment
+    tmp_path, grid, stat, coverage, assignment
 ):
     """`raster_to_grid_single` (a pass of the statistic alone) and `raster_to_grid` (the partial state, or the median's own
-    pass) give the same cells and the same doubles."""
-    ds, _ = ll
-    assert gridagg.raster_to_grid_single(
-        ds, 3, "h3", stat, coverage, assignment
-    ) == gridagg.raster_to_grid(ds, 3, "h3", stat, coverage, assignment)
+    pass) give the same cells and the same doubles, for every grid."""
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import CUSTOM_GRID
+
+    build, res, with_grid = _COARSE[grid]
+    mf, _ = _open(build, tmp_path)
+    kw = {"grid_conf": CUSTOM_GRID} if with_grid else {}
+    with mf, mf.open() as ds:
+        assert gridagg.raster_to_grid_single(
+            ds, res, grid, stat, coverage, assignment, **kw
+        ) == gridagg.raster_to_grid(ds, res, grid, stat, coverage, assignment, **kw)
+
+
+@pytest.mark.parametrize("grid", ("quadbin", "bng", "custom"))
+def test_a_partial_is_public_for_each_other_grid_with_the_h3_shape(grid):
+    fn = MAN.functions[f"gbx_rst_{grid}_rastertogrid_partial"]
+    names = [p.name for p in fn.params]
+    assert names == (
+        ["tile", "grid", "resolution", "coverage", "assignment"]
+        if grid == "custom"
+        else ["tile", "resolution", "coverage", "assignment"]
+    )
+    cell = "string" if grid == "bng" else "bigint"
+    assert fn.returns_uc == (
+        f"array<struct<band:int,cellid:{cell},count:double,sum:double,m2:double,min:double,max:double>>"
+    )
+    assert fn.levels["L4"]["handler"].endswith(f":rst_{grid}_rastertogrid_partial")
+
+
+@pytest.mark.parametrize("grid", ("quadbin", "bng", "custom"))
+def test_the_count_and_average_of_two_tiles_merge_to_the_session_statistic(
+    spark, tmp_path, grid
+):
+    """The count and the average across two halves of a tile, merged by a native GROUP BY, equal the statistic of the whole
+    (the recipe rows hold the same claim on the warehouse)."""
+    p = f"gbx_rst_{grid}_rastertogrid_partial"
+    register(spark, only=[p], _levels={p: ("L3", "c0")})
+    short = rtg._SHORT[grid]
+    for stat in ("count", "avg"):
+        case = next(
+            c for c in rtg.RASTER_TO_GRID if c.cid == f"recipe_{short}_merge_{stat}"
+        )
+        assert oracles.run_recipe(spark, case, "", str(tmp_path)) is None, case.cid
 
 
 def test_the_partial_stays_public_and_unchanged_for_the_several_statistic_route():

@@ -71,6 +71,31 @@ def _rtg_ll_east(tmpdir):
     )
 
 
+@builder("rtg_bng_west")
+def _rtg_bng_west(tmpdir):
+    """The west 20 columns of `rtg_bng`: the same pixel grid, cut in two, so the cells on the seam hold pixels of both."""
+    return _tile(
+        _gtiff(
+            _bands(30, 40)[:, :, :20],
+            "EPSG:27700",
+            origin=(530000.0, 183000.0),
+            px=100.0,
+        )
+    )
+
+
+@builder("rtg_bng_east")
+def _rtg_bng_east(tmpdir):
+    return _tile(
+        _gtiff(
+            _bands(30, 40)[:, :, 20:],
+            "EPSG:27700",
+            origin=(532000.0, 183000.0),
+            px=100.0,
+        )
+    )
+
+
 @builder("rtg_ll_nodata_band")
 def _rtg_ll_nodata_band(tmpdir):
     """`rtg_ll` with the second band all NoData: that band has no valid pixel, so only empty cells."""
@@ -370,6 +395,113 @@ _MERGE_ROWS = tuple(
     for stat in H3_SPLIT
 )
 
+# The grids other than H3 have the same forms: a partial and eight table functions, each over a routine that makes only its
+# own statistic. Their rows are the session's, and the per-tile rows of the partial are one template for the three grids.
+OTHER = ("quadbin", "bng", "custom")
+_GRID_SQL = (
+    "named_struct('bound_x_min', 0L, 'bound_x_max', 1000000L, 'bound_y_min', 0L, 'bound_y_max', 1000000L, "
+    "'cell_splits', 2, 'root_cell_size_x', 1000, 'root_cell_size_y', 1000, 'srid', 27700)"
+)
+_HALVES = {
+    "quadbin": ("rtg_ll_west", "rtg_ll_east"),
+    "bng": ("rtg_bng_west", "rtg_bng_east"),
+    "custom": ("rtg_bng_west", "rtg_bng_east"),
+}
+_PARTIAL_CALL = {  # the arguments of the partial in a recipe, after the tile
+    "quadbin": "tile, 11",
+    "bng": "tile, '1km'",
+    "custom": f"tile, {_GRID_SQL}, 1",
+}
+_OTHER_SHARED = (
+    *(f"{_SHORT[g]}_rtg_{s}" for g in OTHER for s in STATS),
+    "qb_rtg_cellid_past_2_53", "cg_rtg_cellid_past_2_53", "bng_rtg_named_res", "qb_rtg_count_covering",
+    "qb_rtg_bad_res", "bng_rtg_bad_res", "cg_rtg_bad_res", "cg_rtg_null_grid", "cg_rtg_negative_res",
+    "cg_rtg_error_tile", "cg_rtg_corrupt",
+)  # fmt: skip
+
+
+def _pargs(g, tile, *rest):
+    """The arguments of a call of a grid's function: the tile, the grid for the custom one, the resolution, then ``rest``."""
+    _, *tail = _ARGS[g]  # the default call after the tile: (res) or (G, res)
+    return (tile, *tail, *rest)
+
+
+def _other_partial_rows(g):
+    P, short = f"gbx_rst_{g}_rastertogrid_partial", _SHORT[g]
+    tile = _ARGS[g][0]
+    expect = {"grid": g, "res": _RES[g]}
+    bad_res = {"quadbin": 21, "bng": "3km", "custom": 99}[g]
+    rows = (
+        Case(f"{short}_rtgp_value", P, _pargs(g, tile), "grid_partial", expect, BOTH),
+        Case(f"{short}_rtgp_sparse", P, _pargs(g, tile, "sparse"), "grid_partial", {**expect, "coverage": "sparse"}, BOTH),
+        Case(f"{short}_rtgp_null_tile", P, _pargs(g, None), "null", None, BOTH),
+        Case(f"{short}_rtgp_null_res", P, (tile, *_ARGS[g][1:-1], None), "null", None, BOTH),
+        Case(f"{short}_rtgp_error_tile", P, _pargs(g, ERR), "null", None, BOTH),
+        Case(f"{short}_rtgp_corrupt", P, _pargs(g, CORRUPT), "null", None, BOTH),
+        Case(f"{short}_rtgp_bad_coverage", P, _pargs(g, tile, "sideways"), "raises", "sideways", BOTH),
+        Case(f"{short}_rtgp_bad_res", P, (tile, *_ARGS[g][1:-1], bad_res), "raises", str(bad_res), BOTH),
+        Case(f"uc_{short}_rtgp_virtual_refused", P, _pargs(g, VIRTUAL), "uc_refused", None, ("uc",)),
+    )  # fmt: skip
+    if g == "quadbin":  # a band of nothing but NoData has only covered-but-empty cells
+        rows += (
+            Case(
+                "qb_rtgp_nodata_band",
+                P,
+                _pargs(g, NODATA_BAND),
+                "grid_partial",
+                expect,
+                BOTH,
+            ),
+        )
+    return rows
+
+
+def _other_edges(g):
+    return tuple(
+        row
+        for stat in STATS
+        for row in (
+            Case(f"uc_{_SHORT[g]}_rtg_{stat}_null", _fn(g, stat), _pargs(g, None), "no_rows", None, ("uc",)),
+            Case(f"uc_{_SHORT[g]}_rtg_{stat}_virtual_refused", _fn(g, stat), _pargs(g, VIRTUAL), "uc_refused", None, ("uc",)),
+        )
+    )  # fmt: skip
+
+
+def _other_merge_rows(g):
+    west, east = _HALVES[g]
+    P = f"gbx_rst_{g}_rastertogrid_partial"
+    base = (
+        f"WITH rasters AS (SELECT {{tile:{west}}} AS tile UNION ALL SELECT {{tile:{east}}} AS tile), "
+        f"parts AS (SELECT {{q}}{P}({_PARTIAL_CALL[g]}) AS cells FROM rasters), "
+        "p AS (SELECT c.* FROM parts LATERAL VIEW inline(cells) c), "
+        "m AS (SELECT band, cellid, sum(count) AS count, try_divide(sum(sum), sum(count)) AS avg FROM p "
+        "GROUP BY band, cellid) "
+        "SELECT to_json(collect_list(named_struct('band', band, 'cellID', cellid, 'measure', <stat>))) AS out FROM m"
+    )
+    return tuple(
+        recipe(
+            f"recipe_{_SHORT[g]}_merge_{stat}",
+            P,
+            base.replace("<stat>", stat),
+            "grid_stats_json",
+            {"grid": g, "res": _RES[g], "stat": stat},
+            BOTH,
+            args=_pargs(g, _ARGS[g][0]),
+        )
+        for stat in ("count", "avg")
+    )
+
+
+_OTHER_ROWS = tuple(
+    row
+    for g in OTHER
+    for row in (*_other_partial_rows(g), *_other_edges(g), *_other_merge_rows(g))
+)
+
 RASTER_TO_GRID = (
-    share(_SESSION_ROWS, *_H3_SHARED) + _PARTIAL_ROWS + _TVF_EDGES + _MERGE_ROWS
+    share(_SESSION_ROWS, *_H3_SHARED, *_OTHER_SHARED)
+    + _PARTIAL_ROWS
+    + _TVF_EDGES
+    + _MERGE_ROWS
+    + _OTHER_ROWS
 )

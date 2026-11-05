@@ -323,6 +323,9 @@ def test_a_hand_example_written_as_an_fstring_of_constants_is_read():
         "gbx_example" not in info[n]["examples"]
         for n in info
         if n.startswith("gbx_rst_custom_rastertogrid")
+        and not n.endswith(
+            "_partial"
+        )  # the partial's example is its oracle row, as the H3 partial's is
     )
 
 

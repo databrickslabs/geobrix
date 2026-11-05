@@ -149,12 +149,24 @@
       ],
       "since": "0.6.0"
     },
+    "gbx_rst_bng_rastertogrid_partial": {
+      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogrid_partial(c0, 3) AS out FROM gbx_example;",
+      "usage_args": "tile, resolution, [coverage], [assignment]",
+      "description": "Give the mergeable state of every BNG cell the raster covers, so one pass serves every statistic.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_bng_rastertogridavg": {
       "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "description": "Mean of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -165,6 +177,7 @@
       "description": "Count the pixels in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -175,6 +188,7 @@
       "description": "Maximum of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -185,6 +199,7 @@
       "description": "Median of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -195,6 +210,7 @@
       "description": "Minimum of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -205,6 +221,7 @@
       "description": "Population standard deviation of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -215,6 +232,7 @@
       "description": "Sum of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -225,6 +243,7 @@
       "description": "Population variance of the pixel values in each BNG cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -461,12 +480,24 @@
       ],
       "since": "0.5.1"
     },
+    "gbx_rst_custom_rastertogrid_partial": {
+      "examples": "Examples:\n      > SELECT gbx_rst_custom_rastertogrid_partial(c0, c1, 1) AS out FROM gbx_example;",
+      "usage_args": "tile, grid, resolution, [coverage], [assignment]",
+      "description": "Give the mergeable state of every custom-grid cell the raster covers, so one pass serves every statistic.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_custom_rastertogridavg": {
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridavg( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "description": "Mean of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -477,6 +508,7 @@
       "description": "Count the pixels in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -487,6 +519,7 @@
       "description": "Maximum of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -497,6 +530,7 @@
       "description": "Median of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -507,6 +541,7 @@
       "description": "Minimum of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -517,6 +552,7 @@
       "description": "Population standard deviation of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -527,6 +563,7 @@
       "description": "Sum of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -537,6 +574,7 @@
       "description": "Population variance of the pixel values in each custom-grid cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.1"
@@ -1218,12 +1256,24 @@
       ],
       "since": "0.4.3"
     },
+    "gbx_rst_quadbin_rastertogrid_partial": {
+      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogrid_partial(c0, 11) AS out FROM gbx_example;",
+      "usage_args": "tile, resolution, [coverage], [assignment]",
+      "description": "Give the mergeable state of every quadbin cell the raster covers, so one pass serves every statistic.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_quadbin_rastertogridavg": {
       "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "description": "Mean of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1234,6 +1284,7 @@
       "description": "Count the pixels in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1244,6 +1295,7 @@
       "description": "Maximum of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1254,6 +1306,7 @@
       "description": "Median of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1264,6 +1317,7 @@
       "description": "Minimum of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.0"
@@ -1274,6 +1328,7 @@
       "description": "Population standard deviation of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -1284,6 +1339,7 @@
       "description": "Sum of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"
@@ -1294,6 +1350,7 @@
       "description": "Population variance of the pixel values in each quadbin cell, per band.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.4.3"

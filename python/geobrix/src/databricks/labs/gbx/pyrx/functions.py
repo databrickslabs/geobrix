@@ -4660,19 +4660,25 @@ def _rastertogrid_rows(
 
 # The partial state of every cell, per band: ONE pass over the pixels (core.gridagg.raster_to_grid_partial), from which each
 # statistic's table function reads its measure. It is a scalar (an array of structs), so it can be grouped and merged in SQL.
-_GRID_PARTIAL_SCHEMA = ArrayType(
-    StructType(
-        [
-            StructField("band", IntegerType(), True),
-            StructField("cellid", LongType(), True),
-            StructField("count", DoubleType(), True),
-            StructField("sum", DoubleType(), True),
-            StructField("m2", DoubleType(), True),
-            StructField("min", DoubleType(), True),
-            StructField("max", DoubleType(), True),
-        ]
+def _grid_partial_schema(cellid_type):
+    return ArrayType(
+        StructType(
+            [
+                StructField("band", IntegerType(), True),
+                StructField("cellid", cellid_type, True),
+                StructField("count", DoubleType(), True),
+                StructField("sum", DoubleType(), True),
+                StructField("m2", DoubleType(), True),
+                StructField("min", DoubleType(), True),
+                StructField("max", DoubleType(), True),
+            ]
+        )
     )
-)
+
+
+_GRID_PARTIAL_SCHEMA = _grid_partial_schema(LongType())
+# BNG renders the cell as its formatted string, as the table functions do
+_GRID_PARTIAL_STRING_SCHEMA = _grid_partial_schema(StringType())
 
 
 def _rastertogrid_partial_cells(
@@ -4683,6 +4689,10 @@ def _rastertogrid_partial_cells(
     them, so a wrong word raises also for a tile that has nothing to read."""
     if tile is None or resolution is None or (grid == "custom" and grid_struct is None):
         return None
+    if grid == "bng":  # a size such as '1km' is its index, as in the table functions
+        from databricks.labs.gbx.pygx.functions import _norm_res
+
+        resolution = _norm_res(resolution)
     coverage, assignment = coverage or "complete", assignment or "centroid"
     gridagg.check_arguments(
         resolution, grid, "count", coverage, assignment, grid_struct
@@ -4706,7 +4716,7 @@ def _rastertogrid_partial_cells(
     return [
         {
             "band": band,
-            "cellid": int(c["cellID"]),
+            "cellid": c["cellID"] if grid == "bng" else int(c["cellID"]),
             **{k: c[k] for k in gridagg.PARTIAL_FIELDS},
         }
         for band, cells in enumerate(bands, start=1)
@@ -4719,6 +4729,31 @@ def _h3_rastertogrid_partial_udf(
     tile, resolution, coverage="complete", assignment="centroid"
 ):  # the row's defaults: no SQL wrapper
     return _rastertogrid_partial_cells(tile, resolution, "h3", coverage, assignment)
+
+
+@f.udf(_GRID_PARTIAL_SCHEMA)
+def _quadbin_rastertogrid_partial_udf(
+    tile, resolution, coverage="complete", assignment="centroid"
+):
+    return _rastertogrid_partial_cells(
+        tile, resolution, "quadbin", coverage, assignment
+    )
+
+
+@f.udf(_GRID_PARTIAL_STRING_SCHEMA)
+def _bng_rastertogrid_partial_udf(
+    tile, resolution, coverage="complete", assignment="centroid"
+):
+    return _rastertogrid_partial_cells(tile, resolution, "bng", coverage, assignment)
+
+
+@f.udf(_GRID_PARTIAL_SCHEMA)
+def _custom_rastertogrid_partial_udf(
+    tile, grid_struct, resolution, coverage="complete", assignment="centroid"
+):
+    return _rastertogrid_partial_cells(
+        tile, resolution, "custom", coverage, assignment, grid_struct
+    )
 
 
 def _make_rastertogrid_udtf(grid, agg, flat_schema, cellid_is_str=False):

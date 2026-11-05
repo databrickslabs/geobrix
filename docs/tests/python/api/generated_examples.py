@@ -404,6 +404,11 @@ EXAMPLES = {
         "bt_nan_beside_numbers",
         "SELECT raster AS out FROM gbx_rst_bng_rasterize_tvf(TABLE(SELECT 'a' AS key, c0 AS cellid, c1 AS value FROM gbx_example) PARTITION BY (key), 530000.0D, 180000.0D, 533000.0D, 182000.0D, 3, 2)",
     ),
+    "gbx_rst_bng_rastertogrid_partial": (
+        "RASTER_TO_GRID",
+        "bng_rtgp_value",
+        "SELECT gbx_rst_bng_rastertogrid_partial(c0, 3) AS out FROM gbx_example",
+    ),
     "gbx_rst_bng_rastertogridavg": (
         "RASTER_TO_GRID",
         "bng_rtg_avg",
@@ -543,6 +548,11 @@ EXAMPLES = {
         "RASTER_AGGREGATE",
         "cgr_dup_max",
         "SELECT gbx_rst_custom_rasterize_agg(c0, c1, named_struct('bound_x_min', CAST(0 AS bigint), 'bound_x_max', CAST(1000000 AS bigint), 'bound_y_min', CAST(0 AS bigint), 'bound_y_max', CAST(1000000 AS bigint), 'cell_splits', CAST(2 AS int), 'root_cell_size_x', CAST(1000 AS int), 'root_cell_size_y', CAST(1000 AS int), 'srid', CAST(27700 AS int)), 27700, CAST(NULL AS DOUBLE), 529000.0D, 179000.0D, 533000.0D, 182000.0D, 8, 6, 'centroids', 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_custom_rastertogrid_partial": (
+        "RASTER_TO_GRID",
+        "cg_rtgp_value",
+        "SELECT gbx_rst_custom_rastertogrid_partial(c0, c1, 1) AS out FROM gbx_example",
     ),
     "gbx_rst_custom_rastertogridavg": (
         "RASTER_TO_GRID",
@@ -883,6 +893,11 @@ EXAMPLES = {
         "RASTER_AGGREGATE",
         "qbr_dup_max",
         "SELECT gbx_rst_quadbin_rasterize_agg(c0, c1, 4326, CAST(NULL AS DOUBLE), -123.05D, 37.7186D, -122.34D, 38.2511D, 8, 6, 'centroids', 0) AS out FROM gbx_example",
+    ),
+    "gbx_rst_quadbin_rastertogrid_partial": (
+        "RASTER_TO_GRID",
+        "qb_rtgp_value",
+        "SELECT gbx_rst_quadbin_rastertogrid_partial(c0, 11) AS out FROM gbx_example",
     ),
     "gbx_rst_quadbin_rastertogridavg": (
         "RASTER_TO_GRID",

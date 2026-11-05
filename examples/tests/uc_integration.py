@@ -185,6 +185,7 @@ def install_notebook(catalog: str, schema: str, folder: str) -> dict:
 t0 = time.time()
 print("[UC IT] install START", flush=True)
 from databricks.labs.gbx import uc
+spark.sql("CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
 res = uc.install({catalog!r}, {schema!r}, {folder!r}, procedures=True)
 n = len(res) if hasattr(res, "__len__") else -1
 print("[UC IT] install DONE %.1fs, %s statements" % (time.time() - t0, n), flush=True)

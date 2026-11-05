@@ -350,6 +350,9 @@ def test_install_notebook_installs_with_procedures_and_asserts_routines(driver):
     code = "".join(nb["cells"][0]["source"])
     compile(code, "nb", "exec")
     assert "procedures=True" in code and "'/Volumes/c/s/v/uc-it/abc'" in code and "assert cnt > 0" in code
+    # Fail on revert: uc.install does not create the schema (first E2E run: SCHEMA_NOT_FOUND), so the notebook must, first.
+    create = "CREATE SCHEMA IF NOT EXISTS `cat`.`sch`"
+    assert create in code and code.index(create) < code.index("uc.install(")
 
 
 def test_wheel_reuse_refuses_a_wheel_built_from_a_dirty_tree(driver):

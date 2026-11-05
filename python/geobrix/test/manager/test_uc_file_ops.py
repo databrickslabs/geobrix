@@ -69,6 +69,12 @@ def test_a_wrong_argument_raises_with_a_fix_and_names_the_value(call, args, bad)
     assert bad in str(err.value) and "Fix: " in str(err.value)
 
 
+def test_a_null_level_raises_with_a_fix_not_a_bare_type_error():
+    with pytest.raises(ValueError) as err:
+        tier_b.rst_buildoverviews(_tile(), [2, None])
+    assert "Fix: " in str(err.value) and not isinstance(err.value, TypeError)
+
+
 @pytest.mark.parametrize(
     "call,args",
     [

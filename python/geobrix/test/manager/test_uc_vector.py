@@ -190,6 +190,23 @@ def test_the_attributes_count_toward_the_cap_of_a_feature_array(monkeypatch):
         )
 
 
+@pytest.mark.parametrize("extent", [0, -5, 2.5, "big", True, float("nan")])
+def test_a_wrong_extent_raises_with_a_fix_not_null(extent):
+    rows = [{"geom": shapely.Point(5, 7).wkb, "attrs": None}]
+    with pytest.raises(ValueError, match=r"extent .*Fix: ") as err:
+        forms.st_asmvt_array(rows, "lyr", extent)
+    assert "gbx_st_asmvt_array" in str(err.value)
+
+
+def test_a_null_or_whole_extent_encodes_and_a_corrupt_geometry_is_still_null():
+    rows = [{"geom": shapely.Point(5, 7).wkb, "attrs": None}]
+    assert forms.st_asmvt_array(rows, "lyr", None) == forms.st_asmvt_array(
+        rows, "lyr", 4096
+    )
+    assert forms.st_asmvt_array(rows, "lyr", 512.0)
+    assert forms.st_asmvt_array([{"geom": b"\x01junk", "attrs": None}], "lyr") is None
+
+
 def test_features_become_one_layer_with_native_property_types():
     import mapbox_vector_tile as mvt
 

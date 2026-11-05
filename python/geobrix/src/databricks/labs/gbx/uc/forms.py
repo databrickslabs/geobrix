@@ -85,6 +85,26 @@ def _attrs(fn: str, attrs) -> dict:
     return value
 
 
+def _extent(fn: str, extent) -> int:
+    """The tile extent: a whole number of 1 or more, 4096 when NULL. A bad one is a wrong argument, so it raises."""
+    from databricks.labs.gbx.pyvx import _mvt
+
+    if extent is None:
+        return _mvt.DEFAULT_EXTENT
+    try:
+        whole = int(extent)
+        ok = not isinstance(extent, bool) and whole == extent and whole >= 1
+    except (TypeError, ValueError, OverflowError):
+        ok = False
+    if not ok:
+        raise _parameter(
+            fn,
+            f"extent must be a whole number of 1 or more; got {extent!r}. "
+            "Fix: pass an extent such as 4096, the MVT default, or leave it out",
+        )
+    return whole
+
+
 def st_asmvt_pyramid_cells(geom, attrs, min_z, max_z, layer_name, extent):
     """gbx__st_asmvt_pyramid_cells: the ``(z, x, y, mvt_bytes)`` of every tile one EPSG:4326 feature touches, as an
     array. ``gbx_st_asmvt_pyramid`` is the table function over it (``inline`` of the array).
@@ -514,12 +534,12 @@ def st_asmvt_array(features, layer_name, extent=None):
     fn = "gbx_st_asmvt_array"
     if features is None or layer_name is None:
         return None
+    ext = _extent(fn, extent)  # a wrong argument raises; only unreadable data is NULL
     rows = [(_field(r, "geom"), _field(r, "attrs")) for r in features if r is not None]
     # the attribute text travels with its feature, so it counts toward the cap; checked before any geometry is parsed
     size = sum(len(g or b"") + len(a or "") + _TILE_OVERHEAD for g, a in rows)
     if size > DECODED_CAP:
         raise _too_big(fn, "the array of features", size, "gbx_st_asmvt")
-    ext = _mvt.DEFAULT_EXTENT if extent is None else int(extent)
     feats = [
         {"geometry": bytes(g), "properties": _attrs(fn, a)}
         for g, a in rows

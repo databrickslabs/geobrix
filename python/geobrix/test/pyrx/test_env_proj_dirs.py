@@ -541,3 +541,23 @@ def test_core_crs_imports_in_a_fresh_interpreter_when_proj_data_is_unlistable(tm
     )
     assert run.returncode == 0, run.stderr[-2000:]
     assert "ImportError" not in run.stderr, run.stderr[-2000:]
+
+
+def test_bundled_proj_data_falls_back_to_the_env_wheel_payload_share(
+    tmp_path, monkeypatch
+):
+    """The env wheel's rasterio ships no PROJ data: the lookup then returns the payload's share/proj (as for GDAL)."""
+    import rasterio._env
+
+    from databricks.labs.gbx import _native
+
+    native = tmp_path / "_native" / "x86_64"
+    native.mkdir(parents=True)
+    share = tmp_path / "_native" / "share" / "proj"
+    share.mkdir(parents=True)
+    (share / "proj.db").write_bytes(b"")
+    monkeypatch.setattr(rasterio._env.PROJDataFinder, "search", lambda self: None)
+    monkeypatch.setattr(_native, "native_dir", lambda: str(native))
+    assert _env._bundled_proj_data() == str(share)
+    (share / "proj.db").unlink()
+    assert _env._bundled_proj_data() is None

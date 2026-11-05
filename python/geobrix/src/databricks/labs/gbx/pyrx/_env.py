@@ -50,7 +50,7 @@ def _bundled_gdal_data() -> Optional[str]:
 
 
 def _bundled_proj_data() -> Optional[str]:
-    """Return rasterio's bundled PROJ data dir, or None.
+    """Return rasterio's bundled PROJ data dir, else the env wheel's payload share (``_native/share/proj``), or None.
 
     rasterio._env.PROJDataFinder().search() returns a single directory string.
     Verify that proj.db exists in the directory to avoid setting PROJ_DATA to an
@@ -66,9 +66,17 @@ def _bundled_proj_data() -> Optional[str]:
             and os.path.exists(os.path.join(path, "proj.db"))
         ):
             return path
-        return None
     except Exception:
-        return None
+        pass
+    # The env wheel's rasterio ships no PROJ data: its PROJ reads the payload's share (_native/share/proj), the same
+    # directory the activation points PROJ_DATA at (as _bundled_gdal_data does for GDAL_DATA).
+    from databricks.labs.gbx import _native
+
+    native = _native.native_dir()
+    share = os.path.join(os.path.dirname(native), "share", "proj") if native else None
+    if share and os.path.exists(os.path.join(share, "proj.db")):
+        return share
+    return None
 
 
 def _readable_proj_data(value: str) -> bool:

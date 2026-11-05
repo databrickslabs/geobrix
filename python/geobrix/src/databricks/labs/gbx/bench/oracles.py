@@ -5488,6 +5488,14 @@ def check_uc_results(cases, results: dict, tmpdir: str) -> List[str]:
             msg = check_error(case, RuntimeError(r["error"]))
         elif fn.kind == "generator" and case.sql is None:
             msg = _check_rows(case, _uc_rows(fn, r["value"]), args)
+        elif fn.kind == "scalar" and case.kind == "cells":
+            # an array of chips is its elements; one chip (a struct) is one cell, as the session runner reads it
+            v = r["value"]
+            msg = _check_rows(
+                case,
+                [e for e in (v if isinstance(v, list) else [v]) if e is not None],
+                args,
+            )
         else:
             msg = check(case, r["value"], args)
         if msg:

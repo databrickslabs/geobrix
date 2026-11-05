@@ -473,3 +473,18 @@ def test_every_notebook_puts_its_oracle_fixtures_on_the_volume(plan):
             assert m.group(1).startswith(p.volume_dir), (f.name, m.group(1))
             seen += 1
     assert seen >= 5
+
+
+def test_the_uc_judge_reads_a_scalar_that_returns_chips_as_cells(tmp_path):
+    """A scalar tessellate row has kind "cells": the judge read it with the one-value check and raised ValueError."""
+    man = manifest.load()
+    case = next(
+        c
+        for rows in oracles.TABLES.values()
+        for c in rows
+        if c.kind == "cells"
+        and "uc" in c.surfaces
+        and man.functions[c.fn].kind == "scalar"
+    )
+    out = oracles.check_uc_results([case], {case.cid: {"value": []}}, str(tmp_path))
+    assert len(out) == 1 and case.cid in out[0]

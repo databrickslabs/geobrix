@@ -198,14 +198,16 @@ def pytest_runtest_makereport(item, call):
 
 def shard_of(relpath, n):
     """The shard (0..n-1) a test file belongs to when a run is split n ways: a stable hash of its path from
-    python/geobrix ('test/pyrx/test_x.py'). CI's guard (scripts/ci/test_ci_light_shards.py) reads this function."""
+    python/geobrix ('test/pyrx/test_x.py'). CI's guard (scripts/ci/test_ci_light_shards.py) reads this function.
+    """
     return zlib.crc32(relpath.encode()) % n
 
 
 def _split_run(config, items):
     """GBX_SHARD=<i>/<n>: keep only the test files that belong to part i of n (every file to exactly one part, so
     the n parts together are the whole run). Whole files, never single tests, so a module's fixtures and state stay
-    in one process. CI splits its longest light dirs this way; unset, nothing changes."""
+    in one process. CI splits its longest light dirs this way; unset, nothing changes.
+    """
     spec = os.environ.get("GBX_SHARD")
     if not spec:
         return

@@ -5301,12 +5301,24 @@ def _sql_literal(value, param, case: Case) -> str:
             "NULL" if value["raster"] is None else "X'" + value["raster"].hex() + "'"
         )
         path = "NULL" if value["path"] is None else "'" + value["path"] + "'"
+        # The tile's own metadata: an error tile is known by its reason (`last_error`), so a literal without it is an
+        # empty tile, which a UC function answers with NULL.
+        meta = value.get("metadata") or {}
+        metadata = (
+            "map("
+            + ", ".join(
+                "'" + str(t).replace("'", "''") + "'" for kv in meta.items() for t in kv
+            )
+            + ")"
+            if meta
+            else "CAST(map() AS map<string,string>)"
+        )
         return (
             f"named_struct('cellid', 0L, 'raster', {raster}, 'path', {path}, "
             "'path_mode', CAST(NULL AS STRING), "
             "'window', CAST(NULL AS struct<col_off:int,row_off:int,width:int,height:int>), "
             "'clip_polygon', CAST(NULL AS BINARY), 'clip_crs', CAST(NULL AS STRING), "
-            "'crs', CAST(NULL AS STRING), 'metadata', CAST(map() AS map<string,string>))"
+            f"'crs', CAST(NULL AS STRING), 'metadata', {metadata})"
         )
     if param.uc == "GEOMETRY":
         if isinstance(value, (bytes, bytearray)):

@@ -79,51 +79,58 @@ def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series = None) -> b
 # gbx_st_asmvt_array, gbx_st_coverageisvalid_array and gbx_st_coverageinvalidedges_array take the group as one ARRAY
 # (collect_list), so a Unity Catalog query can call them; a session registers the same names with the same answers. The
 # members are WKB or EWKB, and the attributes of a feature are JSON text (a struct of any fields has no UC type).
-def _gap_or_default(gap_width) -> float:
-    return 0.0 if gap_width is None else float(gap_width)
+def _array_coverage(geoms, gap_width, kernel: str, fn: str):
+    """One coverage answer over an array: a wrong ``gap_width`` raises with a Fix, a member that is no polygon is NULL,
+    as on Unity Catalog (the same ``forms._gap_width``)."""
+    from shapely.errors import ShapelyError
 
+    from databricks.labs.gbx.uc import forms
 
-@f.udf(BooleanType())
-def _coverageisvalid_array_udf(geoms, gap_width=None):
     from . import _coverage as _cov
 
     if geoms is None:
         return None
-    return _cov.coverage_is_valid_agg(
-        [bytes(g) for g in geoms if g is not None], _gap_or_default(gap_width)
+    gw = forms._gap_width(fn, gap_width)
+    members = [bytes(g) for g in geoms if g is not None]
+    try:
+        return getattr(_cov, kernel)(members, gw)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (ValueError, ShapelyError):
+        return None
+
+
+@f.udf(BooleanType())
+def _coverageisvalid_array_udf(geoms, gap_width=None):
+    return _array_coverage(
+        geoms, gap_width, "coverage_is_valid_agg", "gbx_st_coverageisvalid_array"
     )
 
 
 @f.udf(BinaryType())
 def _coverageinvalidedges_array_udf(geoms, gap_width=None):
-    from . import _coverage as _cov
-
-    if geoms is None:
-        return None
-    return _cov.coverage_invalid_edges_agg(
-        [bytes(g) for g in geoms if g is not None], _gap_or_default(gap_width)
+    return _array_coverage(
+        geoms,
+        gap_width,
+        "coverage_invalid_edges_agg",
+        "gbx_st_coverageinvalidedges_array",
     )
 
 
 @f.udf(BinaryType())
 def _asmvt_array_udf(features, layer_name, extent=None):
-    import json
+    from databricks.labs.gbx.uc import forms
 
+    fn = "gbx_st_asmvt_array"
     if features is None or layer_name is None:
         return None
+    ext = forms._extent(fn, extent)
     feats = [
-        {
-            "geometry": bytes(r["geom"]),
-            "properties": json.loads(r["attrs"]) if r["attrs"] else {},
-        }
+        {"geometry": bytes(r["geom"]), "properties": forms._attrs(fn, r["attrs"])}
         for r in features
         if r is not None and r["geom"] is not None
     ]
-    return _mvt.encode_layer(
-        feats,
-        str(layer_name),
-        _mvt.DEFAULT_EXTENT if extent is None else int(extent),
-    )
+    return _mvt.encode_layer(feats, str(layer_name), ext)
 
 
 def _legacyaswkb_impl(geom):

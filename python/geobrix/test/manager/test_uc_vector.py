@@ -254,3 +254,35 @@ def test_the_vector_handlers_run_in_a_sandbox_without_pyspark():
         for t in ("VECTOR_SCALAR", "VECTOR_AGGREGATE")
         for c in oracles.TABLES[t]
     )
+
+
+def test_a_geometry_result_with_z_is_iso_wkb_and_keeps_its_srid(monkeypatch):
+    """The product parses ISO WKB (st_asbinary writes type 1001 for a point with Z), not the EWKB Z flag (0x80000000)
+    that shapely writes by default: the warehouse refused that with WKB_PARSE_ERROR (type 2147483649).
+    """
+    monkeypatch.setattr(handlers, "_geometry_type", lambda: UcGeometry)
+    ewkb = shapely.to_wkb(
+        shapely.set_srid(shapely.from_wkt("POINT Z (1 2 3)"), 4326), include_srid=True
+    )
+    out = handlers._geom_out(ewkb)
+    assert out.srid == 4326
+    assert int.from_bytes(out.wkb[1:5], "little") == 1001
+    assert shapely.from_wkb(out.wkb).has_z and shapely.from_wkb(out.wkb).z == 3.0
+    flat = handlers._geom_out(
+        shapely.to_wkb(
+            shapely.set_srid(shapely.from_wkt("POINT (1 2)"), 27700), include_srid=True
+        )
+    )
+    assert int.from_bytes(flat.wkb[1:5], "little") == 1 and flat.srid == 27700
+
+
+def test_the_legacy_struct_with_z_makes_an_iso_geometry(monkeypatch):
+    monkeypatch.setattr(handlers, "_geometry_type", lambda: UcGeometry)
+    legacy = {
+        "typeId": 1,
+        "srid": 0,
+        "boundaries": [[[1.0, 2.0, 3.0]]],
+        "holes": [],
+    }
+    out = handlers.st_legacyaswkb(legacy)
+    assert int.from_bytes(out.wkb[1:5], "little") == 1001

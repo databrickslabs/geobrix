@@ -160,14 +160,21 @@ def _geometry_type():
 
 def _geom_out(ewkb):
     """EWKB -> the GEOMETRY value a UC Python function returns: a ``Geometry`` of the WKB and its SRID (measured:
-    returning bytes for a GEOMETRY(ANY) result fails in the worker)."""
+    returning bytes for a GEOMETRY(ANY) result fails in the worker).
+
+    The WKB is ISO (type 1001 for a point with Z, the form the product's ``st_asbinary`` writes): the engine's WKB
+    parser refuses shapely's default EWKB Z flag (``WKB_PARSE_ERROR``, type 2147483649). The SRID travels beside the
+    bytes, not in them. A geometry without Z has the same bytes in both.
+    """
     if ewkb is None:
         return None
     import shapely
 
     g = shapely.from_wkb(ewkb)
     srid = shapely.get_srid(g)
-    return _geometry_type().fromWKB(shapely.to_wkb(shapely.set_srid(g, 0)), srid)
+    return _geometry_type().fromWKB(
+        shapely.to_wkb(shapely.set_srid(g, 0), flavor="iso"), srid
+    )
 
 
 def bng_tessellate(geom, resolution, keep_core_geom):

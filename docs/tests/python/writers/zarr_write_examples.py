@@ -128,6 +128,30 @@ def create_from_xarray(spark, cube, table, root):
     return version
 
 
+def create_a_plain_store(spark, cube, path):
+    """A plain Zarr store: no manifest table, no versions. ``path`` is a Volume or mounted path."""
+    import xarray as xr
+
+    from databricks.labs.gbx.zarr import gbx_zarr_write
+
+    first = xr.open_zarr(cube, consolidated=False)[["t2m"]].isel(time=slice(0, 12)).load()
+    summary = gbx_zarr_write(first, path, transactional=False, spark=spark)
+    return summary
+
+
+def append_to_a_plain_store(spark, cube, path):
+    """Extend a plain store along time. Use one writer at a time: nothing guards a second."""
+    import xarray as xr
+
+    from databricks.labs.gbx.zarr import gbx_zarr_write
+
+    later = xr.open_zarr(cube, consolidated=False)[["t2m"]].isel(time=slice(12, 24)).load()
+    summary = gbx_zarr_write(
+        later, path, transactional=False, mode="append", append_dim="time", spark=spark
+    )
+    return summary
+
+
 def stage_the_blocks_first(spark, cube, table, staged, root):
     """A create or an append reads its input twice: stage a computed input in a table first."""
     from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write

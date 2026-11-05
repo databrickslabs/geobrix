@@ -227,11 +227,13 @@ coordinates are attached.
 ```python
 gbx_zarr_write(data, target, *, mode="create", root=None, variables=None, append_dim=None,
                dim_cols=None, chunks="balanced", shards=None, codecs=None, file_mode=None,
-               retain="7 days", write_id=None, access="auto", optimize=False, spark=None)
+               retain="7 days", write_id=None, access="auto", optimize=False, transactional=True,
+               spark=None)
 ```
 
 Writes `data` to the Zarr store whose manifest table is `target`, in one transaction. Returns the store
-version (the Delta version) the write committed. See the [Zarr Writer](../writers/zarr) for the modes,
+version (the Delta version) the write committed. With `transactional=False`, `target` is a path and the
+write makes a plain Zarr store instead; it returns a summary dict. See the [Zarr Writer](../writers/zarr) for the modes,
 layouts, tiles and concurrency in detail.
 
 | Parameter | Type | Description |
@@ -251,6 +253,7 @@ layouts, tiles and concurrency in detail.
 | `write_id` | `str` | 32 lowercase hex characters. Writing again with one that has committed returns its version and writes nothing. |
 | `access` | `str` | `"auto"` (default), `"fuse"` or `"direct"`; see [Access](../readers/zarr#access). |
 | `optimize` | `bool` | Fold the shards the write touched right after it commits. The version returned is the write's own. |
+| `transactional` | `bool` | `True` (default) writes a managed store in one Delta commit. `False` writes a plain Zarr store at the path `target`: no manifest table, ledger, marker or commit; only `mode="create"` or `"append"`; one writer at a time. Returns `{"path", "mode", "arrays", "chunks", "bytes"}`, not a version. See [Plain stores](../writers/zarr#plain-stores-opt-in). |
 | `spark` | `SparkSession` | Required for an `xarray.Dataset`, which has no session of its own. |
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="write_a_store"
@@ -265,6 +268,9 @@ nothing.
 | `ValueError` | `mode` is not one of the four | `pass one` |
 | `ValueError` | `create` has no `root` | `pass root='/Volumes/<catalog>/<schema>/<volume>/<dir>'` |
 | `ValueError` | `root`, `chunks`, `shards`, `codecs`, `file_mode` or `retain` is given outside `create` | `drop them, or create a new store` |
+| `ValueError` | `transactional=False` with a table name as `target`, a `mode` of `"update"` or `"overwrite"`, or `root`, `file_mode`, `retain`, `write_id`, `optimize` or `access="direct"` | `pass the store's path`, `use create or append`, or `drop them` |
+| `ZarrError` | `transactional=False` and `mode="create"` at a path that holds a store, or `mode="append"` at one that does not | `choose a new path`, or `create it first with mode='create'` |
+| `ZarrGridMismatch` | `transactional=False` append of values that would be cut to fit the stored type | `convert the variable to the store's type before appending` |
 | `ValueError` | `write_id` is not 32 lowercase hex characters | `pass uuid.uuid4().hex, or leave write_id unset` |
 | `ValueError` | `retain` is not a number and a unit | `pass a number and a unit, such as retain='7 days'.` |
 | `ValueError` | `data` is not a blocks DataFrame or a Dataset | `pass gbx_zarr_read(output='blocks') output or an xarray.Dataset` |

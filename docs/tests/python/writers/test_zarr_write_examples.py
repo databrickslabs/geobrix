@@ -177,6 +177,26 @@ def test_a_store_is_created_from_an_xarray_dataset(
     np.testing.assert_array_equal(assemble(spark, table), truth["t2m"].values[:12])
 
 
+def test_a_plain_store_is_written_and_extended_with_no_manifest(
+    spark, cube, truth, tmp_path
+):
+    path = str(tmp_path / "plain.zarr")
+    summary = ex.create_a_plain_store(spark, cube, path)
+    assert summary["path"] == path and summary["mode"] == "create"
+    assert "t2m" in summary["arrays"] and summary["chunks"] > 0
+    names = {p.name for p in Path(path).rglob("*")}
+    assert not names & {"_gbx_store.json", "_gbx_owner", "_delta_log", "data"}
+    np.testing.assert_array_equal(
+        xr.open_zarr(path)["t2m"].values, truth["t2m"].values[:12]
+    )
+    summary = ex.append_to_a_plain_store(spark, cube, path)
+    assert summary["mode"] == "append"
+    np.testing.assert_array_equal(
+        xr.open_zarr(path)["t2m"].values, truth["t2m"].values[:24]
+    )
+    np.testing.assert_array_equal(assemble(spark, path), truth["t2m"].values[:24])
+
+
 def test_blocks_without_coordinates_make_a_store_labelled_by_position(
     spark, cube, new_table, tmp_path, caplog
 ):

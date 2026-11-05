@@ -39,6 +39,9 @@ same sample cube as the other Zarr pages.
 | `"update"` | Writes into the existing extent | Say where it goes: blocks by their `start` and `stop`, a Dataset by its labels, tiles by their grid |
 | `"overwrite"` | Replaces the named variables | The variables to replace. Chunks the input does not cover read as the fill value afterwards |
 
+This page describes the managed (transactional) store, the default; [Plain stores](#plain-stores-opt-in)
+covers the opt-in plain write.
+
 `root`, `chunks`, `shards`, `codecs`, `file_mode` and `retain` belong to `mode="create"`: in the other
 modes they raise `ValueError` with a `Fix:` (a later write may repeat the store's own `file_mode`). A write into a registered store needs it to be registered
 with `writable=True`; it goes to the store's overlay root, in the base arrays' own codecs and key
@@ -363,6 +366,49 @@ to do, is the next version.
   source="docs/tests/python/writers/zarr_write_examples.py"
   testFile="docs/tests/python/writers/test_zarr_write_examples.py"
   outputConstant="APPEND_AND_FOLD_output" />
+
+## Plain stores (opt-in)
+
+Pass `transactional=False` to write a **plain Zarr store** instead of a managed one. `target` is then a
+path (a Volume path, or any mounted path), not a table name. The default stays `transactional=True`.
+
+<CodeFromTest code={zarrWrite} language="python" functionName="create_a_plain_store"
+  source="docs/tests/python/writers/zarr_write_examples.py"
+  testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+The call returns a summary, `{"path", "mode", "arrays", "chunks", "bytes"}`: the store's path, the mode,
+the arrays it holds, and the chunks and bytes this call wrote. It is not a Delta version.
+
+**What it writes.** A Zarr v3 store that `xarray.open_zarr`, zarr-python and `gbx_zarr_read(spark, path)`
+all open: one file per chunk, or per shard for a sharded array, and the metadata documents. The inputs,
+`variables`, `dim_cols`, `chunks`, `shards`, `codecs` and their checks are the same as for a managed
+store. Tasks write the files where the blocks are made. When blocks start and stop on the shard grid,
+nothing is shuffled.
+
+**What it drops.** No manifest table, ownership ledger or marker file, and no Delta commit. So there are
+no versions or time travel, no retention or vacuum, and no overlay. A write is not all-or-nothing, and
+two writers at once are not guarded: use one writer at a time, or keep a managed store.
+
+**Safety it keeps.** The metadata documents are written last, after every data file, and the root
+group's document is the very last. A write that stops part way leaves files but no store, so no reader
+opens a half-written one. A failed `create` removes what it wrote. A `create` refuses a path that already
+holds a store (a `zarr.json`, `.zgroup` or `.zarray`). An `append` needs a plain store there:
+
+<CodeFromTest code={zarrWrite} language="python" functionName="append_to_a_plain_store"
+  source="docs/tests/python/writers/zarr_write_examples.py"
+  testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+An `append` extends the array shape, and rewrites the documents last, so readers see the old store until
+it ends. A chunk or shard it shares with existing cells keeps those cells. It refuses variables on other
+dimensions, and values that would be cut to fit the stored type (floats into integers, say), each with a
+`Fix:`. A failed `append` can leave files past the store's extent; no document names them.
+
+**Refusals.** `ValueError` with a `Fix:` for `mode="update"` or `"overwrite"`, a table name as `target`,
+and `file_mode`, `retain`, `write_id`, `optimize`, `root` or `access="direct"`.
+
+**When to use it.** One writer, speed, and a store other tools read. A managed store pays for its
+manifest and commit; a plain write pays for neither. Choose a managed store for concurrent writers,
+versions, or all-or-nothing writes.
 
 ## Access and cleanup
 

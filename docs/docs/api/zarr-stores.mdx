@@ -134,12 +134,16 @@ manifest table exists, and who may write.
 
 | Kind | Created by | Where the bytes live | Versions and transactions | Who may write |
 |---|---|---|---|---|
-| **Plain store** | Anyone: xarray, a vendor, any Zarr tool | The store's own objects | None. GeoBrix reads the current bytes. | Not GeoBrix |
+| **Plain store** | Anyone: xarray, a vendor, any Zarr tool, or `gbx_zarr_write(..., transactional=False)` | The store's own objects | None. GeoBrix reads the current bytes. | Anyone, one writer at a time. GeoBrix writes one only with the opt-in |
 | **Registered, read-only** | `gbx_zarr_register(spark, path, table)` | The store's own objects, **not copied** | Yes, in the manifest table | Nobody through GeoBrix |
 | **Registered, writable** | `gbx_zarr_register(spark, path, table, writable=True, overlay_root=...)` | The store's own objects, plus an **overlay** of new pack files | Yes | Anyone with `MODIFY` on the table and write access to the overlay root's Volume; the store itself is never written |
 | **Managed** | `gbx_zarr_write(..., mode="create")` | Pack files GeoBrix wrote under the store's root | Yes | Anyone with `MODIFY` on the table and write access to the root's Volume |
 
 ![The four kinds of Zarr store side by side. A plain store has only its own objects and no manifest table. A read-only registered store has a Delta manifest table that points at the store's objects without copying them. A writable registered store has a manifest that points at the store's objects and at an overlay root of immutable pack files. The store's objects are locked against writes. A managed store has a manifest that points at pack files under a data root. A banner explains that many registrations of one store are independent branches. It also explains that every root has exactly one owner.](../../../resources/images/diagrams/zarr/store-kinds.png)
+
+A plain store has no manifest, so no versions and no guard against a second writer. GeoBrix writes one
+only when you ask: [`transactional=False`](../writers/zarr#plain-stores-opt-in) creates or appends to it,
+and no table exists for it.
 
 Use a **managed** store when GeoBrix creates the data. Use a **registered** store when the data already
 exists and other tools keep using it. [Registering and syncing](./zarr-registered-stores) covers the

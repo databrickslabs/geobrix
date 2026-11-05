@@ -912,6 +912,7 @@ Every grid function follows one contract for its resolution and its input.
   - Appenders that change the array's shape and a shared coordinate chunk are rebased, up to 20 attempts.
   - Writers that meet on one chunk get a `ZarrWriteConflict`. It names the keys and the write that won.
   - A `write_id` makes a retried write apply once.
+- **`gbx_zarr_write(..., transactional=False)` writes a plain Zarr store.** `target` is a path. There is no manifest table, ownership ledger or Delta commit, so no versions, no time travel and no guard against a second writer. Metadata is written last, so a write that stops part way leaves no store. It supports `create` and `append`, and returns a summary. The default stays transactional. See [Plain stores](./writers/zarr#plain-stores-opt-in).
 - **`gbx_zarr_sync` brings a registered table up to date with other tools' changes.** A read stops with `ZarrStoreDrift` when an object changed (its modification time and size on a Volume). `gbx_zarr_sync` records the change as one new version. `gbx_zarr_export(method="publish")` writes a writable registration's overlay into the store itself. That is not atomic for plain readers.
 - **Versions.** Every version stays readable for `retain` (7 days by default), and a tagged version for good.
   - `gbx_zarr_history` lists the commits.

@@ -159,7 +159,7 @@ These changes affect callers that pass keywords or named arguments.
   - The env wheels' extras are `stac`, `vizx`, `databricks`, and `zarr` on env6.
   - An `_all` form becomes `[stac,vizx]`, plus `[zarr]` on env6.
   - For GPU, replace `photogrammetry_gpu_env5`, `models_gpu_env5` and `gpu_env5_all` with the env wheel of the GPU runtime. Then follow the GPU install step below.
-- **GPU install.** GPU stays on CUDA 12. The UDF workers of the Serverless GPU AI Runtime run environment 6, even when the driver runs environment 5, and an env wheel refuses to import on the other environment. For a notebook that runs UDFs (GeoSAM, land cover), select environment 6 and install the env6 wheel. A driver-only GPU step such as dense MVS (`pycolmap-cuda12`) can stay on the env5 wheel. Then install the GPU packages as a separate step:
+- **GPU install.** GPU stays on CUDA 12. The UDF workers of the Serverless GPU AI Runtime run environment 6, even when the driver runs environment 5. An env wheel refuses to import on the other environment. For a notebook that runs UDFs (GeoSAM, land cover), select environment 6 and install the env6 wheel. A driver-only GPU step such as dense MVS (`pycolmap-cuda12`) can stay on the env5 wheel. Then install the GPU packages as a separate step:
   - Photogrammetry: `pycolmap-cuda12==4.2.1`.
   - Models (GeoSAM): `torch==2.9.0`, `torchvision==0.24.0`, `segment-geospatial` and `opencv-python-headless==4.11.0.86`.
   - See [GeoSAM](./models/geosam).

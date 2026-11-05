@@ -58,8 +58,13 @@ def test_a_jar_makes_the_jvm_only_functions_scala():
     statements = ex.preview_install_with_jar(VERSION)
     scala = [s for s in statements if "LANGUAGE SCALA" in s]
     man = manifest.load()
-    expected = {n for n in _uc_names() if "scala" in man.functions[n].levels["L4"]}
-    assert len(scala) == len(expected) == 5
+    # a row with a SQL kernel keeps its Scala form for a forced install, but the install makes it SQL
+    expected = {
+        n
+        for n in _uc_names()
+        if "scala" in man.functions[n].levels["L4"] and "sql" not in man.functions[n].levels["L4"]
+    }
+    assert len(scala) == len(expected) == 3
     for name in expected:
         assert any(f".{name}(" in s for s in scala)
     assert all(f"geobrix-{VERSION}-jar-with-dependencies.jar" in s for s in scala)

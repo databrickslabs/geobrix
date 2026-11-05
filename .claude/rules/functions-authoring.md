@@ -59,6 +59,10 @@ Python-only keywords (the force-output trio) are declared in the row's `python` 
   function with the UC signature; `sources={name: (body, helpers)}` judges a candidate the same way). The host has no
   `h3_*` or `st_*`, so a body that calls one is judged on the workspace, not there. A statement a user writes (not one
   function call) is a recipe row: `_uc_tile.recipe(cid, fn, "SELECT ... AS out", kind, expect)`, `{q}` the schema qualifier.
+- Spark refuses a call to a SQL function whose argument is a lambda variable, inside a lambda (`transform(.., i -> f(i))`).
+  A kernel that builds arrays spells the helper's expression inline in the lambda (see the quadbin ring kernels), and
+  calls a helper only on the function's own parameters. Spark also shifts a BIGINT by the count modulo 64: guard a shift
+  of 64 or more, and cast a count to BIGINT before `shiftleft(.., 52)`. Write a refusal text's semicolon as `chr(59)`.
 - Keep `;` out of a probe function's text (a candidate body, helper summary or message): the warehouse statement file
   splits on it.
 - Known limits (documented, not fixed): `install` does not check that a form the caller forces is one the row can be

@@ -130,6 +130,8 @@ A custom grid is a struct. Build it once with `gbx_custom_grid` and pass it to t
 - `gbx_bng_eastnorthasbng` trims every white-space character from a resolution text.
 - `gbx_bng_eastnorthasbng` reads coordinates from 100 km west or south of the grid origin up to 10 000 km. Beyond that range, use the session function.
 
+`gbx_quadbin_distance`, `gbx_quadbin_kring` and `gbx_quadbin_kloop` run as SQL functions too. They give `NULL` for an id that is no cell and refuse a bad `k` or an oversize ring with the same `Fix:` text as the session functions. Near the edge of the world the session ring functions fail. The SQL functions return the cells that exist.
+
 ### CRS arguments
 
 A UC function takes a CRS argument in three forms:
@@ -294,7 +296,7 @@ A window below one pixel, or an overlap outside 0 to below 100, raises with a `F
 
 ## Python and Scala handlers
 
-Five functions can run as UC Scala functions: `gbx_bng_eastnorthasbng`, `gbx_bng_kring`, `gbx_bng_cellarea`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL.
+Three functions can run as UC Scala functions: `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` run as [SQL functions](#functions-that-run-as-sql) instead.
 
 The install makes them Scala functions when the install folder also holds `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. Without that JAR, or with `only=` that selects none of them, they are Python functions. The names, signatures and answers are the same.
 

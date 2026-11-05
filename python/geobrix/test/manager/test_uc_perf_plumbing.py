@@ -275,7 +275,7 @@ def test_the_sql_keys_have_rules_a_load_enforces():
             perf_manifest(edit)
 
     def l4_from_l0_without_l0(raw):
-        _row(raw, "gbx_quadbin_distance")["levels"]["L4"] = {"sql": "L0"}
+        _row(raw, "gbx_bng_distance")["levels"]["L4"] = {"sql": "L0"}
 
     def helpers_without_body(raw):
         _row(raw, "gbx_quadbin_resolution")["levels"]["L0"] = {"sql_helpers": [HELPER]}

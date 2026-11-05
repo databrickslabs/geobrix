@@ -12,6 +12,7 @@ from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.uc import ddl, handlers, sqlbody
 
 QDIST = "gbx_quadbin_distance"
+QKR, QKL = "gbx_quadbin_kring", "gbx_quadbin_kloop"
 
 
 def _kernel(name):
@@ -35,7 +36,10 @@ def _lit(text):
     return "'" + text.replace("\\", "\\\\").replace("'", "\\'") + "'"
 
 
-@pytest.mark.parametrize("name,table", [(QDIST, "GRID_SCALAR")])
+ADOPTED = [(QDIST, "GRID_SCALAR"), (QKR, "GRID_ARRAY"), (QKL, "GRID_ARRAY")]
+
+
+@pytest.mark.parametrize("name,table", ADOPTED)
 def test_each_adopted_row_has_one_sql_text_for_the_session_and_uc(name, table):
     """Fails when a row loses its kernel or its L0 text."""
     fn = manifest.load().functions[name]
@@ -44,7 +48,7 @@ def test_each_adopted_row_has_one_sql_text_for_the_session_and_uc(name, table):
     assert ddl.chosen_form(fn, None) == "sql"
 
 
-@pytest.mark.parametrize("name,table", [(QDIST, "GRID_SCALAR")])
+@pytest.mark.parametrize("name,table", ADOPTED)
 def test_a_kernel_passes_every_uc_oracle_row_of_its_function(
     spark, tmp_path, name, table
 ):
@@ -144,3 +148,90 @@ def test_quadbin_distance_is_null_for_an_id_that_is_no_cell_and_raises_across_zo
         assert str(want.value) in str(got.value)  # the Python text, semicolon included
     finally:
         _drop(spark, QDIST)
+
+
+# ---- gbx_quadbin_kring and gbx_quadbin_kloop -------------------------------------------------------------------------
+
+
+def _inland_cells(rnd, n):
+    """Cells whose k <= 3 ring stays inside the world at their zoom."""
+    import quadbin
+
+    out = []
+    for _ in range(n):
+        z = rnd.randint(3, 26)
+        side = 1 << z
+        out.append(
+            quadbin.tile_to_cell(
+                (rnd.randint(3, side - 4), rnd.randint(3, side - 4), z)
+            )
+        )
+    return out
+
+
+@pytest.mark.parametrize("name,k_list", [(QKR, (0, 1, 2, 3)), (QKL, (0, 1, 2, 3))])
+def test_quadbin_rings_equal_the_python_core_inland(spark, name, k_list):
+    rnd = random.Random(8 if name == QKR else 9)
+    rows = [(c, k) for c in _inland_cells(rnd, 60) for k in k_list]
+    _install(spark, name)
+    try:
+        got = (
+            spark.createDataFrame(
+                [(i, c, k) for i, (c, k) in enumerate(rows)], "i int, c bigint, k int"
+            )
+            .selectExpr("i", f"{name}(c, k) AS r")
+            .collect()
+        )
+    finally:
+        _drop(spark, name)
+    py = getattr(handlers, name[len("gbx_") :])
+    wrong = [
+        (rows[r["i"]], len(r["r"] or []))
+        for r in got
+        if list(r["r"]) != py(*rows[r["i"]])  # the same cells in the same order
+    ]
+    assert len(got) == len(rows) and wrong[:3] == []
+
+
+@pytest.mark.parametrize("name", [QKR, QKL])
+def test_quadbin_rings_refuse_a_bad_k_and_a_ring_over_the_cap_with_the_python_text(
+    spark, name
+):
+    import quadbin
+
+    cell = quadbin.tile_to_cell((40000000, 30000000, 26))
+    py = getattr(handlers, name[len("gbx_") :])
+    _install(spark, name)
+    try:
+        for k in (-1, 5000, 2000):
+            with pytest.raises(Exception) as want:
+                py(cell, k)
+            with pytest.raises(Exception) as got:
+                spark.sql(f"SELECT size({name}({cell}L, {k})) AS n").collect()
+            assert str(want.value) in str(got.value), k
+        # an id that is no cell is NULL, a NULL argument is NULL
+        assert spark.sql(f"SELECT {name}(0L, 1) AS r").first()["r"] is None
+        assert (
+            spark.sql(f"SELECT {name}({cell}L, CAST(NULL AS INT)) AS r").first()["r"]
+            is None
+        )
+    finally:
+        _drop(spark, name)
+
+
+def test_quadbin_rings_at_the_edge_of_the_world_are_the_documented_divergence(spark):
+    """Pinned: the library walks a ring from its top-left corner and crashes (TypeError) when a neighbour is off the
+    world; the SQL form returns the cells that exist."""
+    import quadbin
+
+    corner = quadbin.tile_to_cell((0, 0, 5))
+    with pytest.raises(TypeError):
+        handlers.quadbin_kring(corner, 1)
+    _install(spark, QKR)
+    try:
+        got = spark.sql(f"SELECT {QKR}({corner}L, 1) AS r").first()["r"]
+    finally:
+        _drop(spark, QKR)
+    assert sorted(got) == sorted(
+        quadbin.tile_to_cell((x, y, 5)) for x in (0, 1) for y in (0, 1)
+    )

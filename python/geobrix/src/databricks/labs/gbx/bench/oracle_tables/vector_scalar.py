@@ -9,6 +9,8 @@ and the UTM zone 33 centre (the central meridian 15 E maps to the false easting 
 the output carries the SRID of the first argument unless the row fixes one.
 """
 
+from dataclasses import replace
+
 from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
 
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
@@ -670,9 +672,68 @@ VECTOR_SCALAR += (
         geom_srid=3857,
     ),
 )
+# --- the seven shapely scalars on UC (gbx_st_node, _reduceprecision, _removerepeatedpoints, _shiftlongitude,
+# _simplifypreservetopology, _snap, _split). A shared row built from plain WKT carries no SRID on the session, while a UC
+# GEOMETRY always carries one, so each such row stays a session row and its UC twin is derived from it: the same
+# arguments and the same expected geometry, now with the SRID the UC argument was built with. One twin per function
+# repeats it with SRID 3857, which is the row that fails when a handler drops the SRID of its result.
+_SEVEN = frozenset({NODE, RP, RRP, SHL, SPT, SNAP, SPLIT})
+
+
+def _uc_twins(cases):
+    shared = [
+        c
+        for c in cases
+        if c.fn in _SEVEN
+        and c.kind == "geom_srid"
+        and "uc" in c.surfaces
+        and isinstance(c.expect, str)
+        and isinstance(c.args[0], str)
+    ]
+    twins, seen = [], set()
+    for c in shared:
+        twins.append(
+            replace(
+                c,
+                cid=f"uc_{c.cid}",
+                expect=(c.expect, c.geom_srid),
+                surfaces=("uc",),
+                variants=(),
+            )
+        )
+        if c.fn not in seen:  # the first row of each function, again in another SRID
+            seen.add(c.fn)
+            twins.append(
+                replace(
+                    c,
+                    cid=f"uc_{c.cid}_keeps_srid",
+                    expect=(c.expect, 3857),
+                    surfaces=("uc",),
+                    variants=(),
+                    geom_srid=3857,
+                )
+            )
+    return tuple(twins), tuple(c.cid for c in shared)
+
+
+_TWINS, _SHARED_PLAIN = _uc_twins(VECTOR_SCALAR)
+VECTOR_SCALAR += _TWINS + (
+    # a GEOS failure on a geometry it cannot process (a bowtie has no valid output) is NULL on UC, an error in a session
+    Case("uc_rp_invalid_input_null", RP, (BOWTIE, 0.5), "null", None, ("uc",)),
+    # a form the function does not take raises with a Fix (a point has nothing to cut)
+    Case(
+        "uc_split_point_refused",
+        SPLIT,
+        ("POINT(1 1)", LINE_REF),
+        "uc_refused",
+        "Splitting Point",
+        ("uc",),
+    ),
+)
 VECTOR_SCALAR = uc_view(
     VECTOR_SCALAR,
-    session_only=(
+    session_only=_SHARED_PLAIN
+    + (
         "ev_valid",  # its EWKT variant: UC st_geomfromwkt takes no EWKT prefix (uc_ev_valid is the plain-WKT row)
         "wrapx_east",
         "wrapx_west",

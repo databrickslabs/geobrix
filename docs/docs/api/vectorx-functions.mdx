@@ -246,6 +246,30 @@ multiple `(z, x, y)` tiles into a single PMTiles file.
 
 ---
 
+### st_asmvt_array
+
+{/* BEGIN GENERATED gbx_st_asmvt_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_asmvt_array(features, layer_name, [extent])` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_asmvt_array(features, layer_name, [extent])` | `BINARY` |
+| Python | `vectorx.functions.st_asmvt_array(features, layer_name, extent=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `features` | `array<struct<geom:binary,attrs:string>>` | `array<struct<geom:binary,attrs:string>>` |  | The tile's features as an array of structs `(geom, attrs)`, for example `collect_list(struct(geom, to_json(attrs)))` after a `GROUP BY` of the tile key. `geom` is WKB or EWKB in tile coordinates; `attrs` is a JSON object text, or NULL for none. A NULL element, or one with a NULL or empty geometry, is skipped. |
+| `layer_name` | `STRING` | `STRING` |  | The name of the layer. |
+| `extent` | `INT` | `INT` | `4096` | The tile coordinate extent. |
+{/* END GENERATED gbx_st_asmvt_array */}
+
+Encode one tile's features from an array of `(geom, attrs)` structs, for example `collect_list(struct(geom, to_json(attrs)))` after a `GROUP BY` of the tile key. It is the array form of `gbx_st_asmvt`, so a Unity Catalog query can build a layer. The attributes are JSON object text, because a struct of any fields has no Unity Catalog type. Geometry is WKB or EWKB in tile coordinates.
+
+**Returns:** `BINARY`, the MVT protobuf of one layer. An array with no usable feature gives an empty layer, and a NULL array gives NULL. An attribute text that is not a JSON object raises with a Fix. An array of more than 64 MiB is refused with a Fix that names `gbx_st_asmvt`. Use `gbx_st_asmvt_pyramid` to cut a feature into the tiles it touches first.
+
+---
+
 ### st_asmvt_pyramid
 
 {/* BEGIN GENERATED gbx_st_asmvt_pyramid: edit manifest/functions.json, then run gbx:manifest:gen */}
@@ -768,6 +792,52 @@ See [Coverage Validity](./coverage-validity).
 
 ---
 
+### st_coverageisvalid_array
+
+{/* BEGIN GENERATED gbx_st_coverageisvalid_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_coverageisvalid_array(geoms, [gap_width])` | `BOOLEAN` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_coverageisvalid_array(geoms, [gap_width])` | `BOOLEAN` |
+| Python | `vectorx.functions.st_coverageisvalid_array(geoms, gap_width=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geoms` | `array<binary>` | `array<binary>` |  | The polygons of the coverage as an array of WKB or EWKB, for example `collect_list(st_asewkb(geom))` after a `GROUP BY`. A NULL or empty element is skipped; an element that is no geometry gives NULL. |
+| `gap_width` | `DOUBLE` | `DOUBLE` | `0.0` | The widest gap between polygons that still counts as a gap, in the CRS units. A negative or non-finite width raises. |
+{/* END GENERATED gbx_st_coverageisvalid_array */}
+
+Say whether an array of polygons is a valid coverage, for example `collect_list(st_asewkb(geom))` after a `GROUP BY`. It is the array form of `gbx_st_coverageisvalid`, so a Unity Catalog query can check a coverage. A NULL or empty member is skipped, and a member that is no geometry gives NULL. A negative or non-finite `gap_width` raises with a Fix.
+
+**Returns:** `BOOLEAN`. NULL for a NULL array or one with no usable polygon. An array of more than 64 MiB is refused with a Fix that names `gbx_st_coverageisvalid`.
+
+---
+
+### st_coverageinvalidedges_array
+
+{/* BEGIN GENERATED gbx_st_coverageinvalidedges_array: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_st_coverageinvalidedges_array(geoms, [gap_width])` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_coverageinvalidedges_array(geoms, [gap_width])` | `BINARY` |
+| Python | `vectorx.functions.st_coverageinvalidedges_array(geoms, gap_width=None)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geoms` | `array<binary>` | `array<binary>` |  | The polygons of the coverage as an array of WKB or EWKB, for example `collect_list(st_asewkb(geom))` after a `GROUP BY`. A NULL or empty element is skipped; an element that is no geometry gives NULL. |
+| `gap_width` | `DOUBLE` | `DOUBLE` | `0.0` | The widest gap between polygons that still counts as a gap, in the CRS units. A negative or non-finite width raises. |
+{/* END GENERATED gbx_st_coverageinvalidedges_array */}
+
+Give the invalid edges of an array of polygons that should form a coverage, for example `collect_list(st_asewkb(geom))` after a `GROUP BY`. It is the array form of `gbx_st_coverageinvalidedges`. Pass EWKB members to keep their SRID on the edges.
+
+**Returns:** `BINARY`, the union of the invalid edges, empty when the coverage is valid. NULL for a NULL array or one with no usable polygon. An array of more than 64 MiB is refused with a Fix that names `gbx_st_coverageinvalidedges`.
+
+---
+
 ### coverage_simplify
 
 **Python-API only — no SQL form.** Topology-preserving simplification of a whole coverage. Unlike per-row simplification (`gbx_st_simplifypreservetopology`), this helper simplifies the coverage as a unit so shared edges stay aligned in both adjacent polygons after simplification.
@@ -806,17 +876,18 @@ Distributed shapely helpers — shapely/GEOS operations running as Python UDFs �
 ### st_simplifypreservetopology
 
 {/* BEGIN GENERATED gbx_st_simplifypreservetopology: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_simplifypreservetopology(geom, tolerance)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_simplifypreservetopology(geom, tolerance)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_simplifypreservetopology(geom, tolerance)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
-| `tolerance` | `DOUBLE` |  | The distance below which a vertex is dropped. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `tolerance` | `DOUBLE` | `DOUBLE` |  | The distance below which a vertex is dropped. |
 {/* END GENERATED gbx_st_simplifypreservetopology */}
 
 Simplifies a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped. The output keeps the topological class of the input and stays valid. Use this instead of the product's `st_simplify` when ring connectivity must be maintained.
@@ -837,17 +908,18 @@ See [Geometry Cleaning](./geometry-cleaning).
 ### st_removerepeatedpoints
 
 {/* BEGIN GENERATED gbx_st_removerepeatedpoints: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_removerepeatedpoints(geom, [tolerance])` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_removerepeatedpoints(geom, [tolerance])` | `GEOMETRY` |
 | Python | `vectorx.functions.st_removerepeatedpoints(geom, tolerance=None)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
-| `tolerance` | `DOUBLE` | `0.0` | Vertices closer than this to the one before are dropped; 0 drops exact repeats only. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `tolerance` | `DOUBLE` | `DOUBLE` | `0.0` | Vertices closer than this to the one before are dropped; 0 drops exact repeats only. |
 {/* END GENERATED gbx_st_removerepeatedpoints */}
 
 Removes consecutive duplicate or near-duplicate vertices from a geometry. With the default `tolerance=0.0`, only exact duplicate consecutive coordinate pairs are removed. A positive `tolerance` collapses vertices within that distance of their predecessor into a single representative vertex.
@@ -868,17 +940,18 @@ See [Geometry Cleaning](./geometry-cleaning).
 ### st_reduceprecision
 
 {/* BEGIN GENERATED gbx_st_reduceprecision: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_reduceprecision(geom, grid_size)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_reduceprecision(geom, grid_size)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_reduceprecision(geom, grid_size)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
-| `grid_size` | `DOUBLE` |  | The grid cell size; coordinates snap to its multiples. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `grid_size` | `DOUBLE` | `DOUBLE` |  | The grid cell size; coordinates snap to its multiples. |
 {/* END GENERATED gbx_st_reduceprecision */}
 
 Snaps coordinates to a precision grid of size `grid_size`, rounding each coordinate to the nearest multiple of `grid_size`. Useful for eliminating floating-point noise, aligning data from different sources, or reducing coordinate storage size. Uses GEOS `set_precision` with `mode="valid_output"` so the output remains valid even if snapping would otherwise collapse a ring.
@@ -899,16 +972,17 @@ See [Geometry Cleaning](./geometry-cleaning).
 ### st_node
 
 {/* BEGIN GENERATED gbx_st_node: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_node(geom)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_node(geom)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_node(geom)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
 {/* END GENERATED gbx_st_node */}
 
 Nodes a geometry's linework by splitting at all self-intersections and pairwise intersections. The result is a `MultiLineString` (or `LineString`) where every segment endpoint is a valid node — no two segments cross without sharing an explicit endpoint. Noding is typically a prerequisite for polygonization, planar graph analysis, or building topologically clean networks from raw linework.
@@ -929,18 +1003,19 @@ See [Geometry Cleaning](./geometry-cleaning).
 ### st_snap
 
 {/* BEGIN GENERATED gbx_st_snap: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_snap(geom, reference, tolerance)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_snap(geom, reference, tolerance)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_snap(geom, reference, tolerance)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
-| `reference` | `BINARY` or `STRING` |  | The geometry to snap onto: WKB, EWKB, WKT or EWKT. |
-| `tolerance` | `DOUBLE` |  | The distance within which a vertex moves onto the reference. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| `reference` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry to snap onto: WKB, EWKB, WKT or EWKT. |
+| `tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex moves onto the reference. |
 {/* END GENERATED gbx_st_snap */}
 
 Snaps `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. Useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
@@ -967,16 +1042,17 @@ These three functions are distributed shapely helpers — shapely/GEOS geometry 
 ### st_shiftlongitude
 
 {/* BEGIN GENERATED gbx_st_shiftlongitude: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_shiftlongitude(geom)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_shiftlongitude(geom)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_shiftlongitude(geom)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `geom` | `BINARY` or `STRING` |  | The geometry: WKB, EWKB, WKT or EWKT. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry: WKB, EWKB, WKT or EWKT. |
 {/* END GENERATED gbx_st_shiftlongitude */}
 
 Shifts all longitude (x) coordinates of a geometry from `[-180, 180]` space into `[0, 360]` space by adding 360 to any negative x value. Use this as the first step when normalizing a geometry that crosses the 180° antimeridian. After the shift, the crossing polygon is contiguous around x=180 and splits cleanly there.
@@ -1030,17 +1106,18 @@ See [Antimeridian](./antimeridian).
 ### st_split
 
 {/* BEGIN GENERATED gbx_st_split: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_split(input_geom, blade_geom)` | `BINARY` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_split(input_geom, blade_geom)` | `GEOMETRY` |
 | Python | `vectorx.functions.st_split(input_geom, blade_geom)` | Column |
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `input_geom` | `BINARY` or `STRING` |  | The geometry to split: WKB, EWKB, WKT or EWKT. |
-| `blade_geom` | `BINARY` or `STRING` |  | The geometry to split by: WKB, EWKB, WKT or EWKT. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `input_geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry to split: WKB, EWKB, WKT or EWKT. |
+| `blade_geom` | `BINARY` or `STRING` | `GEOMETRY` |  | The geometry to split by: WKB, EWKB, WKT or EWKT. |
 {/* END GENERATED gbx_st_split */}
 
 Splits a geometry by a blade geometry, returning a `GEOMETRYCOLLECTION` containing all resulting pieces. The primary use is cutting an antimeridian-crossing polygon at the 180° meridian: pass the polygon (already shifted into `[0, 360]` space by `gbx_st_shiftlongitude`) and the blade `'LINESTRING(180 -90, 180 90)'`.

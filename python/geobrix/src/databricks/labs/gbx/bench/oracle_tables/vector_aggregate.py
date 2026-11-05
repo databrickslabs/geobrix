@@ -9,7 +9,10 @@ An aggregate's first argument is its group's rows; the arguments after it are th
 skipped. A group with no usable geometry is NULL for the coverage functions and an empty layer for the MVT.
 """
 
-from databricks.labs.gbx.bench.oracles import Build, Case, builder
+from dataclasses import replace
+
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import Adapt, twin
+from databricks.labs.gbx.bench.oracles import BUILDERS, Build, Case, builder
 
 ONLY = ("session",)
 MVT, CVALID, CEDGES = (
@@ -117,6 +120,12 @@ def _cov_null(tmpdir):
     return [None, None]
 
 
+def _ewkb_box(x0, x1, srid):
+    import shapely
+
+    return shapely.to_wkb(shapely.set_srid(_box(x0, x1), srid), include_srid=True)
+
+
 def _edges_of_overlap_wkt():
     import shapely
 
@@ -156,4 +165,137 @@ VECTOR_AGGREGATE += (
         ONLY,
     ),
     Case("covedges_empty", CEDGES, (Build("cov_null"), 0.0), "null", None, ONLY),
+)
+
+
+# --- the array twins ----------------------------------------------------------------------------------------------
+# `gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array` and `gbx_st_coverageinvalidedges_array` are the scalar twins of the
+# three aggregates: the group is one ARRAY, and the answer is the aggregate's, so each twin row is the aggregate's row run
+# on the session and on UC with the same expectation. Not twinned: the rows whose members are WKT text (a UC array holds
+# WKB, a BINARY), which stay aggregate rows. The attributes of a feature are JSON text, as in every UC form (a struct of
+# any fields has no UC type).
+MVTA, CVALIDA, CEDGESA = (
+    "gbx_st_asmvt_array",
+    "gbx_st_coverageisvalid_array",
+    "gbx_st_coverageinvalidedges_array",
+)
+BOTH = ("session", "uc")
+
+
+def _as_features(builder_name):
+    """The `(geom, attrs)` members of an aggregate group as the array's structs: the attributes as JSON text."""
+    import json
+
+    def build(tmpdir):
+        return [
+            {"geom": g, "attrs": None if a is None else json.dumps(a)}
+            for g, a in BUILDERS[builder_name](tmpdir)
+        ]
+
+    return build
+
+
+for _n in ("mvt_two_wkb", "mvt_with_null_geom", "mvt_only_null_geom"):
+    builder(f"{_n}__features")(_as_features(_n))
+
+
+def _feature_args(args):
+    return (Build(f"{args[0].name}__features"), *args[1:])
+
+
+VECTOR_AGGREGATE += tuple(
+    replace(c, surfaces=BOTH)
+    for c in twin(
+        tuple(VECTOR_AGGREGATE),
+        MVTA,
+        Adapt(args=_feature_args),
+        "asmvt_two_features",
+        "asmvt_null_geom_skipped",
+        "asmvt_layer_name",
+        "asmvt_no_feature",
+    )
+) + tuple(
+    replace(c, surfaces=BOTH)
+    for fn, cids in (
+        (CVALIDA, [c.cid for c in VECTOR_AGGREGATE if c.fn == CVALID]),
+        (CEDGESA, [c.cid for c in VECTOR_AGGREGATE if c.fn == CEDGES]),
+    )
+    for c in twin(
+        tuple(VECTOR_AGGREGATE),
+        fn,
+        Adapt(),
+        *[x for x in cids if x != "covvalid_wkt"],
+    )
+)
+
+# the invalid edges of the overlapping pair cov_overlap, shapely's own answer written out
+OVERLAP_EDGES = (
+    "MULTILINESTRING ((0 0, 0.5 0), (0.5 1, 0 1), (0.5 0, 1 0), (0.5 1, 0.5 0), (1 1, 0.5 1), "
+    "(1 0, 1.5 0), (1 0, 1 1), (1.5 1, 1 1))"
+)
+
+# Rows only the UC form has: a NULL array is NULL, and an empty one has no usable member; a member that is no geometry is
+# NULL (an aggregate raises); the attributes must be a JSON object; a gap width that is no usable number raises.
+VECTOR_AGGREGATE += (
+    Case("uc_asmvt_array_null", MVTA, (None, "lyr"), "null", None, ("uc",)),
+    Case(
+        "uc_asmvt_array_empty",
+        MVTA,
+        ([], "lyr"),
+        "mvt_layer",
+        {"layer": "lyr", "features": []},
+        ("uc",),
+    ),
+    Case(
+        "uc_asmvt_array_no_attrs",
+        MVTA,
+        ([{"geom": _wkb(POINT), "attrs": None}], "lyr"),
+        "mvt_layer",
+        {"layer": "lyr", "features": [(POINT, {})]},
+        ("uc",),
+    ),
+    Case(
+        "uc_asmvt_array_attrs_not_json",
+        MVTA,
+        ([{"geom": _wkb(POINT), "attrs": "{1, a}"}], "lyr"),
+        "uc_refused",
+        "JSON",
+        ("uc",),
+    ),
+    Case("uc_covvalid_array_null", CVALIDA, (None, 0.0), "null", None, ("uc",)),
+    Case("uc_covvalid_array_empty", CVALIDA, ([], 0.0), "null", None, ("uc",)),
+    Case(
+        "uc_covvalid_array_member_not_a_geometry",
+        CVALIDA,
+        ([b"not a geometry", _box(0, 1).wkb], 0.0),
+        "null",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_covvalid_array_bad_gap",
+        CVALIDA,
+        ([_box(0, 1).wkb], -1.0),
+        "uc_refused",
+        "gap_width",
+        ("uc",),
+    ),
+    Case("uc_covedges_array_null", CEDGESA, (None, 0.0), "null", None, ("uc",)),
+    Case(
+        "uc_covedges_array_bad_gap",
+        CEDGESA,
+        ([_box(0, 1).wkb], float("nan")),
+        "uc_refused",
+        "gap_width",
+        ("uc",),
+    ),
+    # the SRID of the members is the SRID of the edges
+    Case(
+        "uc_covedges_array_keeps_srid",
+        CEDGESA,
+        ([_ewkb_box(0, 1, 3857), _ewkb_box(0.5, 1.5, 3857)], 0.0),
+        "geom_srid",
+        (OVERLAP_EDGES, 3857),
+        ("uc",),
+    ),
 )

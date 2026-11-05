@@ -444,6 +444,98 @@ def st_asmvt_features(tiles, layer_name, extent):
     return _mvt.encode_layer(features, layer, ext)
 
 
+# --- vector tile layer and coverage checks: the array twins of three aggregates ----------------------------------------
+def _gap_width(fn: str, gap_width) -> float:
+    import math
+
+    gw = 0.0 if gap_width is None else float(gap_width)
+    if not math.isfinite(gw) or gw < 0.0:
+        raise _parameter(
+            fn,
+            f"gap_width must be a finite number, 0 or more; got {gap_width!r}. "
+            "Fix: pass a gap_width of 0 or more, in the units of the polygons' CRS",
+        )
+    return gw
+
+
+def _coverage(fn: str, session_fn: str, geoms, gap_width, kernel):
+    from shapely.errors import ShapelyError
+
+    from databricks.labs.gbx.pyvx import _coverage as cov
+
+    if geoms is None:
+        return None
+    gw = _gap_width(fn, gap_width)
+    members = [bytes(g) for g in geoms if g is not None]
+    size = sum(len(m) + _TILE_OVERHEAD for m in members)  # before any member is parsed
+    if size > DECODED_CAP:
+        raise _too_big(fn, "the array of polygons", size, session_fn)
+    try:
+        return getattr(cov, kernel)(members, gw)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        ValueError,
+        ShapelyError,
+    ):  # a member that is no polygon: unreadable data is NULL on UC
+        return None
+
+
+def st_coverageisvalid_array(geoms, gap_width=None):
+    """gbx_st_coverageisvalid_array: the aggregate's answer over an array of WKB polygons."""
+    return _coverage(
+        "gbx_st_coverageisvalid_array",
+        "gbx_st_coverageisvalid",
+        geoms,
+        gap_width,
+        "coverage_is_valid_agg",
+    )
+
+
+def st_coverageinvalidedges_array(geoms, gap_width=None):
+    """gbx_st_coverageinvalidedges_array: the aggregate's edges (WKB, EWKB with an SRID) over an array of WKB polygons."""
+    return _coverage(
+        "gbx_st_coverageinvalidedges_array",
+        "gbx_st_coverageinvalidedges",
+        geoms,
+        gap_width,
+        "coverage_invalid_edges_agg",
+    )
+
+
+def st_asmvt_array(features, layer_name, extent=None):
+    """gbx_st_asmvt_array: one MVT layer from an array of ``(geom, attrs)`` structs, the layer of the aggregate
+    ``gbx_st_asmvt``. ``geom`` is WKB in tile coordinates, ``attrs`` a JSON object text (NULL for none).
+    """
+    from shapely.errors import ShapelyError
+
+    from databricks.labs.gbx.pyvx import _mvt
+
+    fn = "gbx_st_asmvt_array"
+    if features is None or layer_name is None:
+        return None
+    rows = [(_field(r, "geom"), _field(r, "attrs")) for r in features if r is not None]
+    # the attribute text travels with its feature, so it counts toward the cap; checked before any geometry is parsed
+    size = sum(len(g or b"") + len(a or "") + _TILE_OVERHEAD for g, a in rows)
+    if size > DECODED_CAP:
+        raise _too_big(fn, "the array of features", size, "gbx_st_asmvt")
+    ext = _mvt.DEFAULT_EXTENT if extent is None else int(extent)
+    feats = [
+        {"geometry": bytes(g), "properties": _attrs(fn, a)}
+        for g, a in rows
+        if g is not None
+    ]
+    try:
+        return _mvt.encode_layer(feats, str(layer_name), ext)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        ValueError,
+        ShapelyError,
+    ):  # a geometry that is no geometry: unreadable data is NULL on UC
+        return None
+
+
 # --- the retile family: one tile cut into an array of tiles -------------------------------------------------------
 # The private routines behind gbx_rst_retile, gbx_rst_maketiles, gbx_rst_tooverlappingtiles and gbx_rst_separatebands:
 # each returns the sub-tiles of one tile as an array, and the table function turns the array into rows. Three bounds
@@ -692,6 +784,9 @@ def rst_separatebands_tiles(tile):
 
 
 HANDLERS = {
+    "gbx_st_coverageisvalid_array": st_coverageisvalid_array,
+    "gbx_st_coverageinvalidedges_array": st_coverageinvalidedges_array,
+    "gbx_st_asmvt_array": st_asmvt_array,
     "gbx__st_asmvt_pyramid_cells": st_asmvt_pyramid_cells,
     "gbx_rst_h3_rasterize": rst_h3_rasterize,
     "gbx__h3_cellfill_cells": h3_cellfill_cells,

@@ -1458,6 +1458,116 @@ def st_wrapx(geom, wrap_x_origin, wrap_direction):
     )  # the SRID is kept
 
 
+# --- the shapely scalars: GEOMETRY(ANY) in and out, the SRID of the first argument kept ----------------------------
+# One shape for the seven (gbx_st_node, _reduceprecision, _removerepeatedpoints, _shiftlongitude,
+# _simplifypreservetopology, _snap, _split), over the session's own kernels (``pyvx._cleaning``, ``pyvx._antimeridian``).
+# A NULL geometry is NULL. A wrong distance or grid size raises with a Fix. A form the operation does not take (a point
+# has nothing to cut) raises with a Fix. A geometry GEOS cannot process (an invalid one the operation needs valid) is
+# NULL on UC, where a session raises. Two geometries must share an SRID, as the product's own ST functions require.
+
+
+def _two_srids(fn: str, first: bytes, second: bytes) -> None:
+    import shapely
+
+    a, b = (shapely.get_srid(shapely.from_wkb(x)) for x in (first, second))
+    if a != b:
+        raise _Refusal(
+            f"{fn}: the two geometries are in different SRIDs ({a} and {b}). "
+            "Fix: st_transform one of them first, so both are in the same SRID"
+        )
+
+
+def _shapely_scalar(fn: str, kernel, geoms, *args):
+    """GEOMETRY(ANY) result of ``kernel(*geoms as EWKB, *args)``; None when any geometry is NULL."""
+    from shapely.errors import GeometryTypeError, ShapelyError
+
+    if any(g is None for g in geoms):
+        return None
+    ewkb = [_geom_bytes(g) for g in geoms]
+    if len(ewkb) > 1:
+        _two_srids(fn, ewkb[0], ewkb[1])
+    try:
+        out = kernel(*ewkb, *args)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except GeometryTypeError as exc:  # a form the operation does not take
+        raise _Refusal(
+            f"{fn}: {exc}. Fix: pass a geometry type {fn} takes, or cast it first"
+        ) from exc
+    except ValueError as exc:  # a distance or a grid size that is no usable number
+        raise _parameter(fn, exc) from exc
+    except ShapelyError:  # noqa: BLE001 - a geometry GEOS cannot process is NULL on UC
+        return None
+    return _geom_out(out)  # the SRID is kept
+
+
+def st_node(geom):
+    from databricks.labs.gbx.pyvx import _cleaning
+
+    return _shapely_scalar("gbx_st_node", _cleaning.st_node, (geom,))
+
+
+def st_reduceprecision(geom, grid_size):
+    from databricks.labs.gbx.pyvx import _cleaning
+
+    if grid_size is None:
+        return None
+    return _shapely_scalar(
+        "gbx_st_reduceprecision", _cleaning.st_reduceprecision, (geom,), grid_size
+    )
+
+
+def st_removerepeatedpoints(geom, tolerance):
+    from databricks.labs.gbx.pyvx import _cleaning
+
+    # a NULL tolerance is the default (exact repeats only), as in a session
+    return _shapely_scalar(
+        "gbx_st_removerepeatedpoints",
+        _cleaning.st_removerepeatedpoints,
+        (geom,),
+        0.0 if tolerance is None else tolerance,
+    )
+
+
+def st_shiftlongitude(geom):
+    from databricks.labs.gbx.pyvx import _antimeridian
+
+    return _shapely_scalar(
+        "gbx_st_shiftlongitude", _antimeridian.st_shiftlongitude, (geom,)
+    )
+
+
+def st_simplifypreservetopology(geom, tolerance):
+    from databricks.labs.gbx.pyvx import _cleaning
+
+    if tolerance is None:
+        return None
+    return _shapely_scalar(
+        "gbx_st_simplifypreservetopology",
+        _cleaning.st_simplifypreservetopology,
+        (geom,),
+        tolerance,
+    )
+
+
+def st_snap(geom, reference, tolerance):
+    from databricks.labs.gbx.pyvx import _cleaning
+
+    if tolerance is None:
+        return None
+    return _shapely_scalar(
+        "gbx_st_snap", _cleaning.st_snap, (geom, reference), tolerance
+    )
+
+
+def st_split(input_geom, blade_geom):
+    from databricks.labs.gbx.pyvx import _antimeridian
+
+    return _shapely_scalar(
+        "gbx_st_split", _antimeridian.st_split, (input_geom, blade_geom)
+    )
+
+
 def st_legacyaswkb(geom):
     """The legacy Mosaic struct as a GEOMETRY carrying the struct's own `srid` (0 when it has none)."""
     from databricks.labs.gbx.pyvx import _legacy

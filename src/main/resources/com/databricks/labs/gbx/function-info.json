@@ -2411,6 +2411,17 @@
       ],
       "since": "0.4.0"
     },
+    "gbx_st_asmvt_array": {
+      "examples": "Examples:\n      > SELECT gbx_st_asmvt_array(c0, 'lyr') AS out FROM gbx_example;",
+      "usage_args": "features, layer_name, [extent]",
+      "description": "Encode an array of features into one Mapbox Vector Tile layer.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_st_asmvt_pyramid": {
       "examples": "Examples:\n      > WITH feats AS ( SELECT unhex('010100000000000000000000000000000000000000') AS geom_wkb, named_struct('name', 'origin', 'id', 1L) AS attrs ) SELECT t.z, t.x, t.y, t.mvt_bytes FROM feats, LATERAL gbx_st_asmvt_pyramid(geom_wkb, attrs, 0, 2, 'layer', 4096) t;",
       "usage_args": "geom, attrs, min_z, max_z, [layer_name], [extent]",
@@ -2432,6 +2443,17 @@
       ],
       "since": "0.5.0"
     },
+    "gbx_st_coverageinvalidedges_array": {
+      "examples": "Examples:\n      > SELECT gbx_st_coverageinvalidedges_array(c0, 0.0D) AS out FROM gbx_example;",
+      "usage_args": "geoms, [gap_width]",
+      "description": "Give the invalid edges of an array of polygons that should form a coverage.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_st_coverageisvalid": {
       "examples": "Examples:\n      > SELECT cov_id, gbx_st_coverageisvalid(geom, 0.0) AS is_valid FROM coverage_parcels GROUP BY cov_id;",
       "usage_args": "geom, [gap_width]",
@@ -2441,6 +2463,17 @@
         "python"
       ],
       "since": "0.5.0"
+    },
+    "gbx_st_coverageisvalid_array": {
+      "examples": "Examples:\n      > SELECT gbx_st_coverageisvalid_array(c0, 0.0D) AS out FROM gbx_example;",
+      "usage_args": "geoms, [gap_width]",
+      "description": "Say whether an array of polygons is a valid coverage.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
     },
     "gbx_st_crs": {
       "examples": "Examples:\n      > SELECT gbx_st_crs(geom) AS crs FROM vector_geoms;",
@@ -2515,6 +2548,7 @@
       "description": "Node a linework: split it at every point where its lines cross or touch.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2525,6 +2559,7 @@
       "description": "Snap a geometry's coordinates to a grid, keeping the result valid.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2535,6 +2570,7 @@
       "description": "Remove consecutive repeated vertices, or near-repeats within a tolerance.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2556,6 +2592,7 @@
       "description": "Shift longitudes from [-180, 180] into [0, 360].",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2566,6 +2603,7 @@
       "description": "Simplify a geometry with Douglas-Peucker without splitting or collapsing it.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2576,6 +2614,7 @@
       "description": "Snap a geometry's vertices onto a reference geometry within a tolerance.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"
@@ -2586,6 +2625,7 @@
       "description": "Split a geometry by a blade into the pieces on either side of it.",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.5.0"

@@ -1149,6 +1149,11 @@ EXAMPLES = {
         "asmvt_two_features",
         "SELECT gbx_st_asmvt(c0, c1, 'lyr') AS out FROM gbx_example",
     ),
+    "gbx_st_asmvt_array": (
+        "VECTOR_AGGREGATE",
+        "asmvt_two_features__st_asmvt_array",
+        "SELECT gbx_st_asmvt_array(c0, 'lyr') AS out FROM gbx_example",
+    ),
     "gbx_st_asmvt_pyramid": (
         "VECTOR_GENERATOR",
         "pyramid_point_z0_1",
@@ -1159,10 +1164,20 @@ EXAMPLES = {
         "covedges_overlap",
         "SELECT gbx_st_coverageinvalidedges(c0, 0.0D) AS out FROM gbx_example",
     ),
+    "gbx_st_coverageinvalidedges_array": (
+        "VECTOR_AGGREGATE",
+        "covedges_overlap__st_coverageinvalidedges_array",
+        "SELECT gbx_st_coverageinvalidedges_array(c0, 0.0D) AS out FROM gbx_example",
+    ),
     "gbx_st_coverageisvalid": (
         "VECTOR_AGGREGATE",
         "covvalid_clean",
         "SELECT gbx_st_coverageisvalid(c0, 0.0D) AS out FROM gbx_example",
+    ),
+    "gbx_st_coverageisvalid_array": (
+        "VECTOR_AGGREGATE",
+        "covvalid_clean__st_coverageisvalid_array",
+        "SELECT gbx_st_coverageisvalid_array(c0, 0.0D) AS out FROM gbx_example",
     ),
     "gbx_st_crs": (
         "VECTOR_SCALAR",

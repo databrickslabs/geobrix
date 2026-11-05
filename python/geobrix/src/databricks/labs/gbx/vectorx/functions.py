@@ -93,6 +93,38 @@ def st_asmvt(
     )
 
 
+def st_asmvt_array(
+    features: ColLike,
+    layer_name: ColLike,
+    extent: ColLike = None,
+) -> Column:
+    """Encode an array of features into one Mapbox Vector Tile layer.
+
+    Args:
+        features: The tile's features as an array of structs `(geom, attrs)`, for
+            example `collect_list(struct(geom, to_json(attrs)))` after a `GROUP BY` of the
+            tile key. `geom` is WKB or EWKB in tile coordinates; `attrs` is a JSON object
+            text, or NULL for none. A NULL element, or one with a NULL or empty geometry, is
+            skipped.
+        layer_name: The name of the layer.
+        extent: The tile coordinate extent. SQL default: ``4096``.
+
+    Returns:
+        The MVT protobuf of one layer holding the array's features: the layer of the
+        aggregate `gbx_st_asmvt` over the same features, with the attributes read from
+        JSON text. NULL for a NULL array; an array with no usable feature gives an empty
+        layer.
+
+    SQL: ``gbx_st_asmvt_array(features, layer_name, [extent])``
+    """
+    return _api.call(
+        "gbx_st_asmvt_array",
+        features,
+        layer_name,
+        extent,
+    )
+
+
 def st_asmvt_pyramid(
     df: DataFrame,
     geom: ColLike,
@@ -158,6 +190,34 @@ def st_coverageinvalidedges(
     )
 
 
+def st_coverageinvalidedges_array(
+    geoms: ColLike,
+    gap_width: ColLike = None,
+) -> Column:
+    """Give the invalid edges of an array of polygons that should form a coverage.
+
+    Args:
+        geoms: The polygons of the coverage as an array of WKB or EWKB, for example
+            `collect_list(st_asewkb(geom))` after a `GROUP BY`. A NULL or empty element is
+            skipped; an element that is no geometry gives NULL.
+        gap_width: The widest gap between polygons that still counts as a gap, in the
+            CRS units. A negative or non-finite width raises. SQL default: ``0.0``.
+
+    Returns:
+        The union of the edges that make the coverage invalid, as WKB (EWKB when the
+        polygons carry an SRID); empty when the coverage is valid. The answer of the
+        aggregate `gbx_st_coverageinvalidedges` over the same polygons. NULL for a NULL
+        array or one with no usable polygon.
+
+    SQL: ``gbx_st_coverageinvalidedges_array(geoms, [gap_width])``
+    """
+    return _api.call(
+        "gbx_st_coverageinvalidedges_array",
+        geoms,
+        gap_width,
+    )
+
+
 def st_coverageisvalid(
     geom: ColLike,
     gap_width: ColLike = None,
@@ -178,6 +238,33 @@ def st_coverageisvalid(
     return _api.call(
         "gbx_st_coverageisvalid",
         geom,
+        gap_width,
+    )
+
+
+def st_coverageisvalid_array(
+    geoms: ColLike,
+    gap_width: ColLike = None,
+) -> Column:
+    """Say whether an array of polygons is a valid coverage.
+
+    Args:
+        geoms: The polygons of the coverage as an array of WKB or EWKB, for example
+            `collect_list(st_asewkb(geom))` after a `GROUP BY`. A NULL or empty element is
+            skipped; an element that is no geometry gives NULL.
+        gap_width: The widest gap between polygons that still counts as a gap, in the
+            CRS units. A negative or non-finite width raises. SQL default: ``0.0``.
+
+    Returns:
+        True when no polygons overlap, and no gap is narrower than `gap_width`: the
+        answer of the aggregate `gbx_st_coverageisvalid` over the same polygons. NULL
+        for a NULL array or one with no usable polygon.
+
+    SQL: ``gbx_st_coverageisvalid_array(geoms, [gap_width])``
+    """
+    return _api.call(
+        "gbx_st_coverageisvalid_array",
+        geoms,
         gap_width,
     )
 

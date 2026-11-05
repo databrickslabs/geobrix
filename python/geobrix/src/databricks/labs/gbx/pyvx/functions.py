@@ -75,6 +75,57 @@ def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series = None) -> b
     return _cov.coverage_invalid_edges_agg(list(geom), gw)
 
 
+# --- the array twins of the three aggregates: one scalar over a collected array -------------------------------------
+# gbx_st_asmvt_array, gbx_st_coverageisvalid_array and gbx_st_coverageinvalidedges_array take the group as one ARRAY
+# (collect_list), so a Unity Catalog query can call them; a session registers the same names with the same answers. The
+# members are WKB or EWKB, and the attributes of a feature are JSON text (a struct of any fields has no UC type).
+def _gap_or_default(gap_width) -> float:
+    return 0.0 if gap_width is None else float(gap_width)
+
+
+@f.udf(BooleanType())
+def _coverageisvalid_array_udf(geoms, gap_width=None):
+    from . import _coverage as _cov
+
+    if geoms is None:
+        return None
+    return _cov.coverage_is_valid_agg(
+        [bytes(g) for g in geoms if g is not None], _gap_or_default(gap_width)
+    )
+
+
+@f.udf(BinaryType())
+def _coverageinvalidedges_array_udf(geoms, gap_width=None):
+    from . import _coverage as _cov
+
+    if geoms is None:
+        return None
+    return _cov.coverage_invalid_edges_agg(
+        [bytes(g) for g in geoms if g is not None], _gap_or_default(gap_width)
+    )
+
+
+@f.udf(BinaryType())
+def _asmvt_array_udf(features, layer_name, extent=None):
+    import json
+
+    if features is None or layer_name is None:
+        return None
+    feats = [
+        {
+            "geometry": bytes(r["geom"]),
+            "properties": json.loads(r["attrs"]) if r["attrs"] else {},
+        }
+        for r in features
+        if r is not None and r["geom"] is not None
+    ]
+    return _mvt.encode_layer(
+        feats,
+        str(layer_name),
+        _mvt.DEFAULT_EXTENT if extent is None else int(extent),
+    )
+
+
 def _legacyaswkb_impl(geom):
     """Scalar: decode a legacy Mosaic struct row to ISO WKB (Z + holes)."""
     return _legacy.legacy_to_wkb(geom)

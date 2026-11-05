@@ -553,7 +553,8 @@ def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dr
 
 def _run_m6_handler(tmp_path, block_pyspark: bool) -> str:
     """The handler body in a fresh interpreter (the test process has pyspark loaded, which would hide the answer the probe
-    exists to give). ``block_pyspark`` makes ``import pyspark`` raise, as it does in a UC sandbox. The result line, or the
+    exists to give). ``block_pyspark`` makes ``import pyspark`` raise, as it does in a UC sandbox (a meta-path finder: a ``sys.modules['pyspark'] = None``
+    stub would leave the key behind and fail the handler's own ``'pyspark' in sys.modules`` check). The result line, or the
     end of the error."""
     import subprocess
     import sys
@@ -566,7 +567,11 @@ def _run_m6_handler(tmp_path, block_pyspark: bool) -> str:
     tile = tmp_path / "ref.tif"
     tile.write_bytes(probes.p2_tile_bytes("1MiB", 1 << 20))
     block = (
-        "sys.modules['pyspark'] = None\nsys.modules['py4j'] = None\n"
+        "class _Block:\n"
+        "    def find_spec(self, name, path=None, target=None):\n"
+        "        if name.split('.')[0] in ('pyspark', 'py4j'):\n"
+        "            raise ImportError('blocked: ' + name)\n"
+        "sys.meta_path.insert(0, _Block())\n"
         if block_pyspark
         else ""
     )
@@ -597,11 +602,6 @@ def test_the_m6_handler_gives_the_engine_a_slope_tile_when_pyspark_is_importable
     assert line.startswith("RESULT|ok|valid:min:max="), line
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="engine.run imports ds.file_gbx for the read cap, and ds/__init__ needs pyspark: M-6 fails in a UC sandbox "
-    "until the engine plan moves the cap helpers out of ds (found by this probe's rehearsal)",
-)
 def test_the_m6_handler_needs_no_pyspark(tmp_path):
     line = _run_m6_handler(tmp_path, block_pyspark=True)
     assert probes.m6_ok("1|" + line[len("RESULT|") :]), line

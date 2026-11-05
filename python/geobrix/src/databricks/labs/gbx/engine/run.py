@@ -438,7 +438,10 @@ def run(
                 for p in props
             ]
             # the read cap of every tile read from bytes (light's ``_serde.open_tile``), judged from its header
-            from databricks.labs.gbx.ds.file_gbx import read_cap_refusal, tile_read_cap
+            from databricks.labs.gbx.pyrx.core.budget import (
+                read_cap_refusal,
+                tile_read_cap,
+            )
 
             cap = tile_read_cap()
             for size in sizes:

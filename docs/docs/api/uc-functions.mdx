@@ -178,6 +178,7 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Tile arrays: combiners | `gbx_rst_combineavg`, `gbx_rst_combinecount`, `gbx_rst_combinemax`, `gbx_rst_combinemedian`, `gbx_rst_combinemin`, `gbx_rst_combinestddev`, `gbx_rst_combinesum` |
 | Tile arrays: merge, bands and map algebra | `gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra` |
 | Constructors from points and vectors | `gbx_rst_rasterize`, `gbx_rst_binpoints`, `gbx_rst_gridfrompoints`, `gbx_rst_dtmfromgeoms`, `gbx_rst_h3_rasterize`, `gbx_rst_binpoints_partial`, `gbx_rst_binpoints_finalize` |
+| Tile splitting (table functions) | `gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles`, `gbx_rst_separatebands` |
 | Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance` |
 | Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
 | From file bytes | `gbx_rst_fromcontent` |
@@ -212,6 +213,28 @@ Tiles must not overlap. A pixel in two tiles counts twice, as it does in the out
 
 The partial has default arguments, so its public name is a SQL function. UC refuses a SQL function inside a generator, so call the partial in a subquery and explode the column, as the statement does.
 A partial over 64 MiB is refused with a `Fix:` that says to use a coarser resolution or to retile first. A virtual tile is refused.
+
+### Cutting a tile into tiles
+
+Four table functions cut one tile into many: `gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles` and `gbx_rst_separatebands`.
+They give the columns of the session functions and the same sub-tiles in the same order. Call them in `FROM` with `LATERAL`, one row for each sub-tile.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_RETILE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Each sub-tile records the pixel window it was cut from in `window`. A band tile from `gbx_rst_separatebands` records its band number in `metadata['band']`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_BANDS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Three limits keep the work inside the memory of a UC function:
+
+- **The input tile is refused over 64 MiB decoded.** A session reads a tile by window, so cut a tile that large there and store the pieces in a table.
+- **The result is sized before any window is cut.** The estimate is the decoded size of all the tiles, plus 1 percent for the codec and a header for each tile. It is never under the real size, so it can refuse a result that would have fitted.
+- **Each tile made, and the total so far, is checked again.** Nothing is truncated. Over 64 MiB, the `Fix:` says to use larger tiles, a smaller overlap, or the session function.
+
+<CodeFromTest code={ucExamples} language="python" functionName="retile_over_the_limit" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+A tile that cannot be read gives no rows, and so does a NULL size. The session gives one error tile for each. An error tile goes out as itself. A virtual tile is refused.
+A window below one pixel, or an overlap outside 0 to below 100, raises with a `Fix:`, also for a tile with nothing to read.
 
 ## Python and Scala handlers
 

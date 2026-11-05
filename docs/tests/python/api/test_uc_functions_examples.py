@@ -213,6 +213,31 @@ def test_the_raster_to_grid_example_is_the_oracle_recipe_called_in_a_subquery():
     assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
 
 
+@pytest.mark.parametrize("sql", [ex.UC_RASTER_RETILE_SQL, ex.UC_RASTER_BANDS_SQL])
+def test_the_tile_splitting_examples_call_a_table_function_with_a_valid_argument_count(sql):
+    man = manifest.load()
+    ((name, args),) = re.findall(r"main\.geobrix\.(gbx_\w+)\(([^()]*)\)", sql)
+    assert name in _uc_names() and man.functions[name].kind == "generator"
+    assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
+    assert "LATERAL" in sql
+
+
+def test_a_tile_over_64_mib_is_refused_by_retile_with_a_fix():
+    message = ex.retile_over_the_limit()
+    assert "the tile is 67 MiB decoded, over the 64 MiB" in message
+    assert "Fix: run gbx_rst_retile in a notebook or job session" in message
+
+
+def test_the_four_tile_splitting_functions_are_table_functions_over_array_routines():
+    man = manifest.load()
+    for name in ("gbx_rst_retile", "gbx_rst_maketiles", "gbx_rst_tooverlappingtiles", "gbx_rst_separatebands"):
+        stmts = [s for s in ex.preview_install() if f".{name}(" in s and s.startswith("CREATE OR REPLACE FUNCTION")]
+        assert len(stmts) == 1, name
+        private = man.functions[name].levels["L4"]["tvf_over"]
+        assert f"RETURN SELECT inline(`main`.`geobrix`.{private}(" in stmts[0]
+        assert any(s.startswith(f"CREATE OR REPLACE FUNCTION `main`.`geobrix`.{private}(") for s in ex.preview_install())
+
+
 def test_the_seven_h3_statistics_are_table_functions_over_the_one_partial():
     man = manifest.load()
     tvfs = [n for n in _uc_names() if n.startswith("gbx_rst_h3_rastertogrid") and n != "gbx_rst_h3_rastertogrid_partial"]

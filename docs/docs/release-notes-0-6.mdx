@@ -276,6 +276,7 @@ See [Unity Catalog functions](./api/uc-functions) and [Installation](./installat
 - **Cell fills and BNG chips have `_array` forms.** These are `gbx_h3_cellfill_array`, `gbx_quadbin_cellfill_array`, `gbx_bng_cellfill_array`, `gbx_custom_cellfill_array`, `gbx_bng_cellintersection_array` and `gbx_bng_cellunion_array`. Call each with `GROUP BY` and `collect_list`.
 - **`gbx_rst_binpoints_partial` and `gbx_rst_binpoints_finalize` bin points in two steps.** Run the partial step, then `GROUP BY`, then the finalize step.
 - **`gbx_rst_h3_rastertogrid_partial` returns the H3 cell state of one tile.** Merge the state across tiles with `GROUP BY`.
+- **`gbx_rst_retile`, `gbx_rst_maketiles`, `gbx_rst_tooverlappingtiles` and `gbx_rst_separatebands` are table functions.** Call each with `LATERAL`. A tile over 64 MiB decoded, or a result that could not fit, is refused with a `Fix:`.
 
 ## Ingestion {#ingestion}
 

@@ -79,6 +79,16 @@ SELECT band, cellid,
 FROM w
 GROUP BY band, cellid"""
 
+# A tile is cut into tiles by a table function: LATERAL gives one row for each sub-tile, with the session's columns.
+UC_RASTER_RETILE_SQL = """SELECT r.scene, t.window, t.raster
+FROM rasters AS r,
+     LATERAL main.geobrix.gbx_rst_retile(r.tile, 512, 512) AS t"""
+
+# A band tile records its band number in its metadata.
+UC_RASTER_BANDS_SQL = """SELECT r.scene, t.metadata['band'] AS band, t.raster
+FROM rasters AS r,
+     LATERAL main.geobrix.gbx_rst_separatebands(r.tile) AS t"""
+
 # Install the functions and the procedures that call them.
 INSTALL_PROCEDURES_PYTHON = '''import databricks.labs.gbx as gbx
 
@@ -214,6 +224,17 @@ def tile_over_the_limit():
         tier_b.HANDLERS["gbx_rst_avg"](tile)
     except ValueError as err:
         return width, str(err)
+
+
+def retile_over_the_limit():
+    """A tile decoded over 64 MiB is refused by retile, with a Fix. The pieces are made in a session."""
+    from databricks.labs.gbx.uc import forms
+
+    tile = _float_tile(4200, 4200)  # 67 MiB decoded
+    try:
+        forms.rst_retile_tiles(tile, 512, 512)
+    except ValueError as err:
+        return str(err)
 
 
 def preview_procedures():

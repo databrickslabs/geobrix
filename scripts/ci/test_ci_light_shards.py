@@ -1,80 +1,162 @@
 """Guards for the sharded light CI job.
 
-The light tier runs as parallel shards (the `pyrx` job matrix in build_main.yml). These tests
-read the workflow and the two CI actions and fail unless:
+The light tier runs as parallel shards (the `light` job matrix in build_main.yml), always on the native bindings and the
+Rust module (the `light-payload` job). These tests read the workflow and the CI actions and fail unless:
 
-* the shards together hold exactly the dirs of `_LIGHT_TEST_DIRS` (test/conftest.py), each in
-  one shard, so a new light dir that no shard runs, or that two shards run, goes red;
-* the heavy build ignores the same set (`LIGHT_IGNORES`) and the unsharded fallback line of the
-  light action lists the same set;
+* the shards together run every test file of the light dirs of `_LIGHT_TEST_DIRS` (test/conftest.py) exactly once, so a
+  new light dir or file that no shard runs, or that two shards run, goes red. Shards are lists of paths (a dir, or a
+  file), optionally one hashed part of a dir (`part`: i/n, GBX_SHARD; the hash is conftest's `shard_of`) and optionally
+  the oracle tables of test_family_cross_tier.py (`oracle_tables`: that one file runs once per table, every oracle
+  table of the manifest in exactly one shard);
+* the heavy build ignores the same dirs (`LIGHT_IGNORES`) and the unsharded fallback line of the light action lists them;
 * `pyvx` runs before `bench` in the same shard (the PROJ state bench relies on);
-* `build` waits for the whole sharded job, the shards actually receive their `dirs`, and
-  nothing can quietly drop a shard or a dir: the matrix has no `exclude`/`include`, and the job
-  and the action step carry no `if`, `continue-on-error` or skip input.
+* the heavy build waits only for the native payload (it is no longer behind the light shards), and nothing can quietly
+  drop a shard, a path or the native bindings: the matrix has no `exclude`/`include`, and the job and the action step
+  carry no `if`, `continue-on-error` or skip input; the action fails a shard whose bindings do not load from the payload.
 """
 
 import ast
 import re
+import sys
+import zlib
 from pathlib import Path
 
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CONFTEST = REPO_ROOT / "python" / "geobrix" / "test" / "conftest.py"
+PKG = REPO_ROOT / "python" / "geobrix"
+CONFTEST = PKG / "test" / "conftest.py"
+FAMILY = "test/manager/test_family_cross_tier.py"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "build_main.yml"
 LIGHT_ACTION = REPO_ROOT / ".github" / "actions" / "pyrx_build" / "action.yml"
 HEAVY_ACTION = REPO_ROOT / ".github" / "actions" / "python_build" / "action.yml"
 
-HOW_TO_FIX = (
-    "Put every light dir in exactly one shard of the `pyrx` job in build_main.yml"
-)
+HOW_TO_FIX = "Put it in exactly one shard of the `light` job in build_main.yml"
+
+
+def _conftest_tree():
+    return ast.parse(CONFTEST.read_text())
 
 
 def _light_test_dirs():
-    tree = ast.parse(CONFTEST.read_text())
     return ast.literal_eval(
         next(
             n.value
-            for n in tree.body
+            for n in _conftest_tree().body
             if isinstance(n, ast.Assign)
             and any(getattr(t, "id", "") == "_LIGHT_TEST_DIRS" for t in n.targets)
         )
     )
 
 
-def _pyrx_job():
-    return yaml.safe_load(WORKFLOW.read_text())["jobs"]["pyrx"]
+def _shard_of():
+    """conftest's own `shard_of`, compiled from its source (the conftest imports pytest and is not importable here)."""
+    fn = next(
+        n
+        for n in _conftest_tree().body
+        if isinstance(n, ast.FunctionDef) and n.name == "shard_of"
+    )
+    ns = {"zlib": zlib}
+    exec(compile(ast.Module([fn], []), str(CONFTEST), "exec"), ns)
+    return ns["shard_of"]
+
+
+def _jobs():
+    return yaml.safe_load(WORKFLOW.read_text())["jobs"]
 
 
 def _shards():
+    return _jobs()["light"]["strategy"]["matrix"]["shard"]
+
+
+def _test_files(path):
+    """The test files under a path of python/geobrix (a dir, or a file), as 'test/...' strings."""
+    p = PKG / path
+    assert p.exists(), f"{path} does not exist"
+    files = [p] if p.is_file() else [*p.rglob("test_*.py"), *p.rglob("*_test.py")]
+    return {f.relative_to(PKG).as_posix() for f in files}
+
+
+def _files_of(shard):
+    """The test files one shard runs: its paths, less its ignores, narrowed to its part."""
+    files = set()
+    for path in shard["paths"].split():
+        files |= _test_files(path)
+    for ignored in shard.get("ignore", "").split():
+        files -= _test_files(ignored)
+    if shard.get("part"):
+        i, n = (int(x) for x in shard["part"].split("/"))
+        assert 0 <= i < n
+        shard_of = _shard_of()
+        files = {f for f in files if shard_of(f, n) == i}
+    return files
+
+
+def _all_light_files():
+    return set().union(*(_test_files(f"test/{d}") for d in _light_test_dirs()))
+
+
+def _oracle_tables():
+    """Every oracle table test_family_cross_tier.py runs: stable functions whose table has no cross-tier file of its own."""
+    own = ast.literal_eval(
+        next(
+            n.value
+            for n in ast.parse((PKG / FAMILY).read_text()).body
+            if isinstance(n, ast.Assign)
+            and any(getattr(t, "id", "") == "_OWN_FILES" for t in n.targets)
+        )
+    )
+    sys.path.insert(0, str(PKG / "src"))
+    from databricks.labs.gbx import manifest
+
     return {
-        s["name"]: s["dirs"].split() for s in _pyrx_job()["strategy"]["matrix"]["shard"]
+        f.oracle
+        for f in manifest.load().functions.values()
+        if f.status == "stable" and f.oracle not in own
     }
 
 
-def test_the_shards_cover_exactly_the_light_dirs_once_each():
-    light = sorted(_light_test_dirs())
-    shards = _shards()
-    in_shards = [d for dirs in shards.values() for d in dirs]
-    assert all(d.startswith("test/") for d in in_shards), in_shards
-    names = [d.removeprefix("test/") for d in in_shards]
+def test_the_shards_run_every_light_test_file_exactly_once():
+    runs = {}
+    for shard in _shards():
+        for f in _files_of(shard):
+            runs.setdefault(f, []).append(shard["name"])
+    everything = _all_light_files()
+    outside = sorted(set(runs) - everything)
+    assert not outside, f"run by a shard but in no light dir: {outside}"
+    missing = sorted(everything - set(runs))
+    assert not missing, f"in a light dir but in no shard: {missing}. {HOW_TO_FIX}"
+    # the family file runs once per oracle table group (below); every other file in exactly one shard
+    twice = {f: s for f, s in runs.items() if len(s) > 1 and f != FAMILY}
+    assert not twice, f"in more than one shard: {twice}. {HOW_TO_FIX}"
 
-    twice = sorted({n for n in names if names.count(n) > 1})
-    assert not twice, f"in more than one shard (or twice): {twice}. {HOW_TO_FIX}"
-    assert sorted(names) == light, (
-        f"in _LIGHT_TEST_DIRS but in no shard: {sorted(set(light) - set(names))}; "
-        f"in a shard but not in _LIGHT_TEST_DIRS: {sorted(set(names) - set(light))}. "
-        f"{HOW_TO_FIX}"
+
+def test_the_family_file_runs_every_oracle_table_in_exactly_one_shard():
+    running = [s for s in _shards() if FAMILY in _files_of(s)]
+    assert len(running) > 1
+    groups = []
+    for shard in running:
+        # without tables a shard would run the whole file (GBX_ORACLE_TABLES unset)
+        assert shard.get("oracle_tables"), f"{shard['name']} runs {FAMILY} with no oracle_tables"
+        groups.append(shard["oracle_tables"].split(","))
+    flat = [t for g in groups for t in g]
+    assert sorted(set(flat) ^ _oracle_tables()) == [], (
+        f"oracle tables in no shard: {sorted(_oracle_tables() - set(flat))}; "
+        f"named but not in the manifest: {sorted(set(flat) - _oracle_tables())}"
+    )
+    assert len(flat) == len(set(flat)), f"in more than one shard: {sorted(t for t in set(flat) if flat.count(t) > 1)}"
+    # only that file takes tables, and nothing else takes a part of it
+    assert all(
+        not s.get("oracle_tables") or s["paths"].split() == [FAMILY] for s in _shards()
     )
 
-    # The heavy build must ignore the same set ...
+
+def test_the_heavy_build_ignores_the_light_dirs_and_the_fallback_lists_them():
+    light = sorted(_light_test_dirs())
     heavy = re.search(r'LIGHT_IGNORES="([^"]*)"', HEAVY_ACTION.read_text()).group(1)
     ignored = [i.removeprefix("--ignore=test/") for i in heavy.split()]
-    assert (
-        sorted(ignored) == light
-    ), "LIGHT_IGNORES (python_build) differs from _LIGHT_TEST_DIRS"
-
-    # ... and so must the unsharded fallback line (gbx:test:python and gbx:test:light read it).
+    assert sorted(ignored) == light, "LIGHT_IGNORES (python_build) differs from _LIGHT_TEST_DIRS"
+    # gbx:test:python and gbx:test:light read the unsharded fallback line
     fallback = re.search(
         r"^\s*pytest (test/\S+(?: test/\S+)*) -m ", LIGHT_ACTION.read_text(), re.M
     ).group(1)
@@ -83,28 +165,55 @@ def test_the_shards_cover_exactly_the_light_dirs_once_each():
 
 def test_pyvx_runs_before_bench_in_the_same_shard():
     # pyvx registers the PROJ grids that bench's raster builds on worker threads rely on.
-    (dirs,) = [d for d in _shards().values() if "test/bench" in d]
-    assert "test/pyvx" in dirs and dirs.index("test/pyvx") < dirs.index("test/bench")
+    (paths,) = [s["paths"].split() for s in _shards() if "test/bench" in s["paths"].split()]
+    assert "test/pyvx" in paths and paths.index("test/pyvx") < paths.index("test/bench")
 
 
-def test_heavy_waits_for_every_shard_and_nothing_can_hide_one():
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    needs = workflow["jobs"]["build"]["needs"]
-    assert "pyrx" in ([needs] if isinstance(needs, str) else needs)
+def test_the_graph_and_the_labels():
+    jobs = _jobs()
+    # heavy and light run in parallel; both wait only for what they read
+    assert jobs["build"]["needs"] == "native-payload"
+    assert jobs["light-payload"]["needs"] == "native-payload"
+    assert jobs["light"]["needs"] == "light-payload"
+    assert jobs["build"]["name"] == "Heavy tests (Scala + JAR)"
+    assert jobs["light"]["name"].startswith("Light tests - ${{ matrix.shard.name }} (py")
+    # the heavy actions read matrix.python and matrix.gdal: no other dimension is left in the job
+    assert set(jobs["build"]["strategy"]["matrix"]) == {"python", "gdal"}
 
-    job = _pyrx_job()
+
+def test_the_light_job_cannot_hide_a_shard_or_test_without_the_native_bindings():
+    job = _jobs()["light"]
     assert job["strategy"]["fail-fast"] is False
     # Only these two dimensions: an `exclude` (or `include`) could remove or add a shard
     # that the guard above never sees, because it reads `shard` alone.
     assert set(job["strategy"]["matrix"]) == {"python", "shard"}
-    # A job-level condition or continue-on-error would let a failing shard pass the gate.
+    # A job-level condition or continue-on-error would let a failing shard pass.
     assert not {"if", "continue-on-error"} & set(job)
-
-    (step,) = [
-        s for s in job["steps"] if s.get("uses") == "./.github/actions/pyrx_build"
-    ]
+    for shard in _shards():
+        assert set(shard) <= {"name", "paths", "ignore", "part", "oracle_tables", "delta"}, shard
+    (step,) = [s for s in job["steps"] if s.get("uses") == "./.github/actions/pyrx_build"]
+    # no `native` or `run_tests` input: a light shard always tests on the payload
     assert step["with"] == {
         "python_version": "${{ matrix.python }}",
-        "dirs": "${{ matrix.shard.dirs }}",
+        "paths": "${{ matrix.shard.paths }}",
+        "ignore": "${{ matrix.shard.ignore }}",
+        "part": "${{ matrix.shard.part }}",
+        "oracle_tables": "${{ matrix.shard.oracle_tables }}",
+        "delta": "${{ matrix.shard.delta || 'false' }}",
     }
     assert not {"if", "continue-on-error"} & set(step)
+    # the payload job feeds the shards, and the action's check fails the shard when a binding does not load from it
+    action = yaml.safe_load(LIGHT_ACTION.read_text())["runs"]["steps"]
+    (check,) = [s for s in action if "light_native.py check" in s.get("run", "")]
+    assert check["if"] == "inputs.native == 'true'" and "continue-on-error" not in check
+    assert any(
+        s.get("with", {}).get("name") == "light-native-payload" and s.get("if") == "inputs.native == 'true'"
+        for s in action
+    )
+    # the one job that skips the payload runs no light test
+    (scripts,) = [
+        s
+        for s in _jobs()["light-scripts"]["steps"]
+        if s.get("uses") == "./.github/actions/pyrx_build"
+    ]
+    assert scripts["with"]["native"] == "false" and scripts["with"]["run_tests"] == "false"

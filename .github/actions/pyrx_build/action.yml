@@ -1,22 +1,42 @@
 name: build geobrix pyrx (lightweight)
 description: >
-  Build and test the lightweight, JAR-free raster API (pyrx). Unlike
-  scala_build / python_build this installs NO Scala JAR and NO apt/native GDAL —
-  pyrx runs on rasterio's bundled GDAL (the same path that works on Serverless,
-  shared clusters, and ARM). It needs only a JVM (pyspark local mode) plus the
-  pure-Python geobrix[pyrx] extra. Kept fast and isolated so it can gate the
-  heavyweight build (fail-fast).
+  Set up and run one shard of the lightweight, JAR-free tier (pyrx and the other light test dirs). No Scala JAR and no
+  apt/native GDAL: the tests run on the native payload the CI native build makes (GDAL's own Python bindings, the five
+  vendored bindings and the Rust module, laid out by scripts/ci/light_native.py in the job `light-payload`), plus
+  pyspark local mode. The shard fails before its first test when a binding or the Rust module does not load from the
+  payload, so a light shard can never test without them.
 inputs:
   python_version:
     description: 'Python version (matches the job matrix).'
     default: '3.12.3'
-  dirs:
+  paths:
     description: >
-      Space-separated light test dirs (relative to python/geobrix) this job runs in one pytest
-      process, e.g. 'test/pyrx'. The CI workflow shards the light tier across parallel jobs and
-      gives each its share (see the `pyrx` job matrix in .github/workflows/build_main.yml).
-      Empty runs every light dir in one process.
+      Space-separated test paths (dirs or files, relative to python/geobrix) this job runs in one pytest process, e.g.
+      'test/pyrx'. The CI workflow shards the light tier across parallel jobs and gives each its share (the `light` job
+      matrix in .github/workflows/build_main.yml). Empty runs every light dir in one process.
     default: ''
+  ignore:
+    description: 'Space-separated paths (relative to python/geobrix) passed to pytest as --ignore.'
+    default: ''
+  part:
+    description: >
+      '<i>/<n>': run only the test files of part i of n (GBX_SHARD, test/conftest.py shard_of). Splits one dir across
+      jobs; the guard (scripts/ci/test_ci_light_shards.py) proves the parts are the whole dir.
+    default: ''
+  oracle_tables:
+    description: >
+      Comma-separated oracle tables (GBX_ORACLE_TABLES) test_family_cross_tier.py restricts itself to. Splits that one
+      file across jobs; the guard proves the jobs' tables are every table of the manifest, once each.
+    default: ''
+  delta:
+    description: "'true' when the shard has tests on a local Delta session (test/zarr, test/ds): fetches the Delta jars."
+    default: 'false'
+  native:
+    description: "'false' skips the native payload (only the job that tests the scripts, which has no light test)."
+    default: 'true'
+  run_tests:
+    description: "'false' sets the environment up and runs no pytest (the caller runs its own tests)."
+    default: 'true'
 runs:
   using: "composite"
   steps:
@@ -34,18 +54,27 @@ runs:
     - name: Configure python interpreter
       uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
       with:
-        cache: 'pip'
-        cache-dependency-path: '.ci-pip-cache-key'
         python-version: ${{ inputs.python_version }}
-    - name: Authenticate for JFrog (pip via OIDC)
+    - name: Authenticate for JFrog (pip, Maven via OIDC)
       id: jfrog
       uses: ./.github/actions/jfrog-auth
-    # The Delta jar fetch below runs Maven; it uses the pinned ./mvnw like every other CI Maven call.
-    - name: Install the pinned Maven (wrapper)
-      uses: ./.github/actions/maven-wrapper
+
+    # The installed light environment, cached whole. Key: the hash-pinned lock, the interpreter and the runner, so a
+    # change to any of them is a new key (a cache entry is never edited, only replaced). A hit skips the download and
+    # install of ~100 wheels (pyspark alone is 400 MB); the import check below runs either way, so a bad entry fails the
+    # shard instead of testing on it. Saved right after the install, before any test, so a red test run still leaves it.
+    - name: Locate site-packages
+      id: site
+      shell: bash
+      run: echo "purelib=$(python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')" >> "$GITHUB_OUTPUT"
+    - name: Restore the installed light environment
+      id: env_cache
+      uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
       with:
-        jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
-    - name: Install pyrx deps (hash-pinned) + package
+        path: ${{ steps.site.outputs.purelib }}
+        key: light-env-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python_version }}-${{ hashFiles('python/geobrix/requirements-light-env6-ci.txt') }}
+    - name: Install pyrx deps (hash-pinned)
+      if: steps.env_cache.outputs.cache-hit != 'true'
       shell: bash
       run: |
         # Bootstrap pip itself to a known version before --require-hashes.
@@ -56,67 +85,97 @@ runs:
         # Regenerate via (from python/geobrix/):
         #   uv pip compile --generate-hashes --python-version 3.12 \
         #       --output-file requirements-light-env6-ci.txt requirements-light-env6-ci.in
-        # No GDAL exception here — rasterio's bundled-GDAL binary wheel is pinned
-        # in the lock too (the lightweight API installs no native GDAL, no JAR).
+        # The lock holds PyPI's rasterio, pyogrio, pyproj and shapely too (the packages that import them name them);
+        # the native payload's builds of the same bindings are put ahead of them on sys.path below.
         pip install --require-hashes -r python/geobrix/requirements-light-env6-ci.txt
-        # Install the in-repo package itself with --no-deps; every dependency is
-        # already in the hash-pinned closure above.
+    - name: Save the installed light environment
+      if: steps.env_cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+      with:
+        path: ${{ steps.site.outputs.purelib }}
+        key: light-env-${{ runner.os }}-${{ runner.arch }}-py${{ inputs.python_version }}-${{ hashFiles('python/geobrix/requirements-light-env6-ci.txt') }}
+    - name: Install the package
+      shell: bash
+      run: |
+        # The in-repo package itself with --no-deps; every dependency is already in the hash-pinned closure above.
         pip install --no-deps python/geobrix
         python -c "import rasterio, pyarrow, pandas, shapely; print('rasterio', rasterio.__version__, 'gdal', rasterio.__gdal_version__, 'pyarrow', pyarrow.__version__, 'pandas', pandas.__version__)"
-    # test/zarr runs the Zarr transactional manifest against a local Delta Lake session. PySpark
-    # needs the OSS delta-spark jars on the JVM classpath, and they are not in the hash-pinned
-    # pip lock. Fetch them with Maven, which jfrog-auth (above) already pointed at the JFrog
-    # db-maven mirror. Spark's own `--packages` (Ivy) is not used: it ignores that mirror and
-    # the hardened runner blocks direct Maven Central. test/conftest.py finds the jars in
-    # ~/.m2/repository and puts them on PYSPARK_SUBMIT_ARGS when test/zarr is collected.
-    - name: Fetch Delta Lake jars (Zarr manifest tests)
+
+    # The native payload: GDAL's bindings (osgeo), rasterio/pyogrio/pyproj/shapely/netCDF4 built against it, and the Rust
+    # module, as the env wheel carries them (built once by the job `light-payload`, from the native build the JVM jobs
+    # use). Installed like the env wheel: a .pth puts them ahead of site-packages at interpreter start. `check` fails
+    # the shard unless every binding and the Rust module load FROM the payload.
+    - name: Fetch the native payload
+      if: inputs.native == 'true'
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+      with:
+        name: light-native-payload
+        path: ${{ runner.temp }}/light-payload-tar
+    - name: Install the native payload and check the bindings load from it
+      if: inputs.native == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/light-payload"
+        tar -xzf "$RUNNER_TEMP/light-payload-tar/light-payload.tar.gz" -C "$RUNNER_TEMP/light-payload"
+        python scripts/ci/light_native.py install --payload "$RUNNER_TEMP/light-payload"
+        # a fresh interpreter, as the tests start: GBX_NATIVE_ROOT comes from the job env the install wrote
+        GBX_NATIVE_ROOT="$RUNNER_TEMP/light-payload" python scripts/ci/light_native.py check --payload "$RUNNER_TEMP/light-payload"
+
+    # test/zarr and the tests marked `delta` run on a local Delta Lake session. PySpark needs the OSS delta-spark jars on
+    # the JVM classpath, and they are not in the hash-pinned pip lock. Fetch them with Maven, which jfrog-auth (above)
+    # pointed at the JFrog db-maven mirror (Spark's own `--packages` (Ivy) ignores that mirror and the hardened runner
+    # blocks Maven Central). The jars are cached on the fetch script (its version and sha256 pins): a hit needs no Maven,
+    # and the script still checks both sha256 values. test/conftest.py finds them in ~/.m2/repository.
+    - name: Restore the Delta Lake jars
+      id: delta_cache
+      if: inputs.delta == 'true'
+      uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+      with:
+        path: ~/.m2/repository/io/delta
+        key: delta-jars-${{ runner.os }}-${{ hashFiles('scripts/ci/fetch-delta-test-jars.sh') }}
+    - name: Install the pinned Maven (wrapper)
+      if: inputs.delta == 'true' && steps.delta_cache.outputs.cache-hit != 'true'
+      uses: ./.github/actions/maven-wrapper
+      with:
+        jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
+    - name: Fetch Delta Lake jars
+      if: inputs.delta == 'true'
       shell: bash
       env:
         GBX_MVN: ./mvnw
       run: bash scripts/ci/fetch-delta-test-jars.sh
-    - name: Build lightweight wheel
-      shell: bash
-      run: |
-        cd python/geobrix
-        python -m build
+
     - name: Run pyrx tests (no JAR)
+      if: inputs.run_tests == 'true'
       shell: bash
       env:
-        SHARD_DIRS: ${{ inputs.dirs }}
+        SHARD_PATHS: ${{ inputs.paths }}
+        SHARD_IGNORE: ${{ inputs.ignore }}
+        GBX_SHARD: ${{ inputs.part }}
+        GBX_ORACLE_TABLES: ${{ inputs.oracle_tables }}
       run: |
         cd python/geobrix
-        # pyproject sets pythonpath=["src"]; exclude integration (network) tests.
-        # test/ds = lightweight DataSource readers/writer + the tiled-output
-        # framework (raster_gbx/gtiff_gbx/pmtiles_gbx); same light-dep set as pyrx.
-        # The lightweight tier is exercised ONLY here (the heavy phase skips these
-        # dirs via test/conftest.py collect_ignore). Every light test dir must be
-        # listed: pyrx, ds, pyvx, pygx (light GridX), pmtiles_light (light
-        # pmtiles_agg), zarr (transactional Zarr stores, [zarr_dbr19] extra; needs the Delta
-        # jars fetched above), stac (light STAC client, [stac] extra),
-        # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra),
-        # bench (bench-harness spec/compare/fingerprint/runner unit tests -- guards
-        # the light bench FnSpec registry + cross-tier count invariants),
-        # models (gbx.models GeoSAM/runner/serving -- torch/segment-geospatial/mlflow
-        # are lazy-imported at function scope, so no [models] extra install is needed
-        # here. No test in test/models is GPU-bound or marked `integration`: GeoSAM/
-        # segmenter backends are monkeypatch-injected fakes (test_geosam.py,
-        # test_runner.py), and the mlflow-dependent serving tests are individually
-        # guarded with `pytest.importorskip("mlflow")` (test_serving.py) rather than
-        # excluded via the `-m "not integration"` filter below).
-        # manager (the per-surface function manifest: contracts generated from it, plus the
-        # oracle tables that every implementation level is judged against; pure Python,
-        # local Spark only for the oracle runs).
+        # pyproject sets pythonpath=["src"]; exclude integration (network) tests. The environment is cached without
+        # entry-point scripts, so pytest runs as a module.
+        pytest() { python -m pytest "$@"; }
+        # The lightweight tier is exercised ONLY here (the heavy phase skips these dirs via test/conftest.py
+        # collect_ignore). Every light test dir must be in a shard (see test/conftest.py for the three places a new
+        # light dir goes): pyrx, ds, pyvx, pygx, pmtiles_light, zarr, stac, earthdata, vizx, sample, bench, models,
+        # core, manager, engine. Two of them reach into each other through the one process they share: test/pyvx
+        # registers PROJ grids before test/bench builds rasters on worker threads, so those two stay in one shard,
+        # pyvx first.
         #
-        # CI shards the light tier: each parallel job passes its dirs in `dirs`, and
-        # scripts/ci/test_ci_light_shards.py fails unless the shards together cover exactly the dirs of
-        # _LIGHT_TEST_DIRS in test/conftest.py, each once. A shard runs its dirs in ONE
-        # process, so state one dir leaves behind reaches the next: test/pyvx registers PROJ
-        # grids before test/bench builds rasters on worker threads (see test/conftest.py for
-        # the maintained condition), so those two stay in one shard, pyvx first.
-        if [ -n "$SHARD_DIRS" ]; then
-          pytest $SHARD_DIRS -m "not integration" -v
+        # CI shards the light tier: each parallel job passes its paths here, and scripts/ci/test_ci_light_shards.py
+        # fails unless the shards together cover every test file of _LIGHT_TEST_DIRS exactly once (test/pyrx and
+        # test/zarr by a stable per-file hash, GBX_SHARD; test_family_cross_tier.py by oracle table).
+        ignores=()
+        for p in $SHARD_IGNORE; do ignores+=("--ignore=$p"); done
+        if [ -n "$SHARD_PATHS" ]; then
+          # shellcheck disable=SC2086  # SHARD_PATHS is a space-separated list of paths
+          pytest $SHARD_PATHS ${ignores[@]+"${ignores[@]}"} -m "not integration" -v
         else
-          # No shard given: every light dir in one process. gbx:test:python and gbx:test:light
-          # read this line, so keep it a plain `pytest test/... -m ...` and in step with the shards.
+          # No shard given: every light dir in one process. gbx:test:python and gbx:test:light read this line, so keep
+          # it a plain `pytest test/... -m ...` and in step with the shards.
           pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr test/manager test/engine -m "not integration" -v
         fi

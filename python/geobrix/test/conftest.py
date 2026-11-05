@@ -27,9 +27,11 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      CI phase skips it (otherwise its module-level light imports -- e.g.
      ``from pmtiles.reader import ...`` / ``import pandas`` -- raise
      ``ModuleNotFoundError`` at collection and fail the heavy build).
-  2. Add the new light test dir to the explicit pytest dir list in the LIGHT CI
-     phase (``.github/actions/pyrx_build/action.yml``), so it is actually RUN.
+  2. Add the new light test dir to ONE shard of the ``light`` job in
+     ``.github/workflows/build_main.yml`` (and to the unsharded fallback line of
+     ``.github/actions/pyrx_build/action.yml``), so it is actually RUN.
      The light tier is exercised ONLY in the light phase; the heavy phase skips it.
+     scripts/ci/test_ci_light_shards.py fails when a test file runs in no shard or in two.
   3. Add the new light test dir to the explicit ``--ignore`` list in the HEAVY CI
      phase (``.github/actions/python_build/action.yml``, ``LIGHT_IGNORES``). That
      list MUST stay identical to ``_LIGHT_TEST_DIRS``. The collect_ignore fallback
@@ -56,6 +58,7 @@ after it. A test that changes such state must restore it (see the ``_isolate`` /
 import importlib.util
 import os
 import shlex
+import zlib
 from pathlib import Path
 
 import pytest
@@ -193,13 +196,39 @@ def pytest_runtest_makereport(item, call):
         item.gbx_policy_outcome = rep.outcome
 
 
-def pytest_collection_modifyitems(items):
+def shard_of(relpath, n):
+    """The shard (0..n-1) a test file belongs to when a run is split n ways: a stable hash of its path from
+    python/geobrix ('test/pyrx/test_x.py'). CI's guard (scripts/ci/test_ci_light_shards.py) reads this function."""
+    return zlib.crc32(relpath.encode()) % n
+
+
+def _split_run(config, items):
+    """GBX_SHARD=<i>/<n>: keep only the test files that belong to part i of n (every file to exactly one part, so
+    the n parts together are the whole run). Whole files, never single tests, so a module's fixtures and state stay
+    in one process. CI splits its longest light dirs this way; unset, nothing changes."""
+    spec = os.environ.get("GBX_SHARD")
+    if not spec:
+        return
+    i, n = (int(x) for x in spec.split("/"))
+    assert 0 <= i < n, f"GBX_SHARD={spec}: want <i>/<n> with 0 <= i < n"
+    root = Path(__file__).resolve().parent
+    keep, dropped = [], []
+    for item in items:
+        rel = "test/" + Path(item.path).resolve().relative_to(root).as_posix()
+        (keep if shard_of(rel, n) == i else dropped).append(item)
+    if dropped:
+        config.hook.pytest_deselected(items=dropped)
+    items[:] = keep
+
+
+def pytest_collection_modifyitems(config, items):
     """Mark the tests that use the local Connect session `connect`, and order them last (stable for the rest).
 
     The marker is what lets gbx:test:pyrx / gbx:test:light run them in a pytest process of their own and
     gbx:test:parity leave them out (the container has no gRPC client): no test carries it by hand. The policy meta-row
     (marker `policy_meta`) runs after the policy rows and before the Connect rows, so it sees their outcomes.
     """
+    _split_run(config, items)
     for item in items:
         if "spark_connect_local" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.connect)

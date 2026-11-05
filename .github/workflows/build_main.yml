@@ -44,20 +44,111 @@ jobs:
           git diff --staged --quiet && echo "No changes to doc-snippet-inventory.json" && exit 0
           git commit -m "chore(docs): rebuild doc-snippet-inventory.json [skip ci]"
           git push origin HEAD:${{ github.head_ref }}
-  # Lightweight, JAR-free raster API (pyrx). Runs FIRST and gates the heavy
-  # build below (fail-fast): no Scala JAR, no apt/native GDAL — just rasterio's
-  # bundled GDAL + pyspark local.
+  # The x86_64 native build the heavy build's JVMs load their GDAL from (the JAR's GDAL Java classes refuse any
+  # other JNI) and the light shards' bindings come from. Cached on the native build's inputs: a hit takes seconds, a
+  # miss builds (about 20-40 min). See .github/workflows/build-gdal-native.yml for the cache rules.
+  native-payload:
+    uses: ./.github/workflows/build-gdal-native.yml
+    with:
+      cache: true
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
+      id-token: write
+
+  # The native payload the light shards test on, built once: GDAL's own Python bindings (osgeo), the five vendored
+  # bindings (rasterio, pyogrio, pyproj, shapely, netCDF4) and the Rust module (rust/gbxrs), laid out as the env wheel
+  # carries them (scripts/ci/light_native.py), from the native build `native-payload` found or made. Every light shard
+  # downloads it as one artifact (a tarball: the layout has a symlink and an executable) and refuses to test unless the
+  # bindings and the Rust module load from it. Runs on the runner group of `native-payload`: the cache entry it reads
+  # is restorable only there (a cache entry's version includes its compression).
+  light-payload:
+    name: Native payload for the light tests (x86_64)
+    needs: native-payload
+    runs-on:
+      group: larger-runners
+      labels: larger
+    environment: runtime
+    permissions:
+      contents: read
+      # Required by .github/actions/jfrog-auth (the Rust crates come through JFrog on a cache miss).
+      id-token: write
+    steps:
+      - name: checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+      # build/native/jvm-payload: _native/x86_64/{lib,share,...}, every file checked against the build's MANIFEST.json.
+      - name: Fetch the x86_64 native payload
+        id: native
+        uses: ./.github/actions/native_payload
+      # The Rust module is not part of the native build: it is a small pure-Rust crate (pyo3 only, no GDAL), built here
+      # with the pinned toolchain (rust-toolchain.toml) and cached on its sources, so a change to the crate, its lock or
+      # the toolchain is a new key. The shipped module is built in the manylinux container (gbx:build:rs); this one runs
+      # on the runner that built it.
+      - name: Restore the Rust module
+        id: rs
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: build/rs-ci/_gbxrs.so
+          key: gbxrs-x86_64-${{ hashFiles('rust/gbxrs/Cargo.toml', 'rust/gbxrs/Cargo.lock', 'rust/gbxrs/src/**', 'rust-toolchain.toml') }}
+      - name: Authenticate for JFrog (crates via OIDC)
+        id: jfrog
+        if: steps.rs.outputs.cache-hit != 'true'
+        uses: ./.github/actions/jfrog-auth
+      - name: Configure Cargo for JFrog
+        if: steps.rs.outputs.cache-hit != 'true'
+        uses: ./.github/actions/jfrog-cargo
+        with:
+          jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
+      - name: Build the Rust module
+        if: steps.rs.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          bash scripts/native/install-host-rust.sh
+          export RUSTUP_HOME="$HOME/.cache/geobrix/rustup" CARGO_HOME="$GBX_HOST_CARGO_HOME"
+          export PATH="$CARGO_HOME/bin:$PATH"
+          (cd rust/gbxrs && cargo build --release --locked)
+          mkdir -p build/rs-ci
+          cp rust/gbxrs/target/release/lib_gbxrs.so build/rs-ci/_gbxrs.so
+      - name: Save the Rust module
+        if: steps.rs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
+        with:
+          path: build/rs-ci/_gbxrs.so
+          key: gbxrs-x86_64-${{ hashFiles('rust/gbxrs/Cargo.toml', 'rust/gbxrs/Cargo.lock', 'rust/gbxrs/src/**', 'rust-toolchain.toml') }}
+      - name: Lay out the light payload
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/light_native.py assemble --native-out build/native/out/x86_64 \
+            --jvm-payload "${{ steps.native.outputs.root }}" --rs build/rs-ci/_gbxrs.so --out build/native/light-payload
+          mkdir -p build/native/light-payload-tar
+          tar -czf build/native/light-payload-tar/light-payload.tar.gz -C build/native/light-payload .
+          du -sh build/native/light-payload-tar/light-payload.tar.gz
+      - name: Hand the payload to the light shards
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
+        with:
+          name: light-native-payload
+          path: build/native/light-payload-tar/light-payload.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  # The lightweight, JAR-free tier (pyrx and the other light dirs), always on the native bindings and the Rust module
+  # (see `light-payload`): no Scala JAR, no apt/native GDAL, just the payload and pyspark local. Runs in parallel with the
+  # heavy build; neither waits for the other.
   #
-  # Sharded: the light test dirs run as parallel jobs (the `shard` matrix), each in one pytest
-  # process, instead of one ~1 h process. `build` needs this job, so it starts only after ALL
-  # shards pass. scripts/ci/test_ci_light_shards.py fails unless the shards together hold exactly
-  # the light dirs of python/geobrix/test/conftest.py (_LIGHT_TEST_DIRS), each once, and the
-  # heavy build's LIGHT_IGNORES lists the same set. A new light dir goes into ONE shard here.
-  # Keep pyvx before bench in one shard: pyvx leaves the PROJ grids bench relies on (the guard
-  # checks that too). Every shard always runs; there is no matrix exclude/include and no path
-  # filter, so a red test/bench at HEAD can never be hidden (the guard checks that as well).
-  pyrx:
-    name: Lightweight (pyrx) tests - ${{ matrix.shard.name }} (${{ matrix.python }})
+  # Sharded so that no shard's pytest runs much past ~15 min: the `shard` matrix gives each job its test paths. A
+  # shard is a set of paths, or a hashed part of a dir (`part`: test/pyrx, test/zarr), or the oracle tables of the one
+  # file test_family_cross_tier.py (`oracle_tables`). scripts/ci/test_ci_light_shards.py fails unless the shards
+  # together run every test file of the light dirs of python/geobrix/test/conftest.py (_LIGHT_TEST_DIRS) exactly once
+  # (that file once per oracle table), and the heavy build's LIGHT_IGNORES lists the same dirs. A new light dir, file or
+  # oracle table goes into ONE shard here. Keep pyvx before bench in one shard (pyvx leaves the PROJ grids bench relies
+  # on; the guard checks that too). Every shard always runs; there is no matrix exclude/include and no path filter, so a
+  # red test at HEAD can never be hidden (the guard checks that as well).
+  light:
+    name: Light tests - ${{ matrix.shard.name }} (py${{ matrix.python }})
+    needs: light-payload
     runs-on:
       group: databrickslabs-protected-runner-group
       labels: linux-ubuntu-latest
@@ -73,37 +164,91 @@ jobs:
       matrix:
         python: [ 3.12.3 ]
         shard:
-          - name: pyrx
-            dirs: test/pyrx
-          # Also runs the tests of the scripts themselves (one of the shorter shards).
+          # test/pyrx, the longest dir (~17 min), in two hashed halves.
+          - name: pyrx 1/2
+            paths: test/pyrx
+            part: 0/2
+          - name: pyrx 2/2
+            paths: test/pyrx
+            part: 1/2
           - name: ds
-            dirs: test/ds
-            scripts_ci: true
-          # Its own shard: the Zarr tests are the longest dir after pyrx (Delta jars on the classpath).
-          - name: zarr
-            dirs: test/zarr
-          - name: rest
-            dirs: >-
-              test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx
-              test/sample test/bench test/core test/models test/manager test/engine
+            paths: test/ds
+            delta: true
+          # test/zarr (~34 min, on the Delta jars) in four hashed parts (its two longest files, test_write and
+          # test_maint, land in different ones).
+          - name: zarr 1/4
+            paths: test/zarr
+            part: 0/4
+            delta: true
+          - name: zarr 2/4
+            paths: test/zarr
+            part: 1/4
+            delta: true
+          - name: zarr 3/4
+            paths: test/zarr
+            part: 2/4
+            delta: true
+          - name: zarr 4/4
+            paths: test/zarr
+            part: 3/4
+            delta: true
+          # The family oracle tables of test/manager (~27 min) in three: every oracle table of the manifest in exactly one.
+          - name: manager family 1/3
+            paths: test/manager/test_family_cross_tier.py
+            oracle_tables: CELL_AGGREGATE,GRID_GENERATOR,RASTER_ARRAY_OP,RASTER_TO_GRID,RASTER_VECTORIZE,SPEC_ANALYSIS,SPEC_WARP,WEB_TILES
+          - name: manager family 2/3
+            paths: test/manager/test_family_cross_tier.py
+            oracle_tables: GRID_ARRAY,RASTER_ACCESSOR,RASTER_GENERATOR,RASTER_RASTERIZE,SPEC_DEM,VECTOR_GENERATOR,VECTOR_SCALAR
+          - name: manager family 3/3
+            paths: test/manager/test_family_cross_tier.py
+            oracle_tables: GRID_SCALAR,RASTER_AGGREGATE,RASTER_CONSTRUCTOR,RASTER_FILE_OP,RASTER_STAT,RASTER_TILE_OP,SPEC_CALC,VECTOR_AGGREGATE
+          - name: manager
+            paths: test/manager
+            ignore: test/manager/test_family_cross_tier.py
+          # pyvx before bench: one process, in this order (see above).
+          - name: bench
+            paths: test/pyvx test/bench
+          - name: other dirs
+            paths: test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models test/engine
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
         with:
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
-      - name: Create pip cache key file
-        run: echo "pyrx-${{ github.ref }}-${{ matrix.python }}" > .ci-pip-cache-key
-      - name: build + test pyrx (lightweight)
+      - name: set up the light environment and test (lightweight)
         uses: ./.github/actions/pyrx_build
         with:
           python_version: ${{ matrix.python }}
-          dirs: ${{ matrix.shard.dirs }}
-      # Tests of the scripts themselves: the JAR packaging check, the gbx:dcs:build /
-      # gbx:dcs:publish gates and the CI shard guard. Stdlib + pytest (from the pyrx install
-      # above); the DCS commands run against a fake docker on PATH, so no Docker daemon or
-      # registry is involved. Run once, in one shard.
+          paths: ${{ matrix.shard.paths }}
+          ignore: ${{ matrix.shard.ignore }}
+          part: ${{ matrix.shard.part }}
+          oracle_tables: ${{ matrix.shard.oracle_tables }}
+          delta: ${{ matrix.shard.delta || 'false' }}
+
+  # The tests of the scripts themselves: the JAR packaging check, the gbx:dcs:build / gbx:dcs:publish gates, the CI shard
+  # guard. Stdlib + pytest (from the light install); the DCS commands run against a fake docker on PATH, so no Docker
+  # daemon or registry is involved. It is a light-environment job without a native payload (it tests no light code).
+  light-scripts:
+    name: Script tests (scripts/ci)
+    runs-on:
+      group: databrickslabs-protected-runner-group
+      labels: linux-ubuntu-latest
+    environment: runtime
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
+      - name: set up the light environment
+        uses: ./.github/actions/pyrx_build
+        with:
+          python_version: 3.12.3
+          native: 'false'
+          run_tests: 'false'
       - name: test scripts/ci (JAR packaging check, DCS build/publish gates, shard guard)
-        if: matrix.shard.scripts_ci
         # The install-moves rows (test_build_env_wheel.py) resolve with uv. uv comes through the job's pip, which the
         # JFrog bootstrap routes to the mirror (never a direct download), and uses the same index and netrc; the rows
         # FAIL in CI (CI=true) when uv or the index is missing, they do not skip.
@@ -116,18 +261,6 @@ jobs:
           index="$(python -c 'import configparser, os; c = configparser.RawConfigParser(); c.read(os.environ["PIP_CONFIG_FILE"]); print(c.get("global", "index-url", fallback=""))')"
           if [ -z "$index" ]; then echo "::error::no index-url in PIP_CONFIG_FILE; uv would fall back to pypi.org"; exit 1; fi
           UV_DEFAULT_INDEX="$index" python -m pytest scripts/ci -v
-
-  # The x86_64 native build the heavy build's JVMs load their GDAL from (the JAR's GDAL Java classes refuse any
-  # other JNI). Cached on the native build's inputs: a hit takes seconds, a miss builds (about 20-40 min), in
-  # parallel with the pyrx shards. See .github/workflows/build-gdal-native.yml for the cache rules.
-  native-payload:
-    uses: ./.github/workflows/build-gdal-native.yml
-    with:
-      cache: true
-    permissions:
-      contents: read
-      # Required by .github/actions/jfrog-auth (on a cache miss): GitHub OIDC token exchange for pip and crates via JFrog.
-      id-token: write
 
   # CI is x86_64 only; the aarch64 native build is checked by the local two-architecture gate
   # (bash scripts/commands/gbx-native-verify-arches.sh), whose stamp scripts/native/arch-gate.json names the native
@@ -148,10 +281,11 @@ jobs:
         run: python3 scripts/native/native_inputs.py check-stamp
 
   build:
+    name: Heavy tests (Scala + JAR)
     # Heavy: full Scala test + Python test+coverage + GDAL native install (mvn -T 1C, ~10–15 min). Standard runner is too small.
-    # Gated on the lightweight pyrx job so a pyrx failure fails the run fast,
-    # before spending ~10–15 min on the Scala/native build.
-    needs: [pyrx, native-payload]
+    # Needs only the native payload: it runs in parallel with the light shards (they share no state), so the run takes as
+    # long as the slower of the two, and a red light shard no longer hides the heavy result (nor the reverse).
+    needs: native-payload
     runs-on:
       group: larger-runners
       labels: larger
@@ -163,13 +297,12 @@ jobs:
       id-token: write
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # The shared scala_build / python_build actions read matrix.python and matrix.gdal (and scripts/native/legacy-consumers.txt
+    # audits the gdal line), so those two stay a matrix; the explicit name above keeps them out of the job's title.
     strategy:
       matrix:
         python: [ 3.12.3 ]
-        pytest: [9.1.1]
-        numpy: [ 2.1.3 ]
         gdal: [ 3.11.4 ]
-        spark: [ 4.0.0 ]
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -177,7 +310,7 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Create pip cache key file
         run: |
-          echo "${{ github.ref }}-${{ matrix.python }}-${{ matrix.numpy }}-${{ matrix.spark }}-${{ matrix.gdal }}" > .ci-pip-cache-key
+          echo "${{ github.ref }}-${{ matrix.python }}-numpy2.1.3-spark4.0.0-${{ matrix.gdal }}" > .ci-pip-cache-key
       - name: Cache apt packages
         uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306  # v5.0.3
         with:

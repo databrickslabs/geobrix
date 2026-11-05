@@ -56,6 +56,15 @@ def _rtg_ll_world(tmpdir):
     return _tile(_gtiff(_bands(4, 8), "EPSG:4326", origin=(-180.0, 90.0), px=45.0))
 
 
+@builder("rtg_bng_wide")
+def _rtg_bng_wide(tmpdir):
+    """A tile of 4 x 4 pixels over the whole of Great Britain's grid (700 km by 700 km): a few bytes, but at a fine
+    resolution it covers more cells than a Unity Catalog function returns."""
+    return _tile(
+        _gtiff(_bands(4, 4), "EPSG:27700", origin=(0.0, 1300000.0), px=175000.0)
+    )
+
+
 @builder("rtg_ll_west")
 def _rtg_ll_west(tmpdir):
     """The west 40 columns of `rtg_ll`: the same pixel grid, cut in two, so the cells on the seam hold pixels of both."""
@@ -442,6 +451,13 @@ def _other_partial_rows(g):
         Case(f"{short}_rtgp_bad_res", P, (tile, *_ARGS[g][1:-1], bad_res), "raises", str(bad_res), BOTH),
         Case(f"uc_{short}_rtgp_virtual_refused", P, _pargs(g, VIRTUAL), "uc_refused", None, ("uc",)),
     )  # fmt: skip
+    # the cells the tile covers are counted from its bounds BEFORE the pixels are binned: refused with a Fix
+    wide, fine = {
+        "quadbin": (Build("rtg_ll_world"), (20,)),
+        "bng": (Build("rtg_bng_wide"), (6,)),
+        "custom": (Build("rtg_bng_wide"), (G, 8)),
+    }[g]
+    rows += (Case(f"uc_{short}_rtgp_over_cap", P, (wide, *fine), "uc_refused", None, ("uc",)),)  # fmt: skip
     if g == "quadbin":  # a band of nothing but NoData has only covered-but-empty cells
         rows += (
             Case(

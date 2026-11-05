@@ -13,6 +13,7 @@ from typing import Callable, Dict
 from databricks.labs.gbx.uc import handlers
 from databricks.labs.gbx.uc.tier_b import (
     _CORES,
+    _lonlat_bounds,
     _Parameter,
     h3_cover_cells_bound,
     with_dataset,
@@ -31,6 +32,68 @@ _RESOLUTIONS = {
     "custom": "a resolution within the grid",
 }
 _LOWER = "use a coarser resolution, or retile the raster first (gbx_rst_retile) so each tile covers fewer cells"
+
+
+def _bounds_in_srid(ds, srid):
+    """The tile's bounds ``(west, south, east, north)`` in the CRS ``srid``, or None when they cannot be found (a tile with
+    no CRS has no BNG bounds: the kernel cannot warp it either)."""
+    if ds.crs is None:
+        return None
+    left, bottom, right, top = ds.bounds
+    if ds.crs.to_epsg() == srid:
+        return left, bottom, right, top
+    from rasterio.warp import transform_bounds
+
+    try:
+        return transform_bounds(
+            ds.crs, f"EPSG:{srid}", left, bottom, right, top, densify_pts=21
+        )
+    except (
+        Exception
+    ):  # noqa: BLE001 - no estimate: the check after the pass still bounds the rows
+        return None
+
+
+def cells_bound(ds, grid, resolution, coverage, assignment, conf=None):
+    """An upper bound of the cells a tile makes in one band, from its bounds and the grid's cell size alone, before a pixel
+    is binned; None when the bounds cannot be found. H3 has its own (a hexagon is not a square); the grids of squares
+    count the cells of the tile's box, cut to the grid. A sparse, centroid fill holds a cell only where a pixel falls, so
+    its bound is also the pixel count. It is an upper bound: it can refuse a tile whose rows would have fitted.
+    """
+    import math
+
+    import shapely
+
+    if grid == "h3":
+        return h3_cover_cells_bound(ds, resolution, coverage, assignment)
+    if grid == "quadbin":
+        from databricks.labs.gbx.pygx import _quadbin
+
+        box = _lonlat_bounds(ds)
+        if box is None:
+            return None
+        west, south, east, north = box
+        n = 1 << resolution
+        # a span covers at most one tile more than its width in tiles (also across the antimeridian, where east > 180)
+        columns = min(n, math.ceil((east - west) / 360.0 * n) + 1)
+        _, top = _quadbin._lonlat_to_tile(west, north, resolution)
+        _, bottom = _quadbin._lonlat_to_tile(east, south, resolution)
+        cells = columns * (abs(bottom - top) + 1)
+    else:
+        from databricks.labs.gbx.uc import handlers
+
+        if grid == "bng":
+            box = _bounds_in_srid(ds, 27700)
+            if box is None:
+                return None
+            cells = handlers._bng_cells_bound(shapely.box(*box), resolution, 0)
+        else:  # custom: the grid's own coordinates, as the kernel reads them
+            cells = handlers._custom_cells_bound(
+                conf, shapely.box(*ds.bounds), resolution, 0
+            )
+    if coverage == "sparse" and assignment == "centroid":
+        cells = min(cells, ds.width * ds.height)
+    return cells
 
 
 def _run(
@@ -56,8 +119,7 @@ def _run(
         resolution = handlers._bng_res(fn, resolution)
     else:
         resolution = int(resolution)
-    if grid == "custom":
-        handlers._custom_conf(fn, grid_struct)
+    conf = handlers._custom_conf(fn, grid_struct) if grid == "custom" else None
     try:
         gridagg.check_arguments(
             resolution,
@@ -76,17 +138,15 @@ def _run(
     text = grid == "bng"
 
     def kernel(ds):
-        if (
-            grid == "h3"
-        ):  # the most cells the tile can make, from its bounds, before a pixel is binned
-            bound = h3_cover_cells_bound(ds, resolution, coverage, assignment)
-            if bound is not None:
-                handlers._check_bytes(
-                    fn,
-                    bound * ds.count * per_row,
-                    "the cells of the tile (an upper estimate)",
-                    lower=_LOWER,
-                )
+        # the most cells the tile can make, from its bounds, before a pixel is binned
+        bound = cells_bound(ds, grid, resolution, coverage, assignment, conf)
+        if bound is not None:
+            handlers._check_bytes(
+                fn,
+                bound * ds.count * per_row,
+                "the cells of the tile (an upper estimate)",
+                lower=_LOWER,
+            )
         if partial:
             bands = gridagg.raster_to_grid_partial(
                 ds, resolution, grid, coverage, assignment, grid_conf=grid_struct

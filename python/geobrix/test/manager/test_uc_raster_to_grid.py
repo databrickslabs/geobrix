@@ -271,6 +271,53 @@ def test_a_partial_over_the_array_cap_is_refused_with_a_fix_and_never_cut(
     assert tier_b.rst_h3_rastertogrid_partial(tile, 5, "complete", "centroid") == whole
 
 
+# the tile that covers a very large number of cells at a fine resolution, per grid: (the tile, the call after it)
+_FINE = {
+    "h3": ("rtg_ll_world", (15, "complete", "centroid")),
+    "quadbin": ("rtg_ll_world", (20, "complete", "centroid")),
+    "bng": ("rtg_bng_wide", (6, "complete", "centroid")),
+    "custom": ("rtg_bng_wide", (8, "complete", "centroid")),
+}
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+@pytest.mark.parametrize("routine", ("cells", "partial"))
+def test_a_fine_resolution_over_a_big_extent_is_refused_before_any_pixel_is_binned(
+    monkeypatch, tmp_path, grid, routine
+):
+    """The cells a tile can make are bounded from its extent and the grid's cell size BEFORE the pass, for every grid: the
+    pass is never run (the binning is not called) and the refusal has the shape and Fix of the check after it. Dropping
+    the estimate for a grid runs the pass first: the spy records it, and this fails."""
+    from databricks.labs.gbx.bench.oracle_tables.grid_scalar import CUSTOM_GRID
+
+    tile = oracles._build(_FINE[grid][0], str(tmp_path))
+    res, *rest = _FINE[grid][1]
+    passes = []
+
+    def spy(
+        *a, **kw
+    ):  # (the tile reader turns a raised error into a NULL, so it records and gives no cells)
+        passes.append(a)
+        return []
+
+    monkeypatch.setattr(gridagg, "_raster_to_grid", spy)
+    if routine == "cells":
+        ref = MAN.private[f"gbx__rst_{grid}_rastertogridcount_cells"].handler
+        name = f"gbx_rst_{grid}_rastertogridcount"  # the function the Fix names
+    else:
+        name = f"gbx_rst_{grid}_rastertogrid_partial"
+        ref = MAN.functions[name].levels["L4"]["handler"]
+    handler = manifest.resolve_ref(ref)
+    args = (tile, CUSTOM_GRID, res, *rest) if grid == "custom" else (tile, res, *rest)
+    with pytest.raises(
+        ValueError,
+        match=rf"{name}: the cells of the tile \(an upper estimate\) is .*, over the .*"
+        r"Fix: use a coarser resolution, or retile the raster first \(gbx_rst_retile\)",
+    ):
+        handler(*args)
+    assert passes == []
+
+
 def test_a_tile_decoded_over_the_cap_is_refused_and_a_virtual_tile_too(monkeypatch, ll):
     _, tile = ll
     monkeypatch.setattr(tier_b, "DECODED_CAP", 1024)

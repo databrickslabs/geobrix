@@ -210,6 +210,10 @@ def _s2_index_cells(spark, tiles, s2_h3_res):
             t.cellid AS h3_cellid,
             s.observation_date,
             CAST(gbx_rst_summary(named_struct('cellid', t.cellid, 'raster', t.raster,
+                                              'path', t.path, 'path_mode', t.path_mode,
+                                              'window', t.window,
+                                              'clip_polygon', t.clip_polygon,
+                                              'clip_crs', t.clip_crs, 'crs', t.crs,
                                               'metadata', t.metadata)) AS STRING) AS stats
         FROM _s2_mbmp s, LATERAL gbx_rst_h3_tessellate(s.tile, {s2_h3_res}) t
         """

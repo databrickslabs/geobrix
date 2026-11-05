@@ -683,7 +683,9 @@ def main(argv=None) -> int:
         description="Local timing pass of a levels set. Exit 0: no flags; 1: a form was flagged; 2: a precondition is "
         "missing or the usage is wrong; 3: the pass failed."
     )
-    ap.add_argument("--set", default="IO", help="levels set (have: IO, S, SE)")
+    ap.add_argument(
+        "--set", default="IO", help="levels set (have: IO, S, SE; ZL: the Zarr ladder)"
+    )
     ap.add_argument(
         "--k",
         type=float,
@@ -732,7 +734,55 @@ def main(argv=None) -> int:
         action="store_true",
         help="print `jar=<0|1> rust=<0|1>`, whether the set's forms need the JAR and the Rust payload, and exit 0",
     )
+    zl_group = ap.add_argument_group(
+        "the ZL set (the Zarr size ladder; the other options do not apply)"
+    )
+    zl_group.add_argument(
+        "--zarr-root",
+        default=ZL_ROOT,
+        help=f"where the ladder stores are (default {ZL_ROOT})",
+    )
+    zl_group.add_argument(
+        "--zarr-rungs", default="10MB,50MB,100MB", help="rungs to run, comma-separated"
+    )
+    zl_group.add_argument(
+        "--zarr-families", default="county_wind,global_11km", help="families to run"
+    )
+    zl_group.add_argument(
+        "--zarr-cases", default="ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5", help="read legs to run"
+    )
+    zl_group.add_argument(
+        "--zarr-reps", type=int, default=3, help="runs per leg, the first cold"
+    )
+    zl_group.add_argument(
+        "--zarr-cores", type=int, default=8, help="local[N] task slots"
+    )
+    zl_group.add_argument(
+        "--zarr-generate", action="store_true", help="write the missing stores first"
+    )
+    zl_group.add_argument("--zarr-json-out", help="write every leg's metrics there")
+    zl_group.add_argument(
+        "--zarr-budget-mib",
+        type=int,
+        default=None,
+        help="plan reads with this decoded unit budget (MiB)",
+    )
+    zl_group.add_argument(
+        "--zarr-plan-only",
+        action="store_true",
+        help="plan every rung from metadata-only stores (no data, no reads)",
+    )
     a = ap.parse_args(argv)
+    if a.set == "ZL":
+        if a.needs:
+            print("jar=0 rust=0")
+            return 0
+        try:
+            return _run_zl(a)
+        except Exception:  # noqa: BLE001 - the pass itself failed: not a flag, so not 1
+            traceback.print_exc()
+            print("local timing failed (see the traceback above)", file=sys.stderr)
+            return 3
     if a.needs:
         if a.set not in SETS:
             ap.error(
@@ -768,6 +818,28 @@ def main(argv=None) -> int:
         traceback.print_exc()
         print("local timing failed (see the traceback above)", file=sys.stderr)
         return 3
+
+
+ZL_ROOT = "/tmp/gbx-local-timing/ZL"
+
+
+def _run_zl(a) -> int:
+    """The ZL set: the Zarr ladder's read legs on ``local[N]`` (``bench/zarr_ladder_bench.py``)."""
+    from databricks.labs.gbx.bench import zarr_ladder_bench as zlb
+
+    argv = [
+        "--root", a.zarr_root, "--rungs", a.zarr_rungs, "--families", a.zarr_families,
+        "--cases", a.zarr_cases, "--reps", str(a.zarr_reps), "--cores", str(a.zarr_cores),
+    ]  # fmt: skip
+    if a.zarr_generate:
+        argv.append("--generate")
+    if a.zarr_json_out:
+        argv += ["--json-out", a.zarr_json_out]
+    if a.zarr_budget_mib is not None:
+        argv += ["--budget-mib", str(a.zarr_budget_mib)]
+    if a.zarr_plan_only:
+        argv.append("--plan-only")
+    return zlb.main(argv)
 
 
 def _run(a, spec: SetSpec) -> int:

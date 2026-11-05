@@ -789,7 +789,7 @@ def main() -> int:
     # --zarr-only: ONLY run the Zarr benchmark, skip all fn benchmarks. Zarr is light-tier
     #   only, so either forces --lightweight-only.
     benchmark_zarr = "--benchmark-zarr" in sys.argv
-    zarr_only = "--zarr-only" in sys.argv
+    zarr_only = "--zarr-only" in sys.argv or "--zarr-ladder" in sys.argv
     if benchmark_zarr or zarr_only:
         heavyweight = False
         lightweight = True
@@ -1125,7 +1125,15 @@ def main() -> int:
     zarr_cog_dir = _arg("--zarr-cog-dir", f"{volroot}/_probe/zarr/bench/cog_hourly")
     zarr_scratch = _arg("--zarr-scratch", f"{volroot}/_probe/zarr/bench/scratch/{run_id}")
     zarr_schema = _arg("--zarr-schema", f"{catalog}.gbx_zarr_scratch")
-    zarr_cases = _arg("--zarr-cases", "R1,R2,R3,W1,W2")
+    # --zarr-ladder <rungs csv>: also run the size-ladder read legs (ZL-R1..ZL-R5) on the stores under
+    # --zarr-ladder-root (<family>/<rung>.zarr, written by gbx:bench:gen-data --zarr-ladder). Given alone it
+    # runs only the ladder (the classic cases are dropped unless --zarr-cases says otherwise).
+    zarr_ladder = _arg("--zarr-ladder", "")
+    zarr_ladder_family = _arg("--zarr-ladder-family", "county_wind,global_11km")
+    zarr_ladder_root = _arg("--zarr-ladder-root", f"{volroot}/_probe/zarr/ladder")
+    zarr_ladder_cases = _arg("--zarr-ladder-cases", "ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5")
+    zarr_ladder_budget = _arg("--zarr-ladder-budget-mib", "")
+    zarr_cases = _arg("--zarr-cases", "" if zarr_ladder else "R1,R2,R3,W1,W2")
     zarr_reps = int(_arg("--zarr-reps", "3"))
 
     cfg = dict(
@@ -1288,6 +1296,11 @@ def main() -> int:
         zarr_schema=zarr_schema,
         zarr_cases=zarr_cases,
         zarr_reps=zarr_reps,
+        zarr_ladder=zarr_ladder,
+        zarr_ladder_family=zarr_ladder_family,
+        zarr_ladder_root=zarr_ladder_root,
+        zarr_ladder_cases=zarr_ladder_cases,
+        zarr_ladder_budget=zarr_ladder_budget,
         #  --extras: what the install cell adds after the wheel.
         extras=extras,
     )
@@ -1437,6 +1450,8 @@ def main() -> int:
         print(f"  zarr       : store={zarr_store}")
         print(f"               cog_dir={zarr_cog_dir} scratch={zarr_scratch}")
         print(f"               schema={zarr_schema} cases={zarr_cases} reps={zarr_reps}")
+        if zarr_ladder:
+            print(f"               ladder rungs={zarr_ladder} families={zarr_ladder_family} root={zarr_ladder_root}")
     if heavyweight:
         print(
             f"  tests.jar  : {tests_jar}  (attached as job library)"

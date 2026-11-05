@@ -6,9 +6,18 @@ Generate the seeded benchmark corpus (GeoTIFF tiles + `corpus.json` manifest) in
 
 **Options:** `--out <dir>`, `--tile-px <list>`, `--bands <list>`, `--dtypes <list>`, `--srids <list>`, `--nodata-frac <list>`, `--row-rows <n>`, `--row-tile-px <n>` (row-pool tile size — the tile the spark-path sweep benchmarks; default 1024), `--row-bands <n>`, `--row-dtype <t>`, `--seed <n>`, `--set core|full` (accepted for pipeline symmetry; the corpus is function-agnostic, so it does not change corpus content), `--log <path>`, `--help`.
 
+**Zarr size ladder:** `--zarr-ladder <rungs csv>` writes plain Zarr v3 weather stores instead of the raster corpus. It uses `write_era5_cube`, so a store is the `zarr-weather-features` notebook's cube: variables `t2m`, `u10`, `v10`, `msl`, CF times, longitude from 0.
+- `--zarr-ladder-family <csv>`: `county_wind` (0.01 degree over a 1 x 1 degree box, chunks 24 h x box, shards 168 h) and/or `global_11km` (0.1 degree globe, chunks 24 x 90 x 90, shards 168 x 360 x 360). Default: both.
+- `--zarr-ladder-out <dir>`: where the `<family>/<rung>.zarr` stores go. Default: `sample-data/Volumes/main/default/zarr-ladder`.
+- `--zarr-ladder-workers <n>`: processes that write shards. Default: up to 8.
+- `--zarr-ladder-overwrite`: rewrite a store that exists. Default: keep it.
+- A rung is the logical size of the four variables. One hour of the globe is 103.7 MB, so the 10, 50 and 100 MB `global_11km` rungs are one hour of a centred window with the globe's shape.
+- Each store is written one shard at a time, so a 10 GB rung is never held in memory. The record of each store (shape, logical and on-disk bytes, chunks, shards) goes to `ladder_manifest.json` in the out dir.
+
 **Examples:**
 - `bash scripts/commands/gbx-bench-gen-data.sh --log gen.log`
 - `bash scripts/commands/gbx-bench-gen-data.sh --tile-px 256,512 --bands 1,4 --nodata-frac 0.02,0.5 --row-rows 100`
+- `bash scripts/commands/gbx-bench-gen-data.sh --zarr-ladder 10MB,50MB,100MB --zarr-ladder-out /tmp/zl`
 - `bash scripts/commands/gbx-bench-gen-data.sh --tile-px 512 --bands 4 --dtypes float32 --srids 4326 --nodata-frac 0.0 --row-rows 10 --row-tile-px 512`
 
 ## On Databricks

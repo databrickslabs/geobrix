@@ -114,3 +114,90 @@ def test_a_normal_bundle_run_fails_only_when_a_clipped_dataset_does(
     assert (
         mod.main(["--source", str(source), "--out", str(tmp_path / "out")]) == exit_code
     )
+
+
+# --- the default call is the sample cube, file for file; other sizes are streamed -----------------
+
+# Recorded from the cube before write_era5_cube took size and layout arguments: the names of its 102 files,
+# the digest of its metadata documents, and its size in bytes (compression may differ a little by version).
+_SAMPLE_d21ecbcb1974fd82ab84c42ddddb786e076295cefef71c3c469e6ff9705390e3 = (
+    "d21ecbcb1974fd82ab84c42ddddb786e076295cefef71c3c469e6ff9705390e3"
+)
+_SAMPLE_META_SHA = "e4e4ddaa14a98a7c1a781cee16ed96b578e20f4579af7d270e4d1c83665317f3"
+_SAMPLE_BYTES = 6_829_350
+
+
+def test_default_call_still_writes_the_same_files(cube):
+    import hashlib
+
+    files, meta, total = [], hashlib.sha256(), 0
+    for name, root in sorted(cube.items()):
+        for f in sorted(p for p in root.rglob("*") if p.is_file()):
+            rel = f"{name}/{f.relative_to(root).as_posix()}"
+            files.append(rel)
+            total += f.stat().st_size
+            if f.name in ("zarr.json", ".zarray", ".zattrs", ".zgroup"):
+                meta.update(rel.encode())
+                meta.update(f.read_bytes())
+    assert len(files) == 102
+    assert (
+        hashlib.sha256("\n".join(files).encode()).hexdigest()
+        == _SAMPLE_d21ecbcb1974fd82ab84c42ddddb786e076295cefef71c3c469e6ff9705390e3
+    )
+    assert meta.hexdigest() == _SAMPLE_META_SHA
+    assert abs(total - _SAMPLE_BYTES) < 0.03 * _SAMPLE_BYTES
+
+
+def test_other_sizes_are_one_v3_store_with_the_notebooks_variables(tmp_path):
+    out = write_era5_cube(
+        tmp_path,
+        hours=30,
+        step=0.5,
+        box=(50.0, 40.0, 10.0, 20.0),
+        chunks=(24, 11, 11),
+        shards=(24, 22, 22),
+        v3_name="small.zarr",
+        workers=1,
+    )
+    assert list(out) == ["small.zarr"]
+    ds = xr.open_zarr(out["small.zarr"], consolidated=False).load()
+    assert set(ds.data_vars) == set(VARIABLES)
+    assert dict(ds.sizes) == {"time": 30, "latitude": 21, "longitude": 21}
+    assert float(ds.latitude[0]) == 50.0 and float(ds.latitude[-1]) == 40.0
+    assert float(ds.longitude[0]) == 10.0 and float(ds.longitude[-1]) == 20.0
+    assert str(ds.time.values[0])[:13] == "2023-01-01T00" and ds.time.size == 30
+    assert ds.t2m.attrs["units"] == "K" and ds.attrs["Conventions"] == "CF-1.8"
+    assert ds.t2m.encoding["chunks"] == (24, 11, 11) and ds.t2m.encoding["shards"] == (
+        24,
+        22,
+        22,
+    )
+    with pytest.raises(ValueError, match="Zarr v3 only"):
+        write_era5_cube(tmp_path, hours=2, v2=True)
+
+
+def test_a_block_holds_the_same_numbers_whatever_it_is_cut_from(tmp_path):
+    """The stored cube equals ``era5_block`` over the whole, and any sub-block of it, cell for cell."""
+    import numpy as np
+
+    from databricks.labs.gbx.sample.zarr_era5 import era5_block
+
+    out = write_era5_cube(
+        tmp_path,
+        hours=26,
+        step=1.0,
+        box=(60.0, 30.0, 0.0, 40.0),
+        chunks=(24, 16, 21),
+        shards=(24, 32, 42),
+        v3_name="b.zarr",
+        workers=2,  # shards written by separate processes
+    )
+    ds = xr.open_zarr(out["b.zarr"], consolidated=False).load()
+    lat, lon = ds.latitude.values, ds.longitude.values
+    whole = era5_block(VARIABLES, 0, 26, lat, lon)
+    part = era5_block(("u10",), 5, 9, lat[3:11], lon[7:30])["u10"]
+    for name in VARIABLES:
+        assert np.array_equal(ds[name].values, whole[name]), name
+    assert np.array_equal(part, whole["u10"][5:9, 3:11, 7:30])
+    # the noise is real (not rounded away) and the fields are bounded
+    assert 200.0 < float(ds.t2m.min()) and float(ds.t2m.max()) < 330.0

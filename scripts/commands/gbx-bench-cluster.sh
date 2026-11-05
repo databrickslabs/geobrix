@@ -102,6 +102,13 @@ Options:
                         (default <catalog>.gbx_zarr_scratch)
   --zarr-cases <csv>    Cases to run (default R1,R2,R3,W1,W2)
   --zarr-reps <n>       Runs per leg, the first cold (default 3)
+  --zarr-ladder <csv>   Also run the size-ladder read legs ZL-R1..ZL-R5 on these rungs (of 10MB..10GB). Alone, it runs only
+                        the ladder (it implies --zarr-only and drops R1..W2 unless --zarr-cases is given)
+  --zarr-ladder-family <csv>  county_wind and/or global_11km (default both)
+  --zarr-ladder-root <path>   Stores <family>/<rung>.zarr, from gbx:bench:gen-data --zarr-ladder (default
+                        <volume>/_probe/zarr/ladder)
+  --zarr-ladder-cases <csv>   ZL-R1 full table, ZL-R2 box, ZL-R3 100 sites, ZL-R4 wind speed + mean, ZL-R5 one hour as a tile
+  --zarr-ladder-budget-mib <n>  Plan the reads with this decoded unit budget (the planner packs chunks into tasks up to it)
   --extras <csv>        geobrix extras the notebook installs after the wheel (default: the
                         runtime's Zarr extras with a Zarr leg, else light-dbr19)
   --new-cluster         Run on a job cluster made for this run; it ends with the run.

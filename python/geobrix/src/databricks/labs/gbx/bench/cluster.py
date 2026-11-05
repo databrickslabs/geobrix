@@ -3230,6 +3230,7 @@ if _vrows:
 _CELL_ZARR_BODY = """
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import zarr_bench as _zb
+from databricks.labs.gbx.bench import zarr_ladder_bench as _zlb
 if not LIGHTWEIGHT:
     print("ZARR BENCH SKIPPED: Zarr is light-tier only.", flush=True)
 else:
@@ -3244,8 +3245,12 @@ else:
     def _zsink(rows):
         _sink(rows)
         lw.extend(rows)
+    _zrows = []
     try:
-        _zrows = _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
+        if _zcfg.cases:
+            _zrows += _zb.run_zarr_cases(spark, _zcfg, sink=_zsink)
+        if _ZLADDER:
+            _zrows += _zlb.run_ladder(spark, _zlb.LadderConfig(**_ZLADDER), sink=_zsink)
     finally:
         import shutil as _zsh
         _zsh.rmtree(_zcfg.scratch, ignore_errors=True)  # the legs' own scratch, emptied by them
@@ -3265,9 +3270,30 @@ def _zarr_cell(cfg: dict) -> str:
         reps=int(cfg.get("zarr_reps", 3)),
         cases=tuple(c for c in str(cfg.get("zarr_cases", "")).split(",") if c),
     )
+    ladder = None
+    if cfg.get("zarr_ladder"):
+
+        def csv(k):
+            return tuple(c for c in str(cfg.get(k, "")).split(",") if c)
+
+        ladder = dict(
+            root=cfg["zarr_ladder_root"],
+            rungs=csv("zarr_ladder"),
+            families=csv("zarr_ladder_family"),
+            cases=csv("zarr_ladder_cases"),
+            reps=int(cfg.get("zarr_reps", 3)),
+            run_id=cfg["run_id"],
+            where="cluster",
+            serverless=bool(cfg.get("serverless")),
+            budget_mib=(
+                int(cfg["zarr_ladder_budget"])
+                if cfg.get("zarr_ladder_budget")
+                else None
+            ),
+        )
     return (
-        "# Zarr benchmark (light tier only): R1-R3 reads, W1-W2 writes, two probes\n"
-        f"_ZARR = {settings!r}" + _CELL_ZARR_BODY
+        "# Zarr benchmark (light tier only): R1-R3 reads, W1-W2 writes, two probes, the size-ladder reads\n"
+        f"_ZARR = {settings!r}\n_ZLADDER = {ladder!r}" + _CELL_ZARR_BODY
     )
 
 

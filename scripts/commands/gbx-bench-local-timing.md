@@ -10,6 +10,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `--set <name>`: the levels set to time. Default `IO`.
   - `IO`: the tile read forms.
   - `S`: the BNG scalar `gbx_bng_eastnorthasbng` forms `c0`, `c1`, `d` and `floor`, over generated points. There is no corpus copy. n is rows: 1,000,000, 4,000,000 and 16,000,000. `--corpus-dir` and `--corpus-src` are refused for it (exit 2).
+- `--set ZL`: the Zarr size ladder, read legs only (see [the ZL set](#the-zl-set)).
 - `--k <number>`: the multiple that flags a form. Default `3`.
 - `--baseline [path]`: also flag a form whose cost per tile is over `--baseline-k` times the stored one. The default path is `test-logs/local-timing-baseline-<set>.json` (gitignored, per machine; `gbx:bench:clean` does not touch it).
 - `--baseline-write`: store this pass's cost per tile as the baseline (at the `--baseline` path, or the default) instead of comparing. A pass that flags a form is not stored.
@@ -56,6 +57,22 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `bash scripts/commands/gbx-bench-local-timing.sh --baseline-write`
 - `bash scripts/commands/gbx-bench-local-timing.sh --baseline`
 - `bash scripts/commands/gbx-bench-local-timing.sh --corpus-dir /Volumes/main/default/bench-corpus/rows` (the big-folder shape; once before a cluster round)
+
+## The ZL set {#the-zl-set}
+
+`--set ZL` times the Zarr ladder's read legs on `local[8]`. It takes no corpus and needs neither the JAR nor the Rust payload.
+- `--zarr-rungs <csv>`: rungs to run. Default: `10MB,50MB,100MB`. Do not generate rungs above 100 MB locally.
+- `--zarr-families <csv>`: `county_wind`, `global_11km`. Default: both.
+- `--zarr-cases <csv>`: `ZL-R1` full table, `ZL-R2` box over all time, `ZL-R3` 100 sites, `ZL-R4` wind speed and area mean, `ZL-R5` one hour as a tile. Default: all.
+- `--zarr-reps <n>`: runs per leg, the first cold. Default: 3.
+- `--zarr-cores <n>`: task slots of `local[N]`. Default: 8.
+- `--zarr-root <dir>`: where the stores are. Default: `/tmp/gbx-local-timing/ZL` in the container.
+- `--zarr-generate`: write the missing stores first (`gbx:bench:gen-data --zarr-ladder` does the same on the host).
+- `--zarr-json-out <file>`: keep every leg's metrics.
+- `--zarr-budget-mib <n>`: plan reads with this decoded unit budget. The planner packs chunks into tasks up to it: 64 MiB locally and on Serverless, 1536 MiB on a classic cluster.
+- `--zarr-plan-only`: plan all eight rungs from stores that hold only their metadata (no data, no reads), and print the tasks at the 64 and 1536 MiB budgets.
+- Output: a table per leg (wall, cold wall, s/GB, tasks, chunks and shards touched, planning, busy share, MB/s, read-back check) and the gates. A read-back check re-computes the values and compares sums.
+- Gates (exit 1): time per GB within 1.5x of the 100 MB rung's from that rung up; planning under 10% of the wall once it takes 0.25 s; tasks at least `min(cores, chunks, MB / 8)`; one hour of a tile does not grow with the store; no check failure. Below the 100 MB rung a fixed cost dominates, so the table gives a fit `wall = fixed + slope x GB` and the slope between rungs.
 
 **Limits:**
 - The sets are `IO`, `S` and `SE`. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.

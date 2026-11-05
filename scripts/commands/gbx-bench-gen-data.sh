@@ -22,6 +22,11 @@ ROW_DTYPE=""
 SET="core"
 LOG_PATH=""
 ON_DATABRICKS=false
+ZARR_LADDER=""
+ZARR_LADDER_FAMILY="county_wind,global_11km"
+ZARR_LADDER_OUT="${PROJECT_ROOT}/sample-data/Volumes/main/default/zarr-ladder"
+ZARR_LADDER_WORKERS=""
+ZARR_LADDER_OVERWRITE=""
 DBX_ARGS=()
 ROWS_FROM=""
 ROWS_TO=""
@@ -49,6 +54,13 @@ Options:
                        is function-agnostic, so this does not change its content.
   --log <path>         Tee output under test-logs/
   --help, -h           Show help
+
+Zarr size ladder (instead of the raster corpus): plain Zarr v3 weather stores (the zarr-weather-features notebook's cube) per rung.
+  --zarr-ladder <csv>  Rungs to write, of 10MB,50MB,100MB,500MB,1GB,2GB,5GB,10GB (the logical size of the four variables)
+  --zarr-ladder-family <csv>  county_wind (0.01 degree, 1x1 degree box) and/or global_11km (0.1 degree globe); default both
+  --zarr-ladder-out <dir>     Where the <family>/<rung>.zarr stores go (default sample-data/Volumes/main/default/zarr-ladder)
+  --zarr-ladder-workers <n>   Processes that write shards (default up to 8)
+  --zarr-ladder-overwrite     Rewrite a store that exists (default: keep it)
 
 On Databricks (row pool only): generate rows/r<N>.tif on Serverless, byte-identical to the local ones.
   --on-databricks      Generate on Serverless into the corpus Volume instead of locally
@@ -87,6 +99,11 @@ while [[ $# -gt 0 ]]; do case $1 in
     --seed) SEED="$2"; shift 2 ;;
     --set) SET="$2"; shift 2 ;;
     --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+    --zarr-ladder) ZARR_LADDER="$2"; shift 2 ;;
+    --zarr-ladder-family) ZARR_LADDER_FAMILY="$2"; shift 2 ;;
+    --zarr-ladder-out) ZARR_LADDER_OUT="$2"; shift 2 ;;
+    --zarr-ladder-workers) ZARR_LADDER_WORKERS="--workers $2"; shift 2 ;;
+    --zarr-ladder-overwrite) ZARR_LADDER_OVERWRITE="--overwrite"; shift ;;
     --on-databricks) ON_DATABRICKS=true; shift ;;
     --serverless) shift ;;
     --profile) export DATABRICKS_CONFIG_PROFILE="$2"; DBX_ARGS+=(--profile "$2"); shift 2 ;;
@@ -103,6 +120,13 @@ cd "$PROJECT_ROOT"
 show_banner "gbx:bench:gen-data"
 validate_set "$SET" || exit 1
 setup_log_file "$LOG_PATH"
+
+if [[ -n "$ZARR_LADDER" ]]; then
+    # Streamed, one shard at a time: a 10GB rung never sits in memory. Needs the Zarr extra (zarr, xarray) in the venv.
+    run_in_pyrx_venv "python -m databricks.labs.gbx.bench.zarr_ladder \
+        --out '$ZARR_LADDER_OUT' --rungs '$ZARR_LADDER' --families '$ZARR_LADDER_FAMILY' $ZARR_LADDER_WORKERS $ZARR_LADDER_OVERWRITE"
+    exit $?
+fi
 
 if [[ "$ON_DATABRICKS" == true ]]; then
     [[ -z "$ROWS_FROM" ]] && ROWS_FROM=0

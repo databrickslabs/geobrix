@@ -13,7 +13,7 @@ show_help() {
     echo -e "  ${GREEN}bash scripts/commands/gbx-bench-local-timing.sh${NC} ${YELLOW}[OPTIONS]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--set <name>${NC}     Levels set to time (default IO; have IO, S, SE)"
+    echo -e "  ${GREEN}--set <name>${NC}     Levels set to time (default IO; have IO, S, SE, ZL = the Zarr size ladder)"
     echo -e "  ${GREEN}--k <number>${NC}     Multiple that flags a form: vs the row UDF and vs its peers per tile (default 3)"
     echo -e "  ${GREEN}--baseline [path]${NC}  Also flag a form whose cost per tile is over --baseline-k times the stored one"
     echo -e "                      (default path: test-logs/local-timing-baseline-<set>.json; untracked)"
@@ -25,6 +25,12 @@ show_help() {
     echo -e "  ${GREEN}--corpus-dir <path>${NC}  A folder named rows is read in place (no copy; it must hold the tiles). Use the big folder"
     echo -e "                      /Volumes/main/default/bench-corpus/rows once before a cluster round: the default pass times a"
     echo -e "                      96-file copy in /tmp, where a worker's folder listing never shows. Prints the readdir_mode its tiles get"
+    echo -e "  ${GREEN}--zarr-rungs <csv>${NC}     ZL set: rungs to run (default 10MB,50MB,100MB); --zarr-families <csv> (default both);"
+    echo -e "                      --zarr-cases <csv> (ZL-R1..ZL-R4); --zarr-reps <n> (default 3); --zarr-cores <n> (default 8);"
+    echo -e "                      --zarr-root <dir> (the stores; default /tmp/gbx-local-timing/ZL in the container);"
+    echo -e "                      --zarr-budget-mib <n> plans reads with that decoded unit budget; --zarr-plan-only plans all rungs from"
+    echo -e "                      metadata-only stores (no data) and prints the tasks at the 64 and 1536 MiB budgets;"
+    echo -e "                      --zarr-generate writes the missing stores first; --zarr-json-out <file> keeps every leg's metrics"
     echo -e "  ${GREEN}--dry-run${NC}        Check the set's preconditions, print the command and stop (no lock, no pass)"
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file (filename -> test-logs/<name>)"
     print_lock_help
@@ -51,6 +57,7 @@ K=""
 LOG_PATH=""
 BASELINE_ARGS=""
 CORPUS_ARGS=""
+ZARR_ARGS=""
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -64,6 +71,13 @@ while [[ $# -gt 0 ]]; do
             fi
             ;;
         --baseline-write) BASELINE_ARGS="$BASELINE_ARGS --baseline-write"; shift ;;
+        --zarr-generate|--zarr-plan-only) ZARR_ARGS="$ZARR_ARGS $1"; shift ;;
+        --zarr-rungs|--zarr-families|--zarr-cases|--zarr-reps|--zarr-cores|--zarr-root|--zarr-json-out|--zarr-budget-mib)
+            if [[ $# -lt 2 ]]; then
+                echo -e "${RED}Option $1 needs a value${NC}" >&2
+                exit 2
+            fi
+            ZARR_ARGS="$ZARR_ARGS $1 $(printf '%q' "$2")"; shift 2 ;;
         --set|--k|--log|--baseline-k|--repeats|--corpus-dir)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Option $1 needs a value${NC}" >&2
@@ -154,7 +168,7 @@ check_preconditions() {
 
 CMD="cd /root/geobrix && python3 -m databricks.labs.gbx.bench.local_timing --set $(printf '%q' "$SET")"
 [ -n "$K" ] && CMD="$CMD --k $(printf '%q' "$K")"
-CMD="$CMD$BASELINE_ARGS$CORPUS_ARGS"
+CMD="$CMD$BASELINE_ARGS$CORPUS_ARGS$ZARR_ARGS"
 
 if [ "$DRY_RUN" = true ]; then
     check_preconditions

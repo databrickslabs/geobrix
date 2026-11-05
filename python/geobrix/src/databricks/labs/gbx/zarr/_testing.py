@@ -39,6 +39,93 @@ _ATTRS = {
 }
 
 
+def _base_fields(la, lo, hour):
+    """The smooth part of each field, from latitude and longitude in radians and the hour (broadcastable)."""
+    import numpy as np
+
+    return {
+        "t2m": 288.0 + 15.0 * np.cos(la) + 4.0 * np.sin(2 * np.pi * hour / 24 + lo),
+        "u10": 5.0 * np.sin(2 * la) * np.cos(lo + 2 * np.pi * hour / 48),
+        "v10": 4.0 * np.cos(2 * la) * np.sin(lo - 2 * np.pi * hour / 48),
+        "msl": 101325.0
+        + 1500.0 * np.cos(3 * la) * np.cos(2 * lo + 2 * np.pi * hour / 48),
+    }
+
+
+_M64 = 0xFFFFFFFFFFFFFFFF
+
+
+def _mix(x):
+    """splitmix64's finalizer on a uint64 array (wraps around)."""
+    import numpy as np
+
+    x = np.asarray(x, dtype=np.uint64)
+    x = (x ^ (x >> np.uint64(30))) * np.uint64(0xBF58476D1CE4E5B9)
+    x = (x ^ (x >> np.uint64(27))) * np.uint64(0x94D049BB133111EB)
+    return x ^ (x >> np.uint64(31))
+
+
+def _cell_normal(key: int, hour, latitude, longitude):
+    """Standard normal noise addressed by the cell: a function of ``key``, the hour and the cell's latitude and
+    longitude labels only, so a block holds the same noise whatever block it is cut from. Shape ``(nt, ny, nx)``.
+    """
+    import numpy as np
+
+    with np.errstate(over="ignore"):
+        h = _mix(
+            np.uint64(key)
+            + np.asarray(hour, np.uint64)[:, None, None] * np.uint64(0x9E3779B97F4A7C15)
+        )
+        la = (
+            np.round(np.asarray(latitude, np.float64) * 1e6)
+            .astype(np.int64)
+            .astype(np.uint64)
+        )
+        lo = (
+            np.round(np.asarray(longitude, np.float64) * 1e6)
+            .astype(np.int64)
+            .astype(np.uint64)
+        )
+        h = _mix(h ^ _mix(la)[None, :, None])
+        h = _mix(h ^ _mix(lo + np.uint64(0x632BE59BD9B4E019))[None, None, :])
+        h2 = _mix(h ^ np.uint64(0xD1B54A32D192ED03))
+    u1 = ((h >> np.uint64(11)).astype(np.float64) + 1.0) / 9007199254740993.0  # (0, 1]
+    u2 = (h2 >> np.uint64(11)).astype(np.float64) / 9007199254740992.0  # [0, 1)
+    return np.sqrt(-2.0 * np.log(u1)) * np.cos(2.0 * np.pi * u2)
+
+
+def era5_like_block(variables, t0, t1, latitude, longitude, *, noise=1.0):
+    """Hours ``[t0, t1)`` of ``variables`` over the given latitudes and longitudes (degrees), float32.
+
+    The same smooth fields as ``era5_like_dataset``, plus noise of the same size that is a function of the cell
+    (variable, hour, latitude and longitude label; ``_cell_normal``), so any block of any store holds the same
+    numbers whatever surrounds it: a store too big for memory is written, and read back, block by block.
+    (``era5_like_dataset`` draws one stream over the whole cube; the two do not agree on the noise.)
+    Returns ``{name: array (t1 - t0, ny, nx)}``.
+    """
+    import numpy as np
+
+    unknown = set(variables) - set(_FIELDS)
+    if unknown:
+        raise ValueError(f"unknown variables {sorted(unknown)}; pick from {_FIELDS}")
+    lat = np.asarray(latitude, dtype="float64")
+    lon = np.asarray(longitude, dtype="float64")
+    la = np.deg2rad(lat)[None, :, None]
+    lo = np.deg2rad(lon)[None, None, :]
+    hours = np.arange(t0, t1)
+    base = _base_fields(la, lo, hours[:, None, None])
+    out = {}
+    for k, name in enumerate(_FIELDS):
+        if name not in variables:
+            continue
+        spread = _NOISE_STD[name] * noise
+        field = np.broadcast_to(base[name], (t1 - t0, lat.size, lon.size))
+        if spread:
+            field = field + spread * _cell_normal(NOISE_SEED * 16 + k, hours, lat, lon)
+        out[name] = np.asarray(field).astype("float32")
+    return out
+
+
 def era5_like_dataset(
     latitude=None, *, hours=TIME_STEPS, step=2.5, variables=("t2m", "u10"), noise=1.0
 ):
@@ -77,13 +164,7 @@ def era5_like_dataset(
     la = np.deg2rad(lat)[None, :, None]
     lo = np.deg2rad(lon)[None, None, :]
     hour = np.arange(hours)[:, None, None]
-    base = {
-        "t2m": 288.0 + 15.0 * np.cos(la) + 4.0 * np.sin(2 * np.pi * hour / 24 + lo),
-        "u10": 5.0 * np.sin(2 * la) * np.cos(lo + 2 * np.pi * hour / 48),
-        "v10": 4.0 * np.cos(2 * la) * np.sin(lo - 2 * np.pi * hour / 48),
-        "msl": 101325.0
-        + 1500.0 * np.cos(3 * la) * np.cos(2 * lo + 2 * np.pi * hour / 48),
-    }
+    base = _base_fields(la, lo, hour)
     dims = ("time", "latitude", "longitude")
     data = {}
     for name in _FIELDS:

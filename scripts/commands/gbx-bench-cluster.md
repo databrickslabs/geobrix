@@ -149,6 +149,11 @@ See [`--levels` details](#levels-details) for the metrics.
 - `--zarr-schema <catalog.schema>`: the schema of the write legs' manifest tables. Each table is dropped after its run. Default: `<catalog>.gbx_zarr_scratch`.
 - `--zarr-cases <csv>`: the cases to run. Default: `R1,R2,R3,W1,W2`.
 - `--zarr-reps <n>`: runs per leg, the first cold. Default: 3.
+- `--zarr-ladder <csv>`: also run the size-ladder read legs on these rungs (`10MB` to `10GB`). Alone, it implies `--zarr-only` and drops the cases `R1` to `W2` unless `--zarr-cases` is given.
+- `--zarr-ladder-family <csv>`: `county_wind`, `global_11km`. Default: both.
+- `--zarr-ladder-root <path>`: the stores, `<family>/<rung>.zarr`, from `gbx:bench:gen-data --zarr-ladder`. Default: `<volume>/_probe/zarr/ladder`.
+- `--zarr-ladder-cases <csv>`: `ZL-R1` full table, `ZL-R2` box, `ZL-R3` 100 sites, `ZL-R4` wind speed and mean, `ZL-R5` one hour as a tile. Default: all.
+- `--zarr-ladder-budget-mib <n>`: plan the reads with this decoded unit budget. Default: the runtime's own (64 MiB on Serverless, 1536 MiB on a classic cluster).
 - `--extras <csv>`: other feature extras of the env wheel (`stac`, `vizx`, `databricks`). The extras install after the wheel. A `light_*` name is refused.
 
 ### Smoke, preflight and watchdog options

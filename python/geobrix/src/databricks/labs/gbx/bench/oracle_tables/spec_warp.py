@@ -312,8 +312,12 @@ SPEC_WARP = share(
     Case("uc_resample_to_size_result_over_cap", RSZ, (T4326, 20000, 20000), "uc_refused", None, ("uc",)),
     Case("uc_resample_result_over_cap", RS, (T4326, 1000.0), "uc_refused", None, ("uc",)),
     Case("uc_resample_to_res_result_over_cap", RSR, (T4326, 0.00001, 0.00001), "uc_refused", None, ("uc",)),
-    # the cutline is a GEOMETRY: a BINARY is not one; a plain one takes `clip_crs`, an EWKT one carries its SRID
-    Case("uc_clip_wkb_into_geometry_refused", CL, (T4326, Build("clip_left_half_wkb"), False), "uc_refused", None, ("uc",)),
+    # the cutline is a GEOMETRY: a BINARY is not one (the warehouse's own cast error, which has no Fix: line, or the
+    # handler's text); a plain one takes `clip_crs`, an EWKT one carries its SRID
+    Case(
+        "uc_clip_wkb_into_geometry_refused", CL, (T4326, Build("clip_left_half_wkb"), False), "raises",
+        ("DATATYPE_MISMATCH", "a BINARY or STRING is not a GEOMETRY"), ("uc",),
+    ),
     _uc_clip_row("uc_clip_crs_declared", "clip_crs_declared", geom_srid=0),
     _uc_clip_row("uc_clip_ewkt_srid_wins", "clip_ewkt_srid_wins", geom_srid=3857),
     Case(

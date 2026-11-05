@@ -497,9 +497,11 @@ RASTER_STAT = share(
         "uc_sample_wkt_crs_refused", "gbx_rst_sample", (STATS, POINT_UTM, "+proj=longlat +datum=WGS84"), "uc_refused",
         None, ("uc",), geom_srid=0,
     ),
+    # A WKB BINARY is not a GEOMETRY: the warehouse refuses it with its own cast error before the handler runs (so no
+    # Fix: line); a call that reaches the handler gets the handler's text. Either way it is an error, never NULL.
     Case(
-        "uc_sample_wkb_into_geometry_refused", "gbx_rst_sample", (STATS, Build("acc_point_wkb")), "uc_refused", None,
-        ("uc",),
+        "uc_sample_wkb_into_geometry_refused", "gbx_rst_sample", (STATS, Build("acc_point_wkb")), "raises",
+        ("DATATYPE_MISMATCH", "a BINARY or STRING is not a GEOMETRY"), ("uc",),
     ),
     Case(
         "uc_sample_outside", "gbx_rst_sample", (STATS, "POINT(500000 5760000)"), "null", None, ("uc",), geom_srid=32633

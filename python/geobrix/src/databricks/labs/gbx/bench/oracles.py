@@ -5504,9 +5504,11 @@ def coerce_uc_value(value, type_text: str):
         for part in _split_type_args(t[len("struct<") : -1]):
             name, _, ft = part.partition(":")
             fields[name.strip()] = ft.strip()
-        return {
-            k: coerce_uc_value(v, fields.get(k, "string")) for k, v in value.items()
-        }
+        # the API lists a struct's fields in no particular order: put them back in the declared one
+        names = [n for n in fields if n in value] + [
+            n for n in value if n not in fields
+        ]
+        return {k: coerce_uc_value(value[k], fields.get(k, "string")) for k in names}
     if low.startswith("array<") and isinstance(value, list):
         return [coerce_uc_value(v, t[len("array<") : -1]) for v in value]
     if low.startswith("map<") and isinstance(value, dict):

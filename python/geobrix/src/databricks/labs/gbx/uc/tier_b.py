@@ -56,8 +56,29 @@ def _is_error_tile(tile) -> bool:
     merge results carry a note of the members they skipped under ``last_error``."""
     if _field(tile, "raster") is not None or _field(tile, "path") is not None:
         return False
-    md = _field(tile, "metadata") or {}
+    md = _metadata(tile)
     return ERROR_KEY in md or "error_message" in md
+
+
+def _metadata(tile) -> dict:
+    """A tile's metadata as a dict, whatever form the sandbox hands a MAP in: a dict (measured), or the pairs of it (a
+    list of ``(key, value)`` or of ``{key, value}`` structs). NULL and an empty map are an empty dict: a tile with no
+    raster, no path and no reason is not an error tile, it is an empty one (NULL out).
+    """
+    md = _field(tile, "metadata")
+    if not md:
+        return {}
+    if hasattr(md, "items"):
+        return dict(md.items())
+    try:
+        return {
+            (p["key"] if hasattr(p, "keys") else p[0]): (
+                p["value"] if hasattr(p, "keys") else p[1]
+            )
+            for p in md
+        }
+    except (KeyError, IndexError, TypeError, ValueError):
+        return {}
 
 
 def raster_of(fn: str, tile) -> Optional[bytes]:
@@ -328,9 +349,7 @@ def _tile_dict(tile, raster, srid, metadata) -> dict:
 def error_row(tile) -> dict:
     """An error tile as a dict, with its reason: it goes through a tile-returning function unchanged."""
     return {
-        **_tile_dict(
-            tile, None, _field(tile, "crs"), dict(_field(tile, "metadata") or {})
-        ),
+        **_tile_dict(tile, None, _field(tile, "crs"), _metadata(tile)),
         "path_mode": _field(tile, "path_mode"),
     }
 

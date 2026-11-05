@@ -660,3 +660,80 @@ def test_tilexyz_lets_a_failure_of_the_render_raise_and_answers_an_image_only_fo
         _built("tile_corrupt", tmp_path), 3, 1, 1, "PNG", 64, "bilinear", "auto"
     )
     assert png[:4] == b"\x89PNG"
+
+
+# The tile as the workspace pass sent it for an error tile: the statement built the struct with an EMPTY map under
+# `metadata` (the reason was not in the literal), so it carried no raster, no path and no reason.
+WAREHOUSE_EMPTY_TILE = {
+    "cellid": 0,
+    "raster": None,
+    "path": None,
+    "path_mode": None,
+    "window": None,
+    "clip_polygon": None,
+    "clip_crs": None,
+    "crs": None,
+    "metadata": {},
+}
+ERROR_CALLS = (
+    ("gbx_rst_setsrid", (3857,)),
+    ("gbx_rst_updatetype", ("Int32",)),
+    ("gbx_rst_resample", (0.5, "bilinear")),
+    ("gbx_rst_transform", (3857,)),
+    ("gbx_rst_ndvi", (1, 2)),
+    ("gbx_rst_slope", ("degrees",)),
+    ("gbx_rst_proximity", ([1.0], "PIXEL")),
+)
+
+
+def test_a_tile_with_no_raster_path_or_reason_is_empty_not_an_error_tile():
+    assert not tier_b._is_error_tile(WAREHOUSE_EMPTY_TILE)
+    for name, args in ERROR_CALLS:
+        if name in tier_b.HANDLERS:
+            assert tier_b.HANDLERS[name](WAREHOUSE_EMPTY_TILE, *args) is None, name
+    assert tier_b.HANDLERS["gbx_rst_isempty"](WAREHOUSE_EMPTY_TILE) is None
+    assert tier_b.HANDLERS["gbx_rst_merge"]([WAREHOUSE_EMPTY_TILE]) is None
+
+
+@pytest.mark.parametrize(
+    "md",
+    [
+        {"last_error": "upstream"},
+        [("last_error", "upstream")],
+        [{"key": "last_error", "value": "upstream"}],
+        (("last_error", "upstream"),),
+    ],
+    ids=["dict", "pairs", "key_value_structs", "tuple_of_pairs"],
+)
+def test_an_error_tile_is_known_by_its_reason_in_every_form_a_map_arrives_in(md):
+    err = {**WAREHOUSE_EMPTY_TILE, "cellid": 7, "metadata": md}
+    assert tier_b._is_error_tile(err)
+    assert tier_b.HANDLERS["gbx_rst_isempty"](err) is True
+    out = tier_b.HANDLERS["gbx_rst_setsrid"](err, 3857)
+    assert out["raster"] is None and out["cellid"] == 7
+    assert out["metadata"] == {"last_error": "upstream"}
+    assert tier_b.HANDLERS["gbx_rst_combineavg"]([err, err])["metadata"] == {
+        "last_error": "upstream"
+    }
+    assert tier_b.HANDLERS["gbx_rst_merge"]([err])["metadata"] == {
+        "last_error": "upstream"
+    }
+
+
+def test_an_error_tile_passes_through_map_algebra_before_its_expression_is_read(
+    tmp_path,
+):
+    """The builtin 'norm_diff' calc is a session dialect (UC evaluates numexpr): over real tiles it is a wrong
+    argument, over an error tile the error goes through first, as it does in a session.
+    """
+    norm_diff = '{"calc": "norm_diff", "dialect": "builtin"}'
+    err = {**WAREHOUSE_EMPTY_TILE, "metadata": {"last_error": "upstream"}}
+    out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([err, err], norm_diff)
+    assert out["raster"] is None and out["metadata"] == {"last_error": "upstream"}
+    assert (
+        tier_b.HANDLERS["gbx_rst_mapalgebra"]([WAREHOUSE_EMPTY_TILE] * 2, norm_diff)
+        is None
+    )
+    pair = _built("se_pair", tmp_path)
+    with pytest.raises(ValueError, match="cannot be evaluated"):
+        tier_b.HANDLERS["gbx_rst_mapalgebra"](pair, norm_diff)

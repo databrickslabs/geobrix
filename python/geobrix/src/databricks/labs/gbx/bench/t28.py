@@ -27,7 +27,7 @@ from typing import Dict, List, Optional, Sequence, Tuple
 DEFAULT_CATALOG = "geospatial_docs"
 DEFAULT_SCHEMA = "geobrix_t28"
 DEFAULT_VOLROOT = "/Volumes/geospatial_docs/geobrix/sample-data"
-DEFAULT_WS_ROOT = "/Users/mjohns@databricks.com/GeoBrix"
+WS_ROOT_PLACEHOLDER = "/Users/<current-user>/GeoBrix"  # what an un-resolved Params prints; main() resolves it
 DEFAULT_PROFILE = "oauth-fe"
 SCHEMA_KEYS = ("w", "s6", "s6j", "se")
 UNQUALIFIED_OK = (
@@ -64,7 +64,7 @@ class Params:
     )
     out_dir: str = ".superpowers/streamline/t28"
     profile: str = DEFAULT_PROFILE
-    ws_root: str = DEFAULT_WS_ROOT
+    ws_root: str = WS_ROOT_PLACEHOLDER
     cluster_id: Optional[str] = (
         None  # the P1 cluster; its notebooks are written only when it is known
     )
@@ -943,6 +943,33 @@ def parse_locally(files: Sequence[File]) -> Dict[str, str]:
     return bad
 
 
+def resolve_ws_root(profile: str) -> str:
+    """The workspace folder the runners use: /Users/<current user>/GeoBrix.
+
+    Same rule as examples/tests/run_notebooks_serverless.py. Raises RuntimeError when the SDK or a
+    session is not available, so the caller can ask for --ws-root.
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+
+        me = WorkspaceClient(profile=profile).current_user.me().user_name
+    except Exception as exc:  # no SDK, no profile, or no valid session
+        raise RuntimeError(
+            f"cannot resolve the current user for profile {profile!r} ({type(exc).__name__}); pass --ws-root"
+        ) from exc
+    if not me:
+        raise RuntimeError("the session has no user name; pass --ws-root")
+    return f"/Users/{me}/GeoBrix"
+
+
+def _ws_root_of(a: argparse.Namespace) -> str:
+    if a.ws_root is not None:
+        return a.ws_root
+    if a.judge:
+        return WS_ROOT_PLACEHOLDER  # judging prints no commands, so it needs no session
+    return resolve_ws_root(a.profile)
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="gbx-bench-uc-probes", description=__doc__.split("\n\n")[0]
@@ -958,7 +985,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--volroot", default=DEFAULT_VOLROOT)
     ap.add_argument("--out-dir", default=Params.out_dir)
     ap.add_argument("--profile", default=DEFAULT_PROFILE)
-    ap.add_argument("--ws-root", default=DEFAULT_WS_ROOT)
+    ap.add_argument(
+        "--ws-root",
+        default=None,
+        help="workspace folder in the printed commands (default /Users/<current user>/GeoBrix, resolved from --profile)",
+    )
     ap.add_argument("--cluster-id", default=None)
     ap.add_argument("--only", default="", help="comma-separated run ids, e.g. S6-C,W-A")
     ap.add_argument(
@@ -977,6 +1008,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="read a results file written by gbx-uc-sql and judge it",
     )
     a = ap.parse_args(argv)
+    try:
+        a.ws_root = _ws_root_of(a)
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     p = Params(
         a.catalog,
         a.schema,

@@ -104,7 +104,14 @@ def test_the_install_file_creates_the_schema_first_and_names_the_jar_for_the_sca
     assert [c for c, _ in pairs[:2]] == ["schema:create", "floor:select1"]
     stmts = [s for c, s in pairs if c.startswith("install:")]
     assert len(stmts) >= 250
-    assert sum("LANGUAGE SCALA" in s for s in stmts) == 5  # the JVM-only BNG functions
+    # the rows with a Scala handler and no SQL kernel (a SQL kernel is chosen first)
+    scala = [
+        f
+        for f in manifest.load().functions.values()
+        if "scala" in f.levels.get("L4", {}) and "sql" not in f.levels["L4"]
+    ]
+    assert scala
+    assert sum("LANGUAGE SCALA" in s for s in stmts) == len(scala)
     assert all(t28.Params().jar in s for s in stmts if "LANGUAGE SCALA" in s)
     assert sum(s.startswith("CREATE OR REPLACE PROCEDURE") for s in stmts) == 11
 

@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 161 functions, organized by category --------------------------------
+# --- Data: 164 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -189,6 +189,7 @@ CARDS_RIGHT = [
             "rst_quadbin_rastertogridmax", "rst_quadbin_rastertogridmin",
             "rst_quadbin_rastertogridmedian", "rst_quadbin_rastertogridstddev",
             "rst_quadbin_rastertogridsum", "rst_quadbin_rastertogridvariance",
+            "rst_quadbin_rastertogrid_partial",
         ],
     ),
     Card(
@@ -200,6 +201,7 @@ CARDS_RIGHT = [
             "rst_bng_rastertogridmax", "rst_bng_rastertogridmin",
             "rst_bng_rastertogridmedian", "rst_bng_rastertogridstddev",
             "rst_bng_rastertogridsum", "rst_bng_rastertogridvariance",
+            "rst_bng_rastertogrid_partial",
         ],
     ),
     Card(
@@ -211,6 +213,7 @@ CARDS_RIGHT = [
             "rst_custom_rastertogridmax", "rst_custom_rastertogridmin",
             "rst_custom_rastertogridmedian", "rst_custom_rastertogridstddev",
             "rst_custom_rastertogridsum", "rst_custom_rastertogridvariance",
+            "rst_custom_rastertogrid_partial",
         ],
     ),
     Card(
@@ -412,7 +415,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'161 SQL functions for raster data on Spark &#8212; registered as '
+        f'164 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -521,7 +524,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'161 SQL functions for raster data on Spark &#8212; registered as '
+        f'164 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '

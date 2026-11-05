@@ -7,6 +7,24 @@ from databricks.labs.gbx import manifest
 from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.uc import tier_b
 
+
+class _Geometry:
+    """Stand-in for ``pyspark.sql.types.Geometry``, which a UC Python function receives for a GEOMETRY(ANY) element."""
+
+    def __init__(self, geom):
+        self._wkb = shapely.to_wkb(geom)
+
+    def getBytes(self):  # noqa: N802 - the pyspark name
+        return self._wkb
+
+    def getSrid(self):  # noqa: N802
+        return 0
+
+
+def _geometry():
+    return _Geometry(shapely.Point(1.0, 1.0))
+
+
 MAN = manifest.load()
 TIER_B = sorted(
     f.sql_name
@@ -450,8 +468,17 @@ def test_a_grid_over_the_cap_is_refused_before_the_kernel_is_asked_to_make_it(
     calls = {
         "gbx_rst_rasterize": (_square(), 1.0, *huge, 3857, None),
         "gbx_rst_binpoints": ([1.0], [1.0], [1.0], *huge, 3857, "max"),
-        "gbx_rst_gridfrompoints": ([b"\x01"], [1.0], *huge, 3857, 2.0, 12, None),
-        "gbx_rst_dtmfromgeoms": ([b"\x01"], [], 0.0, 0.0, *huge, 3857, -9999.0, None),
+        "gbx_rst_gridfrompoints": ([_geometry()], [1.0], *huge, 3857, 2.0, 12, None),
+        "gbx_rst_dtmfromgeoms": (
+            [_geometry()],
+            [],
+            0.0,
+            0.0,
+            *huge,
+            3857,
+            -9999.0,
+            None,
+        ),
     }
     for name, args in calls.items():
         with pytest.raises(
@@ -464,7 +491,7 @@ def test_a_grid_over_the_cap_is_refused_before_the_kernel_is_asked_to_make_it(
 def test_the_working_set_of_a_grid_not_only_its_pixels_is_held_to_the_cap():
     # 1000 x 1000 Float64 is 7 MiB decoded, but the nearest-12-points interpolation holds several arrays of it
     args = (
-        [b"\x01"] * 20,
+        [_geometry()] * 20,
         [1.0] * 20,
         0.0,
         0.0,

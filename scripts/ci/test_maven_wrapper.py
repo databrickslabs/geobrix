@@ -156,7 +156,9 @@ def problems(files: dict) -> list:
     for name in ci_files_in(files):
         if name == INSTALLER:
             continue
+        # a cache key's hashFiles('...fetch-delta-test-jars.sh') names the script, it does not run it
         text = "\n".join(code_lines(files[name]))
+        text = re.sub(r"hashFiles\([^)]*\)", "hashFiles()", text)
         need = NEEDS_WRAPPER.search(text)
         if not need:
             continue

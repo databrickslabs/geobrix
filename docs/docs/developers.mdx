@@ -210,11 +210,12 @@ Workflows live in **`.github/workflows/`**. They define when and how tests and b
 
 ### When things run
 
-- **Main build** (`build_main.yml`) — Runs on **push to any branch** (except `python/**` and `scala/**`), on **all pull requests**, and via **workflow_dispatch** (manual trigger from the Actions tab or `gh workflow run "build main" --ref <branch>`). Pipeline: checkout → build Scala → build Python → rebuild doc-snippet-inventory → (on push to main only) Scala doc tests → upload artifacts.
-  - **Scala tests** in the main run use `-Dsuites='com.databricks.labs.gbx.*'`, so only unit/integration tests run; **Scala doc tests** (`docs/tests/scala/`) are excluded from this step.
-  - **Scala doc tests** run in a **separate step** only when the event is **push to `main`**. That step sets `GBX_SAMPLE_DATA_ROOT` and runs the doc test suites.
-- **Documentation tests** (`doc-tests.yml`) — Run **after the "build main" workflow completes** (on the same ref). Python doc tests and structure validation run here; Scala doc tests are run by `build_main` (see above). Also triggerable manually via workflow_dispatch.
-- **Branch-specific builds** — `build_python.yml` runs on push to `python/**`; `build_scala.yml` runs on push to `scala/**`.
+- **Main build** (`build_main.yml`) — Runs on **push to any branch** (except `python/**` and `scala/**`), on **all pull requests**, and via **workflow_dispatch** (manual trigger from the Actions tab or `gh workflow run "build main" --ref <branch>`). The jobs:
+  - **Native payload** — builds or restores the cached GDAL native stack. The light and heavy tests wait for it.
+  - **Light tests** — the lightweight test directories, split into parallel shards. Each shard installs the native bindings and the Rust module, and fails if they do not load.
+  - **Script tests** — the tests under `scripts/ci`. They need no native payload, so they start at once.
+  - **Two-architecture native gate** — checks that the native build was verified on both architectures for the current native inputs.
+  - **Heavy tests (Scala + JAR)** — runs in parallel with the light tests. Its Scala step runs the suites listed in `.github/actions/scala_build/suites-heavy.txt`: the suites of code that registered functions still reach. **Scala doc tests** (`docs/tests/scala/`) run in a separate step, only on a push to `main`.
 - **CodeQL** (`codeql-analysis.yml`) — Security analysis on push and pull_request to `main`.
 - **Publish / release** — Triggered by release or publish events (see the workflow files).
 

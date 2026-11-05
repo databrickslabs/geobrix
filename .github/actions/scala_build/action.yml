@@ -12,7 +12,7 @@ inputs:
     description: 'Fail build on ScalaStyle errors? true or false. Typically true only for PRs targeting main.'
     default: 'false'
   suite_pattern:
-    description: 'Optional -Dsuites= value (e.g. com.databricks.labs.gbx.rasterx.*). If empty, uses com.databricks.labs.gbx.*'
+    description: 'Optional -Dsuites= value (e.g. com.databricks.labs.gbx.rasterx.*). If empty, the coverage-off test step runs the list in suites-heavy.txt and the coverage step runs com.databricks.labs.gbx.*'
     default: ''
   native_root:
     description: >-
@@ -178,7 +178,10 @@ runs:
           shell: bash
           run: |
             SUITES="${{ inputs.suite_pattern }}"
-            [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
+            # No pattern: the heavy list (comments and blank lines dropped, joined with commas).
+            [ -z "$SUITES" ] && SUITES="$(grep -v -E '^[[:space:]]*(#|$)' "${{ github.action_path }}/suites-heavy.txt" | paste -s -d, -)"
+            [ -n "$SUITES" ] || { echo "::error::no Scala suites to run"; exit 1; }
+            echo "Scala suites: $SUITES"
             ./mvnw -T 1C -C -q clean install -Dscoverage.skip -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'

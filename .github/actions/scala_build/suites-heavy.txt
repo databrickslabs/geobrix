@@ -1,0 +1,114 @@
+# Scala suites the heavy CI job runs (build_main `build` job, via the scala_build action).
+#
+# One -Dsuites entry per line: an exact class name, or a package wildcard (`pkg.*`, which includes
+# sub-packages). The action joins the lines with commas when its suite_pattern input is empty.
+# A blank line or a line starting with `#` is ignored.
+#
+# Scala is the performance tier only: CI runs the suites of code the registered functions still
+# reach (the L1 expressions, the kernel facades, the shared GDAL, tile, grid and vector primitives).
+# The suites below are left out on purpose, because the code they test is reachable from no function.
+# Each is named on a `# excluded:` line, and scripts/ci/test_scala_heavy_suites.py checks that every
+# suite under src/test/scala is either matched by an entry or excluded here, and that every entry
+# matches a suite.
+#
+# excluded: com.databricks.labs.gbx.rasterx.RST_ChmRegistrationTest
+# excluded: com.databricks.labs.gbx.rasterx.expressions.RST_ChmTest
+# excluded: com.databricks.labs.gbx.rasterx.expressions.spectral.SpectralIndicesTest
+# excluded: com.databricks.labs.gbx.rasterx.expressions.vector.RST_PolygonizeTest
+# excluded: com.databricks.labs.gbx.rasterx.gdal.DirectReaderTest
+# excluded: com.databricks.labs.gbx.rasterx.operations.GDALRasterizeTest
+# excluded: com.databricks.labs.gbx.rasterx.operator.GDALCalcTest
+# excluded: com.databricks.labs.gbx.vectorx.mvt.MvtPyramidBuilderTest
+#
+# SparkAdaptersTest lives outside com.databricks.labs.gbx, so the old default wildcard skipped it.
+com.databricks.labs.gbx.DocExampleSourceTest
+com.databricks.labs.gbx.GeneratorCoverageGuardTest
+com.databricks.labs.gbx.bench.*
+com.databricks.labs.gbx.expressions.*
+com.databricks.labs.gbx.gridx.*
+com.databricks.labs.gbx.kernels.*
+com.databricks.labs.gbx.operations.*
+com.databricks.labs.gbx.pmtiles.*
+com.databricks.labs.gbx.rasterx.GDALOperationsTest
+com.databricks.labs.gbx.rasterx.KernelFacadesSmokeTest
+com.databricks.labs.gbx.rasterx.RST_BinPointsAggRegistrationTest
+com.databricks.labs.gbx.rasterx.RST_BinPointsRegistrationTest
+com.databricks.labs.gbx.rasterx.RST_H3_RasterizeAggTest
+com.databricks.labs.gbx.rasterx.RST_IsobandRegistrationTest
+com.databricks.labs.gbx.rasterx.RST_TransformCrsGridSpec
+com.databricks.labs.gbx.rasterx.RasterXFunctionsTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AccessorsEvalTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AccessorsExecuteTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AdvancedOperationsTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AggEvalTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AggregationsTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AlignToTest
+com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsAggTest
+com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsTest
+com.databricks.labs.gbx.rasterx.expressions.RST_CombineFamilyTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ConstructorsEvalTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ConstructorsExecuteTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ConvolveTest
+com.databricks.labs.gbx.rasterx.expressions.RST_CrsOpsTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ErrorHandlingParityTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ExpressionEvalTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ExpressionExecuteTest
+com.databricks.labs.gbx.rasterx.expressions.RST_GeneratorRowShapeTest
+com.databricks.labs.gbx.rasterx.expressions.RST_GeneratorsEvalTest
+com.databricks.labs.gbx.rasterx.expressions.RST_GridIntegrationTest
+com.databricks.labs.gbx.rasterx.expressions.RST_H3IntegrationTest
+com.databricks.labs.gbx.rasterx.expressions.RST_InitNoDataTest
+com.databricks.labs.gbx.rasterx.expressions.RST_NoVrtPayloadTest
+com.databricks.labs.gbx.rasterx.expressions.RST_Tessellate_GridSystemMetadataTest
+com.databricks.labs.gbx.rasterx.expressions.RST_TileStructureTest
+com.databricks.labs.gbx.rasterx.expressions.RST_TransformationsEvalTest
+com.databricks.labs.gbx.rasterx.expressions.RST_V2RoundTripTest
+com.databricks.labs.gbx.rasterx.expressions.agg.*
+com.databricks.labs.gbx.rasterx.expressions.analysis.*
+com.databricks.labs.gbx.rasterx.expressions.constructor.*
+com.databricks.labs.gbx.rasterx.expressions.dem.*
+com.databricks.labs.gbx.rasterx.expressions.grid.*
+com.databricks.labs.gbx.rasterx.expressions.pixel.*
+com.databricks.labs.gbx.rasterx.expressions.resample.*
+com.databricks.labs.gbx.rasterx.expressions.vector.RST_IsobandTest
+com.databricks.labs.gbx.rasterx.expressions.vector.VectorRasterBridgeTest
+com.databricks.labs.gbx.rasterx.expressions.web.*
+com.databricks.labs.gbx.rasterx.gdal.GDALManagerNativeDirTest
+com.databricks.labs.gbx.rasterx.gdal.GDALManagerPolicyTest
+com.databricks.labs.gbx.rasterx.gdal.GDALManagerProjGridsSpec
+com.databricks.labs.gbx.rasterx.gdal.GDALManagerStaleNativeDirTest
+com.databricks.labs.gbx.rasterx.gdal.GDALManagerTest
+com.databricks.labs.gbx.rasterx.gdal.GDALUtilsTest
+com.databricks.labs.gbx.rasterx.gdal.ValidMaskTest
+com.databricks.labs.gbx.rasterx.operations.AlphaValidityReadersTest
+com.databricks.labs.gbx.rasterx.operations.BandSubsetAlphaTest
+com.databricks.labs.gbx.rasterx.operations.ClipToGeomTest
+com.databricks.labs.gbx.rasterx.operations.KernelFilterTest
+com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometryTest
+com.databricks.labs.gbx.rasterx.operations.PixelCombineRastersTest
+com.databricks.labs.gbx.rasterx.operations.RasterAccessorsTest
+com.databricks.labs.gbx.rasterx.operations.RasterProjectTest
+com.databricks.labs.gbx.rasterx.operations.RasterTessellateAlphaTest
+com.databricks.labs.gbx.rasterx.operations.RasterTessellateBngDiscriminatorTest
+com.databricks.labs.gbx.rasterx.operations.RasterTessellateCentroidWindowTest
+com.databricks.labs.gbx.rasterx.operations.RasterTessellateCustomTest
+com.databricks.labs.gbx.rasterx.operations.RasterTessellateTest
+com.databricks.labs.gbx.rasterx.operations.SpatialRefOpsTest
+com.databricks.labs.gbx.rasterx.operations.WindowedExtractTest
+com.databricks.labs.gbx.rasterx.operator.DerivedTileCompressionTest
+com.databricks.labs.gbx.rasterx.operator.GDALBuildVRTTest
+com.databricks.labs.gbx.rasterx.operator.GDALInfoTest
+com.databricks.labs.gbx.rasterx.operator.GDALTranslateTest
+com.databricks.labs.gbx.rasterx.operator.GDALWarpTest
+com.databricks.labs.gbx.rasterx.operator.WarpSourceTest
+com.databricks.labs.gbx.rasterx.parity.*
+com.databricks.labs.gbx.rasterx.tile.*
+com.databricks.labs.gbx.rasterx.util.*
+com.databricks.labs.gbx.util.*
+com.databricks.labs.gbx.vectorx.ST_CrsCatalystTest
+com.databricks.labs.gbx.vectorx.ST_CrsFamilyTest
+com.databricks.labs.gbx.vectorx.expressions.*
+com.databricks.labs.gbx.vectorx.jts.*
+com.databricks.labs.gbx.vectorx.mvt.MvtDecoderTest
+com.databricks.labs.gbx.vectorx.mvt.MvtWriterTest
+org.apache.spark.sql.adapters.SparkAdaptersTest

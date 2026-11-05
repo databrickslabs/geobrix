@@ -2916,3 +2916,196 @@ def test_uc_probes_has_its_md_and_documents_every_option():
     for opt in re.findall(r"^\s+(--[a-z-]+)\)", sh, re.M):
         assert f"`{opt}" in md, opt
     assert md.startswith("# gbx:bench:uc-probes")
+
+
+# ------------------------------------------------------- notebook runner: wheel library, harvest
+
+
+@pytest.fixture
+def runner(monkeypatch):
+    """The Serverless notebook runner module, with a stand-in for the Databricks SDK (none is installed here)."""
+    from types import ModuleType
+    from unittest.mock import MagicMock
+
+    sdk = ModuleType("databricks.sdk")
+    sdk.WorkspaceClient = MagicMock(name="WorkspaceClient")
+    sdk.WorkspaceClient.return_value.current_user.me.return_value.user_name = (
+        "me@example.com"
+    )
+    service = ModuleType("databricks.sdk.service")
+    compute, jobs = MagicMock(name="compute"), MagicMock(name="jobs")
+    compute.Library.side_effect = lambda **kw: ("library", kw)
+    service.compute, service.jobs = compute, jobs
+    monkeypatch.setitem(
+        sys.modules,
+        "databricks",
+        sys.modules.get("databricks") or ModuleType("databricks"),
+    )
+    for name, mod in (
+        ("databricks.sdk", sdk),
+        ("databricks.sdk.service", service),
+        ("databricks.sdk.service.compute", compute),
+        ("databricks.sdk.service.jobs", jobs),
+    ):
+        monkeypatch.setitem(sys.modules, name, mod)
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    monkeypatch.delitem(sys.modules, "run_notebooks_serverless", raising=False)
+    import run_notebooks_serverless as mod
+
+    mod.HARVEST_FAILURES.clear()
+    yield mod
+    sys.modules.pop("run_notebooks_serverless", None)
+
+
+def _launch(runner, monkeypatch, tmp_path, *argv, run_one=None):
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text(
+        json.dumps({"cells": [], "metadata": {}, "nbformat": 4, "nbformat_minor": 5})
+    )
+    seen = []
+
+    def fake_run_one(**kw):
+        seen.append(kw)
+        return True
+
+    monkeypatch.setattr(runner, "run_one", run_one or fake_run_one)
+    monkeypatch.setattr(
+        sys, "argv", ["run_notebooks_serverless.py", "--notebook", str(nb), *argv]
+    )
+    return runner.main(), seen
+
+
+ENV5 = "/Volumes/c/s/v/geobrix-0.6.0+env5-py3-none-any.whl"
+ENV6 = "/Volumes/c/s/v/geobrix-0.6.0+env6-py3-none-any.whl"
+
+
+def test_a_notebook_on_a_new_cluster_gets_the_wheel_as_a_cluster_library(
+    runner, monkeypatch, tmp_path
+):
+    """A notebook with no %pip cell imports `databricks.labs.gbx` only if the cluster installs the wheel: the
+    `--python-task` route did, the notebook route did not (`No module named databricks.labs`).
+    """
+    code, seen = _launch(
+        runner,
+        monkeypatch,
+        tmp_path,
+        "--new-cluster",
+        "19.3.x-scala2.13",
+        "--wheel",
+        ENV6,
+        "--jar",
+        "/Volumes/c/s/v/g.jar",
+    )
+    assert code == 0 and len(seen) == 1
+    cluster = seen[0]["job_cluster"]
+    assert cluster.wheel == ENV6
+    assert runner._cluster_libraries(cluster) == [
+        ("library", {"whl": ENV6}),
+        ("library", {"jar": "/Volumes/c/s/v/g.jar"}),
+    ]
+
+
+def test_a_serverless_notebook_run_installs_no_cluster_library(
+    runner, monkeypatch, tmp_path
+):
+    code, seen = _launch(runner, monkeypatch, tmp_path)
+    assert code == 0 and seen[0]["job_cluster"] is None
+
+
+def test_the_new_cluster_runtime_decides_which_env_wheel_is_taken(
+    runner, monkeypatch, tmp_path
+):
+    """DBR 18 takes the env5 wheel without `--env-version 5` (which is the Serverless setting); DBR 19 refuses it."""
+    code, seen = _launch(
+        runner,
+        monkeypatch,
+        tmp_path,
+        "--new-cluster",
+        "18.0.x-scala2.13",
+        "--wheel",
+        ENV5,
+    )
+    assert code == 0 and seen[0]["job_cluster"].wheel == ENV5
+    with pytest.raises(SystemExit) as exc:
+        _launch(
+            runner,
+            monkeypatch,
+            tmp_path,
+            "--new-cluster",
+            "19.3.x-scala2.13",
+            "--wheel",
+            ENV5,
+        )
+    assert exc.value.code == 2
+
+
+def _run_with_harvest(runner, monkeypatch, tmp_path, harvest):
+    """`run_one` on a run that SUCCEEDED, with the SDK calls stood in, and `harvest` as the harvest step."""
+    import types
+    from unittest.mock import MagicMock
+
+    jobs = sys.modules["databricks.sdk.service.jobs"]
+    done = MagicMock()
+    done.state.life_cycle_state = jobs.RunLifeCycleState.TERMINATED
+    done.state.result_state = jobs.RunResultState.SUCCESS
+    done.state.state_message = ""
+    done.tasks = []
+    w = MagicMock()
+    w.jobs.get_run.return_value = done
+    monkeypatch.setattr(runner, "_import_notebook", lambda *a, **k: "/ws/nb")
+    monkeypatch.setattr(
+        runner, "submit_once", lambda *a, **k: types.SimpleNamespace(run_id=7)
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "harvest_notebook_outputs",
+        types.SimpleNamespace(harvest_run_outputs=harvest),
+    )
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}")
+    return runner.run_one(
+        w=w,
+        local_path=nb,
+        ws_dir="/ws",
+        deps=[],
+        env_version="6",
+        poll_secs=0,
+        strip_pip=True,
+        harvest_outputs=True,
+    )
+
+
+def test_a_failed_output_harvest_does_not_fail_the_run_or_stop_the_chain(
+    runner, monkeypatch, tmp_path, capsys
+):
+    def broken(*_a, **_k):
+        raise ValueError("could not detect the notebook's JSON serialization")
+
+    assert _run_with_harvest(runner, monkeypatch, tmp_path, broken) is True
+    out = capsys.readouterr().out
+    assert "output harvest failed" in out and "SUCCEEDED" in out
+    assert runner.HARVEST_FAILURES == ["nb.ipynb"]
+
+
+def test_a_harvest_that_works_is_not_reported_as_failed(runner, monkeypatch, tmp_path):
+    assert (
+        _run_with_harvest(runner, monkeypatch, tmp_path, lambda *a, **k: (3, []))
+        is True
+    )
+    assert runner.HARVEST_FAILURES == []
+
+
+def test_a_notebook_json_that_dumps_cannot_reproduce_is_still_harvested(monkeypatch):
+    """eo-series 03 and 04 hold a repeated key, so no json.dumps setting rewrites them byte for byte: the harvest
+    writes them in the repo style instead of raising `could not detect the notebook JSON serialization`.
+    """
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
+    import harvest_notebook_outputs as hno
+
+    original = '{\n "a": 1,\n "a": 2,\n "cells": []\n}\n'
+    out = hno._dump_like(json.loads(original), original)
+    assert json.loads(out) == {"a": 2, "cells": []} and out.endswith("}\n")
+    plain = json.dumps({"cells": [], "n": "é"}, indent=1, ensure_ascii=True)
+    assert (
+        hno._dump_like({"cells": [], "n": "é"}, plain) == plain
+    )  # a reproducible original is kept as it was

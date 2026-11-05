@@ -20,6 +20,7 @@ import json
 import pathlib
 import re
 import subprocess
+import sys
 import time
 import urllib.parse
 
@@ -133,7 +134,15 @@ def _dump_like(nb: dict, original: str) -> str:
         for tail in ("", "\n"):
             if probe + tail == original:
                 return json.dumps(nb, indent=1, ensure_ascii=ensure_ascii) + tail
-    raise ValueError("could not detect the notebook's JSON serialization; not rewriting it")
+    # An original that json does not reproduce byte for byte (a repeated key, a key order or an escape mix of another
+    # writer): the notebook is still valid JSON, so write it in the repo's style rather than lose the run's outputs.
+    print(
+        "    note: the notebook's JSON serialization is not one json.dumps reproduces; "
+        "rewritten in the repo style (indent 1, UTF-8), so the diff may touch more than the outputs",
+        file=sys.stderr,
+        flush=True,
+    )
+    return json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
 
 
 def _export_model(run_id, profile: str) -> dict:

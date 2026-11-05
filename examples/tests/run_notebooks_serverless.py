@@ -302,7 +302,7 @@ class JobCluster:
     access_mode: str = "dedicated"
     user_name: Optional[str] = None
     jar: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (the heavy tier)
-    wheel: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (--python-task)
+    wheel: Optional[str] = None  # a /Volumes path: installed as a library of the cluster (--python-task, notebooks)
     extra_jars: tuple = ()  # more /Volumes JARs installed as libraries (--python-task, --extra-jar)
 
 
@@ -410,6 +410,10 @@ def _accelerator_type(value: str):
         return SimpleNamespace(value=value)
 
 
+# Notebooks whose run succeeded but whose output harvest failed (reported at the end of the launch).
+HARVEST_FAILURES: list[str] = []
+
+
 def run_one(
     w,
     local_path: pathlib.Path,
@@ -463,8 +467,9 @@ def run_one(
         # A classic cluster: the warm interactive one (no cold start), or a job cluster
         # made for this run. Deps install via the notebook's own %pip (kept, not
         # stripped — classic clusters support %pip), so there is no environment spec or
-        # GPU compute request here; --extras/--wheel/--env-version/--hardware-accelerator
-        # do not apply in this mode.
+        # GPU compute request here; --extras/--env-version/--hardware-accelerator do not
+        # apply in this mode. --wheel is installed as a library of a new cluster, so a notebook
+        # without a %pip cell still imports databricks.labs.gbx.
         where = (
             {"existing_cluster_id": existing_cluster_id}
             if existing_cluster_id
@@ -581,9 +586,14 @@ def run_one(
 
         try:
             n, unmatched = harvest_run_outputs(run_id, profile or "oauth-fe", harvest_path or local_path)
-        except Exception as e:  # a requested harvest that fails must fail the run
-            print(f"!!! STOP — output harvest failed ({e.__class__.__name__}: {e})", flush=True)
-            return False
+        except Exception as e:  # noqa: BLE001 — the run itself succeeded: say so loudly, but let the chain go on
+            HARVEST_FAILURES.append(local_path.name)
+            print(
+                f"!!! WARNING — output harvest failed for {local_path.name} ({e.__class__.__name__}: {e}); "
+                "the run SUCCEEDED, its outputs are not in the local notebook",
+                flush=True,
+            )
+            return ok
         print(f"    harvested outputs into {n} cell(s) of {harvest_path or local_path}"
               + (f"; NOT updated (no match or unsupported result type): code cells {unmatched}"
                  if unmatched else ""), flush=True)
@@ -905,8 +915,9 @@ def main() -> int:
             "Run on a classic job cluster made for each run, which Databricks terminates "
             "when the run ends, instead of Serverless. An optional runtime (e.g. "
             "'19.x-scala2.13') sets the cluster's Databricks Runtime, as --spark-version does. "
-            "Deps install via the notebook's own %%pip (kept, not stripped). --extras/--wheel/"
-            "--env-version/--hardware-accelerator are ignored in this mode."
+            "Deps install via the notebook's own %%pip (kept, not stripped); --wheel and --jar are also "
+            "installed as libraries of the cluster. --extras/--env-version/--hardware-accelerator "
+            "are ignored in this mode."
         ),
     )
     parser.add_argument(
@@ -1143,7 +1154,17 @@ def main() -> int:
 
     extras = [e.strip() for e in args.extras.split(",") if e.strip()]
     extra_deps = _split_deps(args.extra_deps)
-    deps = _build_dep_list(args.wheel, extras, extra_deps, args.env_version)
+    # A new cluster's runtime fixes the wheel environment (--env-version is the Serverless one).
+    new_runtime = args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version
+    dep_env = args.env_version
+    if args.new_cluster:
+        try:
+            _check_wheel_env(args.wheel, runtime_env(new_runtime), new_runtime)
+        except SystemExit as exc:
+            parser.error(str(exc.code))
+        if runtime_env(new_runtime) is not None:
+            dep_env = str(runtime_env(new_runtime))
+    deps = _build_dep_list(args.wheel, extras, extra_deps, dep_env)
 
     from databricks.sdk import WorkspaceClient
 
@@ -1156,12 +1177,14 @@ def main() -> int:
     job_cluster = None
     if args.new_cluster:
         job_cluster = JobCluster(
-            spark_version=args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version,
+            spark_version=new_runtime,
             node_type=args.node_type,
             num_workers=args.num_workers,
             access_mode=args.access_mode,
             user_name=w.current_user.me().user_name,
             jar=args.jar,
+            # a notebook with no %pip cell has no other way to import databricks.labs.gbx on a job cluster
+            wheel=args.wheel,
         )
 
     # Resolve default ws-dir using the current user
@@ -1223,6 +1246,8 @@ def main() -> int:
             return 1
 
     print("\n=== ALL NOTEBOOKS SUCCEEDED ===", flush=True)
+    if HARVEST_FAILURES:
+        print(f"=== OUTPUT HARVEST FAILED for: {', '.join(HARVEST_FAILURES)} ===", flush=True)
     return 0
 
 

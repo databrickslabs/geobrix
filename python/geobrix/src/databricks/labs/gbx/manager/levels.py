@@ -51,7 +51,8 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_quadbin_aswkb": ("L3",),
     "gbx_quadbin_centroid": ("L3",),
     "gbx_quadbin_resolution": ("L3",),
-    "gbx_quadbin_distance": ("L3",),
+    # distance has an SQL kernel: L0 0.30 s against light 1.30 s over 1M rows on a local[4] session.
+    "gbx_quadbin_distance": ("L0", "L3"),
     "gbx_quadbin_cellunion": ("L3",),
     # The cell-fill aggregates are light by family, except H3's: 0.57x on a cluster (inside the 0.8 rule), and its
     # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does.

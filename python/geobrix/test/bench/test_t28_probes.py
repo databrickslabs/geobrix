@@ -633,3 +633,87 @@ def test_the_serverless_run_records_the_session_statistics_of_the_wide_key():
             "wide_error"
         ]
     )
+
+
+def test_run_stage_inputs_stages_three_folders_under_the_volume_dir(monkeypatch):
+    from databricks.labs.gbx.bench import uc_perf
+
+    seen = {}
+    monkeypatch.setattr(
+        uc_perf,
+        "perf_stage_tiles",
+        lambda d, mibs: seen.setdefault("perf", (d, tuple(mibs))) and {"a": 1},
+    )
+    monkeypatch.setattr(
+        probes,
+        "stage_mech_tiles",
+        lambda d, mibs=(): seen.setdefault("mech", d) and {"b": 2},
+    )
+    monkeypatch.setattr(
+        probes,
+        "p2_stage_tiles",
+        lambda d, sizes: seen.setdefault("m6", (d, tuple(sizes))) and {"c": 3},
+    )
+    out = probes.run_stage_inputs(None, "/Volumes/c/s/v/f/", m10=(16, 64, 256))
+    assert out == {"perf_tiles": {"a": 1}, "mech_tiles": {"b": 2}, "m6_tiles": {"c": 3}}
+    assert seen["perf"] == ("/Volumes/c/s/v/f/perf_tiles", (1, 64, 16, 64, 256))
+    assert seen["mech"] == "/Volumes/c/s/v/f/mech_tiles"
+    assert seen["m6"] == (
+        "/Volumes/c/s/v/f/m6_tiles",
+        (probes.M6_TILE,),
+    )  # the 1 MiB tile the M-6 call reads
+
+
+def test_a_failed_staging_step_is_recorded_not_raised(monkeypatch):
+    from databricks.labs.gbx.bench import uc_perf
+
+    def boom(*a, **k):
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(uc_perf, "perf_stage_tiles", boom)
+    monkeypatch.setattr(probes, "stage_mech_tiles", lambda d, mibs=(): {})
+    monkeypatch.setattr(probes, "p2_stage_tiles", lambda d, sizes: {})
+    out = probes.run_stage_inputs(None, "/Volumes/c/s/v/f")
+    assert "read-only" in out["perf_tiles"]["error"] and out["mech_tiles"] == {}
+
+
+def test_a_map_parameter_is_a_map_literal_not_a_tile_struct():
+    man = manifest.load()
+    param = man.functions["gbx_rst_index"].params[2]
+    case = next(c for c in oracles.TABLES["SPEC_CALC"] if c.fn == "gbx_rst_index")
+    assert (
+        oracles._sql_literal({"red": 1, "nir": 2}, param, case)
+        == "map('red', 1, 'nir', 2)"
+    )
+    assert oracles._sql_literal({}, param, case) == "CAST(map() AS MAP<STRING,INT>)"
+
+
+def test_the_mixed_language_and_temp_share_cells_are_what_the_checklist_asks():
+    mixed = probes.mixed_language_cells()
+    assert (
+        mixed[0].startswith("import databricks.labs.gbx as gbx")
+        and "gbx.register(spark" in mixed[0]
+    )
+    scala = mixed[1]
+    assert scala.startswith("%scala")
+    for label in (
+        "scalar_sql",
+        "scalar_expr",
+        "scalar_call_function",
+        "generator_select_list",
+        "generator_lateral",
+        "aggregate_group_by",
+    ):
+        assert f'probe("{label}")' in scala
+    assert str(probes.H3_CELL) in scala
+    import h3
+
+    assert (
+        h3.get_resolution(h3.int_to_str(probes.H3_CELL)) == 8
+    )  # a real cell, so a failure is the routine's
+    share = probes.temp_share_cells()
+    assert share[1].startswith("%scala") and "gbx_mvp_t28_share_py" in share[1]
+    assert (
+        "DROP TEMPORARY FUNCTION IF EXISTS" in share[2]
+        and "gbx_mvp_t28_share_scala" in share[2]
+    )

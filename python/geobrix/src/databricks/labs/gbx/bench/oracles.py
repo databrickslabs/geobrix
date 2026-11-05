@@ -5287,6 +5287,15 @@ def _sql_literal(value, param, case: Case) -> str:
             for n, t in decl
         )
         return f"named_struct({parts})"
+    if isinstance(value, dict) and (param.uc or "").upper().startswith("MAP<"):
+        # a MAP<K,V> parameter: map(k1, v1, ...), the key and value types the parameter's own
+        key_uc, val_uc = (t.strip() for t in param.uc[len("MAP<") : -1].split(",", 1))
+        kp, vp = replace(param, uc=key_uc.upper()), replace(param, uc=val_uc.upper())
+        items = ", ".join(
+            f"{_sql_literal(k, kp, case)}, {'CAST(NULL AS ' + sql_type(val_uc) + ')' if v is None else _sql_literal(v, vp, case)}"
+            for k, v in value.items()
+        )
+        return f"map({items})" if value else f"CAST(map() AS {sql_type(param.uc)})"
     if isinstance(value, dict):
         raster = (
             "NULL" if value["raster"] is None else "X'" + value["raster"].hex() + "'"

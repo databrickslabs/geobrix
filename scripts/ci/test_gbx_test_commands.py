@@ -2851,3 +2851,68 @@ def test_bench_cluster_takes_a_profile_and_hands_it_to_the_launcher(sandbox):
     assert res.returncode == 0, res.output
     last = uv_log.read_text().splitlines()[-1]
     assert "--profile oauth-fe" in last and last.endswith("PROFILE=oauth-fe"), last
+
+
+# ------------------------------------------------------------------- gbx:bench:uc-probes
+
+
+def test_uc_probes_runs_the_generator_on_the_host_venv_and_forwards_every_option(sandbox):
+    python, log = _fake_venv(sandbox)
+    argv_file = Path(str(log) + ".argv")
+
+    res = sandbox.run(
+        "gbx-bench-uc-probes.sh",
+        "--catalog", "cat", "--schema", "base", "--volume-dir", "/Volumes/c/s/v/f", "--jar", "/Volumes/c/s/v/j.jar",
+        "--volroot", "/Volumes/c/s/v", "--out-dir", "out dir", "--profile", "p", "--ws-root", "/Users/x", "--cluster-id", "0-1",
+        "--only", "S6-C,W-A", "--dry-run", "--parse",
+    )  # fmt: skip
+
+    assert res.returncode == 0, res.output
+    words = argv_file.read_text().splitlines()
+    assert words[:4] == ["-W", "ignore", "-m", "databricks.labs.gbx.bench.t28"]
+    assert words[4:] == [
+        "--catalog", "cat", "--schema", "base", "--volume-dir", "/Volumes/c/s/v/f", "--jar", "/Volumes/c/s/v/j.jar",
+        "--volroot", "/Volumes/c/s/v", "--out-dir", "out dir", "--profile", "p", "--ws-root", "/Users/x",
+        "--cluster-id", "0-1", "--only", "S6-C,W-A", "--dry-run", "--parse",
+    ]  # fmt: skip
+    assert sandbox.execs() == []  # no container, no workspace
+
+
+def test_uc_probes_judge_and_defaults_and_a_failed_generator_exit_code(sandbox):
+    python, log = _fake_venv(sandbox)
+    argv_file = Path(str(log) + ".argv")
+    assert sandbox.run("gbx-bench-uc-probes.sh").returncode == 0
+    assert argv_file.read_text().splitlines()[4:] == []  # the module's own defaults apply
+    sandbox.run("gbx-bench-uc-probes.sh", "--judge", "out/w_slice.json")
+    assert argv_file.read_text().splitlines()[4:] == ["--judge", "out/w_slice.json"]
+    res = sandbox.run("gbx-bench-uc-probes.sh", "--dry-run", FAKE_PYTHON_RC="1")
+    assert res.returncode == 1  # a failed check fails the command
+
+
+@pytest.mark.parametrize("args", [["--catalog"], ["--only", "--dry-run"], ["--log"]])
+def test_uc_probes_options_that_need_a_value_are_refused_before_python_runs(sandbox, args):
+    python, log = _fake_venv(sandbox)
+    res = sandbox.run("gbx-bench-uc-probes.sh", *args)
+    assert res.returncode == 2 and "needs a value" in res.output and not log.exists()
+
+
+def test_uc_probes_help_lists_the_options_and_an_unknown_option_is_refused(sandbox):
+    res = sandbox.run("gbx-bench-uc-probes.sh", "--help")
+    assert res.returncode == 0
+    for opt in ("--catalog", "--schema", "--volume-dir", "--jar", "--out-dir", "--only", "--dry-run", "--judge", "--log"):
+        assert opt in res.output
+    res = sandbox.run("gbx-bench-uc-probes.sh", "--nope")
+    assert res.returncode == 2 and "Unknown option: --nope" in res.output
+
+
+def test_uc_probes_without_the_venv_says_how_to_make_it(sandbox):
+    res = sandbox.run("gbx-bench-uc-probes.sh", "--dry-run")
+    assert res.returncode != 0 and "pyrx venv not found" in res.output
+
+
+def test_uc_probes_has_its_md_and_documents_every_option():
+    md = (REPO_ROOT / "scripts" / "commands" / "gbx-bench-uc-probes.md").read_text()
+    sh = (REPO_ROOT / "scripts" / "commands" / "gbx-bench-uc-probes.sh").read_text()
+    for opt in re.findall(r"^\s+(--[a-z-]+)\)", sh, re.M):
+        assert f"`{opt}" in md, opt
+    assert md.startswith("# gbx:bench:uc-probes")

@@ -10,25 +10,17 @@ from collections import Counter
 from typing import List, Optional, Sequence, Tuple
 
 
-def write_notebook(
-    path: str, call: str, kwargs: dict, wheel: str, extras: str = ""
-) -> None:
-    """Three cells: %pip the staged env wheel (the interactive two-step install), restart, print(<call>(spark, **kwargs)).
-
-    The env wheel is the light install, so it takes only feature extras (``extras``, e.g. ``"stac"``), never a
-    ``light_*`` name. The Serverless runner strips the two ``%pip`` cells and installs the wheel itself.
-    """
+def _pip_cell(wheel: str, extras: str = "") -> str:
     spec = f"geobrix[{extras}]" if extras else "geobrix"
-    pip = (
+    return (
         f'%pip install --force-reinstall --no-deps "geobrix @ file://{wheel}"\n'
         f'%pip install "{spec} @ file://{wheel}"'
     )
-    run = (
-        "import json\nfrom databricks.labs.gbx.bench import probes\n"
-        f"print(json.dumps(probes.{call}(spark, **{kwargs!r}), default=str, indent=1))"
-    )
-    cells = [pip, "dbutils.library.restartPython()", run]
-    nb = {
+
+
+def notebook_json(cells: Sequence[str]) -> dict:
+    """A Jupyter notebook (nbformat 4) of code cells."""
+    return {
         "cells": [
             {
                 "cell_type": "code",
@@ -43,8 +35,48 @@ def write_notebook(
         "nbformat": 4,
         "nbformat_minor": 5,
     }
+
+
+def _call_cell(calls: Sequence[Tuple[str, dict]]) -> str:
+    lines = ["import json", "from databricks.labs.gbx.bench import probes"]
+    for call, kwargs in calls:
+        lines.append(
+            f"print(json.dumps(probes.{call}(spark, **{kwargs!r}), default=str, indent=1))"
+        )
+    return "\n".join(lines)
+
+
+def write_notebook(
+    path: str, call: str, kwargs: dict, wheel: str, extras: str = ""
+) -> None:
+    """Three cells: %pip the staged env wheel (the interactive two-step install), restart, print(<call>(spark, **kwargs)).
+
+    The env wheel is the light install, so it takes only feature extras (``extras``, e.g. ``"stac"``), never a
+    ``light_*`` name. The Serverless runner strips the two ``%pip`` cells and installs the wheel itself.
+    """
+    write_calls_notebook(path, [(call, kwargs)], wheel, extras)
+
+
+def write_calls_notebook(
+    path: str, calls: Sequence[Tuple[str, dict]], wheel: str, extras: str = ""
+) -> None:
+    """As :func:`write_notebook`, with one result print per ``(call, kwargs)``, in order, in one cell each run."""
+    cells = [
+        _pip_cell(wheel, extras),
+        "dbutils.library.restartPython()",
+        _call_cell(calls),
+    ]
     with open(path, "w") as fh:
-        json.dump(nb, fh, indent=1)
+        json.dump(notebook_json(cells), fh, indent=1)
+
+
+def write_cells_notebook(
+    path: str, cells: Sequence[str], wheel: str, extras: str = ""
+) -> None:
+    """The %pip install, the restart, then ``cells`` as they are (a cell may start with ``%scala``)."""
+    full = [_pip_cell(wheel, extras), "dbutils.library.restartPython()", *cells]
+    with open(path, "w") as fh:
+        json.dump(notebook_json(full), fh, indent=1)
 
 
 def _sha256(path: str) -> str:
@@ -299,6 +331,7 @@ def run_uc_slice(
     man = manifest.load()
     cases = uc_slice_cases(tables)
     run_ = _Run("T28 slice", "t28-slice", 4, 7200.0)
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
     t = time.time()
     stmts, err, _ = run_.step(
         "install",
@@ -2386,6 +2419,7 @@ def run_m6(spark, catalog: str, schema: str, volume_dir: str) -> dict:
     )
     run_ = _Run("T28 M6", "t28-m6", 4, 1800.0)
     out: dict = {"wheel": wheel, "errors": {}, "dropped": False}
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS `{catalog}`.`{schema}`")
     try:
         _, err, _ = run_.step("stage", lambda: p2_stage_tiles(tile_dir, (M6_TILE,)))
         if err:
@@ -2788,3 +2822,99 @@ def run_t28_mechanisms(spark, catalog: str, schema: str, volume_dir: str) -> dic
         run_.stop()
     out["ok"] = all(r.get("ok") for r in out["units"].values())
     return out
+
+
+# --- inputs staged once, and the notebooks for the JVM-language and temporary-function checks (Task 28) ------------------
+
+MIX_NAMES = (
+    "gbx_bng_eastnorthasbng",
+    "gbx_bng_aswkb",
+    "gbx_bng_kringexplode",
+    "gbx_h3_cellfill",
+)
+H3_CELL = 612934495399575551  # an H3 cell of resolution 8 over London
+
+
+def run_stage_inputs(
+    spark, volume_dir: str, m10: Sequence[int] = (16, 64, 256)
+) -> dict:
+    """Write every raster input the Unity Catalog legs read, once: the performance tiles (``perf_tiles``), the mechanism
+    tiles (``mech_tiles``) and the 1 MiB reference tile of the engine probe (``m6_tiles``), all under ``volume_dir``.
+    The warehouse files read them but cannot write them, so this runs before any of them. A file already there is kept.
+
+    Prints ``[T28 stage] <step> START`` and ``DONE <s>s ...`` per step. Returns ``{"perf_tiles", "mech_tiles",
+    "m6_tiles"}``, each ``{file: {path, bytes}}``.
+    """
+    from databricks.labs.gbx.bench import uc_perf
+    from databricks.labs.gbx.bench.uc_perf import _Run
+
+    root = volume_dir.rstrip("/")
+    run_ = _Run("T28 stage", "t28-stage", 3, 3600.0)
+    out: dict = {}
+    try:
+        for key, fn in (
+            ("perf_tiles", lambda: uc_perf.perf_stage_tiles(f"{root}/perf_tiles", (uc_perf.REFERENCE_MIB, 64, *m10))),
+            ("mech_tiles", lambda: stage_mech_tiles(f"{root}/mech_tiles")),
+            ("m6_tiles", lambda: p2_stage_tiles(f"{root}/m6_tiles", (M6_TILE,))),
+        ):  # fmt: skip
+            val, err, _ = run_.step(key, fn)
+            out[key] = {"error": err} if err else val
+    finally:
+        run_.stop()
+    return out
+
+
+def mixed_language_cells(names: Sequence[str] = MIX_NAMES) -> List[str]:
+    """Cells of a notebook that registers in Python and calls the functions by name from a ``%scala`` cell: the scalar
+    by ``spark.sql``, ``expr`` and ``call_function``, a generator in the select list (expected: UNRESOLVED_ROUTINE) and
+    in FROM / LATERAL, and an aggregate with GROUP BY. Each prints ``[T28 mix] <label> OK ...`` or ``ERROR ...``.
+    """
+    register = (
+        "import databricks.labs.gbx as gbx\n"
+        f"choices = gbx.register(spark, only={list(names)!r})\n"
+        "print('[T28 mix] registered', {n: f'{c.level}/{c.variant}' for n, c in sorted(choices.items())})"
+    )
+    scala = f"""%scala
+import scala.util.Try
+import org.apache.spark.sql.functions._
+def probe(label: String)(body: => Long): Unit = {{
+  val r = Try(body)
+  println(s"[T28 mix] $label " + (if (r.isSuccess) s"OK rows=${{r.get}}" else "ERROR " + r.failed.get.getMessage.take(240).replace("\\n", " ")))
+}}
+probe("scalar_sql") {{ spark.sql("SELECT gbx_bng_eastnorthasbng(530000d, 180000d, '3') AS c").collect().length }}
+probe("scalar_expr") {{ spark.range(1).select(expr("gbx_bng_eastnorthasbng(530000d, 180000d, '3')")).collect().length }}
+probe("scalar_call_function") {{ spark.range(1).select(call_function("gbx_bng_eastnorthasbng", lit(530000d), lit(180000d), lit("3"))).collect().length }}
+probe("scalar_light") {{ spark.sql("SELECT gbx_bng_aswkb('TQ3080') AS g").collect().length }}
+probe("generator_select_list") {{ spark.sql("SELECT gbx_bng_kringexplode('TQ3080', 1)").collect().length }}
+probe("generator_lateral") {{ spark.sql("SELECT t.* FROM (SELECT 'TQ3080' AS c) s, LATERAL gbx_bng_kringexplode(s.c, 1) t").collect().length }}
+probe("aggregate_group_by") {{ spark.sql("SELECT k, gbx_h3_cellfill(cellid, value) AS cells FROM VALUES (1, CAST({H3_CELL} AS BIGINT), 1.0D) AS t(k, cellid, value) GROUP BY k").collect().length }}"""
+    return [register, scala]
+
+
+def temp_share_cells() -> List[str]:
+    """Cells that ask whether a Python cell and a ``%scala`` cell of one notebook see each other's temporary functions
+    (both directions), then drop the two functions. Each prints ``[T28 share] <label> OK <value>`` or ``ERROR ...``.
+    """
+    py_create = (
+        "spark.sql('CREATE OR REPLACE TEMPORARY FUNCTION gbx_mvp_t28_share_py(x INT) RETURNS INT RETURN x + 1')\n"
+        "print('[T28 share] python_created')"
+    )
+    scala = """%scala
+import scala.util.Try
+def probe(label: String)(body: => String): Unit = {
+  val r = Try(body)
+  println(s"[T28 share] $label " + (if (r.isSuccess) s"OK ${r.get}" else "ERROR " + r.failed.get.getMessage.take(240).replace("\\n", " ")))
+}
+probe("scala_sees_python_function") { spark.sql("SELECT gbx_mvp_t28_share_py(1)").first().get(0).toString }
+probe("scala_creates") { spark.sql("CREATE OR REPLACE TEMPORARY FUNCTION gbx_mvp_t28_share_scala(x INT) RETURNS INT RETURN x + 2"); "created" }"""
+    py_read = (
+        "def probe(label, fn):\n"
+        "    try:\n"
+        "        print('[T28 share]', label, 'OK', fn())\n"
+        "    except Exception as exc:\n"
+        "        print('[T28 share]', label, 'ERROR', ' '.join(str(exc).split())[:240])\n"
+        "probe('python_sees_scala_function', lambda: spark.sql('SELECT gbx_mvp_t28_share_scala(1)').first()[0])\n"
+        "for name in ('gbx_mvp_t28_share_py', 'gbx_mvp_t28_share_scala'):\n"
+        "    spark.sql(f'DROP TEMPORARY FUNCTION IF EXISTS {name}')"
+    )
+    return [py_create, scala, py_read]

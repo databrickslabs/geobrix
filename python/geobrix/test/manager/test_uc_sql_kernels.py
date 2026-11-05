@@ -234,3 +234,34 @@ def test_the_recipe_row_of_the_grid_table_runs_on_the_host_through_the_kernel(
     ran = oracles.run_sql_kernels(spark, _uc_cases(QUADBIN), tmpdir=str(tmp_path))
     assert "recipe_qb_finest_zoom" in {c.cid for c, _ in ran}
     assert _fail(ran) == []
+
+
+def test_a_helper_is_created_after_every_helper_it_calls():
+    """Unity Catalog resolves a SQL body when it is created, so a helper that calls another must come after it
+    (gbx__h3_cellfill_run calls gbx__h3_cellfill_apply: the install died at the first on Serverless and the warehouse).
+    """
+    checked = 0
+    for fn in manifest.load().functions.values():
+        src = sqlbody.l4_source(fn)
+        if not src:
+            continue
+        seen = set()
+        for h in src[1]:
+            called = set(sqlbody._CALL.findall(h["sql"]))
+            assert called <= seen, (fn.sql_name, h["name"], sorted(called - seen))
+            seen.add(h["name"])
+            checked += 1
+    assert checked > 10
+
+
+def test_the_dependency_order_keeps_the_declared_order_otherwise():
+    a, b, c = (
+        {"name": "gbx__a", "sql": "{q}gbx__c(x)"},
+        {"name": "gbx__b", "sql": "x"},
+        {"name": "gbx__c", "sql": "x"},
+    )
+    assert [h["name"] for h in sqlbody.in_dependency_order((a, b, c))] == [
+        "gbx__c",
+        "gbx__a",
+        "gbx__b",
+    ]

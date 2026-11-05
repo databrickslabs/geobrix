@@ -27,6 +27,29 @@ _QUOTED = re.compile(r"'(?:[^'\\]|\\.|'')*'|`[^`]*`|\"(?:[^\"\\]|\\.)*\"")
 _MAX_DEPTH = 16
 
 
+def in_dependency_order(helpers: Sequence[Mapping]) -> tuple:
+    """``helpers`` with each one after the helpers its body calls, the declared order kept otherwise.
+
+    Unity Catalog resolves a SQL body when the function is created, so a caller made before its callee is refused.
+    """
+    by_name = {h["name"]: h for h in helpers}
+    out: List[Mapping] = []
+    done: set = set()
+
+    def visit(h: Mapping, path: Tuple[str, ...]) -> None:
+        if h["name"] in done or h["name"] in path:
+            return
+        for callee in _CALL.findall(h["sql"]):
+            if callee in by_name and callee != h["name"]:
+                visit(by_name[callee], path + (h["name"],))
+        done.add(h["name"])
+        out.append(h)
+
+    for h in helpers:
+        visit(h, ())
+    return tuple(out)
+
+
 def l4_source(fn) -> Optional[Tuple[str, tuple]]:
     """``(body, helpers)`` of the UC function's SQL kernel, or None when the row has none."""
     l4 = fn.levels.get("L4", {})
@@ -35,8 +58,8 @@ def l4_source(fn) -> Optional[Tuple[str, tuple]]:
         return None
     if body == SQL_FROM_L0:
         l0 = fn.levels["L0"]
-        return l0["sql"], tuple(l0.get("sql_helpers", ()))
-    return body, tuple(l4.get("sql_helpers", ()))
+        return l0["sql"], in_dependency_order(l0.get("sql_helpers", ()))
+    return body, in_dependency_order(l4.get("sql_helpers", ()))
 
 
 def l0_source(fn) -> Optional[Tuple[str, tuple]]:
@@ -44,7 +67,7 @@ def l0_source(fn) -> Optional[Tuple[str, tuple]]:
     l0 = fn.levels.get("L0")
     if l0 is None:
         return None
-    return l0["sql"], tuple(l0.get("sql_helpers", ()))
+    return l0["sql"], in_dependency_order(l0.get("sql_helpers", ()))
 
 
 def _segments(text: str) -> List[Tuple[bool, str]]:

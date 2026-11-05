@@ -2333,6 +2333,7 @@ M6_TILE = ("1MiB", 1 << 20)  # the reference tile: a 512 x 512 Float32 ZSTD GeoT
 
 _M6_BODY = (
     "import sys\n"
+    "pre = {m for m in sys.modules if m.split('.')[0] == 'pyspark'}\n"
     "from databricks.labs.gbx import manifest\n"
     "from databricks.labs.gbx._gdal_policy import open_bytes\n"
     "from databricks.labs.gbx.engine import run as engine_run\n"
@@ -2345,7 +2346,8 @@ _M6_BODY = (
     "    with open_bytes(bytes(res.raster)) as ds:\n"
     "        a = ds.read(1, masked=True)\n"
     "        stats = f'{int(a.count())}:{float(a.min()):.3f}:{float(a.max()):.3f}'\n"
-    "    md['m6'] = f\"ok|valid:min:max={stats}|pyspark_imported={'pyspark' in sys.modules}\"\n"
+    "    now = {m for m in sys.modules if m.split('.')[0] == 'pyspark'}\n"
+    "    md['m6'] = f\"ok|valid:min:max={stats}|pyspark_imported={'pyspark' in sys.modules}|pyspark_before={len(pre)}|pyspark_new={len(now - pre)}\"\n"
     "    d['raster'] = res.raster\n"
     "d['metadata'] = md\n"
     "return d"
@@ -2403,9 +2405,13 @@ def m6_statements(
 
 
 def m6_ok(value) -> bool:
-    """The M-6 pass: a slope tile came back and ``pyspark`` was never imported by the handler."""
+    """The M-6 pass: a slope tile came back and the handler imported no ``pyspark`` module. A sandbox that loads pyspark
+    before the handler runs (``pyspark_before`` > 0) is judged by ``pyspark_new=0``: what the handler's own imports added.
+    """
     text = str(value)
-    return "|ok|valid:min:max=" in "|" + text and "pyspark_imported=False" in text
+    return "|ok|valid:min:max=" in "|" + text and (
+        "pyspark_imported=False" in text or "pyspark_new=0" in text
+    )
 
 
 def run_m6(spark, catalog: str, schema: str, volume_dir: str) -> dict:

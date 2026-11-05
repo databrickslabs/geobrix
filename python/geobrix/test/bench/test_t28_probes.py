@@ -564,6 +564,13 @@ def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dr
     assert stmts["m6:drop"] == "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_se_l4_probe"
     assert probes.m6_ok("123456|ok|valid:min:max=1000:0.0:12.5|pyspark_imported=False")
     assert not probes.m6_ok("123|ok|valid:min:max=1:0:1|pyspark_imported=True")
+    # a sandbox that preloads pyspark: judged by what the handler added
+    assert probes.m6_ok(
+        "1|ok|valid:min:max=1:0:1|pyspark_imported=True|pyspark_before=40|pyspark_new=0"
+    )
+    assert not probes.m6_ok(
+        "1|ok|valid:min:max=1:0:1|pyspark_imported=True|pyspark_before=0|pyspark_new=40"
+    )
     assert not probes.m6_ok("123|error|a GDAL failure")
 
 

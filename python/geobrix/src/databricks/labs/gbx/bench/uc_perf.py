@@ -1402,8 +1402,13 @@ class _Run:
         except Exception as exc:  # noqa: BLE001 - the error is the measurement
             err = f"{type(exc).__name__}: {' '.join(str(exc).split())[:600]}"
         wall = time.time() - t0
+        detail = ""
+        if err is None and isinstance(val, dict):
+            detail = "".join(
+                f" {k}={val[k]}" for k in ("failures", "cases", "functions") if k in val
+            )
         print(
-            f"[{self.tag}] {name} DONE {wall:.1f}s {'ok' if err is None else 'ERROR ' + err[:160]}",
+            f"[{self.tag}] {name} DONE {wall:.1f}s {'ok' if err is None else 'ERROR ' + err[:160]}{detail}",
             flush=True,
         )
         self.hb.end(status=None if err is None else "error")

@@ -6,7 +6,7 @@ import json
 import re
 import time
 from collections import Counter
-from typing import List, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 
 def write_notebook(
@@ -220,56 +220,104 @@ def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) ->
     return out
 
 
-UC_SLICE_TABLES = ("GRID_SCALAR", "GRID_ARRAY", "GRID_GENERATOR", "VECTOR_SCALAR")
+# The grid and vector tables of the first slice, and the tables of the raster, cell, aggregate and vector forms that
+# came after it. Each table here has UC rows; the MVP tables and SPEC_SE run from their own files.
+UC_CORE_TABLES = ("GRID_SCALAR", "GRID_ARRAY", "GRID_GENERATOR", "VECTOR_SCALAR")
+UC_TIER_B_TABLES = (
+    "RASTER_ACCESSOR",
+    "RASTER_STAT",
+    "SPEC_ANALYSIS",
+    "RASTER_TILE_OP",
+    "SPEC_WARP",
+    "SPEC_CALC",
+    "SPEC_DEM",
+    "RASTER_ARRAY_OP",
+    "RASTER_RASTERIZE",
+    "RASTER_VECTORIZE",
+    "RASTER_CONSTRUCTOR",
+    "WEB_TILES",
+    "RASTER_AGGREGATE",
+    "VECTOR_GENERATOR",
+    "CELL_AGGREGATE",
+    "RASTER_TO_GRID",
+    "RASTER_GENERATOR",
+    "VECTOR_AGGREGATE",
+    "RASTER_FILE_OP",
+)
+UC_SLICE_TABLES = UC_CORE_TABLES + UC_TIER_B_TABLES
 
 
-def uc_slice_cases() -> list:
-    """Every UC row of the slice tables whose function has an L4 level."""
+def uc_slice_cases(tables: Sequence[str] = UC_SLICE_TABLES) -> list:
+    """Every UC row of the slice tables: a row of a function that has an L4 level, and a recipe row (a statement over
+    UC functions, such as the aggregate recipes, whose function has no L4 level of its own).
+    """
     from databricks.labs.gbx import manifest
     from databricks.labs.gbx.bench import oracles
 
     man = manifest.load()
     return [
         c
-        for tbl in UC_SLICE_TABLES
+        for tbl in tables
         for c in oracles.TABLES[tbl]
-        if "uc" in c.surfaces and "L4" in man.functions[c.fn].levels
+        if "uc" in c.surfaces
+        and (c.sql is not None or "L4" in man.functions[c.fn].levels)
     ]
 
 
 def run_uc_slice(
-    spark, catalog: str, schema: str, volume_dir: str, tmpdir: str
+    spark,
+    catalog: str,
+    schema: str,
+    volume_dir: str,
+    tmpdir: str,
+    jar: Optional[str] = None,
+    tables: Sequence[str] = UC_SLICE_TABLES,
 ) -> dict:
     """The Unity Catalog slice on a warehouse or Serverless env 6: install, every UC row of the slice tables through
     3-level names, then the same SQL text with unqualified names (S3).
 
-    1. times ``gbx.uc.install`` (a JAR in ``volume_dir`` makes the JVM-only BNG functions Scala functions);
-    2. runs every UC row of the slice tables (scalars through ``run_session``, the table functions through
+    1. times ``gbx.uc.install`` (a JAR in ``volume_dir``, or ``jar``, makes the JVM-only BNG functions Scala
+       functions; ``jar`` names a Volume JAR, so a folder that holds only the wheel serves the Python form and the
+       Scala form from the same install);
+    2. runs every UC row of the slice tables (scalars and recipes through ``run_session``, the table functions through
        ``run_rows``) against ``catalog.schema.<name>``;
     3. ``register(spark, target='uc', ...)`` (the schema is at this wheel's version), drops the session's temporary
        ``gbx_`` functions (a session function outranks a schema function of the same bare name, and the pass would
        then never reach UC), then ``USE catalog.schema`` and the same rows with the bare names: the same text must
        give the same answers. Run it in a session that needs no session ``gbx_`` functions afterwards.
 
+    Prints ``[T28 slice] <step> START`` and ``DONE <s>s ...`` per step and a RUNNING line every 60 s.
+
     Returns ``{"install_s", "statements", "scala", "failures", "cases", "unqualified_failures", "unqualified_cases"}``;
     ``scala`` counts the functions created on the JAR.
     """
     from databricks.labs.gbx import manifest, register, uc
     from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.bench.uc_perf import _Run
 
     man = manifest.load()
+    cases = uc_slice_cases(tables)
+    run_ = _Run("T28 slice", "t28-slice", 4, 7200.0)
     t = time.time()
-    stmts = uc.install(catalog, schema, volume_dir, spark=spark)
+    stmts, err, _ = run_.step(
+        "install",
+        lambda: uc.install(catalog, schema, volume_dir, spark=spark, jar=jar),
+    )
+    if err:
+        run_.stop()
+        raise RuntimeError(f"gbx.uc.install failed: {err}")
     out = {
         "install_s": time.time() - t,
         "statements": len(stmts),
         "scala": sum("LANGUAGE SCALA" in s for s in stmts),
     }
-    cases = uc_slice_cases()
+
+    def is_rows(c):
+        return man.functions[c.fn].kind == "generator" and c.sql is None
 
     def run(name_of):
-        scalar = [c for c in cases if man.functions[c.fn].kind != "generator"]
-        rows = [c for c in cases if man.functions[c.fn].kind == "generator"]
+        scalar = [c for c in cases if not is_rows(c)]
+        rows = [c for c in cases if is_rows(c)]
         res = oracles.run_session(
             spark, scalar, name_of=name_of, tmpdir=tmpdir, surface="uc"
         )
@@ -278,16 +326,25 @@ def run_uc_slice(
         )
         return res
 
-    res = run(lambda f: f"`{catalog}`.`{schema}`.{f}")
-    out["failures"] = [m for _, m in res if m]
-    out["cases"] = len(res)
-    register(spark, target="uc", catalog=catalog, schema=schema)
-    for fn in (n for n, f in man.functions.items() if "L4" in f.levels):
-        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn}")
-    spark.sql(f"USE `{catalog}`.`{schema}`")
-    res = run(lambda f: f)
-    out["unqualified_failures"] = [m for _, m in res if m]
-    out["unqualified_cases"] = len(res)
+    try:
+        res, err, _ = run_.step(
+            "qualified", lambda: run(lambda f: f"`{catalog}`.`{schema}`.{f}")
+        )
+        out["failures"] = [err] if err else [m for _, m in res if m]
+        out["cases"] = 0 if err else len(res)
+
+        def unqualified():
+            register(spark, target="uc", catalog=catalog, schema=schema)
+            for fn in (n for n, f in man.functions.items() if "L4" in f.levels):
+                spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {fn}")
+            spark.sql(f"USE `{catalog}`.`{schema}`")
+            return run(lambda f: f)
+
+        res, err, _ = run_.step("unqualified", unqualified)
+        out["unqualified_failures"] = [err] if err else [m for _, m in res if m]
+        out["unqualified_cases"] = 0 if err else len(res)
+    finally:
+        run_.stop()
     return out
 
 
@@ -1741,3 +1798,411 @@ def run_proc_warm(spark, catalog: str, schema: str, **kw) -> dict:
     from databricks.labs.gbx.bench import uc_perf
 
     return uc_perf.run_proc_warm(spark, catalog, schema, **kw)
+
+
+# --- the batched workspace pass: register, family oracles, the JAR install route (Task 28) --------------------------
+
+
+class _Tee:
+    """A stdout that keeps what is written and passes it on, so a notebook shows the lines as they come."""
+
+    def __init__(self, real):
+        self.real, self.lines, self._part = real, [], ""
+
+    def write(self, text):
+        self.real.write(text)
+        self._part += text
+        *done, self._part = self._part.split("\n")
+        self.lines += done
+        return len(text)
+
+    def flush(self):
+        self.real.flush()
+
+    def finish(self):
+        if self._part:
+            self.lines.append(self._part)
+            self._part = ""
+        return self.lines
+
+
+REGISTER_DOCS_LIMIT_S = 30.0  # past this the docs recommend register(spark, only=[...])
+FROMFILE_MIB = (
+    128  # decoded size of the fromfile cap fixture: between the 64 MiB and 256 MiB caps
+)
+
+
+def run_register_all(
+    spark,
+    only: Optional[Sequence[str]] = None,
+    fromfile_dir: Optional[str] = None,
+    fromfile_mib: int = FROMFILE_MIB,
+) -> dict:
+    """``register(spark)`` over every name, timed: the wall time, the lines it printed, the level chosen per name and
+    the names no level served here. With ``fromfile_dir`` it also reads a raster decoded to ``fromfile_mib`` MiB (between
+    the 64 MiB Serverless cap and the 256 MiB classic one) through ``gbx_rst_fromfile`` in SQL and records whether the
+    call was refused: the driver-side ``read_cap`` carry has no local test.
+
+    Prints ``[T28 register] <step> START`` and ``DONE <s>s ...`` per step, and a RUNNING line every 60 s.
+
+    Returns ``{"wall_s", "over_docs_limit", "lines", "names", "by_level": {level: [names]}, "variants",
+    "reasons": {reason: count}, "skipped": [names], "fromfile": {...}}``. ``over_docs_limit`` is True when the wall
+    time is over :data:`REGISTER_DOCS_LIMIT_S`: the docs then recommend ``register(spark, only=[...])``.
+    """
+    import contextlib
+    import sys
+
+    from databricks.labs.gbx import manifest, register
+    from databricks.labs.gbx.bench.uc_perf import _Run
+
+    run_ = _Run("T28 register", "t28-register", 2 if fromfile_dir else 1, 3600.0)
+    tee = _Tee(sys.stdout)
+
+    def do_register():
+        with contextlib.redirect_stdout(tee):
+            t0 = time.time()
+            got = register(spark, only=list(only) if only else None)
+            return got, time.time() - t0
+
+    out: dict = {}
+    try:
+        res, err, wall = run_.step("register", do_register)
+        out["lines"] = tee.finish()
+        if err:
+            out.update(error=err, wall_s=round(wall, 2))
+            return out
+        choices, reg_wall = res
+        man = manifest.load()
+        wanted = (
+            [n for n, f in man.functions.items() if f.status != "mvp"]
+            if not only
+            else [n if n.startswith("gbx_") else f"gbx_{n}" for n in only]
+        )
+        by_level: dict = {}
+        reasons: Counter = Counter()
+        for name, ch in sorted(choices.items()):
+            by_level.setdefault(ch.level, []).append(name)
+            reasons.update(ch.reasons)
+        out.update(
+            wall_s=round(reg_wall, 2),
+            over_docs_limit=reg_wall > REGISTER_DOCS_LIMIT_S,
+            names=len(choices),
+            by_level=by_level,
+            variants={n: ch.variant for n, ch in sorted(choices.items())},
+            reasons=dict(reasons),
+            skipped=sorted(set(wanted) - set(choices)),
+        )
+        if fromfile_dir:
+            out["fromfile"], _, _ = run_.step(
+                "fromfile_cap", lambda: _fromfile_cap(spark, fromfile_dir, fromfile_mib)
+            )
+    finally:
+        run_.stop()
+    return out
+
+
+def _fromfile_cap(spark, tile_dir: str, mib: int) -> dict:
+    """Read a raster decoded to ``mib`` MiB through ``gbx_rst_fromfile`` in SQL; whether the call was refused and how."""
+    from databricks.labs.gbx.bench import uc_perf
+
+    staged = uc_perf.perf_stage_tiles(tile_dir, (mib,))[f"perf_{mib}MiB.tif"]
+    rec = {"path": staged["path"], "file_bytes": staged["bytes"], "decoded_mib": mib}
+    try:
+        spark.sql(f"SELECT gbx_rst_fromfile('{staged['path']}') AS t").collect()
+        rec.update(refused=False, error=None)
+    except Exception as exc:  # noqa: BLE001 - the refusal is the measured outcome
+        msg = " ".join(str(exc).split())
+        rec.update(refused=True, error=msg[:400], names_cap="64" in msg)
+    return rec
+
+
+_OWN_FILE_TABLES = {"MVP_S", "MVP_G", "MVP_A", "MVP_H", "MVP_IO", "SPEC_SE"}
+_IMPL_KEYS = ("variants", "factory", "callable", "udtf")
+
+
+def _forms_at(fn, level: str) -> list:
+    """The variants of ``fn`` at ``level`` that a forced-level run can register (first one is the one it uses)."""
+    spec = fn.levels.get(level)
+    if spec is None:
+        return []
+    if level == "L3":
+        forms = list(spec.get("variants") or ())
+        if not forms and any(k in spec for k in _IMPL_KEYS):
+            forms = ["-"]
+        if spec.get("engine"):
+            forms += ["engine-c0", "engine-c1"]
+        return forms
+    if level == "L1":
+        return (["-"] if "companion" in spec else []) + (
+            ["engine"] if spec.get("engine") else []
+        )
+    return ["-"]
+
+
+def _oracle_register(spark, fn, level: Optional[str], rec: dict):
+    """Register ``fn`` for an oracle run: ``(level, variant, pin)`` or None (the reason is in ``rec['skipped']``)."""
+    from databricks.labs.gbx import register
+
+    name = fn.sql_name
+    if level is None:
+        choice = register(spark, only=[name]).get(name)
+        if choice is None:
+            rec["skipped"][name] = "no level can serve it here"
+            return None
+        return choice.level, choice.variant, {}
+    forms = _forms_at(fn, level)
+    if not forms:
+        rec["skipped"][name] = f"no {level} form"
+        return None
+    pin = {"_levels": {name: (level, forms[0])}}
+    try:
+        register(spark, only=[name], **pin)
+    except Exception as exc:  # noqa: BLE001 - recorded, the others still run
+        rec["skipped"][name] = f"{level} not registrable: {str(exc)[:200]}"
+        return None
+    return level, forms[0], pin
+
+
+def _oracle_run_cases(spark, fn, cases, tmpdir: str):
+    from databricks.labs.gbx.bench import oracles
+
+    if oracles.has_groups(fn):
+        return oracles.run_groups(spark, cases, tmpdir=tmpdir)
+    if fn.kind == "generator":
+        return oracles.run_rows(spark, cases, tmpdir=tmpdir)
+    return oracles.run_session(spark, cases, tmpdir=tmpdir)
+
+
+def _oracle_capped(spark, fn, capped, pin: dict, tmpdir: str, rec: dict) -> list:
+    """The rows that run with the session's read cap lowered (a Connect session cannot set it: recorded as skipped)."""
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+
+    ran = []
+    for c in capped:
+        try:
+            spark.conf.set(READ_CAP_KEY, str(oracles.READ_CAP_ROWS[c.cid]))
+        except Exception as exc:  # noqa: BLE001
+            rec["skipped"][c.cid] = f"cannot lower the read cap: {str(exc)[:120]}"
+            continue
+        try:
+            register(spark, only=[fn.sql_name], **pin)
+            ran += _oracle_run_cases(spark, fn, [c], tmpdir)
+        finally:
+            spark.conf.unset(READ_CAP_KEY)
+            register(spark, only=[fn.sql_name], **pin)
+    return ran
+
+
+def _oracle_function(spark, fn, table: str, level, tmpdir: str, rec: dict, out: dict):
+    """Run the cases of one function; update ``rec`` (the table's record) and ``out``."""
+    from databricks.labs.gbx.bench import oracles
+
+    cases = [
+        c
+        for c in oracles.TABLES[table]
+        if c.fn == fn.sql_name and ("session" in c.surfaces or "python" in c.surfaces)
+    ]
+    chosen = _oracle_register(spark, fn, level, rec) if cases else None
+    if chosen is None:
+        return
+    at, variant, pin = chosen
+    out["levels"][fn.sql_name] = f"{at}/{variant}"
+    capped = [c for c in cases if c.cid in oracles.READ_CAP_ROWS]
+    ran = _oracle_run_cases(spark, fn, [c for c in cases if c not in capped], tmpdir)
+    ran += _oracle_capped(spark, fn, capped, pin, tmpdir, rec)
+    pending = {
+        cid
+        for cid, lv in oracles.HEAVY_PENDING.items()
+        if at in lv and cid in {c.cid for c in cases}
+    }
+    red = {c.cid: m for c, m in ran if m}
+    rec["functions"] += 1
+    rec["cases"] += len(ran)
+    for cid, m in red.items():
+        if cid in pending:
+            out["pending_red"].append(cid)
+        else:
+            out["red"][cid] = m[-500:]
+            rec["failures"] += 1
+    out["pending_now_green"] += sorted(pending - set(red))
+
+
+def run_family_oracles(
+    spark,
+    tmpdir: str,
+    level: Optional[str] = None,
+    tables: Optional[Sequence[str]] = None,
+    only: Optional[Sequence[str]] = None,
+    cap_s: float = 3600.0,
+) -> dict:
+    """Every family oracle table through SQL on this session, one function at a time.
+
+    ``level=None`` runs each function at the level the manager chooses here; ``level='L1'``/``'L2'``/``'L3'`` forces
+    it for every function that has that level (the others are recorded as skipped, never run at another level).
+    ``tables`` limits the oracle tables (``['GRID_SCALAR']``), ``only`` the function names. A row in
+    ``oracles.HEAVY_PENDING`` for the level is expected to be red and is reported apart.
+
+    Prints ``[T28 oracles] <TABLE> START`` and ``DONE <s>s ...`` per table, and a RUNNING line every 60 s.
+
+    Returns ``{"level", "tables": {table: {"functions", "cases", "failures": n, "skipped": {fn: why}}}, "levels":
+    {fn: "L3/c0"}, "red": {cid: message}, "pending_red": [cid], "pending_now_green": [cid], "failures": n}``.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.bench.uc_perf import _Run
+
+    man = manifest.load()
+    wanted_only = {n if n.startswith("gbx_") else f"gbx_{n}" for n in (only or ())}
+    by_table: dict = {}
+    for fn in sorted(man.functions.values(), key=lambda f: f.sql_name):
+        if (
+            fn.status != "stable"
+            or fn.oracle in _OWN_FILE_TABLES
+            or (tables and fn.oracle not in tables)
+            or (wanted_only and fn.sql_name not in wanted_only)
+        ):
+            continue
+        by_table.setdefault(fn.oracle, []).append(fn)
+    run_ = _Run("T28 oracles", "t28-oracles", len(by_table), cap_s)
+    out: dict = {
+        "level": level or "manager",
+        "tables": {},
+        "levels": {},
+        "red": {},
+        "pending_red": [],
+        "pending_now_green": [],
+    }
+
+    def one_table(table, fns):
+        rec = out["tables"][table] = {
+            "functions": 0,
+            "cases": 0,
+            "failures": 0,
+            "skipped": {},
+        }
+        for fn in fns:
+            _oracle_function(spark, fn, table, level, tmpdir, rec, out)
+        return dict(rec)
+
+    try:
+        for table, fns in by_table.items():
+            run_.step(f"{table}", lambda t=table, f=fns: one_table(t, f))
+    finally:
+        run_.stop()
+    out["failures"] = len(out["red"])
+    return out
+
+
+P1_STATES_DONE = ("INSTALLED", "FAILED", "SKIPPED", "UNINSTALL_ON_RESTART")
+
+
+def _p1_library(jar_path: str):
+    from databricks.sdk.service.compute import Library
+
+    return Library(jar=jar_path)
+
+
+def _p1_caps(spark) -> dict:
+    from databricks.labs.gbx.manager import capabilities
+
+    capabilities.forget(spark)
+    caps = capabilities.detect(spark, need_jvm=True)
+    return {
+        **caps.__dict__,
+        "jar": caps.jar and caps.jar.__dict__,
+        "jar_usable": caps.jar is not None,
+    }
+
+
+def _p1_status(client, cluster_id: str, jar_path: str) -> dict:
+    for st in client.libraries.cluster_status(cluster_id):
+        lib = getattr(st, "library", None)
+        if getattr(lib, "jar", None) == jar_path:
+            status = getattr(st.status, "value", st.status)
+            return {"status": str(status), "messages": list(st.messages or [])}
+    return {"status": "NOT_LISTED", "messages": []}
+
+
+def run_p1(
+    spark,
+    cluster_id: str,
+    jar_path: str,
+    phase: str = "install",
+    client=None,
+    wait_s: float = 900.0,
+    poll_s: float = 10.0,
+    restart: bool = True,
+) -> dict:
+    """P1 (D-P1): can a JAR installed as a library through the Libraries API on a RUNNING cluster be used at L1?
+
+    A restart ends the session this runs in, so the probe has two phases, each its own notebook run on the cluster:
+
+    * ``phase='install'``: ``capabilities.detect`` before; ``libraries.install`` of ``jar_path`` on ``cluster_id``;
+      wait for the library to reach INSTALLED or FAILED; ``detect`` again with no restart (``at_once``). It prints
+      ``[T28 P1] RESULT <json>``. When the JAR is not usable yet and ``restart`` is True it then restarts the cluster
+      (the run ends with it; the line above is the record).
+    * ``phase='after'``: on the restarted cluster, the library status and ``detect`` (``after_restart``).
+
+    D-P1 is the Libraries API route iff ``at_once`` or ``after_restart`` shows a usable JAR. ``client`` is a
+    ``WorkspaceClient`` (default: the notebook's own). Prints ``[T28 P1] <step> START`` / ``DONE`` lines.
+    """
+    if phase not in ("install", "after"):
+        raise ValueError(f"phase must be 'install' or 'after' (got {phase!r})")
+    from databricks.labs.gbx.bench.uc_perf import _Run
+
+    if client is None:
+        from databricks.sdk import WorkspaceClient
+
+        client = WorkspaceClient()
+    run_ = _Run("T28 P1", "t28-p1", 3 if phase == "install" else 1, wait_s + 600)
+    out: dict = {"phase": phase, "cluster_id": cluster_id, "jar": jar_path}
+    try:
+        if phase == "after":
+            out["library"], _, _ = run_.step(
+                "status", lambda: _p1_status(client, cluster_id, jar_path)
+            )
+            out["after_restart"], err, _ = run_.step("detect", lambda: _p1_caps(spark))
+            if err:
+                out["after_restart"] = {"error": err}
+            out["usable_after_restart"] = bool(
+                isinstance(out["after_restart"], dict)
+                and out["after_restart"].get("jar_usable")
+            )
+            return out
+        out["before"], err, _ = run_.step("detect_before", lambda: _p1_caps(spark))
+        t0 = time.time()
+
+        def install():
+            client.libraries.install(cluster_id, [_p1_library(jar_path)])
+            while True:
+                st = _p1_status(client, cluster_id, jar_path)
+                if st["status"] in P1_STATES_DONE or time.time() - t0 > wait_s:
+                    return st
+                time.sleep(poll_s)
+
+        out["library"], err, wall = run_.step("install", install)
+        if err:
+            out["library"] = {"status": "ERROR", "messages": [err]}
+        out["install_s"] = round(wall, 1)
+        out["at_once"], err, _ = run_.step(
+            "detect_after_install", lambda: _p1_caps(spark)
+        )
+        out["usable_at_once"] = bool(
+            isinstance(out["at_once"], dict) and out["at_once"].get("jar_usable")
+        )
+        out["restart_requested"] = bool(
+            restart
+            and not out["usable_at_once"]
+            and out["library"].get("status") == "INSTALLED"
+        )
+        print(f"[T28 P1] RESULT {json.dumps(out, default=str)}", flush=True)
+        if out["restart_requested"]:
+            print(
+                "[T28 P1] RESTART requested: this run ends with the cluster. Run phase='after' on the restarted cluster.",
+                flush=True,
+            )
+            client.clusters.restart(cluster_id)
+        return out
+    finally:
+        run_.stop()

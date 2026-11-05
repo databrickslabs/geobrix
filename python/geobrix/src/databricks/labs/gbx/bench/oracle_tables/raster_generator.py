@@ -300,8 +300,8 @@ def _uc_edges(short, fn, args, null_arg=None, over_result=None):
             f"uc_{short}_input_over_cap_refused",
             fn,
             (OVER, *args),
-            "uc_refused",
-            None,
+            "raises",
+            "decoded, over the 64 MiB",
             UC,
         ),
     ]
@@ -313,8 +313,8 @@ def _uc_edges(short, fn, args, null_arg=None, over_result=None):
                 f"uc_{short}_result_over_cap_refused",
                 fn,
                 over_result,
-                "uc_refused",
-                None,
+                "raises",
+                "upper estimate",
                 UC,
             )
         )

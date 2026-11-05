@@ -3109,3 +3109,91 @@ def test_a_notebook_json_that_dumps_cannot_reproduce_is_still_harvested(monkeypa
     assert (
         hno._dump_like({"cells": [], "n": "é"}, plain) == plain
     )  # a reproducible original is kept as it was
+
+
+# ------------------------------------------------------- gbx:test:python-dbr on a cluster
+
+_NOTEBOOK_RUNNER_STUB = """#!/bin/bash
+printf '%s\\n' "$@" > "$(dirname "$0")/runner-args.txt"
+nb=""
+while [ $# -gt 0 ]; do [ "$1" = "--notebook" ] && nb="$2"; shift; done
+cp "$nb" "$(dirname "$0")/runner-notebook.ipynb"
+"""
+
+
+def _dbr_sandbox(sandbox):
+    tests = sandbox.root / "docs" / "tests-dbr"
+    (tests / "python" / "api").mkdir(parents=True)
+    (tests / "pytest.ini").write_text("[pytest]\n")
+    (tests / "python" / "conftest.py").write_text("# conftest\n")
+    (tests / "python" / "api" / "test_x.py").write_text("def test_x():\n    pass\n")
+    sandbox.write_command("gbx-test-notebooks-serverless.sh", _NOTEBOOK_RUNNER_STUB)
+    return sandbox
+
+
+def test_python_dbr_with_a_cluster_runs_the_tests_there_through_the_notebook_runner(
+    sandbox,
+):
+    import base64
+    import io
+    import zipfile
+
+    _dbr_sandbox(sandbox)
+    res = sandbox.run(
+        "gbx-test-python-dbr.sh",
+        "--cluster-id",
+        "0101-abc",
+        "--profile",
+        "p1",
+        "--path",
+        "api/",
+        "--markers",
+        "databricks",
+    )
+    assert res.returncode == 0, res.output
+    assert sandbox.execs() == []  # nothing ran in the local container
+    args = (sandbox.commands / "runner-args.txt").read_text().split()
+    assert args[:2] == ["--existing-cluster-id", "0101-abc"]
+    assert "--notebook" in args and args[args.index("--profile") + 1] == "p1"
+    nb = json.loads((sandbox.commands / "runner-notebook.ipynb").read_text())
+    source = "".join(nb["cells"][0]["source"])
+    assert (
+        "GBX_DBR_CLUSTER='1'" in source
+        and "'python/api/'" in source
+        and "'databricks'" in source
+    )
+    blob = re.search(r"BLOB = '([^']+)'", source).group(1)
+    names = set(zipfile.ZipFile(io.BytesIO(base64.b64decode(blob))).namelist())
+    assert names == {
+        "tests-dbr/pytest.ini",
+        "tests-dbr/python/conftest.py",
+        "tests-dbr/python/api/test_x.py",
+    }
+
+
+def test_python_dbr_with_a_cluster_needs_a_profile_and_never_picks_one(sandbox):
+    _dbr_sandbox(sandbox)
+    res = sandbox.run("gbx-test-python-dbr.sh", "--cluster-id", "0101-abc")
+    assert res.returncode != 0 and "--profile" in res.output
+    assert not (sandbox.commands / "runner-args.txt").exists()
+
+
+def test_the_dbr_conftest_uses_the_cluster_session_when_asked_to():
+    """On a cluster the fixture takes the session it is given: no local master, no JAR lookup, no stop()."""
+    text = (REPO_ROOT / "docs" / "tests-dbr" / "python" / "conftest.py").read_text()
+    assert 'os.environ.get("GBX_DBR_CLUSTER") == "1"' in text
+    on_cluster = text.split("if on_cluster:", 1)[1].split("else:", 1)[0]
+    assert "getOrCreate()" in on_cluster and "master(" not in on_cluster
+    assert "if not on_cluster:\n        spark.stop()" in text
+
+
+def test_python_dbr_without_a_cluster_still_runs_the_tests_in_the_container(sandbox):
+    """The local run died on helpers that common.sh never defined (`print_header: command not found`)."""
+    _dbr_sandbox(sandbox)
+    res = sandbox.run(
+        "gbx-test-python-dbr.sh", "--path", "api/", "--markers", "databricks"
+    )
+    assert "command not found" not in res.output, res.output
+    assert any(
+        "docs/tests-dbr/python/api/ -m databricks" in c[-1] for c in sandbox.execs()
+    ), (res.output, sandbox.execs())

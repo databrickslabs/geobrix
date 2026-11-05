@@ -39,31 +39,38 @@ def spark_with_geobrix():
         pytest.skip("PySpark not available")
         return None
     
-    # Check if JAR exists
-    if not GEOBRIX_JAR.exists():
-        pytest.skip(f"GeoBrix JAR not found at {GEOBRIX_JAR}. Run 'mvn package' first.")
-        return None
-    
-    # Unset JAVA_TOOL_OPTIONS to prevent debug port conflicts
-    if 'JAVA_TOOL_OPTIONS' in os.environ:
-        del os.environ['JAVA_TOOL_OPTIONS']
-        print("ℹ️  Unset JAVA_TOOL_OPTIONS to prevent Spark conflicts")
-    
-    # Create Spark session with GeoBrix JAR
-    spark = SparkSession.builder \
-        .appName("GeoBrix Databricks Runtime Tests") \
-        .master("local[*]") \
-        .config("spark.driver.memory", "2g") \
-        .config("spark.executor.memory", "2g") \
-        .config("spark.jars", str(GEOBRIX_JAR)) \
-        .config("spark.driver.extraClassPath", str(GEOBRIX_JAR)) \
-        .config("spark.executor.extraClassPath", str(GEOBRIX_JAR)) \
-        .config("spark.driver.extraJavaOptions", "-Djava.library.path=/usr/local/lib") \
-        .getOrCreate()
-    
-    print(f"✅ Spark session created with GeoBrix JAR: {GEOBRIX_JAR}")
-    print(f"   JAR exists: {GEOBRIX_JAR.exists()}")
-    print(f"   JAR size: {GEOBRIX_JAR.stat().st_size / 1024 / 1024:.1f} MB")
+    # On a Databricks cluster (gbx:test:python-dbr --cluster-id) the session is the cluster's own and the JAR is
+    # a cluster library: no local session, no local JAR.
+    on_cluster = os.environ.get("GBX_DBR_CLUSTER") == "1"
+    if on_cluster:
+        spark = SparkSession.builder.getOrCreate()
+        print("✅ Using the cluster's Spark session")
+    else:
+        # Check if JAR exists
+        if not GEOBRIX_JAR.exists():
+            pytest.skip(f"GeoBrix JAR not found at {GEOBRIX_JAR}. Run 'mvn package' first.")
+            return None
+
+        # Unset JAVA_TOOL_OPTIONS to prevent debug port conflicts
+        if 'JAVA_TOOL_OPTIONS' in os.environ:
+            del os.environ['JAVA_TOOL_OPTIONS']
+            print("ℹ️  Unset JAVA_TOOL_OPTIONS to prevent Spark conflicts")
+
+        # Create Spark session with GeoBrix JAR
+        spark = SparkSession.builder \
+            .appName("GeoBrix Databricks Runtime Tests") \
+            .master("local[*]") \
+            .config("spark.driver.memory", "2g") \
+            .config("spark.executor.memory", "2g") \
+            .config("spark.jars", str(GEOBRIX_JAR)) \
+            .config("spark.driver.extraClassPath", str(GEOBRIX_JAR)) \
+            .config("spark.executor.extraClassPath", str(GEOBRIX_JAR)) \
+            .config("spark.driver.extraJavaOptions", "-Djava.library.path=/usr/local/lib") \
+            .getOrCreate()
+
+        print(f"✅ Spark session created with GeoBrix JAR: {GEOBRIX_JAR}")
+        print(f"   JAR exists: {GEOBRIX_JAR.exists()}")
+        print(f"   JAR size: {GEOBRIX_JAR.stat().st_size / 1024 / 1024:.1f} MB")
     print("⚠️  Note: These tests require Databricks Runtime SQL functions (st_*)")
     print("   Tests will skip if functions are not available")
     
@@ -86,8 +93,9 @@ def spark_with_geobrix():
     
     yield spark
     
-    # Cleanup
-    spark.stop()
+    # Cleanup (a cluster's session is not ours to stop)
+    if not on_cluster:
+        spark.stop()
 
 
 @pytest.fixture(scope="module")

@@ -28,6 +28,9 @@ gbx:test:python-dbr --verbose
 
 # Save output to log file
 gbx:test:python-dbr --log dbr-tests.log
+
+# Run on a running DBR cluster instead of the local container
+gbx:test:python-dbr --cluster-id <id> --profile oauth-fe --path readers/
 ```
 
 ## Options
@@ -38,7 +41,18 @@ gbx:test:python-dbr --log dbr-tests.log
 | `--markers MARKERS` | Run tests matching pytest markers |
 | `--verbose, -v` | Show verbose output |
 | `--log FILE` | Save output to log file |
+| `--cluster-id ID` | Run the tests on this running Databricks cluster. The cluster needs the geobrix wheel and JAR as libraries. |
+| `--profile NAME` | Databricks CLI profile for `--cluster-id`. Required with it. |
+| `--timeout-min N` | Time limit of the cluster run in minutes (default 60). |
 | `--help, -h` | Show help message |
+
+## Running on a cluster
+
+- The command packs `docs/tests-dbr/python` into a generated notebook and runs it with `gbx:test:notebooks-serverless --existing-cluster-id`.
+- The notebook unpacks the tests on the driver and runs pytest there with `GBX_DBR_CLUSTER=1`.
+- With that variable the `spark` fixture uses the cluster session. It does not build a local session or look for the JAR.
+- `--path` and `--markers` apply as in a local run. A failing test fails the run.
+- The command never starts a cluster and never logs in. Use a profile that is valid.
 
 ## Requirements
 

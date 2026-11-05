@@ -457,6 +457,10 @@ def _reprojected_decoded(h, ref_crs, res) -> int:
     return int(cols * rows * h.count * np.dtype(h.dtypes[0]).itemsize)
 
 
+# Headroom over the summed terms of _in_ram_bytes: allocator slack and the temporaries of GDAL that no term names.
+_IN_RAM_MARGIN = 1.15
+
+
 def _in_ram_bytes(hdrs: List[_Hdr], ref_crs, union: int) -> int:
     """What the in-RAM merge holds at its peak, an upper estimate (a group over the budget is streamed instead).
 
@@ -472,6 +476,11 @@ def _in_ram_bytes(hdrs: List[_Hdr], ref_crs, union: int) -> int:
       uint8 cast, about ten bytes a pixel, when the group has masks;
     * the members' bytes twice (the list the caller holds and the ``MemoryFile`` each is opened from);
     * the encoded mosaic, at most the mosaic decoded (compression can only do better), and its copy ``read()`` returns.
+
+    The sum is scaled by ``_IN_RAM_MARGIN``. Measured peak RSS of the in-RAM merge (adjacent 16 MiB float32 tiles, zstd,
+    one CRS, a fresh process, over the heap before the call): 2, 4 and 8 tiles peaked at 3.7, 4.2 and 4.1 times the
+    mosaic, and 3.8, 4.5 and 4.3 times with a NoData value. The sum alone was 1.00 to 1.33 times the peak (no margin at
+    all for 4 tiles with NoData); with the margin it is 1.15 to 1.53 times.
     """
     ref = _reference_tile(hdrs, ref_crs)
     res = _pixel_size(ref)
@@ -494,7 +503,7 @@ def _in_ram_bytes(hdrs: List[_Hdr], ref_crs, union: int) -> int:
     total = union + widest + held + 2 * encoded + 2 * union
     if masked:
         total += 10 * union_px
-    return int(total)
+    return int(total * _IN_RAM_MARGIN)
 
 
 def _merge_refusal(decoded: int, cap: int, mixed: bool = False) -> str:

@@ -1444,3 +1444,42 @@ class TestMergeAggVirtualizeDir:
         assert os.path.basename(path).startswith(
             "run42_"
         ), f"filename does not start with prefix: {os.path.basename(path)!r}"
+
+
+# peak RSS of the in-RAM merge over the mosaic, measured on adjacent 16 MiB float32 zstd tiles with a NoData value
+# (3.8 to 4.5 times; see `_in_ram_bytes`), by number of tiles
+_MEASURED_PEAK_OVER_MOSAIC = {2: 3.84, 4: 4.53, 8: 4.27}
+
+
+@pytest.mark.parametrize("n", sorted(_MEASURED_PEAK_OVER_MOSAIC))
+def test_the_in_ram_estimate_stays_above_the_measured_peak_of_the_merge(n):
+    """The estimate that decides between the in-RAM and the streamed merge is held at least 10% above the peak measured
+    for the merge of n adjacent tiles: a term dropped from it, or a smaller margin, fails here.
+    """
+    rng = np.random.default_rng(3)
+    side = 512  # 1 MiB decoded; the encoded share of the decoded size matches the 16 MiB tiles measured
+    rasters = []
+    for i in range(n):
+        with MemoryFile() as mf:
+            with mf.open(
+                driver="GTiff",
+                width=side,
+                height=side,
+                count=1,
+                dtype="float32",
+                crs="EPSG:32633",
+                transform=from_origin(i * side * 10.0, side * 10.0, 10.0, 10.0),
+                nodata=-9999.0,
+                compress="zstd",
+            ) as dst:
+                dst.write(
+                    (rng.random((side, side)) * 100).round(1).astype("float32"), 1
+                )
+            rasters.append(mf.read())
+    hdrs = agg._scan_headers(rasters)
+    ref_crs = agg._pick_ref_crs(hdrs)
+    union = agg._union_decoded_bytes(hdrs, ref_crs)
+    assert union == n * side * side * 4
+    assert agg._in_ram_bytes(hdrs, ref_crs, union) >= (
+        1.10 * _MEASURED_PEAK_OVER_MOSAIC[n] * union
+    )

@@ -782,3 +782,80 @@ def test_the_mixed_language_and_temp_share_cells_are_what_the_checklist_asks():
         "DROP TEMPORARY FUNCTION IF EXISTS" in share[2]
         and "gbx_mvp_t28_share_scala" in share[2]
     )
+
+
+class _M6Spark:
+    """Records each statement; the call answers ``answer`` (or raises it when it is an exception)."""
+
+    def __init__(self, answer, fail_create=False):
+        self.seen, self.answer, self.fail_create = [], answer, fail_create
+
+    def sql(self, text):
+        self.seen.append(text)
+        if text.startswith("CREATE OR REPLACE FUNCTION") and self.fail_create:
+            raise RuntimeError("create refused")
+        if text.startswith("SELECT"):
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return _Rows([(self.answer,)])
+        return _Rows([])
+
+
+def _m6(monkeypatch, tmp_path, spark):
+    from databricks.labs.gbx import uc
+
+    wheel = tmp_path / "geobrix-0.6.0+env6-py3-none-any.whl"
+    wheel.write_bytes(b"w")
+    monkeypatch.setattr(uc, "_single_wheel", lambda d: str(wheel))
+    monkeypatch.setattr(probes, "p2_stage_tiles", lambda d, sizes: {})
+    return probes.run_m6(spark, "cat", "sch", str(tmp_path))
+
+
+def test_run_m6_creates_calls_and_drops_the_probe_and_passes_on_a_slope_tile(
+    monkeypatch, tmp_path
+):
+    spark = _M6Spark("1048576|ok|valid:min:max=0:1|pyspark_imported=False")
+    out = _m6(monkeypatch, tmp_path, spark)
+    kinds = [t.split(" ", 1)[0] for t in spark.seen]
+    assert kinds == [
+        "CREATE",
+        "CREATE",
+        "SELECT",
+        "DROP",
+    ]  # the schema, the probe, the call, the drop
+    assert f"`cat`.`sch`.{probes.M6_FN}" in spark.seen[1]
+    assert out["pass"] is True and out["errors"] == {} and out["dropped"] is True
+
+
+def test_run_m6_records_a_failed_call_and_still_drops_the_probe(monkeypatch, tmp_path):
+    spark = _M6Spark(RuntimeError("UNSUPPORTED_SQL_UDF_USAGE"))
+    out = _m6(monkeypatch, tmp_path, spark)
+    assert "UNSUPPORTED_SQL_UDF_USAGE" in out["errors"]["call"]
+    assert out["pass"] is False and out["dropped"] is True
+    assert spark.seen[-1].startswith("DROP FUNCTION IF EXISTS")
+
+
+def test_run_m6_skips_the_call_when_the_create_is_refused_and_still_drops(
+    monkeypatch, tmp_path
+):
+    spark = _M6Spark("unused", fail_create=True)
+    out = _m6(monkeypatch, tmp_path, spark)
+    assert "create refused" in out["errors"]["create"] and "call" not in out
+    assert not [t for t in spark.seen if t.startswith("SELECT")]
+    assert out["pass"] is False and spark.seen[-1].startswith("DROP")
+
+
+def test_stage_mech_tiles_writes_the_files_with_their_sizes_through_the_guarded_writer(
+    tmp_path,
+):
+    import os
+
+    out = probes.stage_mech_tiles(str(tmp_path), (1,))
+    mech = tmp_path / "mech_1MiB.tif"
+    assert out["mech_1MiB.tif"] == {"path": str(mech), "bytes": os.path.getsize(mech)}
+    assert (
+        0.9 * (1 << 20) < mech.stat().st_size < 1.1 * (1 << 20)
+    )  # about 1 MiB ON DISK
+    perf = out["perf_1MiB.tif"]  # the decoded-size tile comes from the perf writer
+    assert os.path.getsize(perf["path"]) == perf["bytes"]
+    assert not list(tmp_path.glob("*.part"))  # the temp name was renamed away

@@ -341,6 +341,29 @@ def test_dest_removes_nothing_when_the_upload_did_not_land(from_wheel, tmp_path,
     assert not [c for c in files.calls if c[0] == "delete"]  # the JAR already there survives a failed upload
 
 
+def test_prune_other_jars_deletes_only_the_other_jars_and_their_sidecars(stage):
+    module, _ = stage
+    keep = "geobrix-0.6.0-jar-with-dependencies.jar"
+    old = "geobrix-0.5.2-jar-with-dependencies.jar"
+    files = _FolderFiles(present=[keep, keep + ".sha256", old, old + ".sha256", "geobrix-0.5.2+env6-py3-none-any.whl", "notes.txt"])
+    assert module._prune_other_jars(types.SimpleNamespace(files=files), "/Volumes/c/s/v/f", keep) == 0
+    assert files.calls == [("delete", f"/Volumes/c/s/v/f/{old}"), ("delete", f"/Volumes/c/s/v/f/{old}.sha256")]
+
+
+def test_prune_other_jars_reports_a_failed_delete_as_one_line_and_exit_1(stage, capsys):
+    module, _ = stage
+
+    class _Broken(_FolderFiles):
+        def delete(self, path):
+            raise RuntimeError("denied")
+
+    keep = "geobrix-0.6.0-jar-with-dependencies.jar"
+    files = _Broken(present=[keep, "geobrix-0.5.2-jar-with-dependencies.jar"])
+    assert module._prune_other_jars(types.SimpleNamespace(files=files), "/Volumes/c/s/v/f", keep) == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "uploaded " + keep in err and "denied" in err
+
+
 @pytest.mark.parametrize("dest", ["", "/tmp/not-a-volume", "/Volumes/c/s/v"])
 def test_dest_must_be_a_volume_folder_and_needs_from_wheel(from_wheel, stage, tmp_path, monkeypatch, capsys, dest):
     whl, _, _ = _wheel(tmp_path)

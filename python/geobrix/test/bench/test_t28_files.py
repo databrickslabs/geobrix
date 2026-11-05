@@ -434,3 +434,28 @@ def test_the_manifest_lists_every_file_with_its_runs(tmp_path, plan):
         assert f"## {r.id} -" in text
     assert all((tmp_path / f.name).is_file() for f in files)
     assert manifest.load()  # the plan used this wheel's manifest
+
+
+def test_ws_root_is_the_current_users_geobrix_folder(monkeypatch):
+    import sys
+    import types
+
+    class _Client:
+        def __init__(self, profile=None):
+            self.current_user = types.SimpleNamespace(
+                me=lambda: types.SimpleNamespace(user_name="someone@example.com")
+            )
+
+    sdk = types.ModuleType("databricks.sdk")
+    sdk.WorkspaceClient = _Client
+    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
+    assert t28.resolve_ws_root("p") == "/Users/someone@example.com/GeoBrix"
+
+
+def test_ws_root_is_required_when_there_is_no_session(monkeypatch, capsys):
+    def _no_session(profile):
+        raise RuntimeError("cannot resolve; pass --ws-root")
+
+    monkeypatch.setattr(t28, "resolve_ws_root", _no_session)
+    assert t28.main(["--dry-run"]) == 2
+    assert "--ws-root" in capsys.readouterr().err

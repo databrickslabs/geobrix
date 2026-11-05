@@ -1026,6 +1026,7 @@ def test_the_netcdf_fixture_is_built_locally_then_copied(tmp_path, monkeypatch):
 def test_the_tile_index_and_png_fixtures_are_built_locally_then_copied(
     tmp_path, monkeypatch
 ):
+    pytest.importorskip("osgeo.ogr", reason="osgeo needed to write the GTI index")
     calls = _spy_local_writes(monkeypatch)
     volume = tmp_path / "volume"
     volume.mkdir()

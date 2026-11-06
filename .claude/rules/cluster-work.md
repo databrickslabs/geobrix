@@ -1,0 +1,55 @@
+---
+paths:
+  - "examples/tests/push_and_run_bench_on_cluster.py"
+  - "examples/tests/*cluster*"
+  - "python/geobrix/src/databricks/labs/gbx/bench/**"
+  - "scripts/commands/gbx-bench-*"
+  - "scripts/commands/gbx-test-notebooks*"
+  - "scripts/commands/gbx-uc-tests*"
+  - "scripts/commands/gbx-data-stage-*"
+---
+
+# Work on Databricks compute: clusters, Serverless, warehouses
+
+Read this before any run on a workspace: a benchmark, a notebook run, UC tests, or staging. Each rule comes from a run that wasted hours. The commands named here are the canonical entry points (see `gbx-commands.md`).
+
+## Before a run
+- **Check auth first.** The orchestrator runs `bash ~/.claude/hooks/databricks-auth-status.sh PreDispatch`. Pass `--profile <name>` on every call. Never run `databricks auth login`.
+- **Never touch a cluster you did not create.** Never touch `1016-152458-i5qbli6q`. A pool command acts only on clusters that carry its pool tag.
+- **Build from a clean commit.** Use a detached worktree (`git worktree add --detach /private/tmp/<x> <sha>`). The main tree may hold other agents' uncommitted work.
+- **Stage artifacts to an isolated folder.** Use `GBX_BUNDLE_WHEEL_VOLUME_PATH` (the full wheel path) and `--jar-path`. Download the staged wheel and JAR back, and compare sha256 with the local build. A stale staged JAR once voided a whole ladder.
+- **Lead with env6.** Serverless, SQL warehouses, Lakeflow SDP and DBR 19 get newer features first. DBR 17.3/18 get a fallback chosen at runtime.
+
+## Shape the work
+- **Break the work into parts.** Split by function, family, rung or compute, and run the parts in parallel. One slow part must never block the rest.
+- **Size each part.** Aim for about 20-30 min of wall time. Stop splitting when the fixed cost of a part (start, smoke, input read) passes about 20% of it.
+- **Pay setup once.** Build inputs once per (input, scale, generator version), and reuse them across forms and runs. Group forms by input. Rebuild an input when its version stamp differs.
+- **Pick the compute the work needs.** Serverless (env6) is the default where the work allows it.
+  - A fixed cluster is needed only for these:
+    - benchmarking that compares fixed compute;
+    - work on the heavy tier, where the JAR is installed on the cluster;
+    - anything Serverless cannot run.
+  - Every other rule here applies to Serverless too: parts, sizing, prepare-once inputs, fail fast, isolated staging, isolated timing, cleanup. Pin the environment version (env6).
+- **When a fixed cluster is needed, reuse clusters through a pool.** For an iteration or benchmark period, keep N DBR 19 clusters up (`gbx:bench:pool up`). Each run leases one cluster; one run per cluster at a time.
+  - Every pool cluster has a 60-minute idle auto-termination. A lease starts a terminated pool cluster again.
+  - Before a lease, check the cluster's JAR sha. A changed JAR needs a reinstall and a restart.
+  - Shut the pool down when the work settles (`gbx:bench:pool down`).
+- **Use a smoke check, but not a second cluster.** Run the smoke on the leased cluster, or as the first task of the run. On Serverless the start is cheap, so a separate smoke job is acceptable.
+- **Launch jobs one at a time.** Do not wait for one to finish before the next. A batch launched from one shell loop once exited 2.
+
+## While it runs
+- **Fail fast.** The levels harness stops a rung that passes its projected bar. It skips a rung that cannot pass, escalates an interrupt that does not stop work, and skips the warmup on heavy rungs. Never raise the caps to let a run finish.
+- **Read the rows, not only the heartbeat.** When the 1x or 4x rows already show the answer (setup-bound, off linear, failing), cancel and record it. Do not wait hours to confirm a miss.
+- **Watch every job.** Use one monitor, with one status line per job about every 5 min. A heartbeat older than 10 min means a stuck run: cancel it and report it as a harness bug.
+- **Print progress inside the job.** A run over 15 min prints progress between and within its scales.
+- **Keep timing comparisons isolated.** Parallel runs are fine for behaviour and gates. A before/after timing runs alone, or as interleaved A/B on the same compute. Concurrent legs sharing a Volume skew wall times.
+- **Keep local runs light.** At most one or two local perf-timing agents run at a time. Host load above about 30 makes local timings meaningless.
+
+## After the run
+- **Record the results.** Write the result rows to the ledger table for the work, with a verdict per part: linear, sub-linear, over-bar, skipped by projection, or error with its cause.
+- **Clean up what you made.** Remove your worktrees, isolated staging folders, ladder outputs and leftover runner notebooks. Leave shared inputs (`mvp_in_*`) unless the owner says otherwise. Delete a shared artifact only with the user's confirmation.
+- **Keep one current version** in an artifact folder (the norm). Older release wheels stay unless the user says to remove them.
+
+## Agents on a shared working tree
+- **Never touch files you don't own** with `git stash`, `git checkout -- <path>`, `git reset` or `lint --fix`. Take a "before" baseline from a detached worktree.
+- **Commit pathspec-only.** List your own files in `git add <files>`, never `-A`.

@@ -108,8 +108,8 @@ Options:
   --zarr-ladder-root <path>   Stores <family>/<rung>.zarr, from gbx:bench:gen-data --zarr-ladder (default
                         <volume>/_probe/zarr/ladder)
   --zarr-ladder-cases <csv>   ZL-R1 full table, ZL-R2 box, ZL-R3 100 sites, ZL-R4 wind speed + mean, ZL-R5 one hour as a tile;
-                        ZL-W1 table to a manifest store, ZL-W2 to a plain store, ZL-W3 baseline (tasks write the shards),
-                        ZL-W4 / ZL-W5 append a day to the manifest / plain store (default: all)
+                        ZL-W1 table of cells to a manifest store, ZL-W2 to a plain store, ZL-W3 baseline (tasks write staged shards),
+                        ZL-W4 / ZL-W5 append a day to the manifest / plain store, ZL-W1s/W2s/W4s/W5s the same by pack+stage (default: all)
   --zarr-ladder-scratch <path>  Where the write legs put their stores, emptied by them (default <volume>/_probe/zarr/ladder_out/<run-id>)
   --zarr-ladder-generate      The job makes the ladder stores that are missing (on the driver's local disk, then copied to the root)
   --zarr-ladder-budget-mib <n>  Plan the reads with this decoded unit budget (the planner packs chunks into tasks up to it)

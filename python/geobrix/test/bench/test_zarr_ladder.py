@@ -131,6 +131,7 @@ def test_cases_are_registered_with_the_notebooks_steps():
     assert list(zlb.LADDER_CASES) == [
         "ZL-R1", "ZL-R2", "ZL-R3", "ZL-R4", "ZL-R5",
         "ZL-W1", "ZL-W2", "ZL-W3", "ZL-W4", "ZL-W5",
+        "ZL-W1s", "ZL-W2s", "ZL-W4s", "ZL-W5s",
     ]  # fmt: skip
     names = [zlb.ladder_case(c)[0] for c in zlb.LADDER_CASES]
     assert names == [
@@ -144,6 +145,10 @@ def test_cases_are_registered_with_the_notebooks_steps():
         "table_to_zarr_tasks",
         "append_day_managed",
         "append_day_plain",
+        "table_to_zarr_managed_staged",
+        "table_to_zarr_plain_staged",
+        "append_day_managed_staged",
+        "append_day_plain_staged",
     ]
     with pytest.raises(KeyError, match="no Zarr ladder case"):
         zlb.ladder_case("ZL-R9")
@@ -319,3 +324,30 @@ def test_write_gates_flag_a_failed_check_and_a_slow_rung():
     assert "x the 100MB" in zw.write_verdicts(slow)[0]
     bad = [m("100MB", 1e8, 10, check="cells 3 != 4")]
     assert zw.write_verdicts(bad)[0].startswith("FLAG")
+
+
+def test_cells_cases_hand_the_table_to_the_writer_and_the_staged_cases_do_not(
+    monkeypatch,
+):
+    """ZL-W1/W2/W4/W5 pass ``dim_cols`` (the table of cells is the writer's input); the ``s`` cases write blocks."""
+    from databricks.labs.gbx.bench import zarr_ladder as zl
+    from databricks.labs.gbx.bench import zarr_ladder_write as zw
+    from databricks.labs.gbx.zarr import _write
+
+    calls = []
+    monkeypatch.setattr(
+        "databricks.labs.gbx.zarr.gbx_zarr_write",
+        lambda source, target, **kw: calls.append(kw),
+    )
+    g = zl.geometry("county_wind", "10MB")
+    zw._write_call(None, "managed", "src", "t", "/r", g, "create", True)
+    zw._write_call(None, "plain", "src", "/p", None, g, "append", True)
+    zw._write_call(None, "managed", "src", "t", "/r", g, "create", False)
+    assert calls[0]["dim_cols"] == {d: d for d in zw._DIMS} and calls[0]["root"] == "/r"
+    assert calls[1]["dim_cols"] and calls[1]["transactional"] is False
+    assert "dim_cols" not in calls[2]
+    assert [zw.WRITE_CASES[c][0] for c in ("ZL-W1s", "ZL-W5s")] == [
+        "table_to_zarr_managed_staged",
+        "append_day_plain_staged",
+    ]
+    assert _write  # the writer module the cells path lives in

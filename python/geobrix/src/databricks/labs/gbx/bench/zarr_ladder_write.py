@@ -4,21 +4,25 @@ The AccuWeather path, per store of the ladder (``bench.zarr_ladder``):
 
 1. read the store as a table of cells, ``gbx_zarr_read(..., output="table")`` (``t2m``, ``u10``, ``v10``);
 2. add ``wind_speed = sqrt(u10^2 + v10^2)`` in Spark;
-3. **pack** the cells into blocks on the store's shard grid and **stage** them in a Delta table (the writer plans a
-   create from the block positions and then writes, so an input that is a query would be evaluated twice);
-4. write the staged blocks three ways: ``ZL-W1`` ``gbx_zarr_write`` into a manifest table, ``ZL-W2`` the plain
-   ``transactional=False`` store, ``ZL-W3`` the baseline (the driver makes the store, each task writes the shards of its
-   blocks with zarr-python, which is what a hand-written Spark job does); then ``ZL-W4`` / ``ZL-W5`` append one more
-   day to the manifest and the plain store;
+3. hand the table of cells straight to ``gbx_zarr_write`` (``dim_cols``): ``ZL-W1`` into a manifest table, ``ZL-W2`` the
+   plain ``transactional=False`` store, then ``ZL-W4`` / ``ZL-W5`` append one more day to each. ``ZL-W3`` is the
+   baseline (the driver makes the store, each task writes the shards of staged blocks with zarr-python, which is what a
+   hand-written Spark job does);
+4. the same four writes by the path that has no table input, as comparison cases (suffix ``s``): **pack** the cells into
+   blocks on the store's shard grid and **stage** them in a Delta table (the writer plans a create from the block
+   positions and then writes, so a block input that is a query would be evaluated twice), then write the staged blocks
+   (``ZL-W1s``, ``ZL-W2s``, ``ZL-W4s``, ``ZL-W5s``);
 5. verify each output by a read-back: the cell count and the sums of the four variables equal the table's.
 
-Per write the leg records the wall, the steps the writer exposes (position pass, ownership claim, manifest table,
-data files, commit; for a plain store the position pass, data files, coordinates and documents), the tasks that made
+Per write the leg records the wall, the steps the writer exposes (the survey of the dimension columns of a table of cells,
+position pass, ownership claim, manifest table, data files, commit; for a plain store the survey, position pass, data
+files, coordinates and documents), the tasks that made
 data blocks, MB/s and the share of the time that was NOT spent writing data files. That share is reported for the
-write call alone and for the whole table-to-Zarr path (read, pack and stage included).
+write call alone and for the whole table-to-Zarr path (pack and stage included, for the ``s`` cases); ``path s`` is the
+wall plus the pack and stage time.
 
-The blocks cover whole shards (the shard grid of the source store), so every create takes the writer's no-shuffle
-path. Nothing here calls ``spark.conf.set``, ``sparkContext``, ``.rdd`` or ``_jvm``.
+The staged blocks cover whole shards (the shard grid of the source store), so every staged create takes the writer's
+no-shuffle path; a create from cells makes the same blocks itself, in one shuffle. Nothing here calls ``spark.conf.set``, ``sparkContext``, ``.rdd`` or ``_jvm``.
 """
 
 from __future__ import annotations
@@ -53,6 +57,24 @@ WRITE_CASES: Dict[str, Tuple[str, str]] = {
     ),
     "ZL-W4": ("append_day_managed", "append one more day to the manifest store"),
     "ZL-W5": ("append_day_plain", "append one more day to the plain store"),
+    # the same four writes without handing the table of cells to the writer: pack the cells into shard-grid blocks,
+    # stage them in a Delta table, write the blocks (what a job does when the writer takes blocks, xarray or tiles)
+    "ZL-W1s": (
+        "table_to_zarr_managed_staged",
+        "pack + stage, then a manifest store from the blocks",
+    ),
+    "ZL-W2s": (
+        "table_to_zarr_plain_staged",
+        "pack + stage, then a plain store from the blocks",
+    ),
+    "ZL-W4s": (
+        "append_day_managed_staged",
+        "pack + stage a day, append it to the manifest store",
+    ),
+    "ZL-W5s": (
+        "append_day_plain_staged",
+        "pack + stage a day, append it to the plain store",
+    ),
 }
 GATE_PER_GB = 1.5
 VARS_OUT = ("t2m", "u10", "v10", "wind_speed")
@@ -306,6 +328,13 @@ def _phases(plain: bool):
     from databricks.labs.gbx.zarr import _write, _write_plain
 
     ph = zb._w1_phases()
+    from databricks.labs.gbx.zarr import _write_cells
+
+    for name, label in (
+        ("_survey_distinct", "cells: label survey"),
+        ("_survey_units", "cells: unit survey"),
+    ):
+        ph.wrap(_write_cells, name, label)
     if plain:
         for mod, name, label in (
             (_write, "_plain_coordinates", "plain: coordinates"),
@@ -323,8 +352,10 @@ def _write_call(
     root: Optional[str],
     g: zl.Geometry,
     mode: str,
+    cells: bool = False,
 ):
-    """One ``gbx_zarr_write`` of ``kind`` (``managed`` or ``plain``) with its steps timed; returns ``(wall, steps)``."""
+    """One ``gbx_zarr_write`` of ``kind`` (``managed`` or ``plain``) with its steps timed; returns ``(wall, steps)``.
+    ``cells``: the source is the table of cells (``dim_cols``), not blocks."""
     from databricks.labs.gbx.zarr import gbx_zarr_write
 
     ph = _phases(kind == "plain")
@@ -334,6 +365,8 @@ def _write_call(
         kw["shards"] = dict(zip(_DIMS, g.fam.shards))
     else:
         kw["append_dim"] = "time"
+    if cells:
+        kw["dim_cols"] = {d: d for d in _DIMS}
     if kind == "plain":
         kw["transactional"] = False
     elif mode == "create":
@@ -382,8 +415,10 @@ def _compare(got: dict, want: dict) -> str:
 def _steps(kind: str, wall: float, ph: dict) -> dict:
     """The writer's steps of one write, in seconds; ``other`` is what the timers do not cover."""
     g_ = lambda k: round(ph.get(k, 0.0), 3)  # noqa: E731
+    survey = g_("cells: label survey") + g_("cells: unit survey")
     if kind == "plain":
         s = {
+            "survey": round(survey, 3),
             "position": g_("position pass"),
             "files": g_("files"),
             "coordinates": g_("plain: coordinates"),
@@ -391,12 +426,15 @@ def _steps(kind: str, wall: float, ph: dict) -> dict:
         }
     else:
         s = {
+            "survey": round(survey, 3),
             "position": g_("position pass"),
             "claim": g_("setup: ownership claim"),
             "manifest": g_("setup: create table"),
             "files": g_("files"),
             "commit": g_("commit"),
         }
+    if not survey:
+        del s["survey"]  # the blocks paths have none
     s["other"] = round(max(0.0, wall - sum(s.values())), 3)
     return s
 
@@ -410,16 +448,19 @@ def run_writes(  # noqa: C901
 ) -> List[dict]:
     """Run the selected ``ZL-W*`` cases on one store, ``cfg.reps`` times each (the first cold). Returns one metrics
     dict per case, in the shape of ``zarr_ladder_bench._run_leg``'s plus the steps of a write.
+
+    A case with no suffix hands the table of cells straight to ``gbx_zarr_write`` (``dim_cols``); the ``s`` cases
+    (``ZL-W1s`` ...) are the path without that input: pack the cells into blocks, stage them in Delta, write the blocks.
     """
     emit = emit or (lambda s: print(s, flush=True))
     want = [c for c in cfg.cases if c in WRITE_CASES]
-    if g.hours < 2 and ({"ZL-W4", "ZL-W5"} & set(want)):
+    if g.hours < 2 and any(c[4] in "45" for c in want):
         # a create of one time step chooses 'days since' for the time array (xarray's choice from a single midnight
         # value), and an hourly append is then refused: a one-step store has no day to append
         emit(
             f"ZARR-LADDER {g.family} {g.rung}: no append legs (a one-step store takes no hourly append)"
         )
-        want = [c for c in want if c not in ("ZL-W4", "ZL-W5")]
+        want = [c for c in want if c[4] not in "45"]
     if not want:
         return []
     schema = cfg.schema or "default"
@@ -434,10 +475,7 @@ def run_writes(  # noqa: C901
     expect = _expect(spark, base)
     expect_day = _expect(spark, source_table(spark, store, g, hours=day, shift=g.hours))
     expect_after = {k: expect[k] + expect_day[k] for k in expect}
-    need_t = bool({"ZL-W1", "ZL-W4"} & set(want))
-    need_p = bool({"ZL-W2", "ZL-W5"} & set(want))
-    need_b = "ZL-W3" in want
-    do_app_t, do_app_p = "ZL-W4" in want, "ZL-W5" in want  # after the one-step rule
+    staged_cases = [c for c in want if c.endswith("s") or c == "ZL-W3"]
     runs: Dict[str, dict] = {
         c: {
             "walls": [],
@@ -446,6 +484,7 @@ def run_writes(  # noqa: C901
             "packed": [],
             "check": "",
             "extra": [],
+            "pre": [],
         }
         for c in want
     }
@@ -457,11 +496,8 @@ def run_writes(  # noqa: C901
         ).lower()
         stage = f"{schema}.zl_stage_{tag}"
         stage_day = f"{schema}.zl_day_{tag}"
-        tbl = f"{schema}.zl_t_{tag}"
-        root = os.path.join(scratch, f"t_{tag}")
-        plain = os.path.join(scratch, f"p_{tag}.zarr")
-        basel = os.path.join(scratch, f"b_{tag}.zarr")
-        made_tables = [stage, stage_day, tbl]
+        made_tables = [stage, stage_day]
+        paths = []
         verify = rep == 0
 
         def note(case, text):
@@ -470,23 +506,27 @@ def run_writes(  # noqa: C901
             )
 
         try:
-            t = time.perf_counter()
             from databricks.labs.gbx.bench.zarr_ladder_bench import _noop
 
+            t = time.perf_counter()
             _noop(base.select("time", "latitude", "longitude", "wind_speed"))
             read_s = time.perf_counter() - t
-            t = time.perf_counter()
-            _pack_stage(spark, base, g, 0, g.hours, stage, True)
-            stage_s = time.perf_counter() - t
-            note(
-                "stage",
-                f"read+transform {read_s:.2f} s, pack+stage {stage_s:.2f} s (incl. a read)",
-            )
+            stage_s = 0.0
+            if staged_cases:
+                t = time.perf_counter()
+                _pack_stage(spark, base, g, 0, g.hours, stage, True)
+                stage_s = time.perf_counter() - t
+                note(
+                    "stage",
+                    f"read+transform {read_s:.2f} s, pack+stage {stage_s:.2f} s (incl. a read)",
+                )
             prep.append({"read_s": read_s, "stage_s": stage_s})
-            blocks = spark.read.table(stage)
 
-            def record(case, kind, wall, ph, out_path, tasks_key="files: data tasks"):
+            def record(
+                case, kind, wall, ph, out_path, pre=0.0, tasks_key="files: data tasks"
+            ):
                 r = runs[case]
+                r["pre"].append(pre)
                 r["walls"].append(wall)
                 r["steps"].append(_steps(kind, wall, ph))
                 r["tasks"].append(int(ph.get(tasks_key, 0)))
@@ -495,29 +535,85 @@ def run_writes(  # noqa: C901
                     zl.disk_bytes(out_path) if os.path.exists(out_path) else 0
                 )
 
-            if need_t:
-                wall, ph = _write_call(spark, "managed", blocks, tbl, root, g, "create")
-                if "ZL-W1" in want:
-                    record("ZL-W1", "managed", wall, ph, root)
-                if verify and "ZL-W1" in want:
-                    runs["ZL-W1"]["check"] = _compare(_agg(spark, tbl), expect) or "ok"
-                note(
-                    "ZL-W1",
-                    f"managed create {wall:.2f} s, files {ph.get('files', 0):.2f} s",
+            for sfx in ("", "s"):
+                c1, c2, c4, c5 = (f"ZL-W{i}{sfx}" for i in (1, 2, 4, 5))
+                mine = {c1, c2, c4, c5} & set(want)
+                if not mine:
+                    continue
+                direct = sfx == ""
+                tbl = f"{schema}.zl_t{sfx}_{tag}"
+                root = os.path.join(scratch, f"t{sfx}_{tag}")
+                plain = os.path.join(scratch, f"p{sfx}_{tag}.zarr")
+                made_tables.append(tbl)
+                paths += [root, plain]
+                src = (
+                    base.select(*_DIMS, *VARS_OUT)
+                    if direct
+                    else spark.read.table(stage)
                 )
-            if need_p:
-                wall, ph = _write_call(spark, "plain", blocks, plain, None, g, "create")
-                if "ZL-W2" in want:
-                    record("ZL-W2", "plain", wall, ph, plain)
-                if verify and "ZL-W2" in want:
-                    runs["ZL-W2"]["check"] = (
-                        _compare(_agg(spark, plain), expect) or "ok"
+                if {c1, c4} & mine:
+                    wall, ph = _write_call(
+                        spark, "managed", src, tbl, root, g, "create", direct
                     )
-                note(
-                    "ZL-W2",
-                    f"plain create {wall:.2f} s, files {ph.get('files', 0):.2f} s",
-                )
-            if need_b:
+                    if c1 in want:
+                        record(c1, "managed", wall, ph, root, stage_s * (not direct))
+                        if verify:
+                            runs[c1]["check"] = (
+                                _compare(_agg(spark, tbl), expect) or "ok"
+                            )
+                    note(
+                        c1,
+                        f"managed create {wall:.2f} s, files {ph.get('files', 0):.2f} s",
+                    )
+                if {c2, c5} & mine:
+                    wall, ph = _write_call(
+                        spark, "plain", src, plain, None, g, "create", direct
+                    )
+                    if c2 in want:
+                        record(c2, "plain", wall, ph, plain, stage_s * (not direct))
+                        if verify:
+                            runs[c2]["check"] = (
+                                _compare(_agg(spark, plain), expect) or "ok"
+                            )
+                    note(
+                        c2,
+                        f"plain create {wall:.2f} s, files {ph.get('files', 0):.2f} s",
+                    )
+                if {c4, c5} & mine and g.hours >= 2:
+                    dayf = source_table(spark, store, g, hours=day, shift=g.hours)
+                    day_s = 0.0
+                    if direct:
+                        dsrc = dayf.select(*_DIMS, *VARS_OUT)
+                    else:
+                        t = time.perf_counter()
+                        _pack_stage(
+                            spark, dayf, g, g.hours, g.hours + day, stage_day, False
+                        )
+                        day_s = time.perf_counter() - t
+                        dsrc = spark.read.table(stage_day)
+                    if c4 in want:
+                        wall, ph = _write_call(
+                            spark, "managed", dsrc, tbl, None, g, "append", direct
+                        )
+                        record(c4, "managed", wall, ph, root, day_s)
+                        if verify:
+                            runs[c4]["check"] = (
+                                _compare(_agg(spark, tbl), expect_after) or "ok"
+                            )
+                        note(c4, f"managed append {wall:.2f} s")
+                    if c5 in want:
+                        wall, ph = _write_call(
+                            spark, "plain", dsrc, plain, None, g, "append", direct
+                        )
+                        record(c5, "plain", wall, ph, plain, day_s)
+                        if verify:
+                            runs[c5]["check"] = (
+                                _compare(_agg(spark, plain), expect_after) or "ok"
+                            )
+                        note(c5, f"plain append {wall:.2f} s")
+            if "ZL-W3" in want:
+                basel = os.path.join(scratch, f"b_{tag}.zarr")
+                paths.append(basel)
                 t = time.perf_counter()
                 nb = _baseline_write(spark, stage, basel, g)
                 wall = time.perf_counter() - t
@@ -526,35 +622,12 @@ def run_writes(  # noqa: C901
                 runs["ZL-W3"]["tasks"].append(nb)
                 runs["ZL-W3"]["packed"].append(None)
                 runs["ZL-W3"]["extra"].append(zl.disk_bytes(basel))
+                runs["ZL-W3"]["pre"].append(stage_s)
                 if verify:
                     runs["ZL-W3"]["check"] = (
                         _compare(_agg(spark, basel), expect) or "ok"
                     )
                 note("ZL-W3", f"baseline {wall:.2f} s ({nb} blocks)")
-            if (do_app_t or do_app_p) and g.hours >= 2:
-                dayf = source_table(spark, store, g, hours=day, shift=g.hours)
-                _pack_stage(spark, dayf, g, g.hours, g.hours + day, stage_day, False)
-                dblocks = spark.read.table(stage_day)
-                if do_app_t:
-                    wall, ph = _write_call(
-                        spark, "managed", dblocks, tbl, None, g, "append"
-                    )
-                    record("ZL-W4", "managed", wall, ph, root)
-                    if verify:
-                        runs["ZL-W4"]["check"] = (
-                            _compare(_agg(spark, tbl), expect_after) or "ok"
-                        )
-                    note("ZL-W4", f"managed append {wall:.2f} s")
-                if do_app_p:
-                    wall, ph = _write_call(
-                        spark, "plain", dblocks, plain, None, g, "append"
-                    )
-                    record("ZL-W5", "plain", wall, ph, plain)
-                    if verify:
-                        runs["ZL-W5"]["check"] = (
-                            _compare(_agg(spark, plain), expect_after) or "ok"
-                        )
-                    note("ZL-W5", f"plain append {wall:.2f} s")
         except Exception as e:  # noqa: BLE001
             for c in want:
                 error.setdefault(c, f"{type(e).__name__}: {e}"[:600])
@@ -568,7 +641,7 @@ def run_writes(  # noqa: C901
                     spark.sql(f"DROP TABLE IF EXISTS {tb}")
                 except Exception:  # noqa: BLE001
                     pass
-            for p in (root, plain, basel):
+            for p in paths:
                 shutil.rmtree(p, ignore_errors=True)
     out = []
     for case in want:
@@ -612,13 +685,13 @@ def _metrics(case, g, cfg, r, prep, err, failed) -> dict:
     wall = statistics.median(walls)
     steps = {k: _med([s.get(k) for s in r["steps"]]) for k in r["steps"][0]}
     files = steps.get("files") or 0.0
-    is_append = case in ("ZL-W4", "ZL-W5")
+    is_append = case[4] in "45"
     nbytes = (
         g.logical_bytes
         if not is_append
         else (g.logical_bytes // g.hours * min(24, g.hours))
     )
-    pre = (_med([p["stage_s"] for p in prep]) or 0.0) if not is_append else 0.0
+    pre = _med(r["pre"]) or 0.0  # pack + stage, for the paths that stage
     return {
         **base,
         "walls_s": walls,
@@ -631,6 +704,7 @@ def _metrics(case, g, cfg, r, prep, err, failed) -> dict:
             _med([p["read_s"] for p in prep]) if not is_append else None
         ),
         "pack_stage_s": pre or None,
+        "path_s": round(wall + pre, 3),
         "bytes_written": nbytes,
         "out_disk_bytes": int(statistics.median(r["extra"])) if r["extra"] else 0,
         "mb_s": round(nbytes / 1e6 / wall, 1) if wall else 0.0,
@@ -649,9 +723,9 @@ def _metrics(case, g, cfg, r, prep, err, failed) -> dict:
 
 def write_table(metrics: List[dict]) -> str:
     head = (
-        "| family | rung | case | wall s | cold s | s/GB | MB/s | tasks | pack+stage s | steps (s) | "
+        "| family | rung | case | wall s | cold s | s/GB | MB/s | tasks | pack+stage s | path s | steps (s) | "
         "files MB/s | overhead (write) | overhead (path) | check |\n"
-        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     )
     pct = lambda x: "-" if x is None else format(x, ".0%")  # noqa: E731
     lines = []
@@ -660,7 +734,7 @@ def write_table(metrics: List[dict]) -> str:
         lines.append(
             f"| {m['family']} | {m['rung']} | {m['case']} {m['workload']} | {m['wall_s']:.2f} | {m['cold_s']:.2f} | "
             f"{m['s_per_gb'] if m['s_per_gb'] is not None else '-'} | {m.get('mb_s', '-')} | {m.get('tasks', '-')} | "
-            f"{m.get('pack_stage_s') if m.get('pack_stage_s') is not None else '-'} | {steps or '-'} | "
+            f"{m.get('pack_stage_s') if m.get('pack_stage_s') is not None else '-'} | {m.get('path_s', '-')} | {steps or '-'} | "
             f"{m.get('files_mb_s') if m.get('files_mb_s') is not None else '-'} | {pct(m.get('overhead_write_share'))} | "
             f"{pct(m.get('overhead_total_share'))} | {m['check']} |"
         )

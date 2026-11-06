@@ -10,7 +10,7 @@ title: Overture Maps Downloader
 :::note Prerequisites
 - GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
 - Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
-- The `overturemaps` CLI is recommended for fast bbox pushdown (install via `pip install overturemaps`); the client falls back to distributed Spark reads from Overture's public GeoParquet if the CLI is absent
+- The `overturemaps` CLI is recommended for fast bbox pushdown (install via `pip install overturemaps`). The client falls back to distributed Spark reads from Overture's public GeoParquet if the CLI is absent
 :::
 
 ---
@@ -45,10 +45,10 @@ client = OvertureClient(
 )
 ```
 
-The HTTP download fallback fetches each asset href as `StacClient.download` does: the host must not resolve to a
-loopback, link-local, cloud metadata or unspecified address, nor to a private one unless you list it in `allowed_hosts`; every
-redirect hop is checked, no `~/.netrc` is read, and when `allowed_hosts` is set (`"example.com"` is that host,
-`".example.com"` it and every host under it) an href off it is refused. A refused asset is not retried; its row has `is_out_file_valid = false`.
+The HTTP download fallback fetches each asset href as `StacClient.download` does. The host must not resolve to a
+loopback, link-local, cloud metadata or unspecified address. It must not resolve to a private one either, unless you list it in `allowed_hosts`. Every
+redirect hop is checked, and no `~/.netrc` is read. When `allowed_hosts` is set (`"example.com"` is that host,
+`".example.com"` it and every host under it), an href off it is refused. A refused asset is not retried, and its row has `is_out_file_valid = false`.
 
 #### `discover(bbox, themes=None, release=None) → DataFrame`
 
@@ -108,7 +108,7 @@ download_overture_aoi(
 
 ## Copy-Paste Example
 
-The example below downloads Overture **buildings** and **places** for a San Francisco downtown bounding box into a UC Volume, then reads them back as a Spark DataFrame.
+The example below downloads Overture **buildings** and **places** for a San Francisco downtown bounding box into a UC Volume. It then reads them back as a Spark DataFrame.
 
 ```python
 # Install the overturemaps CLI for fastest bbox pushdown (recommended)

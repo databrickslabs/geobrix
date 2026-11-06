@@ -15,7 +15,7 @@ It produces the `(attrs..., geom_0, geom_0_srid, geom_0_srid_proj)` schema.
 
 ## Options
 
-The driver (`GeoJSON`) is preset. Each file is read with the GeoJSON-family driver GDAL detects for it — GeoJSON (FeatureCollection), GeoJSONSeq (newline-delimited), ESRIJSON, TopoJSON or JSON-FG — so a `.geojsonl` file needs no option. A file named for another format (e.g. `data.csv`) is read with the first of those drivers that opens it. A file none of them opens fails: the error names the file and, when GDAL recognizes it as another format, the reader to use instead; when GDAL cannot recognize it as any format, it says so. A JSON file with no features fails with a "no features/fields found" error.
+The driver (`GeoJSON`) is preset. Each file is read with the GeoJSON-family driver GDAL detects for it: GeoJSON (FeatureCollection), GeoJSONSeq (newline-delimited), ESRIJSON, TopoJSON or JSON-FG. A `.geojsonl` file therefore needs no option. A file named for another format (e.g. `data.csv`) is read with the first of those drivers that opens it. A file none of them opens fails. The error names the file and, when GDAL recognizes it as another format, the reader to use instead. When GDAL cannot recognize it as any format, the error says so. A JSON file with no features fails with a "no features/fields found" error.
 
 | Option | Default | Description |
 |--------|---------|-------------|

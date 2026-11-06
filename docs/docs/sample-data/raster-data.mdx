@@ -11,7 +11,7 @@ import rasterDataCode from '!!raw-loader!../../tests/python/sample_data/raster_d
 Datasets below are either included in the **Essential** or **Complete** setup script on the [Setup](./setup) page, or can be downloaded individually with the scripts here.
 
 :::info Viewing Sentinel-2 in QGIS or other viewers
-The **full-size** Sentinel-2 GeoTIFFs from the Essential and Complete bundles (e.g. `nyc_sentinel2_red.tif`, `london_sentinel2_red.tif`) are suitable for visual inspection in QGIS or other desktop viewers. Minimal or clipped Sentinel-2 rasters (including `*_byte.tif` human-friendly versions used in the minimal bundle or small extracts) may appear black or very dark when viewed—they are intended for processing and automated tests, not for visual quality. For best viewing results, use the full Essential or Complete bundle rasters.
+The **full-size** Sentinel-2 GeoTIFFs from the Essential and Complete bundles (e.g. `nyc_sentinel2_red.tif`, `london_sentinel2_red.tif`) are suitable for visual inspection in QGIS or other desktop viewers. Minimal or clipped Sentinel-2 rasters (including `*_byte.tif` human-friendly versions used in the minimal bundle or small extracts) may appear black or very dark when viewed. They are intended for processing and automated tests, not for visual quality. For best viewing results, use the full Essential or Complete bundle rasters.
 :::
 
 ### Sentinel-2 Imagery via STAC (NYC Area)
@@ -194,8 +194,8 @@ stands in for ERA5 in the [Zarr](../api/zarr-stores) examples, the [Zarr Reader]
 | **`era5_like_v3.zarr`** | Zarr v3 with sharding: inner chunks of (12, 91, 180), shards of (24, 182, 360), `zstd`. About 3.6 MB |
 | **`era5_like_v2.zarr`** | The same data as Zarr v2: chunks of (12, 91, 180), Blosc with `zstd`. About 3.2 MB |
 
-The values are smooth fields with seeded noise, rounded to 0.25 K, 0.25 m/s and 10 Pa as ERA5's own
-packed files are, so two runs in one environment give identical stores.
+The values are smooth fields with seeded noise. They are rounded to 0.25 K, 0.25 m/s and 10 Pa, as ERA5's own
+packed files are. Two runs in one environment therefore give identical stores.
 
 **Generate it** in a notebook (it needs the env6 wheel's `[zarr]` extra):
 
@@ -210,7 +210,7 @@ packed files are, so two runs in one environment give identical stores.
 In a GeoBrix checkout, `gbx:data:generate-minimal-bundle --zarr-only` writes the same two stores into the
 in-repo test bundle (`sample-data/Volumes/main/default/test-data/geobrix-examples/global/era5-weather/`;
 the cube is not tracked in git). Then `gbx:data:stage-sample --profile <name>` uploads them to a Volume,
-checks every file size, and removes only stale files inside the uploaded `.zarr` stores; pass
+checks every file size, and removes only stale files inside the uploaded `.zarr` stores. Pass
 `--volume-root` to choose the Volume and `--dry-run` to list what it would upload without contacting a
 workspace.
 

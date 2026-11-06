@@ -40,7 +40,7 @@ page is run by the documentation tests.
 
 `gbx_zarr_read(spark, source, ...)` takes the source as a string. `source_type="auto"` (the
 default) treats a string that starts with `/` or has a URI scheme (`dbfs:/`, `file:/`, `s3://`) as
-the path of a plain store, and anything else as the name of a manifest table. Pass
+the path of a plain store. It treats anything else as the name of a manifest table. Pass
 `source_type="path"` or `"table"` to say which.
 
 - **A plain store** is read as it is on disk, with whatever bytes are there. It has no versions.
@@ -64,7 +64,7 @@ supports them. Other compute refuses with a `ZarrUnsupported` whose `Fix:` names
 
 `variables` is a name or a list of names. The default is every gridded variable: coordinate
 arrays, the arrays that CF `coordinates` and `bounds` attributes name, and scalars are left out. An array GeoBrix cannot
-decode (a string coordinate, say) does not fail the read: it is left out and named only if you ask
+decode (a string coordinate, say) does not fail the read. It is left out and named only if you ask
 for it, select by its labels, or need its labels for a table.
 
 `sel` selects by **label** and `isel` by **position**. Each is a dict of dimension to a value:
@@ -75,7 +75,7 @@ for it, select by its labels, or need its labels for a table.
 | A `slice(a, b)` | Both ends included, in the order of the axis, so a descending latitude takes `slice(60, 50)`. A time takes ISO strings | `start:stop` with the end excluded. A step other than 1 is refused |
 | A list | Those labels; the output follows the array's order, not the list's | Those positions |
 
-A longitude axis that covers the whole circle is periodic: a slice may cross its seam, so
+A longitude axis that covers the whole circle is periodic. A slice may cross its seam, so
 `slice(-10, 10)` on a 0 to 360 axis is the labels from 350 round to 10. A label that is not on the
 axis raises `ValueError` when it is a scalar, and selects nothing when it is a slice. Variables
 that lack a selected dimension are read whole along the others.
@@ -172,7 +172,7 @@ decide which cells count as missing:
   and `True` masks on `fill_value` in either version. The `zarr_gbx` DataSource has no option for
   this and uses the default.
 - **An integer array read as booleans** (a `dtype` attribute of `"bool"`) is masked only on an
-  explicit `_FillValue` or `missing_value`, never on the array's `fill_value`: zarr's default of `0`
+  explicit `_FillValue` or `missing_value`, never on the array's `fill_value`. Zarr's default of `0`
   is a stored `False`, not a missing cell.
 
 <CodeFromTest code={zarrRead} language="python" functionName="keep_zero_counts"
@@ -198,7 +198,7 @@ GeoBrix follows the Zarr store's own semantics, which differ from xarray's in th
 `rst_*` function applies to Zarr data without converting the cube to GeoTIFF. Each selected 2-D
 plane of each variable (the plane of its latitude and longitude, or `y` and `x`) is cut into
 windows, one inner chunk each. Every selected position along the other dimensions makes its own
-tile, and the tile's metadata says which: `zarr_array`, `sliceDims` (such as `time=0`) and
+tile. The tile's metadata says which: `zarr_array`, `sliceDims` (such as `time=0`) and
 `sliceCoord_<dim>` (the label), as the NetCDF reader writes them.
 
 - `tile_size=(width, height)`, in cells, overrides the window. A window never crosses the longitude
@@ -209,8 +209,8 @@ tile, and the tile's metadata says which: `zarr_array`, `sliceDims` (such as `ti
 - **Tiles are north-up**: when latitude ascends, the rows are flipped. The CRS is the array's
   `grid_mapping`, or `EPSG:4326` for a plain latitude and longitude grid, and NoData is NaN for
   floating-point cells.
-- **A 0 to 360 longitude axis** gives `EPSG:4326` tiles with x above 180: a cube whose longitude runs
-  from 0 to 359 has tiles that reach x = 359.5, and GeoBrix does not shift them into -180..180. Keep
+- **A 0 to 360 longitude axis** gives `EPSG:4326` tiles with x above 180. A cube whose longitude runs
+  from 0 to 359 has tiles that reach x = 359.5. GeoBrix does not shift them into -180..180. Keep
   that in mind when you combine the tiles with rasters in the usual -180..180 convention.
 - The coordinates must form a **regular grid** over the selected cells (a constant step; what lies
   outside the selection does not matter). An irregular or curvilinear grid raises `ZarrUnsupported`:
@@ -226,9 +226,9 @@ tile, and the tile's metadata says which: `zarr_array`, `sliceDims` (such as `ti
 
 With `virtual_tiles=True` (the default) a tile holds no pixels. It names its window and the storage
 objects behind it, and reads them when a function opens it. A table of tiles can therefore be
-saved and read back by tasks that have no session, as long as the store stays on a Volume and,
+saved and read back by tasks that have no session. This holds as long as the store stays on a Volume and,
 for a table, the pinned version stays readable. The lightweight `rst_*` functions open a tile on
-demand and read only the chunks its window touches; a header function such as `rst_crs` or
+demand and read only the chunks its window touches. A header function such as `rst_crs` or
 `rst_width` reads no chunk at all.
 
 <CodeFromTest code={zarrRead} language="python" functionName="measure_tiles"
@@ -267,16 +267,16 @@ tile **without that provenance**. Put the provenance back with `withField("metad
 ## How a read is split into tasks
 
 A `blocks` or `table` read packs whole chunks into tasks of about 16 MiB decoded. A read too small for
-that is spread over the cores of the session instead, down to 4 MiB per task, so a 100 MB read does not
+that is spread over the cores of the session instead, down to 4 MiB per task. A 100 MB read therefore does not
 run as one task. A task never holds more than the compute's decoded-data limit (64 MiB on Serverless,
 1536 MiB on a classic cluster), whatever the target. The cores are read from the session's configuration, so
 the plan is the same on Serverless, where there is no `SparkContext`. On a Databricks cluster that sets no
-parallelism or executor configuration, the cores are the cluster's worker count times the cores of a worker; the
-cores of a worker are taken from the driver when both use the same node type, and a cluster of mixed node types
+parallelism or executor configuration, the cores are the cluster's worker count times the cores of a worker. The
+cores of a worker are taken from the driver when both use the same node type. A cluster of mixed node types
 is planned as one slot. A chunk counts only the cells inside the array: a 24-hour chunk of a 1-hour array counts
 one hour.
 
-A plain store on a Volume is decoded by a thread pool that is larger than the core count, because each chunk read
+A plain store on a Volume is decoded by a thread pool larger than the core count. This is because each chunk read
 waits on the mount. Its size is eight threads per core, at most 64, lowered when the chunks the threads hold would
 not fit in the task's decoded-data limit. Set `RAYON_NUM_THREADS` before the first read of a process to choose it
 yourself. A store registered in a table reads its chunks through the manifest, which overlaps its reads already.
@@ -317,8 +317,8 @@ prune with `sel`, `isel` and `variables`.
 
 `gbx_zarr_sample(spark, points_df, source, ...)` reads a store at the points of a DataFrame, with
 the same geometry inputs as `rst_sample`: a POINT column of WKB, EWKB, WKT or EWKT. The result has
-every column of `points_df`, then a column for each dimension that `sel` leaves in (time as
-`TIMESTAMP`), then a column per variable, typed as in a table read. A point is repeated for each
+every column of `points_df`. Next comes a column for each dimension that `sel` leaves in (time as
+`TIMESTAMP`). A column per variable follows, typed as in a table read. A point is repeated for each
 selected position of those dimensions, so one point's time series is its rows.
 
 <CodeFromTest code={zarrRead} language="python" functionName="sample_at_points"
@@ -328,10 +328,10 @@ selected position of those dimensions, so one point's time series is its rows.
 
 - Points are moved to the store's CRS and read at the **nearest cell** (`method="nearest"`;
   `"bilinear"` is planned and raises `ZarrUnsupported`). `crs` is the CRS of points that carry no
-  SRID of their own; an EWKB or EWKT SRID wins, and a point with neither is taken to be in the
+  SRID of their own. An EWKB or EWKT SRID wins, and a point with neither is taken to be in the
   store's CRS.
-- A point outside the grid (more than half a cell beyond its first or last cell), a missing or empty
-  geometry, and a cell equal to the fill value all give `NULL`. A geometry that is not a POINT raises
+- A point outside the grid (more than half a cell beyond its first or last cell) gives `NULL`. A missing or empty
+  geometry and a cell equal to the fill value do the same. A geometry that is not a POINT raises
   `ValueError`.
 - `variables` defaults to every gridded variable, which must share a grid.
 
@@ -342,8 +342,8 @@ selected position of those dimensions, so one point's time series is its rows.
 
 Up to 100,000 points are collected to the driver. Suppose the chunks they lie in hold no more than 16 MiB
 decoded and the answer is small. Then the driver reads them and no Spark job runs. Otherwise Spark reads each
-chunk once for all its points. A chunk with many time steps is split along time into tasks of whole time chunks,
-so a store with few spatial chunks (a county in one chunk, say) still uses every core. Within a chunk, scattered points are read cell by cell. A chunk's points may need a tenth or
+chunk once for all its points. A chunk with many time steps is split along time into tasks of whole time chunks.
+A store with few spatial chunks (a county in one chunk, say) therefore still uses every core. Within a chunk, scattered points are read cell by cell. A chunk's points may need a tenth or
 more of the cells of the box around them. If the box also fits in half of a task's decoded-data budget,
 the box is read once and every point takes its cells from it. The budget was 32 MiB on Serverless and
 768 MiB on Databricks Runtime 19 in these measurements. A chunk whose box is larger is read cell by cell. Take the ERA5 store
@@ -351,8 +351,8 @@ of the [Zarr performance figures](../api/zarr-performance): one 90 x 90 chunk of
 temperature, all 744 hours, on Serverless. Points on a quarter of the chunk's cells took 0.44 s this way
 against 1.7 s cell by cell. Points on every cell took 0.55 s against 6.7 s. At one point in 81 cells
 (100 points), reading cell by cell was the faster: 0.26 s against 0.40 s.
-**Above 100,000 points `points_df` is evaluated more than once** (up to about three times, because
-the chunks to read are planned from a first pass over the geometry column), so it must be
+**Above 100,000 points `points_df` is evaluated more than once**, up to about three times.
+The chunks to read are planned from a first pass over the geometry column, so the DataFrame must be
 deterministic. Write it to a table first, rather than sampling a random or time-dependent query.
 
 ## Access
@@ -367,14 +367,14 @@ deterministic. Write it to a table first, rather than sampling a random or time-
 
 A plain store is read through its path, so `"direct"` raises for it: register the store to use direct
 access. Virtual tiles are opened later, over the mount, so `"direct"` needs `virtual_tiles=False`.
-Direct access sends credentials of at most one hour, scoped to the Volume, to the executors, and under
-memory pressure Spark may spill task data, those credentials included, to local disk: turn on local-disk
+Direct access sends credentials of at most one hour, scoped to the Volume, to the executors. Under
+memory pressure Spark may spill task data, those credentials included, to local disk. Turn on local-disk
 encryption on clusters that use it, or pass `access="fuse"`.
 
 ## Errors
 
-A mistake in the call (a bad argument, an unknown variable, a version that does not exist) is raised
-on the driver at once, as a `Zarr*` error or a `ValueError`, and its message ends with a `Fix:` that
+A mistake in the call is raised on the driver at once. Examples are a bad argument, an unknown variable, and a version that does not exist.
+It arrives as a `Zarr*` error or a `ValueError`, and its message ends with a `Fix:` that
 says how to resolve it:
 
 <CodeFromTest code={zarrRead} language="python" functionName="ask_for_an_unknown_variable"
@@ -382,9 +382,9 @@ says how to resolve it:
   testFile="docs/tests/python/readers/test_zarr_read_examples.py"
   outputConstant="UNKNOWN_VARIABLE_output" />
 
-The DataFrame is lazy, so an error raised while Spark runs the read (a file that went missing, a chunk
-that cannot be decoded, a registered store another tool changed) arrives from the action that triggers
-it, such as `collect` or `write`, as a `pyspark.errors.PythonException`. Its message keeps the
+The DataFrame is lazy, so an error raised while Spark runs the read arrives from the action that triggers
+it, such as `collect` or `write`. Such errors include a file that went missing, a chunk
+that cannot be decoded, and a registered store another tool changed. Each arrives as a `pyspark.errors.PythonException`. Its message keeps the
 GeoBrix error name and the `Fix:` line:
 
 <CodeFromTest code={zarrRead} language="python" functionName="read_a_changed_store"
@@ -394,8 +394,8 @@ GeoBrix error name and the `Fix:` line:
 
 ## Next Steps
 
-- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook
-  that registers a weather cube in place, samples it into a features table, writes a derived
+- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook.
+  It registers a weather cube in place and samples it into a features table. It then writes a derived
   variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Writer](../writers/zarr) — create, append, update and overwrite a store transactionally.
 - [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.

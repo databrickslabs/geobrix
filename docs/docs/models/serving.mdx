@@ -6,9 +6,9 @@ title: Serving GeoSAM
 # Serving GeoSAM
 
 `gbx.models.serving` takes a loaded GeoSAM model from a notebook call to a queryable GPU
-endpoint: wrap it as an MLflow pyfunc, register it to the Unity Catalog model registry
-("Unity Gateway"), stand up a GPU Model Serving endpoint, and query it. Every step is a
-thin wrapper over MLflow / Databricks Model Serving — `mlflow` itself is imported lazily
+endpoint. Wrap it as an MLflow pyfunc. Register it to the Unity Catalog model registry
+("Unity Gateway"). Stand up a GPU Model Serving endpoint. Query it. Every step is a
+thin wrapper over MLflow / Databricks Model Serving. `mlflow` itself is imported lazily
 inside each function, so `databricks.labs.gbx.models.serving` imports cleanly even where
 `mlflow` is not installed.
 
@@ -31,9 +31,9 @@ from databricks.labs.gbx.models import serving
 pyfunc = serving.build_geosam_pyfunc(model_type="vit_h")
 ```
 
-The input/output contract is plain data — one string column in
-(`serving.PREDICT_INPUT_COLUMNS`, `image_b64:string`), one string column out
-(`serving.PREDICT_OUTPUT_COLUMNS`, `geojson:string`) — and `geosam_signature()` converts
+The input/output contract is plain data: one string column in
+(`serving.PREDICT_INPUT_COLUMNS`, `image_b64:string`) and one string column out
+(`serving.PREDICT_OUTPUT_COLUMNS`, `geojson:string`). The helper `geosam_signature()` converts
 that contract into a real MLflow `ModelSignature` lazily, for use at registration time.
 
 ## Registering to Unity Catalog — usage affiliation
@@ -54,8 +54,8 @@ model_version = serving.register_to_unity_gateway(
 function never auto-selects a profile; the caller chooses it explicitly.
 
 The env5 wheel (`wheel_path=`, default `/Volumes/…/geobrix-0.6.0+env5-py3-none-any.whl`) is bundled
-into the model (`code_paths`), and `pip_reqs` defaults to that bundled copy plus the GeoSAM packages
-(`serving.MODEL_DEPS`), since the Model Serving build cannot reach a Volume and the env wheels have no
+into the model (`code_paths`). The `pip_reqs` argument defaults to that bundled copy plus the GeoSAM packages
+(`serving.MODEL_DEPS`). This is because the Model Serving build cannot reach a Volume and the env wheels have no
 models extra:
 
 ```python
@@ -90,13 +90,13 @@ endpoint = serving.create_endpoint(
 `create_endpoint(name, model_version, *, profile, endpoint_name, workload_type="GPU_MEDIUM", scale_to_zero=True)`
 assembles a served-entity/traffic config for UC model `name`@`model_version` and creates a
 Model Serving endpoint named `endpoint_name`. It polls until the endpoint is genuinely
-ready — both `state.ready == "READY"` **and** `state.config_update == "NOT_UPDATING"` —
-since `state.ready` alone can read `READY` mid version-swap while the previous version is
+ready, meaning both `state.ready == "READY"` **and** `state.config_update == "NOT_UPDATING"`.
+This is because `state.ready` alone can read `READY` mid version-swap while the previous version is
 still the one actually serving traffic.
 
-`create_endpoint` is **create-only** — it calls the deployment client's create API, not
+`create_endpoint` is **create-only**. It calls the deployment client's create API, not
 an update. Rolling a new `model_version` onto an endpoint that already exists needs a
-separate update call (not implemented in this module); calling `create_endpoint` again
+separate update call, which this module does not implement. Calling `create_endpoint` again
 against an existing `endpoint_name` is not the way to deploy a new version.
 
 ### Scale-to-zero vs. provisioned
@@ -139,9 +139,9 @@ prediction response (an MLflow deployments-client dict), with the `geojson` stri
   installs GeoBrix at startup — factor that into cold-start time for a scale-to-zero
   endpoint.
 - **`mlflow` is not part of the light CI environment.** All of `mlflow`'s imports in this
-  module are lazy and scoped to the function that needs it; only code paths that call
-  `register_to_unity_gateway`, `create_endpoint`, or `query` — or `build_geosam_pyfunc` /
-  `geosam_signature` — require `mlflow` to be installed.
+  module are lazy and scoped to the function that needs it. Only code paths that call
+  `register_to_unity_gateway`, `create_endpoint`, `query`, `build_geosam_pyfunc` or
+  `geosam_signature` require `mlflow` to be installed.
 
 ## See also
 

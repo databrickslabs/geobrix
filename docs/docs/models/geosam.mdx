@@ -8,7 +8,7 @@ title: GeoSAM Segmentation
 GeoSAM wraps [segment-geospatial](https://samgeo.gishub.org/) (SamGeo) as a `gbx.models`
 backend: load a handle once, then segment a whole raster — of any size — into
 georeferenced object polygons with `segment_raster`. Today GeoSAM runs in **automatic-mask
-mode** (segment everything, no prompt); text-prompt-guided segmentation (segment only
+mode**, which segments everything with no prompt. Text-prompt-guided segmentation (segment only
 objects matching a text description) is a natural follow-on, not yet implemented.
 
 ## Loading a handle
@@ -64,10 +64,10 @@ georeferenced object polygons — chip → infer → stitch → polygonize:
    `gbx_rst_tooverlappingtiles`.
 2. **Infer** — each chip is segmented by GeoSAM (or an injected `segmenter`), fanned across
    1..N GPU device slots. With the default GeoSAM backend, each device gets its own
-   handle — bound to that device and cached across every chip it processes, never shared
+   handle. The handle is bound to that device and cached across every chip it processes. It is never shared
    with another device and never rebuilt per chip.
 3. **Stitch** — each chip's label mask is vectorized into georeferenced WKB polygons using
-   its own true per-window transform, and fragments that straddle a seam are merged by
+   its own true per-window transform. Fragments that straddle a seam are merged by
    geometric intersection into one polygon per real-world object.
 4. **Polygonize / filter** — merged polygons smaller than `min_area` (in square meters)
    are dropped.
@@ -116,11 +116,11 @@ set — scheduling more chips across more devices changes throughput, not output
 ### Why seam-merging just works
 
 `segment_raster` relies on real georeferencing, not bookkeeping, to merge an object split
-across a tile seam. When `overlap > 0`, an object split by a seam is captured by two (or
-more) neighboring windows; because each window's fragment is vectorized with its own true
-per-window transform, the two fragments land at their real-world footprint — which
+across a tile seam. When `overlap > 0`, two (or
+more) neighboring windows capture an object split by a seam. Each window's fragment is vectorized with its own true
+per-window transform. The fragments therefore land at their real-world footprint, which
 necessarily overlaps wherever the windows themselves overlap. Grouping fragments by plain
-geometric intersection and unioning each group is therefore enough; no separate
+geometric intersection and unioning each group is therefore enough. No separate
 distance-based "touch within overlap" heuristic is needed on top of correct per-tile
 georeferencing.
 
@@ -130,9 +130,9 @@ GeoSAM runs SamGeo's **automatic-mask** mode: it segments every distinct object 
 in a chip, with no guidance about what to look for. This is the mode `load_geosam` /
 `segment_raster` use today.
 
-SamGeo also supports **text-prompt-guided** segmentation (return only objects matching a
-description, e.g. `"building"` or `"tree"`), which is a natural extension of this backend
-but is **not implemented** in the current `gbx.models` package — it is a follow-on
+SamGeo also supports **text-prompt-guided** segmentation, which returns only objects matching a
+description, e.g. `"building"` or `"tree"`. It is a natural extension of this backend
+but is **not implemented** in the current `gbx.models` package. It is a follow-on
 capability, not something to invoke today.
 
 ## Installation
@@ -142,9 +142,9 @@ capability, not something to invoke today.
 %pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial" "opencv-python-headless==4.11.0.86"
 ```
 
-On Databricks the GeoSAM packages are a separate step after the env5 wheel (the env wheels have no
-models extra): `torch==2.9.0` / `torchvision==0.24.0` (CUDA 12, the Serverless **GPU AI Runtime
-environment 5** base's pair), OpenCV 4.x, and `segment-geospatial`, which also installs PyPI's
+On Databricks the GeoSAM packages are a separate step after the env5 wheel, because the env wheels have no
+models extra. They are `torch==2.9.0` / `torchvision==0.24.0` (CUDA 12, the Serverless **GPU AI Runtime
+environment 5** base's pair), OpenCV 4.x, and `segment-geospatial`. The last one also installs PyPI's
 `rasterio` and `shapely` beside the wheel's own (a GeoBrix process uses the wheel's). Off
 Databricks, the plain wheel's `geobrix[models]` extra installs `segment-geospatial` with its own
 default torch/torchvision resolution. See [Geospatial Models

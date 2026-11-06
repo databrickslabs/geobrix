@@ -68,7 +68,7 @@ COGs let the reader fetch only the bytes it needs. To prepare COGs and read wind
 `gtiff_gbx` reads compressed GeoTIFFs without an option. GDAL detects the compression (LZW, DEFLATE, JPEG, JPEG2000 or none).
 
 :::note Coordinate reference systems
-GeoTIFF readers extract the CRS from the GTiff SRS tag and store it as a canonical string in `tile.metadata` and the `tile.crs` field (e.g. `"EPSG:4326"`, `"ESRI:54008"`) — ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS for a plain WKT/WKB clip polygon; an embedded SRID in an EWKT/EWKB polygon takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+GeoTIFF readers extract the CRS from the GTiff SRS tag and store it as a canonical string in `tile.metadata` and the `tile.crs` field (e.g. `"EPSG:4326"`, `"ESRI:54008"`). ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS for a plain WKT/WKB clip polygon; an embedded SRID in an EWKT/EWKB polygon takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
 ## Next Steps

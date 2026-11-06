@@ -14,9 +14,9 @@ standard (shared), and ARM clusters.
 To turn the loaded points into raster products — DSM binning, CHM, and isobands — see the
 [LiDAR / Point-Cloud DSM functions](../api/raster-functions#lidar-dsm).
 
-For an end-to-end walkthrough — reading `.laz`, binning ground and all-return points into
-DTM and DSM rasters, and differencing them into a Canopy Height Model — see the
-[Wireless Coverage example](../notebooks/wireless-coverage).
+For an end-to-end walkthrough, see the
+[Wireless Coverage example](../notebooks/wireless-coverage). It reads `.laz`, bins ground and all-return points into
+DTM and DSM rasters, and differences them into a Canopy Height Model.
 
 :::note Lightweight only
 `lidar_gbx` is a Python DataSource with no heavyweight GDAL/JVM counterpart. Register
@@ -198,8 +198,8 @@ dsm = dsm_bytes.select(
 Serverless:
 
 - **Columnar reads.** Points mode reads each file in vectorized chunks and hands Spark
-  **Arrow record batches** — never one Python object per point — so a full-resolution read
-  (`decimate=1`) avoids per-row conversion overhead that would otherwise stall the session.
+  **Arrow record batches**, never one Python object per point. A full-resolution read
+  (`decimate=1`) therefore avoids per-row conversion overhead that would otherwise stall the session.
   Metadata mode is columnar too.
 - **Bounded per-task memory.** Points are streamed `chunkSize` at a time (default
   `1000000`), so peak memory per task is a single batch — independent of the total file
@@ -210,27 +210,28 @@ Serverless:
   reads every point but emits every N-th — use it for a fast coarse pass, then drop to
   `decimate=1` for the full-resolution product.
 - **Bad nodes are skipped, not fatal.** A 0-byte or unreadable `.las`/`.laz` (for example an
-  empty Entwine Point Tile node from an interrupted download) is skipped with a warning, so
-  one corrupt file cannot fail a distributed read over a whole archive. A LAZ file whose chunk
-  table or LASzip record is implausible or cannot be decoded, or (point formats with GPS time)
-  whose compressed points hold a run of `0xFF` bytes, as erased storage or a failed copy leaves,
-  is set aside as unreadable before it is decoded (an unreadable-file record when `on_error` is
-  `skip` or `quarantine`, a warning and a skip otherwise), instead of ending the worker process.
-  The decoder's stack overflows on such a run, and no error reaches Python. Finding the run reads
-  the compressed points once more, ahead of the decoder. These checks do not cover every kind of
-  damage: other damage inside the compressed points, or a crafted file, can still crash the
+  empty Entwine Point Tile node from an interrupted download) is skipped with a warning.
+  One corrupt file therefore cannot fail a distributed read over a whole archive. The reader sets a LAZ file aside
+  as unreadable before decoding it in two cases. In the first, the chunk table or LASzip record is implausible
+  or cannot be decoded. In the second (point formats with GPS time), the compressed points hold a run of `0xFF`
+  bytes, as erased storage or a failed copy leaves. The decoder's stack overflows on such a run, and no error reaches Python.
+  Setting the file aside avoids ending the worker process. Finding the run reads
+  the compressed points once more, ahead of the decoder.
+  When `on_error` is `skip` or `quarantine`, the reader writes an unreadable-file record. Otherwise it logs a warning and skips the file.
+  These checks do not cover every kind of
+  damage. Other damage inside the compressed points, or a crafted file, can still crash the
   decoder until `lazrs` releases a fix for it.
   When `on_error` is `skip` or `quarantine`, a LAZ file whose header declares more points than
-  its chunk table holds is read up to the points the table holds; any other read of such a file
+  its chunk table holds is read up to the points the table holds. Any other read of such a file
   fails.
 - **Parallelism is per file** — one InputPartition per file. A directory of many tiles
-  parallelizes naturally across executors; a handful of very large files limits parallelism
+  parallelizes naturally across executors. A handful of very large files limits parallelism
   to the file count, so split or tile upstream if you need more executors engaged.
 - **Spark Connect–safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and is
   session-free, so it runs unchanged on Serverless, standard, and ARM clusters.
 
 :::note Coordinate reference systems
-The reader extracts the CRS from the LAS/LAZ header using `parse_crs()` and stores it as a canonical string in the `crs` output column (e.g. `"EPSG:27700"`, `"ESRI:54008"`, or WKT for authority-less CRSes). The `srid` column, where present, holds the numeric SRID — `None` when the CRS has no integer authority code. ESRI and OGC authorities are preserved exactly as read from the header. See [Coordinate reference systems](../api/coordinate-reference-systems) for the SRID-vs-CRS-string model.
+The reader extracts the CRS from the LAS/LAZ header using `parse_crs()`. It stores the CRS as a canonical string in the `crs` output column (e.g. `"EPSG:27700"`, `"ESRI:54008"`, or WKT for authority-less CRSes). The `srid` column, where present, holds the numeric SRID — `None` when the CRS has no integer authority code. ESRI and OGC authorities are preserved exactly as read from the header. See [Coordinate reference systems](../api/coordinate-reference-systems) for the SRID-vs-CRS-string model.
 :::
 
 ## Next Steps

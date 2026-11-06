@@ -5,7 +5,7 @@ title: NASA-NEX GDDP-CMIP6 Downloader
 
 ## NASA-NEX GDDP-CMIP6 Downloader
 
-`NasaNexDownloader` fetches **NASA-NEX GDDP-CMIP6** downscaled climate-projection granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the NetCDF-4 granules into a Unity Catalog Volume.
+`NasaNexDownloader` fetches **NASA-NEX GDDP-CMIP6** downscaled climate-projection granules for any bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API. It stages the NetCDF-4 granules into a Unity Catalog Volume.
 
 NASA-NEX GDDP-CMIP6 provides daily downscaled climate variables (temperature, precipitation, humidity, radiation, …) on a **regular 0.25° global lat/lon grid**. There is one file per climate model, scenario, and year. These are true georeferenced grids, not swaths. They pair with the [NetCDF reader](../readers/netcdf)'s **raster mode** (`netcdf_gbx`).
 
@@ -24,7 +24,7 @@ NASA-NEX GDDP-CMIP6 provides daily downscaled climate variables (temperature, pr
 
 1. **`discover(bbox, temporal=None, variables=("tas",))`** — driver-side STAC search against the `nasa-nex-gddp-cmip6` collection. Returns one row per matching granule: `item_id`, `asset_name`, `item_bbox`, `href`. In this collection the **asset name is the climate-variable id** (`tas`, `pr`, `tasmax`, `hurs`, …), so `variables` selects which variables to stage. A granule spans one model/scenario/year; narrow the set with a `temporal` STAC-style `"start/end"` string.
 
-2. **`download(bbox, out_dir, temporal=None, variables=("tas",), ...)`** — re-runs the STAC search, then fans out the granule fetch as parallel Spark tasks via `StacClient.download()`, saving each file as `{item_id}_{asset_name}.nc` (one file per climate variable per item). Regular-grid granules are fetched whole and existence/size-validated; the AOI clip happens on read. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+2. **`download(bbox, out_dir, temporal=None, variables=("tas",), ...)`** — re-runs the STAC search, then fans out the granule fetch as parallel Spark tasks via `StacClient.download()`. It saves each file as `{item_id}_{asset_name}.nc` (one file per climate variable per item). Regular-grid granules are fetched whole and existence/size-validated; the AOI clip happens on read. Returns a metadata DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
 
 3. **`read(out_dir)`** — loads the staged `.nc` granules through the `netcdf_gbx` reader in **raster mode**: one `(source, tile)` row per grid variable, with the source path preserved so multiple variables stay distinguishable.
 

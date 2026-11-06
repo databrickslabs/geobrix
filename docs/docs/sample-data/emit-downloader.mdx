@@ -5,7 +5,7 @@ title: EMIT Methane Downloader
 
 ## EMIT Methane Downloader
 
-`EmitDownloader` fetches **NASA EMIT (Earth Surface Mineral Dust Source Investigation)** Level-2B methane products for any bounding-box AOI from **NASA's LP DAAC** and stages them into a Unity Catalog Volume.
+`EmitDownloader` fetches **NASA EMIT (Earth Surface Mineral Dust Source Investigation)** Level-2B methane products for any bounding-box AOI from **NASA's LP DAAC**. It stages them into a Unity Catalog Volume.
 
 EMIT is an imaging spectrometer on the International Space Station that resolves methane plumes at 60 m. Two EMIT L2B products are fetched together: **`EMITL2BCH4ENH`** (per-scene CH4 enhancement COGs) and **`EMITL2BCH4PLM`** (per-plume complex products — a COG plus a GeoJSON outline with JPL's emission-rate estimate).
 
@@ -36,7 +36,7 @@ Create an [Earthdata Login](https://urs.earthdata.nasa.gov/) account and token f
 
 1. **`discover(bbox, temporal=None)`** — CMR search (`earthaccess.search_data`) for both `EMITL2BCH4ENH` and `EMITL2BCH4PLM` over the AOI. Each granule's data links are classified into an asset label (`ch4enh`, `plm_cog`, or `plm_geojson`) or skipped. Returns a metadata-only DataFrame: `item_id`, `asset_name`, `href`.
 
-2. **`download(bbox, out_dir, temporal=None, force=False, ...)`** — logs in (`EARTHDATA_TOKEN`), runs `discover()` internally, then fetches each asset driver-side (EMIT/LP DAAC auth mints short-lived per-request credentials that don't fan out like anonymous hrefs, so download is not Spark-distributed). Each asset is validated: the enhancement/plume COGs need a rasterio window read to succeed above a size floor; the plume GeoJSON needs to parse and carry at least one feature. Returns the shared result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
+2. **`download(bbox, out_dir, temporal=None, force=False, ...)`** — logs in (`EARTHDATA_TOKEN`), runs `discover()` internally, then fetches each asset driver-side. EMIT/LP DAAC auth mints short-lived per-request credentials that don't fan out like anonymous hrefs, so download is not Spark-distributed. Each asset is validated. The enhancement/plume COGs need a rasterio window read to succeed above a size floor. The plume GeoJSON needs to parse and carry at least one feature. Returns the shared result DataFrame: `item_id`, `asset_name`, `out_file_path`, `out_file_sz`, `is_out_file_valid`, `last_update`.
 
 3. **Two readers**, because EMIT ships two different product shapes:
    - **`read_enh(out_dir)`** — loads the CH4 enhancement COGs as `raster_gbx` tiles (`(source, tile)` schema).
@@ -114,7 +114,7 @@ Loads the CH4 enhancement COGs (`filterRegex=r".*CH4ENH.*\.tif$"`) via `raster_g
 | `out_dir` | `str` | Root directory written by `download()` |
 | `spark` | `SparkSession \| None` | Active SparkSession. |
 
-Reads each `*CH4PLMMETA*.json` plume-metadata file individually via `geojson_gbx` (per-file schema divergence rules out a single multi-file read), normalizes JPL's raw property names to typed columns, and unions the results. Raises `FileNotFoundError` if no matching files exist under `out_dir`. Output columns:
+Reads each `*CH4PLMMETA*.json` plume-metadata file individually via `geojson_gbx` (per-file schema divergence rules out a single multi-file read). It normalizes JPL's raw property names to typed columns and unions the results. Raises `FileNotFoundError` if no matching files exist under `out_dir`. Output columns:
 
 | Column | Type | Source property |
 |--------|------|------------------|
@@ -157,7 +157,7 @@ download_emit_aoi(
 
 ## Copy-Paste Example
 
-The example below fetches EMIT CH4 enhancement scenes and plume-complex metadata for a Delaware Basin (Permian, TX) AOI, then quantifies each plume against the enhancement raster.
+The example below fetches EMIT CH4 enhancement scenes and plume-complex metadata for a Delaware Basin (Permian, TX) AOI. It then quantifies each plume against the enhancement raster.
 
 ```python
 # The env wheel, then earthaccess as a separate step (the env wheels have no [earthdata] extra):
@@ -248,4 +248,4 @@ clipped.select(
 
 ## Notebook Reference
 
-`EmitDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 03) to confirm and quantify a candidate methane plume at 60 m resolution — cross-checking GeoBrix's clipped-raster enhancement against JPL's reported emission rate — after Sentinel-5P screening and Sentinel-2 detection narrow the search area.
+`EmitDownloader` is used in the [Vapor-Eyes example](../notebooks/vapor-eyes) (notebook 03) to confirm and quantify a candidate methane plume at 60 m resolution. It cross-checks GeoBrix's clipped-raster enhancement against JPL's reported emission rate. This happens after Sentinel-5P screening and Sentinel-2 detection narrow the search area.

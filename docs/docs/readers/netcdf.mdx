@@ -106,7 +106,7 @@ variable raises an error steering you to `mode=vector`.
 Climate reanalysis, forecast, and model-output files commonly have a
 `(time, level, lat, lon)` shape. By default the reader emits one row per
 variable and takes the first (index 0) slice of every non-spatial leading
-dimension, logging a warning for any dimension with more than one slice.
+dimension. It logs a warning for any dimension with more than one slice.
 
 **`dimIndex`** selects a specific slice without expanding the result set:
 
@@ -146,7 +146,7 @@ value as a string.
 
 ### Multi-band stacking (`bandDim`)
 
-`bandDim` stacks a leading dimension's slices as bands in one tile, for
+`bandDim` stacks a leading dimension's slices as bands in one tile. Use it for
 per-pixel cross-slice math (e.g. anomaly detection, temporal differencing)
 that needs all time steps in a single raster.
 
@@ -182,12 +182,12 @@ band), and `bandDescriptions` (GDAL-style descriptions such as
 
 :::note bandDim vs fanout: use the right tool for the scale
 **`bandDim`** is for a modest number of slices you intend to work across together
-in one tile — per-pixel aggregations, temporal differencing, or deriving an index
+in one tile. Examples are per-pixel aggregations, temporal differencing, or deriving an index
 from multiple time steps. Peak decoded RAM ≈ 1 slice, but the full N-band GTiff
 is held in the executor while downstream processes it.
 
-**`fanout`** is memory-safe at scale: each row is one bounded 2-D slice, so any
-number of time steps can be processed in parallel without accumulating a large
+**`fanout`** is memory-safe at scale. Each row is one bounded 2-D slice. Any
+number of time steps can therefore be processed in parallel without accumulating a large
 multi-band buffer per task.
 
 If `bandDim` would produce a tile larger than ~256 MiB of decoded data, the
@@ -201,8 +201,8 @@ reader emits a `UserWarning` and suggests `fanout` instead.
   testFile="docs/tests/python/readers/test_netcdf_gbx_read_examples.py" />
 
 Vector mode emits attribute columns (one per variable) followed by a
-`geom_0` WKB point column and `geom_0_srid` / `geom_0_srid_proj` string columns —
-the same shape as the other lightweight vector readers, so the GeoBrix built-in
+`geom_0` WKB point column and `geom_0_srid` / `geom_0_srid_proj` string columns.
+This is the same shape as the other lightweight vector readers, so the GeoBrix built-in
 `gbx_st_*` functions, native Databricks ST, and H3 binning compose directly. A
 curvilinear/swath cell carries its own lon/lat, so each becomes an exact point;
 no target grid or resampling method is chosen for you.
@@ -231,11 +231,11 @@ array, a variable with a `sample_dimension` attribute counts the observations of
 The latitude and longitude may sit on the profile (or trajectory) dimension or on the observation dimension.
 An index outside the profiles, a missing index, or counts that do not add up to the observations are refused with an error.
 
-Attribute columns take their type from the variable's CF attributes: a time variable
+Attribute columns take their type from the variable's CF attributes. A time variable
 is a `TIMESTAMP` (read as UTC), except an integer count of whole days (`days since …`, a
-midnight base, no `scale_factor` or `add_offset`), which is a `DATE`; and a
+midnight base, no `scale_factor` or `add_offset`), which is a `DATE`. A
 variable that flags `0` and `1` as `flag_meanings = "false true"` is a `BOOLEAN`
-(`NULL` where the file has a fill value) — the types the [`netcdf_gbx` writer](../writers/netcdf.mdx)
+(`NULL` where the file has a fill value). These are the types the [`netcdf_gbx` writer](../writers/netcdf.mdx)
 gives a `TIMESTAMP`, `DATE` or `BOOLEAN` column. Any other variable keeps its numeric type.
 
 ## `netcdf_gbx` writer

@@ -13,7 +13,7 @@ _Since:_ lightweight `file_gbx` **v0.5.0** · _(light-only — no heavyweight ti
 `file_gbx` has two roles:
 
 1. **File lister DataSource** — emits one row per file (path, name, extension, size,
-   modification time). Use it as the first step in a preparation pipeline: list the
+   modification time). Use it as the first step in a preparation pipeline. List the
    files you want to process, then pipe those references into a writer such as `cog_gbx`.
 2. **Shared file-access base** — the Python module that every lightweight reader and
    writer uses internally for FILE / FUSE routing, directory enumeration, and write-mode
@@ -73,8 +73,8 @@ files are included.
 
 ## Typical use: COG preparation
 
-The primary use of `file_gbx` is to feed the `cog_gbx` writer: list the source files,
-then write master COGs — one per source file — for efficient windowed reading later.
+The primary use of `file_gbx` is to feed the `cog_gbx` writer. List the source files,
+then write master COGs (one per source file) for efficient windowed reading later.
 
 <CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
   source="docs/tests/python/readers/cog_gbx_examples.py"
@@ -158,9 +158,9 @@ tier = file_access_tier(spark)
 # Returns: "read_files" (DBR 13.3+), "list_files" (DBR 18+), or "fuse" (always)
 ```
 
-`open_for_read(source, access="auto")` is the read resolver every lightweight reader calls:
-it validates the access mode and enforces the no-gating rule (the size-adaptive routing —
-FILE byte-range stream, FUSE-of-FILE, or staging — runs in the reader layer on top of it).
+`open_for_read(source, access="auto")` is the read resolver every lightweight reader calls.
+It validates the access mode and enforces the no-gating rule. The size-adaptive routing
+(FILE byte-range stream, FUSE-of-FILE, or staging) runs in the reader layer on top of it.
 With `access="auto"` it accepts the best available tier and never errors. Passing
 `access="managed"` or `access="external"` on a FUSE-only runtime raises a clear error:
 

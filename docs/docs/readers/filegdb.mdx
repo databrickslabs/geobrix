@@ -28,8 +28,8 @@ File Geodatabases contain multiple feature classes (layers). `file_gdb_gbx` pres
 All other [vector reader options](./vector#options) (`driverName`, …) are also available.
 
 **Zipped input:** a `.gdb.zip` (or a plain `.zip` wrapping a single `.gdb`) is read
-transparently — GDAL opens it via `/vsizip/`, so just point `.load()` at the archive (or a
-directory of them); no option is required. This is the layout the
+transparently. GDAL opens it via `/vsizip/`, so just point `.load()` at the archive (or a
+directory of them). No option is required. This is the layout the
 [`file_gdb_gbx` writer](../writers/filegdb) produces with `zip=true`.
 
 ## Basic usage

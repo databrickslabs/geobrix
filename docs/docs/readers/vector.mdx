@@ -79,9 +79,9 @@ features = vector_file_read(
 features.show()
 ```
 
-`source_type="auto"` (the default) distinguishes a table from a path: a string starting
-with `/`, matching a URI scheme, or having a known vector file extension is treated as a path;
-a dotted name, an extension-less string, or a non-existent path is treated as a table. Pass
+`source_type="auto"` (the default) distinguishes a table from a path. A string starting
+with `/`, matching a URI scheme, or having a known vector file extension is treated as a path.
+A dotted name, an extension-less string, or a non-existent path is treated as a table. Pass
 `source_type="table"` or `source_type="path"` to bypass the heuristic.
 
 **Auto-order default.** `vector_file_read` auto-orders by the resolved source path before
@@ -102,7 +102,7 @@ features = vector_file_read(
 #### Durable co-location: `CLUSTER BY` + `OPTIMIZE`
 
 Use `layout="cluster"` in `vector_file_write` (or `gbx_file_write`) to declare `CLUSTER BY path`
-in the table DDL. After a bulk insert, run `OPTIMIZE` to materialize the clustering — rows for
+in the table DDL. After a bulk insert, run `OPTIMIZE` to materialize the clustering. Rows for
 the same source land in the same data files, which makes repeated reads and compaction-stable:
 
 ```python

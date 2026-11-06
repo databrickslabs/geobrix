@@ -20,8 +20,8 @@ The **lightweight** `pmtiles_gbx` reader produces a tile pyramid as
 - **`source="archive"`** — read tiles back **out of an existing `.pmtiles`
   archive**, one row per stored tile.
 
-Both sources emit the **same `(z, x, y, bytes)` schema** — which is exactly the
-input schema the [PMTiles writer](../writers/pmtiles) expects — so a read feeds
+Both sources emit the **same `(z, x, y, bytes)` schema**. This is exactly the
+input schema the [PMTiles writer](../writers/pmtiles) expects, so a read feeds
 straight into a write with no reshaping.
 
 :::note Lightweight-only read path
@@ -52,7 +52,7 @@ root
 
 ## `source="raster"` — mosaic pyramid from rasters
 
-Point the reader at a directory of rasters and an area of interest; it enumerates
+Point the reader at a directory of rasters and an area of interest. It enumerates
 the slippy tiles across the zoom range, attaches only the sources that intersect
 each tile, and renders one tile per `(z, x, y)` with `rio-tiler`.
 
@@ -80,7 +80,7 @@ into a `.pmtiles` archive is a direct hand-off:
 | `pixelSelection` | `"first"` | Mosaic pixel-selection method. Only `"first"` is supported in v1; any other value raises. |
 
 An AOI (or `bbox`) that intersects zero tiles for the requested zoom range logs a
-warning and returns an **empty** DataFrame with the standard schema — not an error.
+warning. The result is an **empty** DataFrame with the standard schema, not an error.
 
 ## `source="archive"` — read an existing `.pmtiles`
 

@@ -11,9 +11,9 @@ object segmentation via [segment-geospatial](https://samgeo.gishub.org/) (SamGeo
 Unity Catalog model registration and GPU Model Serving on top.
 
 `gbx.models` is a **Python API**, not a SQL function family — there is no `gbx_*` SQL
-surface here, and no Scala/heavyweight tier. It is **light-only**: importing
+surface here, and no Scala/heavyweight tier. It is **light-only**. Importing
 `databricks.labs.gbx.models` (or any of its submodules) never requires `torch` or
-`segment-geospatial` — those import lazily, only when a model is actually loaded or served,
+`segment-geospatial`. Those import lazily, only when a model is actually loaded or served,
 so the base light wheel stays importable with no GPU dependencies installed.
 
 ## Three tenets
@@ -23,7 +23,7 @@ so the base light wheel stays importable with no GPU dependencies installed.
 1. **GeoBrix owns single- and multi-GPU execution.** `segment_raster` chips a raster,
    fans inference across 1..N GPU device slots itself (via `pyrx.core.gpu_pool.gpu_pool_map`),
    and stitches the per-chip results back into whole-object polygons. With the default
-   GeoSAM backend, each device slot gets its own model handle — bound to that device and
+   GeoSAM backend, each device slot gets its own model handle. The handle is bound to that device and
    cached across the chips it processes, never a single handle shared across devices. A
    caller passes `gpus="all"` (or an explicit device count) and gets one call — not a
    hand-rolled device loop per notebook.
@@ -31,8 +31,8 @@ so the base light wheel stays importable with no GPU dependencies installed.
    GeoBrix, not in notebook cells. A notebook that segments a raster is, in essence, one
    call to `segment_raster(...)`.
 3. **The served model imports GeoBrix.** When a GeoSAM model is registered for serving,
-   its `pip_requirements` include the GeoBrix light wheel alongside `segment-geospatial` —
-   the deployed model's runtime environment carries GeoBrix, not just the raw
+   its `pip_requirements` include the GeoBrix light wheel alongside `segment-geospatial`.
+   The deployed model's runtime environment carries GeoBrix, not just the raw
    segmentation backend. See [Serving](./serving).
 
 ## The model lifecycle
@@ -42,15 +42,15 @@ so the base light wheel stays importable with no GPU dependencies installed.
 ### Load
 
 `load_geosam(...)` builds a `GeoSamHandle` wrapping a SamGeo backend in automatic-mask
-mode. torch and `segment-geospatial` import lazily inside this call — a caller without
+mode. torch and `segment-geospatial` import lazily inside this call. A caller without
 those installed gets a clear `ModelDepsMissing` error with an install hint, rather than a
 raw `ImportError` at package-import time.
 
 ### Run — single raster or distributed
 
-`segment_raster(tile_or_path, ...)` is the single call a notebook makes: it chips the
-input into an overlapping grid, runs the segmenter across one or many GPUs, vectorizes
-each chip's label mask into georeferenced polygons, and merges fragments that straddle a
+`segment_raster(tile_or_path, ...)` is the single call a notebook makes. It chips the
+input into an overlapping grid and runs the segmenter across one or many GPUs. It then vectorizes
+each chip's label mask into georeferenced polygons and merges fragments that straddle a
 tile seam into one polygon per real-world object. See [GeoSAM](./geosam) for the full
 parameter reference.
 
@@ -68,7 +68,7 @@ parameter reference.
   The torch pair is the CUDA-12 one of that runtime: `%pip install "torch==2.9.0" "torchvision==0.24.0" "segment-geospatial"
   "opencv-python-headless==4.11.0.86"`.
 - **Off Databricks** — the plain wheel's **`geobrix[models]`** extra adds `segment-geospatial`, which
-  pulls its own default torch/torchvision/segment-anything stack; the resolved torch build may not
+  pulls its own default torch/torchvision/segment-anything stack. The resolved torch build may not
   match a specific GPU's CUDA version.
 
 Both are CPU-importable at the package level — `import databricks.labs.gbx.models`

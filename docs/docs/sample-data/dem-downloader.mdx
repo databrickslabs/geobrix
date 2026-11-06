@@ -5,20 +5,20 @@ title: 3DEP Downloader (DEM)
 
 ## 3DEP Downloader (DEM)
 
-`DemDownloader` fetches **USGS 3DEP (3D Elevation Program)** seamless elevation for any US bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API and stages the DEM GeoTIFFs into a Unity Catalog Volume.
+`DemDownloader` fetches **USGS 3DEP (3D Elevation Program)** seamless elevation for any US bounding-box AOI via the [Microsoft Planetary Computer](https://planetarycomputer.microsoft.com/) STAC API. It stages the DEM GeoTIFFs into a Unity Catalog Volume.
 
-3DEP provides bare-earth digital elevation over the United States as a seamless mosaic, offered at multiple ground resolutions — typically **10 m** (1/3 arc-second) and **30 m** (1 arc-second). The downloader selects a resolution by **ground sample distance (gsd)** rather than by year.
+3DEP provides bare-earth digital elevation over the United States as a seamless mosaic. It is offered at multiple ground resolutions, typically **10 m** (1/3 arc-second) and **30 m** (1 arc-second). The downloader selects a resolution by **ground sample distance (gsd)** rather than by year.
 
 ### Finer resolution: lidar-derived DTM
 
-For a finer bare-earth product, `DemDownloader.lidar_dtm()` targets the **`3dep-lidar-dtm`** collection instead of the seamless mosaic. On the Planetary Computer this is a **2 m** grid across the US today (1 m where a survey provides it). It selects by `resolution` exactly like the seamless downloader (`"finest"` or an int in metres) — even though these items carry no `gsd` property; the resolution is parsed from the item id (`…-dtm-<N>m-…`).
+For a finer bare-earth product, `DemDownloader.lidar_dtm()` targets the **`3dep-lidar-dtm`** collection instead of the seamless mosaic. On the Planetary Computer this is a **2 m** grid across the US today (1 m where a survey provides it). It selects by `resolution` exactly like the seamless downloader (`"finest"` or an int in metres), even though these items carry no `gsd` property. The resolution is parsed from the item id (`…-dtm-<N>m-…`).
 
 ```python
 dtm = DemDownloader.lidar_dtm()
 dtm.download(SF_BBOX, VOLUME, resolution="finest")   # 2 m over San Francisco
 ```
 
-For **true 1 m** (or finer, e.g. to match H3 resolution 13–15), the raster catalogs are not enough — derive elevation from the raw LiDAR point cloud via `LidarDownloader` + `rst_binpoints_agg`. See the [LiDAR reader](../readers/lidar) and the [Wireless Coverage](../notebooks/wireless-coverage) notebook series.
+For **true 1 m** (or finer, e.g. to match H3 resolution 13–15), the raster catalogs are not enough. Derive elevation from the raw LiDAR point cloud via `LidarDownloader` + `rst_binpoints_agg`. See the [LiDAR reader](../readers/lidar) and the [Wireless Coverage](../notebooks/wireless-coverage) notebook series.
 
 :::note Prerequisites
 - GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)
@@ -111,7 +111,7 @@ download_dem_aoi(
 
 ## Copy-Paste Example
 
-The example below downloads the finest-resolution 3DEP DEM for a San Francisco AOI into a UC Volume, then reads the tiles into a Spark DataFrame for terrain analysis.
+The example below downloads the finest-resolution 3DEP DEM for a San Francisco AOI into a UC Volume. It then reads the tiles into a Spark DataFrame for terrain analysis.
 
 ```python
 # Install dependencies if not already present

@@ -14,10 +14,10 @@ See [Ingestion Pipelines](../ingestion/overview): a Lakeflow connector, Auto Loa
 GeoBrix ships native Python DataSource V2 readers. They need no JAR.
 
 :::tip Distributed readers, virtual tiles by default
-These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers): work is
-partitioned and read in parallel across the cluster — vector readers read each file in its own task
-and stream it in batches of `chunkSize` features (memory follows `chunkSize`, not file size), raster
-readers split large files by `sizeInMB` — returning a distributed DataFrame with no driver-side
+These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers). Work is
+partitioned and read in parallel across the cluster. Vector readers read each file in its own task
+and stream it in batches of `chunkSize` features (memory follows `chunkSize`, not file size). Raster
+readers split large files by `sizeInMB`. The result is a distributed DataFrame with no driver-side
 `collect`. Raster readers load **virtual tiles** by default — bytes-free `(path, window)` refs that read
 pixels lazily, so a multi-gigabyte raster fans into tiles without OOM (`.option("virtualTiles", "false")`
 for materialized reads). See **[Virtual Tiles](../api/virtual-tiles)**.
@@ -37,9 +37,9 @@ The call registers all readers and writers. There is no call that registers only
 :::
 
 :::tip On Serverless, read from a FILE-column table
-The **Delta-scan FILE-column-table read path** is the recommended read path on Serverless: a tile index read
+The **Delta-scan FILE-column-table read path** is the recommended read path on Serverless. A tile index read
 with `read_tiles_table` (raster) or `vector_file_read(table)` (vector) scans the Delta table and resolves FILE references without
-per-tile opens — measured at **~1.8–2 s** for 1,000 raster tiles or 100k vector features on both
+per-tile opens. It measured **~1.8–2 s** for 1,000 raster tiles or 100k vector features on both
 Serverless and classic clusters.
 
 The `raster_gbx` **directory DataSource path** incurs a per-tile open and is **~16–17× slower on Serverless**
@@ -80,8 +80,8 @@ reader pages for the OGR `(geom_0, geom_0_srid, geom_0_srid_proj, …attributes)
 :::note `.limit()` and filters are not pushed into the reader — use the function layer for a bounded scan
 The lightweight DataSource readers **enumerate the entire source at planning time**, regardless of a
 downstream `.limit(N)`, `WHERE`, or column projection. Spark 4.0.0's Python DataSource API exposes no
-limit/filter **pushdown** hook, so `spark.read.format("raster_gbx").load(dir).limit(10)` still lists —
-and plans a partition for — *every* file under `dir`, then discards all but 10 rows afterward. The
+limit/filter **pushdown** hook. A call such as `spark.read.format("raster_gbx").load(dir).limit(10)` therefore still lists,
+and plans a partition for, *every* file under `dir`. It then discards all but 10 rows afterward. The
 listing is a fast, stat-free directory walk, so this is cheap for typical directories; on a very large
 directory, every file is still planned.
 
@@ -99,13 +99,13 @@ See **[GBX Common Functions](../common-functions)**.
 
 ### FILE-column-table reads {#file-column-table-reads}
 
-Both the raster and vector light-tier readers can read directly from a FILE-column Delta table
-(a table whose rows carry FILE references to geospatial files) in addition to Volume paths.
+Both the raster and vector lightweight readers can read directly from a FILE-column Delta table
+in addition to Volume paths. Such a table has rows that carry FILE references to geospatial files.
 Both auto-order by the resolved source path by default. The ordering effect differs by format:
 
-- **Raster (`read_tiles_table`, `manifest`)** — a single GeoTIFF can produce many tile rows;
-  auto-ordering puts those tiles next to each other (in a `manifest` read, in adjacent partitions;
-  in `read_tiles_table`, inside each task), so a worker opens the source file once for the windows
+- **Raster (`read_tiles_table`, `manifest`)** — a single GeoTIFF can produce many tile rows.
+  Auto-ordering puts those tiles next to each other (in a `manifest` read, in adjacent partitions;
+  in `read_tiles_table`, inside each task). A worker therefore opens the source file once for the windows
   it reads, amortizing the open cost. See [Raster Reader → tile index auto-order](./raster#tiles-table-auto-order).
 - **Vector (`vector_file_read`)** — one vector file maps to exactly one table row (one FILE
   ref). Every source opens exactly once regardless of row order, so auto-ordering is a

@@ -25,18 +25,16 @@ import re
 from typing import Any
 
 import numpy as np
-from shapely import centroid as _centroid
 from shapely import contains_xy as _contains_xy
 from shapely import equals_exact as _equals_exact
 from shapely import get_coordinates as _get_coordinates
 from shapely import get_dimensions as _get_dimensions
 from shapely import get_srid as _get_srid
 from shapely import get_type_id as _get_type_id
-from shapely import get_x as _get_x
-from shapely import get_y as _get_y
 from shapely import intersection as _intersection
 from shapely import is_empty as _is_empty
 from shapely import polygons as _polygons
+from shapely import prepare as _prepare
 from shapely import set_srid as _set_srid
 from shapely import to_wkb as _to_wkb
 from shapely import union_all as _union_all
@@ -760,7 +758,7 @@ def _origin_valid(ids: np.ndarray, resolution: int, strict: bool = False):
     ndigits = 4 + 2 * n_positions
     x, y, valid = _xy_valid_vec(ab, resolution)
     layout = (ab >= 10 ** (ndigits - 1)) & (ab < 10**ndigits)
-    for i in np.flatnonzero(~layout):
+    for i in () if layout.all() else np.flatnonzero(~layout):
         c = int(ids[i])
         valid[i] = is_valid(c)
         if valid[i]:
@@ -788,61 +786,130 @@ def polyfill(geometry, resolution: int) -> list:
     Centroid-membership BFS flood-fill seeded from every vertex coordinate plus
     the geometry centroid. Returns Long cell ids (the ``*_str`` wrapper formats).
 
-    The flood runs one frontier at a time: the cells of a frontier are tested together (the centroids and the
+    The flood runs one frontier at a time: the cells of a frontier are tested together (the centres and the
     ``contains`` test as array calls), and the neighbours of the cells that pass form the next frontier. A frontier
     keeps the first occurrence of each cell in queue order, which is exactly the order a one-cell-at-a-time queue
     visits them, so the ids come out in the same order as :func:`_polyfill_scalar`.
     """
-    if geometry is None or geometry.is_empty:
-        return []
-    if resolution == -1:
-        return _polyfill_scalar(geometry, resolution)
+    return _polyfill_walks([geometry], resolution)[0]
 
-    centroid = geometry.centroid
-    seeds = np.vstack([_seed_coords_array(geometry), [[centroid.x, centroid.y]]])
-    if not np.isfinite(seeds).all():
-        raise ValueError("Non-finite (NaN or infinite) coordinates are not supported.")
-    frontier = _point_to_cell_id_core(seeds[:, 0], seeds[:, 1], resolution).astype(
-        np.int64
-    )
+
+def _polyfill_walks(geometries, resolution: int, prepare: bool = False) -> list:
+    """:func:`polyfill` of each geometry, floods run side by side: at every step the frontiers of all the floods go
+    through one origin/validity pass, one centre computation and one neighbour encode (array calls whose fixed cost
+    is paid once, not once per flood), while each flood keeps its own visited set, its own ``contains`` test and
+    its own order, so each result is exactly what :func:`polyfill` of that geometry alone returns.
+
+    A cell's centre is its south-west corner + half an edge: the square's centroid, which GEOS computes to those
+    same floats (checked over millions of cells), so the squares are not built to take it. ``prepare`` prepares the
+    geometries for the ``contains`` test (the caller's own temporaries only).
+    """
+    outs = [[] for _ in geometries]
+    live = [i for i, g in enumerate(geometries) if g is not None and not g.is_empty]
+    if not live:
+        return outs
+    if resolution == -1:
+        for i in live:
+            outs[i] = _polyfill_scalar(geometries[i], resolution)
+        return outs
+
+    fronts = _flood_seeds([geometries[i] for i in live], resolution)
+    if prepare:
+        for i in live:
+            _prepare(geometries[i])
+
     edge = get_edge_size(resolution)
-    visited: set = set()
-    out: list = []
-    while frontier.size:
-        _, first = np.unique(frontier, return_index=True)
-        first.sort()  # first occurrences, in queue order
-        frontier = frontier[first]
-        fresh = np.fromiter(
-            (c not in visited for c in frontier.tolist()),
-            dtype=bool,
-            count=frontier.size,
-        )
-        frontier = frontier[fresh]
-        visited.update(frontier.tolist())
+    half = edge / 2.0
+    # the offsets of a cell's k_loop(., 1), in its order: the four corners, then left, right, up, down
+    dx = np.array([-1, -1, 1, 1, -1, 1, 0, 0], dtype=np.int64) * edge
+    dy = np.array([-1, 1, 1, -1, 0, 0, 1, -1], dtype=np.int64) * edge
+    visited = [set() for _ in live]
+    while any(fronts):
+        deduped = []
+        for f, seen in zip(fronts, visited):
+            # the first occurrence of each cell, in queue order, that is not already visited
+            f = [c for c in dict.fromkeys(f) if c not in seen]
+            seen.update(f)
+            deduped.append(f)
+        counts = [len(f) for f in deduped]
+        if not any(counts):
+            break
+        frontier = np.array([c for f in deduped for c in f], dtype=np.int64)
         # out-of-GB / malformed cells (e.g. a raster reprojected to 27700 outside the BNG envelope) have no
         # geometry to test or walk: the fill yields nothing for them
         try:
             x, y, valid = _origin_valid(frontier, resolution, strict=True)
         except _ForeignResolution:
-            return _polyfill_scalar(geometry, resolution)
-        frontier, x, y = frontier[valid], x[valid], y[valid]
+            return _polyfill_walks_scalar(geometries, live, resolution, outs)
+        if not valid.all():
+            counts = _counts_of(valid, counts)
+            frontier, x, y = frontier[valid], x[valid], y[valid]
         if not frontier.size:
             break
-        centres = _centroid(_cell_polygons(x, y, edge))
-        inside = _contains_xy(geometry, _get_x(centres), _get_y(centres))
-        ids, x, y = frontier[inside], x[inside], y[inside]
-        out.extend(ids.tolist())
-        # the cell's k_loop(., 1), in its order: the four corners, then left, right, up, down
-        e = np.stack(
-            [x - edge, x - edge, x + edge, x + edge, x - edge, x + edge, x, x], axis=1
-        )
-        n = np.stack(
-            [y - edge, y + edge, y + edge, y - edge, y, y, y + edge, y - edge], axis=1
-        )
-        frontier = _point_to_cell_id_core(
-            e.ravel().astype(np.float64), n.ravel().astype(np.float64), resolution
-        ).astype(np.int64)
+        cx, cy = x + half, y + half
+        inside = np.empty(frontier.size, dtype=bool)
+        pos = 0
+        for j, n in zip(live, counts):
+            if n:
+                inside[pos : pos + n] = _contains_xy(
+                    geometries[j], cx[pos : pos + n], cy[pos : pos + n]
+                )
+            pos += n
+        found = frontier[inside].tolist()
+        counts = _counts_of(inside, counts)
+        pos = 0
+        for j, n in zip(live, counts):
+            outs[j].extend(found[pos : pos + n])
+            pos += n
+        if not found:
+            break
+        x, y = x[inside], y[inside]
+        nxt = _point_to_cell_id_core(
+            (x[:, None] + dx).ravel().astype(np.float64),
+            (y[:, None] + dy).ravel().astype(np.float64),
+            resolution,
+        ).tolist()
+        fronts, pos = [], 0
+        for n in counts:
+            fronts.append(nxt[pos * 8 : (pos + n) * 8])
+            pos += n
+    return outs
+
+
+def _flood_seeds(geometries, resolution: int) -> list:
+    """The seed cell ids of each geometry's flood (every vertex, then the centroid), as lists, from one encoder
+    call for all of them."""
+    seed_cols = []
+    for g in geometries:
+        centroid = g.centroid
+        seeds = np.vstack([_seed_coords_array(g), [[centroid.x, centroid.y]]])
+        if not np.isfinite(seeds).all():
+            raise ValueError(
+                "Non-finite (NaN or infinite) coordinates are not supported."
+            )
+        seed_cols.append(seeds)
+    all_seeds = np.vstack(seed_cols)
+    ids = _point_to_cell_id_core(all_seeds[:, 0], all_seeds[:, 1], resolution).tolist()
+    out, pos = [], 0
+    for c in seed_cols:
+        out.append(ids[pos : pos + len(c)])
+        pos += len(c)
     return out
+
+
+def _counts_of(mask: np.ndarray, counts: list) -> list:
+    """How many of each consecutive segment (of the given lengths) of ``mask`` are set."""
+    out, pos = [], 0
+    for n in counts:
+        out.append(int(mask[pos : pos + n].sum()))
+        pos += n
+    return out
+
+
+def _polyfill_walks_scalar(geometries, live, resolution: int, outs) -> list:
+    for i in live:
+        outs[i] = _polyfill_scalar(geometries[i], resolution)
+    return outs
 
 
 def polyfill_str(geom, resolution) -> list:
@@ -965,8 +1032,12 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
     else:
         border_geom = polygonal.boundary.buffer(radius * 1.01).simplify(0.01 * radius)
 
-    core_set = set(polyfill(carved, resolution))
-    border = [c for c in polyfill(border_geom, resolution) if c not in core_set]
+    # the carved and the border geometry flood side by side (see :func:`_polyfill_walks`)
+    carved_cells, border_cells = _polyfill_walks(
+        [carved, border_geom], resolution, prepare=True
+    )
+    core_set = set(carved_cells)
+    border = [c for c in border_cells if c not in core_set]
 
     # The cells' squares are made in one array call and clipped in one, where the walk used to build and clip
     # one cell at a time. The chips come out in the same order: core cells (set order), then border cells.
@@ -1006,11 +1077,14 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
 
     # Match heavy's dimension filter: a Polygon may clip into a MultiPolygon,
     # and a MultiPolygon into a Polygon. Boundary-only points/lines still drop.
-    return [
-        (cell, core, chip)
-        for (cell, core, chip) in chips
-        if chip is None or _get_dimensions(chip) == input_dimension
-    ]
+    has = [i for i, ch in enumerate(chips) if ch[2] is not None]
+    if not has:
+        return chips
+    geoms = np.empty(len(has), dtype=object)
+    for j, i in enumerate(has):
+        geoms[j] = chips[i][2]
+    dropped = {i for i, d in zip(has, _get_dimensions(geoms)) if d != input_dimension}
+    return [ch for i, ch in enumerate(chips) if i not in dropped]
 
 
 def _cells_as_polygons(cells: list, resolution: int) -> np.ndarray:
@@ -1136,46 +1210,45 @@ def _xy_valid_vec(cell_ids: np.ndarray, resolution: int):
     n_positions = abs(resolution) if resolution >= -1 else abs(resolution) - 1
     ndigits = 4 + 2 * n_positions
 
-    def digit(pos):
-        """Extract decimal digit at ``pos`` (0=MSB) from every cell id."""
-        p = ndigits - 1 - pos  # power of 10 for that position
-        return (cell_ids // (10**p)) % 10
+    def field(first, count):
+        """The decimal digits ``[first, first + count)`` (0 = MSB) of every id, as a number: the same value as
+        building it digit by digit, since a floor-division by a power of ten composes.
+        """
+        return (cell_ids // (10 ** (ndigits - first - count))) % (10**count)
 
     k = (ndigits - 6) // 2
     edge = get_edge_size(resolution)
 
     # Easting 100km letter index: digits[1:3] (called y_letter in is_valid).
-    east_100km = digit(1) * 10 + digit(2)
+    east_100km = field(1, 2)
     # Northing 100km letter index: digits[3:5] (called x_letter in is_valid).
-    north_100km = digit(3) * 10 + digit(4)
+    north_100km = field(3, 2)
 
-    quadrant = digit(ndigits - 1)
-    edge_adj = np.where(quadrant > 0, 2 * edge, edge)
-
+    quadrant = field(ndigits - 1, 1)
     # Easting value (reproduces get_x): east_100km base + digits[5:5+k].
-    east_base = east_100km
-    for i in range(k):
-        east_base = east_base * 10 + digit(5 + i)
-    x_offset = np.where((quadrant == 3) | (quadrant == 4), edge, 0)
-    easting = east_base * edge_adj + x_offset
-
+    east_base = east_100km * 10**k + field(5, k) if k else east_100km
     # Northing value (reproduces get_y): north_100km base + digits[5+k:5+2k].
-    north_base = north_100km
-    for i in range(k):
-        north_base = north_base * 10 + digit(5 + k + i)
-    y_offset = np.where((quadrant == 2) | (quadrant == 3), edge, 0)
-    northing = north_base * edge_adj + y_offset
+    north_base = north_100km * 10**k + field(5 + k, k) if k else north_100km
+    if quadrant.any():
+        edge_adj = np.where(quadrant > 0, 2 * edge, edge)
+        x_offset = np.where((quadrant == 3) | (quadrant == 4), edge, 0)
+        y_offset = np.where((quadrant == 2) | (quadrant == 3), edge, 0)
+        easting = east_base * edge_adj + x_offset
+        northing = north_base * edge_adj + y_offset
+    else:  # every id is a whole cell of its resolution (what the encoder makes above resolution 0)
+        easting = east_base * edge
+        northing = north_base * edge
 
     # Reproduces is_valid bounds check:
     #   0 <= x (=easting=get_x) <= 700000
     #   0 <= y (=northing=get_y) <= 1300000
     #   x_letter (north_100km) < len(LETTER_MAP) = 14
     #   y_letter (east_100km)  < len(LETTER_MAP[0]) = 8
+    # (read as unsigned, a negative value is past either bound: one test for "0 <= v <= bound"; the letter
+    # indexes are digit fields, never negative)
     valid = (
-        (easting >= 0)
-        & (easting <= 700000)
-        & (northing >= 0)
-        & (northing <= 1300000)
+        (easting.view(np.uint64) <= 700000)
+        & (northing.view(np.uint64) <= 1300000)
         & (north_100km < len(LETTER_MAP))
         & (east_100km < len(LETTER_MAP[0]))
     )

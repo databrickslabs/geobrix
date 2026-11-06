@@ -210,6 +210,50 @@ def test_polyfill_batched_matches_cell_by_cell_in_order():
             )
 
 
+@pytest.mark.parametrize("res", [2, 3, -4])
+def test_polyfill_walks_side_by_side_match_the_one_cell_walk(res):
+    """Floods run together (as tessellate's carved and border geometries do) give, each, the one-cell walk's list:
+    their frontiers share the array calls, but not a visited set or an order. An empty geometry and a ``None`` in the
+    list give ``[]`` and cost the others nothing."""
+    geoms = [g for g in _geoms() if g.bounds[2] - g.bounds[0] < 9000][:6]
+    walks = [None, Polygon(), *geoms, box(530000, 180000, 531500, 181500)]
+    got = _bng._polyfill_walks(walks, res)
+    want = [
+        [] if g is None or g.is_empty else _bng._polyfill_scalar(g, res) for g in walks
+    ]
+    assert got == want
+    assert any(want)
+
+
+def test_polyfill_walks_seed_valid_at_another_resolution():
+    far = (-1087613.8209951958, 1011086.41892763)
+    seed = _bng.point_to_cell_id(*far, 3)
+    _, _, x, y = _bng._cell_origin(seed)
+    foreign = MultiPoint([far, (x + 5000, y + 5000)])
+    ordinary = box(530000, 180000, 531500, 181500)
+    got = _bng._polyfill_walks([ordinary, foreign], 3)
+    assert got == [_bng._polyfill_scalar(g, 3) for g in (ordinary, foreign)]
+
+
+def test_xy_valid_vec_matches_the_scalar_functions():
+    """Origins and validity of Long ids as one array pass, for every resolution that follows the digit layout, with
+    quadrant cells, off-grid cells, negative ids and ids that are not a cell at all."""
+    rng = random.Random(12)
+    for res in (1, 2, 3, 4, 5, 6, -2, -3, -4, -5, -6):
+        ids = [
+            _bng.point_to_cell_id(rng.uniform(-3e5, 1e6), rng.uniform(-3e5, 1.6e6), res)
+            for _ in range(150)
+        ]
+        ids += [-c for c in ids[:30]]
+        ndigits = 4 + 2 * (abs(res) if res >= -1 else abs(res) - 1)
+        ids = [c for c in ids if 10 ** (ndigits - 1) <= abs(c) < 10**ndigits]
+        x, y, valid = _bng._xy_valid_vec(np.abs(np.array(ids, dtype=np.int64)), res)
+        for i, c in enumerate(ids):
+            assert bool(valid[i]) == _bng.is_valid(c), (res, c)
+            if valid[i]:
+                assert (int(x[i]), int(y[i])) == _bng._cell_origin(c)[2:], (res, c)
+
+
 def test_polyfill_500km_is_the_one_cell_walk(monkeypatch):
     """The degenerate 500km ids do not follow the digit layout, so that resolution IS the scalar walk (a parity
     assertion against itself would pass whatever it did)."""

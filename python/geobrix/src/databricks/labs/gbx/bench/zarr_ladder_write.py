@@ -431,9 +431,13 @@ def _write_call(
 ):
     """One ``gbx_zarr_write`` of ``kind`` (``managed`` or ``plain``) with its steps timed; returns ``(wall, steps)``.
     ``cells``: the source is the table of cells (``dim_cols``), not blocks."""
-    from databricks.labs.gbx.zarr import gbx_zarr_write
+    from databricks.labs.gbx.zarr import _write, gbx_zarr_write
 
     ph = _phases(kind == "plain")
+    real_trace, _write._TRACE = (
+        _write._TRACE,
+        True,
+    )  # every pack-stage task reports its start and end
     kw: dict = {}
     if mode == "create":
         kw["chunks"] = dict(zip(_DIMS, g.fam.chunks))
@@ -455,8 +459,40 @@ def _write_call(
         gbx_zarr_write(source, target, mode=mode, spark=spark, **kw)
         wall = time.perf_counter() - t
     finally:
+        _write._TRACE = real_trace
         ph.restore()
-    return wall, {k: round(v, 3) for k, v in ph.t.items()}
+    steps = {k: round(v, 3) for k, v in ph.t.items()}
+    steps.update(_task_times(ph.traces))
+    return wall, steps
+
+
+def _task_note(ph: dict) -> str:
+    if "files: task span s" not in ph:
+        return ""
+    return (
+        f" ({int(ph.get('files: data tasks', 0))} tasks: span {ph['files: task span s']:.1f} s, median "
+        f"{ph['files: task median s']:.1f} s, max {ph['files: task max s']:.1f} s, busy {ph['files: task busy s']:.0f} s)"
+    )
+
+
+def _task_times(traces: list) -> dict:
+    """What the pack-stage tasks of one write took, from their own clocks: ``files: task span s`` (first start to last
+    end: the stage), ``files: task median s`` / ``files: task max s`` (one task's wall) and ``files: task busy s``
+    (the sum). A stage that is many short tasks has a busy time near the span times the slots; one task per shard of
+    a small store shows in the median, the stage's width in the span against the busy time.
+    """
+    runs = [(t["start"], t["end"]) for t in traces if "start" in t and "end" in t]
+    if not runs:
+        return {}
+    spans = sorted(b - a for a, b in runs)
+    return {
+        "files: task span s": round(
+            max(b for _, b in runs) - min(a for a, _ in runs), 3
+        ),
+        "files: task median s": round(spans[len(spans) // 2], 3),
+        "files: task max s": round(spans[-1], 3),
+        "files: task busy s": round(sum(spans), 3),
+    }
 
 
 def _agg(spark, target: str):
@@ -565,6 +601,7 @@ def run_writes(  # noqa: C901
             "check": "",
             "extra": [],
             "pre": [],
+            "task": [],
         }
         for c in want
     }
@@ -610,6 +647,9 @@ def run_writes(  # noqa: C901
                 r["walls"].append(wall)
                 r["steps"].append(_steps(kind, wall, ph))
                 r["tasks"].append(int(ph.get(tasks_key, 0)))
+                r["task"].append(
+                    {k: v for k, v in ph.items() if k.startswith("files: task ")}
+                )
                 r["packed"].append(ph.get("files: packed"))
                 r["extra"].append(
                     zl.disk_bytes(out_path) if os.path.exists(out_path) else 0
@@ -643,7 +683,7 @@ def run_writes(  # noqa: C901
                             )
                     note(
                         c1,
-                        f"managed create {wall:.2f} s, files {ph.get('files', 0):.2f} s",
+                        f"managed create {wall:.2f} s, files {ph.get('files', 0):.2f} s{_task_note(ph)}",
                     )
                 if {c2, c5} & mine:
                     wall, ph = _write_call(
@@ -657,7 +697,7 @@ def run_writes(  # noqa: C901
                             )
                     note(
                         c2,
-                        f"plain create {wall:.2f} s, files {ph.get('files', 0):.2f} s",
+                        f"plain create {wall:.2f} s, files {ph.get('files', 0):.2f} s{_task_note(ph)}",
                     )
                 if {c4, c5} & mine and g.hours >= 2:
                     dayf = source_table(spark, store, g, hours=day, shift=g.hours)
@@ -818,6 +858,10 @@ def _metrics(case, g, cfg, r, prep, err, failed) -> dict:
         "wall_s": round(wall, 3),
         "steps_s": steps,
         "tasks": int(statistics.median(r["tasks"])) if r["tasks"] else 0,
+        "task_times_s": {
+            k: _med([t.get(k) for t in r["task"]])
+            for k in (r["task"][0] if r["task"] else {})
+        },
         "packed_no_shuffle": r["packed"][0],
         "read_transform_s": (
             _med([p["read_s"] for p in prep]) if not is_append else None

@@ -64,6 +64,9 @@ class CellsArgs:
     and the layout a new store's arrays get."""
 
     coords: dict | None = None
+    complete: bool = (
+        False  # coords fix every label and every unit has cells: skip the survey
+    )
     chunks: object = "balanced"
     shards: object = None
     codecs: object = None
@@ -790,11 +793,13 @@ def prepare(
     for g in plan_groups:
         _check_budget(g, budget)
     # the units the cells fall in: every unit of a table that fills its grid, else one pass
-    full = (
-        mode == "create"
-        and rows is not None
-        and not coords
-        and rows == int(np.prod([len(axes[d]) for d in dims], dtype=np.int64))
+    full = mode == "create" and (
+        (args.complete and set(coords) == set(dims))
+        or (
+            rows is not None
+            and not coords
+            and rows == int(np.prod([len(axes[d]) for d in dims], dtype=np.int64))
+        )
     )
     if full:
         keys = [np.arange(int(np.prod(g.nu, dtype=np.int64))) for g in plan_groups]

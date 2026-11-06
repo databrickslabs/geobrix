@@ -148,7 +148,8 @@ _TIME_ATTRS = ("units", "calendar")
 _DEFAULT_PARTITIONS = 64  # when spark.sql.shuffle.partitions is "auto" or unreadable
 _CHANGED_INPUT_FIX = (
     "the input changed between planning and writing; materialize it as a table first "
-    "(write it to Delta, then pass spark.table(...))"
+    "(write it to Delta, then pass spark.table(...)). For a table of cells written with "
+    "complete=True, a storage unit without any cell ends here too: drop complete=True"
 )
 
 # Test hooks, never set in production. _FAULT = (array, chunk key): the task that encodes
@@ -1532,7 +1533,7 @@ def _tile_input(data, dim_cols):
     return None
 
 
-def _cells_args(tiles, mode, coords, chunks, shards, codecs):
+def _cells_args(tiles, mode, coords, chunks, shards, codecs, complete=False):
     """The cells write's layout arguments; ``coords`` apply to a create of cells only."""
     if coords is not None and (tiles is None or tiles[0] is not None):
         raise ValueError(
@@ -1547,7 +1548,7 @@ def _cells_args(tiles, mode, coords, chunks, shards, codecs):
     if tiles is None or tiles[0] is not None:
         return None
     return _write_cells.CellsArgs(
-        coords=coords, chunks=chunks, shards=shards, codecs=codecs
+        coords=coords, chunks=chunks, shards=shards, codecs=codecs, complete=complete
     )
 
 
@@ -3232,10 +3233,11 @@ def _plain_write(
     append_dim,
     dim_cols,
     coords,
-    chunks,
-    shards,
-    codecs,
-    spark,
+    complete=False,
+    chunks=None,
+    shards=None,
+    codecs=None,
+    spark=None,
 ) -> dict:
     """``gbx_zarr_write(transactional=False)``: the planning and the task write path of a
     manifest write, with no manifest. The tasks put the store's objects in place; the
@@ -3258,7 +3260,7 @@ def _plain_write(
         )
     spark = _session(data, spark)
     tiles = _tile_input(data, dim_cols)
-    cells = _cells_args(tiles, mode, coords, chunks, shards, codecs)
+    cells = _cells_args(tiles, mode, coords, chunks, shards, codecs, complete)
     root = _local_root(target)
     write_id = uuid.uuid4().hex
     existed = os.path.isdir(root)
@@ -3464,6 +3466,7 @@ def gbx_zarr_write(
     append_dim=None,
     dim_cols=None,
     coords=None,
+    complete: bool = False,
     chunks="balanced",
     shards=None,
     codecs=None,
@@ -3649,6 +3652,7 @@ def gbx_zarr_write(
             append_dim=append_dim,
             dim_cols=dim_cols,
             coords=coords,
+            complete=complete,
             chunks=chunks,
             shards=shards,
             codecs=codecs,
@@ -3697,7 +3701,7 @@ def gbx_zarr_write(
         )
     spark = _session(data, spark)
     tiles = _tile_input(data, dim_cols)
-    cells = _cells_args(tiles, mode, coords, chunks, shards, codecs)
+    cells = _cells_args(tiles, mode, coords, chunks, shards, codecs, complete)
 
     exists = _table_exists(spark, target)
     if exists:

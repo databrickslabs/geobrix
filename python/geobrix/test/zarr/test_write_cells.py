@@ -437,6 +437,58 @@ def test_one_partition_per_unit_touched_capped_by_the_parallelism(
     assert prep.frame.rdd.getNumPartitions() == 1
 
 
+def test_complete_coords_skip_the_survey_of_the_table(
+    spark_delta, tmp_path, no_hooks, monkeypatch
+):
+    """Fail-on-revert: with every label fixed and ``complete=True`` the table is read once
+    (the data pass), not once more to find its labels or its units."""
+
+    def scanned(*a, **k):
+        raise AssertionError("the table was scanned to plan the write")
+
+    monkeypatch.setattr(_write_cells, "_survey_distinct", scanned)
+    monkeypatch.setattr(_write_cells, "_survey_units", scanned)
+    ds = _dataset()
+    out = tmp_path / "complete.zarr"
+    gbx_zarr_write(
+        _cells(spark_delta, ds),
+        str(out),
+        transactional=False,
+        dim_cols=DIM_COLS,
+        coords=_coords(ds),
+        complete=True,
+        chunks=CHUNKS,
+        shards=SHARDS,
+        spark=spark_delta,
+    )
+    got = _plain_read(out)
+    for n in ("t2m", "u10"):
+        np.testing.assert_array_equal(got[n].values, ds[n].values)
+
+
+def test_complete_with_a_unit_that_has_no_cells_is_refused(
+    spark_delta, tmp_path, no_hooks
+):
+    ds = _dataset()
+    out = tmp_path / "gap.zarr"
+    with pytest.raises(Exception, match="the write pass saw .*complete=True"):
+        gbx_zarr_write(
+            _cells(
+                spark_delta,
+                ds,
+                keep=lambda p: p["time"] < p["time"].min() + pd.Timedelta(hours=24),
+            ),
+            str(out),
+            transactional=False,
+            dim_cols=DIM_COLS,
+            coords=_coords(ds),
+            complete=True,
+            chunks=CHUNKS,
+            shards=SHARDS,
+            spark=spark_delta,
+        )
+
+
 def test_a_sparse_table_plans_only_the_units_it_touches(spark_delta, no_hooks):
     ds = _dataset()
     prep = _prepare(

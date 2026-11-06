@@ -344,6 +344,14 @@ def _phases(plain: bool):
     return ph
 
 
+def _store_coords(store: str) -> dict:
+    """The labels of the source store's dimensions, as a user who knows their grid would pass them."""
+    import xarray as xr
+
+    ds = xr.open_zarr(store, chunks=None)
+    return {d: ds[d].values for d in _DIMS}
+
+
 def _write_call(
     spark,
     kind: str,
@@ -353,6 +361,7 @@ def _write_call(
     g: zl.Geometry,
     mode: str,
     cells: bool = False,
+    coords: Optional[dict] = None,
 ):
     """One ``gbx_zarr_write`` of ``kind`` (``managed`` or ``plain``) with its steps timed; returns ``(wall, steps)``.
     ``cells``: the source is the table of cells (``dim_cols``), not blocks."""
@@ -367,6 +376,9 @@ def _write_call(
         kw["append_dim"] = "time"
     if cells:
         kw["dim_cols"] = {d: d for d in _DIMS}
+        if coords is not None and mode == "create":
+            # every label is known and every storage unit has cells: the writer plans without a survey scan
+            kw["coords"], kw["complete"] = coords, True
     if kind == "plain":
         kw["transactional"] = False
     elif mode == "create":
@@ -472,6 +484,7 @@ def run_writes(  # noqa: C901
         spark.sql(f"CREATE SCHEMA IF NOT EXISTS {schema}")
     day = min(24, g.hours)
     base = source_table(spark, store, g)
+    labels = _store_coords(store)
     expect = _expect(spark, base)
     expect_day = _expect(spark, source_table(spark, store, g, hours=day, shift=g.hours))
     expect_after = {k: expect[k] + expect_day[k] for k in expect}
@@ -553,7 +566,7 @@ def run_writes(  # noqa: C901
                 )
                 if {c1, c4} & mine:
                     wall, ph = _write_call(
-                        spark, "managed", src, tbl, root, g, "create", direct
+                        spark, "managed", src, tbl, root, g, "create", direct, labels
                     )
                     if c1 in want:
                         record(c1, "managed", wall, ph, root, stage_s * (not direct))
@@ -567,7 +580,7 @@ def run_writes(  # noqa: C901
                     )
                 if {c2, c5} & mine:
                     wall, ph = _write_call(
-                        spark, "plain", src, plain, None, g, "create", direct
+                        spark, "plain", src, plain, None, g, "create", direct, labels
                     )
                     if c2 in want:
                         record(c2, "plain", wall, ph, plain, stage_s * (not direct))

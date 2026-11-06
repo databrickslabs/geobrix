@@ -269,6 +269,11 @@ other dimensions' values must be labels the store has.
   (latitude usually descends), pass `coords={"latitude": values, ...}` to `create`; a label the table lacks is then
   a missing cell, and a table value that matches no label is refused. Floating-point labels match to a relative
   1e-9; times and integers exactly.
+- **Planning scan.** The writer reads the table once before the data pass, to find the labels (no `coords`) or the
+  storage units the cells fall in (`coords`). When you know the whole grid, pass `coords` for every dimension and
+  `complete=True`: every storage unit is then planned without that scan, and the table is read once, in the data
+  pass. A unit that holds no cell at all ends the write with "the write pass saw N block(s), not the M its plan was
+  made from"; leave `complete` off for a table that skips whole units. Holes inside a unit are still fill values.
 - **Missing cells** read as the array's fill value (NaN for floats, 0 for integers and booleans). A null value is
   a missing cell. A null label is refused.
 - **Duplicate cells** (two rows at one position) are refused, never merged: the task that meets them raises

@@ -48,6 +48,7 @@ show_help() {
     echo -e "                        (e.g. GPU_1xA10, GPU_1xH100). Omit for CPU Serverless"
     echo -e "                        (default). Pair with a GPU wheel extra via --extras."
     echo -e "  ${GREEN}--existing-cluster-id ID${NC} Run on a warm classic cluster (%%pip cells kept)."
+    echo -e "  ${GREEN}--pool NAME${NC}           Run on an idle cluster leased from the pool NAME (gbx:bench:pool); --jar is made its jar. --pool-volume VOLROOT sets the lease Volume."
     echo -e "  ${GREEN}--new-cluster [VER]${NC}   Run on a classic job cluster made for each run and"
     echo -e "                        terminated when it ends (%%pip cells kept; prints its id)."
     echo -e "  ${GREEN}--jar VOLPATH${NC}         --new-cluster library: the JAR, for heavyweight notebooks (also the --jar-task JAR)."

@@ -17,6 +17,7 @@ Prerequisites (operator):
 ### Target and run
 
 - `--cluster-id <id>`: the target cluster. Sets the same env var as `CLUSTER_ID` in the env file, and overrides it.
+- `--pool <name>`: lease an idle cluster of the pool (`gbx:bench:pool up --name <name>`) instead of making one: no cluster start, one run per cluster at a time, the smoke and the main run on the same cluster. A terminated pool cluster is started; the run's jars are made the cluster's (reinstall and restart on a change). Exclusive with `--new-cluster`, `--serverless` and `--existing-cluster-id`. `--pool-wait-min <n>` (default 30) is how long to wait for a free cluster. See `gbx-bench-pool.md`.
 - `--existing-cluster-id <id>`: attach the run to a warm all-purpose cluster. This skips the 4-8 min job-cluster startup. The Python launcher receives it. It is the same as `CLUSTER_ID` in the env file.
 - `--profile <name>`: the Databricks config profile. It overrides `DATABRICKS_CONFIG_PROFILE` and the env file.
 - `--serverless`: submit to Serverless (lightweight only, no JAR). It skips `--cluster-id`. The profile must point to a workspace that supports Serverless jobs.

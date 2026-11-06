@@ -910,6 +910,22 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--pool",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Lease an idle cluster of the pool NAME (gbx:bench:pool up --name NAME) instead of Serverless: no cluster "
+            "start per run, one run per cluster at a time, an ended cluster is started, and --jar (or none) is made "
+            "the cluster's jar. Exclusive with --new-cluster and --existing-cluster-id."
+        ),
+    )
+    parser.add_argument(
+        "--pool-volume",
+        metavar="VOLROOT",
+        default=None,
+        help="--pool: the Volume root that holds the lease files (default: GBX_BUNDLE_VOLUME_* or the sample-data Volume).",
+    )
+    parser.add_argument(
         "--existing-cluster-id",
         metavar="CLUSTER_ID",
         default=None,
@@ -1141,8 +1157,11 @@ def main() -> int:
     if args.extra_jars:
         parser.error("--extra-jar goes with --python-task")
 
-    if args.jar and not args.new_cluster:
-        parser.error("--jar goes with --jar-task or --new-cluster (it is not used on Serverless or a warm cluster)")
+    if args.pool and (args.new_cluster or args.existing_cluster_id or args.hardware_accelerator):
+        parser.error("--pool is exclusive with --new-cluster, --existing-cluster-id and --hardware-accelerator")
+
+    if args.jar and not args.new_cluster and not args.pool:
+        parser.error("--jar goes with --jar-task, --new-cluster or --pool (it is not used on Serverless or a warm cluster)")
 
     if args.new_cluster and (args.existing_cluster_id or args.hardware_accelerator):
         parser.error(
@@ -1188,6 +1207,32 @@ def main() -> int:
     from databricks.sdk import WorkspaceClient
 
     w = WorkspaceClient(profile=args.profile)
+
+    import atexit
+    import contextlib
+
+    stack = contextlib.ExitStack()
+    atexit.register(stack.close)  # a leased pool cluster is given back when the process ends, whatever the way out
+    if args.pool:
+        import _cluster_pool
+
+        volroot = args.pool_volume or (
+            "/Volumes/{}/{}/{}".format(
+                os.environ.get("GBX_BUNDLE_VOLUME_CATALOG", "geospatial_docs"),
+                os.environ.get("GBX_BUNDLE_VOLUME_SCHEMA", "geobrix"),
+                os.environ.get("GBX_BUNDLE_VOLUME_NAME", "sample-data"),
+            )
+        )
+        try:
+            lease = stack.enter_context(
+                _cluster_pool.leased_cluster(w, args.pool, volroot, {"run_id": "notebooks", "owner": w.current_user.me().user_name})
+            )
+            lease.sync_jars([args.jar] if args.jar else [])
+        except _cluster_pool.PoolError as exc:
+            stack.close()
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        args.existing_cluster_id = lease.cluster_id
 
     # Classic-cluster modes keep %pip cells (classic clusters install via %pip, unlike
     # Serverless JOB compute where they fail and are stripped).

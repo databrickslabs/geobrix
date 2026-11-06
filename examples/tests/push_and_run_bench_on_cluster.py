@@ -793,6 +793,14 @@ def effective_form_caps(form_cap_min, form_cap_max_min, fail_fast, rung_cap_min,
 
 
 def main() -> int:
+    """The launcher. Anything it leases (a pool cluster) is given back when it returns, whatever the path out."""
+    import contextlib
+
+    with contextlib.ExitStack() as stack:
+        return _main(stack)
+
+
+def _main(_stack) -> int:
     exit_if_help(__doc__)
     # Force line-buffered stdout so the run URL + interim progress heartbeats appear
     # LIVE, not all at once at exit. Python block-buffers stdout when it isn't a TTY
@@ -1204,6 +1212,11 @@ def main() -> int:
     # dedicated), --on-demand (AWS: every node on demand, so no spot node is taken back
     # during a measurement; default: the workspace's spot/on-demand policy).
     new_cluster = "--new-cluster" in sys.argv
+    # --pool <name>: lease an idle cluster of that pool (gbx:bench:pool up --name <name>) instead of making one: one run
+    # per cluster at a time, an ended cluster is started, the cluster's jars are made the run's, and the smoke and the
+    # main run both use it (no second cluster start). --pool-wait-min: how long to wait for a free one (default 30).
+    pool_name = _arg("--pool", "")
+    pool_wait_min = float(_arg("--pool-wait-min", "30"))
     on_demand = "--on-demand" in sys.argv
     spark_version = _arg("--spark-version", "19.x-scala2.13")
     node_type = _arg("--node-type", "m6gd.xlarge")
@@ -1228,7 +1241,14 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
-    if with_jar and not new_cluster:
+    if pool_name and (new_cluster or serverless or "--existing-cluster-id" in sys.argv):
+        print(
+            "ERROR: --pool leases a cluster of the pool: it is exclusive with --new-cluster, --serverless and "
+            "--existing-cluster-id.",
+            file=sys.stderr,
+        )
+        return 2
+    if with_jar and not new_cluster and not pool_name:
         print(
             "ERROR: --with-jar applies to a job cluster made for the run: pass --new-cluster with it. "
             "(An existing cluster has its libraries installed already.)",
@@ -1261,7 +1281,9 @@ def main() -> int:
     )
     if new_cluster:
         cluster_id = ""  # a job cluster: CLUSTER_ID from the config file is not used
-    if not serverless and not new_cluster and not cluster_id:
+    if pool_name:
+        cluster_id = ""  # leased below, once the workspace client exists
+    if not serverless and not new_cluster and not cluster_id and not pool_name:
         print(
             "Set CLUSTER_ID env var or pass --existing-cluster-id <id>",
             file=sys.stderr,
@@ -1601,6 +1623,21 @@ def main() -> int:
         if profile
         else WorkspaceClient(host=host, token=token)
     )
+    lease = None
+    if pool_name:
+        import _cluster_pool
+
+        try:
+            lease = _stack.enter_context(
+                _cluster_pool.leased_cluster(
+                    w, pool_name, volroot, {"run_id": run_id, "owner": w.current_user.me().user_name},
+                    wait_s=pool_wait_min * 60.0,
+                )
+            )
+        except _cluster_pool.PoolError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        cluster_id = lease.cluster_id
     if not explicit_wheel:
         # The env wheel for the compute's runtime: the other family's wheel refuses to import there.
         if serverless:
@@ -1806,7 +1843,20 @@ def main() -> int:
     #   - Different geobrix tests.jar installed → REFUSE to submit.  The driver JVM caches classes
     #     by name and won't reload them without a restart; running with the wrong JAR silently
     #     executes stale Scala bench code.  Tell the operator to restart the cluster.
-    if heavyweight and cluster_id:
+    if pool_name:
+        # A pool cluster carries exactly the jars of the run that leased it: a changed jar is reinstalled and the
+        # cluster restarted (_cluster_pool.sync_jars); the job then attaches no library of its own.
+        wanted_jars = ([_arg("--jar-path", f"{volroot}/geobrix/{ver}/jar/geobrix-{ver}-jar-with-dependencies.jar")] if with_jar else []) + (
+            [tests_jar] if heavyweight else []
+        )
+        try:
+            done = lease.sync_jars(wanted_jars)
+        except _cluster_pool.PoolError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
+        print(f"  pool jars  : {done['action']} ({done['fingerprint']}) {wanted_jars}")
+        libraries = None
+    elif heavyweight and cluster_id:
         _existing_tests = []
         try:
             _existing_tests = [
@@ -1964,6 +2014,8 @@ def main() -> int:
                 ],
             )
         run_id_remote = waiter.run_id
+        if lease is not None:
+            lease.job_run(run_id_remote)  # from here the lease follows the job, not this process
         print("=" * 64)
         print(f"Run submitted: run_id={run_id_remote}")
         try:
@@ -2005,6 +2057,8 @@ def main() -> int:
     if not do_wait:
         # Fire-and-forget: submit returns a waiter; we don't call .result().
         print("Run submitted (--no-wait). Poll the table above, or the Databricks UI.")
+        if lease is not None:
+            lease.keep = True  # the job still holds the cluster: its run id on the lease says so
         return 0
 
     # The tier(s) this invocation writes -> filter the live count by (run_id, api) so it

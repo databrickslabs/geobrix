@@ -83,6 +83,7 @@ def sdk(monkeypatch):
             )
             self.warehouses = SimpleNamespace(list=lambda: [])
             self.libraries = SimpleNamespace(cluster_status=lambda cid: [])
+            self.clusters = SimpleNamespace(get=lambda cid: SimpleNamespace(spark_version="19.x-scala2.13"))
 
     sdk_mod = types.ModuleType("databricks.sdk")
     sdk_mod.WorkspaceClient = WorkspaceClient
@@ -454,3 +455,75 @@ def test_without_split_by_a_levels_run_is_one_job(launch, sdk, monkeypatch):
 
     monkeypatch.setattr(sys, "argv", ["x", "--levels", "IO", "--split-by", "other"])
     assert mod.main() == 2
+
+
+# ---- --pool: a leased cluster, the jars the run needs, the job run on the lease
+
+
+class _FakeLease:
+    def __init__(self, log):
+        self.cluster_id, self.keep, self.log = "0101-leased", False, log
+
+    def sync_jars(self, jars):
+        self.log.append(("sync", list(jars)))
+        return {"action": "ok", "fingerprint": "abc"}
+
+    def job_run(self, run_id):
+        self.log.append(("job_run", run_id))
+
+
+@pytest.fixture
+def leased(monkeypatch, launch):
+    import contextlib
+
+    import _cluster_pool
+
+    log = []
+
+    @contextlib.contextmanager
+    def fake(w, name, volroot, info=None, **kw):
+        log.append(("lease", name, dict(info or {})))
+        lease = _FakeLease(log)
+        try:
+            yield lease
+        finally:
+            log.append(("released", lease.keep))
+
+    monkeypatch.setattr(_cluster_pool, "leased_cluster", fake)
+    return log
+
+
+def test_pool_runs_on_the_leased_cluster_with_its_jars_synced_not_attached(launch, sdk, leased):
+    assert launch("--pool", "dev", "--levels", "IO", "--levels-only", "--with-jar", "--run-id", "p1") == 0
+    (submit,) = sdk.submits
+    (task,) = submit["tasks"]
+    assert task.existing_cluster_id == "0101-leased" and task.libraries is None and not hasattr(task, "new_cluster")
+    kinds = [k[0] for k in leased]
+    assert kinds[0] == "lease" and leased[0][1] == "dev" and leased[0][2]["run_id"] == "p1"
+    (sync,) = [k for k in leased if k[0] == "sync"]
+    assert any(j.endswith("-jar-with-dependencies.jar") for j in sync[1])  # the jar the run needs
+    assert ("job_run", 11) in leased  # the lease follows the job
+    assert leased[-1] == ("released", False)  # given back at the end of the run
+
+
+def test_pool_with_no_wait_leaves_the_lease_to_the_job(launch, sdk, leased):
+    assert launch("--pool", "dev", "--levels", "IO", "--levels-only", "--no-wait") == 0
+    assert leased[-1] == ("released", True)  # keep: the job still uses the cluster, its run id is on the lease
+    assert [k for k in leased if k[0] == "sync"][0][1] == []  # a light run wants no jar
+
+
+def test_pool_is_exclusive_with_a_cluster_of_its_own(launch, sdk, leased):
+    for other in (("--new-cluster",), ("--existing-cluster-id", "x"), ("--serverless",)):
+        assert launch("--pool", "dev", *other) == 2
+    assert not leased and not sdk.submits
+
+
+def test_a_pool_with_no_cluster_free_is_one_clear_line(launch, sdk, monkeypatch, capsys):
+    import _cluster_pool
+
+    def none_free(*a, **k):
+        raise _cluster_pool.PoolError("every cluster of pool 'dev' is leased; none came free in 60s")
+
+    monkeypatch.setattr(_cluster_pool, "lease_cluster", none_free)
+    assert launch("--pool", "dev", "--lightweight-only", "--no-wait") == 2
+    assert "every cluster of pool 'dev' is leased" in capsys.readouterr().err and not sdk.submits

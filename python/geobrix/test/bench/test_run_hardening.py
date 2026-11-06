@@ -230,8 +230,16 @@ def test_run_mvp_tells_the_heartbeat_the_set_the_rows_and_the_median(
     )  # fmt: skip
     hb.stop()
     out = _printed(capsys)
-    assert out[0] == f"[LEVELS S] form 1/1 {B}:L3:c0 scale 1x rows 50 START (cap 60s)"
-    assert out[2] == f"[LEVELS S] form 1/1 {B}:L3:c0 scale 4x rows 200 START (cap 240s)"
+    # the fail-fast bar rides beside the cap: the first rung's deadline is the rung cap, the next one's is projected
+    assert (
+        out[0]
+        == f"[LEVELS S] form 1/1 {B}:L3:c0 scale 1x rows 50 START (cap 60s, deadline 1200s)"
+    )
+    assert re.fullmatch(
+        rf"\[LEVELS S\] form 1/1 {re.escape(B)}:L3:c0 scale 4x rows 200 START "
+        r"\(cap 240s, deadline 120s, projected [\d.]+s\)",
+        out[2],
+    ), out[2]
     assert (
         f"{rows[0].iter_median_s:.2f}s" in out[1]
         and out[1].split("median ")[1] == f"{rows[0].iter_median_s:.2f}s"

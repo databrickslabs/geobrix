@@ -30,7 +30,7 @@ class ResultRow:
     throughput_mpix_s: float
     throughput_rows_s: float
     peak_rss_mb: float
-    status: str  # "ok" | "na_by_design" | "error"
+    status: str  # "ok" | "na_by_design" | "error" | "skipped" (projected past the rung cap) | "over-bar" (stopped at its deadline)
     note: str
     env_arch: str
     env_cpu_model: str
@@ -358,7 +358,12 @@ def summarize(rows: List[ResultRow], pool_size=None) -> str:
         "",
         "## Status",
         "",
-        f"ok {len(ok)} · na_by_design {len(na)} · error {len(errs)}",
+        f"ok {len(ok)} · na_by_design {len(na)} · error {len(errs)}"
+        + "".join(
+            f" · {st} {n}"
+            for st in ("skipped", "over-bar")
+            if (n := sum(1 for r in rows if r.status == st))
+        ),
         "",
     ]
 

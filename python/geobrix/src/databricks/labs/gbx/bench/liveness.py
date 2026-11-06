@@ -64,6 +64,13 @@ class Heartbeat:
         self._done = 0
         self._scale = 1
         self._cap_s: Optional[float] = None
+        self._deadline_s: Optional[float] = (
+            None  # fail-fast: this rung's own deadline (levels.run_mvp)
+        )
+        self._projected_s: Optional[float] = (
+            None  # fail-fast: the wall predicted for this rung
+        )
+        self._rung_phase = ""  # fail-fast: setup | warmup i/n | measured i/n
         self._set_name: Optional[str] = None
         self._rows: Optional[int] = None
         self._name = ""
@@ -100,15 +107,36 @@ class Heartbeat:
         rows: Optional[int] = None,
         name: Optional[str] = None,
         set_name: Optional[str] = None,
+        deadline_s: Optional[float] = None,
+        projected_s: Optional[float] = None,
     ) -> None:
-        """``rows`` and ``name`` (the form without its scale) are for the printed lines; ``set_name`` turns them on."""
+        """``rows`` and ``name`` (the form without its scale) are for the printed lines; ``set_name`` turns them on.
+
+        ``deadline_s`` and ``projected_s`` (the fail-fast rung's own deadline and the wall predicted for it) ride in the
+        beat and the START line beside the cap; a run without them prints and beats as before.
+        """
         with self._lock:
             self._form, self._form_started = label, time.monotonic()
             self._index, self._total = index, total
             self._scale, self._cap_s = scale, cap_s
+            self._deadline_s, self._projected_s, self._rung_phase = (
+                deadline_s,
+                projected_s,
+                "",
+            )
             self._set_name, self._rows, self._name = set_name, rows, name or label
         self.beat()
-        self._say("START", f"(cap {self._cap_text(cap_s)})")
+        self._say("START", f"({self._limits_text(cap_s, deadline_s, projected_s)})")
+
+    def set_phase(self, text: str) -> None:
+        """The rung's phase (setup, warmup 1/2, measured 1/3): in the beat and the RUNNING line."""
+        with self._lock:
+            self._rung_phase = text
+
+    def event(self, what: str, tail: str) -> None:
+        """One tagged line outside the START/DONE pair (an interrupt, a skip)."""
+        self._say(what, tail)
+        self.beat()
 
     def end(
         self,
@@ -139,6 +167,8 @@ class Heartbeat:
         with self._lock:
             self._form = None
             self._cap_s = None
+            self._deadline_s = self._projected_s = None
+            self._rung_phase = ""
             self._set_name = None
             if form_done:
                 self._done += 1
@@ -168,6 +198,15 @@ class Heartbeat:
     @staticmethod
     def _cap_text(cap_s: Optional[float]) -> str:
         return "none" if cap_s is None else f"{cap_s:g}s"
+
+    @classmethod
+    def _limits_text(cls, cap_s, deadline_s=None, projected_s=None) -> str:
+        out = f"cap {cls._cap_text(cap_s)}"
+        if deadline_s is not None:
+            out += f", deadline {deadline_s:g}s"
+        if projected_s is not None:
+            out += f", projected {projected_s:g}s"
+        return out
 
     def _say(self, what: str, tail: str) -> None:
         """Print one tagged line for the form in progress (nothing when it was begun without a ``set_name``).
@@ -199,17 +238,27 @@ class Heartbeat:
     def _say_running(self) -> None:
         with self._lock:
             elapsed = time.monotonic() - self._form_started
-            cap = self._cap_s
-        self._say("RUNNING", f"elapsed {elapsed:.0f}s of cap {self._cap_text(cap)}")
+            cap, deadline, phase = self._cap_s, self._deadline_s, self._rung_phase
+        tail = f"elapsed {elapsed:.0f}s of cap {self._cap_text(cap)}"
+        if deadline is not None:
+            tail += f" deadline {deadline:g}s"
+        if phase:
+            tail += f" phase {phase}"
+        self._say("RUNNING", tail)
 
     def snapshot(self) -> dict:
         with self._lock:
             form, started = self._form, self._form_started
             index, total, done = self._index, self._total, self._done
             scale, cap_s = self._scale, self._cap_s
+            deadline, projected, phase = (
+                self._deadline_s,
+                self._projected_s,
+                self._rung_phase,
+            )
             self._seq += 1
             seq = self._seq
-        return {
+        beat = {
             "seq": seq,
             "state": self._state,
             "phase": self.phase,
@@ -225,6 +274,15 @@ class Heartbeat:
             "interval_s": self.interval,
             "stack": self._work_stack(),
         }
+        # the fail-fast keys ride only when a rung carries them: a beat without them is what a reader saw before
+        for key, val in (
+            ("deadline_s", deadline),
+            ("projected_s", projected),
+            ("rung_phase", phase),
+        ):
+            if val not in (None, ""):
+                beat[key] = val
+        return beat
 
     def _work_stack(self) -> list:
         frame = (

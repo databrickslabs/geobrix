@@ -10,7 +10,7 @@ import threading
 import time
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 from databricks.labs.gbx._gdal_policy import open_data
 from databricks.labs.gbx.bench import manifest as m
@@ -51,8 +51,12 @@ def time_iters(
     warmup: int,
     measured: int,
     warmup_fn: Callable[[], None] = None,
+    stop: Optional[Callable[[float], bool]] = None,
 ) -> Dict:
     """Run fn warmup+measured times; return ms distribution over measured runs.
+
+    stop (optional): called with each measured iteration's seconds; True ends the measured loop there (the fail-fast
+    early exit of ``levels``), and ``measured_iters`` then counts the iterations that ran.
 
     warmup_fn (optional): a cheaper stand-in run for the warm-up iterations only --
     e.g. the spark-path warm-up exercises one tile per executor slot instead of the
@@ -70,12 +74,14 @@ def time_iters(
         t0 = time.perf_counter()
         fn()
         samples.append((time.perf_counter() - t0) * 1000.0)
+        if stop is not None and stop(samples[-1] / 1000.0):
+            break
     samples.sort()
     p90_idx = max(0, min(len(samples) - 1, int(round(0.9 * (len(samples) - 1)))))
     total = sum(samples)
     return {
         "warmup_iters": warmup,
-        "measured_iters": measured,
+        "measured_iters": len(samples),
         "warmup_s": warmup_s,  # wall time of the warmup iterations (0.0 when there are none)
         "iter_median_ms": statistics.median(samples),
         "iter_min_ms": samples[0],

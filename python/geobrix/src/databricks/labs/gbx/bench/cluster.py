@@ -391,6 +391,12 @@ LEVELS_FORMS = {levels_forms!r}
 HEARTBEAT_SECS = {heartbeat_secs}
 LAUNCH_TOKEN = {launch_token!r}
 STALL_CAP_S = {stall_cap_s}
+# Fail fast (see levels.run_mvp): rungs run breadth first, a rung projected past RUNG_CAP_S is skipped, a rung past its
+# deadline is interrupted and recorded over-bar, a setup past SETUP_CAP_S is stopped. BAR_FACTOR is the linearity gate.
+FAIL_FAST = {fail_fast!r}
+BAR_FACTOR = {bar_factor}
+RUNG_CAP_S = {rung_cap_s}
+SETUP_CAP_S = {setup_cap_s}
 SMOKE = {smoke!r}
 SMOKE_ROWS = {smoke_rows}
 INJECT_STALL = {inject_stall}
@@ -2667,7 +2673,8 @@ print("=== levels forms:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), f
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                        scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, form_cap_s=STALL_CAP_S,
-                       inject_stall=INJECT_STALL)
+                       inject_stall=INJECT_STALL, fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR,
+                       rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S)
 lw.extend(_lv_rows)
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
 """
@@ -2704,7 +2711,8 @@ if _smoke["import_check"]["ok"] and LEVELS_MVP:
     _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, 0, 1, corpus=CORPUS,
                            schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                            scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,
-                           form_cap_s=STALL_CAP_S, report_tasks=True, inject_stall=INJECT_STALL)
+                           form_cap_s=STALL_CAP_S, report_tasks=True, inject_stall=INJECT_STALL,
+                           fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR, rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S)
     for _r in _lv_rows:
         _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
                                     tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
@@ -3489,6 +3497,10 @@ def build_bench_notebook(cfg: dict) -> dict:
         heartbeat_secs=float(cfg.get("heartbeat_secs", 30)),
         launch_token=str(cfg.get("launch_token", "")),
         stall_cap_s=int(cfg.get("stall_cap_s", 900)),
+        fail_fast=bool(cfg.get("fail_fast", True)),
+        bar_factor=float(cfg.get("bar_factor", 1.5)),
+        rung_cap_s=float(cfg.get("rung_cap_s", 1200)),
+        setup_cap_s=float(cfg.get("setup_cap_s", 600)),
         smoke=bool(cfg.get("smoke")),
         smoke_rows=int(cfg.get("smoke_rows", 16)),
         inject_stall=float(cfg.get("inject_stall", 0) or 0),

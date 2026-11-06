@@ -11,11 +11,13 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 # isort: split
 
 import contextlib
+import dataclasses
 import functools
 import json
 import math
 import os
 import re
+import uuid
 import warnings
 from typing import Optional
 
@@ -1216,6 +1218,13 @@ def _merge_udf(tiles):
     return tile
 
 
+def _unique_prefix(prefix) -> str:
+    """*prefix* with a random id: a merge's file is named by its cell (0) and size only, so two merges of one size in one
+    directory would write the same file, the second over the first."""
+    token = uuid.uuid4().hex[:12]
+    return f"{prefix}_{token}" if prefix else token
+
+
 @f.udf(V2_TILE_SCHEMA)
 def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     # Force-output variant (Python API only): same mosaic via shape_output.
@@ -1229,13 +1238,43 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         return _array_without_members(tiles)
     new_bytes, dropped = result
     row = _shaped_result_row(
-        new_bytes, 0, virtualize_dir, virtualize_prefix, materialize
+        new_bytes,
+        0,
+        virtualize_dir,
+        _unique_prefix(virtualize_prefix) if virtualize_dir else virtualize_prefix,
+        materialize,
     )
     if row is not None and dropped:
         row["metadata"][
             "last_error"
         ] = f"RST_Merge: skipped {dropped} corrupt input tile(s)"
     return row
+
+
+def _file_ref_member(tile, fref):
+    """A member of a FILE-aware merge (the tile and its FileRef, or None), the form the merge core takes: the bytes of
+    a materialized tile verbatim (no re-encode: they are the sort key); a virtual tile with nothing to apply as a
+    ``Ref`` to the file its FileRef names locally (``as_local_file``), or to its own path without one, so the
+    merge reads it as a file and never into memory; any other virtual tile (a clip, a CRS, a pending instruction), or one
+    whose FileRef has no local file, is read through the front door with the FileRef, as bytes.
+    """
+    vt = ot._to_virtual_tile(tile)
+    if not vt.is_virtual():
+        return bytes(vt.raster)
+    if fref is None:
+        return agg_core.Ref(vt)
+    if (
+        vt.clip_polygon is None
+        and not vt.crs
+        and not ot._has_pending(vt.metadata)
+        and not ot._zarr_tiles.is_zarr_tile(vt)
+    ):
+        try:
+            return agg_core.Ref(dataclasses.replace(vt, path=str(fref.as_local_file())))
+        except Exception:  # noqa: BLE001 - no local file: the FileRef reads it
+            pass
+    with ot._open(tile, file_ref=fref) as ds:
+        return _dataset_to_gtiff_bytes(ds)
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -1256,33 +1295,26 @@ def _uf_merge(tiles, file_refs):
     while len(frefs) < len(tiles):
         frefs.append(None)
 
-    rasters = []
-    dropped = 0
-    for t, fref in zip(tiles, frefs):
-        if t is None or _tile_is_empty(t):
-            continue
-        try:
-            vt = ot._to_virtual_tile(t)
-            if vt.is_virtual():
-                with ot._open(t, file_ref=fref) as ds:
-                    candidate = _dataset_to_gtiff_bytes(ds)
-            else:
-                candidate = bytes(vt.raster)
-            with _serde.open_tile(
-                candidate, gate=False
-            ):  # a validity probe: the merge streams a group past the budget
-                pass
-            rasters.append(candidate)
-        except Exception:  # noqa: BLE001
-            dropped += 1
-            continue
-
-    if not rasters:
-        return _array_without_members(tiles)
+    spool, dropped = agg_core._MemberSpool(spill=False), 0
     try:
-        new_bytes = agg_core.merge_tiles(rasters)
-    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
-        return _serde.build_error_tile(str(exc), 0)
+        for t, fref in zip(tiles, frefs):
+            if t is None or _tile_is_empty(t):
+                continue
+            try:
+                member = _file_ref_member(t, fref)
+                # an unreadable member is skipped (and counted): the others are merged
+                if not spool.add(member, drop_bytes=True, drop_refs=True):
+                    dropped += 1
+            except Exception:  # noqa: BLE001
+                dropped += 1
+        if not len(spool):
+            return _array_without_members(tiles)
+        try:
+            new_bytes = spool.result()
+        except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
+            return _serde.build_error_tile(str(exc), 0)
+    finally:
+        spool.close()
     tile = _serde.build_tile(new_bytes, "GTiff", 0)
     if dropped:
         tile["metadata"][
@@ -5080,24 +5112,23 @@ def _serverless_task() -> bool:
 
 
 def _arrow_grouped_agg_available() -> bool:
-    """True when this pyspark has the Arrow-native grouped-aggregate UDF (``arrow_udf`` with ``ArrowUDFType.GROUPED_AGG``,
-    Spark 4.1), which hands a group to the function as Arrow arrays: no pandas conversion, so the group is not held a
-    second time as one Python object per member. ``GBX_ARROW_AGG=0`` keeps the pandas form (the form of Spark 4.0 and
-    so of DBR 17.3 and 18); ``=1`` insists on the Arrow one and raises where it is missing. Decided where the module is
-    imported, with the pyspark that registers the UDF.
-    """
-    forced = os.environ.get("GBX_ARROW_AGG", "").strip()
-    if forced == "0":
-        return False
-    try:
-        from pyspark.sql.functions import arrow_udf  # noqa: F401
-        from pyspark.sql.pandas.functions import ArrowUDFType
+    """True when the grouped-aggregate UDFs are Arrow-native: ``GBX_ARROW_AGG=1`` AND this pyspark has ``arrow_udf`` with
+    ``ArrowUDFType.GROUPED_AGG`` (Spark 4.1). An Arrow UDF hands a group to the function as Arrow arrays, with no
+    pandas conversion. Unset or any other value keeps the pandas form (the form of Spark 4.0, so of DBR 17.3 and 18).
 
-        return hasattr(ArrowUDFType, "GROUPED_AGG")
-    except ImportError:
-        if forced == "1":
-            raise
+    The default is pandas because the measured gain is nil: on pyspark 4.1.1 the worker's peak RSS for the same
+    group was within 0 to 6% of the pandas form (both about twice the group; the Arrow serializer concatenates the
+    group's batches), and the client's pyspark can name an eval type a Serverless server lacks. An env6 measurement
+    decides whether it becomes the default there (env6 leads when it wins). Decided where the module is imported.
+    """
+    if os.environ.get("GBX_ARROW_AGG", "").strip() != "1":
         return False
+    from pyspark.sql.functions import (  # noqa: F401  (ImportError: the Fix is to unset GBX_ARROW_AGG)
+        arrow_udf,
+    )
+    from pyspark.sql.pandas.functions import ArrowUDFType
+
+    return hasattr(ArrowUDFType, "GROUPED_AGG")
 
 
 _ARROW_GROUPED_AGG = _arrow_grouped_agg_available()

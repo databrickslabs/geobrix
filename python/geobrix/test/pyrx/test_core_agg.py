@@ -2067,28 +2067,24 @@ def test_merge_by_key_streams_references_past_the_group_cap_in_parallel(
     assert helpers.merge_by_key(df, ["key"], method="vrt").count() == 2
 
 
-def test_the_grouped_aggregate_is_arrow_native_only_where_pyspark_has_it(monkeypatch):
-    """The grouped-aggregate UDFs are Arrow-native where pyspark has `arrow_udf` (Spark 4.1: DBR 19, Serverless env 6)
-    and pandas UDFs elsewhere (Spark 4.0: DBR 17.3 and 18), decided where the module is imported;
-    `GBX_ARROW_AGG=0` keeps the pandas form. Both run the same body (the c0 test above feeds it a Series and an Arrow array).
+def test_the_grouped_aggregate_is_pandas_unless_arrow_is_asked_for(monkeypatch):
+    """The grouped-aggregate UDFs are pandas UDFs by default (the measured gain of the Arrow form is nil, and the
+    client can name an eval type a server lacks); `GBX_ARROW_AGG=1` makes them Arrow-native where pyspark has
+    `arrow_udf` (Spark 4.1). Both forms run the same body (the c0 test above feeds it a Series and an Arrow array).
     """
-    from pyspark.sql.functions import (  # noqa: F401 - the pandas form is always there
-        PandasUDFType,
-    )
-
     from databricks.labs.gbx.pyrx import functions as fx
 
     monkeypatch.delenv("GBX_ARROW_AGG", raising=False)
-    try:
-        from pyspark.sql.functions import arrow_udf  # noqa: F401
-
-        has_arrow = True
-    except ImportError:
-        has_arrow = False
-    assert fx._arrow_grouped_agg_available() is has_arrow
-    assert fx._ARROW_GROUPED_AGG is has_arrow
+    assert fx._arrow_grouped_agg_available() is False
+    assert fx._ARROW_GROUPED_AGG is False  # the module is imported without the variable
     monkeypatch.setenv("GBX_ARROW_AGG", "0")
     assert fx._arrow_grouped_agg_available() is False
+    try:
+        from pyspark.sql.functions import arrow_udf  # noqa: F401
+    except ImportError:
+        return
+    monkeypatch.setenv("GBX_ARROW_AGG", "1")
+    assert fx._arrow_grouped_agg_available() is True
 
 
 def test_the_arrow_form_of_the_aggregate_reads_the_metadata_map_as_a_dict():
@@ -2147,3 +2143,52 @@ def test_a_spool_that_would_fill_the_local_disk_writes_its_members_under_the_vol
         local.add(t)
     assert all(not e.path.startswith(str(parent)) for e in local.entries)
     local.close()
+
+
+def test_the_file_aware_array_merge_takes_a_file_ref_as_a_reference(
+    tmp_path, monkeypatch
+):
+    """`_uf_merge` (the FILE-mode `gbx_rst_merge`): a virtual element whose FileRef names a local file is a reference to
+    that file (not the tile's own path), and nothing is materialized."""
+    from pathlib import Path
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    class FakeRef:
+        def __init__(self, path):
+            self._path = path
+
+        def as_local_file(self):
+            return Path(self._path)
+
+    rows = _virtual_rows(tmp_path)
+    frefs = [FakeRef(r["path"]) for r in rows]
+    for r in rows:
+        r["path"] = "/nonexistent/stand-in.tif"  # the FileRef is what names the file
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    tile = fx._uf_merge.func(rows, frefs)
+    _expect_three_columns_of_values(bytes(tile["raster"]))
+
+
+def test_two_array_merges_of_one_size_write_two_files(tmp_path):
+    """The force-output array merge (`gbx_rst_merge` with `virtualize_dir`) names its file by cell and size, so two
+    merges of one size in one directory used to share one file, the second over the first.
+    """
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    def merged(values):
+        tiles = [
+            {
+                "cellid": 0,
+                "raster": _ras(np.full((2, 2), v), ulx=2.0 * i, uly=2.0),
+                "path": None,
+            }
+            for i, v in enumerate(values)
+        ]
+        return fx._merge_v2_udf.func(tiles, str(tmp_path), "pre", False)
+
+    first, second = merged([1, 2]), merged([7, 8])
+    assert first["path"] != second["path"]
+    assert len(list(tmp_path.glob("pre_*.tif"))) == 2
+    assert set(np.unique(_grid_and_pixels(_tile_from(first["path"]))[2])) == {1, 2}

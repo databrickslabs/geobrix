@@ -7,11 +7,13 @@ run; without one, a temp view. The seeds are fixed, so a form sees the same rows
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import inspect
 import os
 import re
 import sys
+import textwrap
 import time
 from typing import Callable, Dict, List, Optional
 
@@ -60,32 +62,65 @@ _STAMP_CORPUS: List[str] = [""]  # the corpus of the run (set before an input is
 
 
 def _source_of(obj) -> str:
+    """The source of a function or module, as its syntax: comments, docstrings and layout do not count, so a reformat or a
+    reworded comment does not make every input a new table. "" when there is no source.
+    """
     try:
-        return inspect.getsource(obj)
+        src = inspect.getsource(obj)
     except (
         OSError,
         TypeError,
     ):  # no source (a frozen build): the recipe version alone speaks for it
         return ""
+    try:
+        tree = ast.parse(textwrap.dedent(src))
+        for node in ast.walk(tree):
+            body = getattr(node, "body", None)
+            if (
+                isinstance(body, list)
+                and body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(getattr(body[0], "value", None), ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                body[0] = ast.Pass()  # a docstring
+        return ast.dump(tree)
+    except SyntaxError:
+        return src
+
+
+_CORPUS_FP: Dict[int, tuple] = (
+    {}
+)  # id(rows list) -> (the list, its fingerprint): the listing is memoized, so is this
+
+
+def _corpus_fingerprint(corpus: str) -> str:
+    """Which tiles the corpus holds: the count and a hash of their names. Computed once per listing."""
+    rows = _corpus_rows(corpus) or []
+    held = _CORPUS_FP.get(id(rows))
+    if held is None or held[0] is not rows:
+        fp = (
+            f"{len(rows)}:"
+            + hashlib.sha1(
+                "\n".join(os.path.basename(p) for p in rows).encode()
+            ).hexdigest()
+        )
+        held = _CORPUS_FP[id(rows)] = (rows, fp)
+    return held[1]
 
 
 def input_stamp(builder_src: str, corpus: str = "") -> str:
     """8 hex digits that change when the recipe version, the builder's source or the helpers' source change, and, for a
-    builder that reads the corpus rows, when the set of tiles in the corpus changes."""
+    builder that reads the corpus rows, when the set of tiles in the corpus changes. (`builder_src` is the builder's
+    source as `_source_of` gives it.)"""
     parts = [f"v{RECIPE_VERSION}", builder_src]
     parts += [_source_of(globals()[h]) for h in _STAMP_HELPERS if h in globals()]
     if "synth" in builder_src:
         from databricks.labs.gbx.bench import synth
 
         parts.append(_source_of(synth))
-    if "_corpus_rows(" in builder_src and corpus:
-        rows = _corpus_rows(corpus) or []
-        parts.append(
-            f"{len(rows)}:"
-            + hashlib.sha1(
-                "\n".join(os.path.basename(p) for p in rows).encode()
-            ).hexdigest()
-        )
+    if "_corpus_rows" in builder_src and corpus:
+        parts.append(_corpus_fingerprint(corpus))
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:8]
 
 
@@ -124,6 +159,47 @@ def _table(spark, schema: Optional[str], name: str, build, exact: bool = False) 
                 _drop_partial(spark, full)
                 raise
     return full
+
+
+_INPUT_NAME = re.compile(r"^(mvp_in_.+?)_([0-9a-f]{8})(_tiles)?$")
+
+
+def superseded_inputs(spark, schema: str, keep: int = 1) -> List[str]:
+    """The input tables of `schema` that a newer stamp has replaced: for each input (name, scale) all but the `keep` newest
+    stamps, by creation time. The stamps pile up as the generators change; nothing drops them but this, and only when asked
+    (`drop_superseded`). A table whose name carries no stamp is not an input of this kind and is never listed.
+    """
+    names = [
+        r[1] if len(r) > 1 else r[0]
+        for r in spark.sql(f"SHOW TABLES IN {schema} LIKE 'mvp_in_*'").collect()
+    ]
+    by_input: Dict[tuple, List[tuple]] = {}
+    for name in names:
+        m = _INPUT_NAME.match(name)
+        if not m:
+            continue
+        created = spark.sql(f"DESCRIBE DETAIL {schema}.{name}").collect()[0][
+            "createdAt"
+        ]
+        by_input.setdefault((m.group(1), m.group(3) or ""), []).append(
+            (created, m.group(2), name)
+        )
+    old: List[str] = []
+    for versions in by_input.values():
+        versions.sort(reverse=True)
+        old += [f"{schema}.{name}" for _, _, name in versions[max(keep, 1) :]]
+    return sorted(old)
+
+
+def drop_superseded(
+    spark, schema: str, keep: int = 1, dry_run: bool = True
+) -> List[str]:
+    """`superseded_inputs`, dropped unless `dry_run` (the default: they are shared, so this lists first). The tables."""
+    old = superseded_inputs(spark, schema, keep)
+    if not dry_run:
+        for full in old:
+            spark.sql(f"DROP TABLE IF EXISTS {full}")
+    return old
 
 
 def _drop_partial(spark, full: str) -> None:
@@ -432,7 +508,11 @@ def _gb_tiles(virtual: bool):
         name = stamped_name(schema, f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}")
         if schema is not None and spark.catalog.tableExists(f"{schema}.{name}"):
             return f"{schema}.{name}"  # built by an earlier form or run: no header of the corpus is read again
-        memo = (os.path.join(corpus, "rows"), n)
+        memo = (
+            os.path.join(corpus, "rows"),
+            n,
+            _corpus_fingerprint(corpus),
+        )  # a corpus that changes is not the one found in
         if memo not in _GB_FOUND:
             gb = []
             t0 = time.perf_counter()

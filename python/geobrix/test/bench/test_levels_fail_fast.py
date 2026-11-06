@@ -943,7 +943,7 @@ def test_a_rung_the_tag_does_not_stop_is_stopped_by_the_wider_interrupt_and_the_
     assert (
         bar.status == "over-bar"
         and "escalated at +" in bar.note
-        and "every job of the session" in bar.note
+        and "every operation of this session" in bar.note
     )
     assert "unresponsive" not in bar.note
     assert ("interrupt-all", None) in env.spark.calls
@@ -1189,6 +1189,12 @@ def test_the_comparison_refuses_to_mix_modes_and_takes_old_rows_as_isolated():
     exp = [levels._row({**base, "run_mode": "explore", "concurrent": 2}, status="ok")]
     cmp.check_comparable(iso, iso)  # alike: fine
     cmp.check_comparable(exp, exp)  # explore against explore: fine
+    exp1 = [levels._row({**base, "run_mode": "explore", "concurrent": 1}, status="ok")]
+    cmp.check_comparable(
+        exp, exp1
+    )  # explore against explore, whatever the concurrency: fine, both carry contention
+    with pytest.raises(cmp.ModeMixError):
+        cmp.check_comparable(iso + exp)  # a side that holds both modes
     for a, b in ((iso, exp), (exp, iso)):
         with pytest.raises(cmp.ModeMixError, match="different run modes"):
             cmp.compare_cells(a, b)
@@ -1216,3 +1222,154 @@ def test_the_notebook_writes_the_mode_the_concurrency_and_the_part_on_its_rows()
         "run_mode=RUN_MODE, concurrent=CONCURRENT," in nb
         and "cluster_id=CLUSTER_ID, part=PART" in nb
     )
+
+
+# ---- review: a scoped escalation, a stale rung that cannot reach the next form, a cancel that reaches the rung
+
+
+def test_a_classic_escalation_cancels_this_runs_groups_and_every_job_only_on_a_cluster_that_is_the_runs_alone(
+    monkeypatch,
+):
+    from databricks.labs.gbx.manager import capabilities
+
+    monkeypatch.setattr(capabilities, "is_connect", lambda s: False)
+    monkeypatch.setattr(capabilities, "is_serverless", lambda: False)
+    calls = []
+    sc = types.SimpleNamespace(
+        cancelJobGroup=lambda g: calls.append(("group", g)),
+        cancelAllJobs=lambda: calls.append(("all",)),
+    )
+    spark = types.SimpleNamespace(sparkContext=sc)
+    levels._RUN_GROUPS.add("gbx-bench-r-f-1x")
+    shared = levels._escalate_api(spark, exclusive=False)()
+    assert ("all",) not in calls and (
+        "group",
+        "gbx-bench-r-f-1x",
+    ) in calls  # other jobs on the cluster are left alone
+    assert "left alone" in shared
+    calls.clear()
+    alone = levels._escalate_api(spark, exclusive=True)()
+    assert calls == [("all",)] and "this run's alone" in alone
+
+
+def test_a_rung_given_up_on_does_not_reach_the_next_form_and_its_inputs_are_kept_until_the_run_ends(
+    env, monkeypatch
+):
+    forever = threading.Event()
+    releases = []
+    monkeypatch.setattr(
+        lf, "release_cached_inputs", lambda spark: releases.append(len(CALLS))
+    )
+    env.spark.tag_releases = False
+    env.spark.interruptAll = lambda: None
+
+    def stuck(sp, src):
+        advance(env, 5000)
+        stall_advancing(env, forever)
+
+    PLAN["stuck"] = stuck
+    PLAN["ok"] = lambda sp, src: advance(env, 1)
+    try:
+        rows, _ = env.run(
+            [form("stuck"), form("ok")], scales=(1,), rung_cap_s=1200, escalate_s=30
+        )
+    finally:
+        forever.set()
+    got = by(rows)
+    assert (
+        got[("stuck", 1)].status == "over-bar"
+        and "unresponsive" in got[("stuck", 1)].note
+    )
+    # the form that followed ran beside the stale rung, and says so
+    assert (
+        got[("ok", 1)].status == "ok"
+        and "ran while an abandoned rung was still running (stuck:L4:v@1x)"
+        in got[("ok", 1)].note
+    )
+    # nothing was released under the stale rung: the one release is the end of the run's, after both forms ran
+    assert releases == [2]
+
+
+def test_a_rung_that_ends_hands_its_registrations_back_to_the_run(env):
+    PLAN["f"] = lambda sp, src: advance(env, 1)
+    PLAN["g"] = lambda sp, src: advance(env, 1)
+    seen = {}
+    real = levels._run_one
+
+    def run_one(ctx, f, base, requested):
+        seen[f.fn] = dict(ctx.registered)  # what the rung starts with
+        ctx.registered["gbx_x"] = ("L3", "c0")  # what _register_form does
+        return real(ctx, f, base, requested)
+
+    import pytest as _pt
+
+    mp = _pt.MonkeyPatch()
+    mp.setattr(levels, "_run_one", run_one)
+    try:
+        env.run([form("f"), form("g")], scales=(1,))
+    finally:
+        mp.undo()
+    assert "gbx_x" not in seen["f"] and seen["g"]["gbx_x"] == (
+        "L3",
+        "c0",
+    )  # the second form sees the first's registration
+
+
+def test_a_notebook_cancel_reaches_the_rung_and_not_only_the_waiting_thread(env):
+    import _thread
+
+    def work(sp, src):
+        _thread.interrupt_main()  # the notebook's Cancel: KeyboardInterrupt on the run's main thread
+        stall_until_interrupted(env)
+
+    PLAN["f"] = work
+    with pytest.raises(KeyboardInterrupt):
+        env.run([form("f")], scales=(1,))
+    assert any(
+        kind == "interrupt" for kind, _ in env.spark.calls
+    )  # the rung's work was told to stop too
+
+
+def test_the_watchdog_says_when_there_is_no_wider_interrupt_and_when_it_fails():
+    clock = Clock()
+
+    def stuck_rung(escalate):
+        rung = levels._Rung(scale=1, clock=clock, deadline_s=10, setup_cap_s=5)
+        rung.begin_exec()
+        w = levels._Watchdog(
+            rung, lambda: None, poll=0.01, escalate_s=0.0, escalate=escalate
+        )
+        return rung, w
+
+    rung, w = stuck_rung(None)
+    w._escalate(61)
+    assert "no wider interrupt exists" in rung.interrupt_note
+    rung, w = stuck_rung(lambda: (_ for _ in ()).throw(RuntimeError("refused")))
+    w._escalate(61)
+    assert "escalation failed at +61s (RuntimeError: refused)" in rung.interrupt_note
+
+
+def test_the_compare_command_exits_2_with_the_mix_named(tmp_path, capsys):
+    from databricks.labs.gbx.bench import compare as cmp
+
+    base = dict(
+        run_id="r", api="x", fn="f", category="c", mode="spark-path", rows=10, level="L3", form="v", compute="dedicated",
+        **levels.capture_env("venv"),
+    )  # fmt: skip
+    hw, lw = tmp_path / "h.jsonl", tmp_path / "l.jsonl"
+    results.write_jsonl([levels._row(base, status="ok")], hw)
+    results.write_jsonl(
+        [levels._row({**base, "run_mode": "explore", "concurrent": 2}, status="ok")], lw
+    )
+    with pytest.raises(SystemExit) as ex:
+        cmp.main(
+            [
+                "--heavyweight",
+                str(hw),
+                "--lightweight",
+                str(lw),
+                "--out-dir",
+                str(tmp_path / "o"),
+            ]
+        )
+    assert ex.value.code == 2 and "different run modes" in capsys.readouterr().err

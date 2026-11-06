@@ -125,3 +125,112 @@ def test_a_temp_view_keeps_its_name_and_a_towers_companion_table_follows_the_tow
         towers,
         True,
     ) in made  # `<towers table>_tiles`, as the form reads it
+
+
+def test_a_reformat_or_a_reworded_comment_does_not_make_a_new_input(tmp_path):
+    import importlib.util
+
+    def load(name, text):
+        path = tmp_path / f"{name}.py"
+        path.write_text(text)
+        spec = importlib.util.spec_from_file_location(name, path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod.build
+
+    a = load(
+        "a",
+        "def build(spark, n):\n    '''one doc'''\n    # a comment\n    return n + 1\n",
+    )
+    b = load(
+        "b",
+        "def build(spark, n):\n    '''another doc'''\n    return (n   +   1)  # reworded\n",
+    )
+    c = load("c", "def build(spark, n):\n    return n + 2\n")
+    assert lf._source_of(a) == lf._source_of(b) != lf._source_of(c)
+
+
+def test_the_corpus_fingerprint_is_computed_once_per_listing_and_follows_the_listing(
+    monkeypatch,
+):
+    rows = ["/c/rows/1.tif", "/c/rows/2.tif"]
+    calls = []
+    monkeypatch.setattr(lf, "_corpus_rows", lambda corpus: calls.append(1) or rows)
+    first = lf._corpus_fingerprint("/c")
+    assert lf._corpus_fingerprint("/c") == first
+    rows2 = rows + ["/c/rows/3.tif"]
+    monkeypatch.setattr(lf, "_corpus_rows", lambda corpus: rows2)
+    assert lf._corpus_fingerprint("/c") != first  # another listing, another fingerprint
+
+
+def test_the_bng_tile_memo_follows_the_corpus(monkeypatch):
+    import contextlib
+
+    opened = []
+    monkeypatch.setattr(
+        lf,
+        "_corpus_rows",
+        lambda corpus: (
+            ["/c/rows/1.tif", "/c/rows/2.tif"] if corpus == "/c" else ["/c2/rows/9.tif"]
+        ),
+    )
+    monkeypatch.setattr(lf, "corpus_guard", lambda *a, **k: None)
+    monkeypatch.setattr(
+        lf,
+        "open_data",
+        lambda p: opened.append(p)
+        or contextlib.nullcontext(types.SimpleNamespace(crs=None)),
+    )
+    lf._GB_FOUND.clear()
+    spark = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(tableExists=lambda n: False)
+    )
+    for corpus in ("/c", "/c2"):
+        assert (
+            lf._gb_tiles(False)(spark, 1, corpus, "c.s") is None
+        )  # no BNG tile in either
+    assert len({k[2] for k in lf._GB_FOUND}) == 2  # one memo per corpus listing
+    assert any(
+        "/c2/" in p for p in opened
+    )  # the second corpus was read, not served from the first's memo
+
+
+def test_superseded_stamps_are_listed_newest_kept_and_dropped_only_when_asked():
+    class Rows:
+        def __init__(self, rows):
+            self.rows = rows
+
+        def collect(self):
+            return self.rows
+
+    created = {
+        "mvp_in_x_v2_10_aaaaaaaa": 1,
+        "mvp_in_x_v2_10_bbbbbbbb": 2,
+        "mvp_in_x_v2_10_cccccccc": 3,
+        "mvp_in_y_v2_10_aaaaaaaa": 1,
+        "mvp_in_x_v2_10_cccccccc_tiles": 3,
+        "mvp_in_x_v2_10_aaaaaaaa_tiles": 1,
+    }
+    dropped = []
+
+    class Spark:
+        def sql(self, q):
+            if q.startswith("SHOW TABLES"):
+                return Rows(
+                    [("s", n, False) for n in list(created) + ["mvp_in_unstamped"]]
+                )
+            if q.startswith("DESCRIBE DETAIL"):
+                return Rows([{"createdAt": created[q.rsplit(".", 1)[1]]}])
+            dropped.append(q)
+
+    old = lf.superseded_inputs(Spark(), "c.s")
+    assert old == [
+        "c.s.mvp_in_x_v2_10_aaaaaaaa",
+        "c.s.mvp_in_x_v2_10_aaaaaaaa_tiles",
+        "c.s.mvp_in_x_v2_10_bbbbbbbb",
+    ]  # y has one, "unstamped" is not ours
+    assert (
+        lf.drop_superseded(Spark(), "c.s") == old and dropped == []
+    )  # a dry run by default
+    lf.drop_superseded(Spark(), "c.s", dry_run=False)
+    assert dropped == [f"DROP TABLE IF EXISTS {t}" for t in old]

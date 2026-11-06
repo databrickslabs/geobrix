@@ -285,15 +285,13 @@ class ModeMixError(ValueError):
 
 
 def _mode_of(rows) -> set:
-    return {
-        (getattr(r, "run_mode", "isolate"), int(getattr(r, "concurrent", 1) or 1) > 1)
-        for r in rows
-    }
+    return {getattr(r, "run_mode", "isolate") for r in rows}
 
 
 def check_comparable(*sides) -> None:
-    """Refuse a comparison that mixes modes: an explore run's times carry contention (concurrent parts on one cluster),
-    so they are not set against an isolated run's, nor against each other's across modes.
+    """Refuse a comparison that mixes modes: an explore run's times carry contention (parts sharing a cluster), so they
+    are not set against an isolated run's. Explore against explore is allowed (both carry it), and so is isolate against
+    isolate.
     """
     modes = set()
     for rows in sides:
@@ -301,7 +299,7 @@ def check_comparable(*sides) -> None:
     if len(modes) > 1:
         raise ModeMixError(
             "rows of different run modes cannot be compared: "
-            + ", ".join(sorted(f"{m}{' (concurrent)' if c else ''}" for m, c in modes))
+            + ", ".join(sorted(modes))
             + ". Time both sides with --mode isolate, or compare only explore runs with each other."
         )
 

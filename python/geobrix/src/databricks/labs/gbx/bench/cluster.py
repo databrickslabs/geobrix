@@ -537,6 +537,7 @@ WARMUP_SKIP_S = {warmup_skip_s}
 RUN_MODE = {run_mode!r}
 CONCURRENT = {concurrent}
 PART = {part!r}
+EXCLUSIVE = {exclusive!r}  # the cluster is this run's alone (pool lease, job cluster): an unresponsive rung may cancel every job on it
 try:  # the cluster this driver runs on ("" on Serverless, which has no cluster id to read)
     CLUSTER_ID = spark.conf.get("spark.databricks.clusterUsageTags.clusterId")
 except Exception:
@@ -2820,7 +2821,7 @@ _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, 
                        inject_stall=INJECT_STALL, fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR,
                        rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S,
                        warmup_skip_s=WARMUP_SKIP_S, run_mode=RUN_MODE, concurrent=CONCURRENT,
-                       cluster_id=CLUSTER_ID, part=PART)
+                       cluster_id=CLUSTER_ID, part=PART, exclusive=EXCLUSIVE)
 lw.extend(_lv_rows)
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
 """
@@ -2860,7 +2861,7 @@ if _smoke["import_check"]["ok"] and LEVELS_MVP:
                            form_cap_s=STALL_CAP_S, report_tasks=True, inject_stall=INJECT_STALL,
                            fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR, rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S,
                            warmup_skip_s=WARMUP_SKIP_S, run_mode=RUN_MODE, concurrent=CONCURRENT,
-                           cluster_id=CLUSTER_ID, part=PART)
+                           cluster_id=CLUSTER_ID, part=PART, exclusive=EXCLUSIVE)
     for _r in _lv_rows:
         _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
                                     tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
@@ -3653,6 +3654,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         run_mode=str(cfg.get("run_mode", "isolate")),
         concurrent=int(cfg.get("concurrent", 1)),
         part=str(cfg.get("part", "")),
+        exclusive=bool(cfg.get("exclusive")),
         smoke=bool(cfg.get("smoke")),
         smoke_rows=int(cfg.get("smoke_rows", 16)),
         inject_stall=float(cfg.get("inject_stall", 0) or 0),

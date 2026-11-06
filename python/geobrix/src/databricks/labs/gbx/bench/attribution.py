@@ -602,6 +602,9 @@ def _rest_trouble(base: str, t0: float, t1: float, executors: int, ends: bool) -
     return ""
 
 
+RUN_GROUPS: set = set()  # the job groups the peak has used in this process
+
+
 class WorkerPeak:
     """Peak RSS (MB) of the Python workers that ran the shape.
 
@@ -748,6 +751,7 @@ class WorkerPeak:
         on every worker, and a busy cluster would hold the whole run."""
         sc = self.spark.sparkContext
         group = f"{_PEAK_JOB_GROUP}{uuid.uuid4().hex[:8]}"
+        RUN_GROUPS.add(group)  # so a run's wider cancel can name it (levels.run_groups)
         fired = threading.Event()
 
         def cancel():

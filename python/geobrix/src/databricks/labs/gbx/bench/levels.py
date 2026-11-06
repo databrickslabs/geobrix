@@ -293,9 +293,9 @@ class _Watchdog:
             )
             return
         try:
-            self.escalate()
+            what = self.escalate()
             self._note(
-                f"escalated at +{since:.0f}s: every job of the session was cancelled"
+                f"escalated at +{since:.0f}s: cancelled {what or 'the wider set'}"
             )
         except (
             Exception
@@ -305,7 +305,7 @@ class _Watchdog:
             )
         self.say(
             "INTERRUPT",
-            f"still running {since:.0f}s after the interrupt: escalated to every job",
+            f"still running {since:.0f}s after the interrupt: escalated to the wider cancel",
         )
 
     def _abandon(self, since: float) -> None:
@@ -391,13 +391,49 @@ def _interrupt_api(spark, tag: str):
     return None
 
 
-def _escalate_api(spark):
-    """The wider interrupt of the session, or None: every job of a classic session (after the group's was cancelled),
-    every operation of a Spark Connect one (`interruptAll`)."""
+_RUN_GROUPS: Set[str] = (
+    set()
+)  # the job groups this process's bench rungs have used (their tags)
+
+
+def run_groups() -> Set[str]:
+    """Every job group the bench has used in this process: the rungs' own, and the worker peak's."""
+    return set(_RUN_GROUPS) | set(attribution.RUN_GROUPS)
+
+
+def _escalate_api(spark, exclusive: bool = False):
+    """The wider interrupt, or None: a callable that returns what it cancelled (for the row).
+
+    Classic: the cancel of every job group this run has used; `cancelAllJobs` (every job of the SparkContext, other
+    parts' and notebooks' included) only when the cluster is this run's alone (`exclusive`: a pool lease or a job
+    cluster). Spark Connect: `interruptAll`, which is this session's operations only.
+    """
     sc = _classic_context(spark)
     if sc is not None:
-        return sc.cancelAllJobs
-    return getattr(spark, "interruptAll", None)
+        if exclusive:
+
+            def everything():
+                sc.cancelAllJobs()
+                return "every job of the cluster (it is this run's alone)"
+
+            return everything
+
+        def ours():
+            groups = sorted(run_groups())
+            for g in groups:
+                sc.cancelJobGroup(g)
+            return f"every job group of this run ({len(groups)}); other jobs on the cluster were left alone"
+
+        return ours
+    interrupt_all = getattr(spark, "interruptAll", None)
+    if interrupt_all is None:
+        return None
+
+    def session():
+        interrupt_all()
+        return "every operation of this session"
+
+    return session
 
 
 def _tag(run_id: str, label: str, scale: int) -> str:
@@ -444,6 +480,7 @@ def run_mvp(
     concurrent: int = 1,
     cluster_id: str = "",
     part: str = "",
+    exclusive: bool = False,
 ) -> List[ResultRow]:
     """Time every form of `mvp` that this compute offers, at each scale; one row per form and scale.
 
@@ -490,7 +527,9 @@ def run_mvp(
 
     Every row records how the run was set up: `run_mode` ("isolate": timing-grade, one run on its compute; "explore":
     parts may share a cluster, so the numbers find what is slow and are not compared with isolated ones), `concurrent`
-    (the most parts on the cluster at once), `cluster_id` and `part` (which part of a split run).
+    (the most parts on the cluster at once), `cluster_id` and `part` (which part of a split run). `exclusive` says the
+    cluster is this run's alone (a pool lease, a job cluster): only then may an unresponsive rung's escalation cancel every
+    job on it; otherwise it cancels the job groups this run used.
     """
     from databricks.labs.gbx.bench import levels_forms as lf
 
@@ -532,6 +571,7 @@ def run_mvp(
         watch_poll_s,
         warmup_skip_s,
         escalate_s,
+        exclusive,
     )
     by_form: Dict[int, List[ResultRow]] = {i: [] for i in range(len(todo))}
     hist: Dict[int, _Hist] = {}
@@ -599,6 +639,7 @@ def run_mvp(
                 form_cap_s,
                 rung,
             )
+        alive_before = [lbl for lbl, th in ctx.stale if th.is_alive()]
         row = _execute(
             ctx,
             form,
@@ -609,6 +650,12 @@ def run_mvp(
             bar,
             keep_input=fail_fast,
         )
+        if alive_before and row.status != SKIPPED:
+            # an abandoned rung's work is still on the cluster: this timing was taken beside it
+            row = replace(
+                row,
+                note=f"{row.note}; ran while an abandoned rung was still running ({', '.join(alive_before)})",
+            )
         ctx.held = input_key if fail_fast and row.status == "ok" else None
         ctx.last_input = input_key if row.status == "ok" else None
         rows.append(row)
@@ -634,8 +681,8 @@ def run_mvp(
             # sunk now, not after the last scale: a later scale that hangs or is cancelled loses nothing. The
             # linearity guard needs two scales, so this row is guarded by the scales run so far.
             on_form([_guard_sent(rows)[-1]])
-    if ctx.held is not None:
-        _release(lf, spark)
+    if ctx.held is not None or ctx.stale:
+        _release(lf, spark)  # what an abandoned rung held goes with the end of the run
     out: List[ResultRow] = []
     for i in range(len(todo)):
         out += _guard_sent(by_form[i])
@@ -655,6 +702,7 @@ class _Bar:
     poll_s: float
     warmup_skip_s: float = WARMUP_SKIP_S
     escalate_s: float = ESCALATE_AFTER_S
+    exclusive: bool = False
 
 
 def _skip_note(
@@ -775,15 +823,31 @@ def _execute(
     from databricks.labs.gbx.bench import levels_forms as lf
 
     spark = ctx.spark
-    stuck, row = False, None
+    stuck, row, stale = False, None, None
+    # A supervised rung works on a copy of the run's state: a rung the run gives up on keeps running on its copy, and what
+    # it does late (a registration, a setup) cannot reach the forms that follow; a rung that ends merges its state back.
+    rctx = ctx
+    if rung is not None:
+        rctx = dataclasses.replace(
+            ctx, registered=dict(ctx.registered), setups=set(ctx.setups), rung=rung
+        )
     try:
         if rung is None:
             row = _attempt(ctx, form, base, requested, None)
         else:
-            row, stuck = _supervised(ctx, form, base, requested, rung, tag, bar)
+            row, stuck, stale = _supervised(rctx, form, base, requested, rung, tag, bar)
+            if stale is None:
+                ctx.registered.update(rctx.registered)
+                ctx.setups |= rctx.setups
+                ctx.jvm_why = rctx.jvm_why if rctx.jvm_why is not None else ctx.jvm_why
+            else:
+                ctx.stale.append(
+                    (f"{form.fn}:{form.level}:{form.variant}@{rung.scale}x", stale)
+                )
     finally:
         ctx.rung = None
-        if row is None or row.status != "ok" or not keep_input:
+        # an abandoned rung may still be using its cached inputs: they are released at the end of the run, not under it
+        if stale is None and (row is None or row.status != "ok" or not keep_input):
             _release(lf, spark)  # the rung is over: its cached inputs go
     if stuck and rung is not None:
         row = replace(row, note=f"{row.note}; {rung.interrupt_note.lstrip('; ')}")
@@ -802,6 +866,32 @@ def _release(lf, spark) -> None:
         )
 
 
+def _wait_for_rung(worker, done, rung, api, poll_s, set_thread) -> None:
+    """Start the rung's thread and wait for it, until it ends or the watchdog abandons it. A notebook cancel
+    (KeyboardInterrupt) reaches this thread and not the rung's: it is passed on to the rung's work.
+    """
+    try:
+        worker.start()
+        if set_thread is not None:
+            set_thread(
+                worker.ident
+            )  # the stack in the beat is the rung's, not the waiting thread's
+        while not done.wait(poll_s):
+            if rung.abandoned:
+                break
+    except BaseException:
+        rung.cancelled = rung.cancelled or "cancelled"
+        if api is not None:
+            try:
+                api[1]()
+            except Exception:  # noqa: BLE001 - the run ends either way
+                pass
+        raise
+    finally:
+        if set_thread is not None:
+            set_thread(None)
+
+
 def _supervised(
     ctx: "_Ctx",
     form: Form,
@@ -810,8 +900,8 @@ def _supervised(
     rung: _Rung,
     tag: str,
     bar: _Bar,
-) -> Tuple[ResultRow, bool]:
-    """The rung on a thread of its own under a watchdog; `(row, watchdog_stuck)`. The thread arms the interrupt (the
+) -> Tuple[ResultRow, bool, Optional[threading.Thread]]:
+    """The rung on a thread of its own under a watchdog; `(row, watchdog_stuck, abandoned_thread)`. The thread arms the interrupt (the
     job group and the tags are per thread) and disarms it; the run waits for it, and moves on without it when the
     watchdog abandons the rung."""
     spark = ctx.spark
@@ -822,8 +912,9 @@ def _supervised(
         rung.interrupt_note = (
             f"interrupt unavailable ({type(exc).__name__}: {str(exc)[:120]})"
         )
+    _RUN_GROUPS.add(tag)
     try:
-        wider = _escalate_api(spark)
+        wider = _escalate_api(spark, bar.exclusive)
     except (
         Exception
     ):  # noqa: BLE001 - no wider interrupt: the rung is abandoned after the window
@@ -862,26 +953,15 @@ def _supervised(
             done.set()
 
     worker = threading.Thread(target=work, name="gbx-rung-worker", daemon=True)
-    worker.start()
     set_thread = getattr(ctx.heartbeat, "set_work_thread", None)
-    if set_thread is not None:
-        set_thread(
-            worker.ident
-        )  # the stack in the beat is the rung's, not the waiting thread's
-    try:
-        while not done.wait(bar.poll_s):
-            if rung.abandoned:
-                break
-    finally:
-        if set_thread is not None:
-            set_thread(None)
+    _wait_for_rung(worker, done, rung, api, bar.poll_s, set_thread)
     stuck = not watch.stop()
     if not done.is_set():  # abandoned: the thread is left running
         rung.cancelled = rung.cancelled or OVER_BAR
-        return _over_bar_row(base, rung, form), stuck
+        return _over_bar_row(base, rung, form), stuck, worker
     if "exc" in box:
         raise box["exc"]
-    return box["row"], stuck
+    return box["row"], stuck, None
 
 
 def _say_skip(mvp, index, total, label, scale, rows, note) -> None:
@@ -1041,6 +1121,9 @@ class _Ctx:
         None  # the (input, rows) of the last rung that finished ok
     )
     input_reused: bool = False  # the rung about to run has the input the last one used
+    stale: list = dataclasses.field(
+        default_factory=list
+    )  # (label, thread) of rungs given up on that may still be running
 
 
 _JVM_LEVELS = ("L1", "L2", "JVM-DF")  # forms whose body is the geobrix JAR

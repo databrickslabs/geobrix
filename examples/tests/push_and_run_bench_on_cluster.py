@@ -1547,6 +1547,7 @@ def _main(_stack) -> int:
         run_mode=run_mode,
         concurrent=concurrent,
         part=part,
+        exclusive=bool(pool_name or new_cluster),  # a cluster of this run's alone: its escalation may cancel every job
         inject_stall=inject_stall,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.

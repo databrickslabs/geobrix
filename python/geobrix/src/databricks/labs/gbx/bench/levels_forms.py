@@ -121,6 +121,26 @@ def _bng_polys(spark, n, corpus, schema):
 
 SMALL_INPUT_ROWS = 64  # a tile input of at most this many rows is built from the first files, not by a limit
 
+_CORPUS_SEEN: set = set()
+
+
+def corpus_guard(label: str, rows_dir: str, held: int, need: int) -> None:
+    """Refuse a scale the corpus cannot supply, and say once per run how many tiles it holds.
+
+    A short corpus must not cap silently: every scale of a ladder would read the same tiles under its own label. The
+    error names both numbers and the generator that fills the gap on Databricks (no upload).
+    """
+    key = (label, rows_dir)
+    if key not in _CORPUS_SEEN:
+        _CORPUS_SEEN.add(key)
+        print(f"[LEVELS {label}] corpus {rows_dir} holds {held} tiles", flush=True)
+    if need > held:
+        raise ValueError(
+            f"the scale asks for {need} tiles but {rows_dir} holds only {held}. "
+            f"Fix: gbx:bench:gen-data --on-databricks --rows-from {held} --rows-to {need - 1} "
+            "(generated on Databricks, not uploaded)"
+        )
+
 
 def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
     """The corpus tiles under `subdir` as a one-column `tile` table (`name` labels the cached table)."""
@@ -133,6 +153,8 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
             return None
 
         gbx_manager.register_sources(spark)  # the light raster reader
+        if subdir == "rows":
+            corpus_guard(name or "tiles", rows, len(_corpus_rows(corpus) or []), n)
         label = f"mvp_in_tiles_{name or ('virt' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
         first = (
             _corpus_rows(corpus) if subdir == "rows" and n <= SMALL_INPUT_ROWS else None
@@ -213,6 +235,7 @@ def _grouped(recipe: str, virtual: bool):
             return None
         from databricks.labs.gbx.bench import synth
 
+        corpus_guard("tiles_grouped", os.path.join(corpus, "rows"), len(sources), n)
         pairs = []
         for src in sources[:n]:
             out = synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe)
@@ -240,8 +263,9 @@ def _gb_tiles(virtual: bool):
             return None
 
         gb = []
-        # a probe: a corpus with no EPSG:27700 tiles must not open every file
-        for p in sources[:64]:
+        # the corpus cycles four systems, so about a quarter are EPSG:27700: look at 4n + 64 files, no more (a corpus
+        # with none must not open every file)
+        for p in sources[: 4 * n + 64]:
             with open_data(p) as ds:
                 if ds.crs is not None and ds.crs.to_epsg() == 27700:
                     gb.append(p)
@@ -249,6 +273,7 @@ def _gb_tiles(virtual: bool):
                 break
         if not gb:
             return None
+        corpus_guard("tiles_gb", os.path.join(corpus, "rows"), len(gb), n)
         kind = "virt" if virtual else "mat"
         return _table(
             spark,
@@ -281,7 +306,7 @@ def _plan_grouped_tiles(sources, n, skew):
     points are the memory cliff, not a comparison.
     """
 
-    n = min(n, len(sources))
+    corpus_guard("tiles_grouped", "the corpus rows", len(sources), n)
     half = n // 2
     size = _REST_GROUP_SIZE if skew else _GROUP_SIZE
     by_crs: Dict[Optional[int], List[str]] = {}
@@ -313,7 +338,6 @@ def _grouped_tiles(skew: bool):
         sources = _corpus_rows(corpus)
         if not sources:
             return None
-        n = min(n, len(sources))
         pairs = _plan_grouped_tiles(sources, n, skew)
         kind = "skew" if skew else "even"
         return _table(
@@ -1032,7 +1056,7 @@ def _br_shapes(canvas=_A_CANVAS):
     )
     return {
         "grouped": f"SELECT key, {_BR}({args}) AS out FROM {{src}} GROUP BY key",
-        "udaf": f"SELECT key, {_BR}({args}).raster AS out FROM {{src}} GROUP BY key",
+        "udaf": f"SELECT key, {_BR}({args}) AS out FROM {{src}} GROUP BY key",
         "finalize": finalize.format(fn="gbx_mvp_rst_bng_rasterize_cells"),
         "finalize_l2": finalize.format(fn="gbx_mvp_rst_bng_rasterize_cells_l2"),
         # partial canvases per (key, salt), then one per-pixel max per key
@@ -1624,8 +1648,9 @@ def _io_spec(spark, n, corpus, schema):
     if int(n) > held:
         # A short corpus must not cap silently: every scale of the ladder would read the same tiles under its own label.
         raise ValueError(
-            f"the IO ladder asks for {int(n)} tiles but {rows} holds only {held}: stage a corpus of at least {int(n)} "
-            f"tiles (gbx:bench:gen-data --row-rows {int(n)}, then put it on the Volume) or lower the scales"
+            f"the IO ladder asks for {int(n)} tiles but {rows} holds only {held}. "
+            f"Fix: gbx:bench:gen-data --on-databricks --rows-from {held} --rows-to {int(n) - 1} "
+            "(generated on Databricks, not uploaded), or lower the scales"
         )
     return _table(
         spark,
@@ -1952,3 +1977,9 @@ def client_bytes(input_key: str, rows: int) -> int:
         return 0
     size, per_row = CLIENT_TILES[input_key]
     return rows * per_row * size_of(_se_dem_tile(size, 0))
+
+
+# One set per function family of the manifest, beside the sets above (`bench.levels_family`)
+from databricks.labs.gbx.bench import levels_family as _levels_family  # noqa: E402
+
+_levels_family.install(__import__(__name__, fromlist=["x"]))

@@ -403,6 +403,22 @@ def effective_levels_scales(levels_mvp, levels_scales, root) -> tuple:
     return levels.ladder(levels_mvp)
 
 
+LEVELS_LETTER_SETS = ("S", "G", "A", "H", "SE", "IO")
+
+
+def levels_set_names(root) -> tuple:
+    """The sets ``--levels`` accepts: the letter sets and the function families of the manifest (each family key is a set;
+    the manifest is read as JSON, so this runs where pyspark is absent)."""
+    import json
+
+    path = Path(root) / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
+    try:
+        families = sorted({f["family"] for f in json.loads(path.read_text())["functions"]})
+    except (OSError, ValueError, KeyError):
+        families = []
+    return LEVELS_LETTER_SETS + tuple(families)
+
+
 def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> Optional[str]:
     """Why the levels ladder can never pass the client-input cap, or None when every scale fits.
 
@@ -963,15 +979,16 @@ def main() -> int:
     if levels_scales is not None and (not levels_scales or min(levels_scales) < 1):
         print("ERROR: --levels-scales must be positive integers, e.g. 1,4,16", file=sys.stderr)
         return 2
-    if levels_mvp not in ("", "S", "G", "A", "H", "SE", "IO"):
+    known_sets = levels_set_names(Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent))
+    if levels_mvp and levels_mvp not in known_sets:
         print(
-            f"ERROR: --levels must be one of S, G, A, H, SE, IO (got '{levels_mvp}')",
+            f"ERROR: --levels must be one of {', '.join(known_sets)} (got '{levels_mvp}')",
             file=sys.stderr,
         )
         return 2
     if (levels_only or levels_uc) and not levels_mvp:
         print(
-            "ERROR: --levels-only and --levels-uc need --levels <S|G|A|H|SE|IO>.",
+            "ERROR: --levels-only and --levels-uc need --levels <set> (S, G, A, H, SE, IO or a function family).",
             file=sys.stderr,
         )
         return 2

@@ -166,7 +166,9 @@ def test_levels_leg_times_every_light_shape_of_the_generators(
     from databricks.labs.gbx.bench import oracles
 
     (tmp_path / "rows").mkdir()
-    for i in range(2):  # 300 x 200 px: six 128-px windows each
+    for i in range(
+        20
+    ):  # 300 x 200 px: six 128-px windows each; as many as the scale asks for
         (tmp_path / "rows" / f"r{i}.tif").write_bytes(
             oracles._tile_bytes("EPSG:4326", 300, 200)
         )
@@ -204,7 +206,9 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
     from databricks.labs.gbx.bench import oracles
 
     (tmp_path / "rows").mkdir()
-    for i in range(2):
+    for i in range(
+        400
+    ):  # as many tiles as the scale asks for (a short corpus is refused)
         (tmp_path / "rows" / f"r{i}.tif").write_bytes(
             oracles._tile_bytes("EPSG:4326", 32, 32)
         )
@@ -270,7 +274,7 @@ def test_the_merge_input_groups_hold_tiles_of_one_crs_sized_from_the_rows_there_
         + ["EPSG:27700"] * 14
         + ["EPSG:32618"] * 14
     )
-    for i, c in enumerate(crs):  # 122 tiles; the even input asks for 5000
+    for i, c in enumerate(crs):  # 122 tiles
         (tmp_path / "rows" / f"r{i}.tif").write_bytes(oracles._tile_bytes(c, 32, 32))
 
     def groups(name, n):
@@ -283,7 +287,9 @@ def test_the_merge_input_groups_hold_tiles_of_one_crs_sized_from_the_rows_there_
                 out.setdefault(key, []).append(ds.crs.to_epsg())
         return out
 
-    even = groups("tiles_grouped", 5000)
+    with pytest.raises(ValueError, match=r"asks for 5000 tiles but .* holds only 122"):
+        groups("tiles_grouped", 5000)  # a short corpus is an error, never a silent cap
+    even = groups("tiles_grouped", 122)
     assert sum(map(len, even.values())) == 122
     assert all(len(set(v)) == 1 for v in even.values()), even  # one CRS a group
     assert len(even) >= 4 and max(map(len, even.values())) <= lf._GROUP_SIZE

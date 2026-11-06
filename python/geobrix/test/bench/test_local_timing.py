@@ -63,6 +63,18 @@ def test_a_form_whose_cost_per_tile_is_more_than_k_times_its_peers_is_flagged():
     assert [f for f in flags if f.startswith("b: per-tile")]
 
 
+def test_forms_at_or_under_the_floor_raise_no_peer_flag():
+    """A floor that costs more than the forms (a scan-bound function) leaves negative costs per tile: -15 ms is not
+    'over 3x' a peers' median of -14 ms."""
+    res = {
+        ("a", 6): 0.6, ("a", 24): 2.4, ("a", 96): 6.5,
+        ("b", 6): 0.6, ("b", 24): 1.7, ("b", 96): 6.7,
+        ("floor", 6): 0.5, ("floor", 24): 1.6, ("floor", 96): 7.5,
+    }  # fmt: skip
+    got = lt.flags(res, forms=("a", "b", "floor"), ns=(6, 24, 96), reference="a")
+    assert not [f for f in got if "per-tile" in f], got
+
+
 def test_a_form_that_failed_is_a_flag_not_a_crash():
     flags = _flags(_res(**{"d-py": (2.0, float("nan"), 12.4)}))
     assert flags == [
@@ -98,7 +110,17 @@ def test_every_form_of_the_se_set_exists_for_its_function():
 
 
 def test_only_the_known_sets_are_implemented(capsys):
-    assert set(lt.SETS) == {"IO", "S", "SE"}
+    # the letter sets, and one set per multi-level function family of the manifest
+    assert {"IO", "S", "SE"} <= set(lt.SETS)
+    assert set(lt.SETS) - {"IO", "S", "SE"} == {
+        f.family
+        for f in __import__("databricks.labs.gbx.manifest", fromlist=["x"])
+        .load()
+        .functions.values()
+        if "L1" in f.levels and "L3" in f.levels
+    } - {
+        "web-tiles"
+    }  # no set yet
     with pytest.raises(
         SystemExit
     ) as e:  # a usage error: 2, so 1 stays "the pass flagged a form"

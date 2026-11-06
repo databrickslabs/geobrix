@@ -119,6 +119,110 @@ SETS: Dict[str, SetSpec] = {
 }
 
 
+def _family_sets() -> Dict[str, SetSpec]:
+    """One set per function family of the manifest (`bench.levels_family`): its representative function's forms at every
+    level (`l1@<input>`, each L3 variant, a floor last), over ONE input of n rows. A tile family reads the shared
+    96-tile copy of the corpus; a generated-input family needs none."""
+    tiles = dict(
+        corpus_src="/Volumes/main/default/bench-corpus/rows",
+        corpus_dir="/tmp/gbx-local-timing/IO",
+    )
+    n_tiles = (4, 16, 64)
+
+    def tile_fn(family: str, fn: str, tag: str = "n", ns=n_tiles, **kw) -> SetSpec:
+        return SetSpec(
+            mvp=family,
+            forms=(f"l1@{tag}", f"c0@{tag}", f"floor@{tag}"),
+            reference=f"c0@{tag}",
+            ns=ns,
+            fn=fn,
+            **{**tiles, **kw},
+        )
+
+    def gen_fn(
+        family: str, fn: str, tag: str, ns, variant: str = "c0", exempt=()
+    ) -> SetSpec:
+        return SetSpec(
+            mvp=family,
+            forms=(f"l1@{tag}", f"{variant}@{tag}", f"floor@{tag}"),
+            reference=f"{variant}@{tag}",
+            ns=ns,
+            fn=fn,
+            peer_exempt=tuple(f"{e}@{tag}" for e in exempt),
+        )
+
+    return {
+        "raster-accessor": tile_fn("raster-accessor", "gbx_rst_width"),
+        "raster-stat": tile_fn("raster-stat", "gbx_rst_avg"),
+        "raster-tile-op": tile_fn("raster-tile-op", "gbx_rst_align_to"),
+        "raster-file-op": tile_fn("raster-file-op", "gbx_rst_cog_convert"),
+        "raster-vectorize": tile_fn("raster-vectorize", "gbx_rst_isoband"),
+        "raster-constructor": tile_fn(
+            "raster-constructor", "gbx_rst_fromcontent", "bytes"
+        ),
+        "raster-rasterize": gen_fn(
+            "raster-rasterize", "gbx_rst_binpoints", "pts", (200, 800, 3200)
+        ),
+        "raster-generator": SetSpec(
+            mvp="raster-generator",
+            forms=("udtf", "udtf-arrow", "floor"),
+            reference="udtf",
+            ns=n_tiles,
+            fn="gbx_rst_retile",
+            **tiles,
+        ),
+        "raster-array-op": SetSpec(
+            mvp="raster-array-op",
+            forms=("h_combine_l3", "h_combine_l1", "floor"),
+            reference="h_combine_l3",
+            ns=(2, 8, 32),  # groups of two tiles: 4, 16 and 64 tiles in all
+            fn="gbx_rst_combineavg",
+            **tiles,
+        ),
+        "raster-aggregate": SetSpec(
+            mvp="raster-aggregate",
+            forms=("c0", "udaf", "floor"),
+            reference="c0",
+            ns=(100_000, 400_000, 1_600_000),
+            fn="gbx_rst_bng_rasterize_agg",
+        ),
+        "cell-aggregate": gen_fn(
+            "cell-aggregate", "gbx_bng_cellfill", "cells", (100_000, 400_000, 1_600_000)
+        ),
+        "grid-array": gen_fn(
+            "grid-array", "gbx_bng_kring", "cells", (100_000, 400_000, 1_600_000), "l3"
+        ),
+        "grid-generator": SetSpec(
+            mvp="grid-generator",
+            forms=("udtf", "udtf-arrow", "tvf", "floor"),
+            reference="udtf",
+            ns=(5_000, 20_000, 80_000),
+            fn="gbx_bng_tessellateexplode",
+        ),
+        "vector-scalar": gen_fn(
+            "vector-scalar",
+            "gbx_st_transformcrs",
+            "polys",
+            (2_000, 8_000, 32_000),
+            "l3",
+            (
+                "l1",
+            ),  # the JVM transform is ~25x the light one per row: a finding, not a scaling defect
+        ),
+        "vector-aggregate": gen_fn(
+            "vector-aggregate", "gbx_st_asmvt", "mvt", (20_000, 80_000, 320_000)
+        ),
+        "vector-generator": gen_fn(
+            "vector-generator", "gbx_st_triangulate", "tin", (800, 3_200, 12_800), "l3"
+        ),
+    }
+
+
+SETS.update(_family_sets())
+# the BNG scalar's forms are the grid-scalar family's
+SETS["grid-scalar"] = dataclasses.replace(SETS["S"], mvp="grid-scalar")
+
+
 def needs(spec: SetSpec) -> Tuple[bool, bool]:
     """``(jar, rust)``: whether the set's forms need the geobrix JAR (an L1/L2/JVM-DF form) and the Rust payload (the
     L3 ``d`` form). The IO set's forms are Python only and need neither; a form the pass cannot run here is
@@ -195,7 +299,13 @@ def flags(
                 out.append(
                     f"{f}: non-linear t{hi}/t{mid}={t_hi / t_mid:.2f} (expect {MIN_GROWTH:g} to {want * 1.5:g})"
                 )
-        if peers is not None and f not in peer_exempt and per_tile[f] > k * peers:
+        if (
+            peers is not None
+            and peers
+            > 0  # at or under the floor the forms' work is below the noise: nothing to compare
+            and f not in peer_exempt
+            and per_tile[f] > k * peers
+        ):
             out.append(
                 f"{f}: per-tile {per_tile[f]:.0f} ms > {k:g}x its peers' median {peers:.0f} ms"
             )

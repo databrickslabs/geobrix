@@ -72,22 +72,22 @@ For coercing an arbitrary frame to this shape and for exporting Databricks `GEOM
 `GEOGRAPHY` columns, see the [**Vector Writer schema**](./vector#schema).
 
 **Output:** an ESRI Shapefile — a `.shp` plus its `.shx` / `.dbf` / `.prj` / `.cpg` sidecars.
-Note the Shapefile format constraints: **attribute field names are truncated to 10 characters**,
-attribute types are limited by the dBASE (`.dbf`) format, and a file holds a single geometry
+Note the Shapefile format constraints. **Attribute field names are truncated to 10 characters.**
+Attribute types are limited by the dBASE (`.dbf`) format, and a file holds a single geometry
 type.
 
 ## How it scales
 
 Unlike a single-node `pyogrio.write_*` call that serializes one file on one machine, the
-`shapefile_gbx` writer runs as a Spark DataSource V2 two-phase write: **each partition is
-written concurrently** by its executor to a scratch fragment, then the driver **merges the
+`shapefile_gbx` writer runs as a Spark DataSource V2 two-phase write. **Each executor
+writes its partition concurrently** to a scratch fragment. Then the driver **merges the
 fragments into one output file**. The merge is sequential and rename-free, so it is safe on
 FUSE-mounted cloud storage (Unity Catalog Volumes, DBFS). Repartition the input to control
 write parallelism.
 
 ## Output naming
 
-`shapefile_gbx` applies the standard single-file [output naming contract](./overview#output-naming-for-single-file-writers). When `zip=true` the canonical extension is `.shp.zip`; without `zip` the output is a sidecar directory (not a single file, so the naming contract applies to the directory name rather than a file extension). Rules for the `zip=true` (single-archive) case:
+`shapefile_gbx` applies the standard single-file [output naming contract](./overview#output-naming-for-single-file-writers). When `zip=true` the canonical extension is `.shp.zip`. Without `zip` the output is a sidecar directory. It is not a single file, so the naming contract applies to the directory name rather than a file extension). Rules for the `zip=true` (single-archive) case:
 
 | Case | `.save(path)` / `fileName` | Resolved output |
 |---|---|---|

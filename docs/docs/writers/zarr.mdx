@@ -14,8 +14,8 @@ import zarrWrite from '!!raw-loader!../../tests/python/writers/zarr_write_exampl
 _Since:_ lightweight `gbx_zarr_write` **v0.6.0** · _(light-only — no heavyweight tier)_
 
 `gbx_zarr_write` writes a [Zarr](https://zarr.dev) store **transactionally**. One write is one Delta
-`MERGE` on the store's manifest table, so it is visible whole or not at all; writers that touch
-different chunks both land, and writers that meet on one chunk get a clear error. This page is the
+`MERGE` on the store's manifest table, so it is visible whole or not at all. Writers that touch
+different chunks both land. Writers that meet on one chunk get a clear error. This page is the
 how-to: the modes, the inputs, the layout of new arrays, what happens when writers meet, and publishing a
 registered store. [Zarr Stores](../api/zarr-stores) explains the model, and the
 [Zarr Function Reference](../api/zarr-functions#gbx_zarr_write) lists every parameter and error.
@@ -43,9 +43,9 @@ This page describes the managed (transactional) store, the default; [Plain store
 covers the opt-in plain write.
 
 `root`, `chunks`, `shards`, `codecs`, `file_mode` and `retain` belong to `mode="create"`: in the other
-modes they raise `ValueError` with a `Fix:` (a later write may repeat the store's own `file_mode`). A write into a registered store needs it to be registered
-with `writable=True`; it goes to the store's overlay root, in the base arrays' own codecs and key
-encoding, and the store itself is never written (see [Registered stores](#registered-stores-and-publish)).
+modes they raise `ValueError` with a `Fix:` (a later write may repeat the store's own `file_mode`). A write into a registered store needs the store to be registered
+with `writable=True`. It goes to the store's overlay root, in the base arrays' own codecs and key
+encoding. The store itself is never written (see [Registered stores](#registered-stores-and-publish)).
 
 Old versions stay readable until [vacuumed](../api/zarr-lifecycle): an `overwrite`
 does not destroy what it replaces.
@@ -56,7 +56,7 @@ does not destroy what it replaces.
 
 **Blocks**: a DataFrame in the schema [`gbx_zarr_read`](../readers/zarr#output-blocks) returns
 (`BLOCKS_SCHEMA`). With `decode=True` values (the default of a read) the writer applies the array's CF
-attributes the other way: times back to the array's units, packed values to their integer type, NaN to
+attributes the other way. It converts times back to the array's units, packed values to their integer type, and NaN to
 the fill value. Blocks that still carry the array's packing attributes (a read with `decode=False`)
 are written as the stored values they are.
 
@@ -81,7 +81,7 @@ A new array is laid out by three arguments of `mode="create"`:
 | `codecs` | The inner chunk's codec chain, as Zarr v3 codec documents (dicts) or zarr codec objects, starting with a serializer such as `{"name": "bytes"}` | `bytes`, `zstd` (level 3), `crc32c` |
 
 An **inner chunk** is the unit of reading and writing, about 4 MiB decoded. A **shard** groups inner
-chunks into one object of at most 128 MiB decoded and 4096 chunks, because on a Volume every object costs
+chunks into one object of at most 128 MiB decoded and 4096 chunks. On a Volume every object costs
 a round trip. The last two dimensions are the spatial ones; any before them are leading dimensions
 (time, level, ...).
 
@@ -93,9 +93,9 @@ a round trip. The last two dimensions are the spatial ones; any before them are 
 
 Only the first leading dimension takes the preset's step; any other leading dimension has chunks of 1. A
 `chunks` dict sets the dimensions it names, as given (an append dimension may want chunks longer than
-today's data), and leaves the others at the `"balanced"` size; presets are clipped to a dimension's length. A shard is always a whole number of chunks, and
-the leading dimension's shard grows by whole chunks past the current length, so a store created small
-and appended to along time keeps filling the same shards. Coordinates are written as one unsharded chunk,
+today's data). It leaves the others at the `"balanced"` size. Presets are clipped to a dimension's length. A shard is always a whole number of chunks. The
+leading dimension's shard grows by whole chunks past the current length. A store created small
+and appended to along time therefore keeps filling the same shards. Coordinates are written as one unsharded chunk,
 long enough that appends keep landing in it.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="create_with_a_layout"
@@ -120,7 +120,7 @@ A store in `external` mode keeps `FILE` values in its manifest. It can be writte
 only on compute that supports them. Other compute refuses before it writes anything.
 
 If a `create` fails after it made the table but before anything committed, run it again with the same
-arguments: a `create` on a manifest you own that has no commit yet adopts it. Two `create` calls that claim
+arguments. A `create` on a manifest you own that has no commit yet adopts it. Two `create` calls that claim
 one root at the same moment cannot both win, and the loser never releases the marker the winner relies on.
 
 ### Creating from an xarray Dataset
@@ -134,16 +134,16 @@ one root at the same moment cannot both win, and the loser never releases the ma
 A create from blocks labels a dimension only if the blocks carry its coordinate array. Read the
 coordinates with the variables (`variables=["t2m", "time", "latitude", "longitude"]`, as the examples
 above do). Without them the write still succeeds and logs a warning, "the blocks carry no coordinate for
-...", and the new store labels those dimensions by position only.
+...". The new store labels those dimensions by position only.
 
 ## Appending, updating and overwriting
 
-An `append` labels the new steps: they must come after the store's last, and on a regular axis they land
+An `append` labels the new steps. They must come after the store's last. On a regular axis they land
 at their step, so appends may arrive out of order. On an irregular axis they land at the current length.
 [Zarr transactions](../api/zarr-transactions) shows an append, an update and a conflict.
 
 An `update` writes into the existing extent. An inner chunk the input covers whole is encoded without
-being read; a chunk it covers only in part is read at the base version, patched and written again. A
+being read. A chunk it covers only in part is read at the base version, patched and written again. A
 `write_id` (32 lowercase hex characters) makes a write idempotent: writing again with one that has already
 committed returns its version and writes nothing.
 
@@ -160,8 +160,8 @@ An `overwrite` replaces the variables it names:
 - **It is required to create a variable the store lacks.** A new variable is created on the store's
   dimensions, with the layout and codecs of a new array and the attributes of its first block. Without
   `variables=` the writer only knows the arrays the store already has, and refuses a block of any other.
-- **It narrows the work.** Without it every decodable array of the store is a candidate: the write reads
-  the manifest rows of all of them and moves them through its shuffle, and only then keeps the rows of
+- **It narrows the work.** Without it every decodable array of the store is a candidate. The write reads
+  the manifest rows of all of them and moves them through its shuffle. Only then does it keep the rows of
   the chunks its input touches. Naming the variables leaves the other arrays' rows out from the start,
   so on a large store name the variables you write.
 
@@ -172,16 +172,16 @@ An `overwrite` replaces the variables it names:
 
 ### An input that is read more than once
 
-A table of cells needs no staging, whatever its cost to evaluate: the first pass reads its dimension columns only
+A table of cells needs no staging, whatever its cost to evaluate. The first pass reads its dimension columns only
 (not the values), and the write pass reads the table once. An input that changed between the passes is refused,
 as for blocks, so give it a deterministic one.
 
 A blocks DataFrame is read **once** by an `update` or an `overwrite`. A `create` and an `append` need the
-input's extent (and an append its new labels) before they can lay the chunks out, so they make a first
+input's extent (and an append its new labels) before they can lay the chunks out. So they make a first
 pass over the block positions, which never reads the `data` column, and then the write pass. An opaque
 input, such as a `mapInArrow` or a query with a join, is therefore **evaluated twice** by them. A pass
-that finds the input has changed is refused ("the input changed between planning and writing"), so give
-a `create` or an `append` an input that is deterministic. A table is best: stage the blocks in one first,
+that finds the input has changed is refused ("the input changed between planning and writing").
+Give a `create` or an `append` an input that is deterministic. A table is best: stage the blocks in one first,
 and the table is read once for the data.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="stage_the_blocks_first"
@@ -191,17 +191,17 @@ and the table is read once for the data.
 ### Blocks on the store's grid
 
 A `create` writes blocks that each cover whole chunks (whole shards, in a sharded array) where they are
-made: the task that holds a block encodes it and writes it to a data file of its own, and nothing is
-shuffled. This is decided for the whole create, every variable at once: if any block cuts across a chunk
-or a shard, or two blocks overlap, all of them are cut into pieces, regrouped by chunk through a shuffle
-and assembled. The store is the same either way: the same documents, the same chunk rows, the same bytes
-in every chunk; only the data file a chunk sits in differs.
+made. The task that holds a block encodes it and writes it to a data file of its own. Nothing is
+shuffled. This is decided for the whole create, every variable at once. If any block cuts across a chunk
+or a shard, or two blocks overlap, the write cuts all of them into pieces. It regroups the pieces by chunk through a shuffle
+and assembles them. The store is the same either way: the same documents, the same chunk rows, the same bytes
+in every chunk. Only the data file a chunk sits in differs.
 
-To write the faster way, start every block on a chunk boundary (a shard boundary, for a sharded array)
-and end it on one or at the edge of the array. The blocks are written by the tasks that hold them, so an
-input that keeps its blocks in few partitions (a single one, say) is first spread out by block, and many
-tasks write at once. A block of several shards writes their chunks in its own order, so one shard's
-chunks do not sit side by side in the data file and a read of that shard takes more, smaller reads; a
+To write the faster way, start every block on a chunk boundary (a shard boundary, for a sharded array).
+End it on one or at the edge of the array. The tasks that hold the blocks write them. An
+input that keeps its blocks in few partitions (a single one, say) is first spread out by block, so many
+tasks write at once. A block of several shards writes their chunks in its own order. One shard's
+chunks then do not sit side by side in the data file. A read of that shard takes more, smaller reads. A
 block of one shard keeps them together. A 1 GB create of blocks of one shard each wrote its data
 files at a median 119 MB/s through the Volume on Runtime 19. Direct to storage the median was
 80 MB/s. Direct runs ranged from 39 to 139 MB/s. On Serverless the median was 122 MB/s. See
@@ -213,8 +213,8 @@ has a pass of this kind.
 ### Values and the array's type
 
 Decoded values are encoded with the array's own attributes. A write is refused, as `ZarrUnsupported`
-with a `Fix:`, when the values cannot be held: a NaN into an integer array with no `_FillValue`, values
-that leave the stored integer range once packed, complex values into a real array, or times into an
+with a `Fix:`, when the values cannot be held. This happens for a NaN into an integer array with no `_FillValue`. It also happens for values
+that leave the stored integer range once packed, and for complex values into a real array. It happens as well for times into an
 array with no CF time units.
 
 **Times must be whole multiples of the array's time units.** An axis stored as integer `hours since ...`
@@ -228,8 +228,8 @@ nothing is committed:
 
 The unit names that are understood are `days`, `hours`, `minutes`, `seconds`, `milliseconds`,
 `microseconds` and `nanoseconds`, in any case and with or without the plural (`Hour` is `hours`). The
-UDUNITS abbreviations, such as `h` and `hrs`, are **not** understood: reading such an axis raises
-`ZarrUnsupported` ("is not a CF time unit") and writing times into it is refused too. Correct the
+UDUNITS abbreviations, such as `h` and `hrs`, are **not** understood. Reading such an axis raises
+`ZarrUnsupported` ("is not a CF time unit"), and writing times into it is refused too. Correct the
 `units` attribute, or read the raw numbers with `decode=False`.
 
 ## Write from a table of cells
@@ -242,8 +242,8 @@ order of the array's dimensions. Every other column is a variable (or name them 
   source="docs/tests/python/writers/zarr_write_examples.py"
   testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
 
-The same call with `transactional=False` writes a plain store. `append` extends the store along `append_dim`:
-the table's new labels of that dimension are placed after the store's (on its step, as for any append), and the
+The same call with `transactional=False` writes a plain store. An `append` extends the store along `append_dim`.
+The table's new labels of that dimension are placed after the store's (on its step, as for any append). The
 other dimensions' values must be labels the store has.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="append_a_table_of_cells"
@@ -252,12 +252,12 @@ other dimensions' values must be labels the store has.
 
 **How it is written.**
 
-- The driver reads the **dimension columns only** first: the distinct labels of each dimension that has none yet,
-  sorted ascending (a new store's dimensions, an append's new steps), and which shards the cells fall in. A table
+- The driver reads the **dimension columns only** first. From them it takes the distinct labels of each dimension that has none yet,
+  sorted ascending (a new store's dimensions, an append's new steps). It also finds which shards the cells fall in. A table
   that fills its grid (as many rows as the product of its labels) needs no second pass. The values columns are
   read once, by the write itself.
 - The cells are shuffled **once**, by the shard they fall in (or by the chunk, see below). A task owns whole
-  shards: one partition per shard touched, up to one per slot of the session's parallelism, and the shards of a
+  shards. There is one partition per shard touched, up to one per slot of the session's parallelism. The shards of a
   larger store share the partitions in equal rounds. Each task builds its
   shards and adds them to the store where they are made, as a
   [create from blocks on the shard grid](#blocks-on-the-stores-grid) does. A manifest `append` goes on through the
@@ -270,14 +270,14 @@ other dimensions' values must be labels the store has.
 **Rules.**
 
 - **Labels.** A new store's labels are the distinct values, ascending. To keep the order of another source
-  (latitude usually descends), pass `coords={"latitude": values, ...}` to `create`; a label the table lacks is then
+  (latitude usually descends), pass `coords={"latitude": values, ...}` to `create`. A label the table lacks is then
   a missing cell, and a table value that matches no label is refused. Floating-point labels match to a relative
   1e-9; times and integers exactly.
 - **Planning scan.** The writer reads the table once before the data pass, to find the labels (no `coords`) or the
   storage units the cells fall in (`coords`). When you know the whole grid, pass `coords` for every dimension and
-  `complete=True`: every storage unit is then planned without that scan, and the table is read once, in the data
-  pass. A unit that holds no cell at all ends the write with "the write pass saw N block(s), not the M its plan was
-  made from"; leave `complete` off for a table that skips whole units. Holes inside a unit are still fill values.
+  `complete=True`. Every storage unit is then planned without that scan, and the table is read once, in the data
+  pass. A unit with no cell at all ends the write with "the write pass saw N block(s), not the M its plan was
+  made from". Leave `complete` off for a table that skips whole units. Holes inside a unit are still fill values.
   An `append` takes `coords` for the append dimension only: the new labels, after the store's last. The other
   dimensions use the store's labels. `coords` and `complete=True` together plan an append with no scan. Without
   them, an append reads the table once for the new labels. It reads the table a second time for its units, unless
@@ -285,10 +285,10 @@ other dimensions' values must be labels the store has.
   `gbx_zarr_read(output="table")` cannot skip the other columns, so it still reads every variable.
 - **Missing cells** read as the array's fill value (NaN for floats, 0 for integers and booleans). A null value is
   a missing cell. A null label is refused.
-- **Duplicate cells** (two rows at one position) are refused, never merged: the task that meets them raises
-  `ZarrError` ("share a position with another cell") and nothing is committed. Aggregate or drop the repeats first.
+- **Duplicate cells** (two rows at one position) are refused, never merged. The task that meets them raises
+  `ZarrError` ("share a position with another cell"), and nothing is committed. Aggregate or drop the repeats first.
 - **Types.** A variable keeps its column's type in a new store (`float`, `double`, the integer types and
-  `boolean`); in an existing array the values are cast to the array's type, as for blocks. A `decimal` or string
+  `boolean`). In an existing array the values are cast to the array's type, as for blocks. A `decimal` or string
   column is refused with a Fix to cast it.
 - **Modes.** `create` and `append`. An `update` or an `overwrite` of cells would replace stored cells with the fill
   value wherever the table has none, so they take blocks. An `append` writes arrays the store already has.
@@ -331,14 +331,14 @@ Use blocks when the compute is shaped like a block, such as a pandas UDF over th
 
 A DataFrame with a tile column writes each tile's pixels into the array of its variable, in any mode.
 Tiles are placed by their decoded geotransform against the array's grid, so a clip or a change of NoData
-keeps its place, and a null tile is skipped.
+keeps its place. A null tile is skipped.
 
 - **A tile cut from Zarr** by [`gbx_zarr_read(output="tiles")`](../readers/zarr#output-geobrix-tiles) still
   carries where it came from (`zarr_array`, `sliceDims`, `window`). It goes to the array it came from,
   whose grid (geotransform and CRS) must be the plane it was cut from, else `ZarrGridMismatch`. Its other
   positions are its `sliceDims`.
-- **A tile with no provenance** needs `dim_cols`, a dict of dimension to the column that holds its label
-  (a number or a time column), for every non-spatial dimension, and `variables="<name>"` to name its
+- **A tile with no provenance** needs `dim_cols` for every non-spatial dimension. It is a dict of dimension to the column that holds its label
+  (a number or a time column). It also needs `variables="<name>"` to name its
   variable (a new store defaults to `"data"`). Most pixel-producing `rst_*` functions return such a tile,
   and so does a stack of GeoTIFFs. `dim_cols` also overrides `sliceDims`.
 
@@ -389,12 +389,12 @@ The limits of the rebase are worth knowing before many jobs append to one array:
 - **A write retries up to 20 attempts**, waiting between them with a jittered pause that doubles up to
   16 seconds. Its data files are never rewritten.
 - **Appends to one array land one at a time.** They all change the array's shape and the time
-  coordinate chunk, so Delta commits one per round, and the last of N simultaneous appenders needs about
-  N attempts. In measurements on Databricks one attempt, including its wait, took 16 to 28 seconds, so
-  a writer that keeps losing can spend several minutes before it gives up.
+  coordinate chunk, so Delta commits one per round. The last of N simultaneous appenders needs about
+  N attempts. In measurements on Databricks one attempt, including its wait, took 16 to 28 seconds.
+  A writer that keeps losing can therefore spend several minutes before it gives up.
 - **17 or more simultaneous appenders to one array can exhaust the bound.** Sixteen simultaneous appenders
   all landed in the measurements; beyond that the last ones raise `ZarrWriteConflict` and nothing of their
-  write is visible. The `Fix:` says to retry later or reduce the concurrent writers to the array: batch
+  write is visible. The `Fix:` says to retry later or reduce the concurrent writers to the array. Batch
   the appends into fewer, larger writes, or run the failed ones again when the others are done.
 - **A coordinate label set to two different values is a data conflict.** If another writer already set
   the same coordinate cell to a different value, the write raises `ZarrWriteConflict` rather than
@@ -402,15 +402,15 @@ The limits of the rebase are worth knowing before many jobs append to one array:
 
 ## Registered stores and publish
 
-A store registered with `writable=True` takes the same writes. They land in its overlay root and the
-store's own files are never touched, so every other registration of the store, and every plain Zarr
-reader, is unaffected until you publish.
+A store registered with `writable=True` takes the same writes. They land in its overlay root, and the
+store's own files are never touched. Every other registration of the store, and every plain Zarr
+reader, is therefore unaffected until you publish.
 
 ### Deleting a chunk
 
 A chunk whose every cell is the fill value is **not stored**, in every mode, as zarr does by default. If
-the chunk had a row it is deleted from the manifest; if it lies under a store's shard, the row becomes a
-**tombstone**, a row with no file, and a read sees the fill value there. A read of an older version, and a
+the chunk had a row, the write deletes it from the manifest. If it lies under a store's shard, the row becomes a
+**tombstone** (a row with no file). A read sees the fill value there. A read of an older version, and a
 `gbx_zarr_restore` to one, still has the data. `gbx_zarr_optimize` folds tombstones away, and a publish
 deletes the object.
 
@@ -428,11 +428,10 @@ describes what it does and guarantees). The limits:
 - **A publish refuses if the store changed since the last sync**, with `ZarrStoreDrift`. Run
   `gbx_zarr_sync` and publish again.
 - **A write that lands on the table during a publish makes the publish fail.** The publish commits with a
-  compare-and-swap on the overlay rows it turns into store objects, so if a writer replaced one of them
-  after the publish read it, or Delta rejects the commit because a writer really raced it, the publish
-  raises `ZarrWriteConflict` and the table does not move. The objects the publish had already written are
-  in the store, and the `Fix:` says to run `gbx_zarr_sync`, which lists them (the change is `both` for a key
-  the overlay also changed, and the overlay still wins), then publish again. The lock is released.
+  compare-and-swap on the overlay rows it turns into store objects. It raises `ZarrWriteConflict` and the table does not move
+  if a writer replaced one of them after the publish read it. The same happens if Delta rejects the commit because a writer really raced it. The objects the publish had already written are
+  in the store. The `Fix:` says to run `gbx_zarr_sync`, which lists them (the change is `both` for a key
+  the overlay also changed, and the overlay still wins). Then publish again. The lock is released.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="recover_a_publish"
   source="docs/tests/python/writers/zarr_write_examples.py"
@@ -441,8 +440,8 @@ describes what it does and guarantees). The limits:
 
 - **A publish that was killed leaves its lock.** The table refuses the next publish or sync with
   `ZarrWriteConflict`, and the `Fix:` says how to clear it. A lock can be broken once it is at least one
-  hour old (a younger one may belong to a publish that is still writing), by passing `break_lock=True` to
-  `gbx_zarr_sync`, then publishing again:
+  hour old (a younger one may belong to a publish that is still writing). Pass `break_lock=True` to
+  `gbx_zarr_sync`, then publish again:
 
 <CodeFromTest code={zarrWrite} language="python" functionName="clear_a_stale_publish_lock"
   source="docs/tests/python/writers/zarr_write_examples.py"
@@ -450,17 +449,17 @@ describes what it does and guarantees). The limits:
   outputConstant="CLEAR_A_STALE_LOCK_output" />
 
 A publish records the identity of each object it wrote only after the Volume has settled the object's
-modification time (a Volume moves it to the next whole second a moment after the write), so a read right
-after a publish does not report drift. After looking at each object once it waits, up to 2 seconds in all, for
-the times still moving to settle; an object whose time has not settled by then is recorded as it is, with a
-warning, and `gbx_zarr_sync` puts its identity right. The version `gbx_zarr_export(..., method="publish")` returns is the
+modification time. A Volume moves that time to the next whole second a moment after the write. A read right
+after a publish therefore does not report drift. After looking at each object once, it waits, up to 2 seconds in all, for
+the times still moving to settle. An object whose time has not settled by then is recorded as it is, with a
+warning. Then `gbx_zarr_sync` puts its identity right. The version `gbx_zarr_export(..., method="publish")` returns is the
 commit that turned the overlay rows into store objects.
 
 ## Folding after a write
 
 Appends and updates add one manifest row per chunk they change. `optimize=True` runs
 [`gbx_zarr_optimize`](../api/zarr-functions#gbx_zarr_optimize) on exactly the shards the write touched,
-right after its commit; a few small writes into a big shard cost one fold of that shard, and the content
+right after its commit. A few small writes into a big shard cost one fold of that shard, and the content
 is the same either way. The version the call returns is the **write's own**; the fold, if it had work
 to do, is the next version.
 
@@ -516,9 +515,9 @@ versions, or all-or-nothing writes.
 
 ## Access and cleanup
 
-`access` is how the tasks reach the store's files, as for a read: `"auto"` (default) writes straight to
-cloud storage where Unity Catalog can issue credentials (dedicated compute) and through the Volume mount
-everywhere else, Serverless included; `"fuse"` always uses the mount and sends no credentials; `"direct"`
+`access` is how the tasks reach the store's files, as for a read. With `"auto"` (default), a task writes straight to
+cloud storage where Unity Catalog can issue credentials (dedicated compute). Everywhere else, including Serverless,
+it writes through the Volume mount. With `"fuse"`, a task always uses the mount and sends no credentials. With `"direct"`, a write
 raises `ZarrAccessUnavailable` where credentials cannot be had. See [Access](../readers/zarr#access) for
 the credentials and the local-disk encryption note.
 
@@ -532,17 +531,17 @@ Files anywhere else under the root, and any other store's root, are never touche
 
 ## Errors
 
-Every error GeoBrix defines is a `ZarrError` and ends with a `Fix:` that says how to resolve it; a bad
+Every error GeoBrix defines is a `ZarrError` and ends with a `Fix:` that says how to resolve it. A bad
 argument is a `ValueError` that ends the same way. A mistake in the call is raised on the driver before any
 file is written. An error raised while Spark runs the write arrives from the
 action as a `pyspark.errors.PythonException`, with the GeoBrix error name and its `Fix:` line in the
-message; a failed write commits nothing. The full list, with the cause of each, is in the
+message. A failed write commits nothing. The full list, with the cause of each, is in the
 [Zarr Function Reference](../api/zarr-functions#errors).
 
 ## Next Steps
 
-- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook
-  that registers a weather cube in place, samples it into a features table, writes a derived
+- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook.
+  It registers a weather cube in place and samples it into a features table. It writes a derived
   variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Reader](../readers/zarr) — read a store as blocks, a table or tiles.
 - [Zarr Function Reference](../api/zarr-functions) — every function, parameter and error.

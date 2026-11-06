@@ -8,9 +8,9 @@ sidebar_label: GeoJSONL (multi-file)
 _Since:_ lightweight `geojsonl_gbx` **v0.4.0** · _(light-only — no heavyweight tier)_
 
 Emit a **directory of newline-delimited GeoJSONL shards** (OGR driver `GeoJSONSeq`, one
-`Feature` per line) — **one shard per partition, no driver merge**. Unlike the single-file
-GeoJSON writer — which merges every partition into one `FeatureCollection` file on the driver —
-the GeoJSONL writer's shards *are* the dataset, so write throughput scales with partitions. An
+`Feature` per line) — **one shard per partition, no driver merge**. The single-file
+GeoJSON writer merges every partition into one `FeatureCollection` file on the driver.
+In the GeoJSONL writer the shards *are* the dataset, so write throughput scales with partitions. An
 optional `maxRecordsPerFile` splits a partition into several shards.
 
 The `geojsonl_gbx` writer is pure-Python and Serverless-safe (pyogrio). It produces a directory of
@@ -87,9 +87,9 @@ the driver concatenates all fragments into a single `FeatureCollection`. That dr
 sequential — fine for "one file for the table", but a single-node bottleneck at scale.
 
 The GeoJSONL writer writes **one shard per partition with no driver merge**. Each executor encodes
-its partition to a worker-local GeoJSONL shard and sequentially copies it into the output
+its partition to a worker-local GeoJSONL shard. It then copies the shard sequentially into the output
 directory (rename-free, so safe on FUSE-mounted Unity Catalog Volumes / DBFS). Because GeoJSONL
-is splittable and concatenable, the directory of shards *is* the dataset — there is nothing to
+is splittable and concatenable, the directory of shards *is* the dataset. There is nothing to
 assemble on the driver, so **write throughput scales with the number of partitions**. Use
 `df.repartition(n, "<col>")` to set shard granularity, or `maxRecordsPerFile` to cap features per
 shard (splitting a large partition into several shards). The writer parallelizes

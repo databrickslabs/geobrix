@@ -58,7 +58,7 @@ The writer requires the exact `(source, tile)` schema and takes two writer optio
 
 ### Modes and codecs
 
-Supports `.mode("overwrite")`. For GeoTIFF output the `compress` option decides what happens to each tile: by default (`auto`) a ZSTD tile is written as it is and a tile in any other codec is re-encoded to ZSTD, while an explicit codec re-encodes every tile. Tiles whose driver is not GTiff (e.g. `COG`) are re-encoded via `rasterio`.
+Supports `.mode("overwrite")`. For GeoTIFF output the `compress` option decides what happens to each tile. By default (`auto`) a ZSTD tile is written as it is and a tile in any other codec is re-encoded to ZSTD. An explicit codec re-encodes every tile. Tiles whose driver is not GTiff (e.g. `COG`) are re-encoded via `rasterio`.
 
 ## Write raster tiles
 
@@ -67,7 +67,7 @@ Supports `.mode("overwrite")`. For GeoTIFF output the `compress` option decides 
   testFile="docs/tests/python/writers/test_raster_gbx_write_examples.py" />
 
 With the default `compress="auto"`, a GeoTIFF tile that is already ZSTD-compressed is written
-as it is, and a GeoTIFF tile in any other codec (DEFLATE, LZW, uncompressed) is re-encoded to
+as it is. A GeoTIFF tile in any other codec (DEFLATE, LZW, uncompressed) is re-encoded to
 ZSTD. A tile whose `metadata["driver"]` is non-GTiff (e.g. `COG`) is re-encoded via `rasterio`.
 
 For an explicit GeoTIFF-forced writer, see the [GeoTIFF Writer](./geotiff).
@@ -101,8 +101,8 @@ full explanation.
 | `predictor` | dtype-matched | TIFF predictor (1-3) for an explicit codec. Ignored under `auto`. |
 
 The output driver is read from `tile.metadata`. For GeoTIFF output, `compress` governs the
-codec: under `auto` a ZSTD tile is written as it is and any other GeoTIFF tile is re-encoded to
-ZSTD, while an explicit `compress` re-encodes every tile with that codec (decoded pixels are
+codec. Under `auto` a ZSTD tile is written as it is and any other GeoTIFF tile is re-encoded to
+ZSTD. An explicit `compress` re-encodes every tile with that codec (decoded pixels are
 identical either way). The `compression` / `blocksize` / `zlevel` / `zstd_level` metadata keys
 (`compression` defaults to `DEFLATE` when the metadata names none) apply when a tile is encoded
 to another driver such as COG. See [Materialized Compression](../api/materialized-compression)
@@ -126,9 +126,9 @@ Written rasters are standard GDAL-compatible files:
 
 :::tip Splitting source files into a tile grid?
 This writer takes an already-loaded tile DataFrame (`(source, tile)` schema).
-If you have **source files on disk** that you want to split into a grid of
-mini-COGs — native pixel tiling or quadbin cell-aligned — use `cog_gbx` instead:
-it reads raw files, tiles them, and optionally emits a `mosaic.vrt` index.
+Use `cog_gbx` instead if you have **source files on disk** to split into a grid of
+mini-COGs. The grid can be native pixel tiling or quadbin cell-aligned.
+The writer reads raw files, tiles them, and optionally emits a `mosaic.vrt` index.
 See the [COG Writer](./cog#mosaic-mode) and [VRT & Mosaics](../api/vrt-mosaic).
 :::
 

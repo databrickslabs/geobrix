@@ -7,7 +7,7 @@ sidebar_label: File Writer
 _Since:_ lightweight `file_gbx` **v0.5.0** · _(light-only — no heavyweight tier)_
 
 `file_gbx` is the shared write committer for all lightweight writers. You do not call it
-directly through the DataSource V2 `write.format(...)` API — instead, every `*_gbx` writer
+directly through the DataSource V2 `write.format(...)` API. Instead, every `*_gbx` writer
 that produces a Delta table with a FILE column routes through `open_for_write` internally.
 This page documents the write-side API for use in scripts and pipeline code.
 
@@ -94,7 +94,7 @@ receives a fully-qualified Delta table name and the writer routes through `open_
 ## `ingest_files` — register existing files as FILE MANAGED
 
 `ingest_files` reads files from an external Volume path via `read_files(format=>'file')`
-(DBR 13.3+) and inserts them as FILE MANAGED references into a Delta table, without copying
+(DBR 13.3+). It inserts them as FILE MANAGED references into a Delta table, without copying
 the byte content:
 
 ```python

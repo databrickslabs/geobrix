@@ -17,7 +17,7 @@ lightweight vector readers and writers.
 
 :::tip Compute & scale
 - **Large datasets:** GeoPackage has **no 2 GB cap** and is the recommended single-file option
-  for large data, but it still assembles on the driver (single-node write). For the very
+  for large data. However, it still assembles on the driver (single-node write). For the very
   largest outputs, use a **classic cluster** (high-memory Serverless does *not* help here) or
   switch to the fully distributed `geojsonl_gbx` writer. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
@@ -70,15 +70,15 @@ coerce to the `geom_0` convention.
 For coercing an arbitrary frame to this shape and for exporting Databricks `GEOMETRY` /
 `GEOGRAPHY` columns, see the [**Vector Writer schema**](./vector#schema).
 
-**Output:** a GeoPackage `.gpkg` (SQLite) file; the geometry is stored in a named geometry
-column (default `geom`); attribute names/types and the layer are preserved with no 2 GB cap
+**Output:** a GeoPackage `.gpkg` (SQLite) file. The geometry is stored in a named geometry
+column (default `geom`). Attribute names/types and the layer are preserved with no 2 GB cap
 (set the layer name with `layerName`).
 
 ## How it scales
 
 Unlike a single-node `pyogrio.write_*` call that serializes one file on one machine, the
-`gpkg_gbx` writer runs as a Spark DataSource V2 two-phase write: **each partition is
-written concurrently** by its executor to a scratch fragment, then the driver **merges the
+`gpkg_gbx` writer runs as a Spark DataSource V2 two-phase write. **Each executor
+writes its partition concurrently** to a scratch fragment. Then the driver **merges the
 fragments into one output file**. The merge is sequential and rename-free, so it is safe on
 FUSE-mounted cloud storage (Unity Catalog Volumes, DBFS). Repartition the input to control
 write parallelism.

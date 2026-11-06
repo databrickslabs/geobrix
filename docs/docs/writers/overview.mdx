@@ -58,8 +58,8 @@ is named, field-name and type limits, and how the CRS is stored:
 
 ### What `.save(path)` produces
 
-The format (driver) is chosen by the writer name, **not** the path extension — but
-some formats are a single file and others a directory, so name `path` accordingly:
+The writer name chooses the format (driver), **not** the path extension.
+Some formats are a single file and others a directory, so name `path` accordingly:
 
 | Writer | `.save(path)` writes | Recommended `path` |
 |---|---|---|
@@ -91,7 +91,7 @@ handles partial names so you never produce a misnamed file.
 canonical extension for the format — so `roads` → `roads.shp.zip`, `roads.shp` →
 `roads.shp.zip`, `roads.shp.zip` → unchanged. If `name` ends with a **different** recognized
 geo extension (for example, `.gpkg` passed to the Shapefile writer), the writer raises a clear
-error rather than silently producing a doubly-suffixed name.
+error. It never silently produces a doubly-suffixed name.
 
 Examples:
 
@@ -118,7 +118,7 @@ The `nameCol` option on the sharded and raster writers (`geojsonl_gbx`, `raster_
 ### Choosing a writer for large datasets
 
 The **single-file** writers (`geojson_gbx`, `shapefile_gbx`, `gpkg_gbx`, `file_gdb_gbx`) assemble
-the output on the **driver**, but they **stream** the partitions through one pass
+the output on the **driver**. They **stream** the partitions through one pass
 (the whole dataset is never held at once), so they scale much further than a naive
 single-node merge. They are still single-node writes,
 so:
@@ -129,7 +129,7 @@ so:
 - **`geojson_gbx`** / **`gpkg_gbx`** — streamed, single file, no hard size cap;
   bounded by the single-node write throughput.
 - **`file_gdb_gbx`** — streamed, but GDAL's FileGDB writer keeps per-feature index state in
-  memory until the file is closed, so driver memory grows with the feature count (about 120
+  memory until the file is closed. Driver memory therefore grows with the feature count (about 120
   bytes per feature; a 14-million-polygon write peaked at 1.9 GB). See
   [Benchmarking](../api/benchmarking).
 
@@ -142,9 +142,9 @@ For the largest datasets, prefer the writers that spread work across partitions:
 
 :::tip Large single-file writes may need a larger cluster
 The single-file writers assemble the output in Spark's **Python worker**
-processes, so a very large result (for example, a Shapefile whose `.dbf` runs to
-~1 GB+) can exceed the worker memory on **Serverless** and fail mid-write — seen
-as a `CancelledKeyException` (the driver is lost) or a "Python worker exited
+processes. A very large result (for example, a Shapefile whose `.dbf` runs to
+~1 GB+) can therefore exceed the worker memory on **Serverless** and fail mid-write.
+The failure appears as a `CancelledKeyException` (the driver is lost) or a "Python worker exited
 unexpectedly" crash. If you hit that:
 
 - Run on a **classic cluster** with a larger node — the proven path for the
@@ -152,7 +152,7 @@ unexpectedly" crash. If you hit that:
 - Or avoid single-node assembly entirely: use **`geojsonl_gbx`** (shards per
   partition) or **`gpkg_gbx`**, which scale on Serverless without this ceiling.
 
-Note: **[high-memory Serverless](https://docs.databricks.com/aws/en/compute/serverless/dependencies#use-high-memory-serverless-compute)** ("High: 32 GB") raises the notebook **REPL** memory but **not** the Spark Python-worker memory the writer assembles in, so it does **not** extend this ceiling — prefer a classic cluster or the sharded writers. The write itself is correct at scale (it completes on a classic cluster); this is a memory ceiling, not a writer limit.
+Note: **[high-memory Serverless](https://docs.databricks.com/aws/en/compute/serverless/dependencies#use-high-memory-serverless-compute)** ("High: 32 GB") raises the notebook **REPL** memory but **not** the Spark Python-worker memory the writer assembles in. It therefore does **not** extend this ceiling, so prefer a classic cluster or the sharded writers. The write itself is correct at scale (it completes on a classic cluster); this is a memory ceiling, not a writer limit.
 :::
 
 GeoBrix ships native Python DataSource V2 writers — no JAR.
@@ -161,13 +161,13 @@ GeoBrix ships native Python DataSource V2 writers — no JAR.
 These are Spark DataSource V2 writers, not single-node `pyogrio`/`rasterio` wrappers. **Each
 partition is written concurrently** by its executor, then the driver merges the parts into
 the final output (a two-phase write). The PMTiles writer goes further with **distributed
-spatial sharding** — partitioning tiles into bounded per-shard archives written in parallel
-and then cataloging them — which scales horizontally instead of building one memory-bound
+spatial sharding**. It partitions tiles into bounded per-shard archives written in parallel
+and then catalogs them. This scales horizontally instead of building one memory-bound
 archive on a single node. Merges are sequential and rename-free, so they are safe on
 FUSE-mounted Unity Catalog Volumes / DBFS.
 
-The two-phase staging is **isolated per write**: each write stages its parts under a unique,
-hidden scratch namespace, so concurrent jobs — or multiple users — writing to the same output
+The two-phase staging is **isolated per write**. Each write stages its parts under a unique,
+hidden scratch namespace. Concurrent jobs, or multiple users, writing to the same output
 location never see or overwrite one another's in-progress data. Scratch left behind by an
 interrupted job is reclaimed automatically on a later write to the same location.
 :::
@@ -193,8 +193,8 @@ An unrecognized format raises `ValueError`.
 :::tip On Serverless, write to a FILE-column table for fast reads
 On Serverless, prefer writing raster or vector output to a **FILE-column Delta table** (use
 `file_mode="external"` or `file_mode="managed"` on the writer). Once written, reads via
-`read_tiles_table` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path — measured
-at **~2 s** per 1,000 tiles on both Serverless and classic — instead of the per-tile FUSE opens
+`read_tiles_table` (raster) or `vector_file_read(table)` (vector) use the Delta-scan path. It is measured
+at **~2 s** per 1,000 tiles on both Serverless and classic. This avoids the per-tile FUSE opens
 that make the directory DataSource path **~3.7× slower on Serverless**.
 
 Per-tile FILE writes themselves are not the fast path; the benefit is on the read side once the
@@ -230,7 +230,7 @@ GeoJSONL) and the PMTiles writer — are published on the [Benchmarking](../api/
 page, with the full methodology.
 
 :::note Coordinate reference systems
-Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC authority code) and passes it to the OGR driver via `srs.SetFromUserInput`; when `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 column is the fallback. Raster writers preserve the CRS from each tile's spatial reference metadata. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full SRID-vs-CRS-string model and the ESRI/OGC authority-preservation behavior.
+Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC authority code) and passes it to the OGR driver via `srs.SetFromUserInput`. When `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 column is the fallback. Raster writers preserve the CRS from each tile's spatial reference metadata. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full SRID-vs-CRS-string model and the ESRI/OGC authority-preservation behavior.
 :::
 
 ## Next Steps

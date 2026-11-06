@@ -51,7 +51,7 @@ tiles.select(
 ).write.format("pmtiles_gbx").mode("overwrite").save("/Volumes/cat/sch/vol/out")
 ```
 
-Or generate the pyramid straight from rasters with GeoBrix RasterX. [`gbx_rst_xyzpyramid`](../api/raster-functions#rst_xyzpyramid) explodes a raster into one row per intersecting XYZ tile (rendering each as PNG/JPEG/WebP) and already emits a `tile: STRUCT<z, x, y, bytes>` — exactly the PMTiles schema, no manual aliasing of the tile coordinates needed:
+Or generate the pyramid straight from rasters with GeoBrix RasterX. [`gbx_rst_xyzpyramid`](../api/raster-functions#rst_xyzpyramid) explodes a raster into one row per intersecting XYZ tile (rendering each as PNG/JPEG/WebP). It already emits a `tile: STRUCT<z, x, y, bytes>`, exactly the PMTiles schema, so you need no manual aliasing of the tile coordinates:
 
 ```python
 from pyspark.sql import functions as F
@@ -107,9 +107,9 @@ Rules evaluated in order:
 | No `fileName`; `path` is an existing directory | `.save("/out/exports")` | `/out/exports/exports.pmtiles` | `/out/exports/exports/` (directory under the given path) |
 | No `fileName`; `path` is a stem | `.save("/out/exports/tiles")` | `/out/exports/tiles.pmtiles` | `/out/exports/tiles/` (directory) |
 
-Pure-Python, JAR-free, Serverless-safe writer that packages a tile pyramid
+This pure-Python, JAR-free, Serverless-safe writer packages a tile pyramid
 (`(z, x, y, bytes)`) into [PMTiles](https://docs.protomaps.com/pmtiles/) archives
-using distributed **spatial sharding**: each populated parent tile becomes one
+using distributed **spatial sharding**. Each populated parent tile becomes one
 bounded, non-overlapping `.pmtiles` shard, plus a global `overview.pmtiles` and a
 catalog over the shards.
 
@@ -135,8 +135,8 @@ OUT_DIR/tileset/catalog.json          # STAC/GeoJSON manifest
 
 ## Spatial sharding
 
-The writer treats tiled output as immutable, spatially-indexed shards: partition
-the world by a grid, emit one bounded `.pmtiles` per parent tile, and deliver a
+The writer treats tiled output as immutable, spatially-indexed shards. It partitions
+the world by a grid, emits one bounded `.pmtiles` per parent tile, and delivers a
 catalog over the shards rather than one merged file. This keeps shards
 independently regenerable and lets a browser fetch only the shard for the area in
 view. Set `shardZoom=0` for a single merged archive.

@@ -59,9 +59,9 @@ the DataFrame rows and requires `.mode("append")` since it never deletes its inp
 ## Raster mode (default)
 
 Each `(source, tile)` row is written as one CF grid `.nc` with `lat` and `lon`
-coordinate variables, a `_FillValue` for NoData pixels, and — when the tile CRS
-resolves to an EPSG code other than 4326 — a `crs` grid-mapping variable carrying
-that code in its `spatial_epsg` attribute (which the reader recovers on re-read).
+coordinate variables and a `_FillValue` for NoData pixels. When the tile CRS
+resolves to an EPSG code other than 4326, the file also has a `crs` grid-mapping variable.
+It carries that code in its `spatial_epsg` attribute (which the reader recovers on re-read).
 
 <CodeFromTest code={netcdfWrite} language="python" functionName="WRITE_RASTER"
   source="docs/tests/python/writers/netcdf_gbx_write_examples.py"
@@ -127,15 +127,14 @@ with `singleFile`, or merge already-written parts after the fact with `merge`.
   Discrete Sampling Geometry file (`featureType="point"`), streaming fragment by
   fragment through an UNLIMITED `obs` dimension to bound driver memory.
 - **Raster `singleFile`** merges tiles carrying **distinct** variables that share
-  **one** grid into a single CF grid file: multiple data variables over shared
+  **one** grid into a single CF grid file. The file has multiple data variables over shared
   `lat`/`lon` coordinate variables, each with its own `_FillValue`, plus a shared
   `crs` grid-mapping variable for non-4326 grids. It deliberately does **not**
-  mosaic many spatial-window tiles of one variable — if two tiles have incompatible
+  mosaic many spatial-window tiles of one variable. If two tiles have incompatible
   grids **or** the same variable name, the writer raises a clear error pointing at
   `gbx_rst_merge_agg`.
 - **`merge`** runs the same merge core on the `.nc` files already in the output
-  directory, so the "I already wrote sharded parts, now just combine them" case
-  needs no recompute. Merging an empty directory raises. `merge` implies single
+  directory. It needs no recompute for the "I already wrote sharded parts, now just combine them" case. Merging an empty directory raises. `merge` implies single
   output and wins over `singleFile` when both are set.
 - **`keepParts`** (default `false`) controls the source parts. After a successful,
   validated, durably-written merge the parts are deleted (consolidate-in-place);
@@ -180,11 +179,11 @@ data. It does not re-pack values to compressed integers. To reproduce a source f
 packed storage format, apply the encoding transform manually before writing.
 
 **Geographic (lon/lat) grids on the raster path.** The raster writer targets
-EPSG:4326 geographic grids. Tiles in a projected CRS (for example EPSG:3857 or
-EPSG:27700) should be reprojected to EPSG:4326 with `gbx_rst_transform` before
-writing: the `lat`/`lon` coordinate variables are always written in degrees, and a
+EPSG:4326 geographic grids. Reproject tiles in a projected CRS (for example EPSG:3857 or
+EPSG:27700) to EPSG:4326 with `gbx_rst_transform` before
+writing. The `lat`/`lon` coordinate variables are always written in degrees. A
 non-4326 EPSG is recorded only as a `spatial_epsg` code on the `crs` grid-mapping
-variable — the coordinate values themselves are not reprojected, so a projected tile
+variable. The coordinate values themselves are not reprojected, so a projected tile
 would be mislabeled as degrees.
 
 :::
@@ -192,7 +191,7 @@ would be mislabeled as degrees.
 ## Next Steps
 
 :::note Coordinate reference systems
-The writer stores the tile CRS in two CF grid-mapping attributes: `crs_wkt` (the full WKT, authoritative for any CRS) and `spatial_epsg` (the numeric EPSG code for EPSG CRSes). For a non-EPSG CRS — such as `ESRI:54008` — the writer stores the ESRI code in `spatial_epsg` as its integer value (the attribute name implies EPSG, but the value is the ESRI code). Readers should always prefer `crs_canonical` or `crs_wkt` as the authoritative source; `spatial_epsg` is a legacy interoperability field and may carry an ESRI code for non-EPSG CRSes. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+The writer stores the tile CRS in two CF grid-mapping attributes. The attribute `crs_wkt` holds the full WKT, authoritative for any CRS. The attribute `spatial_epsg` holds the numeric EPSG code for EPSG CRSes. For a non-EPSG CRS such as `ESRI:54008`, the writer stores the ESRI code in `spatial_epsg` as its integer value. The attribute name implies EPSG, but the value is the ESRI code. Readers should always prefer `crs_canonical` or `crs_wkt` as the authoritative source; `spatial_epsg` is a legacy interoperability field and may carry an ESRI code for non-EPSG CRSes. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
 - [NetCDF Reader](../readers/netcdf) — the corresponding read paths (raster and vector).

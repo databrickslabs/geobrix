@@ -21,8 +21,8 @@ writers instead:
 - [GeoDatabase Writer](./filegdb) — `file_gdb_gbx` (OGR driver: `OpenFileGDB`)
 
 :::tip Compute & scale
-- **Large datasets:** this writer assembles output on a single node (sequential driver merge);
-  for very large outputs, use a **classic cluster** (high-memory Serverless does *not* help
+- **Large datasets:** this writer assembles output on a single node (sequential driver merge).
+  For very large outputs, use a **classic cluster** (high-memory Serverless does *not* help
   here) or switch to the scalable `geojsonl_gbx` / `gpkg_gbx` writers. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
 - **Compute:** the `*_gbx` writers need **no JAR** and run on every compute, Serverless and
@@ -130,8 +130,8 @@ geometry handling follow that driver's conventions.
 ## How it scales
 
 Unlike a single-node `pyogrio.write_*` call that serializes one file on one machine, the
-`vector_gbx` writer runs as a Spark DataSource V2 two-phase write: **each partition is written
-concurrently** by its executor to a scratch fragment, then the driver **merges the
+`vector_gbx` writer runs as a Spark DataSource V2 two-phase write. **Each executor writes
+its partition concurrently** to a scratch fragment. Then the driver **merges the
 fragments into one output file**. The merge is sequential and rename-free, so it is safe on
 FUSE-mounted cloud storage (Unity Catalog Volumes, DBFS). Repartition the input to control
 write parallelism.

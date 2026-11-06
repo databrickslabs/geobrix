@@ -50,7 +50,7 @@ are **not** written to the `.laz` output.
 :::note v1 column scope
 The v1 writer supports `x`, `y`, `z` and optional `r`, `g`, `b` only.
 Extended per-point attributes such as `intensity`, `classification`,
-`return_number`, and `gps_time` are planned for v2; any such column in the
+`return_number`, and `gps_time` are planned for v2. Any such column in the
 DataFrame raises an error that directs you to drop it before writing.
 :::
 
@@ -104,8 +104,8 @@ merge already-written parts after the fact with `merge`.
 
 - **`singleFile`** captures each partition's points as a feather fragment on
   the executor, then the driver concatenates all fragments into one `.laz`.
-  The merge budget is sized to the node's available RAM (compute-aware): a
-  GPU/AIR node with large host RAM merges large clouds; a minimal CPU node
+  The merge budget is sized to the node's available RAM (compute-aware). A
+  GPU/AIR node with large host RAM merges large clouds. A minimal CPU node
   falls back to a conservative 512 MiB floor. Override with `mergeMaxMB`.
   Otherwise keep the default sharded parts for very large point clouds.
 - **`merge`** folds the `.laz` / `.las` files already in the output directory
@@ -160,24 +160,24 @@ point set: `overlap`, `dedupeExact`, and `voxelSize`. All three require
 already in the output directory, not on a fresh DataFrame write.
 
 - **`overlap="drop"`** resolves double-covered seam points by ownership
-  rather than by discarding one side's file wholesale: each point is assigned
-  to exactly one cluster — the nearest cluster center among every cluster
-  whose bounding box covers that point — so the union comes out
+  rather than by discarding one side's file wholesale. Each point goes
+  to exactly one cluster: the nearest cluster center among every cluster
+  whose bounding box covers that point. The union therefore comes out
   non-redundant without a hard tile edge. Ownership is a proxy: it's decided
   from each cluster's axis-aligned header bounding box and center, not from
-  where that cluster actually has points. In a region where two clusters'
-  bounding boxes overlap but only one of them has real points there, a point
-  can be assigned to the cluster with no data at that location, thinning the
-  seam. For compact clusters that both genuinely densify the shared seam —
+  where that cluster actually has points. Where two clusters'
+  bounding boxes overlap but only one has real points, a point
+  can go to the cluster with no data there.
+  This thins the seam. For compact clusters that both genuinely densify the shared seam —
   the typical case — this is benign. `overlap="drop"` also needs the parts to
   be **cluster-identifiable**: filenames must follow the
   `*_<group>_<cluster>.laz` pattern produced by writing with `groupCol` /
   `clusterCol` set — use those options, not `nameCol`, when merging with
   `overlap="drop"`. A UUID-fallback stem (`<partPrefix>-<uuid>.laz`) or a stem
-  with no underscore has no cluster id and raises; an arbitrary `nameCol`
-  basename is **not** validated as a cluster id — if it happens to contain an
-  underscore, its last `_`-token is taken as the cluster id as-is, which can
-  silently mis-assign ownership rather than raising.
+  with no underscore has no cluster id and raises. An arbitrary `nameCol`
+  basename is **not** validated as a cluster id. If it contains an
+  underscore, the merge takes its last `_`-token as the cluster id as-is.
+  This can silently mis-assign ownership rather than raising.
 - **`dedupeExact="true"`** drops points that are exact duplicates on `x`,
   `y`, `z` — and on `r`, `g`, `b` too when the parts carry RGB — after
   rounding to millimetre precision. Two points with the same coordinates but
@@ -207,10 +207,10 @@ resolves ownership as each part streams in, ahead of both.
 ```
 
 The merge streams parts one at a time rather than concatenating every part
-into memory up front: each part is fully read, filtered, and released before
-the next one is read, while kept points accumulate in memory as they're
+into memory up front. It fully reads, filters, and releases each part before
+it reads the next one. Kept points accumulate in memory as they are
 emitted. Peak memory is therefore roughly the largest single part plus the
-growing output-sized accumulators — bounded, and far below the sum of every
+growing output-sized accumulators. This is bounded and far below the sum of every
 input part, though not literally just the size of the unified output. The
 same [Serverless & Memory](../serverless-and-memory) budget that governs a
 plain `merge` still applies, and `mergeMaxMB` / `GBX_LIDAR_MERGE_MAX_MB`

@@ -16,8 +16,8 @@ the schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across 
 lightweight vector readers and writers.
 
 :::tip Compute & scale
-- **Large datasets:** this writer emits a single merged GeoJSON file assembled on the driver;
-  for very large outputs, use a **classic cluster** (high-memory Serverless does *not* help
+- **Large datasets:** this writer emits a single merged GeoJSON file assembled on the driver.
+  For very large outputs, use a **classic cluster** (high-memory Serverless does *not* help
   here) or switch to the scalable `geojsonl_gbx` writer. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
 - **Compute:** the `*_gbx` writers need **no JAR** and run on every compute, Serverless and
@@ -68,15 +68,15 @@ or coerce to the `geom_0` convention.
 For coercing an arbitrary frame to this shape and for exporting Databricks `GEOMETRY` /
 `GEOGRAPHY` columns, see the [**Vector Writer schema**](./vector#schema).
 
-**Output:** a single GeoJSON `.geojson` text file (a `FeatureCollection`); the geometry is
-emitted as the standard GeoJSON `geometry` member (not a named attribute field), and all other
+**Output:** a single GeoJSON `.geojson` text file (a `FeatureCollection`). The geometry is
+emitted as the standard GeoJSON `geometry` member (not a named attribute field). All other
 columns become feature `properties`.
 
 ## How it scales
 
 Unlike a single-node `pyogrio.write_*` call that serializes one file on one machine, the
-`geojson_gbx` writer runs as a Spark DataSource V2 two-phase write: **each partition is
-written concurrently** by its executor to a scratch fragment, then the driver **merges the
+`geojson_gbx` writer runs as a Spark DataSource V2 two-phase write. **Each executor
+writes its partition concurrently** to a scratch fragment. Then the driver **merges the
 fragments into one output file**. The merge is sequential and rename-free, so it is safe on
 FUSE-mounted cloud storage (Unity Catalog Volumes, DBFS). Repartition the input to control
 write parallelism.

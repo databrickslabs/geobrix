@@ -614,6 +614,58 @@ def open_source(tile):
                 yield src
 
 
+# What :func:`with_plain_window` returns for a tile it does not take.
+NOT_PLAIN = object()
+
+
+def with_plain_window(tile, file_ref, fn):
+    """``fn(src, window)`` for a virtual tile that is nothing but a window of a file, else ``NOT_PLAIN``.
+
+    ``src`` is the open source file and ``window`` the tile's ``rasterio`` window of it (the
+    whole file for a tile without one). Nothing is copied out of the file first: the
+    ordinary open (:func:`open_tile`) reads the window whole, encodes it as GeoTIFF bytes and
+    opens those again, which holds the window three times over (as pixels, as bytes and as
+    the second open's copy) and spends the encode, before the function has used one pixel.
+    A function that can work from ``src`` and a window (a warp) calls this instead.
+
+    A tile is plain when it has pixels to read from a file and no instruction to apply to
+    them: no bytes, no FILE reference, no clip, no target ``crs``, no pending instruction,
+    and not a Zarr tile; and when its window lies inside the file and ``warp.window_reprojectable``
+    holds for it. For any other tile the result is ``NOT_PLAIN`` and the caller opens the
+    tile with :func:`_open`, as it did.
+    """
+    vt = _to_virtual_tile(tile)
+    if (
+        vt.raster is not None
+        or file_ref is not None
+        or vt.clip_polygon is not None
+        or vt.crs
+        or _has_pending(vt.metadata)
+        or _zarr_tiles.is_zarr_tile(vt)
+    ):
+        return NOT_PLAIN
+    with ExitStack() as stack:
+        local_path = _resolve_local_or_windowed(vt, None, stack)
+        with open_raster(local_path) as src:
+            if vt.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = vt.window
+                window = Window(c, r, w, h)
+                if (
+                    min(c, r) < 0
+                    or min(w, h) <= 0
+                    or c + w > src.width
+                    or r + h > src.height
+                ):
+                    return NOT_PLAIN
+            if not _warp.window_reprojectable(src, window):
+                return NOT_PLAIN
+            # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT: its refusal names the reason
+            with refusals_named(f"the tile {vt.path}"):
+                return fn(src, window)
+
+
 @contextmanager
 def _open_all(tiles):
     """Context manager that yields a list of open ``DatasetReader`` objects.

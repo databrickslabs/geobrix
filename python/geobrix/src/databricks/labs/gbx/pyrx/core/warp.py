@@ -1,8 +1,12 @@
 """Spark-free reproject/warp helpers (rasterio.warp). Tile-returning: each
 function returns new GTiff bytes."""
 
+import threading
+from collections import OrderedDict
+
 import numpy as np
 import rasterio
+import rasterio.windows
 from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 from rasterio.warp import calculate_default_transform, reproject
@@ -78,14 +82,86 @@ def _source_georef(ds, window=None) -> dict:
     return {"src_transform": transform, "src_crs": ds.crs}
 
 
-def _default_transform(ds, dst_crs):
-    """``calculate_default_transform`` of ``ds`` to ``dst_crs``, from its GCPs when it has them in place of a transform."""
+# The output grid of a warp, by the exact inputs that fix it. PROJ builds the CRS-to-CRS
+# transformer again for every ``calculate_default_transform`` call (30 to 200 ms for a pair
+# with a datum shift, such as BNG; under 1 ms for a pair it holds in memory), so a footprint
+# warped again (a tile reprojected by several functions, or the same file by several tiles)
+# does not pay it twice. The answer is a pure function of the key, so a hit is the grid a
+# call would compute.
+_GRID_CACHE_SIZE = 256
+_GRID_CACHE: "OrderedDict" = OrderedDict()
+_GRID_LOCK = threading.Lock()
+
+
+def _cached_default_transform(src_crs, dst_crs, width, height, bounds):
+    """``calculate_default_transform(src_crs, dst_crs, width, height, *bounds)``, remembered."""
+    try:
+        key = (src_crs, dst_crs, int(width), int(height), tuple(bounds))
+        hash(key)
+    except (
+        TypeError
+    ):  # an argument that cannot key the cache: compute, remember nothing
+        return calculate_default_transform(src_crs, dst_crs, width, height, *bounds)
+    with _GRID_LOCK:
+        hit = _GRID_CACHE.get(key)
+        if hit is not None:
+            _GRID_CACHE.move_to_end(key)
+            return hit
+    grid = calculate_default_transform(src_crs, dst_crs, width, height, *bounds)
+    with _GRID_LOCK:
+        _GRID_CACHE[key] = grid
+        while len(_GRID_CACHE) > _GRID_CACHE_SIZE:
+            _GRID_CACHE.popitem(last=False)
+    return grid
+
+
+def _window_geometry(ds, window):
+    """``(width, height, bounds)`` of ``ds``, or of ``window`` of it (None: the whole of ``ds``).
+
+    A window's bounds are those a file holding just the window reports (``DatasetBase.bounds``):
+    the corners of its transform. A window of a rotated transform is not supported
+    (:func:`window_reprojectable`).
+    """
+    if window is None:
+        return ds.width, ds.height, tuple(ds.bounds)
+    left, bottom, right, top = rasterio.windows.bounds(window, ds.transform)
+    return int(window.width), int(window.height), (left, bottom, right, top)
+
+
+def _default_transform(ds, dst_crs, window=None):
+    """``calculate_default_transform`` of ``ds`` (or of ``window`` of it) to ``dst_crs``, from its GCPs when it has them in place of a transform."""
     georef = gcp_georef(ds)
     if georef is not None:
         return calculate_default_transform(
             georef[0], dst_crs, ds.width, ds.height, gcps=georef[1]
         )
-    return calculate_default_transform(ds.crs, dst_crs, ds.width, ds.height, *ds.bounds)
+    width, height, bounds = _window_geometry(ds, window)
+    return _cached_default_transform(ds.crs, dst_crs, width, height, bounds)
+
+
+def full_extent(ds, window) -> bool:
+    """True when ``window`` is None or covers all of ``ds``."""
+    return window is None or (
+        window.col_off == 0
+        and window.row_off == 0
+        and window.width == ds.width
+        and window.height == ds.height
+    )
+
+
+def window_reprojectable(ds, window) -> bool:
+    """True when :func:`reproject_to_crs` can warp ``window`` of ``ds`` as a file holding just that window.
+
+    A whole-file window always can. A sub-window cannot when the source is georeferenced by
+    GCPs (the points are the file's, not the window's) or by a rotated transform (a window's
+    bounds are then not the corners of a box), or when it has its own mask band: GDAL leaves the
+    pixels under the mask of a band it warps from the file unwritten, where a window read out
+    of the file as an array carries them across, so the two differ under the mask.
+    """
+    if full_extent(ds, window):
+        return True
+    t = ds.transform
+    return gcp_georef(ds) is None and t.b == 0 and t.d == 0 and not has_own_mask(ds)
 
 
 def warped_own_mask(
@@ -138,7 +214,21 @@ def warped_footprint(ds, *, dst_crs, transform, width: int, height: int) -> np.n
     return np.where(covered != 0, 255, 0).astype("uint8")
 
 
-def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_nodata):
+def _same_value(a, b) -> bool:
+    """True when two NoData values are the same (NaN equals NaN)."""
+    return a == b or (a != a and b != b)
+
+
+def _warp_bands(
+    ds,
+    profile,
+    *,
+    dst_crs,
+    transform,
+    resampling: str,
+    mark_fill_nodata,
+    window=None,
+):
     """GTiff bytes of every band of ``ds`` warped into a new dataset of ``profile``;
     with ``mark_fill_nodata``, by the plan of :func:`_fill_plan`.
 
@@ -147,7 +237,19 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
     the masked pixels are set to it and the warp carries it, and without one the mask is
     warped to the output grid and written as its own mask band (:func:`warped_own_mask`),
     as the lazy read of a virtual tile with a target CRS does.
+
+    ``window`` (a rasterio ``Window``, None for the whole of ``ds``) warps just that part of
+    ``ds``, as a file holding only the window would be warped, without the window ever being
+    copied out of ``ds`` whole: a band at a time is read from it. Memory: the whole-file warp
+    streams the source through GDAL's block cache and holds no band; a window holds one band
+    of the window (plus its mask, one byte per pixel, when the source has one).
+
+    When every band takes the same source NoData, the bands go through one warp call: GDAL
+    builds the coordinate transformer (a PROJ lookup, tens of milliseconds for a datum shift)
+    once, where a call per band builds it once per band.
     """
+    whole = full_extent(ds, window)
+    window = None if whole else window
     plan = _fill_plan(ds) if mark_fill_nodata else None
     own_mask = has_own_mask(ds)
     nodata, read_masked = plan if plan else (None, False)
@@ -172,31 +274,52 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
             transform=transform,
             width=profile["width"],
             height=profile["height"],
+            window=window,
         )
         if own_mask and not (plan or read_masked)
         else None
     )
     resamp = resampling_enum(resampling)
+    indexes = list(range(1, ds.count + 1))
+    one_call = (
+        whole
+        and not read_masked
+        and all(_same_value(v, band_nodata[0]) for v in band_nodata)
+    )
     with _comp.internal_mask_env(mask), MemoryFile() as mf:
         with mf.open(**profile) as dst:
             _comp.match_alpha(dst, ds.colorinterp)
-            for i in range(1, ds.count + 1):
-                source = rasterio.band(ds, i)
-                if read_masked:
-                    band = ds.read(i, masked=True)
-                    # in place, dtype kept
-                    band.data[np.ma.getmaskarray(band)] = band_nodata[i - 1]
-                    source = band.data
+            if one_call:
                 reproject(
-                    source=source,
-                    destination=rasterio.band(dst, i),
+                    source=rasterio.band(ds, indexes),
+                    destination=rasterio.band(dst, indexes),
                     **_source_georef(ds),
                     dst_transform=transform,
                     dst_crs=dst_crs,
                     resampling=resamp,
-                    src_nodata=band_nodata[i - 1],
+                    src_nodata=band_nodata[0],
                     dst_nodata=nodata,
                 )
+            else:
+                for i in indexes:
+                    source = rasterio.band(ds, i) if whole else None
+                    if read_masked:
+                        band = ds.read(i, window=window, masked=True)
+                        # in place, dtype kept
+                        band.data[np.ma.getmaskarray(band)] = band_nodata[i - 1]
+                        source = band.data
+                    elif source is None:
+                        source = ds.read(i, window=window)
+                    reproject(
+                        source=source,
+                        destination=rasterio.band(dst, i),
+                        **_source_georef(ds, window),
+                        dst_transform=transform,
+                        dst_crs=dst_crs,
+                        resampling=resamp,
+                        src_nodata=band_nodata[i - 1],
+                        dst_nodata=nodata,
+                    )
             if mask is not None:
                 dst.write_mask(mask)
         return mf.read()
@@ -208,16 +331,29 @@ def target_grid(ds, dst_crs) -> tuple:
     return width, height
 
 
-def _identity(ds) -> bytes:
-    """``ds`` re-encoded as it is: its alpha band and its own mask band come with it."""
-    mask = ds.read_masks(1) if has_own_mask(ds) else None
+def _identity(ds, window=None) -> bytes:
+    """``ds`` (or ``window`` of it) re-encoded as it is: its alpha band and its own mask band come with it."""
+    mask = ds.read_masks(1, window=window) if has_own_mask(ds) else None
+    profile = ds.profile
+    if window is not None:
+        profile = dict(profile)
+        profile.update(
+            width=int(window.width),
+            height=int(window.height),
+            transform=ds.window_transform(window),
+        )
     return _comp.write_gtiff(
-        ds.profile, ds.read(), alpha_like=ds.colorinterp, mask=mask
+        profile, ds.read(window=window), alpha_like=ds.colorinterp, mask=mask
     )
 
 
 def reproject_to_crs(
-    ds, target_crs_value, resampling: str = "nearest", *, mark_fill_nodata: bool = False
+    ds,
+    target_crs_value,
+    resampling: str = "nearest",
+    *,
+    mark_fill_nodata: bool = False,
+    window=None,
 ) -> bytes:
     """Reproject an open dataset to a string-given target CRS; return GTiff bytes.
 
@@ -226,6 +362,11 @@ def reproject_to_crs(
     ``reproject_to_srid`` this never requires a positive EPSG code, so
     non-EPSG targets (ESRI codes, WKT) work correctly. ``mark_fill_nodata`` is
     as in ``reproject_to_srid``.
+
+    ``window`` (a rasterio ``Window`` of ``ds``; None for all of it) reprojects just that
+    part, the bytes a file holding only the window would give, without copying the window
+    out of ``ds`` first (see :func:`_warp_bands`). A caller checks
+    :func:`window_reprojectable` first.
 
     Identity short-circuit: when ``ds.crs == resolved_target_crs`` the pixels
     are returned verbatim (no resample, no re-encode) exactly like
@@ -236,9 +377,9 @@ def reproject_to_crs(
     dst_crs = resolve_crs(target_crs_value)
     if ds.crs and ds.crs == dst_crs:
         # Identity: re-encode with ZSTD baseline (same as reproject_to_srid).
-        return _identity(ds)
+        return _identity(ds, None if full_extent(ds, window) else window)
 
-    transform, width, height = _default_transform(ds, dst_crs)
+    transform, width, height = _default_transform(ds, dst_crs, window)
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
     profile = _comp.source_profile(ds.profile)
@@ -255,6 +396,7 @@ def reproject_to_crs(
         transform=transform,
         resampling=resampling,
         mark_fill_nodata=mark_fill_nodata,
+        window=window,
     )
 
 

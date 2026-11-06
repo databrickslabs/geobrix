@@ -2400,8 +2400,18 @@ def _transformcrs_bytes(tile, crs_value, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
+    target = str(crs_value)
+    # A virtual tile that is only a window of a file is warped from the file itself: the window is
+    # not read whole, encoded as GeoTIFF and opened again first (see ot.with_plain_window)
+    warped = ot.with_plain_window(
+        tile,
+        file_ref,
+        lambda src, window: warp.reproject_to_crs(src, target, window=window),
+    )
+    if warped is not ot.NOT_PLAIN:
+        return warped
     with ot._open(tile, file_ref=file_ref) as ds:
-        return warp.reproject_to_crs(ds, str(crs_value))
+        return warp.reproject_to_crs(ds, target)
 
 
 def _transformcrs_tile(tile, crs_value, file_ref=None, grid_dirs=None):

@@ -187,16 +187,22 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
     return build
 
 
+_CORPUS_ROWS: Dict[str, List[str]] = {}
+
+
 def _corpus_rows(corpus: str) -> Optional[List[str]]:
-    """The corpus' row tiles, sorted; None when the corpus has none."""
+    """The corpus' row tiles, sorted; None when the corpus has none. Listed once per process: a corpus of tens of
+    thousands of tiles on a Volume takes seconds to list, and every input build asks."""
     rows = corpus.rstrip("/") + "/rows"
     if not os.path.isdir(rows):
         return None
-    from databricks.labs.gbx.ds._listing import list_files
+    if rows not in _CORPUS_ROWS:
+        from databricks.labs.gbx.ds._listing import list_files
 
-    return list_files(
-        rows, filter_regex=r".*\.tif$", recursive=False, raise_on_empty=False
-    )
+        _CORPUS_ROWS[rows] = list_files(
+            rows, filter_regex=r".*\.tif$", recursive=False, raise_on_empty=False
+        )
+    return _CORPUS_ROWS[rows]
 
 
 def _tile_column(spark, pairs, virtual: bool, keyed: bool):

@@ -305,3 +305,28 @@ def test_list_files_skip_hidden_prunes_underscore_and_dot_entries(tmp_path):
     assert _listing.list_files(root, recursive=False, skip_hidden=True) == [
         str(tmp_path / "a.geojson")
     ]
+
+
+def test_a_flat_listing_reads_entry_types_with_the_listing_not_one_stat_per_file(
+    tmp_path, monkeypatch
+):
+    """A folder of tens of thousands of tiles on a Volume took minutes with an isfile() per entry."""
+    for i in range(5):
+        (tmp_path / f"r{i}.tif").write_bytes(b"x")
+    (tmp_path / "_hidden.tif").write_bytes(b"x")
+    (tmp_path / "sub.tif").mkdir()  # a directory named like a tile is not a file
+    calls = []
+    real = os.path.isfile
+
+    def counting(p):
+        calls.append(p)
+        return real(p)
+
+    monkeypatch.setattr(_listing.os.path, "isfile", counting)
+    files = _listing.list_files(
+        str(tmp_path), filter_regex=r".*\.tif$", recursive=False, skip_hidden=True
+    )
+    assert [os.path.basename(f) for f in files] == [f"r{i}.tif" for i in range(5)]
+    assert calls == [
+        str(tmp_path)
+    ], calls  # the folder itself, never one call per entry

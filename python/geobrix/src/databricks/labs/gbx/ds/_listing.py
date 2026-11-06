@@ -157,12 +157,15 @@ def list_files(
 
             def _listdir() -> List[str]:
                 result: List[str] = []
-                for name in os.listdir(abspath):
-                    if skip_hidden and _hidden(name):
-                        continue
-                    full = os.path.join(abspath, name)
-                    if os.path.isfile(full) and pattern.match(full):
-                        result.append(full)
+                # scandir reads the entry type with the listing: one stat per file on a FUSE mount would take
+                # minutes for a folder of tens of thousands of files
+                with os.scandir(abspath) as entries:
+                    for entry in entries:
+                        if skip_hidden and _hidden(entry.name):
+                            continue
+                        full = os.path.join(abspath, entry.name)
+                        if entry.is_file() and pattern.match(full):
+                            result.append(full)
                 return result
 
             candidates = _retry_transient(_listdir)

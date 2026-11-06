@@ -30,4 +30,4 @@ See `examples/tests/README.md` (section "Test bundle on a live Databricks cluste
 
 ## Interpreter
 
-The launcher needs `databricks-sdk` and Python 3.11 or newer, and runs on the interpreter that the shared `gbx_python_with_sdk` helper in `common.sh` chooses (`.venv-pyrx` or `GBX_PYRX_VENV` when it can import the SDK, otherwise `uv run --with databricks-sdk==<pinned version>`; see `gbx:test:notebooks-serverless`), not on a bare `python`. `gbx:test:bundle-databricks --local` runs its pytest on the same interpreter.
+The launcher needs `databricks-sdk` and Python 3.11 or newer. It runs on the interpreter that the shared `gbx_python_with_sdk` helper in `common.sh` chooses, not on a bare `python`. The helper picks `.venv-pyrx` or `GBX_PYRX_VENV` when it can import the SDK, otherwise `uv run --with databricks-sdk==<pinned version>` (see `gbx:test:notebooks-serverless`). `gbx:test:bundle-databricks --local` runs its pytest on the same interpreter.

@@ -20,9 +20,9 @@ Four marker-guarded adjustments (no-op if already present):
    RUN under enterprise auth. (This fixes the root cause that adjustment #1 was a
    safety-net for.)
 4. **Nested `claude -p` locked down** (`qc_io.py` `run_llm_check`) — the LLM checks pipe
-   a prompt to `claude -p`, which ran with the default tool set from the repo directory,
+   a prompt to `claude -p`. That process ran with the default tool set from the repo directory,
    where the project's `.claude/settings.local.json` allowlists `gbx-test-scala.sh`,
-   `gbx-test-python.sh` and `gbx-docker-exec.sh`: a push could have run one. The argv
+   `gbx-test-python.sh` and `gbx-docker-exec.sh`. A push could have run one. The argv
    gains `--tools "" --strict-mcp-config --no-session-persistence` (no tools, no MCP
    servers, no saved session) and the subprocess runs with `QC_DISABLE=1 JUDGE_DISABLE=1`
    so neither judge fires again inside it. Same hardening as the runtime judge's `claude -p`.

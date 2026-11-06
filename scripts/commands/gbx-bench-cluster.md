@@ -152,9 +152,17 @@ See [`--levels` details](#levels-details) for the metrics.
 - `--zarr-ladder <csv>`: also run the size-ladder read legs on these rungs (`10MB` to `10GB`). Alone, it implies `--zarr-only` and drops the cases `R1` to `W2` unless `--zarr-cases` is given.
 - `--zarr-ladder-family <csv>`: `county_wind`, `global_11km`. Default: both.
 - `--zarr-ladder-root <path>`: the stores, `<family>/<rung>.zarr`, from `gbx:bench:gen-data --zarr-ladder`. Default: `<volume>/_probe/zarr/ladder`.
-- `--zarr-ladder-cases <csv>`: the read legs `ZL-R1` full table, `ZL-R2` box, `ZL-R3` 100 sites, `ZL-R4` wind speed and mean, `ZL-R5` one hour as a tile. The write legs take a table of cells to a store: `ZL-W1` into a manifest store and `ZL-W2` into a plain store (`transactional=False`), both handing the table to the writer with `dim_cols`, `ZL-W3` the baseline (the tasks write the shards of staged blocks with zarr-python), `ZL-W4` and `ZL-W5` append one more day to the manifest and the plain store; `ZL-W1s`, `ZL-W2s`, `ZL-W4s`, `ZL-W5s` repeat the four writes by the staging path (pack the cells into blocks, stage them in Delta, write the blocks). Default: all.
-  - The write legs read the store as a table, add `wind_speed`, pack the cells into blocks on the shard grid and stage them in a Delta table. Then they write. Each write is verified by a read-back (count and sums).
-  - On a classic cluster the legs also record the busy share and peak memory from the Spark UI, and print the ladder tables and the gate verdicts at the end. The metrics are in `zarr_ladder_metrics.json` in the run's output folder.
+- `--zarr-ladder-cases <csv>`: the read legs `ZL-R1` full table, `ZL-R2` box, `ZL-R3` 100 sites, `ZL-R4` wind speed and mean, `ZL-R5` one hour as a tile. The write legs take a table of cells to a store: `ZL-W1` into a manifest store and `ZL-W2` into a plain store (`transactional=False`).
+Both hand the table to the writer with `dim_cols`.
+`ZL-W3` is the baseline: the tasks write the shards of staged blocks with zarr-python.
+`ZL-W4` and `ZL-W5` append one more day to the manifest and the plain store.
+`ZL-W1s`, `ZL-W2s`, `ZL-W4s` and `ZL-W5s` repeat the four writes by the staging path.
+The staging path packs the cells into blocks, stages them in Delta, and writes the blocks. Default: all.
+  - The write legs read the store as a table and add `wind_speed`.
+They pack the cells into blocks on the shard grid and stage them in a Delta table.
+Then they write. Each write is verified by a read-back (count and sums).
+  - On a classic cluster the legs also record the busy share and peak memory from the Spark UI.
+They also print the ladder tables and the gate verdicts at the end. The metrics are in `zarr_ladder_metrics.json` in the run's output folder.
 - `--zarr-ladder-scratch <path>`: where the write legs put their stores and staging tables' files. They empty it. Default: `<volume>/_probe/zarr/ladder_out/<run-id>`. The manifest and staging tables go to `--zarr-schema`, and the legs drop them.
 - `--zarr-ladder-generate`: the job makes the ladder stores that are missing at `--zarr-ladder-root`. It writes each on the driver's local disk, then copies the files to the root, the root `zarr.json` last. A store that is there is kept.
 - `--zarr-ladder-budget-mib <n>`: plan the reads with this decoded unit budget. Default: the runtime's own (64 MiB on Serverless, 1536 MiB on a classic cluster).
@@ -291,7 +299,11 @@ These limits are documented and not coded. None is NULL, and none is checked.
   - Each form of the `--levels` set runs once at `--smoke-rows` rows (default 16). The smoke reports the Spark task count of each form's input scan. A tile form over a one-file table runs on 1-2 tasks.
   - `--no-smoke` skips it (logged). `--smoke-only` stops after it.
   - `--smoke-allow-errors` lets a form's error row through. `--smoke-timeout-min` (default 15) bounds it.
-- **Preflight, no compute.** Exit 5 when the Serverless environment spec lacks the wheel (or the wheel's `+env<N>` is not the environment version), the staged wheel's sha256 is not the local `dist/env<N>` build, a levels form's SQL cannot run on a local Spark session with a few rows (a Java UDF inside `sum()`, a raw-hash sum that overflows under ANSI), or a client-built input would pass 64 MiB. `--skip-preflight` skips it (logged).
+- **Preflight, no compute.** Exit 5 when the Serverless environment spec lacks the wheel, or the wheel's `+env<N>` is not the environment version.
+Exit 5 also when the staged wheel's sha256 is not the local `dist/env<N>` build.
+Exit 5 also when a levels form's SQL cannot run on a local Spark session with a few rows.
+Those forms include a Java UDF inside `sum()` and a raw-hash sum that overflows under ANSI.
+Exit 5 also when a client-built input would pass 64 MiB. `--skip-preflight` skips it (logged).
 - **Time limits.** Every run has `timeout_seconds` (`--timeout-min`, default 360, with or without `--levels`). The smoke run has its own, default 15.
   - Both must be a whole number of minutes, at least 1.
   - Anything else is refused before any work starts.
@@ -300,7 +312,8 @@ These limits are documented and not coded. None is NULL, and none is checked.
   - It then prints `STALLED: <form> @<scale>x after <m> min` with the driver stack, and exits 3.
   - The cap is `--form-cap-min` (default 15, smoke 5) for a 1x form. It is multiplied by the scale for the larger ones: a 16x form gets 16 times the cap. A long 1x/4x/16x ladder is judged one scale at a time, not as a whole.
   - The multiplied cap is held to `--form-cap-max-min` (default 60). At the defaults 4x gets 60 min and 16x gets 60 min, not 240. Raise the ceiling for a ladder whose large scales really need longer.
-  - A heartbeat that cannot be read (a 403, a dropped connection) is not a stall. The quiet clock stands still while reads fail. After 12 failed polls in a row (about a minute) the launcher prints one `WARNING: heartbeat unreadable` line, and only the run's time limit then ends a stalled run.
+  - A heartbeat that cannot be read (a 403, a dropped connection) is not a stall. The quiet clock stands still while reads fail. After 12 failed polls in a row (about a minute), the launcher prints one `WARNING: heartbeat unreadable` line.
+Only the run's time limit then ends a stalled run.
   - The watchdog never retries. If the cancel call itself fails, it says so and names the run to cancel by hand (still exit 3).
   - The per-form cap applies only to the `--levels` leg, which reports its progress form by form. The other bench legs get the worker import check, the stale-heartbeat check and the run time limit, but no per-form cap.
   - The notebook also arms `faulthandler.dump_traceback_later` at the cap (stderr of the driver).

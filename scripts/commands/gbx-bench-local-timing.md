@@ -63,16 +63,29 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 `--set ZL` times the Zarr ladder's read and write legs on `local[8]`. The write legs need the delta-spark jars of the Maven cache (`gbx:test:python` fetches them). It takes no corpus and needs neither the JAR nor the Rust payload.
 - `--zarr-rungs <csv>`: rungs to run. Default: `10MB,50MB,100MB`. Do not generate rungs above 100 MB locally.
 - `--zarr-families <csv>`: `county_wind`, `global_11km`. Default: both.
-- `--zarr-cases <csv>`: `ZL-R1` full table, `ZL-R2` box over all time, `ZL-R3` 100 sites, `ZL-R4` wind speed and area mean, `ZL-R5` one hour as a tile; `ZL-W1` table of cells straight to a manifest store (`gbx_zarr_write` with `dim_cols`), `ZL-W2` to a plain store, `ZL-W3` baseline (tasks write the shards of staged blocks), `ZL-W4` / `ZL-W5` append a day of cells to the manifest / plain store; `ZL-W1s`, `ZL-W2s`, `ZL-W4s`, `ZL-W5s` the same writes by the path that stages: pack the cells into blocks, stage them in a Delta table, write the blocks; `ZL-W6` the blocks recipe: read u10 and v10 as blocks, compute the wind speed per block with a pandas UDF, write all four variables to a plain store (no staging). The write table has `path s` (the wall plus the pack and stage time) and `overhead (path)`. Default: all.
+- `--zarr-cases <csv>`: `ZL-R1` full table, `ZL-R2` box over all time, `ZL-R3` 100 sites, `ZL-R4` wind speed and area mean, `ZL-R5` one hour as a tile.
+  `ZL-W1` writes a table of cells straight to a manifest store (`gbx_zarr_write` with `dim_cols`).
+  `ZL-W2` writes to a plain store, and `ZL-W3` is the baseline (tasks write the shards of staged blocks).
+  `ZL-W4` and `ZL-W5` append a day of cells to the manifest store and the plain store.
+  `ZL-W1s`, `ZL-W2s`, `ZL-W4s` and `ZL-W5s` are the same writes by the path that stages.
+  That path packs the cells into blocks, stages them in a Delta table, and writes the blocks.
+  `ZL-W6` is the blocks recipe.
+  It reads u10 and v10 as blocks and computes the wind speed per block with a pandas UDF.
+  It writes all four variables to a plain store (no staging).
+  The write table has `path s` (the wall plus the pack and stage time) and `overhead (path)`. Default: all.
 - `--zarr-reps <n>`: runs per leg, the first cold. Default: 3.
 - `--zarr-cores <n>`: task slots of `local[N]`. Default: 8.
 - `--zarr-root <dir>`: where the stores are. Default: `/tmp/gbx-local-timing/ZL` in the container.
 - `--zarr-generate`: write the missing stores first (`gbx:bench:gen-data --zarr-ladder` does the same on the host).
 - `--zarr-json-out <file>`: keep every leg's metrics.
 - `--zarr-budget-mib <n>`: plan reads with this decoded unit budget. The planner packs chunks into tasks up to it: 64 MiB locally and on Serverless, 1536 MiB on a classic cluster.
-- `--zarr-plan-only`: plan all eight rungs from stores that hold only their metadata (no data, no reads), and print the tasks at the 64 and 1536 MiB budgets.
+- `--zarr-plan-only`: plan all eight rungs from stores that hold only their metadata (no data, no reads).
+  It also prints the tasks at the 64 and 1536 MiB budgets.
 - Output: a table per leg (wall, cold wall, s/GB, tasks, chunks and shards touched, planning, busy share, MB/s, read-back check) and the gates. A read-back check re-computes the values and compares sums.
-- Gates (exit 1): time per GB within 1.5x of the 100 MB rung's from that rung up; planning under 10% of the wall once it takes 0.25 s; tasks at least `min(cores, chunks, MB / 8)`; one hour of a tile does not grow with the store; no check failure. Below the 100 MB rung a fixed cost dominates, so the table gives a fit `wall = fixed + slope x GB` and the slope between rungs.
+- Gates (exit 1): time per GB within 1.5x of the 100 MB rung's from that rung up.
+  Planning stays under 10% of the wall once it takes 0.25 s.
+  Tasks must be at least `min(cores, chunks, MB / 8)`.
+  One hour of a tile does not grow with the store, and no check fails. Below the 100 MB rung a fixed cost dominates, so the table gives a fit `wall = fixed + slope x GB` and the slope between rungs.
 
 **Limits:**
 - The sets are `IO`, `S` and `SE`. Add another set to `SETS` in `python/geobrix/src/databricks/labs/gbx/bench/local_timing.py`.

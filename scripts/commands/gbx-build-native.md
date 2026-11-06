@@ -1,6 +1,17 @@
 # gbx:build:native
 
-Builds the GeoBrix native stack inside one pinned `manylinux_2_28` container (`scripts/native/build.Dockerfile`), for x86_64 and aarch64. The `toolchain` target is the build container itself: Python 3.12 build tools (cmake, ninja, Cython, numpy 2.1.3, maturin, auditwheel, patchelf), OpenJDK 17, SWIG, Ant, and the pinned Rust toolchain with `cargo-deny`. Later targets build on it: `stage-native` is GDAL, PROJ, GEOS and every library they need, built from source in the same container (below); `bindings` is rasterio, pyogrio, pyproj, shapely and netCDF4 built from their sdists against it; `rust-native` is the toolchain plus libclang, where Rust crates that call GDAL, PROJ or GEOS are built against the `stage-native` tree. Every version comes from `scripts/native/pins.conf`, whose KEY=VALUE lines are the GDAL build's cache key (the build context gets them without comments, so a comment edit rebuilds nothing), or from `scripts/native/rust-pins.conf` for what feeds no GDAL build (PyO3, the georust crates, the rust-native stage's libclang). Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds: the JDK (dnf, from the base image's distribution repositories) and the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
+Builds the GeoBrix native stack inside one pinned `manylinux_2_28` container (`scripts/native/build.Dockerfile`), for x86_64 and aarch64. The `toolchain` target is the build container itself.
+It holds Python 3.12 build tools (cmake, ninja, Cython, numpy 2.1.3, maturin, auditwheel, patchelf).
+It also holds OpenJDK 17, SWIG, Ant, and the pinned Rust toolchain with `cargo-deny`.
+Later targets build on it.
+`stage-native` is GDAL, PROJ, GEOS and every library they need, built from source in the same container (below).
+`bindings` is rasterio, pyogrio, pyproj, shapely and netCDF4, built from their sdists against it.
+`rust-native` is the toolchain plus libclang, where Rust crates that call GDAL, PROJ or GEOS are built against the `stage-native` tree.
+Every version comes from `scripts/native/pins.conf`.
+Its KEY=VALUE lines are the GDAL build's cache key. The build context gets them without comments, so a comment edit rebuilds nothing.
+Versions that feed no GDAL build come from `scripts/native/rust-pins.conf`: PyO3, the georust crates, and the rust-native stage's libclang. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds.
+The first is the JDK (dnf, from the base image's distribution repositories).
+The second is the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
 
 ## Usage
 
@@ -11,7 +22,10 @@ bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target
 ## Options
 
 - `--arch x86_64|aarch64|both` - default: this machine's architecture. `both` builds aarch64 first, then x86_64. The architecture that is not the host's runs under emulation and is much slower.
-- `--target toolchain|stage-native|bindings|rust-native` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native`, `bindings` (which builds on `stage-native`, cached) and `rust-native` build on the toolchain image `geobrix-native-build:toolchain-<hash>-<arch>`: it is built first when missing, and an existing one is used as it is; a change to the toolchain stage or to a file it copies changes `<hash>`, so the next build makes a new toolchain image.
+- `--target toolchain|stage-native|bindings|rust-native` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`.
+  `stage-native`, `bindings` (which builds on `stage-native`, cached) and `rust-native` build on the toolchain image `geobrix-native-build:toolchain-<hash>-<arch>`.
+  The command builds that image first when it is missing, and uses an existing one as it is.
+  A change to the toolchain stage or to a file it copies changes `<hash>`, so the next build makes a new toolchain image.
 - `--no-cache` - Rebuild every layer. A cold build's seconds are the full cost; a cached one reports only the layers that changed. The tree written to `build/native/out/<arch>/<target>/` is always the image just built (the export reads that image, not the build cache).
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
@@ -20,11 +34,21 @@ An option that needs a value given without one prints `<option> needs a value` a
 
 ## What `--target toolchain` checks
 
-Per architecture, after the image is built as `geobrix-native-build:toolchain-<hash>-<arch>`, where `<hash>` is the first 12 characters of a sha256 over the KEY=VALUE lines of `pins.conf` (comments and blank lines dropped: `pins.py tag-hash`), the toolchain stage of `build.Dockerfile` and the files that stage copies (so a toolchain edit, not only a pin change, makes a new tag):
+Per architecture, the image is built as `geobrix-native-build:toolchain-<hash>-<arch>`, and the checks below run on it.
+`<hash>` is the first 12 characters of a sha256 over the KEY=VALUE lines of `pins.conf`.
+Comments and blank lines are dropped (`pins.py tag-hash`).
+The sha256 also covers the toolchain stage of `build.Dockerfile` and the files that stage copies.
+So a toolchain edit, not only a pin change, makes a new tag:
 
-1. The tools match the pins (rustc, maturin, numpy, SWIG, Ant, JDK 17, cargo-deny, and on x86_64 NASM, which libjpeg-turbo's SIMD code needs; aarch64 has none and needs none), and no pip or uv index configuration is in the image.
-2. The Rust smoke crate (`scripts/native/rust-smoke`) builds into a `cp312-abi3-manylinux_2_28_<arch>` wheel with `--network none`, from sources vendored on the host (`scripts/native/cargo-vendor.sh`), and leaves no `target/` in the mounted crate; the wheel installs with `--no-index` and `smoke()` returns `ok`.
-3. `cargo deny` passes the policy in `deny.toml`: licenses, bans and sources offline, advisories against the public advisory database. **Yanked crates are not checked here, by design:** a vendored source has no crates index, so the command allows the `index-failure` lint and prints a NOTE. The yanked check, and the full `advisories bans licenses sources` run, are the CI job `.github/workflows/rust-deny.yml` (`scripts/native/cargo-deny-ci.sh`): the pinned cargo-deny against every `Cargo.lock` in the repository on public crates.io, weekly and on every push and pull request. That job is the gate for a Rust crate.
+1. The tools match the pins (rustc, maturin, numpy, SWIG, Ant, JDK 17, cargo-deny, and on x86_64 NASM).
+   NASM is for libjpeg-turbo's SIMD code; aarch64 has none and needs none.
+   No pip or uv index configuration is in the image.
+2. The Rust smoke crate (`scripts/native/rust-smoke`) builds into a `cp312-abi3-manylinux_2_28_<arch>` wheel with `--network none`.
+   It builds from sources vendored on the host (`scripts/native/cargo-vendor.sh`), and leaves no `target/` in the mounted crate.
+   The wheel installs with `--no-index`, and `smoke()` returns `ok`.
+3. `cargo deny` passes the policy in `deny.toml`: licenses, bans and sources offline, advisories against the public advisory database. **Yanked crates are not checked here, by design:** a vendored source has no crates index, so the command allows the `index-failure` lint and prints a NOTE. The yanked check, and the full `advisories bans licenses sources` run, are the CI job `.github/workflows/rust-deny.yml` (`scripts/native/cargo-deny-ci.sh`).
+That job runs the pinned cargo-deny against every `Cargo.lock` in the repository on public crates.io.
+It runs weekly and on every push and pull request. That job is the gate for a Rust crate.
 
 ## What `--target stage-native` builds and checks
 
@@ -45,47 +69,125 @@ Stages `deps` -> `gdal` -> `stage-native` of `build.Dockerfile`, then `export-st
 
 Beside the tree, `build/native/out/<arch>/stage-native/gdal-native-<GDAL_VERSION>-gbx<GBX_NATIVE_REVISION>-<arch>-<build-id>-debuginfo.tar.xz` holds the debug symbols of every ELF file in it (below); `<build-id>` is the first 12 hex of libgdal's. The tarball is byte-reproducible (`scripts/native/repro_tar.py`: sorted members, mtimes at `SOURCE_DATE_EPOCH`, owner 0, normalized modes), so an unchanged build gives the same bytes. It is never packaged into a wheel: each GeoBrix release attaches the per-arch tarballs as GitHub release assets under these names.
 
-GDAL uses its own copies of libtiff (the same 4.7.2) and libgeotiff (`GDAL_USE_TIFF_INTERNAL`, `GDAL_USE_GEOTIFF_INTERNAL`): GDAL builds the GTiff JXL codec only with them. Their symbols are renamed inside libgdal, so the external libtiff that PROJ links (for grid files) loads beside them without a clash; the external libgeotiff is built but not shipped.
+GDAL uses its own copies of libtiff (the same 4.7.2) and libgeotiff (`GDAL_USE_TIFF_INTERNAL`, `GDAL_USE_GEOTIFF_INTERNAL`): GDAL builds the GTiff JXL codec only with them. Their symbols are renamed inside libgdal.
+So the external libtiff that PROJ links (for grid files) loads beside them without a clash.
+The external libgeotiff is built but not shipped.
 
-Every dependency is built from the pinned source with the options of `scripts/native/build-deps.sh`; an option that CMake or `configure` ignores fails the build (`BUILD FAILED: <dep> ignored -D<name>`), so a renamed option cannot be dropped silently. Sources are bind-mounted from the build context and every build directory is a tmpfs (RAM), so the image layers hold only what was installed; the `deps`, `gdal`, `stage-native` and `bindings` steps run with no network (`RUN --network=none`), so nothing unpinned can be fetched; and `SOURCE_DATE_EPOCH` is fixed (2026-01-01T00:00:00Z), so an unchanged input rebuilds to the same bytes and keeps its hashed SONAME; each is capped at 6 GB of the Docker VM's RAM.
+Every dependency is built from the pinned source with the options of `scripts/native/build-deps.sh`.
+An option that CMake or `configure` ignores fails the build (`BUILD FAILED: <dep> ignored -D<name>`), so a renamed option cannot be dropped silently.
+Sources are bind-mounted from the build context, and every build directory is a tmpfs (RAM), so the image layers hold only what was installed.
+The `deps`, `gdal`, `stage-native` and `bindings` steps run with no network (`RUN --network=none`), so nothing unpinned can be fetched.
+`SOURCE_DATE_EPOCH` is fixed (2026-01-01T00:00:00Z), so an unchanged input rebuilds to the same bytes and keeps its hashed SONAME.
+Each is capped at 6 GB of the Docker VM's RAM.
 
 Per architecture, `scripts/native/verify-native.sh` runs in the toolchain image with the exported tree mounted read-only and `--network none`, and prints `ok: <check>` or `VERIFY FAILED: <what>`:
 
 1. `gdalinfo --version` reports the pinned GDAL and `projinfo EPSG:27700` works, with no `GDAL_DATA`, `PROJ_DATA` or `LD_LIBRARY_PATH` set (the tools only).
-2. Licence guard: no library or NEEDED entry matches `poppler|podofo|pdfium|rttopo|spatialite|mysql|mariadb|FileGDBAPI|ecw|ltidsdk|kdu|lura|grok|x265|odbc|clntsh|sfcgal|CGAL|lcms2_fast_float|lcms2_threaded` (the last two are Little-CMS's GPL-3.0 plugins, never built); none of ECW, JP2ECW, MrSID, JP2MrSID, JP2KAK, JP2Lura, JP2Grok, FileGDB (the SDK driver), MySQL, ODBC, MSSQLSpatial, PGeo, OCI is registered; every `licenses/<dep>` is non-empty. Part 2: the libraries added for JPEG XL, HTTP/2, REGEXP, muparser and the grids (nghttp2, pcre2, muparser, highway, brotli, lcms2, libjxl, proj-grids) each carry a licence and none names a GPL-family licence; libjxl's `PATENTS` and netCDF-C's `BZIP2_LICENSE` are present.
-3. The 25 required drivers are registered (GTiff, COG, VRT, MEM, netCDF, HDF5, GRIB, JP2OpenJPEG, Zarr, PNG, JPEG, WEBP, MBTiles, GPKG, OpenFileGDB, ESRI Shapefile, GeoJSON, GeoJSONSeq, FlatGeobuf, MVT, PMTiles, CSV, KML, GML, JPEGXL).
-4. ELF closure: every ELF file has a RUNPATH `$ORIGIN`-relative to `lib/` and no RPATH, every NEEDED is in `lib/` or in the manylinux policy set, SONAMEs are unique and equal to the file names, every library but the JNI has a hashed SONAME that equals no library name in the image and matches the `sonames` map of `MANIFEST.json`; `auditwheel show` on a throwaway wheel of the tree reports consistency with `manylinux_2_28_<arch>` and no external shared libraries.
-   Then `libgdal` is loaded after the host's `libsqlite3.so.0` and `libcurl.so.4` (what a Python process that imported `sqlite3` looks like): it must load, run on its own SQLite and curl, and not warn that GDAL runs against another curl.
+2. Licence guard: no library or NEEDED entry matches `poppler|podofo|pdfium|rttopo|spatialite|mysql|mariadb|FileGDBAPI|ecw|ltidsdk|kdu|lura|grok|x265|odbc|clntsh|sfcgal|CGAL|lcms2_fast_float|lcms2_threaded`.
+   Its last two entries are Little-CMS's GPL-3.0 plugins, never built.
+   None of ECW, JP2ECW, MrSID, JP2MrSID, JP2KAK, JP2Lura, JP2Grok, FileGDB (the SDK driver), MySQL, ODBC, MSSQLSpatial, PGeo, OCI is registered.
+   Every `licenses/<dep>` is non-empty.
+   Part 2: the libraries added for JPEG XL, HTTP/2, REGEXP, muparser and the grids each carry a licence.
+   They are nghttp2, pcre2, muparser, highway, brotli, lcms2, libjxl and proj-grids.
+   None names a GPL-family licence.
+   libjxl's `PATENTS` and netCDF-C's `BZIP2_LICENSE` are present.
+3. The 25 required drivers are registered: GTiff, COG, VRT, MEM, netCDF, HDF5, GRIB, JP2OpenJPEG, Zarr, PNG, JPEG, WEBP, MBTiles.
+   The rest are GPKG, OpenFileGDB, ESRI Shapefile, GeoJSON, GeoJSONSeq, FlatGeobuf, MVT, PMTiles, CSV, KML, GML and JPEGXL.
+4. ELF closure: every ELF file has a RUNPATH `$ORIGIN`-relative to `lib/` and no RPATH.
+   Every NEEDED is in `lib/` or in the manylinux policy set.
+   SONAMEs are unique and equal to the file names.
+   Every library but the JNI has a hashed SONAME that equals no library name in the image and matches the `sonames` map of `MANIFEST.json`.
+   `auditwheel show` on a throwaway wheel of the tree reports consistency with `manylinux_2_28_<arch>` and no external shared libraries.
+   Then `libgdal` is loaded after the host's `libsqlite3.so.0` and `libcurl.so.4`, which is what a Python process that imported `sqlite3` looks like.
+   It must load, run on its own SQLite and curl, and not warn that GDAL runs against another curl.
 5. JNI: `JniSmoke` loads `libgdalalljni.so` by absolute path and checks GDAL, OGR (OpenFileGDB) and OSR (EPSG:27700) from the Java classes.
-6. osgeo: the version is the pinned one, `libgdal` is the one in `lib/`, an OpenFileGDB layer is written and read back, a CP1252 Shapefile is written and read back and a CP932 DBF decodes (iconv), the GRIB driver reports `HAVE_AEC=YES` (CCSDS), and `share/gdal` is found with `GDAL_DATA` in the environment or `PushFinderLocation`, and not without. `JniSmoke` also checks that `share/gdal` is found when `GDAL_DATA` is set before `AllRegister()`.
-7. HTTPS: a local server with a throwaway CA, which the system trust store also trusts (control: the system curl accepts it). Our `/vsicurl/` read is refused without `GDAL_CURL_CA_BUNDLE` (no CA path is compiled into libcurl) and succeeds with it; the libcurl is built on OpenSSL 4 and no system libssl is loaded.
+6. osgeo: the version is the pinned one, and `libgdal` is the one in `lib/`.
+   An OpenFileGDB layer is written and read back.
+   A CP1252 Shapefile is written and read back, and a CP932 DBF decodes (iconv).
+   The GRIB driver reports `HAVE_AEC=YES` (CCSDS).
+   `share/gdal` is found with `GDAL_DATA` in the environment or `PushFinderLocation`, and not without.
+   `JniSmoke` also checks that `share/gdal` is found when `GDAL_DATA` is set before `AllRegister()`.
+7. HTTPS: a local server with a throwaway CA, which the system trust store also trusts (control: the system curl accepts it).
+   Our `/vsicurl/` read is refused without `GDAL_CURL_CA_BUNDLE`, because no CA path is compiled into libcurl.
+   It succeeds with `GDAL_CURL_CA_BUNDLE` set.
+   The libcurl is built on OpenSSL 4, and no system libssl is loaded.
 8. The dev kit: a C program built against `include/` + `lib-dev/` through `pkg-config`, through `gdal-config` and through CMake `find_package(GDAL)`, run with no library path.
-9. libjpeg-turbo SIMD: the SIMD dispatcher is compiled in (it is the only code that reads `JSIMD_FORCENONE`), and a 2048x2048 RGB JPEG-in-TIFF encodes or decodes at least 1.15x faster than with `JSIMD_FORCENONE=1` (the scalar path), neither slower (under x86_64 emulation decoding gains least).
-10. JPEG XL: the JPEGXL driver writes and reads a `.jxl`; GTiff `COMPRESS=JXL` round-trips Byte, UInt16 and Float32 exactly with `JXL_LOSSLESS=YES`, and with `JXL_LOSSLESS=NO` to a smaller file with a small error. Lossy JXL is perceptual: a Float32 band is nominally 0..1 (a 0..1000 field comes back up to 92% off), so the lossy Float32 row is 0..1.
-11. REGEXP (PCRE2) in the SQLite dialect over a Shapefile, in a SQLite database's own SQL, through `VectorTranslate -dialect SQLite` and on a GPKG through `INDIRECT_SQLITE`. GDAL compiles PCRE2 into its SQLite driver only, so a GPKG's own SQL has REGEXP only after that driver has run in the process (its SQL functions are an SQLite auto-extension): reported from a fresh process, not asserted.
+9. libjpeg-turbo SIMD: the SIMD dispatcher is compiled in, and it is the only code that reads `JSIMD_FORCENONE`.
+   A 2048x2048 RGB JPEG-in-TIFF encodes or decodes at least 1.15x faster than with `JSIMD_FORCENONE=1` (the scalar path).
+   Neither is slower (under x86_64 emulation, decoding gains least).
+10. JPEG XL: the JPEGXL driver writes and reads a `.jxl`.
+   GTiff `COMPRESS=JXL` round-trips Byte, UInt16 and Float32 exactly with `JXL_LOSSLESS=YES`.
+   With `JXL_LOSSLESS=NO`, it round-trips to a smaller file with a small error.
+   Lossy JXL is perceptual.
+   A Float32 band is nominally 0..1: a 0..1000 field comes back up to 92% off.
+   So the lossy Float32 row is 0..1.
+11. REGEXP (PCRE2) works in the SQLite dialect over a Shapefile.
+   It also works in a SQLite database's own SQL, through `VectorTranslate -dialect SQLite`, and on a GPKG through `INDIRECT_SQLITE`.
+   GDAL compiles PCRE2 into its SQLite driver only.
+   So a GPKG's own SQL has REGEXP only after that driver has run in the process.
+   Its SQL functions are an SQLite auto-extension.
+   This is reported from a fresh process, not asserted.
 12. muparser: `bin/gdal raster calc -i A=<2-band tile> --calc "(A[1]-A[2])/(A[1]+A[2])" --dialect muparser` equals numpy.
-13. The PROJ grids: the three files have the pinned sha256 and the licence their TIFF copyright tag states; EPSG:27700 to EPSG:4258 matches five of Ordnance Survey's published OSTN15 test points (OS's `OSTN15-NTv2.zip`: TP01, TP09, TP16, TP26, TP40) to within 1 cm, and with the OSTN15 file hidden PROJ's Helmert fallback misses by more than 0.5 m; at a node of each geoid grid (OSGM15: EPSG:4937 to EPSG:4258+5701; EGM96: EPSG:4979 to EPSG:4326+5773) the height moves by exactly the grid value and back; `proj.ini` says `network = off`.
+13. The PROJ grids: the three files have the pinned sha256 and the licence their TIFF copyright tag states.
+   EPSG:27700 to EPSG:4258 matches five of Ordnance Survey's published OSTN15 test points to within 1 cm.
+   The points are TP01, TP09, TP16, TP26 and TP40 from OS's `OSTN15-NTv2.zip`.
+   With the OSTN15 file hidden, PROJ's Helmert fallback misses by more than 0.5 m.
+   At a node of each geoid grid, the height moves by exactly the grid value and back.
+   The geoid grids are OSGM15 (EPSG:4937 to EPSG:4258+5701) and EGM96 (EPSG:4979 to EPSG:4326+5773).
+   `proj.ini` says `network = off`.
 14. `projsync` prints its usage (`--list-files`, `--source-id`, `--target-dir`); `--list-files` needs the network, which this run has not (`_selfcheck.natives()` runs it where there is network).
 15. libcurl is built with nghttp2 (`curl_version()` names it).
 16. `hdf5-plugins/` holds the zstd, blosc and bzip2 plugins (their closure is checked in 4).
-17. Debug symbols: no ELF file in the tree has `.debug_*` sections or a symbol table; every file's build-id is in `MANIFEST.json` (`build_ids`) and has its `.build-id/<xx>/<rest>.debug` in the tarball; the address of `GDALOpenEx` in the shipped (renamed, re-pathed) libgdal symbolizes with its debug file to `GDALOpenEx` in `gcore/`.
-18. Symbol isolation: `lib/`'s zlib exports `z_`-prefixed names only, no shared libexpat ships and libgdal exports or imports no `XML_*` symbol; then, with the system `libz.so.1` and `libexpat.so.1` loaded `RTLD_GLOBAL` first (what Ubuntu's and the runtimes' Python do), a KML write and read (expat) and a DEFLATE GeoTIFF round trip (zlib) work, `LD_DEBUG=bindings` shows no symbol of a payload file bound to the system zlib or expat (and, as the positive control, that it captured payload bindings, the payload's own `z_*` among them), and curl reports the pinned zlib. Statically, no ELF file in `lib/` (the JNI included), `hdf5-plugins/` or `bin/` imports an unprefixed zlib name or an expat `XML_*` name (an `nm` that cannot read a file fails the row).
+17. Debug symbols: no ELF file in the tree has `.debug_*` sections or a symbol table.
+   Every file's build-id is in `MANIFEST.json` (`build_ids`) and has its `.build-id/<xx>/<rest>.debug` in the tarball.
+   The address of `GDALOpenEx` in the shipped (renamed, re-pathed) libgdal symbolizes with its debug file to `GDALOpenEx` in `gcore/`.
+18. Symbol isolation: `lib/`'s zlib exports `z_`-prefixed names only, and no shared libexpat ships.
+   libgdal exports or imports no `XML_*` symbol.
+   Then, with the system `libz.so.1` and `libexpat.so.1` loaded `RTLD_GLOBAL` first (what Ubuntu's and the runtimes' Python do), two checks run.
+   A KML write and read (expat) works.
+   A DEFLATE GeoTIFF round trip (zlib) works.
+   `LD_DEBUG=bindings` shows no symbol of a payload file bound to the system zlib or expat.
+   As the positive control, it shows that it captured payload bindings, the payload's own `z_*` among them.
+   And curl reports the pinned zlib.
+   Statically, no ELF file in `lib/` (the JNI included), `hdf5-plugins/` or `bin/` imports an unprefixed zlib name or an expat `XML_*` name.
+   An `nm` that cannot read a file fails the row.
 
 ### Debug symbols, and symbolizing a crash
 
-Every library, tool, extension module, JNI library and plugin is compiled with `-g1` (function names and line tables, no local variables; the generated code is the same as without it) and linked with a GNU build-id. `stage-payload.sh` copies each one's debug sections into `debuginfo/.build-id/<first 2 hex>/<rest>.debug` with `objcopy --only-keep-debug`, then strips the file (`strip --strip-unneeded`, as before), so the shipped bytes do not grow. The SONAME renaming and RUNPATH rewriting that follow keep the build-id and the code's addresses, so a debug file still matches its shipped library. The bindings (`--target bindings`) do the same into `build/native/out/<arch>/bindings/bindings-gbx<GBX_NATIVE_REVISION>-<arch>-<build-id>-debuginfo.tar.xz`, named by rasterio's `_base` module (`build-ids.txt` lists their files; `test-bindings.sh` symbolizes `PyInit__base` with it through `scripts/native/symbolize-check.sh`). The build-ids of the tree are in `MANIFEST.json`, which the env wheel ships per architecture.
+Every library, tool, extension module, JNI library and plugin is compiled with `-g1`.
+That gives function names and line tables, with no local variables; the generated code is the same as without it.
+Each one is linked with a GNU build-id.
+`stage-payload.sh` copies each one's debug sections into `debuginfo/.build-id/<first 2 hex>/<rest>.debug` with `objcopy --only-keep-debug`.
+It then strips the file (`strip --strip-unneeded`, as before), so the shipped bytes do not grow.
+The SONAME renaming and RUNPATH rewriting that follow keep the build-id and the code's addresses.
+So a debug file still matches its shipped library.
+The bindings (`--target bindings`) do the same into `build/native/out/<arch>/bindings/bindings-gbx<GBX_NATIVE_REVISION>-<arch>-<build-id>-debuginfo.tar.xz`, named by rasterio's `_base` module.
+`build-ids.txt` lists their files.
+`test-bindings.sh` symbolizes `PyInit__base` with it through `scripts/native/symbolize-check.sh`.
+The build-ids of the tree are in `MANIFEST.json`, which the env wheel ships per architecture.
 
 To symbolize a native crash (a core file, or a JVM `hs_err_pid*.log` frame such as `C  [libgdal-<hash>.so.39+0x13dedc0]`; Python's `faulthandler` prints Python frames only, no native addresses):
 
 1. Find the library's build-id: `readelf -n <the shipped .so>` (`Build ID: ffee2d9c...`), or look the file up in the installed wheel's `_native/<arch>/MANIFEST.json` (`build_ids`; its `lib/libgdal-*` entry names the gdal-native tarball).
 2. Download that version's tarball for the architecture from the GeoBrix GitHub release assets (`gdal-native-<v>-gbx<rev>-<arch>-<libgdal build-id>-debuginfo.tar.xz`, or the bindings one for an extension module) and unpack it: `tar -xJf <tarball> -C /tmp/debuginfo`.
-3. One address: `addr2line -f -C -e /tmp/debuginfo/.build-id/ff/ee2d9c....debug 0x13dedc0` prints the function and `file:line`. A core file: `gdb -iex 'set debug-file-directory /tmp/debuginfo:/usr/lib/debug' <program> <core>` finds every library's debug file by build-id (`-iex` runs before the core's libraries load; `-ex` would be too late, and the `:/usr/lib/debug` keeps the system's own debug files).
+3. One address: `addr2line -f -C -e /tmp/debuginfo/.build-id/ff/ee2d9c....debug 0x13dedc0` prints the function and `file:line`. A core file: `gdb -iex 'set debug-file-directory /tmp/debuginfo:/usr/lib/debug' <program> <core>` finds every library's debug file by build-id.
+`-iex` runs before the core's libraries load; `-ex` would be too late.
+The `:/usr/lib/debug` keeps the system's own debug files.
 
 To use the tree for a build: `export PKG_CONFIG_PATH=<root>/lib/pkgconfig LIBRARY_PATH=<root>/lib-dev GDAL_CONFIG=<root>/bin/gdal-config CMAKE_PREFIX_PATH=<root>`.
 
 ## What `--target bindings` builds and checks
 
-Stage `bindings` (`FROM stage-native`) builds `shapely`, `pyproj`, `pyogrio`, `rasterio` and `netCDF4` from the sdists in `build/native/sdists/` (sha256 from `pins.conf`, fetched by `prefetch.sh` from the project's path on the public file host) with `scripts/native/build-bindings.sh`, `--no-index --no-build-isolation`. Their own build requirements are hashed and offline (`scripts/native/bindings-requirements-<arch>.txt`, installed in this stage, not in the toolchain, so changing them does not change the toolchain tag and rebuild GDAL). They link through `gdal-native`'s `lib-dev/` and `gdal-config`, `geos-config`, `nc-config`, pkg-config (never CMake's `find_package`), so each records the hashed SONAME of every library it needs. Python's own compile flags are kept (a `CFLAGS` in the environment replaces them in setuptools: `-g0` alone builds at `-O0`, and netCDF4 then fails to load). Output `build/native/out/<arch>/bindings/`:
+Stage `bindings` (`FROM stage-native`) builds `shapely`, `pyproj`, `pyogrio`, `rasterio` and `netCDF4` from the sdists in `build/native/sdists/`.
+The sha256 values come from `pins.conf`, and `prefetch.sh` fetches the sdists from the project's path on the public file host.
+The build runs `scripts/native/build-bindings.sh` with `--no-index --no-build-isolation`.
+Their own build requirements are hashed and offline (`scripts/native/bindings-requirements-<arch>.txt`).
+They are installed in this stage, not in the toolchain, so changing them does not change the toolchain tag and rebuild GDAL.
+They link through `gdal-native`'s `lib-dev/` and `gdal-config`, `geos-config`, `nc-config`, pkg-config (never CMake's `find_package`).
+So each records the hashed SONAME of every library it needs.
+Python's own compile flags are kept.
+A `CFLAGS` in the environment replaces them in setuptools: `-g0` alone builds at `-O0`, and netCDF4 then fails to load.
+Output `build/native/out/<arch>/bindings/`:
 
 | Path | Holds |
 |---|---|
@@ -98,32 +200,123 @@ Stage `bindings` (`FROM stage-native`) builds `shapely`, `pyproj`, `pyogrio`, `r
 
 Per architecture, `scripts/native/test-bindings.sh` runs in the toolchain image with `--network none`, the `stage-native` export mounted read-only, and prints `ok: <check>` or `TEST FAILED: <what>`:
 
-1. The payload layout is assembled (`_native/<arch>/lib`, `_native/<arch>/hdf5-plugins`, `_native/share`, `_vendor/<arch>` side by side) and the ELF closure of the vendored tree holds: each file has a RUNPATH that resolves to `lib/` and no RPATH, each NEEDED is in `lib/` or the glibc/libstdc++ set.
-2. Three venvs from the hashed test wheelhouse (`test-requirements{,-newclick}-<arch>.txt`): click 8.2.1, the newest click rasterio accepts, and the PyPI wheels of the same versions as the baseline (sha256-pinned in `baseline-requirements-<arch>.txt`; netCDF4 1.7.5.1 has no binary wheel on PyPI: the baseline is 1.7.5).
-3. All five import from `_vendor/<arch>`; the GDAL, PROJ, GEOS, netCDF-C and HDF5 versions they report equal the pins; `libgdal`, `libproj`, `libgeos_c`, `libnetcdf` and `libhdf5` are mapped only from the payload. (`GDAL_DATA` and `PROJ_DATA` are set in the environment before the first import, as the env wheel's activation sets them; the suites run without geobrix's activation, so the probe gives them `HDF5_PLUGIN_PATH` for the payload's filter plugins.)
-4. Each binding's own suite runs against the vendored package, the test directory taken out of its sdist (`pytest --pyargs`-equivalent for shapely and pyogrio, `-m "not network"` for pyproj and rasterio, `pytest test` and `run_all.py` for netCDF4). rasterio's `tests/data` comes from the project's tag archive (its sdist ships none; `scripts/native/test-data.conf`, sha256-checked by `prefetch.sh`). The payload's `gdalinfo`, `ogrinfo` and `projinfo` are on `PATH` (rasterio's `gdalbin` tests call `gdalinfo`; there is no `gdalwarp`). The rasterio suite has our rasterio's dist-info on the path beside the vendored code (the vendored tree has none, and `rio` finds its commands through entry points); the other bindings' console scripts do not exist in the vendored layout, so the tests that run them fail here and against the PyPI wheel alike (environmental).
-5. Every failure is repeated: in the same environment (flaky), for rasterio with the newest click (a pass there is click-attributable: a `cli_failure` when it comes from the `rio` command line, a `library_failure` otherwise), then against the PyPI wheel (still failing there: environmental; passing there: a regression). A pytest process that dies on a signal is a crash of that test: recorded, deselected, and the run continues.
+1. The payload layout is assembled (`_native/<arch>/lib`, `_native/<arch>/hdf5-plugins`, `_native/share`, `_vendor/<arch>` side by side).
+   The ELF closure of the vendored tree holds: each file has a RUNPATH that resolves to `lib/` and no RPATH.
+   Each NEEDED is in `lib/` or the glibc/libstdc++ set.
+2. Three venvs come from the hashed test wheelhouse (`test-requirements{,-newclick}-<arch>.txt`).
+   They are click 8.2.1, the newest click rasterio accepts, and the PyPI wheels of the same versions as the baseline.
+   The baseline wheels are sha256-pinned in `baseline-requirements-<arch>.txt`.
+   netCDF4 1.7.5.1 has no binary wheel on PyPI, so the baseline is 1.7.5.
+3. All five import from `_vendor/<arch>`.
+   The GDAL, PROJ, GEOS, netCDF-C and HDF5 versions they report equal the pins.
+   `libgdal`, `libproj`, `libgeos_c`, `libnetcdf` and `libhdf5` are mapped only from the payload.
+   (`GDAL_DATA` and `PROJ_DATA` are set in the environment before the first import, as the env wheel's activation sets them.
+   The suites run without geobrix's activation, so the probe gives them `HDF5_PLUGIN_PATH` for the payload's filter plugins.)
+4. Each binding's own suite runs against the vendored package, with the test directory taken out of its sdist.
+   The runner is `pytest --pyargs`-equivalent for shapely and pyogrio, `-m "not network"` for pyproj and rasterio, and `pytest test` and `run_all.py` for netCDF4.
+   rasterio's `tests/data` comes from the project's tag archive.
+   Its sdist ships none (`scripts/native/test-data.conf`, sha256-checked by `prefetch.sh`).
+   The payload's `gdalinfo`, `ogrinfo` and `projinfo` are on `PATH`.
+   rasterio's `gdalbin` tests call `gdalinfo`, and there is no `gdalwarp`.
+   The rasterio suite has our rasterio's dist-info on the path beside the vendored code.
+   The vendored tree has none, and `rio` finds its commands through entry points.
+   The other bindings' console scripts do not exist in the vendored layout.
+   So the tests that run them fail here and against the PyPI wheel alike (environmental).
+5. Every failure is repeated in the same environment (flaky).
+   For rasterio, it is repeated with the newest click.
+   A pass there is click-attributable: a `cli_failure` when it comes from the `rio` command line, a `library_failure` otherwise.
+   Then the failure is repeated against the PyPI wheel (still failing there: environmental; passing there: a regression).
+   A pytest process that dies on a signal is a crash of that test.
+   It is recorded and deselected, and the run continues.
 6. The rasterio distribution wheel installs beside the payload, imports without `PYTHONPATH`, has the relaxed requirement, and `rio info` runs.
 
-`p11.json` is `{<binding>: {version, baseline_version, build_s, test_s, passed, failed, errors, skipped, xfailed, xpassed, subtests_passed, crashed, regressions, environmental, flaky}, rasterio also click_8_2_1: {cli_failures, library_failures}}` with the test ids as lists, and the reported stack versions. The counts are pytest's own (a call is passed, failed, skipped, xfailed or xpassed, a passed subtest is `subtests passed`, a failed setup, teardown or collection is an error), counted from the probe's log and checked against pytest's summary line, which the probe fails on if it differs. `regressions` means a failure here of a test that passes on the baseline; a test that is skipped or xfails here and passes there is not seen by it, so compare the skipped and xfailed ids (`test-results/<binding>.jsonl`) with the baseline's when a decision rests on it. `environmental` means untested: the test fails on the baseline too, because a program is not on `PATH` or there is no network. `python3 scripts/native/p11_probe.py recount --bindings <dir>` redoes the counts of an existing run from its logs.
+`p11.json` is `{<binding>: {version, baseline_version, build_s, test_s, passed, failed, errors, skipped, xfailed, xpassed, subtests_passed, crashed, regressions, environmental, flaky}, rasterio also click_8_2_1: {cli_failures, library_failures}}` with the test ids as lists, and the reported stack versions. The counts are pytest's own.
+A call is passed, failed, skipped, xfailed or xpassed.
+A passed subtest is `subtests passed`, and a failed setup, teardown or collection is an error.
+The probe counts them from its log and checks them against pytest's summary line, and it fails if the two differ.
+`regressions` means a failure here of a test that passes on the baseline.
+A test that is skipped or xfails here and passes there is not seen by it.
+So compare the skipped and xfailed ids (`test-results/<binding>.jsonl`) with the baseline's when a decision rests on it.
+`environmental` means untested: the test fails on the baseline too, because a program is not on `PATH` or there is no network. `python3 scripts/native/p11_probe.py recount --bindings <dir>` redoes the counts of an existing run from its logs.
 
 ## What `--target rust-native` builds and checks
 
-Stage `rust-native` (`FROM toolchain`) adds `clang-libs` and `llvm-libs` at exactly `CLANG_LIBS_VERSION` (`scripts/native/rust-pins.conf`, a build arg of this stage only; dnf from the AlmaLinux AppStream `llvm-toolset` module, checked with `rpm -q` after the install, recorded in `/opt/clang-libs-version.txt`; it requires a `gcc-toolset-15` the build does not use, `PATH` keeps the manylinux `gcc-toolset-14`), `LIBCLANG_PATH=/usr/lib64` and `BINDGEN_EXTRA_CLANG_ARGS=-isystem /opt/clang-resource/include` (libclang does not find its own builtin headers such as `stddef.h` from `/usr/lib64`, and with no `clang` binary bindgen cannot ask for them), because bindgen loads libclang. It does not hold GDAL: a crate links the exported `stage-native` tree, mounted read-only, so building a crate never rebuilds GDAL and the stage never changes the toolchain tag. The check is the probe crate `rust/gbxrs-native-probe` (not shipped): a PyO3 abi3-py312 extension `_gbx_native_probe` with `gdal_vsimem_info(path) -> (width, height, sum of band 1)`, `geos_buffer_area(wkb, dist)` (16 segments per quadrant, shapely's default), `proj_transform(src, dst, x, y)` (normalised axis order, pyproj's `always_xy`) and `versions()` (the GDAL, GEOS and PROJ the process runs). Per architecture, needing `stage-native` and `bindings` (else `PRECONDITION MISSING`):
+Stage `rust-native` (`FROM toolchain`) adds `clang-libs` and `llvm-libs` at exactly `CLANG_LIBS_VERSION`.
+The version is set in `scripts/native/rust-pins.conf`, a build arg of this stage only.
+dnf installs them from the AlmaLinux AppStream `llvm-toolset` module.
+`rpm -q` checks them after the install, and the version is recorded in `/opt/clang-libs-version.txt`.
+The stage requires a `gcc-toolset-15` the build does not use, so `PATH` keeps the manylinux `gcc-toolset-14`.
+The stage sets `LIBCLANG_PATH=/usr/lib64` and `BINDGEN_EXTRA_CLANG_ARGS=-isystem /opt/clang-resource/include`.
+libclang does not find its own builtin headers such as `stddef.h` from `/usr/lib64`, and with no `clang` binary bindgen cannot ask for them.
+Bindgen loads libclang, which is why these are set.
+The stage does not hold GDAL.
+A crate links the exported `stage-native` tree, mounted read-only.
+So building a crate never rebuilds GDAL, and the stage never changes the toolchain tag.
+The check is the probe crate `rust/gbxrs-native-probe` (not shipped).
+It is a PyO3 abi3-py312 extension, `_gbx_native_probe`.
+It has `gdal_vsimem_info(path) -> (width, height, sum of band 1)`, and `geos_buffer_area(wkb, dist)` (16 segments per quadrant, shapely's default).
+It also has `proj_transform(src, dst, x, y)` (normalised axis order, pyproj's `always_xy`) and `versions()` (the GDAL, GEOS and PROJ the process runs).
+Per architecture, needing `stage-native` and `bindings` (else `PRECONDITION MISSING`):
 
 1. `scripts/native/cargo-vendor.sh` vendors the crate's locked crates on the host; `scripts/native/build-rust-native.sh` builds it in the image with `--network none` (below), into `build/native/out/<arch>/rust-native/payload/_native/<arch>/rs/_gbx_native_probe.abi3.so` (RUNPATH `$ORIGIN/../lib`, the env wheel's place for Rust kernels) and `wheel/`. The mounted crate gets no `target/`.
-2. `scripts/native/verify-rust-native.sh` (`ok: <check>` / `VERIFY FAILED: <what>`, `verify.txt`): NEEDED holds the payload's hashed `libgdal`, `libgeos_c` and `libproj` (read from `MANIFEST.json`), every NEEDED is in `lib/` or the manylinux policy set and none is an original SONAME, RUNPATH is `$ORIGIN/../lib` and there is no RPATH; in `.dynsym` every GDAL/OGR/OSR/CPL/VSI, `GEOS*` and `proj_*` entry point is undefined (a static copy beside the dynamic one would define them) and the only defined global is `PyInit_<module>`; in the payload layout (`_native/<arch>/{lib,rs}`, `_native/share`, `_vendor/<arch>` with the bindings and osgeo, its RUNPATH set for that place) `ldd` resolves every library into `lib/` or to glibc/libstdc++/libgcc_s; `auditwheel show` on a throwaway wheel of `_native/<arch>/{lib,rs}` reports `manylinux_2_28_<arch>` and no external library; then `scripts/native/rust_native_smoke.py` runs in a venv of the hashed test environment, with the probe loaded after rasterio and osgeo and once before them.
+2. `scripts/native/verify-rust-native.sh` (`ok: <check>` / `VERIFY FAILED: <what>`, `verify.txt`) checks these:
+   NEEDED holds the payload's hashed `libgdal`, `libgeos_c` and `libproj` (read from `MANIFEST.json`).
+   Every NEEDED is in `lib/` or the manylinux policy set, and none is an original SONAME.
+   RUNPATH is `$ORIGIN/../lib`, and there is no RPATH.
+   In `.dynsym`, every GDAL/OGR/OSR/CPL/VSI, `GEOS*` and `proj_*` entry point is undefined.
+   A static copy beside the dynamic one would define them.
+   The only defined global is `PyInit_<module>`.
+   In the payload layout (`_native/<arch>/{lib,rs}`, `_native/share`, `_vendor/<arch>` with the bindings and osgeo, its RUNPATH set for that place), `ldd` resolves every library into `lib/` or to glibc/libstdc++/libgcc_s.
+   `auditwheel show` on a throwaway wheel of `_native/<arch>/{lib,rs}` reports `manylinux_2_28_<arch>` and no external library.
+   Then `scripts/native/rust_native_smoke.py` runs in a venv of the hashed test environment, with the probe loaded after rasterio and osgeo and once before them.
 3. `cargo deny` as for the toolchain's smoke crate (licences, bans and sources offline; advisories online; yanked crates only in the CI job). `deny.toml` bans every bundled native build: the crates `gdal-src` and `geos-src`, and the features `gdal-sys/bundled`, `geos-sys/static`, `proj-sys/bundled_proj` and `libsqlite3-sys/bundled*`.
 
-The smoke (`rust_native_smoke.py`, Linux) needs the payload active (the env wheel's `.pth`, `GBX_NATIVE_ROOT` with geobrix's source on the path, or `PYTHONPATH`/`GDAL_DATA`/`PROJ_DATA` set) and checks: the probe's GDAL, GEOS and PROJ are those of rasterio, osgeo, shapely and pyproj; the process maps one `libgdal`, one `libgeos_c` and one `libproj`, from one directory; a GeoTIFF rasterio writes to `/vsimem` reads back through the probe and through osgeo with the same size and band sum (a `/vsimem` file lives inside one libgdal: the shared-GDAL proof); GEOS buffer area and PROJ `EPSG:27700 -> EPSG:4326` of (530000, 180000) equal shapely's and pyproj's within 1e-9. The last line of a good run is `R1_SMOKE OK arch=... order=... gdal=... geos=... proj=... libgdal=<path>`. In the dev container, `python/geobrix/test/native/test_rust_native.py` runs it with the env6 payload and the probe as `GBX_NATIVE_ROOT`; with an env wheel built with `--extra-payload build/native/out/<arch>/rust-native/payload` (one per architecture), `python rust_native_smoke.py` finds the probe in the installed payload.
+The smoke (`rust_native_smoke.py`, Linux) needs the payload active.
+The payload is active through the env wheel's `.pth`, `GBX_NATIVE_ROOT` with geobrix's source on the path, or `PYTHONPATH`/`GDAL_DATA`/`PROJ_DATA` set.
+It checks these.
+The probe's GDAL, GEOS and PROJ are those of rasterio, osgeo, shapely and pyproj.
+The process maps one `libgdal`, one `libgeos_c` and one `libproj`, from one directory.
+A GeoTIFF rasterio writes to `/vsimem` reads back through the probe and through osgeo with the same size and band sum.
+A `/vsimem` file lives inside one libgdal: the shared-GDAL proof.
+GEOS buffer area and PROJ `EPSG:27700 -> EPSG:4326` of (530000, 180000) equal shapely's and pyproj's within 1e-9.
+The last line of a good run is `R1_SMOKE OK arch=... order=... gdal=... geos=... proj=... libgdal=<path>`.
+In the dev container, `python/geobrix/test/native/test_rust_native.py` runs it with the env6 payload and the probe as `GBX_NATIVE_ROOT`.
+With an env wheel built with `--extra-payload build/native/out/<arch>/rust-native/payload` (one per architecture), `python rust_native_smoke.py` finds the probe in the installed payload.
 
 ### Rust crates that call GDAL, PROJ or GEOS (the recipe)
 
-- **Crates** (pinned in `scripts/native/rust-pins.conf` as `CRATE_<NAME>_VERSION`, exact in `Cargo.toml`; `pins.py audit` checks every `Cargo.lock` against them and reports a pin no lock uses; never in `pins.conf`, whose every value is the GDAL build's cache key, and the audit refuses one there): `gdal-sys` with `default-features = false, features = ["bindgen"]` (its prebuilt bindings stop at GDAL 3.12; bindgen generates them from the payload's 3.13 headers), called through one narrow internal safe-wrapper module of the crate's own (the probe's `src/gdal.rs` is the pattern: every call under a guard that resets GDAL's error state, keeps its messages off stderr and turns the last one into the Python error; a handle closed on drop; reads by rows into a `try_reserve_exact` buffer, so a huge raster is an error and not an allocation abort; small `unsafe` blocks; a writing kernel adds an explicit, checked close). Not the high-level `gdal` crate yet: 0.19.0, its latest release, does not compile against GDAL 3.13 (`GDT_Byte` became `GDT_UInt8`, `GDALRasterIOExtraArg` gained `bOperateInBufType`); switch to it when a release supports 3.13. `geos` with `default-features = false, features = ["v3_15_0"]`, `proj` with `default-features = false` (its prebuilt bindings are PROJ 9.6's API, which 9.9 keeps). Never `bundled`, `static` or `bundled_proj`.
-- **Environment** (what `build-rust-native.sh` sets, with `<root>` the mounted `gdal-native/`): `PKG_CONFIG_LIBDIR=PKG_CONFIG_PATH=<root>/lib/pkgconfig` (only the payload's `.pc` files; each `-sys` crate takes its version and include path from there), `LIBRARY_PATH=<root>/lib-dev` (the linker names, so NEEDED records the hashed SONAMEs), `_PROJ_SYS_TEST_EXPECT_BUILD_FROM_SRC=0` (proj-sys stops instead of building its bundled PROJ when pkg-config fails), and `GDAL_HOME`, `GDAL_LIB_DIR`, `GDAL_INCLUDE_DIR`, `GDAL_VERSION`, `GDAL_STATIC`, `GEOS_LIB_DIR`, `GEOS_VERSION` unset (each bypasses pkg-config; `GDAL_HOME` would point the linker at `lib/`, which has no `libgdal.so`). The image sets `LIBCLANG_PATH` and `BINDGEN_EXTRA_CLANG_ARGS`.
+- **Crates** are pinned in `scripts/native/rust-pins.conf` as `CRATE_<NAME>_VERSION`, and are exact in `Cargo.toml`.
+  `pins.py audit` checks every `Cargo.lock` against the pins, and reports a pin no lock uses.
+  Never pin them in `pins.conf`: every value there is the GDAL build's cache key, and the audit refuses a crate pin there.
+  `gdal-sys` uses `default-features = false, features = ["bindgen"]`, because its prebuilt bindings stop at GDAL 3.12.
+  Bindgen generates them from the payload's 3.13 headers.
+  The crate is called through one narrow internal safe-wrapper module of the crate's own.
+  The probe's `src/gdal.rs` is the pattern.
+  Every call runs under a guard that resets GDAL's error state, keeps its messages off stderr, and turns the last one into the Python error.
+  A handle is closed on drop.
+  Reads go by rows into a `try_reserve_exact` buffer, so a huge raster is an error and not an allocation abort.
+  Small `unsafe` blocks are used, and a writing kernel adds an explicit, checked close.
+  The high-level `gdal` crate is not used yet: 0.19.0, its latest release, does not compile against GDAL 3.13.
+  (`GDT_Byte` became `GDT_UInt8`, and `GDALRasterIOExtraArg` gained `bOperateInBufType`.)
+  Switch to it when a release supports 3.13.
+  `geos` uses `default-features = false, features = ["v3_15_0"]`.
+  `proj` uses `default-features = false`, because its prebuilt bindings are PROJ 9.6's API, which 9.9 keeps.
+  Never use `bundled`, `static` or `bundled_proj`.
+- **Environment** is what `build-rust-native.sh` sets, with `<root>` the mounted `gdal-native/`.
+  `PKG_CONFIG_LIBDIR=PKG_CONFIG_PATH=<root>/lib/pkgconfig` takes only the payload's `.pc` files.
+  Each `-sys` crate takes its version and include path from there.
+  `LIBRARY_PATH=<root>/lib-dev` gives the linker names, so NEEDED records the hashed SONAMEs.
+  `_PROJ_SYS_TEST_EXPECT_BUILD_FROM_SRC=0` makes proj-sys stop instead of building its bundled PROJ when pkg-config fails.
+  `GDAL_HOME`, `GDAL_LIB_DIR`, `GDAL_INCLUDE_DIR`, `GDAL_VERSION`, `GDAL_STATIC`, `GEOS_LIB_DIR` and `GEOS_VERSION` are unset.
+  Each bypasses pkg-config.
+  `GDAL_HOME` would point the linker at `lib/`, which has no `libgdal.so`.
+  The image sets `LIBCLANG_PATH` and `BINDGEN_EXTRA_CLANG_ARGS`.
 - **Build**: `maturin build --release --offline --locked --compatibility linux --auditwheel skip` (a repair would copy libgdal into the wheel: a second GDAL), then `set-rpath.py --tree <dir> --tree-at _native/<arch>/rs --lib-at _native/<arch>/lib`. The extension ships under `_native/<arch>/rs/` (`gbx:build:wheel --extra-payload`).
 - **Link check**: `verify-rust-native.sh` (NEEDED, RUNPATH, `.dynsym`, ldd, auditwheel, smoke) for the probe; a kernel crate's own build runs the same checks.
-- **Licences**: `gbx:build:wheel` ships, for each kernel under `_native/<arch>/rs/`, the licence files of every crate in its `Cargo.lock` under `_native/licenses/rust/<crate>/` (with an `INDEX.txt`); a crate whose package ships none gets its upstream text under `scripts/native/rust-licenses/<crate>/` (gdal-sys has one), or the wheel build stops.
+- **Licences**: `gbx:build:wheel` ships, for each kernel under `_native/<arch>/rs/`, the licence files of every crate in its `Cargo.lock`.
+  They go under `_native/licenses/rust/<crate>/`, with an `INDEX.txt`.
+  A crate whose package ships none gets its upstream text under `scripts/native/rust-licenses/<crate>/` (gdal-sys has one).
+  Otherwise the wheel build stops.
 - **At run time**: `GDAL_DATA` and `PROJ_DATA` in `os.environ` before the first GDAL or PROJ call (the payload activation sets them).
 
 ## Rust crates from other tasks
@@ -139,15 +332,27 @@ docker run --rm --network none -v <crate>:/src -v <out-dir>:/vendor:ro -v <out>:
 
 ## Environment
 
-- `GBX_CARGO_REGISTRY` (untracked `.gbx-local.env` only) - a sparse crate registry used for `cargo vendor` before the default one. Never printed or committed. The container never uses it. A registry mirror can hide crate versions published in the last 7 days: pick pins at least a week old, or a lock made from the public index fails `cargo vendor --locked` through the mirror (the chain then falls through to the next source, the slowest being cargo's git index). A cargo config of the host that already replaces crates-io makes this source stop with "already defined"; the next source then runs under that config and produces the same vendor tree.
+- `GBX_CARGO_REGISTRY` (untracked `.gbx-local.env` only) - a sparse crate registry used for `cargo vendor` before the default one. Never printed or committed. The container never uses it. A registry mirror can hide crate versions published in the last 7 days.
+Pick pins at least a week old.
+Otherwise, a lock made from the public index fails `cargo vendor --locked` through the mirror.
+The chain then falls through to the next source, the slowest being cargo's git index.
+A cargo config of the host that already replaces crates-io makes this source stop with "already defined".
+The next source then runs under that config and produces the same vendor tree.
 - The host's pip configuration supplies the package index for `pip download` in `prefetch.sh`. The command never reads, passes or prints it.
 
 ## Notes
 
 - Needs Docker and nothing else: no dev container, no container lock. It never pushes or saves an image.
 - Output goes to `build/native/` (gitignored): `src/`, `bin/<arch>/`, `wheelhouse/<arch>/`, `vendor/`, `ctx/<arch>/` (the build context), `out/<arch>/<target>/` (for `stage-native`: `gdal-native/`, `build.txt`, `verify.txt`).
-- Disk: the images are large (3.3 GB toolchain, 3.5 GB stage-native, mostly shared layers) and the Docker VM can be full; the command never prunes images, caches or builders.
+- Disk: the images are large (3.3 GB toolchain, 3.5 GB stage-native, mostly shared layers).
+  The Docker VM can be full.
+  The command never prunes images, caches or builders.
 - The last line of a good run is `NATIVE_VERIFIED arch=<arch> target=<target> total_seconds=<n> image=<tag>`; the line before the verify is `NATIVE_BUILD ... build_seconds=<n> image_bytes=<n>`.
 - Host Rust for vendoring is installed by `bash scripts/native/install-host-rust.sh` (the command runs it when missing) into `~/.cache/geobrix`; no shell profile is touched.
 - If the emulated x86_64 build is too slow, the same command runs on GitHub Actions: `.github/workflows/build-gdal-native.yml` (manual trigger, on the org's hardened runner group).
-- CI builds with this command too: the CI workflows call `build-gdal-native.yml`, which builds `stage-native` and `bindings` for x86_64 when the cache has no build for the native inputs (`scripts/native/native_inputs.py hash --set build`), and the jobs that run a GeoBrix JVM link its JNI (`.github/actions/native_payload`, `scripts/native/jvm_payload.py`). CI never builds aarch64: `gbx:native:verify-arches` checks both architectures locally and writes the stamp CI checks (`scripts/native/arch-gate.json`).
+- CI builds with this command too.
+  The CI workflows call `build-gdal-native.yml`.
+  It builds `stage-native` and `bindings` for x86_64 when the cache has no build for the native inputs (`scripts/native/native_inputs.py hash --set build`).
+  The jobs that run a GeoBrix JVM link its JNI (`.github/actions/native_payload`, `scripts/native/jvm_payload.py`).
+  CI never builds aarch64.
+  `gbx:native:verify-arches` checks both architectures locally and writes the stamp CI checks (`scripts/native/arch-gate.json`).

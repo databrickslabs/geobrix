@@ -1,9 +1,9 @@
 # gbx:app:seed-genie
 
 Seed the Genie Map app's Genie Space with its curated **instructions** and
-**example SQL queries** from the tracked source of truth
-(`examples/apps/genie_map/docs/GENIE-SPACE.md`, Paste blocks A and B), via the Genie
-spaces update API — no manual UI pasting.
+**example SQL queries**.
+The tracked source of truth is `examples/apps/genie_map/docs/GENIE-SPACE.md` (Paste blocks A and B).
+The command writes them through the Genie spaces update API, so no manual UI pasting is needed.
 
 The DAB `genie_space` resource re-applies only the **table set**
 (`genie_space.geniespace.json`) on every `gbx:app:deploy`, which **wipes** any

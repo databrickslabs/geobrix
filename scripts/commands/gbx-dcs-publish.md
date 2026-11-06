@@ -1,8 +1,8 @@
 # gbx:dcs:publish
 
-Pushes the GeoBrix Databricks Container Services (DCS) image built by `gbx:dcs:build` to the registry. **Run by the release owner; never run by agents.** The command never runs `docker login` and never handles credentials: you must already be logged in to Docker Hub (`docker login`) as an account that can push to the repository. If a push fails with an authentication error, log in yourself and retry.
+Pushes the GeoBrix Databricks Container Services (DCS) image built by `gbx:dcs:build` to the registry. **Run by the release owner; never run by agents.** The command never runs `docker login` and never handles credentials. You must already be logged in to Docker Hub (`docker login`) as an account that can push to the repository. If a push fails with an authentication error, log in yourself and retry.
 
-It publishes in two stages. `--candidate` pushes the `-rc` image so it can be verified on a dedicated cluster; `--release` re-tags the candidate image you pushed and verified (no rebuild) and pushes the release tags. `--release` needs explicit consent: `--confirm <ver>` with the version being released, given after you verified the candidate on a cluster. Do not rebuild between `--candidate` and `--release`.
+It publishes in two stages. `--candidate` pushes the `-rc` image so it can be verified on a dedicated cluster. `--release` re-tags the candidate image you pushed and verified (no rebuild) and pushes the release tags. `--release` needs explicit consent: `--confirm <ver>` with the version being released, given after you verified the candidate on a cluster. Do not rebuild between `--candidate` and `--release`.
 
 ## Usage
 
@@ -42,6 +42,6 @@ bash scripts/commands/gbx-dcs-publish.sh --release --confirm 0.6.0 --expect-dige
 
 - The local `<repo>:<ver>-env6-<arm|x86>-rc` image from `gbx:dcs:build` must exist; otherwise the command prints `PRECONDITION MISSING: local image ...` and exits 1 without pushing.
 - The last line is `DIGEST=<repo>@sha256:...`; if the pushed image has no such digest the command fails (exit 1, `No <repo>@sha256 digest on <image> after the push`) instead of printing an empty one. Record the release digest in the release notes.
-- `--release` pushes two tags, the versioned one and then `env6-<arm|x86>`. If the second push fails, the output says `PARTIAL RELEASE: already pushed in this run: <tag>; <tag> was not pushed`; if the first fails, `Release incomplete: no release tag was pushed`. Either way it is safe to re-run the same `--release` command: it re-tags the same `-rc` image and pushes again, and a tag that is already pushed is unchanged.
+- `--release` pushes two tags, the versioned one and then `env6-<arm|x86>`. If the second push fails, the output says `PARTIAL RELEASE: already pushed in this run: <tag>; <tag> was not pushed`; if the first fails, `Release incomplete: no release tag was pushed`. Either way it is safe to re-run the same `--release` command. It re-tags the same `-rc` image and pushes again, and a tag that is already pushed is unchanged.
 - The log (`--log`) starts before the version is read from `target/`, so a `PRECONDITION MISSING` about the JAR is in the log too.
 - `--release` re-tags the candidate image you pushed and verified. A fresh `gbx:dcs:build` has no `<repo>@sha256:...` digest until it is pushed, so `--release` refuses an `-rc` image without one (`PRECONDITION MISSING ... push it as the candidate and verify it first`). If you rebuild after `--candidate`, push a new candidate and verify it again before `--release`.

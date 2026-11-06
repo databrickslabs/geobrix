@@ -403,12 +403,19 @@ def effective_levels_scales(levels_mvp, levels_scales, root) -> tuple:
     """The multiples the leg will time: the ones given, else the set's own ladder (``levels.ladder``). Not given is None."""
     if levels_scales is not None:
         return tuple(levels_scales)
-    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    src = str(Path(root) / "python/geobrix/src")
+    sys.path.insert(0, src)
     try:
         from databricks.labs.gbx.bench import levels
-    except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
+
+        return levels.ladder(levels_mvp)
+    except Exception:  # noqa: BLE001 - no pyspark here, or the form table did not load: the preflight says so
         return (1, 4, 16)
-    return levels.ladder(levels_mvp)
+    finally:
+        try:
+            sys.path.remove(src)
+        except ValueError:
+            pass
 
 
 LEVELS_LETTER_SETS = ("S", "G", "A", "H", "SE", "IO")
@@ -427,13 +434,25 @@ def levels_set_names(root) -> tuple:
     # A family with no forms (web-tiles is pending; the light-only families have no level to time) would pass here and
     # fail on the cluster, after the cold start: keep the ones that have forms. Without pyspark the form table cannot be
     # read, and every manifest family stays (the preflight says so).
-    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    src = str(Path(root) / "python/geobrix/src")
+    sys.path.insert(0, src)
     try:
         from databricks.labs.gbx.bench import levels_forms as lf
 
         families = [f for f in families if lf.FORMS.get(f)]
     except ImportError:
         pass
+    except Exception as exc:  # noqa: BLE001 - the import installs and loads the manifest: any failure of it
+        print(
+            f"NOTE: the form table did not load ({type(exc).__name__}: {str(exc)[:160]}): every manifest family is "
+            "offered, unfiltered.",
+            file=sys.stderr,
+        )
+    finally:
+        try:
+            sys.path.remove(src)
+        except ValueError:
+            pass
     return LEVELS_LETTER_SETS + tuple(families)
 
 
@@ -700,16 +719,20 @@ def effective_form_caps(form_cap_min, form_cap_max_min, fail_fast, rung_cap_min,
     """
     if not fail_fast:
         return form_cap_min, form_cap_max_min, None
+    # At scale s a rung runs its setup (up to min(setup cap x s, rung cap)) and then its iterations (up to the rung cap):
+    # 1x is the bar the 1x cap must clear (the notebook multiplies it by the scale), and the largest bar, the ceiling's.
     bars = rung_cap_min + min(setup_cap_min, rung_cap_min) + BARS_MARGIN_MIN
+    bars_max = 2 * rung_cap_min + BARS_MARGIN_MIN
     cap = max(form_cap_min, bars)
     note = None
     ceiling = form_cap_max_min
-    if ceiling < cap:
-        ceiling = cap
+    if ceiling < bars_max:
+        ceiling = bars_max
         note = (
-            f"NOTE: --form-cap-max-min ({form_cap_max_min:g}) is below the notebook's bars ({bars:g} min = rung cap + "
-            f"setup cap + {BARS_MARGIN_MIN:g}): raised to {cap:g} so the watchdog does not cancel a rung before the "
-            "notebook can stop it. --no-fail-fast keeps the ceiling as given."
+            f"NOTE: --form-cap-max-min ({form_cap_max_min:g}) is below the notebook's largest bar ({bars_max:g} min = "
+            f"2 x rung cap + {BARS_MARGIN_MIN:g}: a setup that ran to its cap, then iterations to the rung cap): raised "
+            "to that so the watchdog does not cancel a rung before the notebook can stop it. --no-fail-fast keeps the "
+            "ceiling as given."
         )
     return cap, ceiling, note
 

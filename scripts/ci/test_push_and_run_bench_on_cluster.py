@@ -364,9 +364,38 @@ def test_the_form_cap_ceiling_is_raised_to_the_bars_when_it_is_below_them(launch
     from push_and_run_bench_on_cluster import effective_form_caps
 
     assert effective_form_caps(15, 60, True, 20, 10) == (35, 60, None)
+    # a rung can run its setup cap and then its iterations to the rung cap: 2 x 20 + 5 at the largest scales
     cap, ceiling, note = effective_form_caps(15, 30, True, 20, 10)
-    assert (cap, ceiling) == (35, 35) and "NOTE" in note and "--form-cap-max-min" in note
+    assert (cap, ceiling) == (35, 45) and "NOTE" in note and "--form-cap-max-min" in note
     assert effective_form_caps(15, 30, False, 20, 10) == (15, 30, None)  # today's caps
     assert effective_form_caps(45, 60, True, 20, 10) == (45, 60, None)  # a higher form cap wins
+    # at every scale the watchdog's cap (1x cap x scale, held to the ceiling) stays above that rung's own bar
+    for rung, setup in ((20, 10), (10, 20), (30, 5), (5, 60)):
+        cap, ceiling, _ = effective_form_caps(15, 60, True, rung, setup)
+        for scale in (1, 4, 16):
+            bar = min(setup * scale, rung) + rung + 5
+            assert min(cap * scale, ceiling) >= bar, (rung, setup, scale)
     assert launch("--serverless", "--levels", "IO", "--levels-only", "--form-cap-max-min", "30", "--no-wait") == 0
     assert "NOTE" in capsys.readouterr().err
+
+
+def test_a_levels_form_table_that_cannot_load_leaves_the_set_names_unfiltered_and_the_path_as_it_was(monkeypatch, capsys):
+    """Importing levels_forms installs and loads the manifest: any failure of it, not only a missing pyspark, falls
+    back to every manifest family (with a note), and the source path the launcher inserted is taken out again."""
+    from push_and_run_bench_on_cluster import LEVELS_LETTER_SETS, levels_set_names
+
+    src = str(REPO_ROOT / "python/geobrix/src")
+    monkeypatch.syspath_prepend(src)
+    import databricks.labs.gbx.bench as bench
+
+    class Broken:
+        FORMS = SimpleNamespace(get=lambda k: (_ for _ in ()).throw(RuntimeError("manifest did not load")))
+
+    monkeypatch.setitem(sys.modules, "databricks.labs.gbx.bench.levels_forms", Broken)
+    monkeypatch.setattr(bench, "levels_forms", Broken, raising=False)
+    sys.path.remove(src)
+    before = list(sys.path)
+    names = levels_set_names(REPO_ROOT)
+    assert names[: len(LEVELS_LETTER_SETS)] == LEVELS_LETTER_SETS and len(names) > len(LEVELS_LETTER_SETS)
+    assert sys.path == before  # the inserted path is gone
+    assert "manifest did not load" in capsys.readouterr().err

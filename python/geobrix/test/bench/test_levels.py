@@ -1602,3 +1602,37 @@ def test_the_replicated_dem_input_has_n_rows_and_its_cache_is_released_with_its_
         lf.release_cached_inputs(spark)
     assert not frame.is_cached and not lf._CACHED_INPUTS
     assert not spark.catalog.tableExists(name)  # the next rung builds its own
+
+
+def test_a_cached_input_another_run_created_first_is_read_not_an_error():
+    """Two runs on one schema build `mvp_in_tiles_n_v2_16` together: the one that loses the race reads the other's."""
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    class Writer:
+        def format(self, _):
+            return self
+
+        def saveAsTable(self, full):
+            made.append(full)
+            raise RuntimeError(
+                "[TABLE_OR_VIEW_ALREADY_EXISTS] Cannot create table " + full
+            )
+
+    class Frame:
+        write = Writer()
+
+    class Catalog:
+        def tableExists(self, full):
+            return bool(made)
+
+    made = []
+    spark = type("S", (), {"catalog": Catalog()})()
+    assert lf._table(spark, "c.s", "t", Frame) == "c.s.t" and made == ["c.s.t"]
+
+    class Other(RuntimeError):
+        pass
+
+    Writer.saveAsTable = lambda self, full: (_ for _ in ()).throw(Other("disk full"))
+    made.clear()
+    with pytest.raises(Other):
+        lf._table(spark, "c.s", "t2", Frame)

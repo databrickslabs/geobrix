@@ -53,7 +53,13 @@ def _table(spark, schema: Optional[str], name: str, build) -> str:
         return name
     full = f"{schema}.{name}"
     if not spark.catalog.tableExists(full):
-        build().write.format("delta").saveAsTable(full)
+        try:
+            build().write.format("delta").saveAsTable(full)
+        except Exception as exc:  # noqa: BLE001
+            # Runs on one schema share the cached inputs (their names hold the recipe version and the row count, not
+            # the run): a run that loses the race to create one reads the other's, which has the same rows.
+            if "ALREADY_EXISTS" not in str(exc) or not spark.catalog.tableExists(full):
+                raise
     return full
 
 

@@ -374,4 +374,20 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         assert(ex.getMessage.contains("not a recognised BNG"))
     }
 
+    test("the geometry generators refuse a non-geometry (INT) geometry argument at analysis") {
+        import com.databricks.labs.gbx.gridx.bng.generators.{BNG_GeometryKLoopExplode, BNG_GeometryKRingExplode, BNG_TessellateExplode}
+        import org.apache.spark.sql.catalyst.expressions.Literal
+        val bad = Literal(7)
+        val ok = Literal("POINT (1 1)")
+        val modeLit = Literal("boundary-out")
+        val covLit = Literal("intersects")
+        val loop = BNG_GeometryKLoopExplode(bad, Literal(3), Literal(1), modeLit, covLit)
+        val ring = BNG_GeometryKRingExplode(bad, Literal(3), Literal(1), modeLit, covLit)
+        val tess = BNG_TessellateExplode(bad, Literal(3), Literal(false))
+        Seq(loop, ring, tess).foreach(e => assert(e.checkInputDataTypes().isFailure, e.getClass.getSimpleName))
+        assert(BNG_GeometryKLoopExplode(ok, Literal(3), Literal(1), modeLit, covLit).checkInputDataTypes().isSuccess)
+        assert(BNG_GeometryKRingExplode(ok, Literal(3), Literal(1), modeLit, covLit).checkInputDataTypes().isSuccess)
+        assert(BNG_TessellateExplode(ok, Literal(3), Literal(false)).checkInputDataTypes().isSuccess)
+    }
+
 }

@@ -4,9 +4,11 @@ import com.databricks.labs.gbx.expressions.WithExpressionInfo
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.{BNG, GeomDilation}
 import com.databricks.labs.gbx.kernels.Coerce
+import com.databricks.labs.gbx.util.GeomInput
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
+import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
 import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expression, Literal}
 import org.apache.spark.sql.types._
@@ -27,6 +29,9 @@ case class BNG_GeometryKLoopExplode(
     override def position: Boolean = false
     override def inline: Boolean = false
     override def children: Seq[Expression] = Seq(geom, resolution, k, mode, coverage)
+
+    /** The geometry is BINARY (WKB or EWKB) or STRING (WKT or EWKT); anything else is refused at analysis. */
+    override def checkInputDataTypes(): TypeCheckResult = GeomInput.checkType(geom, "first")
 
     // noinspection DuplicatedCode
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {

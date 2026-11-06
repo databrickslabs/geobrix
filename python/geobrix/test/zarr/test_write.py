@@ -2320,7 +2320,9 @@ def test_spread_out_moves_only_an_input_too_narrow_for_its_blocks():
 
     def plan(blocks, partitions):
         return types.SimpleNamespace(
-            spread={"blocks": blocks, "partitions": partitions}, table="t"
+            spread={"blocks": blocks, "partitions": partitions},
+            table="t",
+            mode="create",
         )
 
     for blocks, parts, want in [

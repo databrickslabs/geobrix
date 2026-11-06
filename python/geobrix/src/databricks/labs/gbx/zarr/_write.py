@@ -77,7 +77,7 @@ import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
-from databricks.labs.gbx.zarr import _write_tiles
+from databricks.labs.gbx.zarr import _write_cells, _write_tiles
 from databricks.labs.gbx.zarr._access import bounded_closure, resolve_access
 from databricks.labs.gbx.zarr._filemode import FileLayout, require_geobrix_files
 from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
@@ -514,6 +514,8 @@ class _Input:
     # blocks: {"blocks": data blocks, "partitions": input partitions holding them}, from
     # the position pass; None when the positions came from elsewhere (tiles)
     spread: dict | None = None
+    # a table of cells into a new store: variable -> the storage unit its blocks were cut by
+    cells_units: dict | None = None
 
 
 def _wanted(names, variables) -> list[str]:
@@ -615,7 +617,8 @@ def _blocks_frame(df, variables, dims=None):
     if missing:
         raise ValueError(
             f"the DataFrame lacks the blocks column(s) {missing}. Fix: pass the "
-            "output of gbx_zarr_read(output='blocks'), or a DataFrame in BLOCKS_SCHEMA."
+            "output of gbx_zarr_read(output='blocks'), or a DataFrame in BLOCKS_SCHEMA, or a "
+            "table of cells with dim_cols."
         )
     names = _names(variables)
     if names is None:
@@ -1303,6 +1306,19 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
                 ", ".join(unlabelled),
             )
     _finish_plan(plan, inp)
+    for name, unit in (inp.cells_units or {}).items():
+        meta = plan.arrays[name]
+        got = (
+            tuple(meta.chunks)
+            if meta.shard is None
+            else tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
+        )
+        if got != tuple(unit):  # the cells were cut by another layout than the array's
+            raise ZarrError(
+                f"the cells of {name!r} were cut into units of {tuple(unit)}, and the new "
+                f"array stores {got}",
+                fix="report this: the layout of a cells write must equal the array's",
+            )
     return plan
 
 
@@ -1434,11 +1450,27 @@ def _sizing_docs(plan: _Plan, docs: _Docs, name: str) -> None:
             plan.sizing.add(("array", source, _doc_keys(docs.arrays[source])[0]))
 
 
-def _prepare_tiles(spark, data, tiles, mode, variables, append_dim, store):
-    """The plan and blocks of a DataFrame of tiles (``_write_tiles``); ``tiles`` is
-    ``(tile column, dim_cols)``, ``store`` the existing store or ``None`` for a create.
+def _prepare_tiles(spark, data, tiles, mode, variables, append_dim, store, cells=None):
+    """The plan and blocks of a DataFrame of tiles (``_write_tiles``) or of a table of cells
+    (``_write_cells``); ``tiles`` is ``(tile column, dim_cols)`` with the column ``None`` for
+    cells, ``store`` the existing store or ``None`` for a create.
     """
     column, dim_cols = tiles
+    if column is None:
+        return _write_cells.prepare(
+            data,
+            mode=mode,
+            dim_cols=dim_cols,
+            names=_names(variables),
+            append_dim=append_dim,
+            store=store,
+            schema=_blocks_struct(),
+            args=cells or _write_cells.CellsArgs(),
+            layout=_cells_layout(cells or _write_cells.CellsArgs()),
+            append_start=_derive_append_start,
+            parallelism=_shuffle_partitions(spark) or _DEFAULT_PARTITIONS,
+            budget=_budget(),
+        )
     return _write_tiles.prepare(
         data,
         column,
@@ -1451,27 +1483,85 @@ def _prepare_tiles(spark, data, tiles, mode, variables, append_dim, store):
     )
 
 
+def _cells_layout(args):
+    """``layout(name, dtype, dims, shape) -> (storage unit, fill)`` of an array a cells write
+    creates: the shard (or the chunk of an unsharded array) the new store would give it.
+    """
+    chain = _codec_chain(args.codecs)
+
+    def layout(name, dtype, dims, shape):
+        fill = _default_fill(dtype)
+        spec = _NewArray(name, dims, tuple(shape), dtype, {}, fill, False)
+        meta = _new_meta(
+            spec,
+            fmt=3,
+            chunks=args.chunks,
+            shards=args.shards,
+            codecs=chain,
+            separator="/",
+        )
+        unit = (
+            tuple(meta.chunks)
+            if meta.shard is None
+            else tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
+        )
+        return unit, fill
+
+    return layout
+
+
 def _tile_input(data, dim_cols):
-    """``(tile column, dim_cols)`` when ``data`` is a DataFrame of tiles, else ``None``;
-    ``dim_cols`` with any other input is refused."""
+    """``(tile column, dim_cols)`` when ``data`` is a DataFrame of tiles, ``(None, dim_cols)``
+    when it is a table of cells (``dim_cols`` given, and not the blocks schema), else
+    ``None``; ``dim_cols`` with any other input is refused."""
     column = _write_tiles.tile_column(data) if _is_frame(data) else None
     if column is not None:
         return column, _write_tiles.check_dim_cols(dim_cols, data, column)
+    if (
+        dim_cols is not None
+        and _is_frame(data)
+        and not all(c in data.columns for c in _BLOCK_COLUMNS)
+    ):
+        return None, dict(dim_cols) if isinstance(dim_cols, dict) else dim_cols
     if dim_cols is not None:
         raise ValueError(
-            "dim_cols places GeoBrix tiles, and the data holds none. Fix: drop dim_cols, "
-            "or pass a DataFrame with a tile column."
+            "dim_cols places GeoBrix tiles or the cells of a table, and the data holds "
+            "neither. Fix: drop dim_cols, or pass a DataFrame with a tile column or one "
+            "row per cell."
         )
     return None
 
 
-def _create_input(spark, data, tiles, variables) -> _Input:
+def _cells_args(tiles, mode, coords, chunks, shards, codecs):
+    """The cells write's layout arguments; ``coords`` apply to a create of cells only."""
+    if coords is not None and (tiles is None or tiles[0] is not None):
+        raise ValueError(
+            "coords gives the labels of a table of cells, and the data is not one. Fix: "
+            "drop coords, or pass a table with one row per cell and dim_cols."
+        )
+    if coords is not None and mode != "create":
+        raise ValueError(
+            "coords applies to mode='create' only: an append takes the store's labels and "
+            "the table's new ones. Fix: drop coords."
+        )
+    if tiles is None or tiles[0] is not None:
+        return None
+    return _write_cells.CellsArgs(
+        coords=coords, chunks=chunks, shards=shards, codecs=codecs
+    )
+
+
+def _create_input(spark, data, tiles, variables, cells=None) -> _Input:
     """The planned input of a create."""
     if _is_xarray(data):
         return _xarray_input(data, variables)
     if tiles is not None:
-        prep = _prepare_tiles(spark, data, tiles, "create", variables, None, None)
-        return _planned_blocks(_tile_frame(spark, prep), None, seen=prep.seen)
+        prep = _prepare_tiles(
+            spark, data, tiles, "create", variables, None, None, cells
+        )
+        inp = _planned_blocks(_tile_frame(spark, prep), None, seen=prep.seen)
+        inp.cells_units = getattr(prep, "units", None)
+        return inp
     return _planned_blocks(data, variables)
 
 
@@ -1498,6 +1588,7 @@ def _plan_existing(
     owner,
     tiles=None,
     plain: _Docs | None = None,
+    cells=None,
 ) -> _Plan:
     """The plan of a write into an existing store: a manifest table, or (``plain``: the
     documents of the plain store at path ``table``) an append to a plain store."""
@@ -1551,6 +1642,7 @@ def _plan_existing(
             variables,
             append_dim,
             _write_tiles.StoreView(arrays, labels, docs),
+            cells,
         )
         frame = _tile_frame(spark, prep)
         if mode in ("update", "overwrite"):
@@ -1563,6 +1655,7 @@ def _plan_existing(
     else:
         inp = _planned_blocks(data, variables)
         plan.digest = inp.digest
+        plan.spread = inp.spread
     _check_against_store(table, inp.vars.values(), docs, extents)
     if plain is not None:
         _check_stored_types(table, inp.vars.values(), docs)
@@ -1877,20 +1970,23 @@ def _aligned(plan: _Plan) -> bool:
 
 
 def _spread_out(spark, plan: _Plan, frame):
-    """An aligned create's blocks, repartitioned by block when the input holds them in at
+    """A planned input's blocks, repartitioned by block when the input holds them in at
     most half the partitions the write could use (the blocks, up to the session's
-    parallelism): the pack stage runs where the blocks are, so an input of one partition would
-    encode and pack every block in one task, and on Serverless a repartition by column is
-    how work fans out. Hashing the block keys fills about two thirds of the partitions, so an
-    input spread wider than half is left where it is, with nothing moved."""
+    parallelism): the first stage runs where the blocks are (an aligned create encodes and
+    packs them there, any other write cuts them into chunks and encodes the chunks they
+    cover whole), so an input of a few partitions would do all of it in as many tasks, however
+    many shards the write touches; on Serverless a repartition by column is how work fans
+    out. Hashing the block keys fills about two thirds of the partitions, so an input spread
+    wider than half is left where it is, with nothing moved."""
     spread = plan.spread or {}
     blocks, parts = spread.get("blocks", 0), spread.get("partitions", 0)
     want = min(blocks, _shuffle_partitions(spark) or _DEFAULT_PARTITIONS)
     if not parts or parts * 2 > want:
         return frame
     _LOG.info(
-        "gbx_zarr_write %s (create): %d blocks in %d input partition(s), packed in %d",
+        "gbx_zarr_write %s (%s): %d blocks in %d input partition(s), spread over %d",
         plan.table,
+        plan.mode,
         blocks,
         parts,
         want,
@@ -2130,7 +2226,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         )
         return _spread_out(spark, plan, frame).mapInArrow(packed, ROWS_DDL).toArrow()
     # the explode stage touches no storage: it never carries the credentials
-    pieces = frame.mapInArrow(
+    pieces = _spread_out(spark, plan, frame).mapInArrow(
         explode_function(dataclasses.replace(cfg, access=None)), PIECES_DDL
     )
     parts, nbytes = _planned(plan)
@@ -3135,6 +3231,7 @@ def _plain_write(
     variables,
     append_dim,
     dim_cols,
+    coords,
     chunks,
     shards,
     codecs,
@@ -3161,12 +3258,13 @@ def _plain_write(
         )
     spark = _session(data, spark)
     tiles = _tile_input(data, dim_cols)
+    cells = _cells_args(tiles, mode, coords, chunks, shards, codecs)
     root = _local_root(target)
     write_id = uuid.uuid4().hex
     existed = os.path.isdir(root)
     if mode == "create":
         check_absent(root)
-        inp = _create_input(spark, data, tiles, variables)
+        inp = _create_input(spark, data, tiles, variables, cells)
         plan = _plan_create(root, write_id, root, inp, chunks, shards, codecs)
         plan.plain = True
         check_no_leftovers(root, plan.arrays)
@@ -3183,6 +3281,7 @@ def _plain_write(
             None,
             tiles,
             plain=read_plain_docs(root),
+            cells=cells,
         )
     try:
         rows = _write_files(spark, plan)
@@ -3364,6 +3463,7 @@ def gbx_zarr_write(
     variables=None,
     append_dim=None,
     dim_cols=None,
+    coords=None,
     chunks="balanced",
     shards=None,
     codecs=None,
@@ -3548,6 +3648,7 @@ def gbx_zarr_write(
             variables=variables,
             append_dim=append_dim,
             dim_cols=dim_cols,
+            coords=coords,
             chunks=chunks,
             shards=shards,
             codecs=codecs,
@@ -3596,6 +3697,7 @@ def gbx_zarr_write(
         )
     spark = _session(data, spark)
     tiles = _tile_input(data, dim_cols)
+    cells = _cells_args(tiles, mode, coords, chunks, shards, codecs)
 
     exists = _table_exists(spark, target)
     if exists:
@@ -3627,6 +3729,7 @@ def gbx_zarr_write(
             append_dim,
             owner,
             tiles,
+            cells=cells,
         )
         plan.access = _write_access(spark, plan, access)
         return _write(spark, plan, optimize)
@@ -3645,7 +3748,7 @@ def gbx_zarr_write(
         spark, "fuse" if file_mode is None else file_mode, has_filespace=True
     )
     require_geobrix_files(target, fm, "write", new=True)  # before a marker is claimed
-    inp = _create_input(spark, data, tiles, variables)
+    inp = _create_input(spark, data, tiles, variables, cells)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     plan.access = _write_access(spark, plan, access)  # before anything is claimed
     new_props = M.StoreProps(

@@ -42,6 +42,13 @@ heartbeat and cancels a run whose heartbeat stopped (--stale-min) or whose form 
 the smoke stage --smoke-timeout-min, default 15). --inject-stall <secs> adds a form that
 sleeps on the driver (test only; proves the watchdog).
 
+Fail fast (every levels run; --no-fail-fast restores the old form-by-form order with nothing stopped early): the rungs
+run breadth first, and the notebook stops a rung itself instead of leaving it to the watchdog above. A rung whose wall,
+projected from the form's previous rung (x the scale ratio x --bar-factor, default 1.5), passes --rung-cap-min (default
+20) is skipped with a row that says so; a rung past its deadline is interrupted and recorded `over-bar` (what finished,
+the phase, the plan metrics); a setup past --setup-cap-min (default 10 at 1x, x the scale, held to the rung cap) is
+stopped as `setup-bound`. The form cap above stays the last resort where an interrupt cannot reach the work.
+
      Without --run-id a launch gets an id of its own (cluster-<date>-<time>-<4 hex>), so
      the rows of an earlier run are reached only by naming its id: --resume and
      --truncate-results need an explicit --run-id (with a fresh id, --truncate-results
@@ -718,6 +725,20 @@ def main() -> int:
         )
         return 2
     stale_min = float(_arg("--stale-min", "5"))
+    # Fail fast (bench/levels.py run_mvp): the notebook's own bars, apart from the watchdog's caps above.
+    fail_fast = "--no-fail-fast" not in sys.argv
+    bar_factor = float(_arg("--bar-factor", "1.5"))
+    rung_cap_min = float(_arg("--rung-cap-min", "20"))
+    setup_cap_min = float(_arg("--setup-cap-min", "10"))
+    if bar_factor <= 0 or rung_cap_min <= 0 or setup_cap_min <= 0:
+        print("ERROR: --bar-factor, --rung-cap-min and --setup-cap-min must be positive numbers.", file=sys.stderr)
+        return 2
+    if fail_fast and rung_cap_min > form_cap_min:
+        print(
+            f"NOTE: --rung-cap-min ({rung_cap_min:g}) is above --form-cap-min ({form_cap_min:g}): at 1x the watchdog "
+            "cancels the whole run before the notebook can stop the rung. Raise --form-cap-min or lower --rung-cap-min.",
+            file=sys.stderr,
+        )
     try:  # the run time limits are checked here, before the preflight, the uploads or the smoke
         smoke_timeout_min = _minutes_arg("--smoke-timeout-min", DEFAULT_SMOKE_TIMEOUT_MIN)
         timeout_min = _minutes_arg("--timeout-min", DEFAULT_RUN_TIMEOUT_MIN)
@@ -1300,6 +1321,10 @@ def main() -> int:
         heartbeat_secs=30,
         launch_token=uuid.uuid4().hex,
         stall_cap_s=int(form_cap_min * 60),
+        fail_fast=fail_fast,
+        bar_factor=bar_factor,
+        rung_cap_s=rung_cap_min * 60.0,
+        setup_cap_s=setup_cap_min * 60.0,
         inject_stall=inject_stall,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.

@@ -144,6 +144,11 @@ Options:
   --form-cap-min <n>    The watchdog cancels the run when one form runs longer (default 15; the smoke 5)
   --stale-min <n>       ... or when the notebook's heartbeat stops changing for this long (default 5);
                         either prints `STALLED: <form> after <m> min` and the driver stack, exit 3, no retry
+  --no-fail-fast        Run each form through all its scales, as before, with nothing stopped early. By default
+                        (levels runs) the rungs run breadth first and the notebook stops a rung itself:
+  --bar-factor <x>      a rung projected (previous rung x scale ratio x this) past --rung-cap-min is skipped (default 1.5)
+  --rung-cap-min <n>    the most one rung may take; past its deadline it is interrupted and recorded over-bar (default 20)
+  --setup-cap-min <n>   the most a rung's setup may take at 1x (x the scale, held to the rung cap); past it, setup-bound (default 10)
   --inject-stall <s>    TEST ONLY: add a form that sleeps s seconds on the driver (proves the watchdog)
   --help, -h            Show help
 

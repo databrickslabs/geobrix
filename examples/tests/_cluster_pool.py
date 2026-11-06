@@ -104,20 +104,31 @@ def require_member(w, cluster_id: str, name: str):
 # ---- up / status / down -----------------------------------------------------------------------------------------
 
 
+def _slot_token(name: str, cname: str, user: str) -> str:
+    """The idempotency token of one pool slot: the same for every call that wants that slot, so a create that is retried
+    (by the SDK after a lost response, or by a second `up` running at the same time) returns the cluster the first made."""
+    return hashlib.sha1(f"gbx-pool:{name}:{cname}:{user}".encode()).hexdigest()
+
+
 def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True) -> List[str]:
-    """Bring the pool to `n` clusters (creating the missing ones, waiting for them to run); their ids."""
+    """Bring the pool to `n` clusters and make them run; their ids. Idempotent: a cluster the pool already has is reused
+    (and started if it ended), a missing slot is created once under a token of its own, and a create that failed after the
+    server made the cluster finds it by its tag before it makes another."""
     from databricks.sdk.service import compute
 
     have = members(w, name)
+    ids = [c.cluster_id for c in have]
+    for c in have:
+        if state_of(c) == "TERMINATED":
+            w.clusters.ensure_cluster_is_running(c.cluster_id)
     taken = {c.cluster_name for c in have}
-    made = []
     k = 0
-    while len(have) + len(made) < n:
+    while len(ids) < n:
         k += 1
         cname = f"gbx-bench-{name}-{k}"
         if cname in taken:
             continue
-        waiter = w.clusters.create(
+        spec = dict(
             cluster_name=cname,
             spark_version=spark_version,
             node_type_id=node_type,
@@ -135,15 +146,25 @@ def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int
                 if on_demand
                 else None
             ),
+            idempotency_token=_slot_token(name, cname, user),
         )
         try:
-            made.append(waiter.result().cluster_id)
+            waiter = w.clusters.create(**spec)
+            ids.append(waiter.result().cluster_id)
         except TimeoutError as exc:
             raise PoolError(
                 f"cluster {cname} did not reach RUNNING in time ({exc}); it is still starting, or the workspace has no "
                 f"capacity for its nodes. `status --name {name}` shows it; `down --name {name}` ends it."
             ) from exc
-    return [c.cluster_id for c in have] + made
+        except Exception as exc:  # noqa: BLE001 - the server may have made it before the response was lost
+            found = [c for c in members(w, name) if c.cluster_name == cname]
+            if not found:
+                raise
+            say = f"pool {name}: create of {cname} failed after the server made it ({type(exc).__name__}); using {found[0].cluster_id}"
+            print(say)
+            w.clusters.ensure_cluster_is_running(found[0].cluster_id)
+            ids.append(found[0].cluster_id)
+    return ids
 
 
 def status(w, name: str, now: Callable[[], float] = time.time) -> List[dict]:

@@ -41,6 +41,8 @@ class FakeW:
         self.libs = {}  # cluster -> {jar: status}
         self.runs = {}  # job run id -> life cycle state
         self.created = 0
+        self.tokens = {}
+        self.lose_first_response = False
         w = self
 
         class Clusters:
@@ -51,10 +53,19 @@ class FakeW:
                 return w.clusters_by_id[cid]
 
             def create(self, **kw):
+                token = kw.get("idempotency_token")
+                if token and token in w.tokens:  # the server returns the active cluster the token made
+                    cid = w.tokens[token]
+                    return SimpleNamespace(result=lambda: w.clusters_by_id[cid])
                 w.created += 1
                 cid = f"new-{w.created}"
                 w.calls.append(("create", kw))
                 w.clusters_by_id[cid] = Rec(cluster_id=cid, state="RUNNING", **kw)
+                if token:
+                    w.tokens[token] = cid
+                if w.lose_first_response:
+                    w.lose_first_response = False
+                    raise ConnectionError("the response was lost")
                 return SimpleNamespace(result=lambda: w.clusters_by_id[cid])
 
             def ensure_cluster_is_running(self, cid):
@@ -460,3 +471,22 @@ def test_a_notebook_run_on_a_leased_cluster_writes_its_job_run_on_the_lease(monk
     with pytest.raises(Stop):
         rn.run_one(w, pathlib.Path("nb.ipynb"), "/ws", [], "6", 1, False, existing_cluster_id="0101-x", on_submit=seen.append)
     assert seen == [77]
+
+
+def test_up_is_idempotent_a_lost_response_or_a_second_up_never_makes_a_second_cluster(pool):
+    spec = dict(spark_version="x", node_type="y", workers=1, user="me")
+    # the server makes the cluster and the response is lost: the retry finds it by its tag instead of creating another
+    w = FakeW()
+    w.lose_first_response = True
+    ids = pool.up(w, "p", 1, **spec)
+    assert w.created == 1 and ids == ["new-1"]
+    # a second `up` running at the same time (it listed before the first created): the same slot token, the same cluster
+    w2 = FakeW()
+    first = pool.up(w2, "p", 1, **spec)
+    w2.clusters.list = lambda: []  # the racer's listing predates the first create
+    second = pool.up(w2, "p", 1, **spec)
+    assert first == second and w2.created == 1
+    # an existing cluster that ended is started by `up`, not duplicated
+    w3 = FakeW()
+    w3.add("t", state="TERMINATED")
+    assert pool.up(w3, "p", 1, **spec) == ["t"] and w3.created == 0 and ("start", "t") in w3.calls

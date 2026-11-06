@@ -85,6 +85,25 @@ def test_the_tile_input_is_n_rows_in_a_cap_of_tiles_per_partition(
     assert df.columns == ["tile"]
 
 
+def test_the_grouped_tile_input_is_spread_not_read_by_a_task_or_two(
+    spark_session_local, tmp_path
+):
+    """The path rows of a grouped (or BNG) tile input are a few KB: left alone they sit in one or two partitions, and
+    one task reads, holds and writes every tile (a merge or tessellate leg then waits on that task for the whole cap).
+    """
+    from pyspark.sql import functions as F
+
+    corpus = _corpus(tmp_path, 40)
+    n = 20
+    src = lf.INPUTS["tiles_grouped"](spark_session_local, n, corpus, None)
+    df = spark_session_local.table(src)
+    sizes = [
+        r[0]
+        for r in df.groupBy(F.spark_partition_id()).count().select("count").collect()
+    ]
+    assert sum(sizes) == n and max(sizes) <= fam.FAMILY_ROWS_PER_PARTITION, sizes
+
+
 @pytest.mark.parametrize(
     "inp", ["tiles_n", "tiles_mat", "tiles_virt", "tiles_grouped", "file_bytes"]
 )

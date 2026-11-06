@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from typing import Callable, Dict, List, Optional
 
 from databricks.labs.gbx._gdal_policy import open_data
@@ -53,8 +54,14 @@ def _table(spark, schema: Optional[str], name: str, build) -> str:
         return name
     full = f"{schema}.{name}"
     if not spark.catalog.tableExists(full):
+        t0 = time.perf_counter()
         try:
             build().write.format("delta").saveAsTable(full)
+            # a tile input of thousands of files takes minutes: say so, so a form cap hit while building is seen as that
+            print(
+                f"[LEVELS input] {full} built in {time.perf_counter() - t0:.1f} s",
+                flush=True,
+            )
         except Exception as exc:  # noqa: BLE001
             # Runs on one schema share the cached inputs (their names hold the recipe version and the row count, not
             # the run): a run that loses the race to create one reads the other's, which has the same rows.
@@ -233,13 +240,21 @@ def _tile_column(spark, pairs, virtual: bool, keyed: bool):
             spark, rows, f"key string, tile {TILE_SQL}", what="virtual tile rows"
         )
     else:
+        from databricks.labs.gbx.bench.levels_family import family_partitions
         from databricks.labs.gbx.rasterx import functions as rx
 
-        df = client_dataframe(
-            spark, pairs, "key string, path string", what="tile path rows"
-        ).select(
-            "key",
-            rx.rst_fromfile(F.col("path"), "GTiff", materialize=True).alias("tile"),
+        # The path rows are a few KB, which one task would read file by file (the tiles are read where the rows are):
+        # spread them so the n tiles are read, held and written by many tasks, as the family inputs are. The table
+        # that results then has the same many input partitions for every form that reads it.
+        df = (
+            client_dataframe(
+                spark, pairs, "key string, path string", what="tile path rows"
+            )
+            .repartition(family_partitions(spark, len(pairs)))
+            .select(
+                "key",
+                rx.rst_fromfile(F.col("path"), "GTiff", materialize=True).alias("tile"),
+            )
         )
     return df if keyed else df.select("tile")
 
@@ -284,6 +299,7 @@ def _gb_tiles(virtual: bool):
             return None
 
         gb = []
+        t0 = time.perf_counter()
         # the corpus cycles four systems, so about a quarter are EPSG:27700: look at 4n + 64 files, no more (a corpus
         # with none must not open every file)
         for p in sources[: 4 * n + 64]:
@@ -292,6 +308,10 @@ def _gb_tiles(virtual: bool):
                     gb.append(p)
             if len(gb) >= n:
                 break
+        print(
+            f"[LEVELS input] BNG tiles found ({len(gb)}) in {time.perf_counter() - t0:.1f} s",
+            flush=True,
+        )
         if not gb:
             return None
         corpus_guard("tiles_gb", os.path.join(corpus, "rows"), len(gb), n)
@@ -359,7 +379,12 @@ def _grouped_tiles(skew: bool):
         sources = _corpus_rows(corpus)
         if not sources:
             return None
+        t0 = time.perf_counter()
         pairs = _plan_grouped_tiles(sources, n, skew)
+        print(
+            f"[LEVELS input] grouped tiles planned (CRS of {len(pairs)} headers) in {time.perf_counter() - t0:.1f} s",
+            flush=True,
+        )
         kind = "skew" if skew else "even"
         return _table(
             spark,

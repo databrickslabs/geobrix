@@ -136,7 +136,7 @@ _ROW_TRACKING_FIX = "check that delta.enableRowTracking is true on the manifest 
 _MERGE_SQL = """
 MERGE INTO {table} AS t
 USING {source} AS s
-ON t.kind = s.kind AND t.array <=> s.array AND t.key <=> s.key AND t.tag IS NULL AND s.tag IS NULL
+ON t.kind = s.kind AND t.array <=> s.array AND t.key <=> s.key AND t.tag IS NULL AND s.tag IS NULL{prune}
 WHEN MATCHED AND s.op = 'delete' AND t.write_id = s.expected_write_id THEN DELETE
 WHEN MATCHED AND s.op = 'upsert' AND t.write_id = s.expected_write_id THEN UPDATE SET
   shard_key = s.shard_key, file = {file_value}, offset = s.offset, length = s.length, checksum = s.checksum,
@@ -172,14 +172,46 @@ _FILE_GONE_FIX = (
 )
 
 
-def _merge_sql(table: str, view: str, layout: FileLayout) -> str:
+def _prune_predicate(rows: pa.Table) -> str:
+    """The extra ``ON`` terms that let the commit MERGE read only the manifest files its rows
+    can match, so a commit costs what it writes and not the size of the store.
+
+    A row matches a target row of its own ``(kind, array, key)``, and a shard or chunk
+    row's ``shard_key`` follows from its key, so a matched target row has the source row's
+    ``shard_key`` (a shard row's own key), or none (documents, commit rows, chunks of an
+    unsharded array). The manifest is clustered by ``(array, shard_key)``, so a term on the
+    target's ``shard_key`` is what Delta uses to skip files. Empty when it cannot be said
+    for every row (a delete or guard of a chunk with no ``shard_key`` may name a sharded
+    array's) or when the rows name more shards than ``_IN_LIST_LIMIT``.
+    """
+    kind, op, key = rows.column("kind"), rows.column("op"), rows.column("key")
+    shard = rows.column("shard_key")
+    own = pc.equal(kind, "shard")
+    shard = pc.if_else(pc.and_(own, pc.is_null(shard)), key, shard)
+    blind = pc.and_(
+        pc.and_(pc.equal(kind, "chunk"), pc.is_null(shard)),
+        pc.not_equal(op, "upsert"),
+    )
+    if pc.any(blind, min_count=0).as_py():
+        return ""
+    keys = pc.unique(pc.drop_null(shard)).to_pylist()
+    if not keys or len(keys) > _IN_LIST_LIMIT:
+        return ""
+    listed = ", ".join(_lit(k) for k in sorted(keys))
+    return f"\n  AND (t.shard_key IS NULL OR t.shard_key IN ({listed}))"
+
+
+def _merge_sql(table: str, view: str, layout: FileLayout, prune: str = "") -> str:
     """The commit MERGE for ``view`` into ``table``, with the ``file`` value the layout's
     mode stores: the path string as it is (``fuse``) or a ``try_to_file`` reference
     (``external``). A ``managed`` table is refused: GeoBrix does not create its files.
+    ``prune`` is ``_prune_predicate`` of the rows.
     """
     require_geobrix_files(table, layout.mode, "write")
     if layout.mode == "fuse":
-        return _MERGE_SQL.format(table=table, source=view, file_value="s.file")
+        return _MERGE_SQL.format(
+            table=table, source=view, file_value="s.file", prune=prune
+        )
     ext = _lit((layout.root_of("external") or "").rstrip("/") + "/")
     own = _lit((layout.root_of("gbx") or "").rstrip("/") + "/")
     absolute = (
@@ -190,6 +222,7 @@ def _merge_sql(table: str, view: str, layout: FileLayout) -> str:
     return _MERGE_SQL.format(
         table=table,
         source=f"(SELECT v.*, {absolute} AS file_path FROM {view} AS v)",
+        prune=prune,
         file_value=(
             "CASE WHEN s.file_path IS NULL THEN NULL ELSE coalesce("
             "try_to_file(s.file_path), raise_error(concat("
@@ -1115,7 +1148,7 @@ def find_commit_version(spark, table: str, write_id: str, *, since: int = 0):
     try:
         row = spark.sql(
             f"SELECT _metadata.row_commit_version AS v FROM {_q(table)} "
-            f"WHERE kind = 'commit' AND key = '{write_id}' AND tag IS NULL"
+            f"WHERE kind = 'commit' AND array IS NULL AND key = '{write_id}' AND tag IS NULL"
         ).first()
     except Exception as e:
         # Row tracking is off exactly when Spark reports FIELD_NOT_FOUND for the field.
@@ -1253,8 +1286,10 @@ def commit(
     layout = files if files is not None else file_layout(spark, table)
     require_geobrix_files(table, layout.mode, "write")  # before any temp view is made
 
+    prune = _prune_predicate(source)
+
     def merge(view: str) -> None:
-        spark.sql(_merge_sql(sql_table, view, layout))
+        spark.sql(_merge_sql(sql_table, view, layout, prune))
 
     try:
         _with_view(spark, source, _COMMIT_SCHEMA, merge)

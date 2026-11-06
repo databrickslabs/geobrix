@@ -1567,3 +1567,91 @@ def test_a_check_row_aborts_the_commit_when_the_row_moved(spark_delta, held_shar
 def test_argument_errors_say_how_to_fix_them(call):
     with pytest.raises(ValueError, match="Fix:"):
         call()
+
+
+# --- a commit reads the manifest files its rows can match, not every file ----------------------
+
+
+def _shard(i, wid, kind="chunk", expected=None, op="upsert"):
+    row = _chunk(f"c/{i}/0/0", wid, expected=expected)
+    row.update(
+        shard_key=f"c/{i}/0/0" if kind == "shard" else f"s/{i}", kind=kind, op=op
+    )
+    if kind == "shard":
+        row.update(key=f"s/{i}", shard_key=f"s/{i}")
+    return row
+
+
+def test_prune_predicate_names_the_shards_the_rows_lie_in():
+    rows = _rows(_shard(2, "a" * 32), _shard(7, "a" * 32, kind="shard"))
+    sql = M._prune_predicate(rows)
+    assert "t.shard_key IS NULL OR t.shard_key IN ('s/2', 's/7')" in sql
+
+
+def test_prune_predicate_stands_down_when_a_row_could_name_any_shard():
+    """A chunk delete with no shard_key may match a sharded array's row: no pruning."""
+    gone = _shard(2, "a" * 32, op="delete")
+    gone["shard_key"] = None
+    assert M._prune_predicate(_rows(_shard(1, "a" * 32), gone)) == ""
+    assert M._prune_predicate(_rows()) == ""  # nothing names a shard
+
+
+def _tasks_of(spark, group):
+    """The tasks of the stages of every job run under ``group``."""
+    tracker = spark.sparkContext.statusTracker()
+    total = 0
+    for job in tracker.getJobIdsForGroup(group):
+        for sid in tracker.getJobInfo(job).stageIds:
+            info = tracker.getStageInfo(sid)
+            total += info.numTasks if info else 0
+    return total
+
+
+def test_a_commit_reads_only_the_files_of_the_shards_it_touches(
+    spark_delta, table, monkeypatch
+):
+    """Fail-on-revert: with the manifest in many files (a store written by many commits), a
+    one-shard commit reads far fewer than all of them. One task reads one file, so the
+    tasks of the commit's jobs count the files read."""
+    sparse = {"sharded": {"t2m": True}}
+    for batch in range(12):
+        rows = [
+            r
+            for i in range(batch * 4, batch * 4 + 4)
+            for r in (
+                _shard(i, f"{batch:032x}", kind="shard"),
+                _shard(i, f"{batch:032x}"),
+            )
+        ]
+        M.commit(
+            spark_delta,
+            table,
+            _rows(*rows),
+            write_id=f"{batch:032x}",
+            meta={},
+            **sparse,
+        )
+    assert spark_delta.sql(f"DESCRIBE DETAIL {table}").first()["numFiles"] >= 6
+    # each file costs a whole partition's worth, so a file is a task
+    spark_delta.conf.set("spark.sql.files.openCostInBytes", str(128 << 20))
+    try:
+        counts, expected = {}, f"{1:032x}"
+        for label, on in (("pruned", True), ("all", False)):
+            if not on:
+                monkeypatch.setattr(M, "_prune_predicate", lambda rows: "")
+            wid = ("c" if on else "d") * 32
+            spark_delta.sparkContext.setJobGroup(label, label)
+            M.commit(
+                spark_delta,
+                table,
+                _rows(_shard(5, wid, expected=expected)),
+                write_id=wid,
+                meta={},
+                **sparse,
+            )
+            counts[label] = _tasks_of(spark_delta, label)
+            expected = wid
+    finally:
+        spark_delta.sparkContext.setJobGroup("", "")
+        spark_delta.conf.unset("spark.sql.files.openCostInBytes")
+    assert counts["pruned"] < counts["all"], counts

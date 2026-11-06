@@ -2150,6 +2150,14 @@ def _base_frame(spark, plan: _Plan, names: list[str], parts=None):
         f"FROM {M._q(plan.table)} VERSION AS OF {int(plan.base.version)} "
         "WHERE tag IS NULL AND kind IN ('shard', 'chunk')"
     ).where(F.col("array").isin(names))
+    if parts is not None:
+        # the groups' keys as a predicate on the table too (the broadcast join below is exact
+        # but reads every row first): Delta skips the files of the manifest clustered away
+        wanted_keys = sorted({p[1] for p in parts if p[0] in names})
+        if wanted_keys and len(wanted_keys) <= M._IN_LIST_LIMIT:
+            rows = rows.where(
+                F.col("shard_key").isin(wanted_keys) | F.col("key").isin(wanted_keys)
+            )
     part = (
         F.when(F.col("kind") == "shard", F.col("key"))
         .when(F.col("shard_key").isNotNull(), F.col("shard_key"))
@@ -2645,6 +2653,7 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
                         "kind": plain.column("kind"),
                         "array": plain.column("array"),
                         "key": plain.column("key"),
+                        "shard_key": plain.column("shard_key"),
                         "write_id": _const(w, n),
                         "op": _const("delete", n),
                         "expected_write_id": plain.column("expected_write_id"),

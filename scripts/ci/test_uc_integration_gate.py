@@ -404,10 +404,12 @@ def test_the_driver_dry_run_reports_counts_without_a_workspace_call(driver, monk
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
     monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(20)])
+    monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")] * 3})
     assert driver.main(["--profile", "p", "--dry-run", "--shards", "4"]) == 0
     out = capsys.readouterr().out
     assert "scope core: slice 20 statements in 4 shard(s)" in out and "no workspace call" in out
+    assert "20 warehouse statements, batch 25" in out  # nothing batchable here: the plan keeps every statement
 
 
 def test_scope_selects_the_tables_and_the_smoke_sample(driver, monkeypatch, capsys):
@@ -418,6 +420,7 @@ def test_scope_selects_the_tables_and_the_smoke_sample(driver, monkeypatch, caps
     assert driver.slice_tables("full") == probes.UC_SLICE_TABLES and len(probes.UC_SLICE_TABLES) > len(probes.UC_CORE_TABLES)
     monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
     monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: [(f"c{i}", "SELECT 1") for i in range(40)])
+    monkeypatch.setattr(driver, "slice_batchable", lambda t: set())
     seen = []
     monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: seen.append(prefixes) or {Path("a.sql"): [("x", "SELECT 1")]})
     assert driver.main(["--profile", "p", "--dry-run", "--scope", "smoke", "--against", "sch"]) == 0
@@ -468,3 +471,24 @@ def test_a_gated_run_records_its_scope_in_evidence_json(driver, monkeypatch, tmp
     ev = json.loads((tmp_path / "evidence.json").read_text())
     assert ev["scope"] == "full" and ev["slice"]["scope"] == "full" and ev["result"] == "pass" and "adhoc" not in ev
     assert not (tmp_path / "evidence-adhoc.json").exists()
+
+
+def test_the_driver_dry_run_counts_the_batched_warehouse_statements(driver, monkeypatch, capsys):
+    pairs = [(f"v{i}", f"SELECT f({i}) AS out") for i in range(60)] + [(f"r{i}", f"SELECT bad({i}) AS out") for i in range(5)]
+    monkeypatch.setattr(driver.uc_sources_hash, "dirty_files", lambda root: [])
+    monkeypatch.setattr(driver, "slice_tables", lambda scope: ("T",))
+    monkeypatch.setattr(driver, "slice_pairs", lambda c, s, t: pairs)
+    monkeypatch.setattr(driver, "slice_batchable", lambda t: {c for c, _ in pairs if c.startswith("v")})
+    monkeypatch.setattr(driver, "example_pairs", lambda c, s, prefixes=None: {Path("a.sql"): [("x", "SELECT 1")]})
+    assert driver.main(["--profile", "p", "--dry-run", "--batch", "25"]) == 0
+    assert "slice 65 statements in 1 shard(s) (8 warehouse statements, batch 25" in capsys.readouterr().out  # 25+25+10 values, 5 refusals
+    assert driver.main(["--profile", "p", "--dry-run", "--batch", "1"]) == 0
+    assert "(65 warehouse statements, batch 1" in capsys.readouterr().out
+
+
+def test_the_driver_hands_the_runner_its_batch_and_concurrency(driver, monkeypatch):
+    g = driver.Gate(driver.parse_args(["--profile", "p", "--warehouse-id", "w", "--batch", "7", "--concurrency", "5"]))
+    argv = g.uc_sql_argv(Path("a.sql"), Path("a.json"), "sch", batch=True)
+    assert argv[argv.index("--batch") + 1] == "7" and argv[argv.index("--concurrency") + 1] == "5"
+    assert "--batch" not in g.uc_sql_argv(Path("a.sql"), Path("a.json"))  # cleanup and the like run alone
+    assert driver.parse_args(["--profile", "p"]).batch == driver.DEFAULT_BATCH == 25

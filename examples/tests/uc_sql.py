@@ -7,6 +7,12 @@ wall time of each run is recorded); the value, or the error message, comes from 
 
     {cid: {"value": ..., "wall_s": [...]} | {"error": message}}
 
+With `--batch N`, the value statements a file marks `-- batch` run N at a time as ONE statement of one row
+and N columns (the warehouse pays a fixed sandbox cost per statement, ~10 s, whatever it computes): column i
+answers case i, and each case is still judged on its own. A statement that must be refused is never marked, and
+a batch that fails as a whole is rerun case by case, so a failure still names its case. `--concurrency N` keeps
+N warehouse statements in flight.
+
 BINARY cells come back base64 in the API's JSON: they are decoded to bytes (`--decode-binary`, the
 default), and a tile struct's `raster` field too. `bench.oracles.load_uc_results` reads the file
 back, and `bench.oracles.check_uc_results` judges it against the oracle rows.
@@ -20,7 +26,10 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -42,19 +51,10 @@ class StatementTimeout(Exception):
     """A statement was still pending or running when its deadline passed (it has been cancelled)."""
 
 
-def run_once(
-    w,
-    statement: str,
-    warehouse_id: str,
-    catalog: Optional[str],
-    schema: Optional[str],
-    timeout_s: float = DEFAULT_TIMEOUT_S,
-    info: Optional[dict] = None,
-):
-    """Run one statement to a terminal state; return (state, error message, first cell, its type).
+def _execute(w, statement, warehouse_id, catalog, schema, timeout_s):
+    """Submit a statement and wait for a terminal state; return the response.
 
     Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted.
-    When `info` is a dict, it gets `rows` (the number of rows the statement returned) and `first_row`.
     """
     from databricks.sdk.service.sql import StatementState
 
@@ -79,10 +79,42 @@ def run_once(
             )
         time.sleep(POLL_SECS)
         resp = api.get_statement(resp.statement_id)
+    return resp
+
+
+def _failure(resp) -> Optional[str]:
+    from databricks.sdk.service.sql import StatementState
+
     state = resp.status.state
-    if state != StatementState.SUCCEEDED:
-        err = resp.status.error
-        return state, (err.message if err and err.message else f"statement {state.value}"), None, None
+    if state == StatementState.SUCCEEDED:
+        return None
+    err = resp.status.error
+    return err.message if err and err.message else f"statement {state.value}"
+
+
+def _type_of(col) -> str:
+    return getattr(col.type_name, "value", str(col.type_name))
+
+
+def run_once(
+    w,
+    statement: str,
+    warehouse_id: str,
+    catalog: Optional[str],
+    schema: Optional[str],
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+    info: Optional[dict] = None,
+):
+    """Run one statement to a terminal state; return (state, error message, first cell, its type).
+
+    Raises StatementTimeout when it is still not terminal `timeout_s` after it was submitted.
+    When `info` is a dict, it gets `rows` (the number of rows the statement returned) and `first_row`.
+    """
+    resp = _execute(w, statement, warehouse_id, catalog, schema, timeout_s)
+    state = resp.status.state
+    error = _failure(resp)
+    if error is not None:
+        return state, error, None, None
     rows = (resp.result.data_array if resp.result else None) or []
     cell = rows[0][0] if rows and rows[0] else None
     if info is not None:
@@ -92,40 +124,145 @@ def run_once(
     cols = (resp.manifest.schema.columns if resp.manifest and resp.manifest.schema else None) or []
     if not cols:  # a statement with no result set (CREATE FUNCTION, DROP ...): no value
         return state, None, None, None
-    type_name = cols[0].type_name
-    return state, None, cell, getattr(type_name, "value", str(type_name))
+    return state, None, cell, _type_of(cols[0])
+
+
+def run_batch_once(w, statement: str, warehouse_id: str, catalog, schema, timeout_s: float = DEFAULT_TIMEOUT_S):
+    """Run a one-row statement; return (error message, [(cell, type name)] of its row, one per column)."""
+    resp = _execute(w, statement, warehouse_id, catalog, schema, timeout_s)
+    error = _failure(resp)
+    if error is not None:
+        return error, []
+    rows = (resp.result.data_array if resp.result else None) or []
+    cols = (resp.manifest.schema.columns if resp.manifest and resp.manifest.schema else None) or []
+    if len(rows) != 1 or len(rows[0]) != len(cols):
+        return f"a batch statement must return one row of {len(cols)} column(s), got {len(rows)} row(s)", []
+    return None, [(cell, _type_of(col)) for cell, col in zip(rows[0], cols)]
+
+
+# ---- planning: which statements share a warehouse statement --------------------------------------------------------
+
+
+@dataclass
+class Unit:
+    """One warehouse statement: `members` is [(cid, single statement)] (more than one means a batch)."""
+
+    members: list
+    items: Optional[list] = None  # a batch's one-value expressions, in member order
+
+    @property
+    def is_batch(self) -> bool:
+        return self.items is not None
+
+
+def plan_units(pairs, batchable=(), size: int = 0) -> list:
+    """The units that run `pairs`: batchable statements in chunks of `size`, every other statement alone.
+
+    Every cid of `pairs` is in exactly one unit. A statement without a one-value form (`oracles.uc_batch_item`) and a
+    chunk of one are single units. `size` below 2 plans every statement alone.
+    """
+    units, chunk = [], []
+
+    def flush():
+        if len(chunk) >= 2:
+            units.append(Unit([(c, s) for c, s, _ in chunk], [i for _, _, i in chunk]))
+        else:
+            units.extend(Unit([(c, s)]) for c, s, _ in chunk)
+        chunk.clear()
+
+    for cid, stmt in pairs:
+        item = oracles.uc_batch_item(stmt) if size > 1 and cid in batchable else None
+        if item is None:
+            units.append(Unit([(cid, stmt)]))
+            continue
+        chunk.append((cid, stmt, item))
+        if len(chunk) >= size:
+            flush()
+    flush()
+    return units
+
+
+def batch_entries(unit: Unit, cells, wall: float, decode_binary: bool) -> dict:
+    """{cid: entry} for a batch's row: column i answers member i (the mapping the judge relies on)."""
+    return {
+        cid: {"value": oracles.decode_uc_cell(cell, type_name, decode_binary=decode_binary), "wall_s": [wall], "batch": len(unit.members)}
+        for (cid, _), (cell, type_name) in zip(unit.members, cells)
+    }
+
+
+def run_single(w, cid: str, statement: str, args) -> dict:
+    walls, entry = [], None
+    info = {} if getattr(args, "record_rows", False) else None
+    for _ in range(args.repeat):
+        t0 = time.perf_counter()
+        try:
+            state, error, cell, type_name = run_once(
+                w, statement, args.warehouse_id, args.catalog, args.schema, args.timeout_s, info
+            )
+        except StatementTimeout as exc:
+            state, error, cell, type_name = None, str(exc), None, None
+        walls.append(round(time.perf_counter() - t0, 4))
+        if error is not None:
+            entry = {"error": scrub(error)}
+            break
+        if entry is None:
+            value = oracles.decode_uc_cell(cell, type_name, decode_binary=args.decode_binary)
+            entry = {"value": value}
+    if "value" in entry:
+        entry["wall_s"] = walls
+        if info is not None:
+            entry["rows"] = info.get("rows", 0)
+            entry["first_row"] = info.get("first_row")
+    return entry
+
+
+def run_unit(w, unit: Unit, args) -> dict:
+    """{cid: entry} for a unit. A batch that fails as a whole runs its members one by one, so a failure names its case."""
+    if not unit.is_batch:
+        (cid, stmt), = unit.members
+        return {cid: run_single(w, cid, stmt, args)}
+    t0 = time.perf_counter()
+    try:
+        error, cells = run_batch_once(
+            w, oracles.uc_batch_statement(unit.items), args.warehouse_id, args.catalog, args.schema, args.timeout_s
+        )
+    except StatementTimeout as exc:
+        error, cells = str(exc), []
+    if error is None:
+        return batch_entries(unit, cells, round(time.perf_counter() - t0, 4), args.decode_binary)
+    print(f"batch of {len(unit.members)} ({unit.members[0][0]} ...) failed: {' '.join(scrub(error).split())[:160]}; running its cases one by one", flush=True)
+    return {cid: run_single(w, cid, stmt, args) for cid, stmt in unit.members}
 
 
 def run_statements(w, pairs, args) -> dict:
-    results = {}
-    for cid, statement in pairs:
-        walls, entry = [], None
-        info = {} if getattr(args, "record_rows", False) else None
-        for _ in range(args.repeat):
-            t0 = time.perf_counter()
-            try:
-                state, error, cell, type_name = run_once(
-                    w, statement, args.warehouse_id, args.catalog, args.schema, args.timeout_s, info
-                )
-            except StatementTimeout as exc:
-                state, error, cell, type_name = None, str(exc), None, None
-            walls.append(round(time.perf_counter() - t0, 4))
-            if error is not None:
-                entry = {"error": scrub(error)}
-                break
-            if entry is None:
-                value = oracles.decode_uc_cell(cell, type_name, decode_binary=args.decode_binary)
-                entry = {"value": value}
-        if "value" in entry:
-            entry["wall_s"] = walls
-            if info is not None:
-                entry["rows"] = info.get("rows", 0)
-                entry["first_row"] = info.get("first_row")
-        results[cid] = entry
-        print(summary_line(cid, entry), flush=True)
-        if args.out:  # after every statement: a failure later in the run keeps what is already known
-            oracles.dump_uc_results(results, args.out)
-    return results
+    """Run `pairs`; return {cid: entry} in the order of `pairs`.
+
+    `args.batch` (statements per batch, default off) and `args.batchable` (the cids that may be batched) group value
+    statements into one warehouse statement each; `args.concurrency` (default 1) runs that many units at once.
+    """
+    units = plan_units(pairs, getattr(args, "batchable", ()), getattr(args, "batch", 0))
+    workers = max(1, min(getattr(args, "concurrency", 1), len(units) or 1))
+    if len(units) != len(pairs):
+        print(f"{len(pairs)} statements as {len(units)} warehouse statements ({sum(u.is_batch for u in units)} batches)", flush=True)
+    results, lock = {}, threading.Lock()
+
+    def work(unit):
+        entries = run_unit(w, unit, args)
+        with lock:
+            results.update(entries)
+            for cid, _ in unit.members:
+                print(summary_line(cid, entries[cid]), flush=True)
+            if args.out:  # after every unit: a failure later in the run keeps what is already known
+                oracles.dump_uc_results(results, args.out)
+
+    if workers == 1:
+        for unit in units:
+            work(unit)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for f in [pool.submit(work, u) for u in units]:
+                f.result()
+    return {cid: results[cid] for cid, _ in pairs if cid in results}
 
 
 def summary_line(cid: str, entry: dict) -> str:
@@ -150,6 +287,14 @@ def parse_args(argv=None):
         default=DEFAULT_TIMEOUT_S,
         help="give up on (and cancel) a statement still running after this many seconds (default 600)",
     )
+    p.add_argument(
+        "--batch",
+        type=int,
+        default=0,
+        help="put up to N value statements (those marked `-- batch` in the file) in one warehouse statement; "
+        "0 runs each alone (default). A batch that fails runs its cases one by one",
+    )
+    p.add_argument("--concurrency", type=int, default=1, help="warehouse statements in flight at once (default 1)")
     p.add_argument("--profile", default=None, help="Databricks config profile (never chosen for you)")
     p.add_argument(
         "--decode-binary",
@@ -163,18 +308,24 @@ def parse_args(argv=None):
         p.error("--repeat must be at least 1")
     if args.timeout_s <= 0:
         p.error("--timeout-s must be positive")
+    if args.batch < 0 or args.concurrency < 1:
+        p.error("--batch must be 0 or more and --concurrency at least 1")
     return args
 
 
 def main(argv=None) -> int:
     args = parse_args(argv)
-    pairs = oracles.parse_uc_sql(Path(args.file).read_text())
+    text = Path(args.file).read_text()
+    pairs = oracles.parse_uc_sql(text)
+    args.batchable = oracles.parse_uc_batchable(text)
     if not pairs:
         print(f"{args.file}: no '-- cid: <id>' statements found", file=sys.stderr)
         return 2
     if args.dry_run:
+        units = plan_units(pairs, args.batchable, args.batch)
         print(
-            f"dry run: {len(pairs)} statement(s) x {args.repeat} on warehouse {args.warehouse_id or '-'} "
+            f"dry run: {len(pairs)} statement(s) as {len(units)} warehouse statement(s) "
+            f"(batch {args.batch}, concurrency {args.concurrency}) x {args.repeat} on warehouse {args.warehouse_id or '-'} "
             f"(profile {args.profile or '-'}, catalog {args.catalog or '-'}, schema {args.schema or '-'}); "
             f"results {'-> ' + args.out if args.out else 'not written'}"
         )

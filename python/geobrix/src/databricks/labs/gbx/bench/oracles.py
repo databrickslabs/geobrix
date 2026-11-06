@@ -5470,9 +5470,71 @@ def _uc_rows(fn, value) -> list:
 _CID_MARK = "-- cid: "
 
 
-def uc_sql_text(pairs: Sequence[Tuple[str, str]]) -> str:
-    """The statement file gbx:uc:sql reads: a `-- cid: <id>` line, then the statement."""
-    return "\n\n".join(f"{_CID_MARK}{cid}\n{stmt};" for cid, stmt in pairs) + "\n"
+_BATCH_MARK = "-- batch"
+_EXPECTS_ERROR = ("raises", "uc_refused")
+# The two statement shapes `uc_sql` renders for a function call (a recipe is neither).
+_UC_SCALAR_STMT = re.compile(r"\ASELECT (?P<expr>.+) AS out\Z", re.S)
+_UC_TABLE_STMT = re.compile(
+    r"\ASELECT to_json\(collect_list\(.*\)\) AS out FROM .+ AS t\Z", re.S
+)
+
+
+def uc_batchable(cases) -> set:
+    """The cids whose statement may share a warehouse statement with others (`uc_batch_statement`).
+
+    A case that must be refused stays out: one error aborts the whole statement, and the refusal is the
+    answer. A recipe stays out too: it is a statement of its own, not a call.
+    """
+    return {
+        c.cid
+        for c in cases
+        if "uc" in c.surfaces and c.sql is None and c.kind not in _EXPECTS_ERROR
+    }
+
+
+def uc_batch_item(stmt: str) -> Optional[str]:
+    """The one-value expression of a `uc_sql` statement, or None when it has no such form.
+
+    A scalar call `SELECT <call> AS out` is its call; a table function's `SELECT to_json(...) AS out FROM <call> AS t`
+    is that whole query as a scalar subquery.
+    """
+    m = _UC_SCALAR_STMT.match(stmt)
+    if m:
+        return m.group("expr")
+    return f"({stmt})" if _UC_TABLE_STMT.match(stmt) else None
+
+
+def uc_batch_statement(items: Sequence[str]) -> str:
+    """One row, one column `c<i>` per item: the sandbox cost of the statement is paid once for all of them."""
+    return "SELECT " + ", ".join(f"{item} AS c{i}" for i, item in enumerate(items))
+
+
+def uc_sql_text(
+    pairs: Sequence[Tuple[str, str]], batchable: Optional[set] = None
+) -> str:
+    """The statement file gbx:uc:sql reads: a `-- cid: <id>` line, then the statement.
+
+    A cid in `batchable` gets a `-- batch` line after its cid line: the runner may put it in a batch.
+    """
+    mark = f"{_BATCH_MARK}\n"
+    return (
+        "\n\n".join(
+            f"{_CID_MARK}{cid}\n{mark if batchable and cid in batchable else ''}{stmt};"
+            for cid, stmt in pairs
+        )
+        + "\n"
+    )
+
+
+def parse_uc_batchable(text: str) -> set:
+    """The cids that carry a `-- batch` line (see `uc_sql_text`)."""
+    out, cid = set(), None
+    for line in text.splitlines():
+        if line.startswith(_CID_MARK):
+            cid = line[len(_CID_MARK) :].strip()
+        elif line.strip() == _BATCH_MARK and cid is not None:
+            out.add(cid)
+    return out
 
 
 def parse_uc_sql(text: str) -> List[Tuple[str, str]]:

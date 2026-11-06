@@ -68,6 +68,12 @@ WHEEL_INPUTS = tuple(p for p in uc_sources_hash.UC_PATHS if not p.startswith("ex
     "scripts/native",
 )
 HEARTBEAT_S = 60
+# The warehouse pays ~10 s of sandbox cost per statement that calls a UC Python function, whatever it computes:
+# value cases share a statement (DEFAULT_BATCH per statement) and statements run side by side.
+DEFAULT_SHARDS = 1
+DEFAULT_BATCH = 25
+DEFAULT_CONCURRENCY = 16
+DEFAULT_EXAMPLE_PARALLEL = 6
 
 
 class StepFailed(Exception):
@@ -267,6 +273,20 @@ def slice_pairs(catalog: str, schema: str, tables) -> list:
     return t28._slice_pairs(t28.Params(catalog=catalog, schema=schema), schema, tables, notes)
 
 
+def slice_batchable(tables) -> set:
+    """The cids of the slice that may share a warehouse statement (not a refusal, not a recipe)."""
+    from databricks.labs.gbx.bench import oracles, probes
+
+    return oracles.uc_batchable(probes.uc_slice_cases(tables))
+
+
+def warehouse_statements(pairs, batchable, size: int) -> int:
+    """How many warehouse statements `pairs` take when batched `size` at a time (the plan the runner makes)."""
+    import uc_sql
+
+    return len(uc_sql.plan_units(pairs, batchable, size))
+
+
 def slice_tables(scope: str) -> tuple:
     from databricks.labs.gbx.bench import probes
 
@@ -297,7 +317,10 @@ def parse_args(argv=None):
     p.add_argument("--catalog", default=DEFAULT_CATALOG)
     p.add_argument("--volroot", default=DEFAULT_VOLROOT, help="Volume folder that holds the uc-it/<sha12>/ staging folder")
     p.add_argument("--scope", choices=("smoke", "core", "full"), default="core", help="smoke: 12 slice statements and example files 00 and 01; core: grid and vector tables and all examples; full: also the raster tables")
-    p.add_argument("--shards", type=int, default=8, help="parallel warehouse sessions for the slice")
+    p.add_argument("--shards", type=int, default=DEFAULT_SHARDS, help="separate warehouse sessions (processes) for the slice; each batches its own share, so 1 batches best")
+    p.add_argument("--batch", type=int, default=DEFAULT_BATCH, help="value cases per warehouse statement (1 runs each alone); a case that must be refused always runs alone")
+    p.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY, help="warehouse statements in flight at once, per slice session")
+    p.add_argument("--example-files-parallel", type=int, default=DEFAULT_EXAMPLE_PARALLEL, help="example files run side by side (file 00, the setup, always runs first)")
     p.add_argument("--rebuild", action="store_true", help="build the wheel even when dist/env6 holds a reusable one")
     p.add_argument("--keep", action="store_true", help="keep the schema and the Volume folder")
     p.add_argument("--install-timeout-min", type=int, default=90)
@@ -394,17 +417,19 @@ class Gate:
         need(rc, "the install job", out)
         self.created["schema"] = True
 
-    def run_statements(self, name: str, pairs: list) -> Tuple[Path, Path, Path]:
+    def run_statements(self, name: str, pairs: list, batchable=frozenset()) -> Tuple[Path, Path, Path]:
         from databricks.labs.gbx.bench import oracles
 
         self.run_dir.mkdir(parents=True, exist_ok=True)
         sql = self.run_dir / f"{name}.sql"
-        sql.write_text(oracles.uc_sql_text(pairs))
+        sql.write_text(oracles.uc_sql_text(pairs, batchable))
         return sql, self.run_dir / f"{name}.json", self.run_dir / f"{name}.log"
 
-    def uc_sql_argv(self, sql: Path, out: Path, schema: Optional[str] = None) -> List[str]:
+    def uc_sql_argv(self, sql: Path, out: Path, schema: Optional[str] = None, batch: bool = False) -> List[str]:
         argv = ["bash", str(CMD / "gbx-uc-sql.sh"), "--profile", self.a.profile, "--file", str(sql), "--out", str(out),
                 "--catalog", self.a.catalog, "--timeout-s", "900"]
+        if batch:
+            argv += ["--batch", str(self.a.batch), "--concurrency", str(self.a.concurrency)]
         if schema:
             argv += ["--schema", schema]
         if self.warehouse:
@@ -418,15 +443,18 @@ class Gate:
         pairs = slice_pairs(self.a.catalog, self.schema, tables)
         if self.a.scope == "smoke":
             pairs = pairs[:SMOKE_STATEMENTS]
+        batchable = slice_batchable(tables)
+        say(f"slice: {len(pairs)} cases as {warehouse_statements(pairs, batchable, self.a.batch)} warehouse statements (batch {self.a.batch}, concurrency {self.a.concurrency}, {self.a.shards} session(s))")
         shards = shard(pairs, self.a.shards)
         jobs: List[Tuple[str, subprocess.Popen, Path, Path, int]] = []
         for i, part in enumerate(shards):
-            sql, out, log = self.run_statements(f"slice_{i}", part)
-            jobs.append((f"slice_{i}", self._popen(self.uc_sql_argv(sql, out, self.schema), log), out, log, len(part)))
+            sql, out, log = self.run_statements(f"slice_{i}", part, batchable)
+            jobs.append((f"slice_{i}", self._popen(self.uc_sql_argv(sql, out, self.schema, batch=True), log), out, log, len(part)))
         ex_dir = self.run_dir / "examples"
         ex_log = self.run_dir / "examples.log"
         ex_argv = ["bash", str(CMD / "gbx-examples-uc-sql.sh"), "--profile", self.a.profile, "--catalog", self.a.catalog,
-                   "--schema", self.schema, "--out-dir", str(ex_dir), "--timeout-s", "900"]
+                   "--schema", self.schema, "--out-dir", str(ex_dir), "--timeout-s", "900",
+                   "--parallel", str(self.a.example_files_parallel)]
         if self.warehouse:
             ex_argv += ["--warehouse-id", self.warehouse]
         if self.a.scope == "smoke":
@@ -562,7 +590,8 @@ def main(argv=None) -> int:
             wheel_note = f"{wheels[-1].name}: {'reusable' if ok else 'rebuild'}, {why}"
         print(
             f"dry run: sources hash {uc_sources_hash.sources_hash(REPO_ROOT)[:12]}; wheel {wheel_note}; "
-            f"scope {a.scope}{' against ' + a.against if a.against else ''}: slice {len(pairs)} statements in {len(shard(pairs, a.shards))} shard(s); "
+            f"scope {a.scope}{' against ' + a.against if a.against else ''}: slice {len(pairs)} statements in {len(shard(pairs, a.shards))} shard(s) "
+            f"({warehouse_statements(pairs, slice_batchable(tables), a.batch)} warehouse statements, batch {a.batch}, concurrency {a.concurrency}); "
             f"examples: {sum(len(p) for p in ex_pairs.values())} statements in {len(ex_pairs)} files; "
             f"warehouse {g.warehouse or '-'}; known failures {len(known)}; no workspace call"
         )

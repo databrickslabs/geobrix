@@ -29,6 +29,10 @@ Options:
   --repeat N             Run each statement N times and record every wall time (default 1)
   --timeout-s N          Cancel a statement still running after N seconds and record a timeout
                          error for it (default 600)
+  --batch N              Run up to N of the file's `-- batch` statements as ONE warehouse statement (one
+                         row, one column per case); each case is still judged on its own. A batch that
+                         fails is rerun case by case, so a failure names its case (default 0: off)
+  --concurrency N        Warehouse statements in flight at once (default 1)
   --no-decode-binary     Keep BINARY cells as the API's base64 text (decoded to bytes by default)
   --dry-run              Parse the file and print the plan: no workspace call, no auth
   --log <path>           Write output to a log file (filename -> test-logs/<name>)
@@ -53,7 +57,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
-    --file|--profile|--catalog|--schema|--out|--repeat|--timeout-s)
+    --file|--profile|--catalog|--schema|--out|--repeat|--timeout-s|--batch|--concurrency)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --no-decode-binary|--dry-run) ARGS+=("$1"); shift ;;

@@ -28,6 +28,7 @@ Options:
   --files <prefixes>     Comma list of file name prefixes to run, such as 00,05 (default: all)
   --out-dir <folder>     Folder for the per-file result JSON (default test-logs/uc-examples)
   --timeout-s N          Cancel a statement still running after N seconds (default 600)
+  --parallel N           Run N example files side by side (default 1); file 00, the setup, always runs first
   --upload               After a clean run, import the files into your workspace folder
   --upload-only          Import the files and run nothing
   --ws-dir <path>        Workspace folder to import into (default the folder above)
@@ -52,7 +53,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--schema|--dir|--files|--out-dir|--timeout-s|--ws-dir)
+    --profile|--catalog|--schema|--dir|--files|--out-dir|--timeout-s|--ws-dir|--parallel)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --upload|--upload-only|--dry-run) ARGS+=("$1"); shift ;;

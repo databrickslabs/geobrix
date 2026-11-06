@@ -33,7 +33,14 @@ Options:
   --catalog C             Catalog of the schema (default geospatial_docs)
   --volroot DIR           Volume folder that holds uc-it/<sha12>/ (default
                           /Volumes/geospatial_docs/geobrix/sample-data)
-  --shards N              Parallel warehouse sessions for the slice (default 8)
+  --batch N               Value cases per warehouse statement (default 25; 1 runs each alone). The warehouse
+                          pays ~10 s per statement that calls a UC Python function, whatever it computes, so
+                          the cases of a batch share one. A case that must be refused always runs alone, and a
+                          batch that fails is rerun case by case: each case is judged on its own either way
+  --concurrency N         Warehouse statements in flight at once, per slice session (default 16)
+  --shards N              Separate slice sessions (default 1; each batches its own share, so more sessions
+                          mean smaller batches)
+  --example-files-parallel N  Example files run side by side (default 6; file 00, the setup, runs first)
   --rebuild               Build the wheel even when dist/env6 holds one that fits HEAD
   --keep                  Keep the schema and the Volume folder (gated run)
   --install-timeout-min N Time limit of the install job (default 90)
@@ -65,7 +72,7 @@ while [[ $# -gt 0 ]]; do case $1 in
         LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --warehouse-id) [[ $# -ge 2 ]] || { echo "Option --warehouse-id needs a value" >&2; exit 2; }
         HAVE_WAREHOUSE=true; ARGS+=("$1" "$2"); shift 2 ;;
-    --profile|--catalog|--volroot|--scope|--against|--shards|--install-timeout-min)
+    --profile|--catalog|--volroot|--scope|--against|--shards|--batch|--concurrency|--example-files-parallel|--install-timeout-min)
         [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         ARGS+=("$1" "$2"); shift 2 ;;
     --rebuild|--keep|--dry-run) ARGS+=("$1"); shift ;;

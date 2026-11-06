@@ -17,6 +17,7 @@ import argparse
 import base64
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
 
@@ -119,6 +120,7 @@ def parse_args(argv=None):
     p.add_argument("--files", default=None, help="comma list of file name prefixes to run, such as 00,05")
     p.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="folder for the per-file result JSON")
     p.add_argument("--timeout-s", type=float, default=uc_sql.DEFAULT_TIMEOUT_S, help="cancel a statement after this long")
+    p.add_argument("--parallel", type=int, default=1, help="example files run side by side (default 1); the setup file 00 always runs first, alone")
     p.add_argument("--upload", action="store_true", help="after the run, import the files into your workspace folder")
     p.add_argument("--upload-only", action="store_true", help="import the files and run nothing")
     p.add_argument("--ws-dir", default=None, help=f"workspace folder to import into (default /Workspace/Users/<you>/{WS_SUBDIR})")
@@ -126,6 +128,8 @@ def parse_args(argv=None):
     args = p.parse_args(argv)
     if args.timeout_s <= 0:
         p.error("--timeout-s must be positive")
+    if args.parallel < 1:
+        p.error("--parallel must be at least 1")
     return args
 
 
@@ -177,21 +181,42 @@ def main(argv=None) -> int:
             record_rows=True,
             out=None,
         )
-        table = []
-        for f, pairs in parsed.items():
+        def run_file(f, pairs):
+            """(table row, problems) of one file; a file's statements run in order (they may build on each other)."""
+            out = argparse.Namespace(**vars(run_args))  # one Namespace per file: they run side by side
+            out.out = str(out_dir / f"{f.stem}.json")
             print(f"=== {f.name}: {len(pairs)} statement(s)", flush=True)
-            run_args.out = str(out_dir / f"{f.stem}.json")
-            try:
-                results = uc_sql.run_statements(w, pairs, run_args)
-            except Exception as exc:  # noqa: BLE001 - an SDK or network failure: report it and stop
-                print(f"stopped: {uc_sql.scrub(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
-                return 1
+            results = uc_sql.run_statements(w, pairs, out)
             problems = judge(pairs, results)
             ok = len(pairs) - len({p.split(':')[0] for p in problems})
             slowest = max(
                 ((r["wall_s"][0], cid) for cid, r in results.items() if "wall_s" in r), default=(0.0, "-")
             )
-            table.append((f.name, ok, len(pairs), slowest))
+            return (f.name, ok, len(pairs), slowest), problems
+
+        # The setup file (name starts 00) creates the tables the others read: it runs first, alone.
+        order = list(parsed.items())
+        first = [fp for fp in order if fp[0].name.startswith("00")]
+        rest = [fp for fp in order if not fp[0].name.startswith("00")]
+        done = {}
+        try:
+            for f, pairs in first:
+                done[f] = run_file(f, pairs)
+            if args.parallel > 1 and len(rest) > 1:
+                with ThreadPoolExecutor(max_workers=min(args.parallel, len(rest))) as pool:
+                    futures = {f: pool.submit(run_file, f, pairs) for f, pairs in rest}
+                    for f, fut in futures.items():
+                        done[f] = fut.result()
+            else:
+                for f, pairs in rest:
+                    done[f] = run_file(f, pairs)
+        except Exception as exc:  # noqa: BLE001 - an SDK or network failure: report it and stop
+            print(f"stopped: {uc_sql.scrub(f'{type(exc).__name__}: {exc}')}", file=sys.stderr)
+            return 1
+        table = []
+        for f in parsed:
+            row, problems = done[f]
+            table.append(row)
             for line in problems:
                 print(f"  FAIL {line}", file=sys.stderr)
             failed = failed or bool(problems)

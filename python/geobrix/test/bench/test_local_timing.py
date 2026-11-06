@@ -63,6 +63,14 @@ def test_a_form_whose_cost_per_tile_is_more_than_k_times_its_peers_is_flagged():
     assert [f for f in flags if f.startswith("b: per-tile")]
 
 
+def test_a_scan_bound_sets_noise_band_keeps_a_near_zero_baseline_from_flagging():
+    """A baseline of 1 ms read against a run of 48 ms is the noise of a set whose cost is the scan, not a 47x
+    regression: the set's noise band is the least cost per tile it compares."""
+    assert lt.baseline_flags({"f": 48.0}, {"f": 1.0}, k=1.5)
+    assert lt.baseline_flags({"f": 48.0}, {"f": 1.0}, k=1.5, noise_ms=60.0) == []
+    assert lt.baseline_flags({"f": 150.0}, {"f": 1.0}, k=1.5, noise_ms=60.0)
+
+
 def test_forms_at_or_under_the_floor_raise_no_peer_flag():
     """A floor that costs more than the forms (a scan-bound function) leaves negative costs per tile: -15 ms is not
     'over 3x' a peers' median of -14 ms."""

@@ -80,6 +80,9 @@ class SetSpec:
     fn: Optional[str] = (
         None  # time only this function's forms (a set whose forms hold more than one function)
     )
+    noise_ms: float = (
+        0.0  # a cost per tile under this is compared as this much (a scan-bound set's noise); 0: MIN_BASELINE_MS
+    )
     peer_exempt: Tuple[str, ...] = (
         ()  # forms printed with their ratios but kept out of the peer-outlier flags and the peers' median
     )
@@ -136,6 +139,7 @@ def _family_sets() -> Dict[str, SetSpec]:
             reference=f"c0@{tag}",
             ns=ns,
             fn=fn,
+            noise_ms=60.0,  # scan-bound: a cost over the floor under ~60 ms a tile is the run's noise
             **{**tiles, **kw},
         )
 
@@ -437,6 +441,7 @@ def baseline_flags(
     per_tile: Dict[str, float],
     baseline: Dict[str, float],
     k: float = BASELINE_K_DEFAULT,
+    noise_ms: float = 0.0,
 ) -> List[str]:
     """What is above `k` times its stored cost per tile (and the forms the two do not share)."""
     out: List[str] = []
@@ -444,7 +449,7 @@ def baseline_flags(
         if f not in baseline:
             out.append(f"{f}: not in the baseline (write it again)")
             continue
-        was = max(baseline[f], MIN_BASELINE_MS)
+        was = max(baseline[f], MIN_BASELINE_MS, noise_ms)
         if per_tile[f] > k * was:
             out.append(
                 f"{f}: per-tile {per_tile[f]:.0f} ms is {per_tile[f] / was:.1f}x its baseline {baseline[f]:.0f} ms"
@@ -1056,7 +1061,9 @@ def _run(a, spec: SetSpec) -> int:
             env["arch"],
         }:
             print("NOTE: the baseline was taken on another machine; compare with care")
-        found += baseline_flags(per_tile, stored["per_tile_ms"], a.baseline_k)
+        found += baseline_flags(
+            per_tile, stored["per_tile_ms"], a.baseline_k, spec.noise_ms
+        )
     print("FLAGS:\n  " + ("\n  ".join(found) if found else "none"))
     if a.baseline_write:
         if found:

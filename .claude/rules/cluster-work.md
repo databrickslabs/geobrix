@@ -53,6 +53,11 @@ Read this before any run on a workspace: a benchmark, a notebook run, UC tests, 
 - **Keep timing comparisons isolated.** Parallel runs are fine for behaviour and gates. A before/after timing runs alone, or as interleaved A/B on the same compute. Concurrent legs sharing a Volume skew wall times.
 - **Keep local runs light.** At most one or two local perf-timing agents run at a time. Host load above about 30 makes local timings meaningless.
 
+- **Every wait has an end and cannot match itself.**
+  - Wait on a PID (`while kill -0 <pid>; do sleep 30; done`) or a done-marker, always with a time limit.
+  - Never use `until ! pgrep -f <name>`: the loop's own command line contains `<name>`, so it never ends. Five such loops ran for 31 hours on 2026-11-06.
+  - Stop your own background loops and monitors before you report.
+
 ## After the run
 - **Record the results.** Write the result rows to the ledger table for the work, with a verdict per part: linear, sub-linear, over-bar, skipped by projection, or error with its cause.
 - **Clean up what you made.** Remove your worktrees, isolated staging folders, ladder outputs and leftover runner notebooks. Leave shared inputs (`mvp_in_*`) unless the owner says otherwise. Delete a shared artifact only with the user's confirmation.

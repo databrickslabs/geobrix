@@ -102,7 +102,7 @@ Each `--benchmark-*` flag adds a leg. Each `--*-only` flag runs only that leg, w
 
 See [`--levels` details](#levels-details) for the metrics.
 
-- `--levels <set>`: add the levels leg for one set of functions. A set is `S`, `G`, `A`, `H`, `SE`, `IO` or a function family of the manifest (`raster-accessor`, `grid-scalar`, `cell-aggregate`, ...): a family set times one or two of its functions at every level it has, beside a floor.
+- `--levels <set>`: add the levels leg for one set of functions. A set is `S`, `G`, `A`, `H`, `SE`, `IO` or a function family of the manifest (`raster-accessor`, `grid-scalar`, `cell-aggregate`, ...). A family set times one or two of its functions at every level it has, beside a floor.
   - `S`: session functions. `G`: generators. `A`: aggregates. `H`: DataFrame helpers.
   - `SE`: the GDAL spec engine's rows (slope, transformcrs, mapalgebra against today's implementations).
   - `IO`: the raster read and decode forms (its own ladder: 1x, 4x and 10x).

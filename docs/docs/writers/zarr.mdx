@@ -256,13 +256,13 @@ other dimensions' values must be labels the store has.
   sorted ascending (a new store's dimensions, an append's new steps), and which shards the cells fall in. A table
   that fills its grid (as many rows as the product of its labels) needs no second pass. The values columns are
   read once, by the write itself.
-- The cells are shuffled **once**, by the shard they fall in (or by the chunk, see below), and a task owns whole
+- The cells are shuffled **once**, by the shard they fall in (or by the chunk, see below). A task owns whole
   shards: one partition per shard touched, up to four per slot of the session's parallelism. Each task builds its
   shards and adds them to the store where they are made, as a
   [create from blocks on the shard grid](#blocks-on-the-stores-grid) does. A manifest `append` goes on through the
   writer's usual read-modify-write of the shards it touches.
 - A shard that fits the memory of a task is built and written whole. A shard that does not fit is written one inner
-  chunk at a time: the task holds one chunk of every variable, plus a copy of one, and a plain store spools the
+  chunk at a time. The task holds one chunk of every variable, plus a copy of one. A plain store spools the
   shard's chunks on local disk and writes the shard from there. The files are the same either way. A chunk over the
   task budget is refused before any work, with a Fix that names `chunks=`.
 
@@ -279,8 +279,8 @@ other dimensions' values must be labels the store has.
   made from"; leave `complete` off for a table that skips whole units. Holes inside a unit are still fill values.
   An `append` takes `coords` for the append dimension only: the new labels, after the store's last. The other
   dimensions use the store's labels. `coords` and `complete=True` together plan an append with no scan. Without
-  them, an append reads the table once for the new labels, and a second time for its units unless the table has
-  one row per cell of the grid. A scan reads only the dimension columns, but a Python data source such as
+  them, an append reads the table once for the new labels. It reads the table a second time for its units, unless
+  the table has one row per cell of the grid. A scan reads only the dimension columns, but a Python data source such as
   `gbx_zarr_read(output="table")` cannot skip the other columns, so it still reads every variable.
 - **Missing cells** read as the array's fill value (NaN for floats, 0 for integers and booleans). A null value is
   a missing cell. A null label is refused.

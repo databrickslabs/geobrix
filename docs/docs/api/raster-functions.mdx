@@ -1650,7 +1650,7 @@ GROUP BY group_key
 The Python call `rx.rst_merge_agg(...)` returns the same `BINARY` column. Pass it to `rx.rst_fromcontent(col, "GTiff")` for a tile.
 :::
 
-Merge tiles per group. On Serverless a task holds its whole group at once, so a group whose tiles add up (decoded) to more than the task's memory cap is refused before the merge, with a `Fix:` that names `merge_by_key(method="vrt")`, which reads the tiles as files; the Python call returns the group's error tile and the SQL call raises.
+Merge tiles per group. On Serverless a task holds its whole group at once. A group whose tiles add up (decoded) to more than the task's memory cap is refused before the merge. The `Fix:` names `merge_by_key(method="vrt")`, which reads the tiles as files. The Python call returns the group's error tile, and the SQL call raises.
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg mosaic invocation._
 

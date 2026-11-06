@@ -1512,3 +1512,56 @@ def test_a_serverless_task_refuses_a_group_over_its_cap_before_the_merge(monkeyp
         None, 20 * 1024
     ):  # not Serverless: judged by the streaming merge, not this gate
         assert fx._merge_agg_bytes(group, False)
+
+
+def test_the_force_output_merge_agg_refuses_a_serverless_group_over_its_cap(
+    monkeypatch,
+):
+    """`rx.rst_merge_agg` runs the force-output variant: it answers the group's error tile, naming the VRT route, and
+    off Serverless the same group merges.
+    """
+    import pandas as pd
+
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    left = _ras(np.full((64, 64), 3), ulx=0.0, uly=64.0)
+    right = _ras(np.full((64, 64), 4), ulx=64.0, uly=64.0)
+    group = pd.Series([{"raster": left}, {"raster": right}])
+    none = pd.Series([None, None])
+    monkeypatch.setattr(fx, "_serverless_task", lambda: True)
+    with _gdal_policy.carried(None, 20 * 1024):
+        out = fx._merge_agg_v2_udf.func(group, none, none)
+        assert out.startswith(fx._ERROR_MAGIC)
+        text = out.decode("utf-8", "replace")
+        assert "merge_by_key(" in text and "method=" in text and "vrt" in text, text
+    monkeypatch.setattr(fx, "_serverless_task", lambda: False)
+    with _gdal_policy.carried(None, 20 * 1024):
+        merged = fx._merge_agg_v2_udf.func(group, none, none)
+        assert merged and not merged.startswith(fx._ERROR_MAGIC)
+
+
+@pytest.mark.parametrize(
+    "version, carried, expected",
+    [
+        ("client.4.1", None, True),
+        (
+            "client.4.1",
+            1 << 20,
+            False,
+        ),  # a session that carried its cap: not a Serverless budget
+        ("19.0", None, False),
+    ],
+)
+def test_serverless_task_is_the_serverless_runtime_without_a_carried_cap(
+    monkeypatch, version, carried, expected
+):
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", version)
+    if carried is None:
+        assert fx._serverless_task() is expected
+    else:
+        with _gdal_policy.carried(None, carried):
+            assert fx._serverless_task() is expected

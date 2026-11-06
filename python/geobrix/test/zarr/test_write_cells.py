@@ -1074,6 +1074,66 @@ def test_the_sink_writes_a_shard_when_the_next_one_begins(spark_delta, tmp_path)
     assert (tmp_path / "out" / "t2m" / "c" / "1" / "0" / "0").exists()
 
 
+def test_the_sink_refuses_a_chunk_of_a_shard_it_has_written(spark_delta, tmp_path):
+    """Fail-on-revert: shard A, B, then A again would rewrite A without a merge and lose
+    its first chunks silently; the sink refuses instead."""
+    from databricks.labs.gbx.zarr import _write_plain as WP
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    meta = _meta_of(spark_delta, tmp_path, _dataset())
+    sink = WP.PlainSink(str(tmp_path / "out"), stream=True)
+    cps = meta.shard.cps
+    a0, a1, b = (0, 0, 0), (0, 0, 1), (cps[0], 0, 0)
+    sink.add(meta, a0, "k", b"a" * 10, False)
+    sink.add(meta, b, "k", b"b" * 10, False)  # A is written now
+    with pytest.raises(ZarrError, match="not contiguous") as e:
+        sink.add(meta, a1, "k", b"c" * 10, False)
+    assert e.value.fix
+    sink.abort()
+
+
+def test_contiguous_chunks_of_a_streamed_shard_write_the_same_shard(
+    spark_delta, tmp_path
+):
+    """The normal order (all chunks of A, then of B) is untouched by the guard: a streamed
+    sink writes byte-equal shards to a sink that holds them in memory."""
+    from databricks.labs.gbx.zarr import _write_plain as WP
+
+    meta = _meta_of(spark_delta, tmp_path, _dataset())
+    cps = meta.shard.cps
+    chunks = [(0, 0, 0), (0, 0, 1), (0, 1, 0), (cps[0], 0, 0), (cps[0], 0, 1)]
+    out = {}
+    for label, stream in (("streamed", True), ("whole", False)):
+        sink = WP.PlainSink(str(tmp_path / label), stream=stream)
+        for i, c in enumerate(chunks):
+            sink.add(meta, c, "k", bytes([i + 1]) * (10 + i), False)
+        sink.flush()
+        out[label] = _objects(tmp_path / label, "t2m")
+    assert out["streamed"] and out["streamed"] == out["whole"]
+
+
+def test_the_sink_builds_one_held_per_shard_not_per_chunk(
+    spark_delta, tmp_path, monkeypatch
+):
+    """Fail-on-revert: a spool (TemporaryFile) is made when a shard is new, not for each
+    chunk of a shard that is already pending."""
+    import tempfile
+
+    from databricks.labs.gbx.zarr import _write_plain as WP
+
+    made = []
+    real = tempfile.TemporaryFile
+    monkeypatch.setattr(
+        WP.tempfile, "TemporaryFile", lambda *a, **k: made.append(1) or real(*a, **k)
+    )
+    meta = _meta_of(spark_delta, tmp_path, _dataset())
+    sink = WP.PlainSink(str(tmp_path / "out"), stream=True)
+    for i, c in enumerate([(0, 0, 0), (0, 0, 1), (0, 1, 0), (0, 1, 1)]):
+        sink.add(meta, c, "k", b"x" * (i + 1), False)
+    assert len(made) == 1  # four chunks, one shard
+    sink.flush()
+
+
 def _meta_of(spark, tmp_path, ds):
     from databricks.labs.gbx.zarr._write_plain import read_plain_docs
 

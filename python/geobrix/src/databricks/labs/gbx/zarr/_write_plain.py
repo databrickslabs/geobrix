@@ -236,6 +236,8 @@ class PlainSink:
         self.bytes = 0
         self.chunks = 0
         self._pending: dict[tuple[str, str], tuple[ArrayMeta, _Held]] = {}
+        # (array, shard key) of the streamed shards this task has written: keys only
+        self._written: set[tuple[str, str]] = set()
 
     def add(self, meta: ArrayMeta, chunk, key: str, data: bytes, empty: bool) -> int:
         """Take one encoded chunk; the bytes it will occupy (0 for fill that is left out)."""
@@ -249,13 +251,24 @@ class PlainSink:
             return n
         shard_key = meta.key_encoding.chunk_key(shard_of(tuple(chunk), meta.shard.cps))
         streamed = self._streamed(meta.name)
+        key_of = (meta.name, shard_key)
         if streamed:
+            if key_of in self._written:
+                raise ZarrError(
+                    f"a chunk of shard {meta.name}/{shard_key} arrived after that shard "
+                    "was written: the input's chunks of a shard were not contiguous, and "
+                    "writing it again would drop the chunks it already held.",
+                    fix="order the input by shard, then by chunk within the shard "
+                    "(the write path does this itself; a custom block source must too)",
+                )
             done = [k for k in self._pending if k[0] == meta.name and k[1] != shard_key]
             if done:
+                self._written.update(done)
                 self._write({k: self._pending.pop(k) for k in done})
-        held = self._pending.setdefault(
-            (meta.name, shard_key), (meta, _Held(meta, disk=streamed))
-        )[1]
+        entry = self._pending.get(key_of)
+        if entry is None:
+            entry = self._pending[key_of] = (meta, _Held(meta, disk=streamed))
+        held = entry[1]
         held.add(inner_index(tuple(chunk), meta.shard.cps), data, empty)
         return len(data)
 

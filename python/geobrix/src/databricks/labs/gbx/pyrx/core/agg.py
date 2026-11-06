@@ -19,7 +19,7 @@ import os
 import shutil
 import warnings
 from contextlib import contextmanager
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import numpy as np
 import shapely.wkb
@@ -683,7 +683,7 @@ class ArrayOverBudget(ReadCapRefused):
     that row's error tile and its Fix."""
 
 
-def refuse_group_over_task_cap(n: int, decoded: int, cap: int = None) -> None:
+def refuse_group_over_task_cap(n: int, decoded: int, cap: Optional[int] = None) -> None:
     """Raise :class:`ReadCapRefused` when the *n* members of a group, *decoded* bytes together, are over *cap* (the read
     cap the task carries, else this worker's own). A Serverless task holds the whole group in one process before any
     merge begins, so the merge cannot bound it and the task would end in an out-of-memory kill: the group is refused

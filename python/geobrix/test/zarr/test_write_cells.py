@@ -427,13 +427,13 @@ def _prepare(spark, df, **kw):
 
 def test_one_partition_per_unit_touched(spark_delta, no_hooks, monkeypatch):
     """48 h x 10 x 12 in shards of 24 x 10 x 12: two units, so two partitions, however
-    wide the session is."""
+    wide the session is; a session one slot wide shares one partition between them."""
     ds = _dataset()
     prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
     assert prep.frame.rdd.getNumPartitions() == 2
     monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark: 1)
     prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
-    assert prep.frame.rdd.getNumPartitions() == 2
+    assert prep.frame.rdd.getNumPartitions() == 1
 
 
 def _spread(spark, slots, n):
@@ -455,8 +455,10 @@ def test_slot_keys_shuffle_to_their_own_partition(spark_delta, n):
 
 
 def test_units_spread_over_partitions_evenly(spark_delta, no_hooks, monkeypatch):
-    """Fail-on-revert: the 16 units of a create reach the merge in 16 partitions, one unit
-    each; with the session at one slot, 4 partitions hold 4 units each."""
+    """Fail-on-revert: the 16 units of a create reach the merge in as many partitions as the
+    session is wide (a partition per unit while there are fewer units than that), and the
+    units share them in equal rounds: every partition holds the same number of units, give
+    or take one."""
     from pyspark.sql import functions as F
 
     DataFrame = type(spark_delta.range(1))
@@ -470,7 +472,7 @@ def test_units_spread_over_partitions_evenly(spark_delta, no_hooks, monkeypatch)
 
     monkeypatch.setattr(DataFrame, "repartition", spy)
     ds = _dataset()
-    for par, want in ((64, 16), (1, 4)):
+    for par, want in ((64, 16), (16, 16), (6, 6), (1, 1)):
         seen.clear()
         monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark, par=par: par)
         args = _write_cells.CellsArgs(coords=_coords(ds), chunks=CHUNKS, shards=CHUNKS)
@@ -485,7 +487,7 @@ def test_units_spread_over_partitions_evenly(spark_delta, no_hooks, monkeypatch)
             args,
         )
         ((frame, n),) = seen
-        assert n == min(16, 4 * par)
+        assert n == want
         per = (
             frame.repartition(n, "__p")
             .groupBy(F.spark_partition_id().alias("t"))
@@ -494,7 +496,66 @@ def test_units_spread_over_partitions_evenly(spark_delta, no_hooks, monkeypatch)
         )
         assert sum(r["u"] for r in per) == 16
         assert max(r["u"] for r in per) == -(-16 // n)
+        assert min(r["u"] for r in per) >= 16 // n
         assert len(per) == n
+
+
+@pytest.mark.parametrize(
+    "shards,par,width",
+    [
+        (1, 64, 1),
+        (60, 64, 60),  # fewer shards than slots: a task each
+        (64, 64, 64),
+        (183, 64, 61),  # three rounds of 61, not 183 tasks (nor 64 of 2 and 3 shards)
+        (65, 64, 33),
+        (300, 64, 60),
+        (183, 200, 183),
+        (7, 1, 1),
+    ],
+)
+def test_merge_slots_are_bounded_by_the_session_and_filled_in_equal_rounds(
+    shards, par, width
+):
+    """Fail-on-revert: a store of many small shards gets the session's width in merge tasks,
+    not a task per shard (183 tasks of a county store, each paying a task's fixed cost, were
+    a third slower than 61), and the slots are filled evenly: every one holds the same
+    number of shards, give or take one, and every shard has exactly one."""
+    n = _write_cells._shuffle_width(shards, par)
+    assert n == width
+    assert 1 <= n <= max(1, par * _write_cells._SLOTS_PER_PARALLELISM)
+    held = np.bincount(
+        np.arange(shards) % n, minlength=n
+    )  # the rank a shard is dealt by
+    assert held.sum() == shards
+    assert held.max() - held.min() <= 1
+    assert held.max() == -(-shards // max(1, par * _write_cells._SLOTS_PER_PARALLELISM))
+
+
+def test_shards_sharing_a_slot_write_the_same_store_as_a_slot_each(
+    spark_delta, tmp_path, no_hooks, monkeypatch
+):
+    """The 16 chunk-shards of a cube written by 16 merge tasks and by 3 (several shards a
+    task, each built and written in turn): the files are equal byte for byte."""
+    ds = _dataset()
+    roots = {}
+    for par in (64, 3):
+        monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark, par=par: par)
+        roots[par] = tmp_path / f"{par}.zarr"
+        gbx_zarr_write(
+            _cells(spark_delta, ds),
+            str(roots[par]),
+            transactional=False,
+            dim_cols=DIM_COLS,
+            coords=_coords(ds),
+            complete=True,
+            chunks=CHUNKS,
+            shards=CHUNKS,
+            spark=spark_delta,
+        )
+    for n in ("t2m", "u10"):
+        wide, narrow = _objects(roots[64], n), _objects(roots[3], n)
+        assert wide and wide == narrow
+    np.testing.assert_array_equal(_plain_read(roots[3])["t2m"].values, ds["t2m"].values)
 
 
 def test_complete_coords_skip_the_survey_of_the_table(
@@ -1228,6 +1289,44 @@ def test_a_shard_is_whole_exactly_when_all_its_variables_fit_the_budget():
 def test_an_unsharded_array_is_whole_at_its_chunk():
     g = _group(shard=(12, 5, 6))
     assert _write_cells._choose_unit(g, 1 << 30).unit == (12, 5, 6)
+
+
+def test_a_shard_over_the_whole_shard_cap_is_built_a_chunk_at_a_time_though_the_budget_allows(
+    monkeypatch,
+):
+    """Fail-on-revert: a task with room for a big shard (a classic cluster's 1.5 GiB) still
+    builds one past ``_WHOLE_SHARD_MAX`` a chunk at a time (249 MB shards took 374 s whole,
+    285 s a chunk at a time), and one at the cap whole."""
+    g = _group()
+    need = 24 * 10 * 12 * (4 + 4 + 4)
+    monkeypatch.setattr(_write_cells, "_WHOLE_SHARD_MAX", need)
+    assert _write_cells._choose_unit(g, 1 << 30).whole
+    monkeypatch.setattr(_write_cells, "_WHOLE_SHARD_MAX", need - 1)
+    chunked = _write_cells._choose_unit(g, 1 << 30)
+    assert not chunked.whole and chunked.unit == g.unit
+    # the budget still binds under the cap
+    monkeypatch.setattr(_write_cells, "_WHOLE_SHARD_MAX", 1 << 40)
+    assert not _write_cells._choose_unit(g, need - 1).whole
+
+
+def test_the_default_whole_shard_cap_keeps_the_ladders_small_shards_whole():
+    """The unit of the ladder stores' four-variable writes under a classic cluster's budget:
+    a county shard (168 h x 101 x 101, 34 MB with its copy) and a global 2 GB one (19 h x
+    360 x 360, 49 MB) stay whole; a global 10 GB one (96 h x 360 x 360, 249 MB) does not.
+    """
+    cases = (
+        ((168, 101, 101), (24, 101, 101), (4380, 101, 101), True),
+        ((168, 360, 360), (24, 90, 90), (19, 1801, 3600), True),
+        ((168, 360, 360), (24, 90, 90), (96, 1801, 3600), False),
+    )
+    for shard, chunk, shape, whole in cases:
+        g = replace(
+            _group(dtypes=("float32",) * 4, shard=shard, chunk=chunk),
+            nu=tuple(-(-n // c) for n, c in zip(shape, chunk)),
+            wlo=(0, 0, 0),
+            whi=shape,
+        )
+        assert _write_cells._choose_unit(g, 1536 << 20).whole is whole
 
 
 def test_both_ways_of_building_a_shard_write_the_same_files(

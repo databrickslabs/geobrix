@@ -14,20 +14,22 @@ needs no position pass over the blocks, and the data pass reads the table once.
 
 **The data pass: combine, then one shuffle.** The driver first picks, per group of variables
 that share a layout, the *unit* a task builds (``_choose_unit``): the whole shard when the
-shard of all the group's variables fits the task budget, else one inner chunk at a time. Each
+shard of all the group's variables is small (at most ``_WHOLE_SHARD_MAX``) and fits the task
+budget, else one inner chunk at a time. Each
 input partition locates its cells and gathers them by that unit into *partial blocks* (a dense
 block with a mask, or the cells as they came when few), holding at most half the task budget
 and shipping the oldest first. The shuffle moves those partial blocks, keyed by unit, not a row
 per cell: a table that arrives roughly in unit order (``gbx_zarr_read``'s) ships each unit in
 one or a few pieces. The blocks are repartitioned so that each partition owns whole shards, as
-evenly as the shards allow (one partition per shard touched, up to four per slot of the
-session's parallelism), sorted within the partition, and a streaming merge builds one unit at a
+evenly as the shards allow (one partition per shard touched, up to one per slot of the
+session's parallelism; more shards than that share the partitions in equal rounds), sorted within the partition, and a streaming merge builds one unit at a
 time, dense, with the fill value where no cell came. Its block goes straight to the writer's
-pack stage, which encodes it and writes the shard it belongs to. A shard that does not fit the
-task's memory is written one inner chunk at a time (a plain store spools the shard's chunks on
+pack stage, which encodes it and writes the shard it belongs to. A shard that is large or does not
+fit the task's memory is written one inner chunk at a time (a plain store spools the shard's chunks on
 local disk and writes it from there): a chunk is then the most a task holds, plus the partials
-of that chunk in the batch in hand, whatever the size of the shard. A shard that fits is built
-and written whole, which has fewer blocks and less to move; both make the same files.
+of that chunk in the batch in hand, whatever the size of the shard. A small shard that fits is built
+and written whole, which has fewer blocks to make; a large one is cheaper to stream (its whole
+partials ship about a third more bytes through the shuffle). Both make the same files.
 
 **Rules.** A cell missing from the table reads as the fill value. Two cells at one position
 refuse the write (the task that meets them, on the map side or the merge, raises ``ZarrError``) before anything is
@@ -59,6 +61,7 @@ from databricks.labs.gbx.zarr.errors import ZarrError, ZarrGridMismatch, ZarrUns
 __all__ = ["CellsArgs", "CellsPrepared", "check_columns", "prepare"]
 
 _MIB = 1 << 20
+_WHOLE_SHARD_MAX = 64 * _MIB  # the largest shard (with its copy) a task builds whole
 _MAX_LABELS = 20_000_000  # distinct labels of one dimension the driver will hold
 _LAT = {"units": "degrees_north", "standard_name": "latitude"}
 _LON = {"units": "degrees_east", "standard_name": "longitude"}
@@ -485,14 +488,21 @@ def _partial_struct(g: Group):
 # the units touched, modulo the partition count) and shuffles by a column whose hash is that
 # slot, so partitions hold the same number of units, give or take one.
 
-_SLOTS_PER_PARALLELISM = (
-    4  # more partitions than slots keeps a task to one unit when units are many
-)
+_SLOTS_PER_PARALLELISM = 1  # merge slots per slot of the session's parallelism: shards beyond them share a slot
 
 
 def _shuffle_width(shards: int, parallelism: int) -> int:
-    """Partitions of a group's shuffle: one per shard, up to ``_SLOTS_PER_PARALLELISM`` per slot."""
-    return max(1, min(shards, parallelism * _SLOTS_PER_PARALLELISM))
+    """Merge slots of a group's shuffle: a task per shard up to ``parallelism`` x
+    ``_SLOTS_PER_PARALLELISM``, then the shards share the slots in equal rounds. A slot is a
+    task, and a task costs a fixed amount whatever it builds (a worker's start, its pack files,
+    the fetch of every map side's block for it), so a store of many small shards gets the
+    session's width, not a task per shard; the shards are then dealt to the slots by rank, so
+    each holds the same number of them, give or take one."""
+    cap = max(1, parallelism * _SLOTS_PER_PARALLELISM)
+    if shards <= cap:
+        return max(1, shards)
+    rounds = -(-shards // cap)
+    return -(-shards // rounds)
 
 
 def _spark_hash_int(x: np.ndarray) -> np.ndarray:
@@ -906,11 +916,12 @@ def _by_shard(g: Group) -> Group:
 
 def _choose_unit(g: Group, budget: int) -> Group:
     """The unit a task builds for ``g``: its whole shard when the shard of all the group's
-    variables (the dense arrays and one copy) fits ``budget`` (one block, one write, as
-    fast as it gets), else one inner chunk at a time, in shard order. The choice is the
-    driver's, from the plan alone, so every task of a group builds the same way."""
+    variables (the dense arrays and one copy) fits ``budget`` and is no bigger than
+    ``_WHOLE_SHARD_MAX`` (one block, one write, as fast as it gets for a small shard), else
+    one inner chunk at a time, in shard order. The choice is the driver's, from the plan
+    alone, so every task of a group builds the same way."""
     shard = _by_shard(g)
-    if _unit_bytes(shard) <= budget:
+    if g.part == g.unit or _unit_bytes(shard) <= min(budget, _WHOLE_SHARD_MAX):
         return shard
     return replace(g, whole=False)
 

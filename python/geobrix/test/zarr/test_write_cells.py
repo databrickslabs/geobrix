@@ -422,17 +422,76 @@ def _prepare(spark, df, **kw):
     )
 
 
-def test_one_partition_per_unit_touched_capped_by_the_parallelism(
-    spark_delta, no_hooks, monkeypatch
-):
-    """48 h x 10 x 12 in shards of 24 x 10 x 12: two units, so two partitions; with the
-    parallelism at 1 the shuffle has one."""
+def test_one_partition_per_unit_touched(spark_delta, no_hooks, monkeypatch):
+    """48 h x 10 x 12 in shards of 24 x 10 x 12: two units, so two partitions, however
+    wide the session is."""
     ds = _dataset()
     prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
     assert prep.frame.rdd.getNumPartitions() == 2
     monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark: 1)
     prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
-    assert prep.frame.rdd.getNumPartitions() == 1
+    assert prep.frame.rdd.getNumPartitions() == 2
+
+
+def _spread(spark, slots, n):
+    """How many of ``slots`` land on each of ``n`` partitions of a column shuffle."""
+    from pyspark.sql import functions as F
+
+    df = spark.createDataFrame([(int(x),) for x in slots], "p int").repartition(n, "p")
+    rows = df.groupBy(F.spark_partition_id().alias("t")).count().collect()
+    return sorted(r["count"] for r in rows)
+
+
+@pytest.mark.parametrize("n", [1, 7, 60, 64, 150])
+def test_slot_keys_shuffle_to_their_own_partition(spark_delta, n):
+    """Fail-on-revert for the placement: the int whose hash the key table holds for slot j
+    reaches partition j of a Spark column shuffle, so n slots fill n partitions one each
+    (a hash of the unit key leaves about a third of them empty)."""
+    keys = _write_cells._slot_keys(n)
+    assert _spread(spark_delta, keys, n) == [1] * n
+
+
+def test_units_spread_over_partitions_evenly(spark_delta, no_hooks, monkeypatch):
+    """Fail-on-revert: the 16 units of a create reach the merge in 16 partitions, one unit
+    each; with the session at one slot, 4 partitions hold 4 units each."""
+    from pyspark.sql import functions as F
+
+    DataFrame = type(spark_delta.range(1))
+    seen = []
+    real = DataFrame.repartition
+
+    def spy(self, n, *cols):
+        if cols == ("__p",):
+            seen.append((self, n))
+        return real(self, n, *cols)
+
+    monkeypatch.setattr(DataFrame, "repartition", spy)
+    ds = _dataset()
+    for par, want in ((64, 16), (1, 4)):
+        seen.clear()
+        monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark, par=par: par)
+        args = _write_cells.CellsArgs(coords=_coords(ds), chunks=CHUNKS, shards=CHUNKS)
+        _write._prepare_tiles(
+            spark_delta,
+            _cells(spark_delta, ds),
+            (None, DIM_COLS),
+            "create",
+            None,
+            None,
+            None,
+            args,
+        )
+        ((frame, n),) = seen
+        assert n == min(16, 4 * par)
+        per = (
+            frame.repartition(n, "__p")
+            .groupBy(F.spark_partition_id().alias("t"))
+            .agg(F.countDistinct("__k").alias("u"))
+            .collect()
+        )
+        assert sum(r["u"] for r in per) == 16
+        assert max(r["u"] for r in per) == -(-16 // n)
+        assert len(per) == n
 
 
 def test_complete_coords_skip_the_survey_of_the_table(
@@ -499,7 +558,9 @@ def test_a_sparse_table_plans_only_the_units_it_touches(spark_delta, no_hooks):
         coords=_coords(ds),
     )
     seen = prep.seen.to_pandas()
-    assert set(seen[seen.variable == "t2m"]["start"].map(tuple)) == {(0, 0, 0)}
+    # the 8 chunks of the first shard, and one partition: the other shard is not planned
+    want = {(t, y, x) for t in (0, 12) for y in (0, 5) for x in (0, 6)}
+    assert set(seen[seen.variable == "t2m"]["start"].map(tuple)) == want
     assert prep.frame.rdd.getNumPartitions() == 1
 
 
@@ -527,7 +588,7 @@ def test_a_create_is_one_shuffle_and_stages_nothing(
     assert made == {table}
 
 
-def test_a_unit_over_the_task_budget_is_refused_naming_the_shards(
+def test_a_chunk_over_the_task_budget_is_refused_naming_the_chunks(
     spark_delta, no_hooks, monkeypatch
 ):
     ds = _dataset(hours=24)
@@ -538,7 +599,7 @@ def test_a_unit_over_the_task_budget_is_refused_naming_the_shards(
         shards={"time": 24, "latitude": 10, "longitude": 12},
     )
     monkeypatch.setattr(_write_cells, "_unit_bytes", lambda g: 2 << 20)
-    with pytest.raises(ZarrError, match=r"one storage unit.*Fix: use smaller shards"):
+    with pytest.raises(ZarrError, match=r"one chunk.*Fix: use smaller chunks"):
         _write._prepare_tiles(
             spark_delta,
             _cells(spark_delta, ds),
@@ -599,14 +660,14 @@ def test_an_offgrid_append_from_few_input_partitions_runs_in_a_task_per_block(
 
 @pytest.fixture
 def shuffled_rows(monkeypatch, spark_delta):
-    """The row counts entering each shuffle by unit key (``repartition(n, "__k")``), recorded
+    """The row counts entering each shuffle by unit (``repartition(n, "__p")``), recorded
     as the plan is built."""
     DataFrame = type(spark_delta.range(1))
     seen = []
     real = DataFrame.repartition
 
     def spy(self, n, *cols):
-        if cols == ("__k",):
+        if cols == ("__p",):
             seen.append(self.count())
         return real(self, n, *cols)
 
@@ -623,12 +684,13 @@ def _in_chunk_order(spark, ds, names=("t2m", "u10")):
 def test_the_shuffle_moves_partial_blocks_not_cells(
     spark_delta, no_hooks, shuffled_rows
 ):
-    """Fail-on-revert for the combine: 48 h x 10 x 12 cells in two shards reach the shuffle as
-    two partial blocks (one per unit the partition holds), not as 5760 rows."""
+    """Fail-on-revert for the combine: 48 h x 10 x 12 cells in two shards of 8 chunks each reach
+    the shuffle as 16 partial blocks (one per chunk the partition holds), not as 5760 rows.
+    """
     ds = _dataset()
     prep = _prepare(spark_delta, _in_chunk_order(spark_delta, ds), coords=_coords(ds))
     assert prep.frame.rdd.getNumPartitions() == 2
-    assert shuffled_rows == [2]
+    assert shuffled_rows == [16]
     assert ds["t2m"].size == 5760
 
 
@@ -843,3 +905,167 @@ def test_an_append_takes_coords_for_the_append_dimension_only(
             coords=_coords(day),
             spark=spark_delta,
         )
+
+
+# --- a shard is built one inner chunk at a time -----------------------------------------------
+
+
+def _big(hours=48, ny=80, nx=96):
+    """A cube whose shards (48 x 80 x 96 float32, two variables) are over a 1 MiB task."""
+    return _dataset(hours=hours, ny=ny, nx=nx)
+
+
+BIG_SHARDS = {"time": 48, "latitude": 80, "longitude": 96}
+
+
+def test_the_blocks_of_a_cells_write_are_single_chunks_in_shard_order(
+    spark_delta, no_hooks, monkeypatch
+):
+    """Fail-on-revert: with a task budget under one shard, the data pass makes one block per
+    chunk and variable, each within the budget, and a task's blocks come shard by shard.
+    """
+    ds = _big()
+    monkeypatch.setattr(_write, "_budget", lambda: 1 << 20)
+    args = _write_cells.CellsArgs(coords=_coords(ds), chunks=CHUNKS, shards=BIG_SHARDS)
+    prep = _write._prepare_tiles(
+        spark_delta,
+        _cells(spark_delta, ds, parts=4),
+        (None, DIM_COLS),
+        "create",
+        None,
+        None,
+        None,
+        args,
+    )
+    blocks = [r for r in prep.frame.collect()]
+    chunks = 4 * 16 * 16
+    assert len(blocks) == 2 * chunks
+    assert max(int(np.prod(r["shape"])) * 4 for r in blocks) <= (1 << 20)
+    assert {tuple(r["shape"]) for r in blocks} == {(12, 5, 6)}
+    assert shard_order_holds(blocks)
+
+
+def shard_order_holds(blocks) -> bool:
+    """Within one task's rows (collected in partition order) a shard's blocks are together."""
+    seen, last = set(), None
+    for r in blocks:
+        t, y, x = r["start"]
+        shard = (t // 48, y // 80, x // 96)
+        if shard != last and shard in seen:
+            return False
+        seen.add(shard)
+        last = shard
+    return True
+
+
+@pytest.mark.parametrize("plain", [False, True], ids=["manifest", "plain"])
+def test_a_shard_over_the_task_budget_writes_and_reads_back_equal(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch, plain
+):
+    """A shard of 4.4 MiB in a 1 MiB task: it used to be refused; it is now built chunk by
+    chunk and the store holds every cell."""
+    ds = _big()
+    monkeypatch.setattr(_write, "_budget", lambda: 1 << 20)
+    if plain:
+        out = tmp_path / "big.zarr"
+        gbx_zarr_write(
+            _cells(spark_delta, ds, parts=4),
+            str(out),
+            transactional=False,
+            dim_cols=DIM_COLS,
+            coords=_coords(ds),
+            complete=True,
+            chunks=CHUNKS,
+            shards=BIG_SHARDS,
+            spark=spark_delta,
+        )
+        got = _plain_read(out)
+        for n in ("t2m", "u10"):
+            np.testing.assert_array_equal(got[n].values, ds[n].values)
+    else:
+        table, _, _ = _create(
+            spark_delta,
+            drop,
+            tmp_path,
+            _cells(spark_delta, ds, parts=4),
+            label="big",
+            dim_cols=DIM_COLS,
+            coords=_coords(ds),
+            shards=BIG_SHARDS,
+        )
+        for n in ("t2m", "u10"):
+            np.testing.assert_array_equal(_read(spark_delta, table, n), ds[n].values)
+
+
+def _objects(root, name):
+    base = root / name
+    return {
+        p.relative_to(base).as_posix(): p.read_bytes()
+        for p in sorted(base.rglob("*"))
+        if p.is_file() and p.name != "zarr.json"
+    }
+
+
+def test_a_plain_shard_from_cells_is_byte_equal_to_the_shard_the_cube_writes(
+    spark_delta, tmp_path, no_hooks
+):
+    """The shard files a cells write puts down (chunks spooled, then written one at a time)
+    are the bytes the cube's own write makes (the assembler path)."""
+    ds = _dataset()
+    cells, cube = tmp_path / "cells.zarr", tmp_path / "cube.zarr"
+    gbx_zarr_write(
+        _cells(spark_delta, ds),
+        str(cells),
+        transactional=False,
+        dim_cols=DIM_COLS,
+        coords=_coords(ds),
+        complete=True,
+        chunks=CHUNKS,
+        shards=SHARDS,
+        spark=spark_delta,
+    )
+    gbx_zarr_write(
+        ds,
+        str(cube),
+        transactional=False,
+        chunks=CHUNKS,
+        shards=SHARDS,
+        spark=spark_delta,
+    )
+    for n in ("t2m", "u10"):
+        mine, theirs = _objects(cells, n), _objects(cube, n)
+        assert sorted(mine) == sorted(theirs) and mine
+        assert mine == theirs
+
+
+def test_the_sink_writes_a_shard_when_the_next_one_begins(spark_delta, tmp_path):
+    """Fail-on-revert for streaming: chunks come shard by shard, so the first shard is on
+    disk before the second one is complete, and a held shard is not in memory."""
+    from databricks.labs.gbx.zarr import _write_plain as WP
+
+    meta = _meta_of(spark_delta, tmp_path, _dataset())
+    sink = WP.PlainSink(str(tmp_path / "out"), stream=True)
+    cps = meta.shard.cps
+    first, second = (0, 0, 0), (cps[0], 0, 0)
+    sink.add(meta, first, "k", b"a" * 10, False)
+    shard_file = tmp_path / "out" / "t2m" / "c" / "0" / "0" / "0"
+    assert not shard_file.exists()
+    sink.add(meta, second, "k", b"b" * 10, False)  # a chunk of the next shard
+    assert shard_file.exists()
+    sink.flush()
+    assert (tmp_path / "out" / "t2m" / "c" / "1" / "0" / "0").exists()
+
+
+def _meta_of(spark, tmp_path, ds):
+    from databricks.labs.gbx.zarr._write_plain import read_plain_docs
+
+    out = tmp_path / "meta.zarr"
+    gbx_zarr_write(
+        ds,
+        str(out),
+        transactional=False,
+        chunks=CHUNKS,
+        shards=SHARDS,
+        spark=spark,
+    )
+    return read_plain_docs(str(out)).arrays["t2m"]

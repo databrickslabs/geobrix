@@ -143,6 +143,7 @@ class TaskConfig:
     plain: bool = (
         False  # the objects of a plain store, not pack files and manifest rows
     )
+    chunk_ordered: bool = False  # the blocks are chunks, shard by shard (a cells write)
 
 
 # --- shared helpers ----------------------------------------------------------------------
@@ -793,7 +794,7 @@ def pack_function(cfg: TaskConfig):
     def run(batches):
         trace = _Trace() if cfg.trace else None
         packs = None if cfg.plain else _Packs(cfg, trace)
-        sink = PlainSink(cfg.root) if cfg.plain else None
+        sink = PlainSink(cfg.root, stream=cfg.chunk_ordered) if cfg.plain else None
         out: list[dict] = []
         seen = {"count": 0, "hash": 0, "region": {}, "variables": set()}
         try:
@@ -811,10 +812,12 @@ def pack_function(cfg: TaskConfig):
                     seen["hash"] = (seen["hash"] + h) & _HASH_MASK
                     for piece in _block_pieces(cfg, row, data[i].as_buffer(), seen):
                         out.append(_packed(cfg, packs, piece, sink))
-                    if sink is not None:
+                    if sink is not None and not cfg.chunk_ordered:
                         sink.flush()  # an aligned block holds every chunk of its shards
             if packs is not None:
                 packs.finish()
+            if sink is not None:
+                sink.flush()  # the last shard of a chunk-ordered input
         except BaseException:
             if packs is not None:
                 packs.abort()

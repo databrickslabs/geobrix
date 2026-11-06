@@ -13,16 +13,18 @@ these the driver plans every block: one per variable and unit, so a create or an
 needs no position pass over the blocks, and the data pass reads the table once.
 
 **The data pass: combine, then one shuffle.** Each input partition locates its cells and
-gathers them by storage unit into *partial blocks* (a dense block with a mask, or the cells
+gathers them by inner chunk into *partial blocks* (a dense block with a mask, or the cells
 as they came when few), holding at most half the task budget and shipping the oldest first.
-The shuffle moves those partial blocks, keyed by unit, not a row per cell: a table that
-arrives roughly in chunk order (``gbx_zarr_read``'s) ships each unit in one or a few pieces.
-The blocks are repartitioned by the unit key (one partition per unit touched, no more than
-the session's parallelism), sorted within the partition, and a streaming merge builds one
-unit at a time, dense, with the fill value where no cell came. Its block (a unit of one
-variable) goes straight to the writer's pack stage, which encodes the chunks and writes the
-shard where the block was made. A unit is the most a task holds, plus the partials of that
-unit in the batch in hand.
+The shuffle moves those partial blocks, keyed by chunk, not a row per cell: a table that
+arrives roughly in chunk order (``gbx_zarr_read``'s) ships each chunk in one or a few pieces.
+The blocks are repartitioned so that each partition owns whole shards, as evenly as the shards
+allow (one partition per shard touched, up to four per slot of the session's parallelism),
+sorted within the partition by shard and chunk, and a streaming merge builds one inner chunk at
+a time, dense, with the fill value where no cell came. Its block (a chunk of one variable) goes
+straight to the writer's pack stage, which encodes it and adds it to the shard it belongs to
+(a plain store spools the shard's chunks on local disk and writes it from there, one chunk at a
+time). A chunk is the most a task holds, plus the partials of that chunk in the batch in hand,
+whatever the size of the shard.
 
 **Rules.** A cell missing from the table reads as the fill value. Two cells at one position
 refuse the write (the task that meets them, on the map side or the merge, raises ``ZarrError``) before anything is
@@ -81,6 +83,7 @@ class CellsArgs:
 @dataclass
 class CellsPrepared(Prepared):
     units: dict = field(default_factory=dict)  # variable -> storage unit (a new store)
+    chunk_blocks: bool = True  # the blocks are single chunks, in order by shard
 
 
 # --- the columns ----------------------------------------------------------------------------
@@ -346,8 +349,11 @@ class Group:
     ckinds: tuple  # the kind of each dimension column
     axes: tuple  # Axis per dimension
     offsets: tuple  # added to a label's position: where the labels start in the array
-    unit: tuple  # storage unit per dimension (cells)
-    nu: tuple  # units per dimension in the array after the write
+    unit: tuple  # inner chunk per dimension (cells): what a task builds, one at a time
+    part: (
+        tuple  # storage unit per dimension (cells): a shard, which one task owns whole
+    )
+    nu: tuple  # chunks per dimension in the array after the write
     wlo: tuple  # the window being written, per dimension
     whi: tuple
     vars: tuple
@@ -446,6 +452,12 @@ def _partial_arrow(g: Group) -> pa.Schema:
     return pa.schema(fields + [(f"__v{i}", pa.binary()) for i in range(len(g.vars))])
 
 
+def _placed_arrow(g: Group) -> pa.Schema:
+    """A partial block with the partition ``__p`` it is shuffled to."""
+    base = _partial_arrow(g)
+    return base.append(pa.field("__p", pa.int32())).append(pa.field("__s", pa.int64()))
+
+
 def _partial_struct(g: Group):
     from pyspark.sql import types as T
 
@@ -454,7 +466,63 @@ def _partial_struct(g: Group):
         + [T.StructField("__n", T.LongType())]
         + [T.StructField(n, T.BinaryType()) for n in ("__box", "__m")]
         + [T.StructField(f"__v{i}", T.BinaryType()) for i in range(len(g.vars))]
+        + [T.StructField("__p", T.IntegerType())]
+        + [T.StructField("__s", T.LongType())]
     )
+
+
+# --- placing units on partitions -------------------------------------------------------------
+#
+# ``repartition(n, "__k")`` hashes the key, so n units land on about (1 - 1/e) n partitions
+# and a few partitions hold two or three units while the rest sit empty: the stage then takes
+# as long as its fullest task. The data pass instead gives every unit a slot (its rank among
+# the units touched, modulo the partition count) and shuffles by a column whose hash is that
+# slot, so partitions hold the same number of units, give or take one.
+
+_SLOTS_PER_PARALLELISM = (
+    4  # more partitions than slots keeps a task to one unit when units are many
+)
+
+
+def _shuffle_width(shards: int, parallelism: int) -> int:
+    """Partitions of a group's shuffle: one per shard, up to ``_SLOTS_PER_PARALLELISM`` per slot."""
+    return max(1, min(shards, parallelism * _SLOTS_PER_PARALLELISM))
+
+
+def _spark_hash_int(x: np.ndarray) -> np.ndarray:
+    """Spark's ``hash`` (Murmur3, seed 42) of int32 values, as int32: the function a column
+    shuffle partitions by, taken modulo the partition count."""
+    c1, c2 = np.uint32(0xCC9E2D51), np.uint32(0x1B873593)
+    m = np.uint32(0xFFFFFFFF)
+
+    def rotl(v, r):
+        return ((v << np.uint32(r)) | (v >> np.uint32(32 - r))) & m
+
+    with np.errstate(over="ignore"):
+        k = x.astype(np.int32).view(np.uint32)
+        k = rotl(k * c1, 15) * c2
+        h = rotl(np.uint32(42) ^ k, 13) * np.uint32(5) + np.uint32(0xE6546B64)
+        h = h ^ np.uint32(4)
+        h = (h ^ (h >> np.uint32(16))) * np.uint32(0x85EBCA6B)
+        h = (h ^ (h >> np.uint32(13))) * np.uint32(0xC2B2AE35)
+        h = h ^ (h >> np.uint32(16))
+    return h.view(np.int32)
+
+
+def _slot_keys(n: int) -> np.ndarray:
+    """``keys[j]``: an int32 whose shuffle partition among ``n`` is ``j``."""
+    keys = np.full(n, -1, dtype=np.int64)
+    start, step = 0, max(1024, 8 * n)
+    while (keys < 0).any():
+        cand = np.arange(start, start + step, dtype=np.int64).astype(np.int32)
+        part = np.mod(_spark_hash_int(cand).astype(np.int64), n)
+        # first candidate of each residue not yet found
+        _, first = np.unique(part, return_index=True)
+        for j, i in zip(part[first], first):
+            if keys[j] < 0:
+                keys[j] = cand[i]
+        start += step
+    return keys.astype(np.int32)
 
 
 def _flat_offsets(g: Group, absolute: list) -> np.ndarray:
@@ -605,12 +673,33 @@ class _Partial:
         return pa.RecordBatch.from_arrays(cols, schema=schema)
 
 
-def _combine_function(g: Group, limit: int):
+def _shard_keys(g: Group, keys: np.ndarray) -> np.ndarray:
+    """The key of the storage unit (shard) each chunk key lies in."""
+    per = [p // u for p, u in zip(g.part, g.unit)]
+    idx = np.unravel_index(np.asarray(keys, dtype=np.int64), g.nu)
+    counts = [-(-n // c) for n, c in zip(g.nu, per)]
+    return np.ravel_multi_index([i // c for i, c in zip(idx, per)], counts).astype(
+        np.int64
+    )
+
+
+def _combine_function(g: Group, limit: int, shards: np.ndarray, n: int):
     """Cells to partial blocks, before the shuffle: each input partition gathers its cells
     by unit and ships a unit's cells as one (or a few) partial blocks instead of a row per
     cell. It holds at most ``limit`` bytes of partials (the oldest ship first); a partition
-    that reads in chunk order holds one unit at a time and ships it near full."""
+    that reads in chunk order holds one chunk at a time and ships it near full. ``shards`` are
+    the sorted keys of the storage units touched; each partial is tagged with its shard and
+    with the shuffle slot among ``n`` partitions that its shard has."""
     schema = _partial_arrow(g)
+    placed = _placed_arrow(g)
+    slot_key = _slot_keys(n)
+
+    def place(batch):
+        k = batch.column(0).to_numpy(zero_copy_only=False)
+        s = _shard_keys(g, k)
+        p = slot_key[np.searchsorted(shards, s) % n]
+        cols = list(batch.columns) + [pa.array(p, pa.int32()), pa.array(s, pa.int64())]
+        return pa.RecordBatch.from_arrays(cols, schema=placed)
 
     def run(batches):
         held: OrderedDict = OrderedDict()
@@ -643,9 +732,9 @@ def _combine_function(g: Group, limit: int):
                 while total > limit and len(held) > 1:
                     _, old = held.popitem(last=False)
                     total -= old.nbytes
-                    yield old.emit(schema)
+                    yield place(old.emit(schema))
         for p in held.values():
-            yield p.emit(schema)
+            yield place(p.emit(schema))
 
     return run
 
@@ -793,10 +882,10 @@ def _check_budget(g: Group, budget: int) -> None:
     if need > budget:
         per = {d: u for d, u in zip(g.dims, g.unit)}
         raise ZarrError(
-            f"one storage unit of {list(g.vars)} is {per} cells, {need / _MIB:.0f} MiB with its "
-            f"copy, over the {budget / _MIB:.0f} MiB a task holds; a task builds one unit "
+            f"one chunk of {list(g.vars)} is {per} cells, {need / _MIB:.0f} MiB with its "
+            f"copy, over the {budget / _MIB:.0f} MiB a task holds; a task builds one chunk "
             "at a time",
-            fix="use smaller shards (shards={'<dimension>': <size>}) or chunks, or fewer "
+            fix="use smaller chunks (chunks={'<dimension>': <size>}), or fewer "
             "variables per write",
         )
 
@@ -880,7 +969,7 @@ def _plan_groups(
         dt = dtypes[v]
         if not appending:
             shape = tuple(len(axes[d]) for d in dims)
-            unit, fill = layout(v, dt, dims, shape)
+            unit, fill, inner = layout(v, dt, dims, shape)
             vdims, units[v] = dims, unit
         else:
             meta, vdims = _existing_array(store, v, dims)
@@ -888,7 +977,8 @@ def _plan_groups(
                 max(n, at + len(axes[append_dim])) if d == append_dim else n
                 for d, n in zip(vdims, meta.shape)
             )
-            unit = tuple(meta.chunks)
+            inner = tuple(meta.chunks)
+            unit = inner
             if meta.shard is not None:
                 unit = tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
             fill = meta.fill_value
@@ -900,11 +990,11 @@ def _plan_groups(
             )
             for d, n in zip(vdims, shape)
         )
-        groups.setdefault((vdims, tuple(unit), shape, window), []).append(
+        groups.setdefault((vdims, tuple(inner), tuple(unit), shape, window), []).append(
             (v, dt, _fill_of(dt, fill))
         )
     out = []
-    for (vdims, unit, shape, window), members in groups.items():
+    for (vdims, inner, part, shape, window), members in groups.items():
         out.append(
             Group(
                 dims=vdims,
@@ -914,8 +1004,9 @@ def _plan_groups(
                 offsets=tuple(
                     at if (appending and d == append_dim) else 0 for d in vdims
                 ),
-                unit=unit,
-                nu=tuple(-(-n // u) for n, u in zip(shape, unit)),
+                unit=inner,
+                part=part,
+                nu=tuple(-(-n // u) for n, u in zip(shape, inner)),
                 wlo=tuple(w[0] for w in window),
                 whi=tuple(w[1] for w in window),
                 vars=tuple(m[0] for m in members),
@@ -926,7 +1017,7 @@ def _plan_groups(
     return out, units
 
 
-def _partials_frame(df, g: Group, limit: int):
+def _partials_frame(df, g: Group, limit: int, shards: np.ndarray, n: int):
     """One group's map side: each input partition locates its cells and gathers them into
     partial blocks per unit (``_combine_function``); a row of this frame is a partial block,
     not a cell."""
@@ -936,19 +1027,21 @@ def _partials_frame(df, g: Group, limit: int):
         F.col(v) for v in g.vars
     ]
     return df.select(*picked).mapInArrow(
-        _combine_function(g, limit), _partial_struct(g)
+        _combine_function(g, limit, shards, n), _partial_struct(g)
     )
 
 
 def _group_frame(df, g: Group, ks: np.ndarray, schema, parallelism: int, limit: int):
-    """One group's data pass: partial blocks per input partition, shuffled once by unit key
-    (a partition per unit touched, no more than ``parallelism``), sorted, and merged into one
-    unit at a time."""
-    n = max(1, min(len(ks), parallelism))
+    """One group's data pass: partial blocks per input partition, shuffled once so that the
+    storage units (shards) spread evenly over the partitions (``_shuffle_width``), sorted by
+    shard and chunk, and merged into one chunk at a time. A task owns whole shards and holds
+    one chunk of one: ``ks`` are the keys of the chunks touched."""
+    shards = np.unique(_shard_keys(g, ks))
+    n = _shuffle_width(len(shards), parallelism)
     return (
-        _partials_frame(df, g, limit)
-        .repartition(n, "__k")
-        .sortWithinPartitions("__k")
+        _partials_frame(df, g, limit, shards, n)
+        .repartition(n, "__p")
+        .sortWithinPartitions("__s", "__k")
         .mapInArrow(_merge_function(g), schema)
     )
 

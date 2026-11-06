@@ -12,7 +12,8 @@ the driver's: refusing a path that already holds a store, reading the documents 
 append to, writing the documents, and taking back a failed create.
 
 A Unity Catalog Volume is a FUSE mount: no seeks and no appends. Every object is written
-whole and in order (a shard is assembled in memory from its encoded chunks first), and an
+whole and in order (a shard is read back from a local spool of its encoded chunks, one chunk
+at a time), and an
 object that replaces an earlier one goes through a temp name and a rename.
 """
 
@@ -22,6 +23,7 @@ import contextlib
 import json
 import os
 import shutil
+import tempfile
 import uuid
 
 import numpy as np
@@ -67,23 +69,70 @@ def object_path(root: str, array: str, key: str) -> str:
 # --- shards -----------------------------------------------------------------------------
 
 
-def shard_parts(meta: ArrayMeta, chunks: dict[int, bytes]) -> list[bytes]:
-    """The bytes of one shard object as ordered parts: ``chunks`` (inner index to encoded
-    chunk) in index order, and the shard index, at the end or the start as the array's
-    codecs say. A chunk the shard lacks is ``(MISSING, MISSING)`` in the index."""
+def shard_index(
+    meta: ArrayMeta, lengths: dict[int, int]
+) -> tuple[bytes, dict[int, int]]:
+    """``(index, offsets)`` of a shard whose inner chunks (inner index to encoded length)
+    are laid back to back in index order: the shard index bytes, and where each chunk starts
+    in the shard object. A chunk the shard lacks is ``(MISSING, MISSING)`` in the index.
+    """
     spec = meta.shard
     n = int(np.prod(spec.cps))
     size = index_nbytes(n, spec.index_codecs)
     at = size if spec.index_location == "start" else 0
     entries = np.full((n, 2), MISSING, dtype=np.uint64)
-    body: list[bytes] = []
-    for i in sorted(chunks):
-        data = chunks[i]
-        entries[i] = (at, len(data))
-        body.append(data)
-        at += len(data)
-    index = encode_index(entries, spec.index_codecs)
-    return [index, *body] if spec.index_location == "start" else [*body, index]
+    offsets: dict[int, int] = {}
+    for i in sorted(lengths):
+        entries[i] = (at, lengths[i])
+        offsets[i] = at
+        at += lengths[i]
+    return encode_index(entries, spec.index_codecs), offsets
+
+
+def shard_parts(meta: ArrayMeta, chunks: dict[int, bytes]) -> list[bytes]:
+    """The bytes of one shard object as ordered parts: ``chunks`` (inner index to encoded
+    chunk) in index order, and the shard index, at the end or the start as the array's
+    codecs say. A chunk the shard lacks is ``(MISSING, MISSING)`` in the index."""
+    index, _ = shard_index(meta, {i: len(d) for i, d in chunks.items()})
+    body = [chunks[i] for i in sorted(chunks)]
+    return [index, *body] if meta.shard.index_location == "start" else [*body, index]
+
+
+class _ShardParts:
+    """A shard object's parts, read one inner chunk at a time from where the chunks wait
+    (a spool on local disk, or the shard file this write replaces), so a task holds a chunk
+    and the index, not the shard. Iterable more than once, since the write is retried.
+    """
+
+    def __init__(self, meta: ArrayMeta, sources: dict[int, tuple]):
+        self.meta, self.sources = meta, sources  # idx -> (file, offset, length)
+        self.index, _ = shard_index(meta, {i: s[2] for i, s in sources.items()})
+
+    def __iter__(self):
+        start = self.meta.shard.index_location == "start"
+        if start:
+            yield self.index
+        for i in sorted(self.sources):
+            f, off, n = self.sources[i]
+            f.seek(off)
+            yield f.read(n)
+        if not start:
+            yield self.index
+
+
+def read_shard_index(f, meta: ArrayMeta, size: int, source: str) -> dict[int, tuple]:
+    """``{inner index: (offset, length)}`` of the chunks a shard file ``f`` (``size`` bytes)
+    holds, from its index alone."""
+    spec = meta.shard
+    n = int(np.prod(spec.cps))
+    nbytes = index_nbytes(n, spec.index_codecs)
+    f.seek(0 if spec.index_location == "start" else size - nbytes)
+    entries = decode_index(f.read(nbytes), n, spec.index_codecs, source=source)
+    return {
+        i: (int(off), int(length))
+        for i, (off, length) in enumerate(entries.tolist())
+        if off != MISSING
+    }
 
 
 def read_shard_chunks(path: str, meta: ArrayMeta) -> dict[int, bytes]:
@@ -140,13 +189,34 @@ def _put(path: str, parts, *, replace: bool) -> int:
     return _retry_transient(write, attempts=3, backoff=0.2)
 
 
+class _Held:
+    """The inner chunks of one shard a task has encoded so far, kept on local disk (a spool)
+    and not in memory: ``entries`` is inner index to ``(offset in the spool, length, empty)``.
+    """
+
+    def __init__(self, meta: ArrayMeta):
+        self.meta = meta
+        self.spool = tempfile.TemporaryFile()
+        self.entries: dict[int, tuple[int, int, bool]] = {}
+
+    def add(self, idx: int, data: bytes, empty: bool) -> None:
+        self.spool.seek(0, os.SEEK_END)
+        self.entries[idx] = (self.spool.tell(), len(data), empty)
+        self.spool.write(data)
+
+    def close(self) -> None:
+        self.spool.close()
+
+
 class PlainSink:
     """The objects one task writes into a plain store.
 
     ``add`` takes one encoded inner chunk. An unsharded array's chunk is written at once.
-    A sharded array's chunks wait until ``flush``, which writes each shard whole: the
-    caller flushes when it holds every chunk of the shards it has begun (an aligned
-    block's, or a shuffle group's).
+    A sharded array's chunks wait on local disk until ``flush``, which writes each shard whole
+    from them, one chunk at a time: the caller flushes when it holds every chunk of the
+    shards it has begun (an assemble group's), or, with ``stream``, the sink writes a shard
+    as soon as a chunk of another shard of the same array arrives (chunks come shard by
+    shard) and the caller flushes once at the end.
 
     ``merge`` is for an append, which may write into a unit an earlier write began: a shard
     file that exists keeps the inner chunks this write does not rewrite, and a chunk of
@@ -154,12 +224,13 @@ class PlainSink:
     fill is left out, as zarr does: an absent object reads as the fill value.
     """
 
-    def __init__(self, root: str, *, merge: bool = False):
+    def __init__(self, root: str, *, merge: bool = False, stream: bool = False):
         self.root = root
         self.merge = merge
+        self.stream = stream
         self.bytes = 0
         self.chunks = 0
-        self._pending: dict[tuple[str, str], tuple[ArrayMeta, dict]] = {}
+        self._pending: dict[tuple[str, str], tuple[ArrayMeta, _Held]] = {}
 
     def add(self, meta: ArrayMeta, chunk, key: str, data: bytes, empty: bool) -> int:
         """Take one encoded chunk; the bytes it will occupy (0 for fill that is left out)."""
@@ -172,30 +243,54 @@ class PlainSink:
             self.chunks += 1
             return n
         shard_key = meta.key_encoding.chunk_key(shard_of(tuple(chunk), meta.shard.cps))
-        held = self._pending.setdefault((meta.name, shard_key), (meta, {}))[1]
-        held[inner_index(tuple(chunk), meta.shard.cps)] = (data, empty)
+        if self.stream:
+            done = [k for k in self._pending if k[0] == meta.name and k[1] != shard_key]
+            if done:
+                self._write({k: self._pending.pop(k) for k in done})
+        held = self._pending.setdefault((meta.name, shard_key), (meta, _Held(meta)))[1]
+        held.add(inner_index(tuple(chunk), meta.shard.cps), data, empty)
         return len(data)
 
     def flush(self) -> None:
         """Write the shards that wait."""
         pending, self._pending = self._pending, {}
-        for (name, shard_key), (meta, new) in sorted(pending.items()):
-            path = object_path(self.root, name, shard_key)
-            old = None
+        self._write(pending)
+
+    def _write(self, pending: dict) -> None:
+        for (name, shard_key), (meta, held) in sorted(pending.items()):
+            try:
+                self._write_shard(name, shard_key, meta, held)
+            finally:
+                held.close()
+
+    def _write_shard(self, name: str, shard_key: str, meta: ArrayMeta, held) -> None:
+        path = object_path(self.root, name, shard_key)
+        old, old_index = None, {}
+        try:
             if self.merge and os.path.exists(path):
-                old = read_shard_chunks(path, meta)
-            if old is None:
-                chunks = {i: d for i, (d, empty) in new.items() if not empty}
-            else:
-                chunks = {**old, **{i: d for i, (d, _) in new.items()}}
-            if not chunks:
-                continue
-            parts = shard_parts(meta, chunks)
-            self.bytes += _put(path, parts, replace=old is not None)
-            self.chunks += len(chunks) if old is None else len(new)
+                old = open(path, "rb")
+                old_index = read_shard_index(old, meta, os.path.getsize(path), path)
+            sources = {i: (old, off, n) for i, (off, n) in old_index.items()}
+            fresh = {
+                i: (held.spool, off, n)
+                for i, (off, n, empty) in held.entries.items()
+                if old is not None or not empty
+            }
+            sources.update(fresh)
+            if not sources:
+                return
+            self.bytes += _put(
+                path, _ShardParts(meta, sources), replace=old is not None
+            )
+            self.chunks += len(sources) if old is None else len(fresh)
+        finally:
+            if old is not None:
+                old.close()
 
     def abort(self) -> None:
-        self._pending = {}
+        pending, self._pending = self._pending, {}
+        for _, held in pending.values():
+            held.close()
 
 
 # --- the store as it is -----------------------------------------------------------------

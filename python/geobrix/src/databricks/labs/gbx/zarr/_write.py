@@ -517,6 +517,8 @@ class _Input:
     spread: dict | None = None
     # a table of cells into a new store: variable -> the storage unit its blocks were cut by
     cells_units: dict | None = None
+    # the blocks are single chunks, in order by shard and then chunk (a table of cells)
+    chunk_blocks: bool = False
 
 
 def _wanted(names, variables) -> list[str]:
@@ -959,6 +961,7 @@ class _Plan:
     spread: dict | None = None  # create: how the input holds its blocks (_Input.spread)
     coverage: dict = field(default_factory=dict)  # variable -> _coverage of its boxes
     plain: bool = False  # a plain store: the objects of the Zarr store, no manifest
+    chunk_blocks: bool = False  # the blocks are single chunks, in shard order (cells)
 
 
 def _as_numbers(values):
@@ -1276,6 +1279,7 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
         extents=extents,
         digest=inp.digest,
         spread=inp.spread,
+        chunk_blocks=inp.chunk_blocks,
     )
     chunks_codecs = _codec_chain(codecs)
     for v in inp.vars.values():
@@ -1485,8 +1489,9 @@ def _prepare_tiles(spark, data, tiles, mode, variables, append_dim, store, cells
 
 
 def _cells_layout(args):
-    """``layout(name, dtype, dims, shape) -> (storage unit, fill)`` of an array a cells write
-    creates: the shard (or the chunk of an unsharded array) the new store would give it.
+    """``layout(name, dtype, dims, shape) -> (storage unit, fill, chunk)`` of an array a cells
+    write creates: the shard (or the chunk of an unsharded array) the new store would give
+    it, and its inner chunk.
     """
     chain = _codec_chain(args.codecs)
 
@@ -1506,7 +1511,7 @@ def _cells_layout(args):
             if meta.shard is None
             else tuple(c * k for c, k in zip(meta.chunks, meta.shard.cps))
         )
-        return unit, fill
+        return unit, fill, tuple(meta.chunks)
 
     return layout
 
@@ -1564,6 +1569,7 @@ def _create_input(spark, data, tiles, variables, cells=None) -> _Input:
         )
         inp = _planned_blocks(_tile_frame(spark, prep), None, seen=prep.seen)
         inp.cells_units = getattr(prep, "units", None)
+        inp.chunk_blocks = bool(getattr(prep, "chunk_blocks", False))
         return inp
     return _planned_blocks(data, variables)
 
@@ -1652,6 +1658,7 @@ def _plan_existing(
             return _plan_single_pass(spark, plan, frame, prep.names)
         inp = _planned_blocks(frame, None, seen=prep.seen, known=prep.known)
         plan.digest = inp.digest
+        plan.chunk_blocks = bool(getattr(prep, "chunk_blocks", False))
         append_dim = prep.append_dim
     elif mode in ("update", "overwrite"):
         return _plan_single_pass(spark, plan, data, variables)
@@ -1961,7 +1968,18 @@ def _aligned(plan: _Plan) -> bool:
         if meta.shard is not None:
             unit = chunks * np.array(meta.shard.cps, dtype=np.int64)
         shape = np.array(meta.shape, dtype=np.int64)
-        if (starts % unit).any() or ((stops % unit != 0) & (stops != shape)).any():
+        if plan.chunk_blocks:
+            # single chunks, in shard order: each on the chunk grid, together beginning and
+            # ending on the grid of the units, so no shard has chunks from an earlier write
+            lo, hi = starts.min(axis=0), stops.max(axis=0)
+            if (
+                (starts % chunks).any()
+                or ((stops % chunks != 0) & (stops != shape)).any()
+                or (lo % unit).any()
+                or ((hi % unit != 0) & (hi != shape)).any()
+            ):
+                return False
+        elif (starts % unit).any() or ((stops % unit != 0) & (stops != shape)).any():
             return False
         # whole chunks only: the blocks are disjoint exactly when their chunk counts add up
         # to the chunks they touch together
@@ -2215,6 +2233,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         trace=_TRACE,
         access=plan.access,
         plain=plan.plain,
+        chunk_ordered=plan.chunk_blocks,
     )
     if _aligned(plan):
         _LOG.info(

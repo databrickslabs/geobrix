@@ -695,9 +695,7 @@ def _plan_groups(
 
 def _group_frame(df, g: Group, ks: np.ndarray, schema, parallelism: int):
     """One group's data pass: locate each cell, shuffle once by unit key (a partition per unit
-    touched, no more than ``parallelism``), sort, and pack one unit at a time. The packed blocks
-    are then spread over a task per block (up to ``parallelism``) when the units alone would
-    not fill them."""
+    touched, no more than ``parallelism``), sort, and pack one unit at a time."""
     from pyspark.sql import functions as F
     from pyspark.sql import types as T
 
@@ -709,19 +707,13 @@ def _group_frame(df, g: Group, ks: np.ndarray, schema, parallelism: int):
         + [df.schema[v] for v in g.vars]
     )
     n = max(1, min(len(ks), parallelism))
-    packed = (
+    return (
         df.select(*picked)
         .mapInArrow(_locate_function(g), located)
         .repartition(n, "__k")
         .sortWithinPartitions("__k")
         .mapInArrow(_pack_function(g), schema)
     )
-    # a unit packs all its variables in one task, so few units leave cores idle for the encode
-    # and write that follow: fan the packed blocks (small beside the cells) out to a task each
-    blocks = max(1, min(len(ks) * len(g.vars), parallelism))
-    if blocks > n:
-        packed = packed.repartition(blocks, "variable", "start")
-    return packed
 
 
 def _seen_rows(g: Group, ks: np.ndarray) -> list:

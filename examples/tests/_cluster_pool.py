@@ -41,6 +41,7 @@ import io
 import json
 import threading
 import time
+import uuid
 from typing import Callable, Dict, Iterable, List, Optional
 
 POOL_TAG = "gbx_bench_pool"
@@ -131,7 +132,13 @@ def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int
                 else None
             ),
         )
-        made.append(waiter.result().cluster_id)
+        try:
+            made.append(waiter.result().cluster_id)
+        except TimeoutError as exc:
+            raise PoolError(
+                f"cluster {cname} did not reach RUNNING in time ({exc}); it is still starting, or the workspace has no "
+                f"capacity for its nodes. `status --name {name}` shows it; `down --name {name}` ends it."
+            ) from exc
     return [c.cluster_id for c in have] + made
 
 
@@ -177,11 +184,21 @@ def _is_missing(exc: BaseException) -> bool:
     return any(t in text for t in ("notfound", "not found", "does not exist", "404"))
 
 
+class LeaseLost(PoolError):
+    """The lease is no longer this holder's (it was reclaimed and taken by another launch, or cannot be read)."""
+
+
 class Leases:
-    """The lease files of one pool under `<volroot>/bench-pool/<name>/`."""
+    """The lease files of one pool under `<volroot>/bench-pool/<name>/`.
+
+    Every lease carries the holder's own token. A holder writes, refreshes and releases a lease only while the file still
+    holds its token (a launch that was judged gone and replaced must not overwrite or delete its replacement's), and
+    never writes anything it could not read.
+    """
 
     def __init__(self, w, volroot: str, name: str, clock: Callable[[], float] = time.time):
         self.w, self.dir, self.name, self.clock = w, f"{volroot.rstrip('/')}/bench-pool/{name}", name, clock
+        self.tokens: Dict[str, str] = {}
 
     def path(self, cluster_id: str) -> str:
         return f"{self.dir}/{cluster_id}.lease"
@@ -190,23 +207,33 @@ class Leases:
         self.w.files.upload(self.path(cluster_id), io.BytesIO(json.dumps(info).encode("utf-8")), overwrite=overwrite)
 
     def acquire(self, cluster_id: str, info: dict) -> bool:
-        """The exclusive create: True when the lease is ours, False when it exists."""
-        info = dict(info, acquired_at=self.clock(), touched_at=self.clock())
+        """The exclusive create: True when the lease is ours (its token is kept), False when it exists."""
+        token = uuid.uuid4().hex
+        info = dict(info, acquired_at=self.clock(), touched_at=self.clock(), token=token)
         try:
             self.w.files.create_directory(self.dir)
         except Exception:  # noqa: BLE001 - it exists, or the upload below makes it
             pass
         try:
             self._put(cluster_id, info, overwrite=False)
-            return True
         except Exception as exc:  # noqa: BLE001
             if _is_exists(exc):
                 return False
             raise
+        self.tokens[cluster_id] = token
+        return True
+
+    def _mine(self, cluster_id: str) -> dict:
+        """The lease's content, when it is this holder's; LeaseLost when it is another's, gone, or unreadable."""
+        held = self.read(cluster_id)
+        if not held or held.get("unreadable") or held.get("token") != self.tokens.get(cluster_id):
+            raise LeaseLost(f"the lease of {cluster_id} is no longer this launch's")
+        return held
 
     def update(self, cluster_id: str, **fields) -> None:
-        """The holder adds what it learned (the job run id)."""
-        info = self.read(cluster_id) or {}
+        """The holder adds what it learned (the job run id) and refreshes the lease. LeaseLost, and nothing written, when the
+        lease is not this holder's."""
+        info = self._mine(cluster_id)
         info.update({k: v for k, v in fields.items() if v is not None})
         info["touched_at"] = self.clock()
         self._put(cluster_id, info, overwrite=True)
@@ -235,11 +262,31 @@ class Leases:
             return 0.0
 
     def release(self, cluster_id: str) -> None:
+        """Delete the lease, if it is still this holder's (another launch's replacement is left alone)."""
+        try:
+            self._mine(cluster_id)
+        except LeaseLost:
+            return
+        self._delete(cluster_id)
+
+    def _delete(self, cluster_id: str) -> None:
         try:
             self.w.files.delete(self.path(cluster_id))
         except Exception as exc:  # noqa: BLE001
             if not _is_missing(exc):
                 raise
+
+    def reclaim(self, cluster_id: str, stale_info: dict) -> bool:
+        """Take over a lease judged stale: delete exactly that lease (not a fresher one a faster launch put in its place),
+        then create ours exclusively. False (back off) when it changed under us or another launch created first."""
+        now = self.read(cluster_id)
+        if now is None:
+            return True
+        same = (now.get("unreadable") and stale_info.get("unreadable")) or now == stale_info
+        if not same:
+            return False  # another launch reclaimed it, or its holder is back: not the lease we judged
+        self._delete(cluster_id)
+        return True
 
     def stale(self, info: dict) -> bool:
         """True when nothing holds the lease any more: its holder stopped refreshing it and its job run (if any) is over."""
@@ -269,13 +316,14 @@ def lease_cluster(
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.time,
     say: Callable[[str], None] = print,
+    leases: Optional["Leases"] = None,
 ) -> str:
-    """Lease one cluster of the pool and make it run: the id.
+    """Lease one cluster of the pool and make it run: the id. (`leases` is the holder's: it keeps the lease's token.)
 
     Running clusters are tried before terminated ones (no start to pay). A lease whose holder is gone is reclaimed.
     A terminated cluster is started and waited for. PoolError after `wait_s` with every cluster held.
     """
-    leases = Leases(w, volroot, name, clock)
+    leases = leases or Leases(w, volroot, name, clock)
     end = clock() + wait_s
     while True:
         pool = members(w, name)
@@ -283,7 +331,11 @@ def lease_cluster(
             raise PoolError(f"pool '{name}' has no clusters: gbx:bench:pool up --name {name} --n <n>")
         order = {"RUNNING": 0, "TERMINATED": 1}
         for c in sorted(pool, key=lambda c: order.get(state_of(c), 2)):
-            require_member(w, c.cluster_id, name)
+            try:
+                require_member(w, c.cluster_id, name)  # read again, tags and all, just before acting
+            except PoolError as exc:  # it changed since the listing (retagged, gone): this one is skipped, not the lease
+                say(f"pool {name}: skipping {c.cluster_id}: {exc}")
+                continue
             if _try_lease(leases, c.cluster_id, info):
                 say(f"pool {name}: leased {c.cluster_id} ({state_of(c) or '?'})")
                 w.clusters.ensure_cluster_is_running(c.cluster_id)  # starts it when terminated, waits when pending
@@ -300,9 +352,8 @@ def _try_lease(leases: Leases, cluster_id: str, info: dict) -> bool:
     held = leases.read(cluster_id)
     if held is None:  # released between the two calls
         return leases.acquire(cluster_id, info)
-    if leases.stale(held):
-        leases.release(cluster_id)
-        return leases.acquire(cluster_id, info)  # whoever reclaims first wins
+    if leases.stale(held) and leases.reclaim(cluster_id, held):
+        return leases.acquire(cluster_id, info)  # exclusive: whoever creates first wins, the other backs off
     return False
 
 
@@ -319,10 +370,11 @@ def jar_fingerprint(w, jar_paths: Iterable[str]) -> str:
 
 
 def installed_jars(w, cluster_id: str) -> List[str]:
+    """Every jar library of the cluster: a pool cluster carries only what a run put there, whatever the jar is called."""
     return [
         fs.library.jar
         for fs in w.libraries.cluster_status(cluster_id)
-        if getattr(fs, "library", None) and getattr(fs.library, "jar", None) and "geobrix" in fs.library.jar.lower()
+        if getattr(fs, "library", None) and getattr(fs.library, "jar", None)
     ]
 
 
@@ -354,7 +406,7 @@ def sync_jars(
     say(f"pool: cluster {cluster_id} carries jar {have_tag} ({len(have)} installed), this run needs {want}: reinstalling")
     if have:
         w.libraries.uninstall(cluster_id, [compute.Library(jar=p) for p in have])
-    fields = {f: getattr(cluster, f) for f in _EDIT_FIELDS if getattr(cluster, f, None) is not None}
+    fields = _edit_fields(w, cluster)
     fields["custom_tags"] = {**tags_of(cluster), JAR_TAG: want}
     w.clusters.edit(cluster_id=cluster_id, **fields)  # restarts a running cluster; a terminated one is only edited
     w.clusters.ensure_cluster_is_running(cluster_id)
@@ -362,6 +414,21 @@ def sync_jars(
         w.libraries.install(cluster_id, [compute.Library(jar=p) for p in jar_paths])
         _wait_installed(w, cluster_id, jar_paths, wait_s, sleep, clock)
     return {"action": "reinstalled", "fingerprint": want}
+
+
+def _edit_fields(w, cluster) -> dict:
+    """The cluster's whole spec as the keyword arguments of `clusters.edit` (which replaces the spec): every setting the
+    SDK's edit takes that the cluster has, so an edit of the tag leaves the rest as it was. A client whose `edit` takes
+    only **kwargs (a fake) gets the fixed list."""
+    import inspect
+
+    try:
+        params = inspect.signature(w.clusters.edit).parameters
+        names = [n for n, p in params.items() if n not in ("self", "cluster_id") and p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)]
+    except (TypeError, ValueError):
+        names = []
+    names = names or list(_EDIT_FIELDS)
+    return {n: getattr(cluster, n) for n in names if getattr(cluster, n, None) is not None}
 
 
 def _wait_installed(w, cluster_id, jar_paths, wait_s, sleep, clock) -> None:
@@ -389,6 +456,7 @@ class Lease:
         self.w, self.leases, self.cluster_id, self.say = w, leases, cluster_id, say
         self.keep = False
         self.jars: Optional[dict] = None
+        self.job_runs: list = []
 
     def sync_jars(self, jar_paths: Optional[Iterable[str]], **kw) -> Optional[dict]:
         """Make the cluster carry exactly these jars (None: do not look). Returns what was done."""
@@ -399,7 +467,19 @@ class Lease:
 
     def job_run(self, run_id) -> None:
         """Write the job run on the lease: from here the lease follows the job, not this process."""
+        self.job_runs.append(run_id)
         self.leases.update(self.cluster_id, job_run_id=run_id)
+
+    def jobs_over(self) -> bool:
+        """True when every job run this launch submitted on the cluster has ended."""
+        for run in self.job_runs:
+            try:
+                if str(_val(self.w.jobs.get_run(run).state.life_cycle_state)) not in TERMINAL_RUN_STATES:
+                    return False
+            except Exception as exc:  # noqa: BLE001
+                if not _is_missing(exc):
+                    return False
+        return True
 
 
 @contextlib.contextmanager
@@ -412,6 +492,7 @@ def leased_cluster(
     wait_s: float = 1800.0,
     poll_s: float = 15.0,
     touch_every_s: float = TOUCH_EVERY_S,
+    settle_s: float = 120.0,
     say: Callable[[str], None] = print,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.time,
@@ -419,10 +500,12 @@ def leased_cluster(
     """Lease a cluster of pool `name` for the length of the block; yields a `Lease`.
 
     The lease is refreshed in the background while the block runs, and released at its end (an error included) unless
-    ``lease.keep`` is set. A cluster that has ended is started first.
+    ``lease.keep`` is set. It is released only when the job runs it submitted have ended (a launch that stopped waiting
+    leaves the cluster to its job: the lease goes stale by itself once the job is over); `settle_s` is how long it waits
+    for them. A cluster that has ended is started first.
     """
-    cluster_id = lease_cluster(w, name, volroot, dict(info or {}), wait_s=wait_s, poll_s=poll_s, sleep=sleep, clock=clock, say=say)
     leases = Leases(w, volroot, name, clock)
+    cluster_id = lease_cluster(w, name, volroot, dict(info or {}), wait_s=wait_s, poll_s=poll_s, sleep=sleep, clock=clock, say=say, leases=leases)
     lease = Lease(w, leases, cluster_id, say)
     stop = threading.Event()
 
@@ -430,6 +513,9 @@ def leased_cluster(
         while not stop.wait(touch_every_s):
             try:
                 leases.update(cluster_id)
+            except LeaseLost:
+                say(f"pool {name}: the lease of {cluster_id} was lost (reclaimed by another launch)")
+                return
             except Exception:  # noqa: BLE001 - a missed refresh is covered by the grace
                 pass
 
@@ -440,6 +526,12 @@ def leased_cluster(
     finally:
         stop.set()
         thread.join(timeout=5)
+        end = clock() + settle_s
+        while not lease.keep and not lease.jobs_over() and clock() < end:
+            sleep(min(5.0, poll_s))
+        if not lease.keep and not lease.jobs_over():
+            lease.keep = True  # a job is still on the cluster: its run id on the lease holds it until the job ends
+            say(f"pool {name}: a job run is still live on {cluster_id}; the lease stays with it")
         if not lease.keep:
             try:
                 leases.release(cluster_id)

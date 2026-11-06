@@ -430,8 +430,11 @@ def run_one(
     job_cluster: JobCluster | None = None,
     timeout_min: int = DEFAULT_TIMEOUT_MIN,
     harvest_path: pathlib.Path | None = None,
+    on_submit=None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS.
+
+    ``on_submit(run_id)`` is called once the run exists (a leased pool cluster writes it on its lease).
 
     ``timeout_min`` is the run's time limit. ``harvest_path`` is where harvested outputs go when it is not
     ``local_path`` (the launcher runs a snapshot copy of each notebook, so a later edit cannot change a live run).
@@ -491,6 +494,8 @@ def run_one(
                 )
             ],
         )
+        if on_submit is not None:
+            on_submit(waiter.run_id)
     else:
         gpu_compute = (
             jobs.Compute(hardware_accelerator=_accelerator_type(hardware_accelerator))
@@ -1211,6 +1216,7 @@ def main() -> int:
     import atexit
     import contextlib
 
+    lease = None
     stack = contextlib.ExitStack()
     atexit.register(stack.close)  # a leased pool cluster is given back when the process ends, whatever the way out
     if args.pool:
@@ -1305,6 +1311,7 @@ def main() -> int:
             job_cluster=job_cluster,
             timeout_min=args.timeout_min,
             harvest_path=originals[nb_path],
+            on_submit=lease.job_run if lease is not None else None,  # the lease follows the notebook's job run
         )
         if not ok:
             return 1

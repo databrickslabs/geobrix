@@ -158,11 +158,11 @@ VOL = "/Volumes/c/s/v"
 INFO = {"run_id": "r1", "owner": "me"}
 
 
-def lease(pool, w, wait_s=60, **kw):
+def lease(pool, w, wait_s=60, leases=None, **kw):
     """lease_cluster on the fake's clock: waiting advances it, so a lease that cannot be had ends in PoolError at once."""
     return pool.lease_cluster(
         w, "p", VOL, INFO, wait_s=wait_s, poll_s=10, sleep=lambda s: setattr(w, "now", w.now + s),
-        clock=lambda: w.now, say=lambda s: None, **kw,
+        clock=lambda: w.now, say=lambda s: None, leases=leases or pool.Leases(w, VOL, "p", lambda: w.now), **kw,
     )  # fmt: skip
 
 
@@ -203,13 +203,13 @@ def test_status_shows_state_and_idle_minutes_and_down_ends_only_the_pools_cluste
 def test_the_lease_is_exclusive_and_a_second_launch_takes_another_cluster(pool):
     w = FakeW()
     w.add("a"), w.add("b")
-    first = lease(pool, w)
+    mine = pool.Leases(w, VOL, "p", lambda: w.now)
+    first = lease(pool, w, leases=mine)
     second = lease(pool, w)
     assert {first, second} == {"a", "b"}
     with pytest.raises(pool.PoolError, match="every cluster of pool 'p' is leased"):
         lease(pool, w, wait_s=30)
-    leases = pool.Leases(w, VOL, "p")
-    leases.release(first)
+    mine.release(first)
     assert lease(pool, w) == first
 
 
@@ -325,3 +325,137 @@ def test_the_command_brings_a_pool_up_shows_it_and_takes_it_down(pool, capsys, m
     assert [c.state for c in w.clusters_by_id.values()] == ["TERMINATED", "TERMINATED"]
     monkeypatch.delenv("GBX_BENCH_POOL", raising=False)
     assert bench_pool.main(["status"], w=w) == 2  # no pool name: refused before any call
+
+
+# ---- review: tokens, compare-and-swap reclaim, skipped clusters, jar paths, the full spec, settle before release
+
+
+def test_a_holder_never_writes_a_lease_that_is_not_its_own_or_that_it_could_not_read(pool):
+    w = FakeW()
+    w.add("a")
+    a = pool.Leases(w, VOL, "p", lambda: w.now)
+    assert a.acquire("a", dict(INFO))
+    path = a.path("a")
+    mine = w.fs[path]
+    # the lease was reclaimed by another launch: this holder's refresh writes nothing
+    w.fs[path] = json.dumps({"run_id": "other", "token": "theirs", "touched_at": w.now}).encode()
+    theirs = w.fs[path]
+    with pytest.raises(pool.LeaseLost):
+        a.update("a")
+    a.release("a")  # and its release leaves the replacement's lease alone
+    assert w.fs[path] == theirs
+    # the lease cannot be read (the content is not downloadable): nothing is written over it, no sentinel included
+    w.fs[path] = mine
+    real = w.files.download
+    w.files.download = lambda p: (_ for _ in ()).throw(PermissionError("not readable here"))
+    with pytest.raises(pool.LeaseLost):
+        a.update("a", job_run_id=5)
+    w.files.download = real
+    assert w.fs[path] == mine and b"unreadable" not in w.fs[path]
+
+
+def test_two_launches_that_both_judge_a_lease_stale_do_not_both_take_it(pool):
+    w = FakeW()
+    w.add("a")
+    old = pool.Leases(w, VOL, "p", lambda: w.now)
+    assert old.acquire("a", dict(INFO))
+    w.now += pool.TOUCH_GRACE_S + 1  # silent, no job run: stale
+    a, b = (pool.Leases(w, VOL, "p", lambda: w.now) for _ in range(2))
+    stale_seen = a.read("a")
+    assert a.stale(stale_seen) and b.stale(b.read("a"))
+    assert a.reclaim("a", stale_seen) and a.acquire("a", dict(INFO, run_id="A"))  # A is first
+    # B judged the same stale lease; by now the file is A's fresh one: B must neither delete it nor take the cluster
+    assert not b.reclaim("a", stale_seen)
+    assert not b.acquire("a", dict(INFO, run_id="B"))
+    assert json.loads(w.fs[a.path("a")])["run_id"] == "A"
+
+
+def test_a_cluster_that_changed_since_the_listing_is_skipped_and_the_next_one_is_leased(pool):
+    w = FakeW()
+    w.add("a"), w.add("b")
+    real_get = w.clusters.get
+
+    def get(cid):
+        if cid == "a":  # retagged between the listing and the lease
+            c = real_get(cid)
+            c.custom_tags = {"gbx_bench_pool": "elsewhere"}
+            return c
+        return real_get(cid)
+
+    w.clusters.get = get
+    assert lease(pool, w) == "b"
+
+
+def test_a_jar_without_geobrix_in_its_path_is_still_the_clusters_to_manage(pool):
+    w = FakeW()
+    w.add("a", tags={"gbx_jar": "none"})
+    jar = f"{VOL}/bench-extra.jar"
+    assert pool.sync_jars(w, "a", [jar], say=lambda s: None, sleep=lambda s: None)["action"] == "reinstalled"
+    w.calls.clear()
+    assert pool.sync_jars(w, "a", [jar], say=lambda s: None)["action"] == "ok" and w.calls == []  # matched, not reinstalled
+
+
+def test_the_edit_carries_every_setting_the_sdks_edit_takes_that_the_cluster_has(pool):
+    w = FakeW()
+    c = w.add("a", tags={"gbx_jar": "none"}, driver_instance_pool_id="pool-9", enable_local_disk_encryption=True, spark_conf={"k": "v"})
+
+    def edit(cluster_id, spark_version, *, driver_instance_pool_id=None, enable_local_disk_encryption=None, spark_conf=None, custom_tags=None, autotermination_minutes=None, node_type_id=None, num_workers=None, data_security_mode=None, single_user_name=None, cluster_name=None):  # noqa: E501
+        w.calls.append(("edit", cluster_id, dict(spark_version=spark_version, driver_instance_pool_id=driver_instance_pool_id, spark_conf=spark_conf, custom_tags=custom_tags, enc=enable_local_disk_encryption)))
+
+    w.clusters.edit = edit
+    pool.sync_jars(w, "a", [f"{VOL}/x.jar"], say=lambda s: None, sleep=lambda s: None)
+    sent = next(x for x in w.calls if x[0] == "edit")[2]
+    assert sent["spark_version"] == c.spark_version and sent["driver_instance_pool_id"] == "pool-9" and sent["spark_conf"] == {"k": "v"} and sent["enc"] is True  # a setting the fixed list lacks
+    assert sent["custom_tags"]["gbx_bench_pool"] == "p" and sent["custom_tags"]["gbx_jar"] != "none"
+
+
+def test_the_lease_is_released_only_when_the_job_it_submitted_has_ended(pool):
+    w = FakeW()
+    w.add("a")
+    path = pool.Leases(w, VOL, "p").path("a")
+    w.runs[5] = "RUNNING"
+    with pool.leased_cluster(w, "p", VOL, {}, say=lambda s: None, settle_s=0, poll_s=1, sleep=lambda s: None) as ls:
+        ls.job_run(5)
+    assert path in w.fs  # the job is live: the lease stays with it
+    held = json.loads(w.fs[path])
+    assert held["job_run_id"] == 5
+    w.fs.pop(path)
+    w.runs[6] = "TERMINATED"
+    with pool.leased_cluster(w, "p", VOL, {}, say=lambda s: None, settle_s=0) as ls:
+        ls.job_run(6)
+    assert path not in w.fs  # ended: released
+
+
+def test_a_cluster_that_never_reaches_running_is_one_clear_error(pool):
+    w = FakeW()
+
+    def create(**kw):
+        def result():
+            raise TimeoutError("timed out after 0:20:00: Finding instances for new nodes")
+
+        return SimpleNamespace(result=result)
+
+    w.clusters.create = create
+    with pytest.raises(pool.PoolError, match="still starting"):
+        pool.up(w, "p", 1, spark_version="x", node_type="y", workers=1, user="me")
+
+
+def test_a_notebook_run_on_a_leased_cluster_writes_its_job_run_on_the_lease(monkeypatch, pool):
+    import pathlib
+
+    import run_notebooks_serverless as rn
+
+    class Stop(Exception):
+        pass
+
+    jobs_mod = types.ModuleType("databricks.sdk.service.jobs")
+    jobs_mod.SubmitTask = jobs_mod.NotebookTask = lambda **kw: SimpleNamespace(**kw)
+    monkeypatch.setitem(sys.modules, "databricks.sdk.service.jobs", jobs_mod)
+    sys.modules["databricks.sdk.service"].jobs = jobs_mod
+    monkeypatch.setattr(rn, "_import_notebook", lambda *a, **k: "/ws/nb")
+    monkeypatch.setattr(rn, "submit_once", lambda w, **kw: SimpleNamespace(run_id=77))
+    seen = []
+    w = SimpleNamespace(jobs=SimpleNamespace(get_run=lambda *a, **k: (_ for _ in ()).throw(Stop())))
+    with pytest.raises(Stop):
+        rn.run_one(w, pathlib.Path("nb.ipynb"), "/ws", [], "6", 1, False, existing_cluster_id="0101-x", on_submit=seen.append)
+    assert seen == [77]

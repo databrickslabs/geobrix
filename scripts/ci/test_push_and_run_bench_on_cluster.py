@@ -426,7 +426,7 @@ def test_split_by_fn_launches_one_job_per_function_with_its_own_run_id_and_forms
     import push_and_run_bench_on_cluster as mod
 
     groups = {"gbx_rst_merge_agg": ["c0", "tvf"], "gbx_rst_bng_rasterize_agg": ["c0"]}
-    monkeypatch.setattr(mod, "levels_functions", lambda mvp, root, only=(): groups)
+    monkeypatch.setattr(mod, "levels_functions", lambda mvp, root, only=(), compute=None: groups)
     started = []
 
     class Proc:
@@ -587,3 +587,24 @@ def test_concurrent_parts_need_explore_mode_and_the_mode_reaches_the_notebook(la
     sdk.uploads.clear()
     assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
     assert _grab(sdk, "RUN_MODE") == "'isolate'" and _grab(sdk, "CONCURRENT") == "1"
+
+
+def test_a_part_killed_by_a_signal_is_a_failure_and_the_split_follows_the_compute(launch, sdk, monkeypatch):
+    import push_and_run_bench_on_cluster as mod
+
+    class Proc:
+        codes = iter([0, -9])
+
+        def __init__(self, cmd):
+            pass
+
+        def wait(self):
+            return next(self.codes)
+
+    monkeypatch.setattr(mod.subprocess, "Popen", Proc)
+    assert mod.run_split([("a", ["--run-id", "r-a"]), ("b", ["--run-id", "r-b"])]) == 1  # not 0, not -9
+    seen = []
+    monkeypatch.setattr(mod, "levels_functions", lambda mvp, root, only=(), compute=None: seen.append(compute) or {"a": ["v"]})
+    monkeypatch.setattr(sys, "argv", ["x", "--levels", "IO", "--levels-only", "--serverless", "--purpose", "p", "--split-by", "fn", "--no-wait"])
+    mod.main()
+    assert seen == ["serverless"]  # the parts are the functions the compute offers

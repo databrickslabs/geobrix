@@ -753,9 +753,11 @@ def named_run(name: str, purpose: str, sha: str) -> str:
     return f"{name} | {' '.join(purpose.split())[:80]} | {sha or 'nogit'}"
 
 
-def levels_functions(levels_mvp, root, only=()) -> dict:
+def levels_functions(levels_mvp, root, only=(), compute=None) -> dict:
     """``{function: [form names]}`` for the forms a run of the set times (the opt-in ones are left out, as the run
-    leaves them out), in the set's order; `only` limits it to those form names. {} where the form table cannot load."""
+    leaves them out), in the set's order; `only` limits it to those form names, `compute` (serverless, standard,
+    dedicated) to the forms that compute offers, so no part is a function with nothing to time there. {} where the
+    form table cannot load."""
     src = str(Path(root) / "python/geobrix/src")
     sys.path.insert(0, src)
     try:
@@ -771,7 +773,8 @@ def levels_functions(levels_mvp, root, only=()) -> dict:
             pass
     out: dict = {}
     for f in forms:
-        out.setdefault(f.fn, []).append(f.variant)
+        if compute is None or compute in f.computes:
+            out.setdefault(f.fn, []).append(f.variant)
     return out
 
 
@@ -803,7 +806,9 @@ def run_split(plans) -> int:
     codes = {fn: p.wait() for fn, p in procs}
     for fn, code in codes.items():
         print(f"[split] {fn}: exit {code}", flush=True)
-    return max(codes.values(), default=0)
+    failed = [c for c in codes.values() if c != 0]
+    # a part killed by a signal exits negative: that is a failure, never the "worst" (smallest) code of the lot
+    return max([c for c in failed if c > 0], default=1) if failed else 0
 
 
 def effective_form_caps(form_cap_min, form_cap_max_min, fail_fast, rung_cap_min, setup_cap_min):
@@ -1204,8 +1209,11 @@ def _main(_stack) -> int:
         if not levels_mvp:
             print("ERROR: --split-by fn needs --levels <set>.", file=sys.stderr)
             return 2
+        split_compute = (
+            "serverless" if "--serverless" in sys.argv else ("standard" if _arg("--access-mode", "dedicated") == "standard" else "dedicated")
+        )
         groups = levels_functions(
-            levels_mvp, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent), levels_forms
+            levels_mvp, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent), levels_forms, split_compute
         )
         if len(groups) > 1:
             return run_split(

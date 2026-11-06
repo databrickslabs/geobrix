@@ -546,7 +546,23 @@ def test_complete_with_a_unit_that_has_no_cells_is_refused(
         )
 
 
-def test_a_sparse_table_plans_only_the_units_it_touches(spark_delta, no_hooks):
+# a task budget the 34 KiB shards of _dataset() do not fit and their 4 KiB chunks do
+CHUNK_BUDGET = 20_000
+
+
+@pytest.fixture(params=["whole", "chunks"])
+def unit_mode(request, monkeypatch):
+    """Both ways a shard can be built: whole (the default budget) and one chunk at a time
+    (a budget under one shard); the value is the number of units per shard."""
+    if request.param == "chunks":
+        monkeypatch.setattr(_write, "_budget", lambda: CHUNK_BUDGET)
+        return 8
+    return 1
+
+
+def test_a_sparse_table_plans_only_the_units_it_touches(
+    spark_delta, no_hooks, unit_mode
+):
     ds = _dataset()
     prep = _prepare(
         spark_delta,
@@ -558,8 +574,9 @@ def test_a_sparse_table_plans_only_the_units_it_touches(spark_delta, no_hooks):
         coords=_coords(ds),
     )
     seen = prep.seen.to_pandas()
-    # the 8 chunks of the first shard, and one partition: the other shard is not planned
-    want = {(t, y, x) for t in (0, 12) for y in (0, 5) for x in (0, 6)}
+    # the first shard (its 8 chunks one at a time), and one partition: the other is not planned
+    ts, ys, xs = ((0, 12), (0, 5), (0, 6)) if unit_mode == 8 else ((0,), (0,), (0,))
+    want = {(t, y, x) for t in ts for y in ys for x in xs}
     assert set(seen[seen.variable == "t2m"]["start"].map(tuple)) == want
     assert prep.frame.rdd.getNumPartitions() == 1
 
@@ -682,15 +699,16 @@ def _in_chunk_order(spark, ds, names=("t2m", "u10")):
 
 
 def test_the_shuffle_moves_partial_blocks_not_cells(
-    spark_delta, no_hooks, shuffled_rows
+    spark_delta, no_hooks, shuffled_rows, unit_mode
 ):
     """Fail-on-revert for the combine: 48 h x 10 x 12 cells in two shards of 8 chunks each reach
-    the shuffle as 16 partial blocks (one per chunk the partition holds), not as 5760 rows.
+    the shuffle as 2 partial blocks (one per shard the partition holds), or 16 when a shard is
+    built a chunk at a time (one per chunk), not as 5760 rows.
     """
     ds = _dataset()
     prep = _prepare(spark_delta, _in_chunk_order(spark_delta, ds), coords=_coords(ds))
     assert prep.frame.rdd.getNumPartitions() == 2
-    assert shuffled_rows == [16]
+    assert shuffled_rows == [2 * unit_mode]
     assert ds["t2m"].size == 5760
 
 
@@ -1069,3 +1087,137 @@ def _meta_of(spark, tmp_path, ds):
         spark=spark,
     )
     return read_plain_docs(str(out)).arrays["t2m"]
+
+
+# --- a shard is built whole when it fits the task, a chunk at a time when it does not ---------
+
+
+def _blocks_of(spark, ds, budget, parts=4):
+    args = _write_cells.CellsArgs(coords=_coords(ds), chunks=CHUNKS, shards=SHARDS)
+    prep = _write._prepare_tiles(
+        spark,
+        _cells(spark, ds, parts=parts),
+        (None, DIM_COLS),
+        "create",
+        None,
+        None,
+        None,
+        args,
+    )
+    return prep, prep.frame.collect()
+
+
+@pytest.mark.parametrize(
+    "budget,shape,chunk_vars",
+    [
+        (None, (24, 10, 12), frozenset()),
+        (CHUNK_BUDGET, (12, 5, 6), frozenset({"t2m", "u10"})),
+    ],
+    ids=["fits", "does-not-fit"],
+)
+def test_the_unit_is_the_shard_when_it_fits_the_task_else_the_chunk(
+    spark_delta, no_hooks, monkeypatch, budget, shape, chunk_vars
+):
+    """Fail-on-revert for the choice: the same cube gives blocks of a whole shard under the
+    default budget (and no variable is marked as streamed) and blocks of one chunk under a
+    budget below a shard, each within it."""
+    if budget is not None:
+        monkeypatch.setattr(_write, "_budget", lambda: budget)
+    prep, blocks = _blocks_of(spark_delta, _dataset(), budget)
+    assert {tuple(r["shape"]) for r in blocks} == {shape}
+    assert len(blocks) == 2 * (2 if budget is None else 16)
+    assert prep.chunk_vars == chunk_vars
+
+
+def _group(shard=(24, 10, 12), chunk=(12, 5, 6), dtypes=("float32", "float32")):
+    names = tuple(f"v{i}" for i in range(len(dtypes)))
+    return _write_cells.Group(
+        dims=("time", "latitude", "longitude"),
+        cols=("time", "latitude", "longitude"),
+        ckinds=("M", "f", "f"),
+        axes=(None, None, None),
+        offsets=(0, 0, 0),
+        unit=chunk,
+        part=shard,
+        nu=tuple(-(-n // c) for n, c in zip((48, 10, 12), chunk)),
+        wlo=(0, 0, 0),
+        whi=(48, 10, 12),
+        vars=names,
+        dtypes={n: np.dtype(d) for n, d in zip(names, dtypes)},
+        fill={n: 0 for n in names},
+    )
+
+
+def test_a_shard_is_whole_exactly_when_all_its_variables_fit_the_budget():
+    """The check is the one a unit was held to before: the dense arrays of every variable of
+    the group and one copy of the largest, at the shard's size; a byte over streams."""
+    g = _group(dtypes=("float32", "float64"))
+    need = 24 * 10 * 12 * (4 + 8 + 8)
+    whole = _write_cells._choose_unit(g, need)
+    assert whole.whole and whole.unit == g.part and whole.nu == (2, 1, 1)
+    chunked = _write_cells._choose_unit(g, need - 1)
+    assert not chunked.whole and chunked.unit == g.unit and chunked.nu == g.nu
+    # a variable more makes the same shard too big for the same budget
+    more = _group(dtypes=("float32", "float64", "float64"))
+    assert not _write_cells._choose_unit(more, need).whole
+
+
+def test_an_unsharded_array_is_whole_at_its_chunk():
+    g = _group(shard=(12, 5, 6))
+    assert _write_cells._choose_unit(g, 1 << 30).unit == (12, 5, 6)
+
+
+def test_both_ways_of_building_a_shard_write_the_same_files(
+    spark_delta, tmp_path, no_hooks, monkeypatch
+):
+    """The same cells, a shard built whole and a shard built a chunk at a time: the shard
+    files are equal byte for byte."""
+    ds = _dataset()
+    roots = {}
+    for label, budget in (("whole", None), ("chunks", CHUNK_BUDGET)):
+        with monkeypatch.context() as m:
+            if budget is not None:
+                m.setattr(_write, "_budget", lambda: budget)
+            roots[label] = tmp_path / f"{label}.zarr"
+            gbx_zarr_write(
+                _cells(spark_delta, ds),
+                str(roots[label]),
+                transactional=False,
+                dim_cols=DIM_COLS,
+                coords=_coords(ds),
+                complete=True,
+                chunks=CHUNKS,
+                shards=SHARDS,
+                spark=spark_delta,
+            )
+    for n in ("t2m", "u10"):
+        whole, chunks = _objects(roots["whole"], n), _objects(roots["chunks"], n)
+        assert whole and whole == chunks
+        np.testing.assert_array_equal(
+            _plain_read(roots["whole"])[n].values, ds[n].values
+        )
+
+
+def test_the_sink_keeps_a_whole_shard_in_memory_and_a_streamed_one_on_disk(
+    spark_delta, tmp_path
+):
+    """Fail-on-revert: a flush with ``streamed=False`` writes the arrays built whole and
+    leaves the shard of a streamed array, which may still be getting chunks."""
+    import dataclasses
+    import io
+
+    from databricks.labs.gbx.zarr import _write_plain as WP
+
+    meta = _meta_of(spark_delta, tmp_path, _dataset())
+    other = dataclasses.replace(meta, name="u10")
+    sink = WP.PlainSink(str(tmp_path / "out"), stream=frozenset({"t2m"}))
+    sink.add(meta, (0, 0, 0), "k", b"a" * 10, False)
+    sink.add(other, (0, 0, 0), "k", b"b" * 10, False)
+    held = {k[0]: h for k, (_, h) in sink._pending.items()}
+    assert isinstance(held["u10"].spool, io.BytesIO)
+    assert not isinstance(held["t2m"].spool, io.BytesIO)
+    sink.flush(streamed=False)
+    assert (tmp_path / "out" / "u10" / "c" / "0" / "0" / "0").exists()
+    assert not (tmp_path / "out" / "t2m" / "c" / "0" / "0" / "0").exists()
+    sink.flush()
+    assert (tmp_path / "out" / "t2m" / "c" / "0" / "0" / "0").exists()

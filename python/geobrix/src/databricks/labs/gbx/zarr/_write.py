@@ -517,8 +517,9 @@ class _Input:
     spread: dict | None = None
     # a table of cells into a new store: variable -> the storage unit its blocks were cut by
     cells_units: dict | None = None
-    # the blocks are single chunks, in order by shard and then chunk (a table of cells)
-    chunk_blocks: bool = False
+    # the variables whose blocks are single chunks, in order by shard and then chunk (a table
+    # of cells whose shard does not fit a task); the other variables' blocks are whole units
+    chunk_vars: frozenset = frozenset()
 
 
 def _wanted(names, variables) -> list[str]:
@@ -961,7 +962,9 @@ class _Plan:
     spread: dict | None = None  # create: how the input holds its blocks (_Input.spread)
     coverage: dict = field(default_factory=dict)  # variable -> _coverage of its boxes
     plain: bool = False  # a plain store: the objects of the Zarr store, no manifest
-    chunk_blocks: bool = False  # the blocks are single chunks, in shard order (cells)
+    chunk_vars: frozenset = (
+        frozenset()
+    )  # variables whose blocks are single chunks (cells)
 
 
 def _as_numbers(values):
@@ -1279,7 +1282,7 @@ def _plan_create(table, write_id, root, inp: _Input, chunks, shards, codecs) -> 
         extents=extents,
         digest=inp.digest,
         spread=inp.spread,
-        chunk_blocks=inp.chunk_blocks,
+        chunk_vars=inp.chunk_vars,
     )
     chunks_codecs = _codec_chain(codecs)
     for v in inp.vars.values():
@@ -1569,7 +1572,7 @@ def _create_input(spark, data, tiles, variables, cells=None) -> _Input:
         )
         inp = _planned_blocks(_tile_frame(spark, prep), None, seen=prep.seen)
         inp.cells_units = getattr(prep, "units", None)
-        inp.chunk_blocks = bool(getattr(prep, "chunk_blocks", False))
+        inp.chunk_vars = frozenset(getattr(prep, "chunk_vars", ()))
         return inp
     return _planned_blocks(data, variables)
 
@@ -1658,7 +1661,7 @@ def _plan_existing(
             return _plan_single_pass(spark, plan, frame, prep.names)
         inp = _planned_blocks(frame, None, seen=prep.seen, known=prep.known)
         plan.digest = inp.digest
-        plan.chunk_blocks = bool(getattr(prep, "chunk_blocks", False))
+        plan.chunk_vars = frozenset(getattr(prep, "chunk_vars", ()))
         append_dim = prep.append_dim
     elif mode in ("update", "overwrite"):
         return _plan_single_pass(spark, plan, data, variables)
@@ -1968,7 +1971,7 @@ def _aligned(plan: _Plan) -> bool:
         if meta.shard is not None:
             unit = chunks * np.array(meta.shard.cps, dtype=np.int64)
         shape = np.array(meta.shape, dtype=np.int64)
-        if plan.chunk_blocks:
+        if name in plan.chunk_vars:
             # single chunks, in shard order: each on the chunk grid, together beginning and
             # ending on the grid of the units, so no shard has chunks from an earlier write
             lo, hi = starts.min(axis=0), stops.max(axis=0)
@@ -2241,7 +2244,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         trace=_TRACE,
         access=plan.access,
         plain=plan.plain,
-        chunk_ordered=plan.chunk_blocks,
+        chunk_vars=plan.chunk_vars,
     )
     if _aligned(plan):
         _LOG.info(

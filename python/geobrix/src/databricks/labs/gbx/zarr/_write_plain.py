@@ -20,6 +20,7 @@ object that replaces an earlier one goes through a temp name and a rename.
 from __future__ import annotations
 
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -190,13 +191,15 @@ def _put(path: str, parts, *, replace: bool) -> int:
 
 
 class _Held:
-    """The inner chunks of one shard a task has encoded so far, kept on local disk (a spool)
-    and not in memory: ``entries`` is inner index to ``(offset in the spool, length, empty)``.
+    """The inner chunks of one shard a task has encoded so far: ``entries`` is inner index to
+    ``(offset in the spool, length, empty)``. They are kept on local disk (a spool), not in
+    memory, when the shard is written chunk by chunk (``disk``); a shard that is built whole
+    is in memory already, and stays there.
     """
 
-    def __init__(self, meta: ArrayMeta):
+    def __init__(self, meta: ArrayMeta, disk: bool = True):
         self.meta = meta
-        self.spool = tempfile.TemporaryFile()
+        self.spool = tempfile.TemporaryFile() if disk else io.BytesIO()
         self.entries: dict[int, tuple[int, int, bool]] = {}
 
     def add(self, idx: int, data: bytes, empty: bool) -> None:
@@ -212,11 +215,13 @@ class PlainSink:
     """The objects one task writes into a plain store.
 
     ``add`` takes one encoded inner chunk. An unsharded array's chunk is written at once.
-    A sharded array's chunks wait on local disk until ``flush``, which writes each shard whole
-    from them, one chunk at a time: the caller flushes when it holds every chunk of the
-    shards it has begun (an assemble group's), or, with ``stream``, the sink writes a shard
-    as soon as a chunk of another shard of the same array arrives (chunks come shard by
-    shard) and the caller flushes once at the end.
+    A sharded array's chunks wait until ``flush``, which writes each shard whole: the caller
+    flushes when it holds every chunk of the shards it has begun (an assemble group's, or a
+    block of whole shards). ``stream`` names the arrays whose chunks come one at a time,
+    shard by shard (``True``: all of them), because a whole shard would not fit the task: the
+    chunks of such an array wait on local disk and are read back one at a time, the sink
+    writes a shard as soon as a chunk of another shard of the same array arrives, and the
+    caller flushes once at the end. The other arrays' chunks wait in memory.
 
     ``merge`` is for an append, which may write into a unit an earlier write began: a shard
     file that exists keeps the inner chunks this write does not rewrite, and a chunk of
@@ -224,7 +229,7 @@ class PlainSink:
     fill is left out, as zarr does: an absent object reads as the fill value.
     """
 
-    def __init__(self, root: str, *, merge: bool = False, stream: bool = False):
+    def __init__(self, root: str, *, merge: bool = False, stream=False):
         self.root = root
         self.merge = merge
         self.stream = stream
@@ -243,18 +248,31 @@ class PlainSink:
             self.chunks += 1
             return n
         shard_key = meta.key_encoding.chunk_key(shard_of(tuple(chunk), meta.shard.cps))
-        if self.stream:
+        streamed = self._streamed(meta.name)
+        if streamed:
             done = [k for k in self._pending if k[0] == meta.name and k[1] != shard_key]
             if done:
                 self._write({k: self._pending.pop(k) for k in done})
-        held = self._pending.setdefault((meta.name, shard_key), (meta, _Held(meta)))[1]
+        held = self._pending.setdefault(
+            (meta.name, shard_key), (meta, _Held(meta, disk=streamed))
+        )[1]
         held.add(inner_index(tuple(chunk), meta.shard.cps), data, empty)
         return len(data)
 
-    def flush(self) -> None:
-        """Write the shards that wait."""
-        pending, self._pending = self._pending, {}
-        self._write(pending)
+    def _streamed(self, name: str) -> bool:
+        return self.stream is True or (bool(self.stream) and name in self.stream)
+
+    def flush(self, *, streamed: bool = True) -> None:
+        """Write the shards that wait; with ``streamed=False`` those of the arrays that are not
+        streamed only (the shard of a streamed array may still be getting chunks)."""
+        take = {
+            k: v
+            for k, v in self._pending.items()
+            if streamed or not self._streamed(k[0])
+        }
+        for k in take:
+            del self._pending[k]
+        self._write(take)
 
     def _write(self, pending: dict) -> None:
         for (name, shard_key), (meta, held) in sorted(pending.items()):

@@ -275,7 +275,7 @@ nothing.
 | `ZarrUnsupported` | A cells column of a type GeoBrix does not write (a `decimal`, a string), or a label column that is not a number or a time | `cast <column> to a number or a timestamp` |
 | `ZarrError` | Two cells at one position | `keep one row per cell` |
 | `ZarrError` | A null label in a table of cells | `drop or fill the cells without a position before writing` |
-| `ZarrError` | A shard of a cells write over the task budget | `use smaller shards` |
+| `ZarrError` | A chunk of a cells write over the task budget | `use smaller chunks` |
 | `ZarrGridMismatch` | A cell whose label the store (or `coords`) lacks | `write values the store's <dimension> labels have, or use mode='append' for new steps of the append dimension` |
 | `ValueError` | `root`, `chunks`, `shards`, `codecs`, `file_mode` or `retain` is given outside `create` | `drop them, or create a new store` |
 | `ValueError` | `transactional=False` with a table name as `target`, a `mode` of `"update"` or `"overwrite"`, or `root`, `file_mode`, `retain`, `write_id`, `optimize` or `access="direct"` | `pass the store's path`, `use create or append`, or `drop them` |

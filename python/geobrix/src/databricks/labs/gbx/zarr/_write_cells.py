@@ -12,19 +12,22 @@ fills its grid (as many cells as the product of its labels) needs no second pass
 these the driver plans every block: one per variable and unit, so a create or an append
 needs no position pass over the blocks, and the data pass reads the table once.
 
-**The data pass: combine, then one shuffle.** Each input partition locates its cells and
-gathers them by inner chunk into *partial blocks* (a dense block with a mask, or the cells
-as they came when few), holding at most half the task budget and shipping the oldest first.
-The shuffle moves those partial blocks, keyed by chunk, not a row per cell: a table that
-arrives roughly in chunk order (``gbx_zarr_read``'s) ships each chunk in one or a few pieces.
-The blocks are repartitioned so that each partition owns whole shards, as evenly as the shards
-allow (one partition per shard touched, up to four per slot of the session's parallelism),
-sorted within the partition by shard and chunk, and a streaming merge builds one inner chunk at
-a time, dense, with the fill value where no cell came. Its block (a chunk of one variable) goes
-straight to the writer's pack stage, which encodes it and adds it to the shard it belongs to
-(a plain store spools the shard's chunks on local disk and writes it from there, one chunk at a
-time). A chunk is the most a task holds, plus the partials of that chunk in the batch in hand,
-whatever the size of the shard.
+**The data pass: combine, then one shuffle.** The driver first picks, per group of variables
+that share a layout, the *unit* a task builds (``_choose_unit``): the whole shard when the
+shard of all the group's variables fits the task budget, else one inner chunk at a time. Each
+input partition locates its cells and gathers them by that unit into *partial blocks* (a dense
+block with a mask, or the cells as they came when few), holding at most half the task budget
+and shipping the oldest first. The shuffle moves those partial blocks, keyed by unit, not a row
+per cell: a table that arrives roughly in unit order (``gbx_zarr_read``'s) ships each unit in
+one or a few pieces. The blocks are repartitioned so that each partition owns whole shards, as
+evenly as the shards allow (one partition per shard touched, up to four per slot of the
+session's parallelism), sorted within the partition, and a streaming merge builds one unit at a
+time, dense, with the fill value where no cell came. Its block goes straight to the writer's
+pack stage, which encodes it and writes the shard it belongs to. A shard that does not fit the
+task's memory is written one inner chunk at a time (a plain store spools the shard's chunks on
+local disk and writes it from there): a chunk is then the most a task holds, plus the partials
+of that chunk in the batch in hand, whatever the size of the shard. A shard that fits is built
+and written whole, which has fewer blocks and less to move; both make the same files.
 
 **Rules.** A cell missing from the table reads as the fill value. Two cells at one position
 refuse the write (the task that meets them, on the map side or the merge, raises ``ZarrError``) before anything is
@@ -38,7 +41,7 @@ Nothing here touches ``spark.conf``, ``sparkContext``, ``.rdd``, ``_jvm`` or ``_
 from __future__ import annotations
 
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import pyarrow as pa
@@ -83,7 +86,7 @@ class CellsArgs:
 @dataclass
 class CellsPrepared(Prepared):
     units: dict = field(default_factory=dict)  # variable -> storage unit (a new store)
-    chunk_blocks: bool = True  # the blocks are single chunks, in order by shard
+    chunk_vars: frozenset = frozenset()  # variables whose blocks are single chunks
 
 
 # --- the columns ----------------------------------------------------------------------------
@@ -349,7 +352,7 @@ class Group:
     ckinds: tuple  # the kind of each dimension column
     axes: tuple  # Axis per dimension
     offsets: tuple  # added to a label's position: where the labels start in the array
-    unit: tuple  # inner chunk per dimension (cells): what a task builds, one at a time
+    unit: tuple  # per dimension (cells), what a task builds one at a time: the shard, or the inner chunk
     part: (
         tuple  # storage unit per dimension (cells): a shard, which one task owns whole
     )
@@ -359,6 +362,9 @@ class Group:
     vars: tuple
     dtypes: dict
     fill: dict
+    whole: bool = (
+        True  # a task builds a whole shard (``unit`` is ``part``), not a chunk
+    )
 
 
 def _absolute(batch, g: Group):
@@ -877,6 +883,26 @@ def _unit_bytes(g: Group) -> int:
     return cells * (sum(sizes) + max(sizes))  # the dense arrays and one copy of one
 
 
+def _by_shard(g: Group) -> Group:
+    """``g`` with its shard as the unit a task builds: the blocks, partials and keys are whole
+    shards, as for an unsharded array's chunks."""
+    nu = tuple(
+        -(-n // k) for n, k in zip(g.nu, (p // u for p, u in zip(g.part, g.unit)))
+    )
+    return replace(g, unit=g.part, nu=nu, whole=True)
+
+
+def _choose_unit(g: Group, budget: int) -> Group:
+    """The unit a task builds for ``g``: its whole shard when the shard of all the group's
+    variables (the dense arrays and one copy) fits ``budget`` (one block, one write, as
+    fast as it gets), else one inner chunk at a time, in shard order. The choice is the
+    driver's, from the plan alone, so every task of a group builds the same way."""
+    shard = _by_shard(g)
+    if _unit_bytes(shard) <= budget:
+        return shard
+    return replace(g, whole=False)
+
+
 def _check_budget(g: Group, budget: int) -> None:
     need = _unit_bytes(g)
     if need > budget:
@@ -1136,6 +1162,7 @@ def prepare(
     plan_groups, units = _plan_groups(
         variables, dtypes, dim_cols, kinds, axes, mode, append_dim, at, store, layout
     )
+    plan_groups = [_choose_unit(g, budget) for g in plan_groups]
     for g in plan_groups:
         _check_budget(g, budget)
     # the units the cells fall in: every unit of the window when the caller says the table fills
@@ -1183,4 +1210,5 @@ def prepare(
         known=known,
         append_dim=append_dim if mode == "append" else None,
         units=units,
+        chunk_vars=frozenset(v for g in plan_groups if not g.whole for v in g.vars),
     )

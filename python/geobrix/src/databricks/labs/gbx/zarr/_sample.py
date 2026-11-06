@@ -434,8 +434,15 @@ def _split_steps(
     unit target, lowered to give each of ``slots`` a unit, under ``budget``). ``()`` is one slab.
     """
     arrays = cfg.read.arrays
-    if not cfg.other or not cfg.n_steps or not n_chunks:
+    if not cfg.n_steps or not n_chunks:
         return 0, ()
+    if (
+        not cfg.other
+    ):  # a store with no other dimension: one slab, but its bytes still count
+        one = sum(
+            math.prod(arrays[v].chunks) * arrays[v].itemsize for v in cfg.variables
+        )
+        return one * n_chunks, ()
     ref = arrays[cfg.variables[0]]
     first = cfg.other[0]
     group = cfg.steps[0] // max(1, ref.chunks[first])

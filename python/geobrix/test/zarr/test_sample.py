@@ -557,3 +557,23 @@ def test_a_unit_with_no_selected_step_is_not_read_as_a_box():
     cfg = types.SimpleNamespace(n_steps=0, box_bytes=1 << 20)
     rows = np.array([3, 4])
     assert _sample._unit_boxes(cfg, None, None, rows, rows) is None
+
+
+def test_a_store_without_other_dimensions_still_counts_the_bytes_it_reads():
+    """The driver path is gated on decoded bytes; a 2D store must not count as zero."""
+    import types
+
+    arrays = {
+        "a": types.SimpleNamespace(chunks=(512, 512), itemsize=4),
+        "b": types.SimpleNamespace(chunks=(512, 512), itemsize=8),
+    }
+    cfg = types.SimpleNamespace(
+        read=types.SimpleNamespace(arrays=arrays),
+        other=(),
+        n_steps=1,
+        variables=("a", "b"),
+    )
+    total, slabs = _sample._split_steps(cfg, 100, 8, 1 << 30)
+    assert total == 100 * 512 * 512 * 12 and slabs == ()
+    assert total > _sample._DRIVER_BYTES  # so a wide 2D sample goes to tasks
+    assert _sample._split_steps(cfg, 0, 8, 1 << 30) == (0, ())

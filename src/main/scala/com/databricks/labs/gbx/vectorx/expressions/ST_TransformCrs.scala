@@ -117,9 +117,10 @@ object ST_TransformCrs extends WithExpressionInfo {
       * path, so a grid-requiring CRS resolves even when nothing else in the session initialized
       * GDAL. Mirrors [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]'s
       * `eval(row, crs, conf)`. `conf` is the base64 config literal — never user-supplied, never
-      * null (propagateNull short-circuits before this runs). */
+      * null (propagateNull short-circuits before this runs). This runs once per ROW, so the config is decoded
+      * once per JVM ([[ExpressionConfig.fromUtf8]]), not per row: the decode was ~1 ms against a ~10 us transform. */
     def evalSqlWithConf(geom: Any, targetCrs: UTF8String, conf: UTF8String): Array[Byte] = {
-        GDALManager.init(ExpressionConfig.fromB64(conf.toString))
+        GDALManager.init(ExpressionConfig.fromUtf8(conf))
         evalSql(geom, targetCrs)
     }
 
@@ -158,7 +159,7 @@ object ST_TransformCrs3 extends WithExpressionInfo {
     def evalSqlWithConf(
         geom: Any, targetCrs: UTF8String, sourceCrs: UTF8String, conf: UTF8String
     ): Array[Byte] = {
-        GDALManager.init(ExpressionConfig.fromB64(conf.toString))
+        GDALManager.init(ExpressionConfig.fromUtf8(conf))
         evalSql(geom, targetCrs, sourceCrs)
     }
 

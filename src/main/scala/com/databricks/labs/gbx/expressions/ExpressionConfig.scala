@@ -75,11 +75,43 @@ object ExpressionConfig {
         new ExpressionConfig(merged, new SerializableConfiguration(spark.sessionState.newHadoopConf()))
     }
 
-    /** Deserialize from base64 (used on executors). */
+    /** The configurations this JVM has decoded, by their encoding. A row-level expression (`gbx_st_transformcrs`)
+      * calls [[fromB64]] once per ROW, and a decode deserializes the whole Spark conf map and Hadoop
+      * `Configuration` (~1 ms; the transform itself is ~10 us), so each distinct encoding is decoded once per JVM.
+      * A session has one, so the map stays as small as the sessions that used the engine here; the cap is a
+      * backstop for a long-lived JVM that cycles through many. */
+    private val decoded = new java.util.concurrent.ConcurrentHashMap[String, ExpressionConfig]()
+    private val DecodedCap = 64
+
+    /** Deserialize from base64 (used on executors); decoded once per JVM per distinct encoding. The result is a
+      * shared, read-only value: callers read it and never mutate its `hConf`. */
     def fromB64(b64: String): ExpressionConfig = {
-        val bytes = java.util.Base64.getDecoder.decode(b64)
-        val ois = new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes))
-        ois.readObject().asInstanceOf[ExpressionConfig]
+        val hit = decoded.get(b64)
+        if (hit != null) hit
+        else {
+            val bytes = java.util.Base64.getDecoder.decode(b64)
+            val ois = new java.io.ObjectInputStream(new java.io.ByteArrayInputStream(bytes))
+            val cfg = try ois.readObject().asInstanceOf[ExpressionConfig] finally ois.close()
+            if (decoded.size() >= DecodedCap) decoded.clear()
+            decoded.put(b64, cfg)
+            cfg
+        }
+    }
+
+    /** The last (literal instance, decoded config) pair [[fromUtf8]] saw. */
+    @volatile private var lastLiteral: (UTF8String, ExpressionConfig) = _
+
+    /** [[fromB64]] for the per-row path. The config arrives as the SAME `UTF8String` literal instance on every row,
+      * so a reference hit skips even `conf.toString` and the hash of its ~50 KB (each ~40 us, still 4x the
+      * transform); a different instance falls back to [[fromB64]]'s per-encoding cache. */
+    def fromUtf8(conf: UTF8String): ExpressionConfig = {
+        val last = lastLiteral
+        if (last != null && (last._1 eq conf)) last._2
+        else {
+            val cfg = fromB64(conf.toString)
+            lastLiteral = (conf, cfg)
+            cfg
+        }
     }
 
     /** Decode config from an expression that evaluated to a config literal (e.g. ExpressionConfigExpr). */

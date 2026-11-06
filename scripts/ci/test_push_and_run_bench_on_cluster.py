@@ -443,6 +443,7 @@ def test_split_by_fn_launches_one_job_per_function_with_its_own_run_id_and_forms
     assert mod.main() == 3  # the worst exit code of the launches
     assert len(started) == 2 and all("--split-by" not in a for a in started)
     first, second = started
+    assert first[first.index("--part") + 1] == "gbx_rst_merge_agg" and second[second.index("--part") + 1] == "gbx_rst_bng_rasterize_agg"
     assert first[first.index("--run-id") + 1] == "r1-gbx_rst_merge_agg" and first[first.index("--levels-forms") + 1] == "c0,tvf"
     assert second[second.index("--run-id") + 1] == "r1-gbx_rst_bng_rasterize_agg" and second[second.index("--levels-forms") + 1] == "c0"
     assert first.count("--run-id") == 1 and first.count("--levels-forms") == 1  # the originals are replaced, not repeated
@@ -573,3 +574,16 @@ def test_a_launch_on_compute_without_a_purpose_is_refused_with_the_fix(launch, s
     monkeypatch.setattr(sys, "argv", ["x", "--serverless", "--explain-only", "--no-smoke", "--skip-preflight", "--no-wait"])
     mod.main()
     assert "--purpose" not in capsys.readouterr().err
+
+
+def test_concurrent_parts_need_explore_mode_and_the_mode_reaches_the_notebook(launch, sdk):
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--concurrent", "2", "--no-wait") == 2
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--mode", "fast", "--no-wait") == 2
+    assert not sdk.uploads
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--mode", "explore", "--concurrent", "2", "--part", "gbx_f", "--no-wait") == 0
+    assert _grab(sdk, "RUN_MODE") == "'explore'" and _grab(sdk, "CONCURRENT") == "2" and _grab(sdk, "PART") == "'gbx_f'"
+    head = _header(sdk)
+    assert "mode explore" in head
+    sdk.uploads.clear()
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
+    assert _grab(sdk, "RUN_MODE") == "'isolate'" and _grab(sdk, "CONCURRENT") == "1"

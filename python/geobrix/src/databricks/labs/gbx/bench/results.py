@@ -139,6 +139,14 @@ class ResultRow:
     # time (0.0 when there are none). 0.0 on a row that did not time (and on every other leg).
     setup_s: float = 0.0
     warmup_s: float = 0.0
+    # How the run was set up. run_mode: "isolate" (timing-grade: one run on its compute) or "explore" (parts may share a
+    # cluster; the numbers are for finding what is slow, not for a comparison). concurrent: the most parts running on the
+    # cluster at once (1 when alone). cluster_id: the cluster a classic run used ("" on Serverless). part: which part of
+    # a split run this row is from (the function of --split-by fn; "" for a whole run).
+    run_mode: str = "isolate"
+    concurrent: int = 1
+    cluster_id: str = ""
+    part: str = ""
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

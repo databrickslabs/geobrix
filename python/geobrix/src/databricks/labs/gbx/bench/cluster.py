@@ -84,6 +84,10 @@ ORDER = [
     "failure_mode",
     "setup_s",
     "warmup_s",
+    "run_mode",
+    "concurrent",
+    "cluster_id",
+    "part",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -322,7 +326,7 @@ def bench_header(cfg: dict, info: dict) -> str:
         + (" - the smoke gates the real run" if smoke else ""),
         f"- **Expected time:** {timing}",
         f"- **Monitoring:** {watch}; heartbeat `{cfg.get('out_dir')}/heartbeat.json`; launcher watchdog ceiling "
-        f"{_minutes(info.get('ceiling_min'))} min; cancel: `databricks --profile {info.get('profile') or '<profile>'} jobs cancel-run <run id>`; on {where}, git {info.get('sha') or '?'}",
+        f"{_minutes(info.get('ceiling_min'))} min; cancel: `databricks --profile {info.get('profile') or '<profile>'} jobs cancel-run <run id>`; on {where}, mode {cfg.get('run_mode', 'isolate')}, git {info.get('sha') or '?'}",
     ]
     return "\n".join(lines) + "\n"
 
@@ -529,6 +533,14 @@ RUNG_CAP_S = {rung_cap_s}
 SETUP_CAP_S = {setup_cap_s}
 # A rung whose projected run is over WARMUP_SKIP_S seconds runs its measured iterations cold (0 keeps every warmup).
 WARMUP_SKIP_S = {warmup_skip_s}
+# How the run was set up, written on every levels row (see ResultRow): isolate = timing-grade, explore = parts may share a cluster.
+RUN_MODE = {run_mode!r}
+CONCURRENT = {concurrent}
+PART = {part!r}
+try:  # the cluster this driver runs on ("" on Serverless, which has no cluster id to read)
+    CLUSTER_ID = spark.conf.get("spark.databricks.clusterUsageTags.clusterId")
+except Exception:
+    CLUSTER_ID = ""
 SMOKE = {smoke!r}
 SMOKE_ROWS = {smoke_rows}
 INJECT_STALL = {inject_stall}
@@ -2807,7 +2819,8 @@ _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, 
                        scales=LEVELS_SCALES, on_form=_sink, heartbeat=HEARTBEAT, form_cap_s=STALL_CAP_S,
                        inject_stall=INJECT_STALL, fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR,
                        rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S,
-                       warmup_skip_s=WARMUP_SKIP_S)
+                       warmup_skip_s=WARMUP_SKIP_S, run_mode=RUN_MODE, concurrent=CONCURRENT,
+                       cluster_id=CLUSTER_ID, part=PART)
 lw.extend(_lv_rows)
 _show_md(f"levels leg {LEVELS_MVP} -- {RUN_ID}", _lv.summarize(_lv_rows))
 """
@@ -2846,7 +2859,8 @@ if _smoke["import_check"]["ok"] and LEVELS_MVP:
                            scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,
                            form_cap_s=STALL_CAP_S, report_tasks=True, inject_stall=INJECT_STALL,
                            fail_fast=FAIL_FAST, bar_factor=BAR_FACTOR, rung_cap_s=RUNG_CAP_S, setup_cap_s=SETUP_CAP_S,
-                           warmup_skip_s=WARMUP_SKIP_S)
+                           warmup_skip_s=WARMUP_SKIP_S, run_mode=RUN_MODE, concurrent=CONCURRENT,
+                           cluster_id=CLUSTER_ID, part=PART)
     for _r in _lv_rows:
         _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
                                     tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
@@ -3636,6 +3650,9 @@ def build_bench_notebook(cfg: dict) -> dict:
         rung_cap_s=float(cfg.get("rung_cap_s", 1200)),
         setup_cap_s=float(cfg.get("setup_cap_s", 600)),
         warmup_skip_s=float(cfg.get("warmup_skip_s", 120)),
+        run_mode=str(cfg.get("run_mode", "isolate")),
+        concurrent=int(cfg.get("concurrent", 1)),
+        part=str(cfg.get("part", "")),
         smoke=bool(cfg.get("smoke")),
         smoke_rows=int(cfg.get("smoke_rows", 16)),
         inject_stall=float(cfg.get("inject_stall", 0) or 0),

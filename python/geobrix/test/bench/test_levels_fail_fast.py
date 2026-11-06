@@ -2,6 +2,7 @@
 early exit, and a setup cap. The forms are fakes over a fake Spark and a fake clock: nothing here runs a query.
 """
 
+import dataclasses
 import threading
 import time
 import types
@@ -1146,3 +1147,72 @@ def test_an_l3_rung_with_a_worker_peak_is_still_cancelled_at_its_deadline(
     )  # fmt: skip
     assert time.monotonic() - t0 < 25  # the sleep is 30 s a row
     assert rows[0].status == "over-bar"
+
+
+# ---- how the run was set up: isolate / explore, concurrent, cluster, part
+
+
+def test_every_row_records_the_mode_the_concurrency_the_cluster_and_the_part(env):
+    PLAN["f"] = lambda sp, src: advance(env, 1)
+    (alone,), _ = env.run([form("f")], scales=(1,))
+    assert (alone.run_mode, alone.concurrent, alone.cluster_id, alone.part) == (
+        "isolate",
+        1,
+        "",
+        "",
+    )
+    PLAN["slow"] = lambda sp, src: advance(env, 100)
+    rows, _ = env.run(
+        [form("slow")],
+        scales=(1, 4),
+        rung_cap_s=300,
+        bar_factor=1.0,
+        run_mode="explore",
+        concurrent=3,
+        cluster_id="0101-x",
+        part="gbx_f",
+    )
+    assert {r.status for r in rows} == {"ok", "skipped"}  # skipped rows say it too
+    assert {(r.run_mode, r.concurrent, r.cluster_id, r.part) for r in rows} == {
+        ("explore", 3, "0101-x", "gbx_f")
+    }
+
+
+def test_the_comparison_refuses_to_mix_modes_and_takes_old_rows_as_isolated():
+    from databricks.labs.gbx.bench import compare as cmp
+
+    base = dict(
+        run_id="r", api="x", fn="f", category="c", mode="spark-path", rows=10, level="L3", form="v", compute="dedicated",
+        **levels.capture_env("venv"),
+    )  # fmt: skip
+    iso = [levels._row(base, status="ok")]
+    exp = [levels._row({**base, "run_mode": "explore", "concurrent": 2}, status="ok")]
+    cmp.check_comparable(iso, iso)  # alike: fine
+    cmp.check_comparable(exp, exp)  # explore against explore: fine
+    for a, b in ((iso, exp), (exp, iso)):
+        with pytest.raises(cmp.ModeMixError, match="different run modes"):
+            cmp.compare_cells(a, b)
+    old = results.ResultRow(**{**dataclasses.asdict(iso[0])})
+    assert (
+        old.run_mode == "isolate" and old.concurrent == 1
+    )  # a shard from before the columns reads as isolated
+
+
+def test_the_notebook_writes_the_mode_the_concurrency_and_the_part_on_its_rows():
+    from databricks.labs.gbx.bench import cluster as cl
+
+    cfg = dict(
+        wheel="/Volumes/c/s/v/w.whl", corpus="/Volumes/c/s/v/corpus", out_dir="/Volumes/c/s/v/out", table="c.s.t",
+        run_id="r1", functions="", modes="spark-path", row_counts="10", warmup=0, measured=1, lightweight=True,
+        levels_mvp="S", levels_uc="c.s", run_mode="explore", concurrent=2, part="gbx_f",
+    )  # fmt: skip
+    nb = "\n".join("".join(c["source"]) for c in cl.build_bench_notebook(cfg)["cells"])
+    assert (
+        "RUN_MODE = 'explore'" in nb
+        and "CONCURRENT = 2" in nb
+        and "PART = 'gbx_f'" in nb
+    )
+    assert (
+        "run_mode=RUN_MODE, concurrent=CONCURRENT," in nb
+        and "cluster_id=CLUSTER_ID, part=PART" in nb
+    )

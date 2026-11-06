@@ -778,7 +778,7 @@ def levels_functions(levels_mvp, root, only=()) -> dict:
 def split_by_function_args(argv, run_id, groups) -> list:
     """The argv of one launch per function: this launch's own, without ``--split-by`` and with its own ``--run-id``
     (``<run>-<function>``) and ``--levels-forms`` (the function's form names)."""
-    drop = {"--split-by": 1, "--run-id": 1, "--levels-forms": 1}
+    drop = {"--split-by": 1, "--run-id": 1, "--levels-forms": 1, "--part": 1}
     base, skip = [], 0
     for a in argv:
         if skip:
@@ -790,7 +790,7 @@ def split_by_function_args(argv, run_id, groups) -> list:
     plans = []
     for fn, variants in groups.items():
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", fn).strip("_")
-        plans.append((fn, base + ["--run-id", f"{run_id}-{safe}", "--levels-forms", ",".join(variants)]))
+        plans.append((fn, base + ["--run-id", f"{run_id}-{safe}", "--levels-forms", ",".join(variants), "--part", fn]))
     return plans
 
 
@@ -883,6 +883,19 @@ def _main(_stack) -> int:
     bar_factor = float(_arg("--bar-factor", "1.5"))
     rung_cap_min = float(_arg("--rung-cap-min", "20"))
     setup_cap_min = float(_arg("--setup-cap-min", "10"))
+    # --mode isolate|explore: isolate (default) is timing-grade, one run on its compute; explore lets parts share a
+    # cluster, its rows are flagged and never compared with isolated ones. --concurrent <n>: how many parts run on the
+    # cluster at once (needs --mode explore). --part <name>: which part of a split run this is (--split-by sets it).
+    run_mode = _arg("--mode", "isolate")
+    concurrent = int(_arg("--concurrent", "1"))
+    part = _arg("--part", "")
+    if run_mode not in ("isolate", "explore") or concurrent < 1 or (concurrent > 1 and run_mode != "explore"):
+        print(
+            "ERROR: --mode is isolate or explore, and --concurrent > 1 needs --mode explore.\n"
+            "Fix: add --mode explore (its rows are flagged and never compared with isolated ones).",
+            file=sys.stderr,
+        )
+        return 2
     warmup_skip_s = float(_arg("--warmup-skip-s", "120"))
     if warmup_skip_s < 0:
         print("ERROR: --warmup-skip-s must be 0 (always warm) or a number of seconds.", file=sys.stderr)
@@ -1523,6 +1536,9 @@ def _main(_stack) -> int:
         rung_cap_s=rung_cap_min * 60.0,
         setup_cap_s=setup_cap_min * 60.0,
         warmup_skip_s=warmup_skip_s,
+        run_mode=run_mode,
+        concurrent=concurrent,
+        part=part,
         inject_stall=inject_stall,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.

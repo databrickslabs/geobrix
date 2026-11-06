@@ -151,6 +151,8 @@ Options:
   --setup-cap-min <n>   the most a rung's setup may take at 1x (x the scale, held to the rung cap); past it, setup-bound (default 10)
   --purpose "<why>"     REQUIRED on a launch: what the run tests and why (heads the notebook, rides on the run name; --explain-only may omit it)
   --pool <name>         lease an idle cluster of the pool (gbx:bench:pool) instead of making one; --pool-wait-min <n> to wait (default 30)
+  --mode isolate|explore  isolate (default): timing-grade, one run on its compute; explore: parts may share a cluster, rows flagged and never
+                        compared with isolated ones. --concurrent <n> (needs explore) and --part <name> are written on the rows
   --warmup-skip-s <n>   a rung whose projected run is over n seconds skips its warmup (default 120; 0 keeps every warmup)
   --split-by fn         with --levels <set>: one job per function of the set, all started at once (run id <run>-<function>)
   --inject-stall <s>    TEST ONLY: add a form that sleeps s seconds on the driver (proves the watchdog)

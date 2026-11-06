@@ -12,6 +12,7 @@ import csv
 import json
 import math
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
@@ -279,8 +280,35 @@ def _key(r: ResultRow):
     return (r.fn, r.mode, r.tile_px, r.bands, r.dtype, r.srid, r.nodata_frac, r.rows)
 
 
+class ModeMixError(ValueError):
+    """Rows from explore runs (or from runs with parts sharing a cluster) set beside isolated ones."""
+
+
+def _mode_of(rows) -> set:
+    return {
+        (getattr(r, "run_mode", "isolate"), int(getattr(r, "concurrent", 1) or 1) > 1)
+        for r in rows
+    }
+
+
+def check_comparable(*sides) -> None:
+    """Refuse a comparison that mixes modes: an explore run's times carry contention (concurrent parts on one cluster),
+    so they are not set against an isolated run's, nor against each other's across modes.
+    """
+    modes = set()
+    for rows in sides:
+        modes |= _mode_of(rows)
+    if len(modes) > 1:
+        raise ModeMixError(
+            "rows of different run modes cannot be compared: "
+            + ", ".join(sorted(f"{m}{' (concurrent)' if c else ''}" for m, c in modes))
+            + ". Time both sides with --mode isolate, or compare only explore runs with each other."
+        )
+
+
 def compare_cells(hw_rows: List[ResultRow], lw_rows: List[ResultRow]):
     """Return (cells, unmatched). cells: matched CellCompare list. unmatched: (fn, side, key)."""
+    check_comparable(hw_rows, lw_rows)
     hw_by = {_key(r): r for r in hw_rows}
     lw_by = {_key(r): r for r in lw_rows}
     cells: List[CellCompare] = []
@@ -890,7 +918,11 @@ def main(argv=None):
 
     hw_rows = _r.read_jsonl(a.heavyweight)
     lw_rows = _r.read_jsonl(a.lightweight)
-    cells, unmatched = compare_cells(hw_rows, lw_rows)
+    try:
+        cells, unmatched = compare_cells(hw_rows, lw_rows)
+    except ModeMixError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(2)
     out = Path(a.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     write_csv(cells, out / "comparison.csv")

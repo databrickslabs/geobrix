@@ -440,6 +440,10 @@ def run_mvp(
     watch_poll_s: float = WATCH_POLL_S,
     warmup_skip_s: float = WARMUP_SKIP_S,
     escalate_s: float = ESCALATE_AFTER_S,
+    run_mode: str = "isolate",
+    concurrent: int = 1,
+    cluster_id: str = "",
+    part: str = "",
 ) -> List[ResultRow]:
     """Time every form of `mvp` that this compute offers, at each scale; one row per form and scale.
 
@@ -483,6 +487,10 @@ def run_mvp(
         form of the same input and released when a different one is next, so one input is held at a time; the later
         forms say ``input reused`` and their setup is the lookup.
     The launcher's whole-run watchdog stays the last resort where an interrupt cannot reach the work.
+
+    Every row records how the run was set up: `run_mode` ("isolate": timing-grade, one run on its compute; "explore":
+    parts may share a cluster, so the numbers find what is slow and are not compared with isolated ones), `concurrent`
+    (the most parts on the cluster at once), `cluster_id` and `part` (which part of a split run).
     """
     from databricks.labs.gbx.bench import levels_forms as lf
 
@@ -560,6 +568,10 @@ def run_mvp(
             level=form.level,
             form=form.variant,
             compute=compute,
+            run_mode=run_mode,
+            concurrent=int(concurrent),
+            cluster_id=cluster_id,
+            part=part,
             **env,
         )
         rows, prev = by_form[i], hist.get(i)

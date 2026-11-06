@@ -377,30 +377,31 @@ Call them with `LATERAL` (for example `FROM t, LATERAL gbx_st_triangulate(...) t
 ### st_interpolateelevationbbox
 
 {/* BEGIN GENERATED gbx_st_interpolateelevationbbox: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_interpolateelevationbbox(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_interpolateelevationbbox(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode])` | rows |
 | Python | `vectorx.functions.st_interpolateelevationbbox(df, points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, mode=None)` | DataFrame |
 
 Rows: `elevation_point` `BINARY`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
-| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
-| `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
-| `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
-| `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
-| `xmin` | `DOUBLE` |  | The west edge of the grid. |
-| `ymin` | `DOUBLE` |  | The south edge of the grid. |
-| `xmax` | `DOUBLE` |  | The east edge of the grid, above `xmin`. |
-| `ymax` | `DOUBLE` |  | The north edge of the grid, above `ymin`. |
-| `width_px` | `INT` |  | The number of grid columns, above 0. |
-| `height_px` | `INT` |  | The number of grid rows, above 0. |
-| `srid` | `INT` |  | The SRID of the output points; 0 for none. |
-| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
+| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `xmin` | `DOUBLE` | `DOUBLE` |  | The west edge of the grid. |
+| `ymin` | `DOUBLE` | `DOUBLE` |  | The south edge of the grid. |
+| `xmax` | `DOUBLE` | `DOUBLE` |  | The east edge of the grid, above `xmin`. |
+| `ymax` | `DOUBLE` | `DOUBLE` |  | The north edge of the grid, above `ymin`. |
+| `width_px` | `INT` | `INT` |  | The number of grid columns, above 0. |
+| `height_px` | `INT` | `INT` |  | The number of grid rows, above 0. |
+| `srid` | `INT` | `INT` |  | The SRID of the output points; 0 for none. |
+| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
 {/* END GENERATED gbx_st_interpolateelevationbbox */}
 
 <Impl udtf/>
@@ -422,28 +423,29 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 ### st_interpolateelevationgeom
 
 {/* BEGIN GENERATED gbx_st_interpolateelevationgeom: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_interpolateelevationgeom(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_interpolateelevationgeom(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode])` | rows |
 | Python | `vectorx.functions.st_interpolateelevationgeom(df, points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, mode=None)` | DataFrame |
 
 Rows: `elevation_point` `BINARY`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
-| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
-| `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
-| `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
-| `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
-| `grid_origin` | `BINARY` or `STRING` |  | The origin of the grid: a POINT in WKB, EWKB, WKT or EWKT. Its SRID is the SRID of the output. |
-| `grid_cols` | `INT` |  | The number of grid columns. |
-| `grid_rows` | `INT` |  | The number of grid rows. |
-| `cell_size_x` | `DOUBLE` |  | The cell width in the geometry's units; a positive value steps east. |
-| `cell_size_y` | `DOUBLE` |  | The cell height in the geometry's units; a negative value steps south. |
-| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
+| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `grid_origin` | `BINARY` or `STRING` | `GEOMETRY` |  | The origin of the grid: a POINT in WKB, EWKB, WKT or EWKT. Its SRID is the SRID of the output. |
+| `grid_cols` | `INT` | `INT` |  | The number of grid columns. |
+| `grid_rows` | `INT` | `INT` |  | The number of grid rows. |
+| `cell_size_x` | `DOUBLE` | `DOUBLE` |  | The cell width in the geometry's units; a positive value steps east. |
+| `cell_size_y` | `DOUBLE` | `DOUBLE` |  | The cell height in the geometry's units; a negative value steps south. |
+| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
 {/* END GENERATED gbx_st_interpolateelevationgeom */}
 
 <Impl udtf/>
@@ -465,23 +467,24 @@ Builds a TIN from mass points and breaklines, then samples elevation on a regula
 ### st_triangulate
 
 {/* BEGIN GENERATED gbx_st_triangulate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_st_triangulate(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode])` | rows |
 | Python | `vectorx.functions.st_triangulate(df, points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, mode=None)` | DataFrame |
 
 Rows: `triangle` `BINARY`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
-| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
-| `merge_tolerance` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
-| `snap_tolerance` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
-| `split_point_finder` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
-| `mode` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `points_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The mass points: WKB, EWKB, WKT or EWKT, as an array. A multi-point element adds each of its points; a point without Z has Z 0. |
+| `breaklines_array` | `ARRAY<BINARY>` or `ARRAY<STRING>` | `ARRAY<GEOMETRY>` |  | The break lines (line strings in any of the four formats), as an array; NULL or empty for none. Each segment becomes an edge of the triangulation. |
+| `merge_tolerance` | `DOUBLE` | `DOUBLE` |  | Points closer than this in X and Y become one point. 0 merges only identical points. |
+| `snap_tolerance` | `DOUBLE` | `DOUBLE` |  | The distance within which a vertex takes the Z value of a break line. |
+| `split_point_finder` | `STRING` | `STRING` |  | The rule that places the extra points of the conforming mode: `'NONENCROACHING'` or `'MIDPOINT'`. The constrained mode, the default, does not use it. |
+| `mode` | `STRING` | `STRING` | `'constrained'` | `'constrained'`, the default. `'conforming'` adds points along the break lines and runs on the JVM level only; the Python level raises for it. Any other word raises. |
 {/* END GENERATED gbx_st_triangulate */}
 
 <Impl udtf/>

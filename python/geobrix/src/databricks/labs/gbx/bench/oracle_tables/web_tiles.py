@@ -259,6 +259,13 @@ WEB_TILES = share(
     "tilexyz_covered", "tilexyz_partial", "tilexyz_out_of_extent", "tilexyz_jpeg", "tilexyz_size",
     "tilexyz_null_tile", "tilexyz_error_tile", "tilexyz_corrupt_tile", "tilexyz_null_coordinate",
     "tilexyz_rescale_pair", "tilexyz_rescale_reversed", "tilexyz_bad_format", "tilexyz_bad_size",
+    "xyzpyramid_z8_9", "xyzpyramid_size", "xyzpyramid_null_tile", "xyzpyramid_error_tile", "xyzpyramid_corrupt_tile",
+    "xyzpyramid_bad_zoom_range", "xyzpyramid_bad_format",
 ) + edges(_not_null=("tilexyz",), tilexyz=(11, 1020, 678)) + (
     Case("uc_tilexyz_size_over_cap_refused", TXYZ, (TILE, 11, 1020, 678, "PNG", 4096), "uc_refused", None, ("uc",)),
+    # the pyramid renders through the tilexyz kernel, so it keeps the 64 MiB pixel cap and the render-size cap; a virtual
+    # tile is refused with a Fix, and a tile that cannot be read gives no rows
+    Case("uc_xyzpyramid_virtual_refused", PYR, (VIRT, 8, 9), "uc_refused", None, ("uc",)),
+    Case("uc_xyzpyramid_input_over_cap_refused", PYR, (Build("rg_over_cap"), 8, 9), "raises", "decoded, over the 64 MiB", ("uc",)),
+    Case("uc_xyzpyramid_size_over_cap_refused", PYR, (TILE, 8, 8, "PNG", 4096), "uc_refused", None, ("uc",)),
 )  # fmt: skip

@@ -142,6 +142,7 @@ VECTOR_GENERATOR = (
         (SQUARE_WKT, [], 0.0, 0.0, F, _wkb.dumps(Point(0.0, 10.0)), 2, 2, 5.0, -5.0),
         "elev_points",
         CENTRES,
+        ("session",),  # UC takes a GEOMETRY origin, not WKB bytes
     ),
     Case(
         "elevgeom_origin_ewkt",
@@ -161,6 +162,42 @@ VECTOR_GENERATOR = (
         EGM,
         (None, [], 0.0, 0.0, F, "POINT (0 10)", 2, 2, 5.0, -5.0),
         "no_rows",
+    ),
+    # ---------------------------------------------------------------------------------------------- Unity Catalog only
+    # The conforming mode runs on the JVM level; the table functions are Python, so they refuse it with a Fix. A grid whose
+    # rows could not fit the array cap is refused from its cell count before the surface is built (the price: a grid with
+    # cells outside the hull is refused too, as the estimate counts every cell).
+    Case(
+        "uc_tri_conforming_refused",
+        TRI,
+        (KITE, [], 0.0, 0.0, F, "conforming"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_elevbbox_conforming_refused",
+        EBB,
+        (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 0, "conforming"),
+        "uc_refused",
+        None,
+        ("uc",),
+    ),
+    Case(
+        "uc_elevbbox_grid_over_cap_refused",
+        EBB,
+        (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2000, 1000, 0),
+        "raises",
+        "upper estimate",
+        ("uc",),
+    ),
+    Case(
+        "uc_elevgeom_grid_over_cap_refused",
+        EGM,
+        (SQUARE_WKT, [], 0.0, 0.0, F, "POINT (0 10)", 2000, 1000, 0.005, -0.01),
+        "raises",
+        "upper estimate",
+        ("uc",),
     ),
     # ---------------------------------------------------------------------------------------------- MVT pyramid
     Case(

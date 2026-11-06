@@ -170,42 +170,9 @@ class _AsMvtPyramidUDTF:
 # Sloan recovery; conforming mode is heavy-only and raises.
 
 
-def _geoms_from_array(arr):
-    """Decode an ARRAY<BINARY|STRING> of geometries via the shared parse_geom
-    contract (WKB/EWKB/WKT/EWKT)."""
-    from ._geom import parse_geom
-
-    out = []
-    for g in arr or []:
-        geom = parse_geom(g)
-        if geom is not None:
-            out.append(geom)
-    return out
-
-
-def _all_xyz(geom):
-    """Recursively flatten any geometry to a list of (x, y, z) coordinate tuples.
-
-    Handles multi-part geometries (MULTIPOINT/MULTILINESTRING/etc. expose
-    ``.geoms``, not ``.coords``) and pads 2D coordinates with z=0.0. Used to
-    extract triangulation/elevation sites from the points array, so a single
-    MULTIPOINT element doesn't crash on a missing ``.coords``.
-    """
-    if hasattr(geom, "geoms"):
-        return [c for g in geom.geoms for c in _all_xyz(g)]
-    return [(c[0], c[1], c[2] if len(c) == 3 else 0.0) for c in geom.coords]
-
-
-def _validate_mode(mode):
-    m = (mode or "constrained").lower()
-    if m == "conforming":
-        raise NotImplementedError(
-            "mode='conforming' (Steiner-point conforming Delaunay) is heavy-only; "
-            "use the heavyweight vectorx tier, or mode='constrained' in light."
-        )
-    if m != "constrained":
-        raise ValueError(f"mode must be 'constrained' or 'conforming'; got {mode!r}")
-    return m
+_geoms_from_array = _tin.geoms_from_array
+_all_xyz = _tin.all_xyz
+_validate_mode = _tin.validate_mode
 
 
 def _triangulate_schema():
@@ -232,19 +199,10 @@ class _TriangulateUDTF:
             or split_point_finder is None
         ):
             return  # a NULL required argument: no rows, as explode(NULL)
-        import numpy as np
-        from shapely import to_wkb
-        from shapely.geometry import Polygon
-
-        pt_geoms = _geoms_from_array(points)
-        if not pt_geoms:
-            return
-        coords = np.array([xyz for g in pt_geoms for xyz in _all_xyz(g)], dtype=float)
-        bls = [np.array(g.coords, dtype=float) for g in _geoms_from_array(breaklines)]
-        for t in _tin.triangulate(
-            coords, bls, float(merge_tolerance), float(snap_tolerance)
+        for blob in _tin.triangle_wkbs(
+            points, breaklines, merge_tolerance, snap_tolerance
         ):
-            yield (to_wkb(Polygon([(p[0], p[1]) for p in t])),)
+            yield (blob,)
 
 
 # --- st_interpolateelevation{bbox,geom}: barycentric Z over the constrained TIN -------------
@@ -261,24 +219,8 @@ def _emit_elevation(points, breaklines, mt, st, spf, mode, cell_iter, srid):
     _validate_mode(mode)
     if mt is None or st is None or spf is None:
         return  # a NULL required argument: no rows, as explode(NULL)
-    import numpy as np
-    from shapely import set_srid, to_wkb
-    from shapely.geometry import Point
-
-    pt_geoms = _geoms_from_array(points)
-    if not pt_geoms:
-        return
-    coords = np.array([xyz for g in pt_geoms for xyz in _all_xyz(g)], dtype=float)
-    bls = [np.array(g.coords, dtype=float) for g in _geoms_from_array(breaklines)]
-    tris = _tin.triangulate(coords, bls, float(mt), float(st))
-    for x, y in cell_iter:
-        z = _tin.interpolate_z(tris, x, y)
-        if z is None:
-            continue
-        p = Point(x, y, z)
-        if srid:
-            p = set_srid(p, int(srid))
-        yield (to_wkb(p, output_dimension=3),)
+    for blob in _tin.elevation_wkbs(points, breaklines, mt, st, cell_iter, srid):
+        yield (blob,)
 
 
 @udtf(returnType=_elevation_schema())

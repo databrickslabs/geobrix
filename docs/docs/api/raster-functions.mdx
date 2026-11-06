@@ -2442,21 +2442,22 @@ Compute the tile in a subquery or CTE, then call the generator on that column, a
 ### rst_bng_tessellate
 
 {/* BEGIN GENERATED gbx_rst_bng_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])` | rows |
 | Python | `rasterx.functions.rst_bng_tessellate(df, tile, resolution, assignment=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `resolution` | `INT` or `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `resolution` | `INT` or `STRING` | `STRING` |  | BNG resolution: an index (1 to 6, negative for a quadrant) or a size such as `'1km'` or `'100m'`. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
 {/* END GENERATED gbx_rst_bng_tessellate */}
 
 <Impl udtf/>
@@ -2484,21 +2485,22 @@ Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (
 ### rst_h3_tessellate
 
 {/* BEGIN GENERATED gbx_rst_h3_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_h3_tessellate(tile, resolution, [assignment], [coverage])` | rows |
 | Python | `rasterx.functions.rst_h3_tessellate(df, tile, resolution, assignment=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `resolution` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `resolution` | `INT` | `INT` |  | The H3 resolution, a whole number from 0 to 15. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
 {/* END GENERATED gbx_rst_h3_tessellate */}
 
 <Impl udtf/>
@@ -2559,21 +2561,22 @@ Subdivide into smaller tiles by approximate size in MB.
 ### rst_quadbin_tessellate
 
 {/* BEGIN GENERATED gbx_rst_quadbin_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_quadbin_tessellate(tile, resolution, [assignment], [coverage])` | rows |
 | Python | `rasterx.functions.rst_quadbin_tessellate(df, tile, resolution, assignment=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `resolution` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `resolution` | `INT` | `INT` |  | The quadbin zoom level, a whole number from 0 to 20. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
 {/* END GENERATED gbx_rst_quadbin_tessellate */}
 
 <Impl udtf/>
@@ -2599,22 +2602,23 @@ Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (
 ### rst_custom_tessellate
 
 {/* BEGIN GENERATED gbx_rst_custom_tessellate: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])` | rows |
 | Python | `rasterx.functions.rst_custom_tessellate(df, tile, grid, resolution, assignment=None, coverage=None)` | DataFrame |
 
 Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING`, `window` `struct<col_off:int,row_off:int,width:int,height:int>`, `clip_polygon` `BINARY`, `clip_crs` `STRING`, `crs` `STRING`, `metadata` `map<string,string>`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to split. |
-| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
-| `resolution` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
-| `assignment` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
-| `coverage` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to split. |
+| `grid` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` | `struct<bound_x_min:bigint,bound_x_max:bigint,bound_y_min:bigint,bound_y_max:bigint,cell_splits:int,root_cell_size_x:int,root_cell_size_y:int,srid:int>` |  | The grid, as built by `gbx_custom_grid`. |
+| `resolution` | `INT` | `INT` |  | The grid resolution: 0 is the root cells, each level splits a cell into `cell_splits` by `cell_splits`. |
+| `assignment` | `STRING` | `STRING` | `'centroid'` | How a pixel joins a cell: `'centroid'` (the cell holds the pixel's centre) or `'covering'` (every cell the pixel overlaps). Any other word raises. |
+| `coverage` | `STRING` | `STRING` | `'complete'` | `'complete'` also gives the cells that overlap the raster but hold no valid pixel, as all-NoData tiles; `'sparse'` leaves them out. Any other word raises. |
 {/* END GENERATED gbx_rst_custom_tessellate */}
 
 <Impl udtf/>
@@ -5283,24 +5287,25 @@ Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by defa
 ### rst_xyzpyramid
 
 {/* BEGIN GENERATED gbx_rst_xyzpyramid: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session uc python scala />
 
 | Surface | Call | Returns |
 |---|---|---|
 | SQL (session) | `gbx_rst_xyzpyramid(tile, min_z, max_z, [format], [size], [resampling], [rescale])` | rows |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_xyzpyramid(tile, min_z, max_z, [format], [size], [resampling], [rescale])` | rows |
 | Python | `rasterx.functions.rst_xyzpyramid(df, tile, min_z, max_z, format=None, size=None, resampling=None, rescale=None)` | DataFrame |
 
 Rows: `z` `INT`, `x` `INT`, `y` `INT`, `bytes` `BINARY`.
 
-| Parameter | SQL type | Default | Description |
-|---|---|---|---|
-| `tile` | `TILE` |  | The tile to render. |
-| `min_z` | `INT` |  | The first zoom level, from 0. |
-| `max_z` | `INT` |  | The last zoom level, at least `min_z` and at most 20. |
-| `format` | `STRING` | `'PNG'` | `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. |
-| `size` | `INT` | `256` | The side of each output tile in pixels, in (0, 4096]. Any other value raises. |
-| `resampling` | `STRING` | `'bilinear'` | The GDAL warp resampling, as for `gbx_rst_tilexyz`. Any other word raises. |
-| `rescale` | `STRING` | `'auto'` | The 8-bit contrast, as for `gbx_rst_tilexyz`. |
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to render. |
+| `min_z` | `INT` | `INT` |  | The first zoom level, from 0. |
+| `max_z` | `INT` | `INT` |  | The last zoom level, at least `min_z` and at most 20. |
+| `format` | `STRING` | `STRING` | `'PNG'` | `'PNG'`, `'JPEG'` or `'WEBP'`, in any case. Any other word raises. |
+| `size` | `INT` | `INT` | `256` | The side of each output tile in pixels, in (0, 4096]. Any other value raises. |
+| `resampling` | `STRING` | `STRING` | `'bilinear'` | The GDAL warp resampling, as for `gbx_rst_tilexyz`. Any other word raises. |
+| `rescale` | `STRING` | `STRING` | `'auto'` | The 8-bit contrast, as for `gbx_rst_tilexyz`. |
 {/* END GENERATED gbx_rst_xyzpyramid */}
 
 <Impl udtf/>

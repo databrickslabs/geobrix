@@ -309,13 +309,17 @@ _SESSION_ROWS = (
 
 
 # Unity Catalog: the table functions over the private tile-array routines. A materialized tile gives the session's
-# sub-tiles in the session's order; a virtual tile is refused with a Fix, and so is an input decoded over the cap or a
+# sub-tiles in the session's order (a tessellation: the session's cells and pixel sums); a virtual tile is refused with a Fix, and so is an input decoded over the cap or a
 # result that could not fit (checked from the window arithmetic before any window is cut); data a function cannot read
 # is NULL (no rows) where the session gives an error tile, and so is a NULL argument; an error tile goes through as itself.
 _SHARED = (
     "maketiles_5mb", "maketiles_fits", "maketiles_no_split", "maketiles_null", "maketiles_error_tile",
     "separatebands_three", "separatebands_single", "separatebands_null", "separatebands_error_tile",
     "overlap_half", "overlap_zero", "overlap_all", "overlap_zero_window", "overlap_null", "overlap_error_tile",
+    "h3_tess_res4", "h3_tess_sparse", "h3_tess_bad_assignment", "h3_tess_bad_coverage", "h3_tess_null", "h3_tess_error_tile",
+    "qb_tess_z10", "qb_tess_bad_assignment", "qb_tess_null",
+    "bng_tess_1km", "bng_tess_named_res", "bng_tess_bad_res", "bng_tess_bad_assignment", "bng_tess_null",
+    "cg_tess_res0", "cg_tess_bad_assignment", "cg_tess_null",
 )  # fmt: skip
 UC = ("uc",)
 
@@ -360,6 +364,13 @@ RASTER_GENERATOR = (
         _uc_edges("maketiles", MK, (1,), (T4326, None), over=OVER_WIN, cap="256 MiB")
     )
     + tuple(_uc_edges("separatebands", SB, ()))
+    # a tessellation reads the whole label raster (4 bytes a pixel) and the BNG route warps the tile whole, so it keeps the
+    # 64 MiB pixel cap, not the 256 MiB the window readers take; a NULL resolution or grid is NULL (the session's error tile)
+    + tuple(_uc_edges("h3_tess", H3T, (4,), (RAMP4326, None)))
+    + tuple(_uc_edges("quadbin_tess", QBT, (10,), (RAMP4326, None)))
+    + tuple(_uc_edges("bng_tess", BNGT, (3,), (RAMPBNG, None)))
+    + tuple(_uc_edges("custom_tess", CGT, (G, 0), (RAMPBNG, G, None)))
+    + (Case("uc_custom_tess_null_grid", CGT, (RAMPBNG, None, 0), "no_rows", None, UC),)
     + tuple(
         _uc_edges(
             "overlap",

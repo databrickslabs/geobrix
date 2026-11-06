@@ -255,6 +255,7 @@
       "description": "Cut a tile in EPSG:27700 into BNG cells, one tile per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -587,6 +588,7 @@
       "description": "Cut a tile into custom-grid cells, one tile per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -912,6 +914,7 @@
       "description": "Cut a tile into H3 cells, one tile per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1364,6 +1367,7 @@
       "description": "Cut a tile into quadbin cells, one tile per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -1882,6 +1886,7 @@
       "description": "Render every web-mercator XYZ tile that the raster touches, across a range of zoom levels.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2577,6 +2582,7 @@
       "description": "Interpolate the Z of a triangulated surface at the centres of a bounding-box grid, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2588,6 +2594,7 @@
       "description": "Interpolate the Z of a triangulated surface at the centres of a grid anchored at a point, one row per cell.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],
@@ -2721,6 +2728,7 @@
       "description": "Build a constrained Delaunay triangulation of Z-valued points and break lines, one row per triangle.",
       "surfaces": [
         "session",
+        "uc",
         "python",
         "scala"
       ],

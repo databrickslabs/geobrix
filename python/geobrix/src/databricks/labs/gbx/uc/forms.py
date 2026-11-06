@@ -820,7 +820,14 @@ def _window_dict(window) -> Optional[dict]:
 
 
 def _sub_tile(
-    fn: str, tile, raster: bytes, cap: int, window=None, band=None, whole=False
+    fn: str,
+    tile,
+    raster: bytes,
+    cap: int,
+    window=None,
+    band=None,
+    whole=False,
+    cell=None,
 ):
     """The tile row of one piece of ``tile``: the session's fields (where it was cut from in ``window``, the band marker),
     with the CRS as an SRID as every UC tile has it. The one piece that covers its whole input IS the input, so it keeps the
@@ -852,7 +859,13 @@ def _sub_tile(
         meta["band"] = str(band)
     elif parent_band is not None:
         meta["band"] = parent_band
+    if (
+        cell is not None
+    ):  # a cell of a grid: its own id, and the grid it belongs to (as the session stamps both)
+        meta["gridSystem"] = cell[1]
     row = _tile_dict(tile, raster, srid, meta)
+    if cell is not None:
+        row["cellid"] = int(cell[0])
     if whole:
         row["path"] = _field(tile, "path")
         row["window"] = _window_dict(_field(tile, "window"))
@@ -871,13 +884,16 @@ def _tile_array(
     lower: str,
     smaller: str = "pass a smaller tile size",
     piece_cap: Optional[int] = None,
+    reads: str = "which reads the tile in windows",
 ):
     """The pieces of ``tile`` as an array of tile rows, under the three bounds above. NULL for a NULL tile and for data
     that cannot be read (UC has no error tile); an error tile goes out as itself; a virtual tile is refused.
 
     ``plan(ds, raster)`` returns ``(tiles, pixel_bytes, bands, whole, pieces, largest)``: the count of tiles, the decoded
     bytes of all of them, the bands of each, whether the one tile is the whole input, a function ``pieces(ds)`` that yields
-    ``(window, band, raster bytes)`` one piece at a time, and the decoded bytes of the largest piece. The input and the
+    ``(window, band, raster bytes)`` one piece at a time (a cell of a grid adds a fourth item, ``(cell id, grid)``), and
+    the decoded bytes of the largest piece. A plan that cannot count its tiles before it cuts them (a tessellation)
+    returns 0 tiles and 0 pixel bytes: the running total then is the only bound on the array. The input and the
     array are held to ``cap``; a piece, which is what is read at once, to ``piece_cap`` (``cap`` or the pixel cap
     :data:`DECODED_CAP`, the lower), refused from the arithmetic before a window is cut.
     """
@@ -898,7 +914,7 @@ def _tile_array(
             if decoded > cap:
                 raise _Refusal(
                     f"{fn}: the tile is {size_text(decoded)} decoded, over the {size_text(cap)} a Unity Catalog "
-                    f"function decodes. Fix: run {fn} in a notebook or job session, which reads the tile in windows"
+                    f"function decodes. Fix: run {fn} in a notebook or job session, {reads}"
                 )
             tiles, pixel_bytes, bands, whole, pieces, largest = plan(ds, raster)
             at_once = min(cap, DECODED_CAP) if piece_cap is None else piece_cap
@@ -915,8 +931,10 @@ def _tile_array(
                 cap=cap,
             )
             out, total = [], 0
-            for window, band, data in pieces(ds):
-                out.append(_sub_tile(fn, tile, data, at_once, window, band, whole))
+            for window, band, data, *cell in pieces(ds):
+                out.append(
+                    _sub_tile(fn, tile, data, at_once, window, band, whole, *cell)
+                )
                 total += len(data) + _TILE_ROW_BYTES
                 _check_bytes(fn, total, "the tiles it returns", lower=lower, cap=cap)
             return out
@@ -1052,6 +1070,393 @@ def rst_separatebands_tiles(tile):
     )
 
 
+# --- the grid tessellations: one tile cut into the tile of each cell it covers --------------------------------------
+# gbx__rst_<grid>_tessellate_tiles return the session's cells as an array of tiles, in the kernel's order, each with the
+# cell id (a BNG id as its digit id) and the grid in its metadata. A tessellation is NOT a window reader: it holds a label
+# raster of 4 bytes a pixel for the whole tile (and the BNG route warps the tile whole), so its input is held to DECODED_CAP,
+# the 64 MiB of a pixel function, where the retile family takes 256 MiB. The tiles of the cells cannot be counted before
+# they are cut (a covering cell overlaps its neighbours), so the running total of the tiles made is the only bound on the
+# array: each is checked against the cap as it is cut and a tile past it stops the work.
+_ASSIGNMENTS = ("covering", "centroid")
+_COVERAGES = ("sparse", "complete")
+
+
+def _tessellate_words(fn: str, assignment, coverage):
+    """The assignment and coverage words (the session's defaults for NULL); another word is a wrong argument."""
+    a = "centroid" if assignment is None else assignment
+    c = "complete" if coverage is None else coverage
+    if a not in _ASSIGNMENTS:
+        raise _parameter(fn, f"assignment must be one of covering, centroid; got '{a}'")
+    if c not in _COVERAGES:
+        raise _parameter(fn, f"coverage must be one of sparse, complete; got '{c}'")
+    return a, c
+
+
+def _tessellate_tiles(grid, tile, resolution, assignment, coverage, spec=None):
+    from databricks.labs.gbx.uc.handlers import _custom_conf, _res
+
+    fn = f"gbx_rst_{grid}_tessellate"
+    if tile is None or resolution is None or (grid == "custom" and spec is None):
+        return None
+    tess = importlib.import_module(f"{_CORES}.tessellate")
+    a, c = _tessellate_words(fn, assignment, coverage)
+    conf = None
+    if grid == "custom":
+        conf = _custom_conf(fn, spec)
+        res = int(resolution)
+        if not 0 <= res <= conf.max_resolution:
+            raise _parameter(
+                fn,
+                f"resolution must be in [0, {conf.max_resolution}] for this grid; got {res}. "
+                "Fix: pass a resolution the grid defines",
+            )
+    elif grid == "bng":
+        res = _res(
+            resolution
+        )  # an index or a size such as '1km'; one BNG does not define raises
+    else:
+        try:
+            res = tess._resolve_resolution(resolution, grid)
+        except ValueError as exc:
+            raise _parameter(
+                fn, f"{exc}. Fix: pass a resolution the grid defines"
+            ) from exc
+
+    def plan(ds, raster):
+        def pieces(d):
+            for cell, data in tess.iter_tessellate(
+                d, res, grid, mode=a, coverage=c, conf=conf
+            ):
+                if data is None:  # defensive: never a tile with no raster
+                    continue
+                if grid == "bng":
+                    from databricks.labs.gbx.pygx import _bng
+
+                    cell = _bng.parse(cell)
+                yield None, None, data, (cell, grid)
+
+        return 0, 0, ds.count, False, pieces, decoded_bytes(ds)
+
+    return _tile_array(
+        fn,
+        tile,
+        DECODED_CAP,
+        plan,
+        "use a coarser resolution or retile first",
+        "retile first (gbx_rst_retile) so each tile is smaller",
+        reads="or retile first (gbx_rst_retile) so each tile is smaller",
+    )
+
+
+def rst_h3_tessellate_tiles(tile, resolution, assignment, coverage):
+    """gbx__rst_h3_tessellate_tiles: the tile of every H3 cell the tile covers, as an array (the session's cells)."""
+    return _tessellate_tiles("h3", tile, resolution, assignment, coverage)
+
+
+def rst_quadbin_tessellate_tiles(tile, resolution, assignment, coverage):
+    """gbx__rst_quadbin_tessellate_tiles: the tile of every quadbin cell the tile covers, as an array."""
+    return _tessellate_tiles("quadbin", tile, resolution, assignment, coverage)
+
+
+def rst_bng_tessellate_tiles(tile, resolution, assignment, coverage):
+    """gbx__rst_bng_tessellate_tiles: the tile of every BNG cell the tile covers, as an array. The resolution is an index
+    or a size such as '1km'; the tile is warped to EPSG:27700 first when it is in another CRS.
+    """
+    return _tessellate_tiles("bng", tile, resolution, assignment, coverage)
+
+
+def rst_custom_tessellate_tiles(tile, grid, resolution, assignment, coverage):
+    """gbx__rst_custom_tessellate_tiles: the tile of every cell of the custom grid ``grid`` the tile covers, as an array."""
+    return _tessellate_tiles("custom", tile, resolution, assignment, coverage, grid)
+
+
+# --- the XYZ pyramid: one tile rendered into the web tiles it touches -----------------------------------------------
+# The pyramid renders through the kernel of gbx_rst_tilexyz, which UC reads under the 64 MiB pixel cap and the render-size
+# cap, so it keeps both. The tile count is not known to be small: the tiles are counted as they are rendered and the
+# running total is held to the cap, so a pyramid over it stops there (the session's own guard, 1,000,000 tiles, still
+# applies first).
+def rst_xyzpyramid_tiles(tile, min_z, max_z, format, size, resampling, rescale):
+    """gbx__rst_xyzpyramid_tiles: the ``(z, x, y, bytes)`` of every web tile the tile touches across the zoom range, as an
+    array, in the session's order. A NULL, error or unreadable tile has no tiles; a virtual tile is refused.
+    """
+    import contextlib
+
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.uc.tier_b import check_made
+
+    fn = "gbx_rst_xyzpyramid"
+    xyzc = importlib.import_module(f"{_CORES}.xyz")
+    if min_z is None or max_z is None:
+        return None
+    try:
+        fmt, sz, resamp, rsc = xyzc.render_args(format, size, resampling, rescale)
+        lo, hi = xyzc._validate_zoom_range(min_z, max_z)
+    except ValueError as exc:
+        raise _Parameter(
+            f"{exc}. Fix: use a format of PNG, JPEG or WEBP, a size in (0, 4096], a GDAL resampling word, a rescale of "
+            "'auto', 'none' or 'min,max', and 0 <= min_z <= max_z <= 20"
+        ) from exc
+    if tile is None:
+        return None
+    raster = raster_of(fn, tile)
+    if raster is None:
+        return None
+    with contextlib.ExitStack() as stack:
+        try:
+            ds = stack.enter_context(
+                open_bytes(stack.enter_context(MemoryFile(raster)))
+            )
+        except (MemoryError, RecursionError, ImportError):
+            raise
+        except (
+            Exception
+        ):  # noqa: BLE001 - bytes GDAL cannot open: no tiles, as the session
+            return None
+        decoded = decoded_bytes(ds)
+        if decoded > DECODED_CAP:
+            raise _Refusal(
+                f"{fn}: the tile is {size_text(decoded)} decoded, over the {size_text(DECODED_CAP)} a Unity Catalog "
+                f"function decodes. Fix: run {fn} in a notebook or job session, or retile first (gbx_rst_retile) so "
+                "each tile is smaller"
+            )
+        check_made(
+            fn,
+            sz,
+            sz,
+            ["uint8"] * 4,
+            xyzc.render_working_bytes(sz, ds.count),
+            ask="a smaller size",
+        )
+        out, total = [], 0
+        for z, x, y, blob in xyzc.iter_pyramid(ds, lo, hi, fmt, sz, resamp, rsc):
+            total += len(blob) + _TILE_OVERHEAD
+            if total > DECODED_CAP:
+                raise _Refusal(
+                    f"{fn}: the pyramid is {size_text(total)} so far, over the {size_text(DECODED_CAP)} a Unity "
+                    f"Catalog function returns. Fix: lower max_z, pass a smaller size, or run {fn} in a notebook "
+                    "or job session"
+                )
+            out.append({"z": z, "x": x, "y": y, "bytes": blob})
+        return out
+
+
+# --- the TIN functions: a surface from points and break lines ---------------------------------------------------------
+# gbx__st_triangulate_rows, gbx__st_interpolateelevationbbox_rows and gbx__st_interpolateelevationgeom_rows return the
+# session's rows as an array of WKB (a triangle as 2D WKB, an elevation point as ISO WKB with its Z: the warehouse parses
+# type 1001 and refuses the EWKB Z flag). The points and break lines are ARRAY<GEOMETRY(ANY)>, whose Geometry values keep
+# their Z; the SRID is not carried in the bytes, as the session's Python level leaves it. The arrays are bounded twice:
+# the points and break lines held (their WKB bytes) and the rows returned, the rows estimated BEFORE the surface is built
+# (at most two triangles per point; one point per grid cell) and counted again as they are made.
+_ROW_OVERHEAD = 32  # what an array element carries beside its bytes
+_TRIANGLE_ROW_BYTES = (
+    73 + _ROW_OVERHEAD
+)  # the 2D WKB of a triangle: one ring of four vertices
+_POINT_ROW_BYTES = 29 + _ROW_OVERHEAD  # the WKB of a point with Z
+
+
+def _tin_mode(fn: str, mode) -> None:
+    """The mode: 'constrained' (the default) runs here; 'conforming' is the JVM level's; any other word is wrong."""
+    m = (mode or "constrained").lower()
+    if m == "conforming":
+        raise _Refusal(
+            f"{fn}: mode 'conforming' runs on the JVM level only. Fix: run {fn} in a notebook or job session on a "
+            "cluster with the geobrix JAR, or use mode 'constrained'"
+        )
+    if m != "constrained":
+        raise _parameter(
+            fn, f"mode must be 'constrained' or 'conforming'; got {mode!r}"
+        )
+
+
+def _tin_sites(fn: str, points, breaklines):
+    """``(coords, break lines)`` of the two Geometry arrays, once their WKB fits the cap."""
+    from databricks.labs.gbx.pyvx import _tin
+    from databricks.labs.gbx.uc.tier_b import _wkb_array
+
+    pts, bls = _wkb_array(points), _wkb_array(breaklines)
+    held = sum(len(b) for b in (pts or []) if b is not None) + sum(
+        len(b) for b in (bls or []) if b is not None
+    )
+    if held > DECODED_CAP:
+        raise _too_big(fn, "the points and break lines", held, fn)
+    return _tin.sites(pts, bls)
+
+
+def _rows_within_cap(fn: str, rows, what: str):
+    """The rows of a generator as a list, each counted as it is made against the cap."""
+    out, total = [], 0
+    for blob in rows:
+        total += len(blob) + _ROW_OVERHEAD
+        if total > DECODED_CAP:
+            raise _too_big(fn, what, total, fn)
+        out.append(blob)
+    return out
+
+
+def st_triangulate_rows(
+    points_array,
+    breaklines_array,
+    merge_tolerance,
+    snap_tolerance,
+    split_point_finder,
+    mode,
+):
+    """gbx__st_triangulate_rows: the 2D WKB triangles of the constrained Delaunay triangulation of the points and break
+    lines, as an array, in the session's order. NULL points, an empty array or a NULL tolerance give no rows.
+    """
+    from databricks.labs.gbx.pyvx import _tin
+    from databricks.labs.gbx.uc.handlers import _check_bytes
+
+    fn = "gbx_st_triangulate"
+    _tin_mode(fn, mode)
+    if (
+        points_array is None
+        or merge_tolerance is None
+        or snap_tolerance is None
+        or split_point_finder is None
+    ):
+        return None
+    parsed = _tin_sites(fn, points_array, breaklines_array)
+    coords, bls = parsed
+    if coords is None:
+        return None
+    sites = len(coords) + sum(len(b) for b in bls)
+    _check_bytes(
+        fn,
+        2 * sites * _TRIANGLE_ROW_BYTES,
+        "the triangles it returns (an upper estimate, two for every point)",
+        lower="pass fewer points",
+        cap=DECODED_CAP,
+    )
+    return _rows_within_cap(
+        fn,
+        _tin.triangle_wkbs(None, None, merge_tolerance, snap_tolerance, parsed=parsed),
+        "the triangles it returns",
+    )
+
+
+def _elevation_rows(fn, points, breaklines, mt, st, spf, mode, cells, cell_iter, srid):
+    from databricks.labs.gbx.pyvx import _tin
+    from databricks.labs.gbx.uc.handlers import _check_bytes
+
+    _tin_mode(fn, mode)
+    if mt is None or st is None or spf is None:
+        return None
+    _check_bytes(
+        fn,
+        cells * _POINT_ROW_BYTES,
+        "the points it returns (an upper estimate, one for every grid cell)",
+        lower="pass a coarser grid",
+        cap=DECODED_CAP,
+    )
+    if points is None:
+        return None
+    parsed = _tin_sites(fn, points, breaklines)
+    if parsed[0] is None:
+        return None
+    return _rows_within_cap(
+        fn,
+        _tin.elevation_wkbs(
+            None, None, mt, st, cell_iter, srid, flavor="iso", parsed=parsed
+        ),
+        "the points it returns",
+    )
+
+
+def st_interpolateelevationbbox_rows(
+    points_array,
+    breaklines_array,
+    merge_tolerance,
+    snap_tolerance,
+    split_point_finder,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    srid,
+    mode,
+):
+    """gbx__st_interpolateelevationbbox_rows: the ISO WKB point (with Z) at the centre of every cell of the bounding-box
+    grid that is inside the surface, as an array, in the session's order (column by column).
+    """
+    from databricks.labs.gbx.pyvx import _tin
+
+    fn = "gbx_st_interpolateelevationbbox"
+    if None in (xmin, ymin, xmax, ymax, width_px, height_px, srid):
+        _tin_mode(fn, mode)
+        return None
+    cells = max(0, int(width_px)) * max(0, int(height_px))
+    return _elevation_rows(
+        fn,
+        points_array,
+        breaklines_array,
+        merge_tolerance,
+        snap_tolerance,
+        split_point_finder,
+        mode,
+        cells,
+        _tin.grid_bbox(
+            float(xmin),
+            float(ymin),
+            float(xmax),
+            float(ymax),
+            int(width_px),
+            int(height_px),
+        ),
+        int(srid),
+    )
+
+
+def st_interpolateelevationgeom_rows(
+    points_array,
+    breaklines_array,
+    merge_tolerance,
+    snap_tolerance,
+    split_point_finder,
+    grid_origin,
+    grid_cols,
+    grid_rows,
+    cell_size_x,
+    cell_size_y,
+    mode,
+):
+    """gbx__st_interpolateelevationgeom_rows: as the bounding-box form, for a grid anchored at a POINT (its north-west
+    corner; a negative cell height steps south)."""
+    import shapely
+
+    from databricks.labs.gbx.pyvx import _tin
+
+    fn = "gbx_st_interpolateelevationgeom"
+    if None in (grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y):
+        _tin_mode(fn, mode)
+        return None
+    origin = shapely.from_wkb(_geom_bytes(grid_origin))
+    cells = max(0, int(grid_cols)) * max(0, int(grid_rows))
+    return _elevation_rows(
+        fn,
+        points_array,
+        breaklines_array,
+        merge_tolerance,
+        snap_tolerance,
+        split_point_finder,
+        mode,
+        cells,
+        _tin.grid_geom(
+            origin.x,
+            origin.y,
+            int(grid_cols),
+            int(grid_rows),
+            float(cell_size_x),
+            float(cell_size_y),
+        ),
+        shapely.get_srid(origin),
+    )
+
+
 HANDLERS = {
     "gbx_st_coverageisvalid_array": st_coverageisvalid_array,
     "gbx_st_coverageinvalidedges_array": st_coverageinvalidedges_array,
@@ -1070,6 +1475,14 @@ HANDLERS = {
     "gbx__rst_maketiles_tiles": rst_maketiles_tiles,
     "gbx__rst_tooverlappingtiles_tiles": rst_tooverlappingtiles_tiles,
     "gbx__rst_separatebands_tiles": rst_separatebands_tiles,
+    "gbx__rst_h3_tessellate_tiles": rst_h3_tessellate_tiles,
+    "gbx__rst_quadbin_tessellate_tiles": rst_quadbin_tessellate_tiles,
+    "gbx__rst_bng_tessellate_tiles": rst_bng_tessellate_tiles,
+    "gbx__rst_custom_tessellate_tiles": rst_custom_tessellate_tiles,
+    "gbx__rst_xyzpyramid_tiles": rst_xyzpyramid_tiles,
+    "gbx__st_triangulate_rows": st_triangulate_rows,
+    "gbx__st_interpolateelevationbbox_rows": st_interpolateelevationbbox_rows,
+    "gbx__st_interpolateelevationgeom_rows": st_interpolateelevationgeom_rows,
 }
 
 

@@ -238,3 +238,97 @@ def _zsnap(triangles, breaklines, tol):
                             t[vi, 2] = b[2]
         out.append(t)
     return out
+
+
+# --- the rows of the TIN functions: the one core of the session UDTFs and the Unity Catalog routines ---------------------
+def geoms_from_array(arr):
+    """Decode an ARRAY<BINARY|STRING> of geometries via the shared parse_geom contract (WKB/EWKB/WKT/EWKT); a NULL or
+    empty element is dropped."""
+    from ._geom import parse_geom
+
+    out = []
+    for g in arr or []:
+        geom = parse_geom(g)
+        if geom is not None:
+            out.append(geom)
+    return out
+
+
+def all_xyz(geom):
+    """Recursively flatten any geometry to a list of (x, y, z) coordinate tuples.
+
+    Handles multi-part geometries (MULTIPOINT/MULTILINESTRING/etc. expose ``.geoms``, not ``.coords``) and pads 2D
+    coordinates with z=0.0. Used to extract triangulation/elevation sites from the points array, so a single MULTIPOINT
+    element doesn't crash on a missing ``.coords``.
+    """
+    if hasattr(geom, "geoms"):
+        return [c for g in geom.geoms for c in all_xyz(g)]
+    return [(c[0], c[1], c[2] if len(c) == 3 else 0.0) for c in geom.coords]
+
+
+def validate_mode(mode):
+    """``'constrained'`` (the default) or raise: ``'conforming'`` is JVM-only, any other word is a bad argument."""
+    m = (mode or "constrained").lower()
+    if m == "conforming":
+        raise NotImplementedError(
+            "mode='conforming' (Steiner-point conforming Delaunay) is heavy-only; "
+            "use the heavyweight vectorx tier, or mode='constrained' in light."
+        )
+    if m != "constrained":
+        raise ValueError(f"mode must be 'constrained' or 'conforming'; got {mode!r}")
+    return m
+
+
+def sites(points, breaklines):
+    """``(coords, breaklines)`` as arrays from the two geometry arrays: the (x, y, z) of every point (None when there is
+    none) and one coordinate array per break line."""
+    pt_geoms = geoms_from_array(points)
+    if not pt_geoms:
+        return None, []
+    coords = np.array([xyz for g in pt_geoms for xyz in all_xyz(g)], dtype=float)
+    return coords, [
+        np.array(g.coords, dtype=float) for g in geoms_from_array(breaklines)
+    ]
+
+
+def triangle_wkbs(points, breaklines, merge_tolerance, snap_tolerance, parsed=None):
+    """The 2D WKB polygon of every triangle of the constrained Delaunay triangulation, one at a time. ``parsed`` is the
+    ``(coords, break lines)`` of :func:`sites` when the caller has them already."""
+    from shapely import to_wkb
+    from shapely.geometry import Polygon
+
+    coords, bls = parsed or sites(points, breaklines)
+    if coords is None:
+        return
+    for t in triangulate(coords, bls, float(merge_tolerance), float(snap_tolerance)):
+        yield to_wkb(Polygon([(p[0], p[1]) for p in t]))
+
+
+def elevation_wkbs(
+    points,
+    breaklines,
+    merge_tolerance,
+    snap_tolerance,
+    cell_iter,
+    srid,
+    flavor="extended",
+    parsed=None,
+):
+    """The WKB point (with Z) at the centre of every grid cell inside the surface, in the order of ``cell_iter``; a cell
+    outside the hull gives none. ``flavor="iso"`` writes type 1001 for a point with Z (the form the warehouse parses).
+    """
+    from shapely import set_srid, to_wkb
+    from shapely.geometry import Point
+
+    coords, bls = parsed or sites(points, breaklines)
+    if coords is None:
+        return
+    tris = triangulate(coords, bls, float(merge_tolerance), float(snap_tolerance))
+    for x, y in cell_iter:
+        z = interpolate_z(tris, x, y)
+        if z is None:
+            continue
+        p = Point(x, y, z)
+        if srid:
+            p = set_srid(p, int(srid))
+        yield to_wkb(p, output_dimension=3, flavor=flavor)

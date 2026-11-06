@@ -427,11 +427,16 @@ def _prepare(spark, df, **kw):
 def test_one_partition_per_unit_touched_capped_by_the_parallelism(
     spark_delta, no_hooks, monkeypatch
 ):
-    """48 h x 10 x 12 in shards of 24 x 10 x 12: two units, so two partitions; with the
-    parallelism at 1 the shuffle has one."""
+    """48 h x 10 x 12 in shards of 24 x 10 x 12: two units; the cells shuffle into one
+    partition each and the packed blocks (two variables per unit) fan out to a task each;
+    with the parallelism at 1 everything is one partition."""
     ds = _dataset()
+    monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark: 8)
     prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
-    assert prep.frame.rdd.getNumPartitions() == 2
+    assert prep.frame.rdd.getNumPartitions() == 2 * len(prep.names)
+    monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark: 3)
+    prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
+    assert prep.frame.rdd.getNumPartitions() == 3
     monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark: 1)
     prep = _prepare(spark_delta, _cells(spark_delta, ds), coords=_coords(ds))
     assert prep.frame.rdd.getNumPartitions() == 1
@@ -489,7 +494,10 @@ def test_complete_with_a_unit_that_has_no_cells_is_refused(
         )
 
 
-def test_a_sparse_table_plans_only_the_units_it_touches(spark_delta, no_hooks):
+def test_a_sparse_table_plans_only_the_units_it_touches(
+    spark_delta, no_hooks, monkeypatch
+):
+    monkeypatch.setattr(_write, "_shuffle_partitions", lambda spark: 8)
     ds = _dataset()
     prep = _prepare(
         spark_delta,
@@ -502,7 +510,9 @@ def test_a_sparse_table_plans_only_the_units_it_touches(spark_delta, no_hooks):
     )
     seen = prep.seen.to_pandas()
     assert set(seen[seen.variable == "t2m"]["start"].map(tuple)) == {(0, 0, 0)}
-    assert prep.frame.rdd.getNumPartitions() == 1
+    assert prep.frame.rdd.getNumPartitions() == len(
+        prep.names
+    )  # one unit, a task per variable
 
 
 def test_a_create_is_one_shuffle_and_stages_nothing(

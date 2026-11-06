@@ -213,6 +213,52 @@ def append_a_table_of_cells(spark, cube, table):
     return version
 
 
+def transform_blocks_into_a_new_store(spark, cube, path):
+    """Zarr to Zarr: read blocks, compute on each block, write the blocks."""
+    import json
+
+    import numpy as np
+    import pandas as pd
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
+
+    @F.pandas_udf("binary")
+    def wind_speed_block(u: pd.Series, v: pd.Series, dtype: pd.Series) -> pd.Series:
+        """The bytes of one wind speed block, from the bytes of its u10 and v10 blocks."""
+        return pd.Series(
+            [
+                np.hypot(np.frombuffer(a, k), np.frombuffer(b, k)).astype(k).tobytes()
+                for a, b, k in zip(u, v, dtype)
+            ]
+        )
+
+    hours = {"time": slice("2023-01-01T00:00", "2023-01-01T11:00")}
+    u = gbx_zarr_read(spark, cube, variables=["u10"], sel=hours).alias("u")
+    v = gbx_zarr_read(spark, cube, variables=["v10"], sel=hours).alias("v")
+    attrs = json.dumps({"units": "m s-1", "long_name": "10 metre wind speed"})
+    wind = u.join(v, F.col("u.start") == F.col("v.start")).select(
+        F.lit("wind_speed").alias("variable"),
+        "u.dims",
+        "u.start",
+        "u.stop",
+        "u.coord_start",
+        "u.coord_stop",
+        "u.dtype",
+        "u.shape",
+        wind_speed_block("u.data", "v.data", "u.dtype").alias("data"),
+        "u.fill_value",
+        F.lit(attrs).alias("attrs"),
+    )
+    labels = gbx_zarr_read(
+        spark, cube, variables=["time", "latitude", "longitude"], sel=hours
+    )
+    summary = gbx_zarr_write(
+        wind.unionByName(labels), path, transactional=False, spark=spark
+    )
+    return summary
+
+
 # --- overwrite, and variables the store lacks --------------------------------------------
 
 

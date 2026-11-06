@@ -209,6 +209,17 @@ def test_a_table_of_cells_is_written_and_extended(spark, cube, truth, new_table,
     np.testing.assert_allclose(assemble(spark, table, "temp_c")[:, ::-1], want, atol=1e-3)
 
 
+def test_blocks_are_transformed_into_a_new_store(spark, cube, tmp_path):
+    path = str(tmp_path / "wind.zarr")
+    ex.transform_blocks_into_a_new_store(spark, cube, path)
+    got = xr.open_zarr(path)
+    src = xr.open_zarr(cube, consolidated=False).isel(time=slice(0, 12))
+    want = np.hypot(src["u10"].values, src["v10"].values)
+    np.testing.assert_allclose(got["wind_speed"].values, want, rtol=1e-6)
+    np.testing.assert_array_equal(got["time"].values, src["time"].values)
+    assert got["wind_speed"].attrs["units"] == "m s-1"
+
+
 def test_blocks_without_coordinates_make_a_store_labelled_by_position(
     spark, cube, new_table, tmp_path, caplog
 ):

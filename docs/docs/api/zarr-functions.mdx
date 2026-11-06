@@ -245,8 +245,8 @@ layouts, tiles and concurrency in detail.
 | `variables` | `str` or `list[str]` | The variables to write. Required in an `update` or `overwrite` from blocks to create a variable the store lacks, and it narrows the work. For tiles with no provenance, the single variable they belong to. |
 | `append_dim` | `str` | `append` only. Default: the first dimension labelled by CF times. |
 | `dim_cols` | `dict[str, str]` | Tiles and tables of cells. Dimension to the column that labels each tile or cell along it. For cells the dict's order is the array's dimension order, every other column is a variable (or the ones `variables` names), and the mode is `create` or `append`. See [Write from a table of cells](../writers/zarr#write-from-a-table-of-cells). |
-| `coords` | `dict[str, array]` | A `create` of cells only. The labels of a dimension, in array order, instead of the distinct values of its column sorted ascending; it saves the pass over that column. |
-| `complete` | `bool` | A `create` of cells with `coords` for every dimension. `True` says every storage unit of that grid holds at least one cell, so the writer skips the scan that finds the units: the table is read once. A unit with no cell ends the write; default `False`. |
+| `coords` | `dict[str, array]` | Cells only. In a `create`, the labels of each dimension, in array order, instead of the distinct values of its column sorted ascending. In an `append`, the new labels of the append dimension only. It saves the pass over that column. |
+| `complete` | `bool` | Cells with `coords` for every dimension of a `create`, or for the append dimension of an `append`. `True` says every storage unit of that grid holds at least one cell, so the writer skips the scan that finds the units: the table is read once. A unit with no cell ends the write; default `False`. |
 | `chunks` | `str` or `dict` | `create` only. `"balanced"` (default), `"maps"`, `"series"` or a dict of dimension to size. |
 | `shards` | `None`, `False` or `dict` | `create` only. `None` computes the shards, a dict sets some, `False` means none. |
 | `codecs` | `list` | `create` only. The inner chunk's codec chain as Zarr v3 codec documents or zarr codec objects. Default `bytes`, `zstd` (level 3), `crc32c`. |
@@ -269,7 +269,8 @@ nothing.
 |---|---|---|
 | `ValueError` | `mode` is not one of the four | `pass one` |
 | `ValueError` | A table of cells with `mode` `"update"` or `"overwrite"` | `use one of those, or write blocks` |
-| `ValueError` | `coords` outside a `create` of cells | `drop coords` |
+| `ValueError` | `coords` in an `update` or `overwrite`, or on data that is not a table of cells | `drop coords` |
+| `ValueError` | `coords` for a dimension other than the append dimension, in an `append` of cells | `drop coords for <dimensions>` |
 | `ValueError` | A `dim_cols` column the table lacks, or no value column | `name a column of the table` |
 | `ZarrUnsupported` | A cells column of a type GeoBrix does not write (a `decimal`, a string), or a label column that is not a number or a time | `cast <column> to a number or a timestamp` |
 | `ZarrError` | Two cells at one position | `keep one row per cell` |

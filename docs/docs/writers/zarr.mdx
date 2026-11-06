@@ -274,6 +274,11 @@ other dimensions' values must be labels the store has.
   `complete=True`: every storage unit is then planned without that scan, and the table is read once, in the data
   pass. A unit that holds no cell at all ends the write with "the write pass saw N block(s), not the M its plan was
   made from"; leave `complete` off for a table that skips whole units. Holes inside a unit are still fill values.
+  An `append` takes `coords` for the append dimension only: the new labels, after the store's last. The other
+  dimensions use the store's labels. `coords` and `complete=True` together plan an append with no scan. Without
+  them, an append reads the table once for the new labels, and a second time for its units unless the table has
+  one row per cell of the grid. A scan reads only the dimension columns, but a Python data source such as
+  `gbx_zarr_read(output="table")` cannot skip the other columns, so it still reads every variable.
 - **Missing cells** read as the array's fill value (NaN for floats, 0 for integers and booleans). A null value is
   a missing cell. A null label is refused.
 - **Duplicate cells** (two rows at one position) are refused, never merged: the task that meets them raises
@@ -283,6 +288,25 @@ other dimensions' values must be labels the store has.
   column is refused with a Fix to cast it.
 - **Modes.** `create` and `append`. An `update` or an `overwrite` of cells would replace stored cells with the fill
   value wherever the table has none, so they take blocks. An `append` writes arrays the store already has.
+
+## Zarr to Zarr: transform blocks
+
+To read a store, compute on it and write the result, stay with blocks. `gbx_zarr_read` returns blocks by
+default. A pandas UDF changes the bytes of each block, and `gbx_zarr_write` takes the result. No table of
+cells sits in between, so no row is made per cell and no data is shuffled.
+
+<CodeFromTest code={zarrWrite} language="python" functionName="transform_blocks_into_a_new_store"
+  source="docs/tests/python/writers/zarr_write_examples.py"
+  testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+- Join the blocks of the inputs on `start`, so each pair covers the same cells. Keep `dims`, `start`, `stop` and
+  `shape` from one side.
+- Read the coordinate arrays too (`time`, `latitude`, `longitude`) and add them to the result, or a
+  new store is labelled by position only.
+- A join or a UDF is an opaque input, which a `create` evaluates twice
+  ([see above](#an-input-that-is-read-more-than-once)). Keep the compute deterministic.
+- Use a table of cells instead when the compute needs the neighbours of a cell, or when the source
+  is not a Zarr store.
 
 ## Tiles
 

@@ -207,6 +207,11 @@ materialize), see the
 [Virtual↔materialized advice](./execution-tiers#virtual-materialized-advice) on
 the Surfaces and levels page.
 
+A table of virtual tiles is tiny (each row is a path), so Spark reads it in a single task. A pixel-producing
+operation over it then runs one tile at a time and holds every output of the batch in that task's memory, which
+Serverless stops at 1 GB. `repartition(n)` the table first, with a few tiles per partition, so the tiles are
+processed in parallel and each task holds only its own outputs.
+
 ### Instructions that stay virtual
 
 A few cheap, common operations record an **instruction** on a virtual tile instead

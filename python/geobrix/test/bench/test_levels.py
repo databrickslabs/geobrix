@@ -254,6 +254,27 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
             assert len({r.rows for r in mine.values()}) == 1
 
 
+def test_a_virtual_tile_input_is_spread_over_partitions_like_a_materialized_one(
+    spark_session_local, tmp_path
+):
+    """The rows of a virtual tile table are paths, so the table is a few KB and one task would read it: a serial run
+    of every tile whose outputs all sit in one Python batch (Serverless stops that at 1 GB). It is written spread.
+    """
+    from databricks.labs.gbx.bench import oracles
+
+    (tmp_path / "rows").mkdir()
+    for i in range(40):
+        (tmp_path / "rows" / f"r{i}.tif").write_bytes(
+            oracles._tile_bytes("EPSG:3857", 16, 16)
+        )
+    for n in (40, 12):
+        virt = lf.INPUTS["tiles_virt"](spark_session_local, n, str(tmp_path), None)
+        got = spark_session_local.table(virt)
+        assert got.count() == n
+        assert got.rdd.getNumPartitions() == lf.io_partitions(spark_session_local, n)
+        assert got.rdd.getNumPartitions() > 1
+
+
 def test_the_merge_input_groups_hold_tiles_of_one_crs_sized_from_the_rows_there_are(
     spark_session_local, tmp_path
 ):

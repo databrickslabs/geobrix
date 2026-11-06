@@ -161,7 +161,14 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
         gbx_manager.register_sources(spark)  # the light raster reader
         if subdir == "rows":
             corpus_guard(name or "tiles", rows, len(_corpus_rows(corpus) or []), n)
-        label = f"mvp_in_tiles_{name or ('virt' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
+        # a virtual table's rows are paths: its few KB would be read by ONE task (a serial run that also holds every
+        # output of the op in one batch), so it is written spread over `io_partitions` files, as the IO inputs are
+        label = f"mvp_in_tiles_{name or ('virtsp' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
+        spread = (
+            (lambda df: df.repartition(io_partitions(spark, n)))
+            if virtual
+            else (lambda df: df)
+        )
         first = (
             _corpus_rows(corpus) if subdir == "rows" and n <= SMALL_INPUT_ROWS else None
         )
@@ -173,7 +180,7 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
                 spark,
                 schema,
                 label,
-                lambda: _tile_column(spark, pairs, virtual, keyed=False),
+                lambda: spread(_tile_column(spark, pairs, virtual, keyed=False)),
             )
         # The scan is given the first n files themselves (the `filterRegex` IO's reads use), so it plans n files: a bare
         # `limit(n)` leaves a task per file of the folder (10,000 for the big corpus) when the table is built or read.
@@ -182,12 +189,14 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
             spark,
             schema,
             label,
-            lambda: spark.read.format("raster_gbx")
-            .option("virtualTiles", str(virtual).lower())
-            .option("filterRegex", only)
-            .load(rows)
-            .select("tile")
-            .limit(n),
+            lambda: spread(
+                spark.read.format("raster_gbx")
+                .option("virtualTiles", str(virtual).lower())
+                .option("filterRegex", only)
+                .load(rows)
+                .select("tile")
+                .limit(n)
+            ),
         )
 
     return build

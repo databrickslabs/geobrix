@@ -3876,7 +3876,9 @@ def rst_merge(
         only error tiles gives the first one; a tile that cannot be read is skipped. An
         array over the memory budget gives an error tile with a `Fix:`. A member over
         the read cap names `merge_by_key(..., method='vrt')`; a mosaic or result over
-        the cap names `mint_vrt`.
+        the cap names `mint_vrt`. Where tiles overlap, the last in a fixed order wins:
+        tiles with bytes sorted by their bytes, then virtual tiles sorted by path and
+        window.
 
     SQL: ``gbx_rst_merge(tiles)``
     """
@@ -3909,7 +3911,9 @@ def rst_merge_agg(
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        The merged raster over the union extent, or NULL for an empty group.
+        The merged raster over the union extent, or NULL for an empty group. Where tiles
+        overlap, the last in a fixed order wins: tiles with bytes sorted by their bytes,
+        then virtual tiles sorted by path and window.
 
     SQL: ``gbx_rst_merge_agg(tile)``
     """

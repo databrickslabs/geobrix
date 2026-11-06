@@ -34,7 +34,7 @@ RasterX is, in large part, **distributed rasterio** + a best-of-breed raster sta
 
 ## Overview
 
-RasterX is GeoBrix's raster data processing package, providing comprehensive tools for working with raster datasets such as satellite imagery, elevation models, and other gridded spatial data. It is a refactor and improvement of Mosaic raster functions, extended through v0.5.0 with terrain analysis, spectral indices, vector-raster bridging, web-mercator tile output, H3/quadbin/BNG grid aggregations, and — in v0.5.0 — **virtual tiles**, a **COG-preparation lane**, and **VRT mosaics** for memory-safe processing of multi-gigabyte rasters. Since the Databricks product does not (yet) support anything built-in specifically for raster processing, RasterX provides a gap-filling capability for raster operations on the Databricks platform.
+RasterX is GeoBrix's raster data processing package. It provides comprehensive tools for working with raster datasets such as satellite imagery, elevation models, and other gridded spatial data. It is a refactor and improvement of Mosaic raster functions. It was extended through v0.5.0 with terrain analysis, spectral indices, vector-raster bridging, web-mercator tile output, and H3/quadbin/BNG grid aggregations. In v0.5.0 it also gained **virtual tiles**, a **COG-preparation lane**, and **VRT mosaics** for memory-safe processing of multi-gigabyte rasters. The Databricks product does not (yet) support anything built-in specifically for raster processing. RasterX therefore provides a gap-filling capability for raster operations on the Databricks platform.
 
 ## Key Features
 
@@ -102,7 +102,7 @@ The examples on this page read from **four temp views**, each a raster loaded as
 
 Each format has a named `*_gbx` reader. The generic `raster_gbx` reader also reads any raster that GDAL supports.
 
-The four `*_DIR` placeholders in the code below are wired to small sample rasters **committed in the GeoBrix repo** under [`src/test/resources/binary/`](https://github.com/databrickslabs/geobrix/tree/main/src/test/resources/binary) (resolved by the `_SAMPLE_PATHS[...]` / `*_path()` helpers you'll see in the snippet). To run the examples yourself, stage those sample files — or your own rasters — in a Unity Catalog Volume directory and set each placeholder to its Volume path.
+The four `*_DIR` placeholders in the code below are wired to small sample rasters **committed in the GeoBrix repo** under [`src/test/resources/binary/`](https://github.com/databrickslabs/geobrix/tree/main/src/test/resources/binary). The `_SAMPLE_PATHS[...]` / `*_path()` helpers you'll see in the snippet resolve them. To run the examples yourself, stage those sample files, or your own rasters, in a Unity Catalog Volume directory. Then set each placeholder to its Volume path.
 
 The setup below loads `GTIFF_SAMPLE_DIR` into `rasters` and then loads the other three the same way — swap the path and view name (and, for NetCDF, the reader). Every example on the page assumes these four views exist.
 
@@ -182,7 +182,7 @@ Tile-returning functions (`rst_clip`, `rst_resample`, `rst_transform`, the aggre
 
 ### Per-function notes
 
-Functions that use a non-default fixture (multiband GeoTIFF, DEM, or NetCDF) carry a one-line note immediately before their code example flagging the file. Functions that produce a tile rather than consuming one (constructors: `rst_fromfile`, `rst_fromcontent`, `rst_frombands`, …) show a fuller load/build example with a note — the bare-invocation model does not apply when there is no input `tile` yet.
+Functions that use a non-default fixture (multiband GeoTIFF, DEM, or NetCDF) carry a one-line note immediately before their code example flagging the file. Functions that produce a tile rather than consuming one (constructors: `rst_fromfile`, `rst_fromcontent`, `rst_frombands`, …) show a fuller load/build example with a note. The bare-invocation model does not apply when there is no input `tile` yet.
 
 ## Accessor Functions
 
@@ -703,7 +703,7 @@ Powered by **rasterio** + **NumPy**. Per-band count of valid (non-NoData) pixels
 
 Total pixel count.
 
-_Examples use the multiband fixture (`rgb_nir_small.tif`, 8×8, 3 bands, no NoData set), yielding 64 valid pixels per band; the canonical single-band sentinel2 tile has NoData=0 with all pixels equal zero, returning `[0]`._
+_Examples use the multiband fixture (`rgb_nir_small.tif`, 8×8, 3 bands, no NoData set), yielding 64 valid pixels per band. The canonical single-band sentinel2 tile has NoData=0 with all pixels equal zero, returning `[0]`._
 
 <FunctionExamples
   name="rst_pixelcount"
@@ -1415,7 +1415,7 @@ Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Aggregate — bu
 In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-Streaming aggregator that accepts one Z-valued point WKB per row and produces a TIN/Delaunay DTM raster tile per group; breaklines are supplied as a per-group constant array to enforce hard terrain edges.
+Streaming aggregator that accepts one Z-valued point WKB per row and produces a TIN/Delaunay DTM raster tile per group. Breaklines are supplied as a per-group constant array to enforce hard terrain edges.
 
 _Multi-row fixture: 4 Z-valued WKB POINT rows (elevation 100–250 m) over a `[0,0,1,1]` EPSG:4326 extent. All tabs use the same grouped-agg invocation._
 
@@ -1429,13 +1429,13 @@ _Multi-row fixture: 4 Z-valued WKB POINT rows (elevation 100–250 m) over a `[0
 :::note Memory & scale — thin the points that feed a TIN
 
 A Delaunay TIN must hold **all** of a group's points in memory to triangulate, so peak memory is
-**proportional to the points per group** — and, unlike [`rst_binpoints_agg`](#rst_binpoints_agg),
+**proportional to the points per group**. Unlike [`rst_binpoints_agg`](#rst_binpoints_agg),
 a triangulation is inherently global and **cannot** be made grid-bounded the way
 [`bin_points_tiled`](#rst_binpoints_agg) bounds binning. At full LiDAR density a single tile's ground
 returns (hundreds of thousands to millions of points) can exhaust worker RAM.
 
 A bare-earth TIN is near-identical from a **representative subset**, so thin the input points before
-the aggregate — `df.sample(fraction=…)` down to a bounded per-group count (e.g. ~150 k), or use
+the aggregate. Use `df.sample(fraction=…)` down to a bounded per-group count (e.g. ~150 k), or use
 smaller tiles. This is standard LiDAR TIN practice and keeps memory bounded regardless of source
 density. See the [LiDAR reader](../readers/lidar) and [Performance](./performance).
 
@@ -1467,7 +1467,7 @@ Powered by **rasterio**. Aggregate — `groupBy(...).agg(rx.rst_frombands_agg("t
 In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-Streaming aggregator that collects ordered per-band tiles (one row per band) into a single multi-band raster tile per group; use when bands arrive as separate rows rather than a pre-built array.
+Streaming aggregator that collects ordered per-band tiles (one row per band) into a single multi-band raster tile per group. Use it when bands arrive as separate rows rather than a pre-built array.
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif` with `band_index` 1/2/3. All tabs stack via the same grouped-agg invocation._
 
@@ -1515,7 +1515,7 @@ Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Aggregate — `groupBy(...)
 In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-Streaming IDW-interpolation aggregator that accepts one point geometry and one scalar value per row and produces a Float64 GeoTIFF tile per group; use when observations arrive one per row rather than as pre-built arrays.
+Streaming IDW-interpolation aggregator that accepts one point geometry and one scalar value per row and produces a Float64 GeoTIFF tile per group. Use it when observations arrive one per row rather than as pre-built arrays.
 
 _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]` EPSG:4326 extent. All tabs use the same grouped-agg IDW invocation._
 
@@ -1572,7 +1572,7 @@ The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set 
 :::
 
 :::tip Worked example
-The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to end on a San Francisco Bay Area DEM: elevation isobands → H3 polyfill → a shared canvas from [`rst_h3_gridspec`](#h3-grid) → per-band `rst_h3_rasterize_agg` → multi-band stack via [`rst_frombands_agg`](#rst_frombands_agg), visualized with the [`gbx.vizx`](./vizx) helpers. The same pattern maps directly to a telco multi-threshold signal-coverage stack.
+The [H3 Rasterize notebook](../notebooks/h3-rasterize) walks this through end to end on a San Francisco Bay Area DEM. The steps are elevation isobands → H3 polyfill → a shared canvas from [`rst_h3_gridspec`](#h3-grid) → per-band `rst_h3_rasterize_agg` → multi-band stack via [`rst_frombands_agg`](#rst_frombands_agg), visualized with the [`gbx.vizx`](./vizx) helpers. The same pattern maps directly to a telco multi-threshold signal-coverage stack.
 :::
 
 _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. All tabs use the same grouped-agg rasterize invocation._
@@ -1633,7 +1633,13 @@ Rasterize an array of H3 cells into one tile, the scalar twin of [`rst_h3_raster
 <Impl groupedAgg/>
 
 :::note Implementation
-Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS. A mosaic built in memory and one streamed from disk (when it is too large for memory) then place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) gets the footprint of the warp as its mask. The mosaic then has a mask band, and a pixel no tile reaches is invalid in it. A gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The aggregate streams under the worker cap. A result over the cap raises an error with a `Fix:` that names `rasterx.helpers.mint_vrt` or the `cog_gbx` writer in mosaic mode. Members over memory use `merge_by_key(..., method="vrt")`.
+Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS. A mosaic built in memory and one streamed from disk (when it is too large for memory) then place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) gets the footprint of the warp as its mask. The mosaic then has a mask band, and a pixel no tile reaches is invalid in it. A gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The aggregate streams under the worker cap. A result over the cap raises an error with a `Fix:` that names `rasterx.helpers.mint_vrt` or the `cog_gbx` writer in mosaic mode.
+
+Where tiles overlap, the last tile in a fixed order wins. Tiles with bytes come first, sorted by their bytes. Virtual tiles follow, sorted by path and window. The result does not depend on the order the rows arrive. A virtual tile therefore wins over a tile with bytes.
+
+A virtual tile is merged as a file: its path and window go into the mosaic, and no pixel is read into memory first. So a group of any size merges in the same memory. Tiles with bytes are held by the task, so the group must fit it.
+
+On Serverless, pass virtual tiles (the readers' default).
 :::
 
 :::warning `gbx_rst_merge_agg` returns BINARY
@@ -1650,7 +1656,7 @@ GROUP BY group_key
 The Python call `rx.rst_merge_agg(...)` returns the same `BINARY` column. Pass it to `rx.rst_fromcontent(col, "GTiff")` for a tile.
 :::
 
-Merge tiles per group. On Serverless a task holds its whole group at once. A group whose tiles add up (decoded) to more than the task's memory cap is refused before the merge. The `Fix:` names `merge_by_key(method="vrt")`, which reads the tiles as files. The Python call returns the group's error tile, and the SQL call raises.
+Merge tiles per group. On Serverless a task holds the bytes of its whole group at once. A group of tiles with bytes that add up (decoded) to more than the task's memory cap is refused before the merge. The `Fix:` names `merge_by_key`, which reads the tiles as files. The Python call returns the group's error tile, and the SQL call raises. Virtual tiles are not counted: they are read as files.
 
 _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the same grouped-agg mosaic invocation._
 
@@ -1723,7 +1729,7 @@ Pixels not covered by any geometry in the group are set to **`-9999.0`** (band-r
 In SQL and Python the aggregate returns the raster as `BINARY` (the GeoTIFF bytes), on every compute. Wrap it with `gbx_rst_fromcontent(<aggregate>, 'GTiff')` to get a tile back.
 :::
 
-Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat; their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
+Streaming aggregator that burns quadbin cell geometry/value pairs (one row per cell) into a single rasterized tile per group. Quadbin cells are defined in EPSG:4326 lon/lat. Their geometry is reprojected to `out_srid`, so the output tile is in that CRS (`pixel_size`, the extent and `width`/`height` are given in it). The cell IDs carry their zoom level (0..26). The inverse of `rst_quadbin_rastertogrid*`: where those functions reduce raster pixels to per-cell statistics, this one synthesizes a raster from per-cell values.
 
 :::note Python-only `out_crs` parameter
 The aggregate accepts an optional trailing `out_crs` (string CRS) argument. Set `out_srid` or `out_crs`, not both: setting both raises. The JVM level takes `EPSG:<n>` (or a bare code) here and refuses other CRS text with a `Fix:`; the Python level reads any CRS string.
@@ -1929,7 +1935,7 @@ Create or load rasters from path, binary content, or bands (4 total).
 Powered by **rasterio** + **SciPy** (`scipy.spatial.Delaunay`). Barycentric interpolation over an **unconstrained** Delaunay TIN; cells outside the convex hull are NoData. `breaklines`, `merge_tolerance`, and `snap_tolerance` are accepted for signature parity but not enforced — the JVM level builds a constrained TIN that honors them.
 :::
 
-Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries, with an optional array of breakline WKB geometries to preserve sharp terrain transitions.
+Create a DTM raster tile via TIN/Delaunay interpolation from an array of Z-valued point WKB geometries. An optional array of breakline WKB geometries preserves sharp terrain transitions.
 
 :::note Python-only `out_crs` parameter
 The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL does not.
@@ -2171,11 +2177,11 @@ within the pixel cell. Empty cells carry NoData (−9999). The bounding box uses
 half-open interval on the upper x/y edges to prevent double-counting when DSM tiles
 are assembled from adjacent strips.
 
-**What it computes.** This is the point-cloud→raster (DSM-building) step: every input
-point is dropped into the grid cell its (x, y) falls in, and the pixel value is the chosen
+**What it computes.** This is the point-cloud→raster (DSM-building) step. Every input
+point is dropped into the grid cell its (x, y) falls in. The pixel value is the chosen
 reduction of the z-values that landed there. With the default `"max"` that is the *tallest*
 return per cell — a surface model (DSM), exactly the input [`rst_chm`](#rst_chm) differences
-against a DEM; `"min"`/`"mean"`/`"median"`/`"count"`/`"percentile:<p>"` reduce the same
+against a DEM. The `"min"`/`"mean"`/`"median"`/`"count"`/`"percentile:<p>"` modes reduce the same
 points into other surfaces.
 
 <FunctionExamples
@@ -2218,8 +2224,8 @@ points into other surfaces.
 Aggregator variant of [`rst_binpoints`](#rst_binpoints): stream **one scalar (x, y, z) point
 per row** into a DSM tile via `groupBy(...).agg(rx.rst_binpoints_agg(...))`. The
 `xmin`/`ymin`/`xmax`/`ymax`/`width_px`/`height_px`/`srid`/`statistic` arguments are
-per-group constants. The per-cell binning is identical to [`rst_binpoints`](#rst_binpoints) —
-see **What it computes** there for the reduction semantics and statistic modes — it just
+per-group constants. The per-cell binning is identical to [`rst_binpoints`](#rst_binpoints).
+See **What it computes** there for the reduction semantics and statistic modes. It just
 streams one point per row instead of a per-row array.
 
 The SQL aggregate returns **`BINARY`** (raster bytes). Wrap with
@@ -2238,7 +2244,7 @@ wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
 
 Both `rst_binpoints_agg` (grouped — realizes a whole group's points in the worker) and
 `rst_binpoints` (scalar — realizes a row's point arrays) hold memory **proportional to the
-points per group**. That is fine at moderate density, but a full-resolution tile (millions of
+points per group**. That is fine at moderate density. A full-resolution tile (millions of
 returns — e.g. a 1 km tile of 1 m LiDAR) can exhaust worker RAM.
 
 For large or full-density point clouds, use the bounded helper
@@ -2359,8 +2365,8 @@ Returns `ARRAY<STRUCT<geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE>>` �
 entry per contiguous region. `geom_wkb` is a WKB Polygon in the raster's own CRS.
 NoData pixels are excluded. Pixels below `breaks[0]` or `>= breaks[-1]` are dropped.
 
-Each bin is **half-open — `[breaks[i], breaks[i+1])`** — closed on the lower bound and
-open on the upper, so a value equal to a break belongs to the band that break *opens*.
+Each bin is **half-open — `[breaks[i], breaks[i+1])`**. It is closed on the lower bound and
+open on the upper. A value equal to a break belongs to the band that break *opens*.
 For example, with `breaks = array(0, 50, 100, 150, 200)`, a value of `55.0` — and `50.0`
 itself — falls in the `[50.0, 100.0)` band (`band` index 1), while `100.0` moves up to
 the `[100.0, 150.0)` band and `200.0` (equal to `breaks[-1]`) is dropped.
@@ -2398,11 +2404,11 @@ Compute a **Canopy Height Model (CHM)** from a Digital Surface Model (DSM) tile 
 Digital Elevation Model (DEM) tile: `CHM = clamp(align(DSM → DEM grid) − DEM, min=0)`.
 
 **What it computes.** The DSM holds the height of the *top* surface in each cell (canopy,
-rooftops) and the DEM holds bare-earth ground elevation, so subtracting one from the other
-leaves the height of whatever stands above the ground — canopy or object height — in the
-DEM's units. It is a per-cell **subtraction**, not an aggregation: taking the max z per cell
-is how you build the DSM upstream (e.g. `rst_binpoints` over LiDAR returns), and `rst_chm`
-then differences that surface against the DEM.
+rooftops). The DEM holds bare-earth ground elevation. Subtracting one from the other
+leaves the height of whatever stands above the ground (canopy or object height) in the
+DEM's units. It is a per-cell **subtraction**, not an aggregation. Taking the max z per cell
+is how you build the DSM upstream (e.g. `rst_binpoints` over LiDAR returns). Then `rst_chm`
+differences that surface against the DEM.
 
 The DSM is warped onto the DEM's grid (CRS, extent, width, height) via
 nearest-neighbour resampling before subtraction. Negative differences (where the DSM
@@ -2466,9 +2472,9 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 The implementation is backed by BNG cell math and `rasterio`. It auto-warps the input to **EPSG:27700** with `rasterio.warp`, enumerates the overlapping BNG cells, and clips one tile per cell. BNG cell IDs are **STRING** at the row boundary. The cell set and clip windows match the JVM level's.
 :::
 
-Tessellate a raster to British National Grid (BNG) cells — one row per overlapping cell, each clipped to that cell's extent. The raster is automatically reprojected to **EPSG:27700** (British National Grid) before tessellation, so any projected or geographic input is handled transparently. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys from `BNG.resolutionMap` (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING** (e.g. `"TQ28"`, `"SU3412"`).
+Tessellate a raster to British National Grid (BNG) cells — one row per overlapping cell, each clipped to that cell's extent. The raster is automatically reprojected to **EPSG:27700** (British National Grid) before tessellation, so any projected or geographic input is handled transparently. Resolution accepts integer indices **±1..±6** , where 1 = 100 km, 2 = 10 km, and 3 = 1 km. Index 4 = 100 m, 5 = 10 m, and 6 = 1 m. Negative indices address quadrant sub-cells. Resolution also accepts string keys from `BNG.resolutionMap` (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING** (e.g. `"TQ28"`, `"SU3412"`).
 
-Natural fit for CV image-tiling workflows that require Ordnance Survey–scale cells aligned to the national grid — for example tiling aerial or satellite imagery into 1 km BNG cells for object-detection model inference. See issue [#49](https://github.com/databrickslabs/geobrix/issues/49) for the background.
+Natural fit for CV image-tiling workflows that require Ordnance Survey–scale cells aligned to the national grid. An example is tiling aerial or satellite imagery into 1 km BNG cells for object-detection model inference. See issue [#49](https://github.com/databrickslabs/geobrix/issues/49) for the background.
 
 Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
 
@@ -2585,7 +2591,7 @@ Rows: `cellid` `BIGINT`, `raster` `BINARY`, `path` `STRING`, `path_mode` `STRING
 The implementation is backed by quadbin cell math and `rasterio`. It enumerates the quadbin cells that overlap the raster footprint and clips one tile per cell, matching the JVM level's cell set.
 :::
 
-Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. A raster in another CRS is accepted: its footprint is reprojected to EPSG:4326 to find the overlapping cells (see [Grid raster tessellation](./grid-raster-tessellation) for the antimeridian and pole limits). Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
+Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. A raster in another CRS is accepted. Its footprint is reprojected to EPSG:4326 to find the overlapping cells (see [Grid raster tessellation](./grid-raster-tessellation) for the antimeridian and pole limits). Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
 
 Assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
 
@@ -2795,7 +2801,7 @@ A NULL tile, an error tile and a tile that cannot be read give no rows. A resolu
 Powered by **h3**. Returns a `STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>` bounding box for the given H3 cell in the requested `srid`. In `'centroids'` mode the box tightly wraps the centroid point; in `'spatial_envelope'` mode it wraps the full hexagon outline. When `kring_pad > 0` the k-ring of that radius is computed first and the bounding box covers all cells in the ring.
 :::
 
-Scalar function — returns the bounding box `STRUCT<xmin, ymin, xmax, ymax>` for one H3 cell in the given CRS. Use this to drive the `xmin/ymin/xmax/ymax` and grid-size parameters of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg) when you need a consistent per-cell canvas, or to clip and inspect cell extents in downstream queries.
+Scalar function — returns the bounding box `STRUCT<xmin, ymin, xmax, ymax>` for one H3 cell in the given CRS. Use this to drive the `xmin/ymin/xmax/ymax` and grid-size parameters of [`rst_h3_rasterize_agg`](#rst_h3_rasterize_agg) when you need a consistent per-cell canvas. Use it also to clip and inspect cell extents in downstream queries.
 
 **Returns:** `STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE>`
 
@@ -2822,7 +2828,7 @@ FROM   (SELECT gbx_h3_cell_bbox(cellid, 4326, 'centroids', 1) AS cell_bbox FROM 
 ```
 :::
 
-`rst_h3_gridspec` computes the shared, snapped canvas (extent + pixel size) that a group of H3 cells should use so that per-threshold rasters align on a common grid and can be stacked via `rst_frombands_agg` or mosaicked via `rst_merge_agg`.
+`rst_h3_gridspec` computes the shared, snapped canvas (extent + pixel size) that a group of H3 cells should use. Per-threshold rasters then align on a common grid. You can stack them via `rst_frombands_agg` or mosaic them via `rst_merge_agg`.
 
 **Signature:**
 ```python
@@ -3448,7 +3454,7 @@ Population variance of pixel values per quadbin cell.
 
 See [Grid raster tessellation](./grid-raster-tessellation) for the coverage / assignment / fill model shared by all grids.
 
-Aggregate raster values to British National Grid (BNG) cells (8 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m; negative indices address quadrant sub-cells) or string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
+Aggregate raster values to British National Grid (BNG) cells (8 total). BNG functions automatically reproject the input raster to **EPSG:27700** before sampling — no `rst_transform` needed upstream. Resolution accepts integer indices **±1..±6** , where 1 = 100 km, 2 = 10 km, and 3 = 1 km. Index 4 = 100 m, 5 = 10 m, and 6 = 1 m. Negative indices address quadrant sub-cells. Resolution also accepts string keys (e.g. `"1km"`, `"100m"`). Cell IDs are **STRING**.
 
 :::warning NoData and NULL
 With the default `complete` coverage, a cell that overlaps the raster but holds only NoData pixels is returned with a **`NULL`** measure (`0` for a count; never `NaN`). The H3 and quadbin reducers behave the same. `NULL` is safe to filter (`WHERE measure IS NULL`) and is excluded by SQL aggregates like `MAX`/`MIN`/`AVG`.
@@ -4155,8 +4161,8 @@ The **Python** function takes three optional keywords that SQL does not: `virtua
 Clip by geometry. The `clip` argument must be **WKT** (string), **EWKT** (SRID-prefixed string), **WKB** (binary), or **EWKB** (SRID-embedded binary); do not use `st_geomfromtext()` or other DBR native geometry. Optional `clip_crs` (string, source role) declares the CRS of a plain WKB/WKT cutline — an EWKB/EWKT embedded SRID wins, absent → assumed already in the raster CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
 
 **CRS handling:**
-- **EWKT** (`SRID=4326;POLYGON(...)`) or **EWKB** (SRID encoded in the byte header) — the SRID is read, and if it differs from the raster's CRS the cutline is reprojected before clipping. Use this form whenever the geometry and raster may be in different CRSs.
-- **Plain WKT / WKB** (no SRID) — the geometry is assumed to already be in the raster's CRS. If that assumption is wrong (for example, lon/lat polygons against a UTM raster), the cutline will land outside the raster and you'll get an empty or blank output. Either switch to EWKT/EWKB, or reproject the geometry to the raster's CRS first.
+- **EWKT** (`SRID=4326;POLYGON(...)`) or **EWKB** (SRID encoded in the byte header). The SRID is read. If it differs from the raster's CRS, the cutline is reprojected before clipping. Use this form whenever the geometry and raster may be in different CRSs.
+- **Plain WKT / WKB** (no SRID) — the geometry is assumed to already be in the raster's CRS. If that assumption is wrong (for example, lon/lat polygons against a UTM raster), the cutline will land outside the raster. You'll get an empty or blank output. Either switch to EWKT/EWKB, or reproject the geometry to the raster's CRS first.
 
 _Example clip geometry: a WKT polygon in the raster's native CRS (EPSG:32618, no SRID prefix). To clip with a WGS84 geometry use EWKT: `SRID=4326;POLYGON(...)` — the embedded SRID triggers auto-reprojection to the raster's CRS._
 
@@ -4227,7 +4233,7 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Per-pixel mean across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the mean of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use for temporal/ensemble composites such as cloud-reduced mean reflectance.
+Per-pixel mean across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the mean of that location's valid (non-NoData) values across the stack. A pixel that is NoData in *every* input stays NoData. Use for temporal/ensemble composites such as cloud-reduced mean reflectance.
 
 Average multiple tiles (e.g. temporal composite).
 
@@ -4256,10 +4262,10 @@ Average multiple tiles (e.g. temporal composite).
 {/* END GENERATED gbx_rst_combinecount */}
 
 :::note Implementation
-Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns a tile where each pixel is the count of valid (non-NoData) inputs across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output (never 0 for an all-NoData pixel). Align tiles with `gbx_rst_align_to` before combining.
+Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns a tile where each pixel is the count of valid (non-NoData) inputs across the stack. Input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output (never 0 for an all-NoData pixel). Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the number of inputs whose value at that location is valid; a location that is NoData in *every* input yields NoData (never 0). Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
+Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the number of inputs whose value at that location is valid. A location that is NoData in *every* input yields NoData (never 0). Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
 
 Count of valid pixels per location.
 
@@ -4291,7 +4297,7 @@ Count of valid pixels per location.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel maximum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel maximum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the largest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
+Per-pixel maximum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the largest of that location's valid (non-NoData) values across the stack. A pixel that is NoData in *every* input stays NoData. Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
 
 Maximum pixel value per location.
 
@@ -4323,7 +4329,7 @@ Maximum pixel value per location.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel median; input tiles must share the same grid (shape/extent/CRS). Even-count median uses the mean of the two middle values (`numpy np.ma.median` convention). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel median across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the median of that location's valid (non-NoData) values across the stack (even counts average the two middle values; a pixel that is NoData in *every* input stays NoData). Robust to outliers — useful for seasonal median composites from time-series imagery.
+Per-pixel median across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the median of that location's valid (non-NoData) values across the stack. Even counts average the two middle values. A pixel that is NoData in *every* input stays NoData. Robust to outliers — useful for seasonal median composites from time-series imagery.
 
 Median pixel value per location.
 
@@ -4355,7 +4361,7 @@ Median pixel value per location.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel minimum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel minimum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the smallest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
+Per-pixel minimum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the smallest of that location's valid (non-NoData) values across the stack. A pixel that is NoData in *every* input stays NoData. Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
 
 Minimum pixel value per location.
 
@@ -4387,7 +4393,7 @@ Minimum pixel value per location.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel population standard deviation (ddof=0) across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel population standard deviation across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the population standard deviation (ddof=0) of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
+Per-pixel population standard deviation across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the population standard deviation (ddof=0) of that location's valid (non-NoData) values across the stack. A pixel that is NoData in *every* input stays NoData. Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
 
 Population standard deviation of pixel values per location.
 
@@ -4419,7 +4425,7 @@ Population standard deviation of pixel values per location.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel sum across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel sum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the sum of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
+Per-pixel sum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack. They must share grid, extent, and CRS, so align them with `rst_align_to` first. Each output pixel is the sum of that location's valid (non-NoData) values across the stack. A pixel that is NoData in *every* input stays NoData. Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
 
 Sum of pixel values per location.
 
@@ -5584,7 +5590,7 @@ The largest minus the smallest value in the 3×3 window around each pixel.
 {/* END GENERATED gbx_rst_slope */}
 
 :::note Implementation
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical: edge pixels are filled by replicating the border (gdaldem leaves them NoData) and NoData cells are not excluded from the 3×3 window.
+Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical. Edge pixels are filled by replicating the border (gdaldem leaves them NoData), and NoData cells are not excluded from the 3×3 window.
 :::
 
 :::note Python-only keywords
@@ -5784,12 +5790,12 @@ also the output tile's NoData value.
 
 :::tip Tracing class regions to polygons, with a metric min-area filter
 Because the output is an ordinary single-band tile, trace its class regions to polygons the
-same way as any other `rst_*` result — via the registered
+same way as any other `rst_*` result. Use the registered
 [`gbx_rst_polygonize(tile, band, connectedness)`](#rst_polygonize) streaming UDTF.
 `rst_polygonize` has no `min_area` parameter, so filter out small regions **after**
-polygonizing, in metric square meters, via `core.crs.area_m2(geom, crs)` — it takes the
-geodesic area on the CRS's own ellipsoid for a geographic CRS (e.g. EPSG:4326), instead of a
-raw `geom.area` in square degrees that would silently drop every region against a metric
+polygonizing. Filter in metric square meters via `core.crs.area_m2(geom, crs)`. For a
+geographic CRS (e.g. EPSG:4326), it takes the geodesic area on the CRS's own ellipsoid.
+A raw `geom.area` in square degrees would silently drop every region against a metric
 threshold.
 :::
 
@@ -6098,7 +6104,7 @@ Sample the raster at the geometry's location(s). For a `POINT`, returns `ARRAY<D
 `rst_sample` is GeoBrix's equivalent of the ArcGIS **Sample** tool's `RS_VALUE` — reading a raster's cell value at a point. It returns `ARRAY<DOUBLE>` (one value per band, in band order), or `null` where the point falls outside the raster (the NoData/out-of-extent case). Sampling is nearest-pixel; for bilinear or cubic, run [`rst_resample`](#rst_resample) first, then sample.
 
 - **Multiple rasters** (Esri's `RS_VALUE1`, `RS_VALUE2`, …): call `rst_sample` once per raster and alias each result column.
-- **A points table against a raster tile set** (the Sample-tool workflow at scale): join the points to the tiles that contain them — with `st_intersects`, or a raster grid tessellation such as `rst_h3_tessellate` for an index join — then call `rst_sample(tile, point)` per row.
+- **A points table against a raster tile set** (the Sample-tool workflow at scale): join the points to the tiles that contain them. Use `st_intersects`, or a raster grid tessellation such as `rst_h3_tessellate` for an index join. Then call `rst_sample(tile, point)` per row.
 
 See [Raster Sampling](./raster-sampling) for the full workflow guide.
 :::
@@ -6373,13 +6379,13 @@ pipeline function in `databricks.labs.gbx.rasterx.helpers`. It runs on Serverles
 :::
 
 :::info Changed in 0.6.0
-`visible_px` and `total_px` now come from the window around each tower (the `radius_m` square, clipped to the DSM), as `rst_viewshed` returns it; in v0.5.2 a stretched mask inflated them on DEMs above the same limit. A tower that stands in a grid cell with no DSM tile has no row; one outside the DSM used to get a row with no visible pixels.
+`visible_px` and `total_px` now come from the window around each tower (the `radius_m` square, clipped to the DSM), as `rst_viewshed` returns it. In v0.5.2 a stretched mask inflated them on DEMs above the same limit. A tower that stands in a grid cell with no DSM tile has no row. One outside the DSM used to get a row with no visible pixels.
 :::
 
 `rst_viewshed_towers` runs a per-tower raster viewshed over a tiled DSM and returns one scalar
 row per tower. For each tower it selects the in-radius DSM tiles via the `tile_range` windowing
-helper (using an EPSG:3857 grid origin + tile size that the `tx`/`ty` indices in `dsm_tiles_df`
-reference), mints one bytes-free VRT over those tiles, runs a single `rst_viewshed` (materialized
+helper. The helper uses an EPSG:3857 grid origin + tile size that the `tx`/`ty` indices in `dsm_tiles_df`
+reference. It then mints one bytes-free VRT over those tiles, runs a single `rst_viewshed` (materialized
 once, in-memory), and derives coverage counts from a histogram. No raster bytes cross a shuffle —
 each tower row carries a ~100-byte VRT path — so there is no FUSE read-back and no whole-AOI
 merge. Powers the Wireless Coverage series Part 3b viewshed analysis.
@@ -6438,13 +6444,13 @@ This section documents one detail of the JVM level: the GDAL VRT Python pixel-fu
 
 ### VRT Python pixel functions
 
-`gbx_rst_combineavg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband`, and `gbx_rst_derivedband_agg` evaluate a Python expression on each pixel via GDAL's [VRT Python pixel-function API](https://gdal.org/en/stable/drivers/raster/vrt.html#using-derived-bands-with-pixel-functions-in-python). That API is gated behind the GDAL config option `GDAL_VRT_ENABLE_PYTHON`, which **GeoBrix sets to `NO` at executor startup** (see [Security - Restrict GDAL drivers](../security#6-vrt-python-pixel-functions-off-by-default-by-design)). When you call one of the four functions above, GeoBrix flips the option to `YES` for the duration of that call only — via the internal `GDALManager.withVrtPython` bracket — and restores `NO` immediately on return. You don't need to set anything on the cluster or in your notebook to use the built-in functions.
+`gbx_rst_combineavg`, `gbx_rst_combineavg_agg`, `gbx_rst_derivedband`, and `gbx_rst_derivedband_agg` evaluate a Python expression on each pixel via GDAL's [VRT Python pixel-function API](https://gdal.org/en/stable/drivers/raster/vrt.html#using-derived-bands-with-pixel-functions-in-python). That API is gated behind the GDAL config option `GDAL_VRT_ENABLE_PYTHON`, which **GeoBrix sets to `NO` at executor startup** (see [Security - Restrict GDAL drivers](../security#6-vrt-python-pixel-functions-off-by-default-by-design)). When you call one of the four functions above, GeoBrix flips the option to `YES` for the duration of that call only. It does so via the internal `GDALManager.withVrtPython` bracket and restores `NO` immediately on return. You don't need to set anything on the cluster or in your notebook to use the built-in functions.
 
 #### When you need to enable it yourself
 
-If you're invoking the GDAL Python bindings (`from osgeo import gdal`) **directly** — outside the built-in RasterX functions — and you read a VRT that declares a `<PixelFunctionLanguage>Python</...>` band, you'll get an empty/null read unless you enable the option in the same process. Pick one of:
+Suppose you invoke the GDAL Python bindings (`from osgeo import gdal`) **directly**, outside the built-in RasterX functions. If you then read a VRT that declares a `<PixelFunctionLanguage>Python</...>` band, you get an empty/null read unless you enable the option in the same process. Pick one of:
 
-**Python — programmatic, scoped to your read.** Recommended in all cases. Mirrors what GeoBrix does internally, works for both driver-side `pyspark.sql` calls and inside `mapPartitions` / `mapInPandas` UDFs that load VRT-with-pyfunc via `osgeo.gdal`, and survives interleaving with GeoBrix built-in calls (each GeoBrix call resets the option to `NO` on exit, so re-set it on every read):
+**Python — programmatic, scoped to your read.** Recommended in all cases. Mirrors what GeoBrix does internally. It works for both driver-side `pyspark.sql` calls and inside `mapPartitions` / `mapInPandas` UDFs that load VRT-with-pyfunc via `osgeo.gdal`. It also survives interleaving with GeoBrix built-in calls (each GeoBrix call resets the option to `NO` on exit, so re-set it on every read):
 
 ```python
 from osgeo import gdal
@@ -6460,7 +6466,7 @@ finally:
 
 **Cluster env var — for Python-worker processes only.** Setting `spark.executorEnv.GDAL_VRT_ENABLE_PYTHON YES` on the cluster works for Python UDF workers (a separate process from the JVM, where GDAL initializes from env vars). It does **not** help JVM-side reads — GeoBrix calls `gdal.SetConfigOption("GDAL_VRT_ENABLE_PYTHON", "NO")` at executor JVM startup, and `SetConfigOption` takes precedence over the env var. Prefer the programmatic form above unless you have a strong reason to globally enable.
 
-**Scala / JVM code.** If you're writing custom Spark expressions that consume Python-pixel VRTs, wrap the read/translate in the same helper GeoBrix uses internally — it refcounts the option so concurrent tasks on the same executor JVM compose safely:
+**Scala / JVM code.** If you're writing custom Spark expressions that consume Python-pixel VRTs, wrap the read/translate in the same helper GeoBrix uses internally. The helper refcounts the option so concurrent tasks on the same executor JVM compose safely:
 
 ```scala
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager

@@ -683,6 +683,20 @@ class ArrayOverBudget(ReadCapRefused):
     that row's error tile and its Fix."""
 
 
+def refuse_group_over_task_cap(n: int, decoded: int, cap: int = None) -> None:
+    """Raise :class:`ReadCapRefused` when the *n* members of a group, *decoded* bytes together, are over *cap* (the read
+    cap the task carries, else this worker's own). A Serverless task holds the whole group in one process before any
+    merge begins, so the merge cannot bound it and the task would end in an out-of-memory kill: the group is refused
+    before that, with the route that needs no RAM for the members.
+    """
+    cap = tile_read_cap() if cap is None else cap
+    if decoded > cap:
+        raise ReadCapRefused(
+            f"the {n} tiles of this group are {size_text(decoded)} decoded together, over what one task of this "
+            f"compute holds ({size_text(cap)}). Fix: {_VRT_ROUTE}"
+        )
+
+
 class MosaicTooLarge(ValueError):
     """The mosaic of a group is past what a merge can stream (see :func:`merge_tiles`). It is a ValueError for a
     caller that lets it stop the query; one whose result is a tile turns it into that group's error tile, and an

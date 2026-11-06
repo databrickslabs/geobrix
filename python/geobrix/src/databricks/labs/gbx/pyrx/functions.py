@@ -5035,12 +5035,23 @@ _as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(_as_tile_cellid_envelope_ud
 _VTPATH_MAGIC = b"\x00GBXVT:"
 
 
+def _serverless_task() -> bool:
+    """True in a task of a Serverless worker (its own memory budget, not a cap the session carried): the one place a
+    group's size is judged before the merge, since the whole group is in the task's process at once.
+    """
+    from databricks.labs.gbx._gdal_policy import carried_read_cap
+    from databricks.labs.gbx.manager import capabilities
+
+    return capabilities.is_serverless() and carried_read_cap() is None
+
+
 def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     rasters = []
     dropped = 0
+    decoded = 0
     for r in tile:
         candidate = _tile_raster_bytes(r)
         if candidate is None:
@@ -5048,8 +5059,8 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
         try:
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                decoded += agg_core._decoded_bytes(ds)
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
             dropped += 1
@@ -5059,6 +5070,8 @@ def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     try:
+        if _serverless_task():
+            agg_core.refuse_group_over_task_cap(len(rasters), decoded)
         # the bytes come back whole in one row: bounded by the cap the members are
         return agg_core.merge_tiles(rasters, max_out=agg_core._merge_budget())
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
@@ -5105,6 +5118,7 @@ def _merge_agg_v2_udf(
     vprefix = virtualize_prefix.iloc[0] if len(virtualize_prefix) > 0 else None
 
     rasters = []
+    decoded = 0
     for r in tile:
         candidate = _tile_raster_bytes(r)
         if candidate is None:
@@ -5112,8 +5126,8 @@ def _merge_agg_v2_udf(
         try:
             with _serde.open_tile(
                 candidate, gate=False
-            ):  # a validity probe: the decode gates
-                pass
+            ) as ds:  # a validity probe: the decode gates
+                decoded += agg_core._decoded_bytes(ds)
             rasters.append(candidate)
         except Exception:  # noqa: BLE001
             continue
@@ -5121,6 +5135,8 @@ def _merge_agg_v2_udf(
         return _error_payload(_only_error_tiles(tile))
 
     try:
+        if _serverless_task():
+            agg_core.refuse_group_over_task_cap(len(rasters), decoded)
         merged_bytes = agg_core.merge_tiles(rasters)
     except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
         return _error_payload([_serde.build_error_tile(str(exc), 0)])

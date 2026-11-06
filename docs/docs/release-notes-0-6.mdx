@@ -696,6 +696,7 @@ Both tiers apply one rule for which pixels are valid.
   - `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window.
   - `gbx_rst_convolve` no longer writes each block's result shifted.
   - In both tiers it adds only the neighbours on the raster, so the tiers agree at the edges. The lightweight one replicated the edge.
+- **`gbx_rst_merge_agg` refuses an oversize group on Serverless.** A Serverless task holds the whole group before any merge, so a group of tiles that add up (decoded) to more than the task's memory cap used to end the query with a memory-limit error. It is now refused first, with a `Fix:` that names `merge_by_key(method="vrt")`: the SQL call raises and the Python call returns the group's error tile.
 - **Grouped functions apply a virtual tile's clip.** On runtimes with the FILE type, the lightweight `*_grouped` functions skipped the `clipPolygons` polygon of a `raster_gbx` or `cog_gbx` virtual tile. These include `rst_clip_grouped`, `rst_memsize_grouped` and `rst_resample_grouped`.
   - They now read the tile clipped, and reproject a tile whose `crs` differs from its source's.
   - A tile written with `virtualize_dir` from a clipped or reprojected tile no longer applies that clip and CRS twice when read.

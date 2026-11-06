@@ -1483,3 +1483,32 @@ def test_the_in_ram_estimate_stays_above_the_measured_peak_of_the_merge(n):
     assert agg._in_ram_bytes(hdrs, ref_crs, union) >= (
         1.10 * _MEASURED_PEAK_OVER_MOSAIC[n] * union
     )
+
+
+def test_a_serverless_task_refuses_a_group_over_its_cap_before_the_merge(monkeypatch):
+    """A Serverless task holds the whole group at once, so a group whose members add up to more than the task's cap is
+    refused before any merge, with the VRT route (never an out-of-memory kill, never a silent NULL): the bytes
+    aggregate raises, the tile aggregate answers the group's error tile. Off Serverless the same group merges.
+    """
+    import pandas as pd
+
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    left = _ras(np.full((64, 64), 3), ulx=0.0, uly=64.0)  # 16 KiB decoded each
+    right = _ras(np.full((64, 64), 4), ulx=64.0, uly=64.0)
+    group = pd.Series([{"raster": left}, {"raster": right}])
+    monkeypatch.setattr(fx, "_serverless_task", lambda: True)
+    with _gdal_policy.carried(None, 20 * 1024):  # 32 KiB together, over 20 KiB
+        with pytest.raises(
+            agg.ReadCapRefused, match=r"merge_by_key\(.*method=\"vrt\"\)"
+        ):
+            fx._merge_agg_bytes(group, False)
+        assert fx._merge_agg_bytes(group, True).startswith(fx._ERROR_MAGIC)
+    with _gdal_policy.carried(None, 40 * 1024):  # under the cap: merged
+        assert fx._merge_agg_bytes(group, False)
+    monkeypatch.setattr(fx, "_serverless_task", lambda: False)
+    with _gdal_policy.carried(
+        None, 20 * 1024
+    ):  # not Serverless: judged by the streaming merge, not this gate
+        assert fx._merge_agg_bytes(group, False)

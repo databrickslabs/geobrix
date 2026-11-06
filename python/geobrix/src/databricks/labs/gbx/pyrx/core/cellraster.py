@@ -19,7 +19,6 @@ round-trip a Long digit-id internally).
 import math
 import sys
 
-import h3
 import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine
@@ -33,6 +32,8 @@ _U64 = 0xFFFFFFFFFFFFFFFF
 
 def _h3_str(cellid) -> str:
     """Canonical h3 string for a (possibly signed) Spark Long cell id."""
+    import h3  # lazy: only the H3 grid needs it (the quadbin/BNG/custom rasterizers declare no h3)
+
     return h3.int_to_str(int(cellid) & _U64)
 
 
@@ -43,6 +44,8 @@ def _resolution(cell_strs) -> int:
     ``[_h3_str(c) for c in cells]``. Grid-generic resolution lives on the
     adapter (``resolution``), which operates on native cell keys.
     """
+    import h3
+
     res = h3.get_resolution(next(iter(cell_strs)))
     for c in cell_strs:
         if h3.get_resolution(c) != res:
@@ -110,19 +113,29 @@ class _H3Adapter:
         return _resolution(list(keys))
 
     def k_ring(self, key, k):
+        import h3
+
         return h3.grid_disk(key, k)
 
     def cell_center(self, key):
+        import h3
+
         lat, lon = h3.cell_to_latlng(key)  # h3 returns (lat, lon)
         return lon, lat
 
     def cell_boundary(self, key):
+        import h3
+
         return [(lo, la) for la, lo in h3.cell_to_boundary(key)]  # -> (lon, lat)
 
     def pixel_key(self, lon, lat, res):
+        import h3
+
         return h3.latlng_to_cell(float(lat), float(lon), res)
 
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
+        import h3
+
         edge_m = h3.average_hexagon_edge_length(res, unit="m")
         if _is_geographic(srid):
             midlat = (bymin + bymax) / 2.0
@@ -138,10 +151,15 @@ class _QuadbinAdapter:
     def __init__(self):
         from shapely import from_wkb
 
+        self._from_wkb = from_wkb
+
+    @property
+    def _qb(
+        self,
+    ):  # lazy: the module-level adapter table is built without quadbin installed
         from databricks.labs.gbx.pygx import _quadbin as _qb
 
-        self._qb = _qb
-        self._from_wkb = from_wkb
+        return _qb
 
     def to_key(self, cellid):
         return int(cellid) & _U64

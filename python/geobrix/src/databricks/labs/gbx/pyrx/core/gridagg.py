@@ -50,11 +50,10 @@ path is not intended for large tiles.
 
 import math
 
-import h3
 import numpy as np
 
 from databricks.labs.gbx._gdal_policy import open_bytes
-from databricks.labs.gbx.pygx import _bng, _quadbin
+from databricks.labs.gbx.pygx import _bng
 from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 
 H3_MAX_RES = 15
@@ -113,6 +112,8 @@ def _validate_resolution(resolution: int, grid: str) -> None:
 
 def _h3_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
     """Per-valid-pixel H3 cell ids (uint64). Scalar lib call; no array API."""
+    import h3  # lazy: stats_partial and the BNG paths run without h3 installed
+
     cells = [
         h3.str_to_int(h3.latlng_to_cell(float(la), float(lo), resolution))
         for lo, la in zip(lon, lat)  # vectorscan: ok (h3 no array API)
@@ -716,7 +717,14 @@ def _raster_to_grid(
         )
 
     resolution = int(resolution)
-    encode = _h3_cells if grid == "h3" else _quadbin.point_as_cell_vec
+    if grid == "h3":
+        encode = _h3_cells
+    else:
+        from databricks.labs.gbx.pygx import (
+            _quadbin,  # lazy: only the quadbin grid needs it
+        )
+
+        encode = _quadbin.point_as_cell_vec
 
     def _run(work_ds):
         gt = work_ds.transform.to_gdal()  # (c, a, b, f, d, e) GDAL geotransform

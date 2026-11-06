@@ -703,19 +703,20 @@ RASTER_AGGREGATE += (
 
 
 # --- the cell rasterizers: H3, quadbin, custom grid (BNG's rows are MVP_A's) ---------------------------------------
-def _rings():
-    """(center, [three ring-1 cells]) of each grid, from its own library or numbering."""
-    import h3
-    import quadbin
+def _rings(prefix):
+    """(center, [three ring-1 cells]) of one grid, from its own library or numbering (only that library is imported:
+    the sandbox of a function that declares quadbin but not h3 cannot import h3)."""
+    if prefix == "h3":
+        import h3
 
-    h3_ring = [h3.str_to_int(x) for x in h3.grid_ring(h3.int_to_str(H3_CELL), 1)][:3]
-    qb_ring = sorted(set(quadbin.k_ring(QB_C, 1)) - {QB_C})[:3]
-    cg_ring = [cg_id(531, 180, 0), cg_id(530, 181, 0), cg_id(531, 181, 0)]
-    return {
-        "h3": (H3_CELL, h3_ring),
-        "qb": (QB_C, qb_ring),
-        "cg": (cg_id(530, 180, 0), cg_ring),
-    }
+        ring = [h3.str_to_int(x) for x in h3.grid_ring(h3.int_to_str(H3_CELL), 1)]
+        return H3_CELL, ring[:3]
+    if prefix == "qb":
+        import quadbin
+
+        return QB_C, sorted(set(quadbin.k_ring(QB_C, 1)) - {QB_C})[:3]
+    ring = [cg_id(531, 180, 0), cg_id(530, 181, 0), cg_id(531, 181, 0)]
+    return cg_id(530, 180, 0), ring
 
 
 # grid -> (function, twin, resolution of the cells, canvas: out_srid, pixel_size, extent, width, height, mode, kring_pad)
@@ -743,7 +744,7 @@ _CELLS = {
 
 
 def _members(prefix, kind):
-    c = _rings()[prefix]
+    c = _rings(prefix)
     cells = [c[0], *c[1]]
     return {
         # a repeated cell keeps its largest value (3 of 3, 1); a NULL value in a typed column and a NaN burn NaN

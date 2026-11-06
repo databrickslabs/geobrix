@@ -182,6 +182,10 @@ def test_a_running_form_prints_a_line_each_print_interval_apart_from_the_json_be
         json.loads(path.read_text())["seq"] == seq
     )  # only begin/end/the JSON interval write the file
     hb.end()
+    # a tick can land between the read above and end(), and one that was already printing when end() ran lands just
+    # after it: both are the running form's lines. Drain them, then watch the gap between forms.
+    time.sleep(0.05)
+    capsys.readouterr()
     hb.stop()
     assert len(lines) >= 2, lines
     assert re.fullmatch(

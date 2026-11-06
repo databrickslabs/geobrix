@@ -386,8 +386,9 @@ def test_the_injected_stall_form_sleeps_on_the_driver_after_the_first_form(
         spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1,), where="venv",
         base_rows=50, only_levels=("L3",), inject_stall=0.4, on_form=lambda rs: seen.append(rs[0].fn),
     )  # fmt: skip
-    assert seen == [B, "inject_stall", B]
-    stall = rows[1]
+    # the forms of one input run together, so the stall comes after the first input's forms (B, B), not between them
+    assert seen == [B, B, "inject_stall"]
+    stall = [r for r in rows if r.fn == "inject_stall"][0]
     assert stall.status == "ok" and stall.iter_median_s >= 0.4
 
 

@@ -360,6 +360,11 @@ def _grouped(recipe: str, virtual: bool):
     return build
 
 
+_GB_FOUND: Dict[tuple, List[str]] = (
+    {}
+)  # (rows dir, n) -> the EPSG:27700 tiles found, once per process
+
+
 def _gb_tiles(virtual: bool):
     """The corpus row tiles that are EPSG:27700 (the BNG cells of the others fall outside Britain)."""
 
@@ -368,20 +373,28 @@ def _gb_tiles(virtual: bool):
         if not sources:
             return None
 
-        gb = []
-        t0 = time.perf_counter()
-        # the corpus cycles four systems, so about a quarter are EPSG:27700: look at 4n + 64 files, no more (a corpus
-        # with none must not open every file)
-        for p in sources[: 4 * n + 64]:
-            with open_data(p) as ds:
-                if ds.crs is not None and ds.crs.to_epsg() == 27700:
-                    gb.append(p)
-            if len(gb) >= n:
-                break
-        print(
-            f"[LEVELS input] BNG tiles found ({len(gb)}) in {time.perf_counter() - t0:.1f} s",
-            flush=True,
-        )
+        kind = "virt" if virtual else "mat"
+        name = f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}"
+        if schema is not None and spark.catalog.tableExists(f"{schema}.{name}"):
+            return f"{schema}.{name}"  # built by an earlier form or run: no header of the corpus is read again
+        memo = (os.path.join(corpus, "rows"), n)
+        if memo not in _GB_FOUND:
+            gb = []
+            t0 = time.perf_counter()
+            # the corpus cycles four systems, so about a quarter are EPSG:27700: look at 4n + 64 files, no more (a
+            # corpus with none must not open every file)
+            for p in sources[: 4 * n + 64]:
+                with open_data(p) as ds:
+                    if ds.crs is not None and ds.crs.to_epsg() == 27700:
+                        gb.append(p)
+                if len(gb) >= n:
+                    break
+            print(
+                f"[LEVELS input] BNG tiles found ({len(gb)}) in {time.perf_counter() - t0:.1f} s",
+                flush=True,
+            )
+            _GB_FOUND[memo] = gb
+        gb = _GB_FOUND[memo]
         if not gb:
             return None
         if len(gb) < n:
@@ -393,11 +406,10 @@ def _gb_tiles(virtual: bool):
                 f"Fix: gbx:bench:gen-data --on-databricks --rows-from {held} --rows-to {held + 4 * (n - len(gb)) - 1} "
                 "(generated on Databricks, not uploaded)"
             )
-        kind = "virt" if virtual else "mat"
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}",
+            name,
             lambda: _tile_column(spark, [(p, p) for p in gb], virtual, keyed=False),
         )
 
@@ -493,18 +505,24 @@ def _grouped_tiles(skew: bool, label: str = ""):
         sources = _corpus_rows(corpus)
         if not sources:
             return None
-        t0 = time.perf_counter()
-        pairs = _plan_grouped_tiles(sources, n, skew, spark)
-        print(
-            f"[LEVELS input] grouped tiles planned (CRS of {len(pairs)} headers) in {time.perf_counter() - t0:.1f} s",
-            flush=True,
-        )
         kind = "skew" if skew else "even"
+
+        def tiles():
+            # planned only when the table is built: reading the CRS of every header (thousands, on the cluster) took
+            # minutes, and it ran for every form that asked for a table that was already there
+            t0 = time.perf_counter()
+            pairs = _plan_grouped_tiles(sources, n, skew, spark)
+            print(
+                f"[LEVELS input] grouped tiles planned (CRS of {len(pairs)} headers) in {time.perf_counter() - t0:.1f} s",
+                flush=True,
+            )
+            return _tile_column(spark, pairs, False, keyed=True)
+
         return _table(
             spark,
             schema,
             f"mvp_in_tiles_grouped{label}_{kind}_v{RECIPE_VERSION}_{n}",
-            lambda: _tile_column(spark, pairs, False, keyed=True),
+            tiles,
         )
 
     return build

@@ -75,6 +75,7 @@ class Heartbeat:
         self._rows: Optional[int] = None
         self._name = ""
         self._work_thread: Optional[int] = None
+        self._start_thread: Optional[int] = None
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
@@ -83,7 +84,7 @@ class Heartbeat:
 
     # -- the work thread's side -------------------------------------------------------------
     def start(self) -> "Heartbeat":
-        self._work_thread = threading.get_ident()
+        self._work_thread = self._start_thread = threading.get_ident()
         self._state = "running"
         try:
             os.makedirs(os.path.dirname(self.path) or ".", exist_ok=True)
@@ -132,6 +133,11 @@ class Heartbeat:
         """The rung's phase (setup, warmup 1/2, measured 1/3): in the beat and the RUNNING line."""
         with self._lock:
             self._rung_phase = text
+
+    def set_work_thread(self, ident: Optional[int]) -> None:
+        """The thread whose stack the beat records: a rung that runs on a thread of its own names it for its duration,
+        and None puts back the thread that started the heartbeat."""
+        self._work_thread = ident if ident is not None else self._start_thread
 
     def form_skipped(self) -> None:
         """A form whose remaining rungs are skipped before any begins: it is done as far as the count goes."""

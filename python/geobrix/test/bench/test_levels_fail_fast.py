@@ -34,6 +34,9 @@ class FakeSpark:
         self.calls = []
         self.released = threading.Event()
         self.fail_interrupt = False
+        self.tag_releases = (
+            True  # False: an interrupt of the tag stops nothing (the wider one does)
+        )
 
     def addTag(self, tag):
         self.calls.append(("add", tag))
@@ -45,13 +48,18 @@ class FakeSpark:
         self.calls.append(("interrupt", tag))
         if self.fail_interrupt:
             raise RuntimeError("no route to the server")
+        if self.tag_releases:
+            self.released.set()
+
+    def interruptAll(self):
+        self.calls.append(("interrupt-all", None))
         self.released.set()
 
 
-def form(name, **kw):
+def form(name, input="ff_in", **kw):
     kw.setdefault("level", "L4")  # a UC function level: no Python worker, no JAR probe
     return Form(
-        mvp=SET, fn=name, variant="v", input="ff_in",
+        mvp=SET, fn=name, variant="v", input=input,
         run=f"{__name__}:ff_run", register=False, **kw,
     )  # fmt: skip
 
@@ -116,6 +124,15 @@ def stall_until_interrupted(env):
     assert env.spark.released.wait(WAIT), "the watchdog never interrupted the query"
     env.spark.released.clear()
     raise RuntimeError("OPERATION_CANCELED: the operation was cancelled")
+
+
+def stall_advancing(env, event=None, secs=1.0):
+    """A query that never ends by itself while the run's clock moves (the escalation windows are on that clock)."""
+    event = event or env.spark.released
+    end = time.monotonic() + WAIT
+    while not event.wait(0.01):
+        advance(env, secs)
+        assert time.monotonic() < end, "never released"
 
 
 def by(rows):
@@ -848,3 +865,284 @@ def test_the_heartbeat_says_an_interrupt_on_its_own_tagged_line(tmp_path, capsys
         "[LEVELS FF] form 1/1 f scale 1x rows 10 INTERRUPT over-bar: elapsed 1300s past deadline 1200s"
         in capsys.readouterr().out
     )
+
+
+# ---- the cause of the interrupt that stopped nothing, escalation, cold rungs, shared inputs -----------------------
+
+
+def test_the_worker_peak_puts_the_callers_job_group_back_instead_of_clearing_it():
+    """The cause of rungs that ran 630 s past their deadline: WorkerPeak.start() (every L3/DF form) grouped its barrier
+    stage and then CLEARED the job group of the thread, so the rung's jobs ran in no group and cancelling the rung's
+    group stopped nothing."""
+    from databricks.labs.gbx.bench import attribution
+
+    keys = ("spark.jobGroup.id", "spark.job.description", "spark.job.interruptOnCancel")
+    props = {keys[0]: "gbx-bench-rung", keys[1]: "the rung", keys[2]: "true"}
+
+    def setj(group, desc, interruptOnCancel=False):
+        props.update(
+            {keys[0]: group, keys[1]: desc, keys[2]: str(interruptOnCancel).lower()}
+        )
+
+    sc = types.SimpleNamespace(
+        getLocalProperty=props.get, setJobGroup=setj, cancelJobGroup=lambda g: None,
+        setLocalProperty=lambda k, v: props.pop(k, None) if v is None else props.__setitem__(k, v),
+    )  # fmt: skip
+    peak = attribution.WorkerPeak(types.SimpleNamespace(sparkContext=sc))
+    seen = []
+    peak._bounded(lambda: seen.append(props[keys[0]]))
+    assert seen[0].startswith(
+        attribution._PEAK_JOB_GROUP
+    )  # the stage ran in the peak's own group
+    assert props == {
+        keys[0]: "gbx-bench-rung",
+        keys[1]: "the rung",
+        keys[2]: "true",
+    }  # and the rung's is back
+
+
+def test_every_iteration_puts_the_rungs_group_back_before_it_runs(env):
+    armed = []
+    seen = []
+
+    def body(sp, src):
+        seen.append(len(armed))
+
+    PLAN["f"] = body
+    rung = levels._Rung(scale=1, clock=env.clock, deadline_s=100, setup_cap_s=50)
+    rung.rearm = lambda: armed.append(1)
+    ctx = levels._Ctx(env.spark, 1, 2, "/none", None, "c.s", {})
+    go = levels._iteration(ctx, form("f"), ("f", 10), rung, {}, 1)
+    go(), go(), go()
+    assert seen == [
+        1,
+        2,
+        3,
+    ]  # armed before each of the warmup and the two measured iterations
+
+
+def test_a_rung_the_tag_does_not_stop_is_stopped_by_the_wider_interrupt_and_the_next_form_runs(
+    env,
+):
+    env.spark.tag_releases = False
+
+    def stuck(sp, src):
+        advance(env, 5000)
+        stall_advancing(env)
+        env.spark.released.clear()
+        raise RuntimeError("OPERATION_CANCELED")
+
+    PLAN["stuck"] = stuck
+    PLAN["ok"] = lambda sp, src: advance(env, 1)
+    rows, _ = env.run(
+        [form("stuck"), form("ok")], scales=(1,), rung_cap_s=1200, escalate_s=30
+    )
+    got = by(rows)
+    bar = got[("stuck", 1)]
+    assert (
+        bar.status == "over-bar"
+        and "escalated at +" in bar.note
+        and "every job of the session" in bar.note
+    )
+    assert "unresponsive" not in bar.note
+    assert ("interrupt-all", None) in env.spark.calls
+    assert got[("ok", 1)].status == "ok"
+
+
+def test_a_rung_nothing_stops_is_abandoned_and_the_next_form_runs(env):
+    forever = threading.Event()
+    env.spark.tag_releases = False
+    env.spark.interruptAll = lambda: env.spark.calls.append(
+        ("interrupt-all", None)
+    )  # accepted, stops nothing
+
+    def stuck(sp, src):
+        advance(env, 5000)
+        stall_advancing(env, forever)  # a worker blocked in native code
+
+    PLAN["stuck"] = stuck
+    PLAN["ok"] = lambda sp, src: advance(env, 1)
+    try:
+        rows, _ = env.run(
+            [form("stuck"), form("ok")], scales=(1, 4), rung_cap_s=1200, escalate_s=30
+        )
+    finally:
+        forever.set()
+    got = by(rows)
+    bar = got[("stuck", 1)]
+    assert (
+        bar.status == "over-bar"
+        and "unresponsive after escalation" in bar.note
+        and "escalated at +" in bar.note
+    )
+    assert (
+        got[("stuck", 4)].status == "skipped"
+        and "over-bar at 1x" in got[("stuck", 4)].note
+    )
+    assert [got[("ok", s)].status for s in (1, 4)] == ["ok", "ok"]
+
+
+def test_a_rung_whose_projected_run_is_long_skips_its_warmup_and_says_so(env):
+    PLAN["f"] = lambda sp, src: advance(env, 100)
+    rows, _ = env.run(
+        [form("f")], scales=(1, 4), warmup=1, rung_cap_s=5000, bar_factor=1.0
+    )
+    r1, r4 = rows
+    # 1x: warmup + measured = 2 calls; 4x: the 200 s of 1x x 4 = 800 s projected > 120 s: measured only
+    assert [c for c in CALLS if c[0] == "f"] == [("f", 10), ("f", 10), ("f", 40)]
+    assert r1.warmup_iters == 1 and "cold" not in r1.note
+    assert r4.warmup_iters == 0 and "cold: warmup skipped (projected 800s)" in r4.note
+
+    CALLS.clear()
+    env.run(
+        [form("f")],
+        scales=(1, 4),
+        warmup=1,
+        rung_cap_s=5000,
+        bar_factor=1.0,
+        warmup_skip_s=0,
+    )
+    assert len(CALLS) == 4  # 0 keeps every warmup
+
+
+CACHE = {}
+BUILDS = []
+MOST_HELD = [0]
+
+
+def cached_input(name):
+    def build(spark, n, corpus, schema):
+        key = (name, n)
+        if key not in CACHE:
+            BUILDS.append(key)
+            CACHE[key] = True
+            MOST_HELD[0] = max(MOST_HELD[0], len({k[0] for k in CACHE}))
+        return (CURRENT[0], n)
+
+    return build
+
+
+def test_forms_of_one_input_run_together_share_it_and_never_two_inputs_are_held(
+    env, monkeypatch
+):
+    CACHE.clear(), BUILDS.clear()
+    MOST_HELD[0] = 0
+    for name in ("k1", "k2"):
+        monkeypatch.setitem(lf.INPUTS, name, cached_input(name))
+        monkeypatch.setitem(lf.BASE_ROWS, name, 10)
+    monkeypatch.setattr(lf, "release_cached_inputs", lambda spark: CACHE.clear())
+    order = []
+    for fn in "abc":
+        PLAN[fn] = lambda sp, src, fn=fn: (
+            order.append(fn + str(src[1] // 10)),
+            advance(env, 1),
+        )
+    # a and c read k1, b reads k2: a pass runs a, c, b
+    rows, _ = env.run(
+        [form("a", "k1"), form("b", "k2"), form("c", "k1")], scales=(1, 4)
+    )
+    assert order == ["a1", "c1", "b1", "a4", "c4", "b4"]
+    assert BUILDS == [
+        ("k1", 10),
+        ("k2", 10),
+        ("k1", 40),
+        ("k2", 40),
+    ]  # each input once per scale
+    assert MOST_HELD[0] == 1  # one input held at a time
+    got = by(rows)
+    assert (
+        "input reused" in got[("c", 1)].note
+        and "input reused" not in got[("a", 1)].note
+    )
+    assert "input reused" not in got[("b", 1)].note
+    assert not CACHE  # and none is left behind
+
+
+def test_an_input_is_planned_only_when_its_table_has_to_be_built(monkeypatch):
+    """Planning the groups reads the CRS of every header (thousands, on the cluster): it ran for every form that asked
+    for a table that was already there, which was the 230-260 s of setup of each of the merge aggregate's forms.
+    """
+    planned = []
+    monkeypatch.setattr(
+        lf, "_corpus_rows", lambda corpus: [f"/c/rows/{i}.tif" for i in range(20)]
+    )
+    monkeypatch.setattr(lf, "corpus_guard", lambda *a, **k: None)
+    monkeypatch.setattr(
+        lf, "_plan_grouped_tiles", lambda *a, **k: planned.append(1) or []
+    )
+    spark = types.SimpleNamespace(
+        catalog=types.SimpleNamespace(tableExists=lambda n: True)
+    )
+    got = lf._grouped_tiles(True)(spark, 10, "/c", "c.s")
+    assert got.startswith("c.s.mvp_in_tiles_grouped_skew_") and planned == []
+
+    monkeypatch.setattr(
+        lf,
+        "open_data",
+        lambda p: (_ for _ in ()).throw(AssertionError("a header was read")),
+    )
+    assert lf._gb_tiles(False)(spark, 10, "/c", "c.s").startswith(
+        "c.s.mvp_in_tiles_gb_mat_"
+    )
+
+
+def test_the_heartbeat_beat_records_the_stack_of_the_rungs_own_thread(tmp_path):
+    import json
+
+    hb = liveness.Heartbeat(str(tmp_path / "hb.json"), interval=3600).start()
+    release = threading.Event()
+
+    def rung_thread_is_blocked_here():
+        release.wait(WAIT)
+
+    t = threading.Thread(target=rung_thread_is_blocked_here, daemon=True)
+    t.start()
+    time.sleep(0.1)
+    hb.set_work_thread(t.ident)
+    hb.beat()
+    mine = json.loads((tmp_path / "hb.json").read_text())["stack"]
+    hb.set_work_thread(None)
+    hb.beat()
+    back = json.loads((tmp_path / "hb.json").read_text())["stack"]
+    release.set()
+    hb.stop()
+    assert any("rung_thread_is_blocked_here" in ln for ln in mine)
+    assert not any("rung_thread_is_blocked_here" in ln for ln in back)
+
+
+def ff_sleepy_l3(spark, src):
+    from pyspark.sql import functions as F
+
+    nap = F.udf(lambda i: (time.sleep(30), i)[1], "long")
+    r = (
+        spark.range(4, numPartitions=4)
+        .select(nap("id").alias("x"))
+        .agg(F.count("x"), F.sum("x"), F.count("x"))
+        .collect()[0]
+    )
+    return r[0], r[1], r[2]
+
+
+def test_an_l3_rung_with_a_worker_peak_is_still_cancelled_at_its_deadline(
+    spark_session_local, monkeypatch
+):
+    """The decisive check: an L3 form starts a WorkerPeak, which used to clear the rung's job group."""
+    monkeypatch.setitem(lf.INPUTS, "ff_in", lambda spark, n, corpus, schema: (n, n))
+    monkeypatch.setitem(lf.BASE_ROWS, "ff_in", 4)
+    f = Form(
+        mvp=SET,
+        fn="nap",
+        level="L3",
+        variant="c0",
+        input="ff_in",
+        run=f"{__name__}:ff_sleepy_l3",
+        register=False,
+    )
+    monkeypatch.setitem(lf.FORMS, SET, [f])
+    t0 = time.monotonic()
+    rows = levels.run_mvp(
+        spark_session_local, SET, "run1", 0, 1, corpus="/none", schema=None, uc="c.s", scales=(1,),
+        where="venv", rung_cap_s=3, watch_poll_s=0.1,
+    )  # fmt: skip
+    assert time.monotonic() - t0 < 25  # the sleep is 30 s a row
+    assert rows[0].status == "over-bar"

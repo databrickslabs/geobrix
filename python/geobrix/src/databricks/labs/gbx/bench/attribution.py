@@ -756,6 +756,15 @@ class WorkerPeak:
 
         timer = threading.Timer(self.TIMEOUT_S, cancel)
         timer.daemon = True
+        # The caller may have a job group of its own (the levels leg groups a rung's jobs to cancel them at its
+        # deadline; a notebook cell has one): put it back, do not clear it. Clearing it left every query after the
+        # peak's start outside the rung's group, so cancelling the group stopped nothing.
+        keys = (
+            "spark.jobGroup.id",
+            "spark.job.description",
+            "spark.job.interruptOnCancel",
+        )
+        saved = {k: sc.getLocalProperty(k) for k in keys}
         sc.setJobGroup(group, "gbx worker peak", interruptOnCancel=True)
         timer.start()
         try:
@@ -768,9 +777,8 @@ class WorkerPeak:
             raise
         finally:
             timer.cancel()
-            sc.setLocalProperty(
-                "spark.jobGroup.id", None
-            )  # PySpark has no clearJobGroup
+            for k, v in saved.items():
+                sc.setLocalProperty(k, v)  # None clears (PySpark has no clearJobGroup)
 
     def _sweep(self, reset: bool) -> List:
         """One row per task: hwm, missed, ran, lost, envs, scope, own_pool, ticks (see `_sweep_task`)."""

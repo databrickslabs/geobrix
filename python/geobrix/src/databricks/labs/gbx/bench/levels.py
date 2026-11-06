@@ -97,7 +97,8 @@ RUNG_CAP_S = (
 SETUP_CAP_S = 600.0  # the most a rung's setup may take at 1x (times the scale for later rungs, held to the rung cap)
 DEADLINE_FLOOR_S = 120.0  # a rung after the first is never judged by less than this
 INTERRUPT_REPEAT_S = 5.0  # an interrupt is sent again this often while the rung is still past its deadline
-STUCK_AFTER_S = 60.0  # past the deadline and still running this long after the interrupt: say so (driver-side work)
+ESCALATE_AFTER_S = 60.0  # past the first interrupt and still running this long: cancel every job (the next step)
+WARMUP_SKIP_S = 120.0  # a rung whose projected run is longer than this skips its warmup (0: always warm)
 WATCH_POLL_S = 1.0
 WATCH_JOIN_S = 5.0  # how long a rung waits for its watchdog thread to end
 
@@ -148,6 +149,16 @@ class _Rung:
     cancelled: str = ""  # "" | "over-bar" | "setup-bound"
     cancelled_at: float = 0.0
     interrupt_note: str = ""
+    rearm: Optional[Callable[[], None]] = (
+        None  # puts the rung's job group / tag back on the work thread
+    )
+    abandoned: bool = (
+        False  # the work did not return after the escalation: the harness moved on without it
+    )
+    warmup: Optional[int] = (
+        None  # the warmup iterations this rung runs (None: the run's); 0 when it runs cold
+    )
+    cold_note: str = ""
     early_why: str = ""
     holder: Dict = dataclasses.field(default_factory=dict)
 
@@ -194,6 +205,10 @@ class _Watchdog:
     """A driver-side thread that, once a rung is past its limit, flags it and interrupts the rung's Spark work (again
     every `repeat_s` while it still runs: an interrupt reaches only what is running at that moment). The work thread
     sees the flag at its next iteration boundary even where no interrupt is available.
+
+    A rung that has not returned `escalate_s` after the first interrupt gets the wider one (`escalate`: every job of the
+    session), and one that has not returned `escalate_s` after that is abandoned (`rung.abandoned`): the run moves on
+    and leaves its work behind. Each step is written on the rung for the row.
     """
 
     def __init__(
@@ -203,16 +218,17 @@ class _Watchdog:
         *,
         poll=WATCH_POLL_S,
         repeat=INTERRUPT_REPEAT_S,
-        stuck=STUCK_AFTER_S,
+        escalate_s=ESCALATE_AFTER_S,
+        escalate=None,
         say=None,
     ):
-        self.rung, self.interrupt, self.poll, self.repeat, self.stuck = (
+        self.rung, self.interrupt, self.poll, self.repeat = (
             rung,
             interrupt,
             poll,
             repeat,
-            stuck,
         )
+        self.escalate_s, self.escalate = escalate_s, escalate
         self.say = say or (lambda what, tail: None)
         self._stop = threading.Event()
         self._thread = threading.Thread(
@@ -234,9 +250,11 @@ class _Watchdog:
 
     def _loop(self) -> None:
         r = self.rung
-        last_fire, stuck_said = None, False
+        last_fire, escalated = None, False
         while not self._stop.wait(self.poll):
             now = r.clock()
+            if r.ended is not None:
+                continue  # the iterations are over: there is nothing left to stop
             if not r.cancelled:
                 why = r.expired(now)
                 if not why:
@@ -254,20 +272,52 @@ class _Watchdog:
             ):
                 last_fire = now
                 self._fire()
-            if (
-                not stuck_said
-                and now - r.cancelled_at >= self.stuck
-                and not self._stop.is_set()
-            ):
-                stuck_said = True
-                r.interrupt_note += (
-                    f"; still running {now - r.cancelled_at:.0f}s after the interrupt (driver-side work is not "
-                    "interruptible): the launcher's watchdog is the fallback"
-                )
-                self.say(
-                    "INTERRUPT",
-                    "the rung is still running after the interrupt; the launcher's watchdog is the fallback",
-                )
+            since = now - r.cancelled_at
+            if not escalated and since >= self.escalate_s:
+                escalated = True
+                self._escalate(since)
+            elif escalated and since >= 2 * self.escalate_s and not r.abandoned:
+                self._abandon(since)
+
+    def _note(self, text: str) -> None:
+        if (
+            not self._stop.is_set()
+        ):  # a step that lands after the rung ended writes nothing on it
+            self.rung.interrupt_note += "; " + text
+
+    def _escalate(self, since: float) -> None:
+        """Past the window: the wider interrupt, once."""
+        if self.escalate is None:
+            self._note(
+                f"still running {since:.0f}s after the interrupt and no wider interrupt exists on this session"
+            )
+            return
+        try:
+            self.escalate()
+            self._note(
+                f"escalated at +{since:.0f}s: every job of the session was cancelled"
+            )
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - recorded; the next window abandons the rung
+            self._note(
+                f"escalation failed at +{since:.0f}s ({type(exc).__name__}: {str(exc)[:120]})"
+            )
+        self.say(
+            "INTERRUPT",
+            f"still running {since:.0f}s after the interrupt: escalated to every job",
+        )
+
+    def _abandon(self, since: float) -> None:
+        self._note(
+            f"unresponsive after escalation: still running {since:.0f}s after the first interrupt; the rung is "
+            "abandoned and its thread left to the cluster (later forms may share its executors)"
+        )
+        self.rung.abandoned = True
+        self.say(
+            "INTERRUPT",
+            "unresponsive after escalation: the rung is abandoned and the run moves on",
+        )
 
     def _fire(self) -> None:
         if self._stop.is_set():
@@ -318,9 +368,12 @@ def _interrupt_api(spark, tag: str):
         saved: Dict[str, Optional[str]] = {}
 
         def arm():
-            # the notebook cell has a job group of its own (the UI's Cancel uses it): keep it for the disarm
-            for key in _JOB_GROUP_PROPS:
-                saved[key] = sc.getLocalProperty(key)
+            # the notebook cell has a job group of its own (the UI's Cancel uses it): keep it for the disarm. Armed
+            # again before every iteration (the group is per thread and anything that runs between can clear it), the
+            # first call's is the one to put back.
+            if not saved:
+                for key in _JOB_GROUP_PROPS:
+                    saved[key] = sc.getLocalProperty(key)
             sc.setJobGroup(tag, tag, True)
 
         def disarm():
@@ -336,6 +389,15 @@ def _interrupt_api(spark, tag: str):
             (lambda: remove(tag)) if remove else (lambda: None),
         )
     return None
+
+
+def _escalate_api(spark):
+    """The wider interrupt of the session, or None: every job of a classic session (after the group's was cancelled),
+    every operation of a Spark Connect one (`interruptAll`)."""
+    sc = _classic_context(spark)
+    if sc is not None:
+        return sc.cancelAllJobs
+    return getattr(spark, "interruptAll", None)
 
 
 def _tag(run_id: str, label: str, scale: int) -> str:
@@ -376,6 +438,8 @@ def run_mvp(
     deadline_floor_s: float = DEADLINE_FLOOR_S,
     clock: Callable[[], float] = time.monotonic,
     watch_poll_s: float = WATCH_POLL_S,
+    warmup_skip_s: float = WARMUP_SKIP_S,
+    escalate_s: float = ESCALATE_AFTER_S,
 ) -> List[ResultRow]:
     """Time every form of `mvp` that this compute offers, at each scale; one row per form and scale.
 
@@ -410,6 +474,14 @@ def run_mvp(
         the rung stops after it: an ``ok`` row of one iteration, with a note.
       * Setup has its own cap (`setup_cap_s` at 1x, times the scale, held to the rung cap); a setup past it is
         interrupted the same way, and the row says ``setup-bound``.
+      * A rung that does not return `escalate_s` after the first interrupt gets the wider one (every job of the session),
+        and `escalate_s` after that is abandoned: its row says ``unresponsive after escalation``, its form is dead, the
+        next form runs (its stuck worker is left to the cluster). The rung runs on a thread of its own for this.
+      * A rung whose projected run (the previous rung's warmup + iterations x the scale ratio) is over `warmup_skip_s`
+        runs its measured iterations cold (``cold: warmup skipped``); a form's first rung keeps its warmup. 0 keeps them all.
+      * Within a scale the forms are ordered by input (stable otherwise) and a rung's cached input is kept for the next
+        form of the same input and released when a different one is next, so one input is held at a time; the later
+        forms say ``input reused`` and their setup is the lookup.
     The launcher's whole-run watchdog stays the last resort where an interrupt cannot reach the work.
     """
     from databricks.labs.gbx.bench import levels_forms as lf
@@ -450,6 +522,8 @@ def run_mvp(
         deadline_floor_s,
         clock,
         watch_poll_s,
+        warmup_skip_s,
+        escalate_s,
     )
     by_form: Dict[int, List[ResultRow]] = {i: [] for i in range(len(todo))}
     hist: Dict[int, _Hist] = {}
@@ -457,15 +531,25 @@ def run_mvp(
     if (
         fail_fast
     ):  # breadth first: every form at a scale, then the next scale for the forms that went on
-        order = [(i, scale) for scale in scales for i in range(len(todo))]
+        first_seen: Dict[str, int] = {}
+        for f in todo:
+            first_seen.setdefault(f.input, len(first_seen))
+        # the forms of one input are neighbours (stable otherwise), so the input is built once and used by them all
+        by_input = sorted(range(len(todo)), key=lambda k: first_seen[todo[k].input])
+        order = [(i, scale) for scale in scales for i in by_input]
     else:
         order = [(i, scale) for i in range(len(todo)) for scale in scales]
-    # The cached inputs are per rung and per form: the cache lives for one (form, scale) and is released with it (a
-    # replicated input is keyed by its row count, so the next form of the same scale builds its own, as it always has);
-    # holding every form's inputs until the end of the scale's pass would hold them all at once.
+    # A cached input lives from the rung that built it to the next rung of a different input (a replicated input is
+    # keyed by its row count, so the forms of one input at one scale share it), and a rung that did not finish ok
+    # releases it at once: one input is held at a time, as the cache's memory contract needs.
     for i, scale in order:
         form, label = todo[i], labels[i]
         requested = (base_rows or lf.BASE_ROWS[form.input]) * scale
+        input_key = (form.input, requested)
+        if ctx.held is not None and ctx.held != input_key:
+            _release(lf, spark)
+            ctx.held = None
+        ctx.input_reused = ctx.last_input == input_key
         base = dict(
             run_id=run_id,
             api=form.level,
@@ -489,7 +573,7 @@ def run_mvp(
             if on_form:
                 on_form([_guard_sent(rows)[-1]])
             continue
-        rung = _new_rung(bar, prev, scale)
+        rung = _new_rung(bar, prev, scale, warmup)
         ctx.rung = rung
         if heartbeat:
             _begin(
@@ -504,8 +588,17 @@ def run_mvp(
                 rung,
             )
         row = _execute(
-            ctx, form, base, requested, rung, _tag(run_id, label, scale), bar
+            ctx,
+            form,
+            base,
+            requested,
+            rung,
+            _tag(run_id, label, scale),
+            bar,
+            keep_input=fail_fast,
         )
+        ctx.held = input_key if fail_fast and row.status == "ok" else None
+        ctx.last_input = input_key if row.status == "ok" else None
         rows.append(row)
         if rung is not None:
             if row.status == "ok":
@@ -529,6 +622,8 @@ def run_mvp(
             # sunk now, not after the last scale: a later scale that hangs or is cancelled loses nothing. The
             # linearity guard needs two scales, so this row is guarded by the scales run so far.
             on_form([_guard_sent(rows)[-1]])
+    if ctx.held is not None:
+        _release(lf, spark)
     out: List[ResultRow] = []
     for i in range(len(todo)):
         out += _guard_sent(by_form[i])
@@ -546,6 +641,8 @@ class _Bar:
     floor_s: float
     clock: Callable[[], float]
     poll_s: float
+    warmup_skip_s: float = WARMUP_SKIP_S
+    escalate_s: float = ESCALATE_AFTER_S
 
 
 def _skip_note(
@@ -570,9 +667,12 @@ def _skip_note(
     )
 
 
-def _new_rung(bar: _Bar, prev: Optional[_Hist], scale: int) -> Optional[_Rung]:
-    """The limits of one rung (None without fail-fast): a form's first gets the rung cap; a later one its projection
-    from the rung before it, held between the floor and the cap."""
+def _new_rung(
+    bar: _Bar, prev: Optional[_Hist], scale: int, warmup: int = 0
+) -> Optional[_Rung]:
+    """The limits of one rung (None without fail-fast): a form's first gets the rung cap and its warmup; a later one its
+    projection from the rung before it, held between the floor and the cap, and no warmup when its projected run is
+    longer than `warmup_skip_s` (a warmup that long is a second measured iteration)."""
     if not bar.fail_fast:
         return None
     setup_cap = min(bar.setup_cap_s * scale, bar.rung_cap_s)
@@ -585,7 +685,7 @@ def _new_rung(bar: _Bar, prev: Optional[_Hist], scale: int) -> Optional[_Rung]:
         )
     ratio = scale / prev.scale
     projected = prev.wall_s * ratio * bar.factor
-    return _Rung(
+    rung = _Rung(
         scale=scale,
         clock=bar.clock,
         deadline_s=min(bar.rung_cap_s, max(projected, bar.floor_s)),
@@ -596,6 +696,11 @@ def _new_rung(bar: _Bar, prev: Optional[_Hist], scale: int) -> Optional[_Rung]:
         projected_s=projected,
         projected_from=prev.scale,
     )
+    run = prev.exec_s * ratio
+    if warmup > 0 and bar.warmup_skip_s > 0 and run > bar.warmup_skip_s:
+        rung.warmup = 0
+        rung.cold_note = f"cold: warmup skipped (projected {run:.0f}s)"
+    return rung
 
 
 def _begin(
@@ -619,6 +724,26 @@ def _begin(
     )
 
 
+def _attempt(
+    ctx: "_Ctx", form: Form, base: Dict, requested: int, rung: Optional[_Rung]
+) -> ResultRow:
+    """`_run_one`, with its failure as an ``error`` row and a stopped rung as an ``over-bar`` one."""
+    try:
+        row = _run_one(ctx, form, base, requested)
+        if rung is not None:
+            if rung.ended is None:
+                rung.ended = rung.clock()
+            if rung.cancelled:
+                # flagged during an iteration that then finished (the interrupt found nothing running): the rung went
+                # past its bar, so it is over-bar and its form is dead, whatever the iteration returned
+                row = _over_bar_row(base, rung, form)
+        return row
+    except Exception as exc:  # noqa: BLE001 - a failure is a measured outcome
+        if rung is not None and rung.cancelled:
+            return _over_bar_row(base, rung, form)
+        return _row(base, status="error", failure=failure_text(exc))
+
+
 def _execute(
     ctx: "_Ctx",
     form: Form,
@@ -627,69 +752,124 @@ def _execute(
     rung: Optional[_Rung],
     tag: str,
     bar: _Bar,
+    keep_input: bool = False,
 ) -> ResultRow:
     """Run one rung and return its row: a failure is an ``error`` row, a stopped rung an ``over-bar`` one. Under
-    fail-fast the rung's Spark work is tagged and a watchdog thread watches its limits until it ends.
+    fail-fast the rung runs on a thread of its own with its Spark work tagged (grouped), and a watchdog thread watches
+    its limits until it ends: a rung the watchdog abandons (no return after the interrupt and the wider one) is written
+    as ``over-bar`` and left running, so one stuck worker does not end the run. `keep_input` leaves a successful rung's
+    cached inputs for the next form of the same input.
     """
     from databricks.labs.gbx.bench import levels_forms as lf
 
     spark = ctx.spark
-    watch, disarm = None, None
-    if rung is not None:
-        api = None
-        try:
-            api = _interrupt_api(spark, tag)
-            if api is not None:
-                api[0]()
-                disarm = api[2]
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - no tag, no interrupt: the rung still has its flag
-            api = None
-            rung.interrupt_note = (
-                f"interrupt unavailable ({type(exc).__name__}: {str(exc)[:120]})"
-            )
-        say = getattr(ctx.heartbeat, "event", None) or (lambda what, tail: None)
-        watch = _Watchdog(
-            rung, api[1] if api else None, poll=bar.poll_s, say=say
-        ).start()
-    stuck = False
+    stuck, row = False, None
     try:
-        try:
-            row = _run_one(ctx, form, base, requested)
-            if rung is not None:
-                if rung.ended is None:
-                    rung.ended = rung.clock()
-                if rung.cancelled:
-                    # flagged during an iteration that then finished (the interrupt found nothing running): the rung
-                    # went past its bar, so it is over-bar and its form is dead, whatever the iteration returned
-                    row = _over_bar_row(base, rung, form)
-        except Exception as exc:  # noqa: BLE001 - a failure is a measured outcome
-            if rung is not None and rung.cancelled:
-                row = _over_bar_row(base, rung, form)
-            else:
-                row = _row(base, status="error", failure=failure_text(exc))
+        if rung is None:
+            row = _attempt(ctx, form, base, requested, None)
+        else:
+            row, stuck = _supervised(ctx, form, base, requested, rung, tag, bar)
     finally:
-        if watch is not None:
-            stuck = not watch.stop()
-        if disarm is not None:
-            try:
-                disarm()
-            except Exception:  # noqa: BLE001 - the tag is spent either way
-                pass
         ctx.rung = None
-        try:
-            lf.release_cached_inputs(spark)  # the rung is over: its cached inputs go
-        except (
-            Exception
-        ) as exc:  # noqa: BLE001 - an interrupted rung may leave a cache that will not unpersist
-            print(
-                f"[LEVELS input] releasing the cached inputs failed ({type(exc).__name__}: {str(exc)[:160]})",
-                flush=True,
-            )
+        if row is None or row.status != "ok" or not keep_input:
+            _release(lf, spark)  # the rung is over: its cached inputs go
     if stuck and rung is not None:
         row = replace(row, note=f"{row.note}; {rung.interrupt_note.lstrip('; ')}")
     return row
+
+
+def _release(lf, spark) -> None:
+    try:
+        lf.release_cached_inputs(spark)
+    except (
+        Exception
+    ) as exc:  # noqa: BLE001 - an interrupted rung may leave a cache that will not unpersist
+        print(
+            f"[LEVELS input] releasing the cached inputs failed ({type(exc).__name__}: {str(exc)[:160]})",
+            flush=True,
+        )
+
+
+def _supervised(
+    ctx: "_Ctx",
+    form: Form,
+    base: Dict,
+    requested: int,
+    rung: _Rung,
+    tag: str,
+    bar: _Bar,
+) -> Tuple[ResultRow, bool]:
+    """The rung on a thread of its own under a watchdog; `(row, watchdog_stuck)`. The thread arms the interrupt (the
+    job group and the tags are per thread) and disarms it; the run waits for it, and moves on without it when the
+    watchdog abandons the rung."""
+    spark = ctx.spark
+    api = None
+    try:
+        api = _interrupt_api(spark, tag)
+    except Exception as exc:  # noqa: BLE001 - no interrupt: the rung still has its flag
+        rung.interrupt_note = (
+            f"interrupt unavailable ({type(exc).__name__}: {str(exc)[:120]})"
+        )
+    try:
+        wider = _escalate_api(spark)
+    except (
+        Exception
+    ):  # noqa: BLE001 - no wider interrupt: the rung is abandoned after the window
+        wider = None
+    say = getattr(ctx.heartbeat, "event", None) or (lambda what, tail: None)
+    watch = _Watchdog(
+        rung,
+        api[1] if api else None,
+        poll=bar.poll_s,
+        escalate_s=bar.escalate_s,
+        escalate=wider,
+        say=say,
+    ).start()
+    box: Dict = {}
+    done = threading.Event()
+
+    def work() -> None:
+        disarm = None
+        try:
+            if api is not None:
+                try:
+                    api[0]()
+                    disarm = api[2]
+                    rung.rearm = api[0]
+                except Exception as exc:  # noqa: BLE001 - no tag, no interrupt
+                    rung.interrupt_note = f"interrupt unavailable ({type(exc).__name__}: {str(exc)[:120]})"
+            box["row"] = _attempt(ctx, form, base, requested, rung)
+        except BaseException as exc:  # noqa: BLE001 - handed to the waiting thread
+            box["exc"] = exc
+        finally:
+            if disarm is not None:
+                try:
+                    disarm()
+                except Exception:  # noqa: BLE001 - the tag is spent either way
+                    pass
+            done.set()
+
+    worker = threading.Thread(target=work, name="gbx-rung-worker", daemon=True)
+    worker.start()
+    set_thread = getattr(ctx.heartbeat, "set_work_thread", None)
+    if set_thread is not None:
+        set_thread(
+            worker.ident
+        )  # the stack in the beat is the rung's, not the waiting thread's
+    try:
+        while not done.wait(bar.poll_s):
+            if rung.abandoned:
+                break
+    finally:
+        if set_thread is not None:
+            set_thread(None)
+    stuck = not watch.stop()
+    if not done.is_set():  # abandoned: the thread is left running
+        rung.cancelled = rung.cancelled or OVER_BAR
+        return _over_bar_row(base, rung, form), stuck
+    if "exc" in box:
+        raise box["exc"]
+    return box["row"], stuck
 
 
 def _say_skip(mvp, index, total, label, scale, rows, note) -> None:
@@ -842,6 +1022,13 @@ class _Ctx:
     rung: Optional["_Rung"] = (
         None  # the running rung under fail-fast (None: nothing is stopped early)
     )
+    held: Optional[Tuple[str, int]] = (
+        None  # the (input, rows) whose cached frames are kept for the next form
+    )
+    last_input: Optional[Tuple[str, int]] = (
+        None  # the (input, rows) of the last rung that finished ok
+    )
+    input_reused: bool = False  # the rung about to run has the input the last one used
 
 
 _JVM_LEVELS = ("L1", "L2", "JVM-DF")  # forms whose body is the geobrix JAR
@@ -912,7 +1099,9 @@ def _register_form(ctx: _Ctx, form: Form) -> None:
         ctx.registered[form.fn] = want
 
 
-def _iteration(ctx: _Ctx, form: Form, src, rung: Optional["_Rung"], holder: Dict):
+def _iteration(
+    ctx: _Ctx, form: Form, src, rung: Optional["_Rung"], holder: Dict, warmup: int
+):
     """The function `time_iters` calls: one warmup or measured iteration of the form over `src`. Under fail-fast it
     stops a rung the watchdog flagged, names the phase it is in, and tells the rung what finished and how long it took.
     """
@@ -943,12 +1132,19 @@ def _iteration(ctx: _Ctx, form: Form, src, rung: Optional["_Rung"], holder: Dict
     def go():
         if rung is not None and rung.cancelled:
             raise _RungCancelled(rung.cancelled)
+        if rung is not None and rung.rearm is not None:
+            try:
+                rung.rearm()
+            except (
+                Exception
+            ):  # noqa: BLE001 - the group is then what the first arm left
+                pass
         calls[0] += 1
-        warming = calls[0] <= ctx.warmup
+        warming = calls[0] <= warmup
         phase(
-            f"warmup {calls[0]}/{ctx.warmup}"
+            f"warmup {calls[0]}/{warmup}"
             if warming
-            else f"measured {calls[0] - ctx.warmup}/{ctx.measured}"
+            else f"measured {calls[0] - warmup}/{ctx.measured}"
         )
         t_iter = rung.clock() if rung is not None else 0.0
         if "first" not in holder and rung is not None:
@@ -972,6 +1168,11 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
 
     t_start = time.perf_counter()
     spark = ctx.spark
+    rung = (
+        ctx.rung
+    )  # under fail-fast: the limits, and where the work thread reports what it has done. Read first: the run may
+    # move on (and set the next rung) while this thread is still in its input build
+    reused = ctx.input_reused
     gone = _cannot_run_here(form, ctx.uc, ctx)
     if gone:
         return _row(base, note=gone, status="na_by_design")
@@ -983,16 +1184,14 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     scan_tasks = _scan_tasks(ctx, src)
     _register_form(ctx, form)
     _ensure_setup(ctx, form)
-    rung = (
-        ctx.rung
-    )  # under fail-fast: the limits, and where the work thread reports what it has done
     holder: Dict = rung.holder if rung is not None else {}
-    _go = _iteration(ctx, form, src, rung, holder)
+    warmup = rung.warmup if rung is not None and rung.warmup is not None else ctx.warmup
+    _go = _iteration(ctx, form, src, rung, holder, warmup)
     peak = attribution.WorkerPeak(spark) if form.level in _PYTHON_LEVELS else None
     if peak:
         peak.start()  # the memory peak is the shape's, not a worker's lifetime
     stop = _first_iteration_stop(rung, ctx.measured) if rung is not None else None
-    timing = time_iters(_go, ctx.warmup, ctx.measured, stop=stop)
+    timing = time_iters(_go, warmup, ctx.measured, stop=stop)
     if rung is not None:
         rung.ended = (
             rung.clock()
@@ -1014,6 +1213,10 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     m = {k: plan[k] for k in attribution.METRICS}
     m["py_worker_rss_mb"] = rss
     note = [f"attr={plan['source']}"]
+    if reused:
+        note.append("input reused")
+    if rung is not None and rung.cold_note:
+        note.append(rung.cold_note)
     if timing["measured_iters"] < ctx.measured:
         note.append(
             f"early exit: {timing['measured_iters']} of {ctx.measured} measured iterations ({rung.early_why})"

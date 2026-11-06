@@ -371,7 +371,11 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
 
 def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_scalars():
     man = manifest.load()
-    stubs = {n: f.stub for n, f in man.functions.items() if f.stub}
+    # an aggregate or generator also carries route text, but install(stubs=True) makes no
+    # function for it; only the session-only scalars become raising functions
+    stubs = {
+        n: f.stub for n, f in man.functions.items() if f.stub and f.kind == "scalar"
+    }
     assert set(stubs) == {
         "gbx_st_crs",
         "gbx_st_setcrs",
@@ -385,7 +389,6 @@ def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_sca
     assert "gbx_rst_fromcontent" in stubs["gbx_rst_fromfile"]
     assert "gbx_rst_mapalgebra" in stubs["gbx_rst_derivedband"]
     assert "gbx_mvp_rst_materialize" not in stubs  # a probe name gets none
-    assert all(man.functions[n].kind == "scalar" for n in stubs)
     # opt-in: a plain install creates none, stubs=True adds one statement for each
     plain = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True)
     with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)
@@ -394,7 +397,10 @@ def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_sca
     assert with_stubs[: len(plain)] == plain and len(added) == 5
     for n, fix in stubs.items():
         (stmt,) = [s for s in added if f".{n}(" in s.split("\n")[0]]
-        assert f"runs in a notebook or job session. Fix: {fix.replace(chr(39), chr(39) * 2)}" in stmt
+        assert (
+            f"runs in a notebook or job session. Fix: {fix.replace(chr(39), chr(39) * 2)}"
+            in stmt
+        )
 
 
 def test_only_may_be_a_generator_and_an_aggregate_stub_hint_names_its_session_route(

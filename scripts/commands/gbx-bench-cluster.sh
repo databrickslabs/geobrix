@@ -121,6 +121,9 @@ Options:
                         m6gd.xlarge), --num-workers (default 1), --access-mode
                         dedicated|standard (default dedicated), --on-demand (AWS: every
                         node on demand, none of them a spot node taken back mid-run)
+  --with-jar            With --new-cluster: install the staged GeoBrix JAR on the job cluster as a
+                        library (the JVM levels L1/L2 of a --levels run need it). --jar-path <path>
+                        names another JAR (default <volume>/geobrix/<version>/jar/geobrix-<version>-jar-with-dependencies.jar)
   --serverless          Submit to Serverless compute (light-only, no JAR). Skips --cluster-id.
                         Profile must point to a workspace that supports Serverless jobs (e.g. dogfood).
   --env-version <N>     Serverless environment version to pin (default 6; env v6 = protobuf-6 regime).

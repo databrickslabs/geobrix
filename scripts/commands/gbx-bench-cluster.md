@@ -31,11 +31,12 @@ Prerequisites (operator):
 
 `--new-cluster` runs the notebook on a cluster made for the run. Databricks ends the cluster when the run ends. `CLUSTER_ID` from the config file is not used. The task has `max_retries=0`.
 
-- `--new-cluster`: use a job cluster.
+- `--new-cluster`: use a job cluster. Without `--with-jar` it has no GeoBrix JAR and the heavy tier cannot run on it.
 - `--spark-version <v>`: the Spark version. Default: `19.x-scala2.13`.
 - `--node-type <t>`: the node type. Default: `m6gd.xlarge`.
 - `--num-workers <n>`: the worker count. Default: 1.
 - `--access-mode dedicated|standard`: the access mode. Default: `dedicated` (single-user for the caller).
+- `--with-jar`: install the staged GeoBrix JAR on the job cluster as a library, so the JVM levels (L1, L2) of a `--levels` run can be timed. `--jar-path <path>` names another JAR. Default: `<volume>/geobrix/<version>/jar/geobrix-<version>-jar-with-dependencies.jar`. Stage it first with `gbx:data:stage-jar`. It needs `--new-cluster`.
 - `--on-demand`: AWS only. Puts every node on demand, so a spot node taken back cannot cut a measurement. Without it, the workspace's spot policy applies.
 
 ### Which functions run

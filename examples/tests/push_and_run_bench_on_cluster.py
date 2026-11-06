@@ -1055,6 +1055,9 @@ def main() -> int:
     node_type = _arg("--node-type", "m6gd.xlarge")
     num_workers = int(_arg("--num-workers", "1"))
     access_mode = _arg("--access-mode", "dedicated")
+    # --with-jar: a --new-cluster job cluster carries the staged GeoBrix JAR as a cluster library, so the levels leg
+    # can time the JVM levels (L1, L2). --jar-path: the JAR (default: the versioned bundle folder's fat JAR).
+    with_jar = "--with-jar" in sys.argv
     if access_mode not in ("dedicated", "standard"):
         print(
             f"ERROR: --access-mode must be 'dedicated' or 'standard' (got '{access_mode}')",
@@ -1068,6 +1071,13 @@ def main() -> int:
         print(
             "ERROR: a --new-cluster job cluster is made without the GeoBrix JAR, so the "
             "heavyweight tier cannot run on it. Fix: add --lightweight-only (or --zarr-only).",
+            file=sys.stderr,
+        )
+        return 2
+    if with_jar and not new_cluster:
+        print(
+            "ERROR: --with-jar applies to a job cluster made for the run: pass --new-cluster with it. "
+            "(An existing cluster has its libraries installed already.)",
             file=sys.stderr,
         )
         return 2
@@ -1701,6 +1711,12 @@ def main() -> int:
             return 2
     else:
         libraries = [compute.Library(jar=tests_jar)] if heavyweight else None
+        if with_jar:
+            fat_jar = _arg(
+                "--jar-path", f"{volroot}/geobrix/{ver}/jar/geobrix-{ver}-jar-with-dependencies.jar"
+            )
+            libraries = [compute.Library(jar=fat_jar)] + (libraries or [])
+            print(f"  jar library: {fat_jar}  (attached to the job cluster)")
 
     def submit(path, name, timeout_s):
         """Submit one notebook run (Serverless or the cluster) with a time limit; returns the run id."""

@@ -373,3 +373,11 @@ def test_the_launch_exports_the_notebook_before_it_removes_it():
 
     src = inspect.getsource(launcher.main)
     assert src.index("_save_run_output(") < src.index("_remove_notebook(")
+
+
+def test_with_jar_needs_a_job_cluster_made_for_the_run(monkeypatch, capsys):
+    """--with-jar installs the JAR on a --new-cluster job cluster; an existing cluster has its libraries already."""
+    _no_work(monkeypatch, "--profile", "p", "--existing-cluster-id", "0101-x", "--levels", "raster-accessor", "--levels-only", "--with-jar")
+    assert launcher.main() == 2
+    err = capsys.readouterr().err
+    assert "--with-jar" in err and "--new-cluster" in err

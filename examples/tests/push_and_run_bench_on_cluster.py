@@ -392,6 +392,7 @@ def _expected_rows(
 EXIT_STALLED = _run_watchdog.EXIT_STALLED
 EXIT_SMOKE_FAILED = 4
 EXIT_PREFLIGHT = 5
+BARS_MARGIN_MIN = 5.0  # the watchdog's cap sits this far above the notebook's own bars (see effective_form_caps)
 SMOKE_FORM_CAP_MIN = 5.0  # a form at the smoke's few rows that runs longer than this is stuck, not slow
 HEARTBEAT_READ_SECS = 15.0
 DEFAULT_RUN_TIMEOUT_MIN = 360  # the real run's time limit, a levels leg included (its 1x/4x/16x ladder runs long)
@@ -689,6 +690,30 @@ def run_smoke_stage(
     return None
 
 
+def effective_form_caps(form_cap_min, form_cap_max_min, fail_fast, rung_cap_min, setup_cap_min):
+    """``(1x form cap, ceiling after the scale multiply, note or None)`` in minutes, for the watchdog.
+
+    The watchdog is the last resort. With fail-fast the notebook's own bars (a projected skip, an over-bar rung, a
+    setup-bound one) must act first, so a form is not judged by less than the longest a rung can legitimately run: its
+    cap (and a setup that ran on before the iterations) plus ``BARS_MARGIN_MIN``. The 1x cap is raised to that, and the
+    ceiling too when it is below it (with a note). Without fail-fast the caps are the ones asked for.
+    """
+    if not fail_fast:
+        return form_cap_min, form_cap_max_min, None
+    bars = rung_cap_min + min(setup_cap_min, rung_cap_min) + BARS_MARGIN_MIN
+    cap = max(form_cap_min, bars)
+    note = None
+    ceiling = form_cap_max_min
+    if ceiling < cap:
+        ceiling = cap
+        note = (
+            f"NOTE: --form-cap-max-min ({form_cap_max_min:g}) is below the notebook's bars ({bars:g} min = rung cap + "
+            f"setup cap + {BARS_MARGIN_MIN:g}): raised to {cap:g} so the watchdog does not cancel a rung before the "
+            "notebook can stop it. --no-fail-fast keeps the ceiling as given."
+        )
+    return cap, ceiling, note
+
+
 def main() -> int:
     exit_if_help(__doc__)
     # Force line-buffered stdout so the run URL + interim progress heartbeats appear
@@ -733,12 +758,12 @@ def main() -> int:
     if bar_factor <= 0 or rung_cap_min <= 0 or setup_cap_min <= 0:
         print("ERROR: --bar-factor, --rung-cap-min and --setup-cap-min must be positive numbers.", file=sys.stderr)
         return 2
-    if fail_fast and rung_cap_min > form_cap_min:
-        print(
-            f"NOTE: --rung-cap-min ({rung_cap_min:g}) is above --form-cap-min ({form_cap_min:g}): at 1x the watchdog "
-            "cancels the whole run before the notebook can stop the rung. Raise --form-cap-min or lower --rung-cap-min.",
-            file=sys.stderr,
-        )
+    # the watchdog's caps sit above the notebook's bars, so the bars act first and the watchdog stays the last resort
+    form_cap_min, form_cap_max_min, caps_note = effective_form_caps(
+        form_cap_min, form_cap_max_min, fail_fast, rung_cap_min, setup_cap_min
+    )
+    if caps_note:
+        print(caps_note, file=sys.stderr)
     try:  # the run time limits are checked here, before the preflight, the uploads or the smoke
         smoke_timeout_min = _minutes_arg("--smoke-timeout-min", DEFAULT_SMOKE_TIMEOUT_MIN)
         timeout_min = _minutes_arg("--timeout-min", DEFAULT_RUN_TIMEOUT_MIN)

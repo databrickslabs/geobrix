@@ -333,3 +333,40 @@ def test_profile_option_beats_the_environment_variable(launch, sdk):
     assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t1") == 0
     assert launch("--serverless", "--zarr-only", "--no-wait", "--run-id", "t2", "--profile", "oauth-fe") == 0
     assert sdk.profiles == ["test", "oauth-fe"]  # the env var (test) is only the default
+
+
+# ---- fail fast: the notebook's bars act before the watchdog's caps
+
+
+def _stall_cap(sdk):
+    (_, notebook), = sdk.uploads
+    lines = [l for c in notebook["cells"] for l in "".join(c["source"]).splitlines() if l.startswith("STALL_CAP_S =")]
+    assert len(lines) == 1
+    return int(lines[0].split("=")[1])
+
+
+def test_the_watchdog_cap_sits_above_the_notebooks_rung_bars_when_fail_fast_is_on(launch, sdk, capsys):
+    """The watchdog once cancelled the whole run at 15 min on a 1x form while the notebook's rung cap was 20: the
+    in-notebook bars (skip, over-bar, setup-bound) never got to act. With fail-fast the 1x cap is raised to the rung
+    cap + the setup cap + 5 min (20 + 10 + 5 = 35 min); --no-fail-fast keeps today's cap."""
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
+    assert _stall_cap(sdk) == 35 * 60
+    assert "NOTE" not in capsys.readouterr().err  # the cap is derived, not a warning
+    sdk.uploads.clear()
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--rung-cap-min", "10", "--setup-cap-min", "20", "--no-wait") == 0
+    assert _stall_cap(sdk) == 25 * 60  # the setup headroom is held to the rung cap: 10 + 10 + 5
+    sdk.uploads.clear()
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-fail-fast", "--no-wait") == 0
+    assert _stall_cap(sdk) == 15 * 60
+
+
+def test_the_form_cap_ceiling_is_raised_to_the_bars_when_it_is_below_them(launch, sdk, capsys):
+    from push_and_run_bench_on_cluster import effective_form_caps
+
+    assert effective_form_caps(15, 60, True, 20, 10) == (35, 60, None)
+    cap, ceiling, note = effective_form_caps(15, 30, True, 20, 10)
+    assert (cap, ceiling) == (35, 35) and "NOTE" in note and "--form-cap-max-min" in note
+    assert effective_form_caps(15, 30, False, 20, 10) == (15, 30, None)  # today's caps
+    assert effective_form_caps(45, 60, True, 20, 10) == (45, 60, None)  # a higher form cap wins
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--form-cap-max-min", "30", "--no-wait") == 0
+    assert "NOTE" in capsys.readouterr().err

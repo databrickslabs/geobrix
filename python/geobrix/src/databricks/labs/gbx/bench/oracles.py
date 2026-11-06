@@ -224,9 +224,9 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
 # A NULL cell id next to ids past 2**53 reaches the lightweight aggregate as float64, which rounds the ids to other cells,
 # so it refuses; the JVM reads exact longs and answers, rightly.
 _EXACT_IDS_L1 = "the JVM aggregate reads exact long ids, so a NULL cell id beside ids past 2**53 is no hazard there: it answers where the lightweight level refuses"
-# The JVM st_asmvt takes WKB only and writes no layer for a group with no feature; the contract is the lightweight
-# encoder's (any of the four geometry formats, an empty layer). It is not the default level and the sweep may delete it.
-_ASMVT_L1 = "the JVM st_asmvt takes WKB only (a WKT string fails the cast) and writes no layer for a group with no feature"
+# The JVM st_asmvt writes no layer for a group with no feature; the contract is the lightweight encoder's (an empty
+# layer). It is not the default level and the sweep may delete it.
+_ASMVT_L1 = "the JVM st_asmvt writes no layer for a group with no feature"
 HEAVY_PENDING.update(
     {
         **{
@@ -240,7 +240,6 @@ HEAVY_PENDING.update(
             )
         },
         "ca_agg_virtual": {"L1": _L1_NO_VIRTUAL},
-        "asmvt_wkt": {"L1": _ASMVT_L1},
         "asmvt_no_feature": {"L1": _ASMVT_L1},
     }
 )

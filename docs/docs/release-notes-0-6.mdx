@@ -838,6 +838,7 @@ Every grid function follows one contract for its resolution and its input.
 - **The geometry explodes follow the rules of their array functions.** An unknown mode or an undefined resolution raises. A non-finite point or unreadable geometry gives no rows. The BNG and custom explodes raise for an unknown `coverage` before they run, and read a `BIGINT` `k`. A `k` past INT raises.
 - **`gbx_rst_bng_tessellate` raises for a resolution BNG does not define.**
 - **The TIN generators and `gbx_st_asmvt_pyramid` give no rows for a NULL required argument.** They failed the query before.
+- **`gbx_st_asmvt` reads WKT and EWKT geometry text on the heavyweight level.** It failed with a cast error on a STRING geometry. A geometry that is neither BINARY nor STRING is refused at analysis. WKB and EWKB give the same tile bytes as before.
 
 ### Exact cell ids (fix) {#exact-cell-ids}
 

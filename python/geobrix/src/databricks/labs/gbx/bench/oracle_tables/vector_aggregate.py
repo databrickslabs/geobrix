@@ -43,6 +43,23 @@ def _mvt_two_wkt(tmpdir):
     return [(POLY, A_ATTRS), (POINT, B_ATTRS)]
 
 
+@builder("mvt_two_ewkt")
+def _mvt_two_ewkt(tmpdir):
+    return [("SRID=4326;" + POLY, A_ATTRS), ("SRID=4326;" + POINT, B_ATTRS)]
+
+
+@builder("mvt_two_ewkb")
+def _mvt_two_ewkb(tmpdir):
+    import shapely
+
+    def ewkb(wkt):
+        return shapely.to_wkb(
+            shapely.set_srid(shapely.from_wkt(wkt), 4326), include_srid=True
+        )
+
+    return [(ewkb(POLY), A_ATTRS), (ewkb(POINT), B_ATTRS)]
+
+
 @builder("mvt_with_null_geom")
 def _mvt_with_null_geom(tmpdir):
     return [(None, {"name": "x", "n": 9}), *_mvt_two_wkb(tmpdir)]
@@ -60,6 +77,8 @@ VECTOR_AGGREGATE = (
     ),
     # the four formats: WKT in tile coordinates gives the same layer
     Case("asmvt_wkt", MVT, (Build("mvt_two_wkt"), "lyr"), "mvt_layer", TWO, ONLY),
+    Case("asmvt_ewkt", MVT, (Build("mvt_two_ewkt"), "lyr"), "mvt_layer", TWO, ONLY),
+    Case("asmvt_ewkb", MVT, (Build("mvt_two_ewkb"), "lyr"), "mvt_layer", TWO, ONLY),
     Case(
         "asmvt_null_geom_skipped",
         MVT,

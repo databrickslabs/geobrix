@@ -161,6 +161,74 @@ class ST_AsMvtTest extends PlanTest with SilentSparkSession {
         assert(mvt != null && mvt.nonEmpty)
     }
 
+    test("st_asmvt accepts WKT and EWKT geometry text and matches the WKB tile bytes") {
+        spark.sparkContext.setLogLevel("ERROR")
+        TestL1.installAll(spark)
+        import vectorx.functions._
+
+        val polyWkt = "POLYGON((10 10, 100 10, 100 100, 10 100, 10 10))"
+        val ptWkt = "POINT(5 7)"
+        val attrs = struct(col("name"), col("id"))
+        def tile(geomCol: String, rows: Seq[(Any, String, Long)]): Array[Byte] = {
+            val df = spark.createDataFrame(
+              spark.sparkContext.parallelize(rows.map(r => org.apache.spark.sql.Row(r._1, r._2, r._3)), 1),
+              org.apache.spark.sql.types.StructType(Seq(
+                org.apache.spark.sql.types.StructField(
+                  geomCol,
+                  rows.head._1 match {
+                      case _: String => org.apache.spark.sql.types.StringType
+                      case _ => org.apache.spark.sql.types.BinaryType
+                  }
+                ),
+                org.apache.spark.sql.types.StructField("name", org.apache.spark.sql.types.StringType),
+                org.apache.spark.sql.types.StructField("id", org.apache.spark.sql.types.LongType)
+              ))
+            )
+            df.agg(st_asmvt(col(geomCol), attrs, lit("lyr")).as("mvt")).collect().head.getAs[Array[Byte]]("mvt")
+        }
+
+        val wkbTile = tile("g", Seq((JTS.toWKB(JTS.fromWKT(polyWkt)), "a", 1L), (JTS.toWKB(JTS.fromWKT(ptWkt)), "b", 2L)))
+        val wktTile = tile("g", Seq((polyWkt, "a", 1L), (ptWkt, "b", 2L)))
+        val ewktTile = tile("g", Seq(("SRID=4326;" + polyWkt, "a", 1L), ("SRID=4326;" + ptWkt, "b", 2L)))
+        val ewkbTile = tile(
+          "g",
+          Seq(
+            (JTS.toEWKB({ val g = JTS.fromWKT(polyWkt); g.setSRID(4326); g }), "a", 1L),
+            (JTS.toEWKB({ val g = JTS.fromWKT(ptWkt); g.setSRID(4326); g }), "b", 2L)
+          )
+        )
+        assert(wkbTile.nonEmpty)
+        assert(wktTile.sameElements(wkbTile), "WKT tile differs from the WKB tile")
+        assert(ewktTile.sameElements(wkbTile), "EWKT tile differs from the WKB tile")
+        assert(ewkbTile.sameElements(wkbTile), "EWKB tile differs from the WKB tile")
+    }
+
+    test("st_asmvt skips null and unparseable geometry text") {
+        spark.sparkContext.setLogLevel("ERROR")
+        TestL1.installAll(spark)
+        import vectorx.functions._
+
+        val df = spark.createDataFrame(Seq(
+            ("POINT(5 7)", "a", 1L),
+            (null, "b", 2L),
+            ("not a geometry", "c", 3L)
+        )).toDF("g", "name", "id")
+        val mvt = df.agg(st_asmvt(col("g"), struct(col("name"), col("id")), lit("lyr")).as("mvt"))
+            .collect().head.getAs[Array[Byte]]("mvt")
+        assert(mvt != null && mvt.nonEmpty)
+    }
+
+    test("st_asmvt rejects a geometry argument that is neither BINARY nor STRING") {
+        spark.sparkContext.setLogLevel("ERROR")
+        TestL1.installAll(spark)
+        import vectorx.functions._
+
+        val df = spark.createDataFrame(Seq((1, "a", 1L))).toDF("g", "name", "id")
+        intercept[org.apache.spark.sql.AnalysisException] {
+            df.agg(st_asmvt(col("g"), struct(col("name"), col("id")), lit("lyr")).as("mvt")).collect()
+        }
+    }
+
     test("st_asmvt should produce a non-null MVT for an empty group") {
         spark.sparkContext.setLogLevel("ERROR")
         TestL1.installAll(spark)

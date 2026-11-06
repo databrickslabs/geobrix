@@ -146,3 +146,4 @@ Path-scoped — each loads automatically when you edit a matching file. Read the
 | `docs-and-doctests.md` | `docs/**` | Doc-tests-as-source, user-facing voice (no wave numbers), MDX/sidebar/deploy gotchas |
 | `notebooks-on-databricks.md` | `examples/**`, notebook runner commands | Staging on dogfood, `%pip` wheel-install incantations, canonical runners, viz |
 | `gbx-commands.md` | `scripts/commands/**` | How to add or fix a `gbx:*` command |
+| `cluster-work.md` | `bench/**`, the cluster launcher, `gbx-bench-*`, `gbx-test-notebooks*`, `gbx-uc-tests*`, `gbx-data-stage-*` | Any work on Databricks compute: fail fast, split and size parts, prepare inputs once, a DBR 19 pool only when a fixed cluster is needed (60-min idle), isolated staging + sha check, env6 first, isolated timing, an at-a-glance header per run, cleanup |

@@ -391,7 +391,7 @@ def test_dim_cols_required_without_provenance(spark_delta, drop, tmp_path, no_ho
         gbx_zarr_write(one.select("tile"), cube, mode="update", variables="t2m")
     with pytest.raises(ValueError, match="variables"):  # and no variable to name it
         gbx_zarr_write(one.select("tile"), cube, mode="update")
-    with pytest.raises(ValueError, match="holds none"):
+    with pytest.raises(ValueError, match="holds neither"):
         gbx_zarr_write(_dataset(), cube, mode="update", dim_cols={"time": "t"})
 
 

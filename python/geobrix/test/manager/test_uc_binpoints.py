@@ -25,7 +25,12 @@ def _rows(fn):
 
 
 def _recipes():
-    return [c for c in oracles.TABLES["RASTER_AGGREGATE"] if c.sql is not None]
+    # the binpoints recipes only; the table also holds the cell-rasterize pre-reduction recipes
+    return [
+        c
+        for c in oracles.TABLES["RASTER_AGGREGATE"]
+        if c.sql is not None and c.cid.startswith("recipe_d1_")
+    ]
 
 
 def _raster(out):

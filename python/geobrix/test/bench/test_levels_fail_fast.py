@@ -461,17 +461,15 @@ def test_the_interrupt_api_by_session_kind(monkeypatch):
         calls=[], setJobGroup=lambda *a: sc.calls.append(("group", a)),
         cancelJobGroup=lambda t: sc.calls.append(("cancel", t)),
         setLocalProperty=lambda k, v: sc.calls.append(("prop", k, v)),
+        getLocalProperty=lambda k: None,
     )  # fmt: skip
     classic = types.SimpleNamespace(sparkContext=sc)
     monkeypatch.setattr(capabilities, "is_connect", lambda s: False)
     monkeypatch.setattr(capabilities, "is_serverless", lambda: False)
     arm, interrupt, disarm = levels._interrupt_api(classic, "t1")
     arm(), interrupt(), disarm()
-    assert sc.calls == [
-        ("group", ("t1", "t1", True)),
-        ("cancel", "t1"),
-        ("prop", "spark.jobGroup.id", None),
-    ]
+    assert sc.calls[:2] == [("group", ("t1", "t1", True)), ("cancel", "t1")]
+    assert ("prop", "spark.jobGroup.id", None) in sc.calls[2:]
     # Spark 4 classic has addTag too, but its interruptTag cancels nothing (measured): a classic session groups
     classic4 = types.SimpleNamespace(
         sparkContext=sc, addTag=lambda t: 1 / 0, interruptTag=lambda t: 1 / 0
@@ -479,7 +477,9 @@ def test_the_interrupt_api_by_session_kind(monkeypatch):
     sc.calls.clear()
     arm, interrupt, disarm = levels._interrupt_api(classic4, "t2")
     arm(), interrupt(), disarm()
-    assert [c[0] for c in sc.calls] == ["group", "cancel", "prop"]
+    assert [c[0] for c in sc.calls][:2] == ["group", "cancel"] and {
+        c[0] for c in sc.calls[2:]
+    } == {"prop"}
     # Spark Connect has no SparkContext: it tags
     monkeypatch.setattr(capabilities, "is_connect", lambda s: True)
     tags = []
@@ -592,4 +592,259 @@ def test_a_real_spark_job_is_cancelled_at_the_deadline_not_waited_for(
         row.status == "over-bar"
         and "stopped at" in row.note
         and "during measured 1/1" in row.note
+    )
+
+
+# ---- review fixes -----------------------------------------------------------------------------------------------
+
+
+def ff_run_df(spark, src):
+    """A run form that also returns the DataFrame whose plan feeds the split."""
+    fn, rows = src
+    CALLS.append((fn, rows))
+    PLAN[fn](spark, src)
+    return rows, rows, rows, object()
+
+
+def test_without_an_interrupt_api_the_rung_stops_at_the_next_iteration_boundary(
+    env, monkeypatch
+):
+    monkeypatch.setattr(levels, "_interrupt_api", lambda spark, tag: None)
+
+    def work(sp, src):
+        advance(env, 5000)  # the warmup runs past the rung cap
+        time.sleep(0.2)  # the watchdog's poll sees it
+
+    PLAN["f"] = work
+    rows, _ = env.run([form("f")], warmup=1, measured=1, scales=(1,), rung_cap_s=1200)
+    (row,) = rows
+    assert row.status == "over-bar" and "no interrupt API on this session" in row.note
+    assert [c for c in CALLS if c[0] == "f"] == [
+        ("f", 10)
+    ]  # the warmup only: the measured iteration never ran
+    assert env.spark.calls == []
+
+
+def test_a_watchdog_that_outlives_its_rung_writes_nothing_on_it_and_says_it_was_stuck(
+    monkeypatch,
+):
+    monkeypatch.setattr(levels, "WATCH_JOIN_S", 0.2)
+    clock = Clock()
+    rung = levels._Rung(scale=1, clock=clock, deadline_s=10, setup_cap_s=5)
+    rung.begin_exec()
+    entered, release = threading.Event(), threading.Event()
+
+    def interrupt():
+        entered.set()
+        release.wait(WAIT)
+        raise RuntimeError("late")
+
+    watch = levels._Watchdog(rung, interrupt, poll=0.01).start()
+    clock.t += 100
+    assert entered.wait(WAIT)
+    assert (
+        watch.stop() is False
+    )  # the join timed out: the interrupt call is still blocking
+    assert "still inside an interrupt call" in rung.interrupt_note
+    note = rung.interrupt_note
+    release.set()
+    time.sleep(0.2)
+    assert (
+        rung.interrupt_note == note
+    )  # the late failure is not written on a rung that has ended
+
+
+def test_the_watchdog_leaves_a_rung_alone_once_its_iterations_are_done(
+    env, monkeypatch
+):
+    """The plan-metrics lookup, the worker read and the output checks run after the last iteration: a rung past its
+    deadline there is a finished measurement, not an over-bar one."""
+    monkeypatch.setitem(lf.INPUTS, "ff_in", ff_in)
+
+    def from_plan(df, t0):
+        advance(env, 5000)
+        time.sleep(0.2)  # the watchdog polls while the lookup runs
+        raise RuntimeError("the lookup failed")
+
+    monkeypatch.setattr(levels.attribution, "from_plan", from_plan)
+    PLAN["f"] = lambda sp, src: advance(env, 1)
+    f = Form(
+        mvp=SET,
+        fn="f",
+        variant="v",
+        level="L4",
+        input="ff_in",
+        run=f"{__name__}:ff_run_df",
+        register=False,
+    )
+    rows, _ = env.run([f], scales=(1,), rung_cap_s=1200)
+    assert rows[0].status == "error" and "the lookup failed" in rows[0].failure_mode
+    assert not any(k == "interrupt" for k, _ in env.spark.calls)
+
+
+def test_a_classic_rung_puts_the_cells_job_group_back(monkeypatch):
+    from databricks.labs.gbx.manager import capabilities
+
+    monkeypatch.setattr(capabilities, "is_connect", lambda s: False)
+    monkeypatch.setattr(capabilities, "is_serverless", lambda: False)
+    keys = ("spark.jobGroup.id", "spark.job.description", "spark.job.interruptOnCancel")
+
+    def classic(props):
+        def setj(group, desc, interrupt):
+            props.update(
+                {keys[0]: group, keys[1]: desc, keys[2]: str(interrupt).lower()}
+            )
+
+        def setp(k, v):
+            props.pop(k, None) if v is None else props.__setitem__(k, v)
+
+        sc = types.SimpleNamespace(
+            getLocalProperty=props.get,
+            setLocalProperty=setp,
+            setJobGroup=setj,
+            cancelJobGroup=lambda t: None,
+        )
+        return types.SimpleNamespace(sparkContext=sc)
+
+    cell = {keys[0]: "cell-9", keys[1]: "the cell", keys[2]: "false"}
+    props = dict(cell)
+    arm, _, disarm = levels._interrupt_api(classic(props), "t1")
+    arm()
+    assert props[keys[0]] == "t1"
+    disarm()
+    assert props == cell  # the notebook cell's group, description and flag are back
+    props.clear()
+    arm, _, disarm = levels._interrupt_api(classic(props), "t1")
+    arm(), disarm()
+    assert props == {}  # no group before, none after
+
+
+def test_a_tag_keeps_its_scale_and_stays_apart_from_another_rungs_when_the_label_is_long():
+    label = "gbx_rst_a_very_long_function_name_" * 4
+    tags = {
+        levels._tag("run1", label + str(k), s) for k in range(2) for s in (1, 4, 16)
+    }
+    assert len(tags) == 6 and all(len(t) <= 120 and "," not in t for t in tags)
+    assert levels._tag("run1", label, 16).endswith("-16x") and levels._tag(
+        "run1", label, 4
+    ).endswith("-4x")
+    assert (
+        levels._tag("r", "f:L3:c0", 4) == "gbx-bench-r-f_L3_c0-4x"
+    )  # a short one is as it was
+
+
+def test_a_form_skipped_by_projection_counts_as_done_in_the_heartbeat(env, tmp_path):
+    import json
+
+    PLAN["slow"] = lambda sp, src: advance(env, 100)
+    PLAN["fast"] = lambda sp, src: advance(env, 1)
+    hb = liveness.Heartbeat(str(tmp_path / "hb.json"), interval=3600).start()
+    env.run(
+        [form("slow"), form("fast")], scales=(1, 4, 16), rung_cap_s=500, heartbeat=hb
+    )
+    hb.stop()
+    assert json.loads((tmp_path / "hb.json").read_text())["forms_done"] == 2
+
+
+def test_the_projection_from_a_rung_that_exited_early_is_that_of_a_full_rung(env):
+    PLAN["f"] = lambda sp, src: advance(
+        env, 300
+    )  # 5 iterations of 300 s would be 1500 s; one ran
+    rows, _ = env.run(
+        [form("f")], scales=(1, 4), measured=5, rung_cap_s=1200, bar_factor=0.5
+    )
+    r1, r4 = rows
+    assert r1.status == "ok" and r1.measured_iters == 1
+    # a full rung is 5 x 300 s: x4 x 0.5 = 3000 s > 1200 s (the early-exit rung's own 300 s would project 600 s)
+    assert r4.status == "skipped" and "projected 3000s > cap 1200s from 1x" in r4.note
+
+
+def test_a_partial_input_table_does_not_stay_to_be_read_as_complete():
+    calls = []
+
+    class Writer:
+        def format(self, f):
+            return self
+
+        def saveAsTable(self, name):
+            calls.append(("write", name))
+            raise RuntimeError("OPERATION_CANCELED")
+
+    class Spark:
+        catalog = types.SimpleNamespace(tableExists=lambda n: False)
+
+        def sql(self, q):
+            calls.append(("sql", q))
+
+    build = lambda: types.SimpleNamespace(write=Writer())  # noqa: E731
+    with pytest.raises(RuntimeError, match="OPERATION_CANCELED"):
+        lf._table(Spark(), "c.s", "mvp_in_x", build)
+    assert ("sql", "DROP TABLE IF EXISTS c.s.mvp_in_x") in calls
+
+    calls.clear()
+
+    class Raced(Spark):
+        catalog = types.SimpleNamespace(tableExists=lambda n: len(calls) > 0)
+
+    Writer.saveAsTable = lambda self, name: (
+        calls.append(("write", name)),
+        (_ for _ in ()).throw(RuntimeError("TABLE_OR_VIEW_ALREADY_EXISTS")),
+    )[1]
+    assert lf._table(Raced(), "c.s", "mvp_in_x", build) == "c.s.mvp_in_x"
+    assert not any(
+        k == "sql" for k, _ in calls
+    )  # another run's table is its own: not dropped
+
+
+def test_an_over_bar_row_has_the_p90_the_ok_rows_have(env):
+    samples = [float(k) for k in range(1, 11)]  # 1 .. 10 s
+    state = {"n": 0}
+
+    def work(sp, src):
+        state["n"] += 1
+        if state["n"] <= 10:
+            return advance(env, samples[state["n"] - 1])
+        advance(env, 5000)
+        stall_until_interrupted(env)
+
+    PLAN["f"] = work
+    rows, _ = env.run([form("f")], scales=(1,), measured=11, rung_cap_s=1200)
+    (row,) = rows
+    assert row.status == "over-bar" and row.measured_iters == 10
+    assert row.iter_p90_s == 9.0 and row.iter_min_s == 1.0 and row.iter_median_s == 5.5
+
+
+def test_a_rung_whose_iteration_finishes_after_the_flag_is_over_bar_and_its_form_is_dead(
+    env,
+):
+    def work(sp, src):
+        advance(env, 5000)
+        time.sleep(
+            0.2
+        )  # the watchdog flags it; the interrupt misses (nothing was running) and the iteration ends
+
+    PLAN["f"] = work
+    PLAN["g"] = lambda sp, src: advance(env, 1)
+    rows, _ = env.run(
+        [form("f"), form("g")], scales=(1, 4), measured=1, rung_cap_s=1200
+    )
+    got = by(rows)
+    assert got[("f", 1)].status == "over-bar" and got[("f", 1)].measured_iters == 1
+    assert got[("f", 4)].status == "skipped" and "over-bar at 1x" in got[("f", 4)].note
+    assert [got[("g", s)].status for s in (1, 4)] == ["ok", "ok"]
+
+
+def test_the_heartbeat_says_an_interrupt_on_its_own_tagged_line(tmp_path, capsys):
+    hb = liveness.Heartbeat(
+        str(tmp_path / "hb.json"), interval=3600, print_every=3600
+    ).start()
+    hb.begin("f @1x", 1, 1, scale=1, cap_s=60, rows=10, name="f", set_name="FF")
+    hb.event(
+        "INTERRUPT", "over-bar: elapsed 1300s past deadline 1200s during warmup 1/1"
+    )
+    hb.end()
+    hb.stop()
+    assert (
+        "[LEVELS FF] form 1/1 f scale 1x rows 10 INTERRUPT over-bar: elapsed 1300s past deadline 1200s"
+        in capsys.readouterr().out
     )

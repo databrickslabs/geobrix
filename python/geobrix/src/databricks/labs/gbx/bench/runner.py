@@ -46,6 +46,11 @@ def _synthesized_paths(corpus_root, tile_rel_path: str, fn: str) -> List[str]:
     return _synth.synthesize(src, _spec.synth_recipe(fn), out_dir)
 
 
+def p90_index(n: int) -> int:
+    """The index of the 90th percentile in `n` sorted samples."""
+    return max(0, min(n - 1, int(round(0.9 * (n - 1)))))
+
+
 def time_iters(
     fn: Callable[[], None],
     warmup: int,
@@ -77,7 +82,7 @@ def time_iters(
         if stop is not None and stop(samples[-1] / 1000.0):
             break
     samples.sort()
-    p90_idx = max(0, min(len(samples) - 1, int(round(0.9 * (len(samples) - 1)))))
+    p90_idx = p90_index(len(samples))
     total = sum(samples)
     return {
         "warmup_iters": warmup,

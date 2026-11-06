@@ -8,6 +8,7 @@ levels the compute offers and records the attribution split (``attribution.py``)
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import re
 import statistics
 import threading
@@ -17,7 +18,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from databricks.labs.gbx.bench import attribution
 from databricks.labs.gbx.bench.results import ResultRow
-from databricks.labs.gbx.bench.runner import capture_env, time_iters
+from databricks.labs.gbx.bench.runner import capture_env, p90_index, time_iters
 
 _L3_VARIANTS = (
     "c0",
@@ -98,6 +99,7 @@ DEADLINE_FLOOR_S = 120.0  # a rung after the first is never judged by less than 
 INTERRUPT_REPEAT_S = 5.0  # an interrupt is sent again this often while the rung is still past its deadline
 STUCK_AFTER_S = 60.0  # past the deadline and still running this long after the interrupt: say so (driver-side work)
 WATCH_POLL_S = 1.0
+WATCH_JOIN_S = 5.0  # how long a rung waits for its watchdog thread to end
 
 OVER_BAR = "over-bar"  # a rung the deadline stopped (its row carries what was captured)
 SKIPPED = "skipped"  # a rung not run: projected past the cap, or an earlier rung of the form was stopped
@@ -157,7 +159,9 @@ class _Rung:
             self.setup_end = self.clock()
 
     def expired(self, now: float) -> str:
-        """ "" while the rung is inside its limits, else which one it passed."""
+        """ "" while the rung is inside its limits (or its iterations are over), else which one it passed."""
+        if self.ended is not None:
+            return ""  # the measurement is done: what runs now is the post-processing of a finished rung
         if self.setup_end is None:
             return "setup-bound" if now - self.started > self.setup_cap_s else ""
         limit = self.started + self.deadline_s
@@ -171,6 +175,14 @@ class _Rung:
         if self.setup_end is None:
             return end - self.started, 0.0
         return self.setup_end - self.started, end - self.setup_end
+
+    def full_wall(self, measured: int) -> Tuple[float, float]:
+        """`wall`, with the measured iterations an early exit skipped added at the pace of the ones that ran, so the
+        next rung is projected from a whole rung and not from a truncated one."""
+        setup, run = self.wall()
+        if self.meas and len(self.meas) < measured:
+            run += (measured - len(self.meas)) * (sum(self.meas) / len(self.meas))
+        return setup, run
 
     def limit_text(self) -> str:
         if self.setup_end is None:
@@ -211,9 +223,14 @@ class _Watchdog:
         self._thread.start()
         return self
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
+        """End the thread; False (and a note on the rung) when it is still inside an interrupt call after the join."""
         self._stop.set()
-        self._thread.join(timeout=5)
+        self._thread.join(timeout=WATCH_JOIN_S)
+        if self._thread.is_alive():
+            self.rung.interrupt_note += "; the watchdog thread was still inside an interrupt call when the rung ended (the call blocks)"
+            return False
+        return True
 
     def _loop(self) -> None:
         r = self.rung
@@ -224,15 +241,24 @@ class _Watchdog:
                 why = r.expired(now)
                 if not why:
                     continue
+                if self.interrupt is None:
+                    # said before the flag: the work thread builds its row the moment it sees the flag
+                    r.interrupt_note = "no interrupt API on this session: stopped at the next iteration boundary"
                 r.cancelled, r.cancelled_at = why, now
                 self.say(
                     "INTERRUPT",
                     f"{why}: elapsed {now - r.started:.0f}s past {r.limit_text()} during {r.phase}",
                 )
-            if last_fire is None or now - last_fire >= self.repeat:
+            if self.interrupt is not None and (
+                last_fire is None or now - last_fire >= self.repeat
+            ):
                 last_fire = now
                 self._fire()
-            if not stuck_said and now - r.cancelled_at >= self.stuck:
+            if (
+                not stuck_said
+                and now - r.cancelled_at >= self.stuck
+                and not self._stop.is_set()
+            ):
                 stuck_said = True
                 r.interrupt_note += (
                     f"; still running {now - r.cancelled_at:.0f}s after the interrupt (driver-side work is not "
@@ -244,16 +270,27 @@ class _Watchdog:
                 )
 
     def _fire(self) -> None:
-        if self.interrupt is None:
-            if not self.rung.interrupt_note:
-                self.rung.interrupt_note = "no interrupt API on this session: stopped at the next iteration boundary"
-            return
+        if self._stop.is_set():
+            return  # the rung has ended: its tag is spent
         try:
             self.interrupt()
         except (
             Exception
         ) as exc:  # noqa: BLE001 - recorded; the launcher's watchdog stays the last resort
-            self.rung.interrupt_note = f"interrupt failed ({type(exc).__name__}: {str(exc)[:160]}): the launcher's watchdog is the fallback"
+            if (
+                not self._stop.is_set()
+            ):  # a call that returns after the rung ended writes nothing on it
+                self.rung.interrupt_note = (
+                    f"interrupt failed ({type(exc).__name__}: {str(exc)[:160]}): "
+                    "the launcher's watchdog is the fallback"
+                )
+
+
+_JOB_GROUP_PROPS = (
+    "spark.jobGroup.id",
+    "spark.job.description",
+    "spark.job.interruptOnCancel",
+)
 
 
 def _classic_context(spark):
@@ -278,11 +315,19 @@ def _interrupt_api(spark, tag: str):
     """
     sc = _classic_context(spark)
     if sc is not None:
-        return (
-            lambda: sc.setJobGroup(tag, tag, True),
-            lambda: sc.cancelJobGroup(tag),
-            lambda: sc.setLocalProperty("spark.jobGroup.id", None),
-        )
+        saved: Dict[str, Optional[str]] = {}
+
+        def arm():
+            # the notebook cell has a job group of its own (the UI's Cancel uses it): keep it for the disarm
+            for key in _JOB_GROUP_PROPS:
+                saved[key] = sc.getLocalProperty(key)
+            sc.setJobGroup(tag, tag, True)
+
+        def disarm():
+            for key, val in saved.items():
+                sc.setLocalProperty(key, val)
+
+        return arm, lambda: sc.cancelJobGroup(tag), disarm
     if hasattr(spark, "addTag") and hasattr(spark, "interruptTag"):
         remove = getattr(spark, "removeTag", None)
         return (
@@ -294,7 +339,15 @@ def _interrupt_api(spark, tag: str):
 
 
 def _tag(run_id: str, label: str, scale: int) -> str:
-    return re.sub(r"[^\w.-]", "_", f"gbx-bench-{run_id}-{label}-{scale}x")[:120]
+    """The rung's tag (job group): the label is cut when it is long, the scale suffix never, so two rungs of a form
+    keep two tags; a cut label keeps a hash of the whole so two long labels with one start keep two as well.
+    """
+    head = re.sub(r"[^\w.-]", "_", f"gbx-bench-{run_id}-{label}")
+    suffix = f"-{scale}x"
+    if len(head) + len(suffix) <= 120:
+        return head + suffix
+    digest = hashlib.sha1(head.encode()).hexdigest()[:8]
+    return head[: 120 - len(suffix) - len(digest) - 1] + "-" + digest + suffix
 
 
 def run_mvp(
@@ -426,8 +479,11 @@ def run_mvp(
             **env,
         )
         rows, prev = by_form[i], hist.get(i)
+        was_dead = i in dead
         skip_note = _skip_note(bar, prev, dead, i, scale)
         if skip_note:
+            if heartbeat and not was_dead and hasattr(heartbeat, "form_skipped"):
+                heartbeat.form_skipped()  # the form is over as of this skip (a stopped rung counted it at its end)
             rows.append(_row(base, status=SKIPPED, note=skip_note))
             _say_skip(mvp, i + 1, len(todo), label, scale, requested, skip_note)
             if on_form:
@@ -454,8 +510,8 @@ def run_mvp(
         if rung is not None:
             if row.status == "ok":
                 hist[i] = _Hist(
-                    scale, *rung.wall()
-                )  # what the rung took on the run's clock, not what its row sums
+                    scale, *rung.full_wall(measured)
+                )  # what a whole rung took on the run's clock, not what its row sums
             elif row.status == OVER_BAR:
                 dead[i] = f"{rung.cancelled} at {scale}x"
         if heartbeat:
@@ -597,18 +653,25 @@ def _execute(
         watch = _Watchdog(
             rung, api[1] if api else None, poll=bar.poll_s, say=say
         ).start()
+    stuck = False
     try:
-        row = _run_one(ctx, form, base, requested)
-        if rung is not None:
-            rung.ended = rung.clock()
-        return row
-    except Exception as exc:  # noqa: BLE001 - a failure is a measured outcome
-        if rung is not None and rung.cancelled:
-            return _over_bar_row(base, rung, form)
-        return _row(base, status="error", failure=failure_text(exc))
+        try:
+            row = _run_one(ctx, form, base, requested)
+            if rung is not None:
+                if rung.ended is None:
+                    rung.ended = rung.clock()
+                if rung.cancelled:
+                    # flagged during an iteration that then finished (the interrupt found nothing running): the rung
+                    # went past its bar, so it is over-bar and its form is dead, whatever the iteration returned
+                    row = _over_bar_row(base, rung, form)
+        except Exception as exc:  # noqa: BLE001 - a failure is a measured outcome
+            if rung is not None and rung.cancelled:
+                row = _over_bar_row(base, rung, form)
+            else:
+                row = _row(base, status="error", failure=failure_text(exc))
     finally:
         if watch is not None:
-            watch.stop()
+            stuck = not watch.stop()
         if disarm is not None:
             try:
                 disarm()
@@ -624,6 +687,9 @@ def _execute(
                 f"[LEVELS input] releasing the cached inputs failed ({type(exc).__name__}: {str(exc)[:160]})",
                 flush=True,
             )
+    if stuck and rung is not None:
+        row = replace(row, note=f"{row.note}; {rung.interrupt_note.lstrip('; ')}")
+    return row
 
 
 def _say_skip(mvp, index, total, label, scale, rows, note) -> None:
@@ -670,7 +736,7 @@ def _over_bar_row(base: Dict, rung: _Rung, form: Form) -> ResultRow:
     if rung.meas:
         ms = sorted(x * 1000.0 for x in rung.meas)
         timing.update(
-            iter_median_ms=statistics.median(ms), iter_min_ms=ms[0], iter_p90_ms=ms[-1],
+            iter_median_ms=statistics.median(ms), iter_min_ms=ms[0], iter_p90_ms=ms[p90_index(len(ms))],
             avg_wall_clock_ms=sum(ms) / len(ms),
         )  # fmt: skip
     m = _partial_metrics(rung, form)
@@ -927,6 +993,10 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         peak.start()  # the memory peak is the shape's, not a worker's lifetime
     stop = _first_iteration_stop(rung, ctx.measured) if rung is not None else None
     timing = time_iters(_go, ctx.warmup, ctx.measured, stop=stop)
+    if rung is not None:
+        rung.ended = (
+            rung.clock()
+        )  # the iterations are over: the watchdog has nothing left to stop
     n, fp, n_out = holder["n_fp"]
     if n_out != n and not form.allows_null:
         raise ValueError(f"{n - n_out} of {n} outputs NULL")

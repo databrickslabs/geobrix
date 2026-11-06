@@ -66,8 +66,20 @@ def _table(spark, schema: Optional[str], name: str, build) -> str:
             # Runs on one schema share the cached inputs (their names hold the recipe version and the row count, not
             # the run): a run that loses the race to create one reads the other's, which has the same rows.
             if "ALREADY_EXISTS" not in str(exc) or not spark.catalog.tableExists(full):
+                _drop_partial(spark, full)
                 raise
     return full
+
+
+def _drop_partial(spark, full: str) -> None:
+    """A build that failed or was interrupted (a setup past its cap) must not leave a table behind: `_table` takes an
+    existing table for a complete one. A Delta create-table-as-select should not leave one, but the cost of being wrong
+    is a later run timing a short input as ok, so the target is dropped (it did not exist when this build began).
+    """
+    try:
+        spark.sql(f"DROP TABLE IF EXISTS {full}")
+    except Exception:  # noqa: BLE001 - the build's own error is the one to report
+        pass
 
 
 def _bng_points(spark, n, corpus, schema):

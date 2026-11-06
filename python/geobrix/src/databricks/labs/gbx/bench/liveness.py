@@ -133,6 +133,12 @@ class Heartbeat:
         with self._lock:
             self._rung_phase = text
 
+    def form_skipped(self) -> None:
+        """A form whose remaining rungs are skipped before any begins: it is done as far as the count goes."""
+        with self._lock:
+            self._done += 1
+        self.beat()
+
     def event(self, what: str, tail: str) -> None:
         """One tagged line outside the START/DONE pair (an interrupt, a skip)."""
         self._say(what, tail)

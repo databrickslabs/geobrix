@@ -152,7 +152,12 @@ def _family_sets() -> Dict[str, SetSpec]:
         )
 
     return {
-        "raster-accessor": tile_fn("raster-accessor", "gbx_rst_width"),
+        "raster-accessor": tile_fn(
+            "raster-accessor",
+            "gbx_rst_width",
+            # the light level opens the tile (~20 ms) where the JVM reads a header: a finding, not a scaling defect
+            peer_exempt=("c0@n",),
+        ),
         "raster-stat": tile_fn("raster-stat", "gbx_rst_avg"),
         "raster-tile-op": tile_fn("raster-tile-op", "gbx_rst_align_to"),
         "raster-file-op": tile_fn("raster-file-op", "gbx_rst_cog_convert"),

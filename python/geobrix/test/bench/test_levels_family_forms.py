@@ -85,6 +85,17 @@ def test_the_tile_input_is_n_rows_in_a_cap_of_tiles_per_partition(
     assert df.columns == ["tile"]
 
 
+def test_the_crs_of_a_long_corpus_listing_is_read_by_tasks_in_order(
+    spark_session_local, tmp_path
+):
+    """Past a handful of files the header reads run on the cluster; the answer is the same list, in the listing's order."""
+    corpus = _corpus(tmp_path, lf.SMALL_INPUT_ROWS + 6)
+    paths = lf._corpus_rows(corpus)
+    assert len(paths) > lf.SMALL_INPUT_ROWS
+    assert lf._epsgs(spark_session_local, paths) == [lf._epsg_of(p) for p in paths]
+    assert set(lf._epsgs(spark_session_local, paths)) == {4326}
+
+
 def test_the_grouped_tile_input_is_spread_not_read_by_a_task_or_two(
     spark_session_local, tmp_path
 ):

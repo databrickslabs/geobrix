@@ -576,6 +576,9 @@ def install(lf) -> None:
             "file_bytes": 250,
             "mvt_rows": 100_000,
             "tin_points": 2000,
+            # the aggregate family reads a tile family's 250 tiles (five groups of about 50), not the 2000 tiles
+            # (32 GB, forty groups) the aggregate set reads: that input took a form's whole cap to build
+            "tiles_grouped": 250,
         }
     )
     for fam, forms in reused_forms(lf).items():

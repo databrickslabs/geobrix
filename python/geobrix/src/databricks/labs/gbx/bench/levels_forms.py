@@ -331,7 +331,38 @@ _REST_GROUP_SIZE = 4  # tiles a group holds, at most, in the half of the skew in
 _CELL_KEYS = 200  # groups of the BNG cell rows
 
 
-def _plan_grouped_tiles(sources, n, skew):
+def _epsg_of(path: str) -> Optional[int]:
+    """The EPSG code of the tile at `path` (one header read), or None."""
+    with open_data(path) as ds:
+        return ds.crs.to_epsg() if ds.crs else None
+
+
+def _epsgs(spark, paths: List[str]) -> List[Optional[int]]:
+    """The EPSG code of each of `paths`, in order. A header read on a Volume costs tens of milliseconds, so the
+    thousands of a ladder rung are read by the cluster's tasks, not one after another on the driver (one rung of the
+    merge aggregate waited on that for its whole form cap); a short list, or no session, is read here.
+    """
+    if spark is None or len(paths) < SMALL_INPUT_ROWS:
+        return [_epsg_of(p) for p in paths]
+    from pyspark.sql import functions as F
+
+    probe = F.udf(_epsg_of, "int")
+    rows = (
+        client_dataframe(
+            spark,
+            list(enumerate(paths)),
+            "i int, p string",
+            what="corpus paths",
+        )
+        .repartition(io_partitions(spark, len(paths)))
+        .select("i", probe("p").alias("crs"))
+        .collect()
+    )
+    got = {r["i"]: r["crs"] for r in rows}
+    return [got[i] for i in range(len(paths))]
+
+
+def _plan_grouped_tiles(sources, n, skew, spark=None):
     """`(key, path)` pairs for the first `n` of the corpus row tiles `sources`, every group of ONE CRS.
 
     The corpus cycles four systems over four places (two cities), so a group of mixed ones is a mosaic of
@@ -352,14 +383,17 @@ def _plan_grouped_tiles(sources, n, skew):
     size = _REST_GROUP_SIZE if skew else _GROUP_SIZE
     by_crs: Dict[Optional[int], List[str]] = {}
     hot_crs = None
-    for p in sources:
-        with open_data(p) as ds:
-            crs = ds.crs.to_epsg() if ds.crs else None
-        hot_crs = crs if not by_crs else hot_crs
-        by_crs.setdefault(crs, []).append(p)
-        have = sum(map(len, by_crs.values()))
-        if have >= n and (not skew or len(by_crs[hot_crs]) >= half):
-            break
+    seen, batch, done = 0, max(int(n), 64), False
+    while not done and seen < len(sources):
+        chunk = sources[seen : seen + batch]
+        seen += len(chunk)
+        for p, crs in zip(chunk, _epsgs(spark, chunk)):
+            hot_crs = crs if not by_crs else hot_crs
+            by_crs.setdefault(crs, []).append(p)
+            have = sum(map(len, by_crs.values()))
+            if have >= n and (not skew or len(by_crs[hot_crs]) >= half):
+                done = True
+                break
     pairs = []
     if skew:
         hot, by_crs[hot_crs] = by_crs[hot_crs][:half], by_crs[hot_crs][half:]
@@ -380,7 +414,7 @@ def _grouped_tiles(skew: bool):
         if not sources:
             return None
         t0 = time.perf_counter()
-        pairs = _plan_grouped_tiles(sources, n, skew)
+        pairs = _plan_grouped_tiles(sources, n, skew, spark)
         print(
             f"[LEVELS input] grouped tiles planned (CRS of {len(pairs)} headers) in {time.perf_counter() - t0:.1f} s",
             flush=True,

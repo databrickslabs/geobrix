@@ -24,9 +24,18 @@ import re
 from typing import Any
 
 import numpy as np
+from shapely import centroid as _centroid
+from shapely import contains_xy as _contains_xy
 from shapely import equals_exact as _equals_exact
+from shapely import get_coordinates as _get_coordinates
 from shapely import get_dimensions as _get_dimensions
 from shapely import get_srid as _get_srid
+from shapely import get_type_id as _get_type_id
+from shapely import get_x as _get_x
+from shapely import get_y as _get_y
+from shapely import intersection as _intersection
+from shapely import is_empty as _is_empty
+from shapely import polygons as _polygons
 from shapely import set_srid as _set_srid
 from shapely import to_wkb as _to_wkb
 from shapely import union_all as _union_all
@@ -281,29 +290,28 @@ def point_to_cell_id_vec(e: np.ndarray, n: np.ndarray, resolution: int) -> np.nd
     return _point_to_cell_id_core(e, n, resolution).astype(np.int64)
 
 
+_MAX_X_IDX, _MAX_Y_IDX = len(LETTER_MAP) - 1, len(LETTER_MAP[0]) - 1
+
+
 def format(cell_id: int) -> str:
-    digits = cell_digits(cell_id)
-    if len(digits) < 6:
-        x_idx = _safe_digit_index(digits[3:5], len(LETTER_MAP) - 1)
-        y_idx = _safe_digit_index(digits[1:3], len(LETTER_MAP[0]) - 1)
-        return LETTER_MAP[x_idx][y_idx][0]
-    q_idx = max(0, min(len(QUADRANTS) - 1, digits[-1]))
-    x_idx = _safe_digit_index(digits[3:5], len(LETTER_MAP) - 1)
-    y_idx = _safe_digit_index(digits[1:3], len(LETTER_MAP[0]) - 1)
+    # String slices of the id's digits: the same digit logic as `cell_digits` + `get_x`/`get_y`, without a list of
+    # ints per cell (this runs once per emitted cell, so it is the hot loop of every cell-listing function).
+    s = str(abs(int(cell_id)))
+    x_idx = int(s[3:5] or 0)
+    y_idx = int(s[1:3] or 0)
+    if x_idx > _MAX_X_IDX:
+        x_idx = _MAX_X_IDX
+    if y_idx > _MAX_Y_IDX:
+        y_idx = _MAX_Y_IDX
     prefix = LETTER_MAP[x_idx][y_idx]
-    coords = digits[5:-1]
+    if len(s) < 6:
+        return prefix[0]
+    q_idx = int(s[-1])
+    quadrant = QUADRANTS[q_idx] if q_idx < 5 else QUADRANTS[4]
+    coords = s[5:-1]
+    # k = len // 2, so both halves are exactly k digits long (a trailing odd digit is dropped, as in heavy)
     k = len(coords) // 2
-    if not coords:
-        x_str = y_str = ""
-    else:
-        x_part = coords[:k]
-        y_part = coords[k : 2 * k]
-        # padTo(k, 0): right-pad to length k with zeros.
-        x_part = x_part + [0] * (k - len(x_part))
-        y_part = y_part + [0] * (k - len(y_part))
-        x_str = "".join(str(d) for d in x_part)
-        y_str = "".join(str(d) for d in y_part)
-    return f"{prefix}{x_str}{y_str}{QUADRANTS[q_idx]}"
+    return prefix + coords[:k] + coords[k : 2 * k] + quadrant
 
 
 def parse_safe(cell_id: str):
@@ -318,11 +326,19 @@ def parse_safe(cell_id: str):
         return None
 
 
+# prefix -> (e_letter, n_letter): the first LETTER_MAP row that holds it, and its column
+_PREFIX_POS: dict = {}
+for _n_letter, _row in enumerate(LETTER_MAP):
+    for _e_letter, _prefix in enumerate(_row):
+        _PREFIX_POS.setdefault(_prefix, (_e_letter, _n_letter))
+
+
 def parse(cell_id: str) -> int:
     prefix = cell_id[:2] if len(cell_id) >= 2 else f"{cell_id}V"
-    letter_row = next(row for row in LETTER_MAP if prefix in row)
-    e_letter = letter_row.index(prefix)
-    n_letter = LETTER_MAP.index(letter_row)
+    pos = _PREFIX_POS.get(prefix)
+    if pos is None:
+        raise StopIteration  # an unrecognised prefix, as the row search it replaces
+    e_letter, n_letter = pos
     if len(cell_id) == 1:
         return encode(e_letter, 0, 0, 0, 0, 1, -1)
     suffix = cell_id[-2:]
@@ -424,37 +440,56 @@ def cell_centroid(cell_id: int) -> bytes:
     return _to_wkb(cell_id_to_geometry(cell_id).centroid)
 
 
+def _loop_points(x: int, y: int, edge: int, k: int):
+    """``(eastings, northings)`` float64 arrays of the hollow square at radius ``k`` around a cell whose origin is
+    ``(x, y)``: the four corners, then the left, right, top and bottom edge runs (the Scala ``until ... by edgeSize``
+    runs, exclusive at the far end like ``range``)."""
+    xmin, xmax = x - k * edge, x + k * edge
+    ymin, ymax = y - k * edge, y + k * edge
+    ys = range(ymin + edge, ymax, edge)
+    xs = range(xmin + edge, xmax, edge)
+    e = [xmin, xmin, xmax, xmax, *([xmin] * len(ys)), *([xmax] * len(ys)), *xs, *xs]
+    n = [ymin, ymax, ymax, ymin, *ys, *ys, *([ymax] * len(xs)), *([ymin] * len(xs))]
+    return np.array(e, dtype=np.float64), np.array(n, dtype=np.float64)
+
+
+def _cell_origin(cell_id: int):
+    """``(resolution, edge, x, y)`` of a Long cell id (its digits' resolution, edge size and south-west corner)."""
+    digits = cell_digits(cell_id)
+    resolution = get_resolution_from_digits(digits)
+    edge = get_edge_size(resolution)
+    return resolution, edge, get_x(digits, edge), get_y(digits, edge)
+
+
+def _ids_at(e: np.ndarray, n: np.ndarray, resolution: int) -> list:
+    """Long cell ids of integer-valued float64 (e, n) points, in order: one encoder call for the whole batch (the
+    same core the scalar ``point_to_cell_id`` runs, so the ids are identical; every point is finite).
+    """
+    return _point_to_cell_id_core(e, n, resolution).tolist()
+
+
 def k_loop(cell_id: int, k: int) -> list:
     """Hollow square ring of Long cell ids at radius k (BNG.kLoop).
 
     Walks the four corners plus the interior edge runs of the square at
     distance ``k * edgeSize`` around the cell centre, mapping each point back
     to a cell id. Mirrors the Scala ``until ... by edgeSize`` (exclusive upper
-    bound) edge runs via Python ``range`` (also exclusive).
+    bound) edge runs via ``np.arange`` (also exclusive); the points are encoded in one array call.
     """
-    digits = cell_digits(cell_id)
-    resolution = get_resolution_from_digits(digits)
-    edge = get_edge_size(resolution)
-    x = get_x(digits, edge)
-    y = get_y(digits, edge)
-    xmin, xmax = x - k * edge, x + k * edge
-    ymin, ymax = y - k * edge, y + k * edge
-    pts = [(xmin, ymin), (xmin, ymax), (xmax, ymax), (xmax, ymin)]
-    pts += [(xmin, yy) for yy in range(ymin + edge, ymax, edge)]  # left
-    pts += [(xmax, yy) for yy in range(ymin + edge, ymax, edge)]  # right
-    pts += [(xx, ymax) for xx in range(xmin + edge, xmax, edge)]  # up
-    pts += [(xx, ymin) for xx in range(xmin + edge, xmax, edge)]  # down
-    return [point_to_cell_id(px, py, resolution) for (px, py) in pts]
+    resolution, edge, x, y = _cell_origin(cell_id)
+    e, n = _loop_points(x, y, edge, k)
+    return _ids_at(e, n, resolution)
 
 
 def k_ring(cell_id: int, n: int) -> list:
     """Center + all k-loops 1..n of Long cell ids (BNG.kRing)."""
-    if n == 1:
-        return [cell_id] + k_loop(cell_id, 1)
-    out = [cell_id]
-    for k in range(1, n + 1):
-        out += k_loop(cell_id, k)
-    return out
+    resolution, edge, x, y = _cell_origin(cell_id)
+    loops = [_loop_points(x, y, edge, k) for k in range(1, n + 1)]
+    if not loops:
+        return [cell_id]
+    e = np.concatenate([lp[0] for lp in loops])
+    nn = np.concatenate([lp[1] for lp in loops])
+    return [cell_id] + _ids_at(e, nn, resolution)
 
 
 def k_ring_str(cell_id_str: str, n: int) -> list:
@@ -506,12 +541,9 @@ def _seed_coords(geometry) -> list:
     return pts
 
 
-def polyfill(geometry, resolution: int) -> list:
-    """Long cell ids whose centroid is contained by the geometry (BNG.polyfill).
-
-    Centroid-membership BFS flood-fill seeded from every vertex coordinate plus
-    the geometry centroid. Returns Long cell ids (the ``*_str`` wrapper formats).
-    """
+def _polyfill_scalar(geometry, resolution: int) -> list:
+    """One cell at a time: the reference walk of :func:`polyfill`, kept for the degenerate 500km resolution (-1),
+    whose ids do not follow the digit layout the batched walk reads."""
     if geometry is None or geometry.is_empty:
         return []
 
@@ -537,6 +569,112 @@ def polyfill(geometry, resolution: int) -> list:
             for nb in k_loop(current, 1):
                 if nb not in visited:
                     queue.append(nb)
+    return out
+
+
+def _seed_coords_array(geometry) -> np.ndarray:
+    """:func:`_seed_coords` as an ``(n, 2)`` float array, in the same order. A collection contributes its direct
+    members' vertices; a collection nested in a collection contributes none (it has no ``coordinates``).
+    """
+    if geometry.geom_type == "GeometryCollection":
+        parts = [
+            _get_coordinates(part)
+            for part in geometry.geoms
+            if part.geom_type != "GeometryCollection"
+        ]
+        return np.concatenate(parts) if parts else np.empty((0, 2))
+    return _get_coordinates(geometry)
+
+
+def _origin_valid(ids: np.ndarray, resolution: int):
+    """``(x, y, valid)`` arrays for Long ids made at ``resolution``: the cell origins and :func:`is_valid`.
+
+    The array walk needs the id's digit count to be the layout's. An id past it (a coordinate far outside the
+    grid, or a negative one) goes through the scalar :func:`is_valid`/``get_x``/``get_y``, so every id gives what
+    the scalar functions give.
+    """
+    ab = np.abs(ids)
+    n_positions = abs(resolution) if resolution >= -1 else abs(resolution) - 1
+    ndigits = 4 + 2 * n_positions
+    x, y, valid = _xy_valid_vec(ab, resolution)
+    layout = (ab >= 10 ** (ndigits - 1)) & (ab < 10**ndigits)
+    for i in np.flatnonzero(~layout):
+        c = int(ids[i])
+        valid[i] = is_valid(c)
+        if valid[i]:
+            x[i], y[i] = _cell_origin(c)[2:]
+    return x, y, valid
+
+
+def _cell_polygons(x: np.ndarray, y: np.ndarray, edge: int) -> np.ndarray:
+    """The cell squares as shapely polygons, in one call: the ring :func:`cell_id_to_geometry` makes (south-west
+    corner first, counter-clockwise, closed), so a centroid or a vertex-order test gives the same answer.
+    """
+    ring = np.empty((x.size, 5, 2), dtype=np.float64)
+    ring[:, 0, 0] = ring[:, 3, 0] = ring[:, 4, 0] = x
+    ring[:, 1, 0] = ring[:, 2, 0] = x + edge
+    ring[:, 0, 1] = ring[:, 1, 1] = ring[:, 4, 1] = y
+    ring[:, 2, 1] = ring[:, 3, 1] = y + edge
+    return _polygons(ring)
+
+
+def polyfill(geometry, resolution: int) -> list:
+    """Long cell ids whose centroid is contained by the geometry (BNG.polyfill).
+
+    Centroid-membership BFS flood-fill seeded from every vertex coordinate plus
+    the geometry centroid. Returns Long cell ids (the ``*_str`` wrapper formats).
+
+    The flood runs one frontier at a time: the cells of a frontier are tested together (the centroids and the
+    ``contains`` test as array calls), and the neighbours of the cells that pass form the next frontier. A frontier
+    keeps the first occurrence of each cell in queue order, which is exactly the order a one-cell-at-a-time queue
+    visits them, so the ids come out in the same order as :func:`_polyfill_scalar`.
+    """
+    if geometry is None or geometry.is_empty:
+        return []
+    if resolution == -1:
+        return _polyfill_scalar(geometry, resolution)
+
+    centroid = geometry.centroid
+    seeds = np.vstack([_seed_coords_array(geometry), [[centroid.x, centroid.y]]])
+    if not np.isfinite(seeds).all():
+        raise ValueError("Non-finite (NaN or infinite) coordinates are not supported.")
+    frontier = _point_to_cell_id_core(seeds[:, 0], seeds[:, 1], resolution).astype(
+        np.int64
+    )
+    edge = get_edge_size(resolution)
+    visited: set = set()
+    out: list = []
+    while frontier.size:
+        _, first = np.unique(frontier, return_index=True)
+        first.sort()  # first occurrences, in queue order
+        frontier = frontier[first]
+        fresh = np.fromiter(
+            (c not in visited for c in frontier.tolist()),
+            dtype=bool,
+            count=frontier.size,
+        )
+        frontier = frontier[fresh]
+        visited.update(frontier.tolist())
+        # out-of-GB / malformed cells (e.g. a raster reprojected to 27700 outside the BNG envelope) have no
+        # geometry to test or walk: the fill yields nothing for them
+        x, y, valid = _origin_valid(frontier, resolution)
+        frontier, x, y = frontier[valid], x[valid], y[valid]
+        if not frontier.size:
+            break
+        centres = _centroid(_cell_polygons(x, y, edge))
+        inside = _contains_xy(geometry, _get_x(centres), _get_y(centres))
+        ids, x, y = frontier[inside], x[inside], y[inside]
+        out.extend(ids.tolist())
+        # the cell's k_loop(., 1), in its order: the four corners, then left, right, up, down
+        e = np.stack(
+            [x - edge, x - edge, x + edge, x + edge, x - edge, x + edge, x, x], axis=1
+        )
+        n = np.stack(
+            [y - edge, y + edge, y + edge, y - edge, y, y, y + edge, y - edge], axis=1
+        )
+        frontier = _point_to_cell_id_core(
+            e.ravel().astype(np.float64), n.ravel().astype(np.float64), resolution
+        ).astype(np.int64)
     return out
 
 
@@ -663,18 +801,21 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
     core_set = set(polyfill(carved, resolution))
     border = [c for c in polyfill(border_geom, resolution) if c not in core_set]
 
+    # The cells' squares are made in one array call and clipped in one, where the walk used to build and clip
+    # one cell at a time. The chips come out in the same order: core cells (set order), then border cells.
     chips = []
-    for cell in core_set:
-        core_geom = cell_id_to_geometry(cell) if keep_core_geom else None
-        chips.append((cell, True, core_geom))
-    for cell in border:
-        cell_geom = cell_id_to_geometry(cell)
-        intersect = cell_geom.intersection(geometry)
-        if intersect.is_empty:
-            continue  # heavy: (cell, false, intersect).filterNot(_._3.isEmpty)
-        adjusted = _clean_chip_geometry(intersect, cell_geom.boundary)
-        if adjusted.is_empty:
-            continue
+    core_cells = list(core_set)
+    core_geoms = _cells_as_polygons(core_cells, resolution) if keep_core_geom else None
+    for i, cell in enumerate(core_cells):
+        chips.append((cell, True, core_geoms[i] if keep_core_geom else None))
+    if border:
+        cell_geoms = _cells_as_polygons(border, resolution)
+        intersects = _intersection(cell_geoms, geometry)
+        keep = ~_is_empty(intersects)
+        for i in np.flatnonzero(keep & (_get_type_id(intersects) == 7)):
+            # a GeometryCollection clip: its boundary fragments come out leaf by leaf
+            intersects[i] = _clean_chip_geometry(intersects[i], cell_geoms[i].boundary)
+        keep &= ~_is_empty(intersects)
         # Heavy promotes a border cell to core iff the clipped chip is the whole
         # cell per JTS ``adjusted.equalsExact(cellGeom, 0.1)`` (BNG.borderChips).
         # JTS ``equalsExact`` is vertex-ORDER sensitive: when the polygon-vs-cell
@@ -687,11 +828,14 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
         # set and so under-expanding the geometry k-ring/k-loop (heavy expands the
         # kept-border cells) -- a light-vs-heavy parity break on grid-aligned
         # polygons. Match heavy exactly. (BNG coords are integer metres.)
-        is_core = _equals_exact(adjusted, cell_geom, _FULL_CELL_TOL)
-        if is_core:
-            chips.append((cell, True, cell_geom if keep_core_geom else None))
-        else:
-            chips.append((cell, False, adjusted))
+        is_core = _equals_exact(intersects, cell_geoms, _FULL_CELL_TOL)
+        for i in np.flatnonzero(keep):
+            if is_core[i]:
+                chips.append(
+                    (border[i], True, cell_geoms[i] if keep_core_geom else None)
+                )
+            else:
+                chips.append((border[i], False, intersects[i]))
 
     # Match heavy's dimension filter: a Polygon may clip into a MultiPolygon,
     # and a MultiPolygon into a Polygon. Boundary-only points/lines still drop.
@@ -700,6 +844,20 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
         for (cell, core, chip) in chips
         if chip is None or _get_dimensions(chip) == input_dimension
     ]
+
+
+def _cells_as_polygons(cells: list, resolution: int) -> np.ndarray:
+    """Object array of the squares of valid Long ``cells`` (see :func:`cell_id_to_geometry`), one array call."""
+    if (
+        resolution == -1
+    ):  # the degenerate 500km ids do not follow the digit layout the array walk reads
+        out = np.empty(len(cells), dtype=object)
+        for i, c in enumerate(cells):
+            out[i] = cell_id_to_geometry(c)
+        return out
+    ids = np.array(cells, dtype=np.int64)
+    x, y, _ = _origin_valid(ids, resolution)
+    return _cell_polygons(x, y, get_edge_size(resolution))
 
 
 def tessellate_str(geom, resolution, keep_core_geom: bool = False) -> list:
@@ -712,10 +870,16 @@ def tessellate_str(geom, resolution, keep_core_geom: bool = False) -> list:
     """
     res = get_resolution(resolution)
     parsed = parse_geom(geom)
-    return [
-        (format(c), core, (_to_wkb(chip) if chip is not None else None))
-        for (c, core, chip) in tessellate(parsed, res, keep_core_geom)
-    ]
+    chips = tessellate(parsed, res, keep_core_geom)
+    has = [i for i, ch in enumerate(chips) if ch[2] is not None]
+    geoms = np.empty(len(has), dtype=object)
+    for j, i in enumerate(has):
+        geoms[j] = chips[i][2]
+    wkb = _to_wkb(geoms) if has else ()
+    wkbs = [None] * len(chips)
+    for i, w in zip(has, wkb):
+        wkbs[i] = w
+    return [(format(c), core, wkbs[i]) for i, (c, core, _) in enumerate(chips)]
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +922,29 @@ def is_valid_vec(cell_ids: np.ndarray, resolution: int) -> np.ndarray:
     """Vectorized :func:`is_valid` for a single-resolution batch of Long ids.
 
     Equivalent to ``[is_valid(int(c)) for c in cell_ids]`` when every id was
-    produced at ``resolution``. Extracts digit slices by integer arithmetic
+    produced at ``resolution`` (see :func:`_xy_valid_vec` for the digit layout).
+    """
+    cell_ids = np.asarray(cell_ids, dtype=np.int64)
+    if cell_ids.size == 0:
+        return np.zeros(0, dtype=bool)
+
+    # res -1 (500km) is a DEGENERATE 4-digit id (encode divides by 100) and its
+    # get_x/get_y math has k=-1 -- the generic array formula does NOT apply.
+    # 500km cells never arise at raster-tile scale, so keep parity via the scalar
+    # path for this one resolution (still correct; not the hot case).
+    if resolution == -1:
+        return np.array(
+            [is_valid(int(c)) for c in cell_ids], dtype=bool
+        )  # vectorscan: ok (res -1 degenerate, non-hot)
+    return _xy_valid_vec(cell_ids, resolution)[2]
+
+
+def _xy_valid_vec(cell_ids: np.ndarray, resolution: int):
+    """``(x, y, valid)`` of a single-resolution batch of Long ids: the cell origins (``get_x``/``get_y``) and
+    :func:`is_valid`, as arrays. :func:`is_valid_vec` returns the last of the three.
+
+    Equivalent to ``[is_valid(int(c)) for c in cell_ids]`` when every id was
+    produced at ``resolution`` (not -1: see :func:`is_valid_vec`). Extracts digit slices by integer arithmetic
     (fixed digit layout per resolution), reproducing ``get_x``/``get_y`` and the
     bounds/index checks on arrays.
 
@@ -775,16 +961,8 @@ def is_valid_vec(cell_ids: np.ndarray, resolution: int) -> np.ndarray:
     """
     cell_ids = np.asarray(cell_ids, dtype=np.int64)
     if cell_ids.size == 0:
-        return np.zeros(0, dtype=bool)
-
-    # res -1 (500km) is a DEGENERATE 4-digit id (encode divides by 100) and its
-    # get_x/get_y math has k=-1 -- the generic array formula below does NOT apply.
-    # 500km cells never arise at raster-tile scale, so keep parity via the scalar
-    # path for this one resolution (still correct; not the hot case).
-    if resolution == -1:
-        return np.array(
-            [is_valid(int(c)) for c in cell_ids], dtype=bool
-        )  # vectorscan: ok (res -1 degenerate, non-hot)
+        z = np.zeros(0, dtype=np.int64)
+        return z, z, np.zeros(0, dtype=bool)
 
     # For all other resolutions the digit count is fixed by the encode layout:
     #   ndigits = 4 + 2*n_positions  (leading placeholder '1' + letter + coord fields).
@@ -826,7 +1004,7 @@ def is_valid_vec(cell_ids: np.ndarray, resolution: int) -> np.ndarray:
     #   0 <= y (=northing=get_y) <= 1300000
     #   x_letter (north_100km) < len(LETTER_MAP) = 14
     #   y_letter (east_100km)  < len(LETTER_MAP[0]) = 8
-    return (
+    valid = (
         (easting >= 0)
         & (easting <= 700000)
         & (northing >= 0)
@@ -834,6 +1012,7 @@ def is_valid_vec(cell_ids: np.ndarray, resolution: int) -> np.ndarray:
         & (north_100km < len(LETTER_MAP))
         & (east_100km < len(LETTER_MAP[0]))
     )
+    return easting, northing, valid
 
 
 def get_chips(geometry, resolution: int, keep_core_geom: bool = False) -> list:

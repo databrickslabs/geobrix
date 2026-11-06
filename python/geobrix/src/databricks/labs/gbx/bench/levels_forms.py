@@ -7,8 +7,11 @@ run; without one, a temp view. The seeds are fixed, so a form sees the same rows
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import os
 import re
+import sys
 import time
 from typing import Callable, Dict, List, Optional
 
@@ -48,10 +51,62 @@ BASE_ROWS = {
 }
 
 
-def _table(spark, schema: Optional[str], name: str, build) -> str:
+# What an input's identity holds, besides its name: the recipe version, the source of the builder that makes it and of the
+# helpers every builder shares, and (for a builder that reads the corpus) which tiles the corpus holds. A table whose
+# stamp differs is another table: it is built under its own name, the old one is left alone (other runs may be reading
+# it), so a changed generator or corpus can never serve a stale input.
+_STAMP_HELPERS = ("_tile_column", "_plan_grouped_tiles", "_epsgs", "_epsg_of")
+_STAMP_CORPUS: List[str] = [""]  # the corpus of the run (set before an input is built)
+
+
+def _source_of(obj) -> str:
+    try:
+        return inspect.getsource(obj)
+    except (
+        OSError,
+        TypeError,
+    ):  # no source (a frozen build): the recipe version alone speaks for it
+        return ""
+
+
+def input_stamp(builder_src: str, corpus: str = "") -> str:
+    """8 hex digits that change when the recipe version, the builder's source or the helpers' source change, and, for a
+    builder that reads the corpus rows, when the set of tiles in the corpus changes."""
+    parts = [f"v{RECIPE_VERSION}", builder_src]
+    parts += [_source_of(globals()[h]) for h in _STAMP_HELPERS if h in globals()]
+    if "synth" in builder_src:
+        from databricks.labs.gbx.bench import synth
+
+        parts.append(_source_of(synth))
+    if "_corpus_rows(" in builder_src and corpus:
+        rows = _corpus_rows(corpus) or []
+        parts.append(
+            f"{len(rows)}:"
+            + hashlib.sha1(
+                "\n".join(os.path.basename(p) for p in rows).encode()
+            ).hexdigest()
+        )
+    return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:8]
+
+
+def _stamp_of(frame) -> str:
+    return input_stamp(_source_of(frame.f_code), _STAMP_CORPUS[0])
+
+
+def stamped_name(schema: Optional[str], name: str) -> str:
+    """`name` with the stamp of the calling builder appended (a temp view, schema None, keeps its name: it lives one session)."""
+    return name if schema is None else f"{name}_{_stamp_of(sys._getframe(1))}"
+
+
+def _table(spark, schema: Optional[str], name: str, build, exact: bool = False) -> str:
+    """The input as a table of `schema` (or a temp view): built once under a name that holds its stamp, so every form and
+    every run that asks for the same input at the same scale shares it. `exact` names the table as given (a companion
+    table of an input that already carries its stamp)."""
     if schema is None:
         build().createOrReplaceTempView(name)
         return name
+    if not exact:
+        name = f"{name}_{_stamp_of(sys._getframe(1))}"
     full = f"{schema}.{name}"
     if not spark.catalog.tableExists(full):
         t0 = time.perf_counter()
@@ -63,8 +118,8 @@ def _table(spark, schema: Optional[str], name: str, build) -> str:
                 flush=True,
             )
         except Exception as exc:  # noqa: BLE001
-            # Runs on one schema share the cached inputs (their names hold the recipe version and the row count, not
-            # the run): a run that loses the race to create one reads the other's, which has the same rows.
+            # Runs on one schema share the cached inputs (their names hold the recipe version, the row count and the
+            # stamp, not the run): a run that loses the race to create one reads the other's, which has the same rows.
             if "ALREADY_EXISTS" not in str(exc) or not spark.catalog.tableExists(full):
                 _drop_partial(spark, full)
                 raise
@@ -374,7 +429,7 @@ def _gb_tiles(virtual: bool):
             return None
 
         kind = "virt" if virtual else "mat"
-        name = f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}"
+        name = stamped_name(schema, f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}")
         if schema is not None and spark.catalog.tableExists(f"{schema}.{name}"):
             return f"{schema}.{name}"  # built by an earlier form or run: no header of the corpus is read again
         memo = (os.path.join(corpus, "rows"), n)
@@ -411,6 +466,7 @@ def _gb_tiles(virtual: bool):
             schema,
             name,
             lambda: _tile_column(spark, [(p, p) for p in gb], virtual, keyed=False),
+            exact=True,
         )
 
     return build
@@ -578,14 +634,16 @@ def _dsm_towers(spark, n, corpus, schema):
         _DSM_GRID,
         _DSM_TILE_PX,
     )
-    name = f"mvp_in_dsm_towers_v{RECIPE_VERSION}_{n}"
+    name = stamped_name(schema, f"mvp_in_dsm_towers_v{RECIPE_VERSION}_{n}")
     _table(
         spark,
         schema,
-        name + "_tiles",
+        name
+        + "_tiles",  # beside the towers, under the same stamp (the form reads `<towers table>_tiles`)
         lambda: client_dataframe(
             spark, tiles, "tx int, ty int, path string", what="tower tile paths"
         ),
+        exact=True,
     )
     reach = _DSM_GRID * _DSM_TILE_PX - 2 * _TOWER_RADIUS
     return _table(
@@ -597,6 +655,7 @@ def _dsm_towers(spark, n, corpus, schema):
             (F.rand(11) * reach + _TOWER_RADIUS).alias("x"),
             (F.rand(12) * reach + _TOWER_RADIUS).alias("y"),
         ),
+        exact=True,
     )
 
 

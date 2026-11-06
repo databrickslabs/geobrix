@@ -1176,6 +1176,9 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     gone = _cannot_run_here(form, ctx.uc, ctx)
     if gone:
         return _row(base, note=gone, status="na_by_design")
+    lf._STAMP_CORPUS[0] = (
+        ctx.corpus
+    )  # an input's stamp holds the tiles of the corpus it reads
     src = lf.INPUTS[form.input](spark, requested, ctx.corpus, ctx.schema)
     if src is None:
         return _row(

@@ -795,7 +795,7 @@ def test_a_partial_input_table_does_not_stay_to_be_read_as_complete():
 
     build = lambda: types.SimpleNamespace(write=Writer())  # noqa: E731
     with pytest.raises(RuntimeError, match="OPERATION_CANCELED"):
-        lf._table(Spark(), "c.s", "mvp_in_x", build)
+        lf._table(Spark(), "c.s", "mvp_in_x", build, exact=True)
     assert ("sql", "DROP TABLE IF EXISTS c.s.mvp_in_x") in calls
 
     calls.clear()
@@ -807,7 +807,7 @@ def test_a_partial_input_table_does_not_stay_to_be_read_as_complete():
         calls.append(("write", name)),
         (_ for _ in ()).throw(RuntimeError("TABLE_OR_VIEW_ALREADY_EXISTS")),
     )[1]
-    assert lf._table(Raced(), "c.s", "mvp_in_x", build) == "c.s.mvp_in_x"
+    assert lf._table(Raced(), "c.s", "mvp_in_x", build, exact=True) == "c.s.mvp_in_x"
     assert not any(
         k == "sql" for k, _ in calls
     )  # another run's table is its own: not dropped

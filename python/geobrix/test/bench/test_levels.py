@@ -1674,7 +1674,9 @@ def test_a_cached_input_another_run_created_first_is_read_not_an_error():
 
     made = []
     spark = type("S", (), {"catalog": Catalog()})()
-    assert lf._table(spark, "c.s", "t", Frame) == "c.s.t" and made == ["c.s.t"]
+    assert lf._table(spark, "c.s", "t", Frame, exact=True) == "c.s.t" and made == [
+        "c.s.t"
+    ]
 
     class Other(RuntimeError):
         pass

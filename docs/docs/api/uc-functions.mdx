@@ -355,6 +355,101 @@ The install uses that exact JAR, even when the folder holds other files. It refu
 
 No raster function runs as a Scala function on UC. Raster functions run as Python functions.
 
+## Session functions on UC
+
+Some session functions have no UC function of the same name. The table says what to call on UC instead.
+
+{/* BEGIN GENERATED uc-routes: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Session function | Kind | On Unity Catalog |
+|---|---|---|
+| `gbx_bng_cellfill` | aggregate | GROUP BY the key and call `gbx_bng_cellfill_array` on `collect_list(struct(cellid, value))`. |
+| `gbx_bng_cellintersection_agg` | aggregate | GROUP BY the cell and call `gbx_bng_cellintersection_array` on `collect_list(struct(cellid, core, chip))`. |
+| `gbx_bng_cellunion_agg` | aggregate | GROUP BY the cell and call `gbx_bng_cellunion_array` on `collect_list(struct(cellid, core, chip))`. |
+| `gbx_custom_cellfill` | aggregate | GROUP BY the key and call `gbx_custom_cellfill_array` on `collect_list(struct(cellid, value))`. |
+| `gbx_h3_cellfill` | aggregate | GROUP BY the key and call `gbx_h3_cellfill_array` on `collect_list(struct(cellid, value))`. For a large table, fill the holes with a join over `h3_kringdistances`. |
+| `gbx_pmtiles_agg` | aggregate | UC cannot write a file. Build the tiles table with `gbx_features_to_mvt`, then run `gbx_pmtiles_agg` in a notebook or job session. |
+| `gbx_quadbin_cellfill` | aggregate | GROUP BY the key and call `gbx_quadbin_cellfill_array` on `collect_list(struct(cellid, value))`. |
+| `gbx_quadbin_cellunion_agg` | aggregate | GROUP BY the key and call `gbx_quadbin_cellunion` on `collect_list(cell)`. For a very large group, use `st_union_agg` over the cell polygons. |
+| `gbx_rst_binpoints_agg` | aggregate | Call `gbx_rst_binpoints_partial` for each point, GROUP BY the pixel, then pass the rows to `gbx_rst_binpoints_finalize`. |
+| `gbx_rst_bng_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_bng_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_bng_rasterize_tvf` | table function | UC has no partitioned table function for this. Call `gbx_rst_bng_rasterize` on the collected cells of each group. |
+| `gbx_rst_combineavg_agg` | aggregate | GROUP BY the key and call `gbx_rst_combineavg` on `collect_list(tile)`. For many tiles, use the `gbx_combine_by_key` procedure. |
+| `gbx_rst_custom_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_custom_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_derivedband` | scalar | UC does not run caller-supplied Python. Run `gbx_rst_derivedband` in a notebook or job session, or call `gbx_rst_mapalgebra` or `gbx_rst_index` on UC. |
+| `gbx_rst_derivedband_agg` | aggregate | UC does not run caller-supplied Python. Run the aggregate in a notebook or job session. |
+| `gbx_rst_dtmfromgeoms_agg` | aggregate | GROUP BY the key and call `gbx_rst_dtmfromgeoms` on `collect_list(CAST(geom AS GEOMETRY(ANY)))`. |
+| `gbx_rst_frombands_agg` | aggregate | GROUP BY the key and call `gbx_rst_frombands` on `collect_list(tile)`. |
+| `gbx_rst_fromfile` | scalar | UC reads no raw path. Ingest the file in a notebook or job session into a Delta table, or read its bytes with `read_files` in `binaryFile` format and call `gbx_rst_fromcontent`. |
+| `gbx_rst_gridfrompoints_agg` | aggregate | GROUP BY the key and call `gbx_rst_gridfrompoints` on the collected points and the collected values. |
+| `gbx_rst_h3_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_h3_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_merge_agg` | aggregate | GROUP BY the key and call `gbx_rst_merge` on `collect_list(tile)`. For many tiles, use the `gbx_mosaic_by_key` procedure. |
+| `gbx_rst_merge_tvf` | table function | UC has no partitioned table function for this. Call `gbx_rst_merge` on `collect_list(tile)`, or use the `gbx_mosaic_by_key` procedure. |
+| `gbx_rst_quadbin_rasterize_agg` | aggregate | GROUP BY the raster key and call `gbx_rst_quadbin_rasterize` on `collect_list(struct(cellid, value))`. |
+| `gbx_rst_rasterize_agg` | aggregate | UC has no aggregate that burns a group of geometries. Run it in a notebook or job session, or rasterize grid cells with a grid rasterize function. |
+| `gbx_st_asmvt` | aggregate | GROUP BY the tile key and call `gbx_st_asmvt_array` on `collect_list(struct(st_asbinary(geom) AS geom, to_json(attrs) AS attrs))`. |
+| `gbx_st_coverageinvalidedges` | aggregate | GROUP BY the district and call `gbx_st_coverageinvalidedges_array` on `collect_list(st_asewkb(geom))`. |
+| `gbx_st_coverageisvalid` | aggregate | GROUP BY the district and call `gbx_st_coverageisvalid_array` on `collect_list(st_asewkb(geom))`. |
+| `gbx_st_crs` | scalar | Call the built-in `st_srid(geom)` on UC. It returns the SRID as an INT, not EPSG text. |
+| `gbx_st_setcrs` | scalar | Call the built-in `st_setsrid(geom, srid)` on UC. The SRID is an INT. |
+| `gbx_st_transformcrs` | scalar | Call the built-in `st_transform(geom, srid)` on UC. The target is an INT SRID. |
+{/* END GENERATED uc-routes */}
+
+UC has no user-defined aggregate, so a group goes to an array function: `GROUP BY` the key, then `collect_list` the members.
+
+`gbx.uc.install(..., stubs=True)` also creates a raising function for each scalar in the table: `gbx_st_crs`, `gbx_st_setcrs`, `gbx_st_transformcrs`, `gbx_rst_fromfile` and `gbx_rst_derivedband`. A call to a stub fails with the route in its message, not with a missing-function error. Stubs are off by default. A session function wins for an unqualified name, so a stub never hides it.
+
+## Recipes on UC
+
+These statements replace a session aggregate or a session step. Each is plain SQL that runs on a warehouse.
+
+### Fill empty H3 cells in a large table
+
+The join needs no array and has no size limit. It is faster than `gbx_h3_cellfill_array` from about 1M cells. For a small group, the array function is simpler.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_H3_FILL_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Union the cells of a large group
+
+The built-in `st_union_agg` does the union. The GeoBrix function gives only the polygon of each cell.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_QUADBIN_UNION_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_BNG_CHIP_UNION_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Turn points into a raster
+
+`gbx_rst_binpoints_partial` gives each point its pixel. A `GROUP BY` reduces the points of a pixel with `max`, `min`, `avg`, `count`, `median` or `percentile`. The finalize makes the tile. No point reaches Python.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_BINPOINTS_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The array function `gbx_rst_binpoints` refuses a large input. This route is the one that scales.
+
+### Merge or combine many tiles for each key
+
+The two procedures take any number of tiles for each key. They work in levels, so no array limit applies. See [Procedures](#procedures).
+
+<CodeFromTest code={ucExamples} language="sql" functionName="CALL_MOSAIC_BY_KEY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="CALL_COMBINE_BY_KEY_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Statistics of a cell across many tiles
+
+Call the raster-to-grid partial once for each tile and merge the rows with `GROUP BY`. See [Raster to grid](#raster-to-grid).
+
+### Read the header of a tile once
+
+Header functions are cheap, but a dashboard should not call them on every refresh. Compute the header in the ingest job, which is a session, and save it as columns. The dashboard then reads the columns.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="HEADERS_AT_INGEST_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+### Read a small raster file
+
+`read_files` with `format => 'binaryFile'` gives the bytes of each file, and `gbx_rst_fromcontent` turns the bytes into a tile. A warehouse needs no session for this.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_READ_FILES_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+The route works for files up to 64 MiB. Files of 1, 16 and 64 MiB were tested. A larger file is over the 64 MiB limit of a UC function. Ingest it in a notebook or job session, or cut it into smaller files first.
+
 ## Cost
 
 Measured on an X-Small pro serverless warehouse. Treat the figures as orders of magnitude.
@@ -362,13 +457,38 @@ Measured on an X-Small pro serverless warehouse. Treat the figures as orders of 
 | Measure | Result |
 |---|---|
 | A `SELECT 1` statement | 0.53 to 0.63 s |
+| A call to a trivial SQL function | about 0.5 s |
 | A UC Python function over 1M rows | about 10 to 11 s per statement |
+| The sandbox start of a Python function on a warehouse | 8 to 30 s for each statement |
 | BNG point to cell over 1M rows, Python handler | about 15.4 s |
 | BNG point to cell over 1M rows, Scala handler | 10.7 to 11.6 s |
+| `gbx_bng_eastnorthasbng` over 10M rows: SQL, Scala, Python | 1.0 s, 15.3 s, 33.2 s |
+| Three GeoBrix Python functions in one statement: one package list for each, then shared | 28.3 s, then 16.8 s |
+| H3 cell fill over 1M cells: the join, then `gbx_h3_cellfill_array` | 1.4 s, then 8.6 s |
+| Points to a raster with the partial and finalize: 100 thousand, 1M and 10M points | 21.8 s, 24.3 s and 174.7 s |
+| Raster to grid, one statistic over 1000 tiles | about 305 s |
+| `gbx_mosaic_by_key` over 10, 50 and 200 tiles | 34.9 s, 23.8 s and 34.0 s |
+| A `CALL` of `gbx_polygons_to_bng`: first, second, and after 10 minutes idle | 35 s, 24 s and 28 s |
+
+On Serverless, the raster-to-grid partial that gives every statistic costs about twice one statistic. On a warehouse it costs the same as one. If you need one statistic, call its table function.
+
+Two forms were measured and not built. The ring functions `gbx_bng_kring` and `gbx_bng_kloop` stay Python or Scala, because a SQL form was 2.6 to 2.9 times slower over 1M rows in a local test. No procedure computes every raster-to-grid statistic in one call: call the partial and merge, as shown above.
 
 The per-statement cost is high next to a session function, and UC functions suit BI and governed use. For bulk transforms use session SQL or the Python API.
 
-A UC Python function holds about 10 tiles of 512 by 512 pixels, at 4.2 MB each. A function that received 50 tiles ran out of memory. UC has no aggregate over tiles, so use a session aggregate for that work.
+A UC Python function holds about 10 tiles of 512 by 512 pixels, at 4.2 MB each. A function that received 50 tiles ran out of memory. UC has no aggregate over tiles, so use `gbx_mosaic_by_key` or `gbx_combine_by_key`, or a session aggregate.
+
+### Sizes
+
+| What | Limit |
+|---|---|
+| A tile read by a pixel function | 64 MiB decoded |
+| A header function | any size |
+| A tile cut by `gbx_rst_retile`, `gbx_rst_maketiles` or `gbx_rst_tooverlappingtiles` | 256 MiB decoded, in windows of at most 64 MiB |
+| A tile cut by `gbx_rst_separatebands` | 64 MiB decoded |
+| A tile from `read_files` and `gbx_rst_fromcontent` | a file of 64 MiB |
+| An array argument, or a merged or combined tile | 64 MiB |
+| A tile sent between SQL and a UC function | tested up to 256 MiB |
 
 ## Errors on UC
 
@@ -410,7 +530,7 @@ Most procedures upsert. A row already in the target that the source no longer ha
 
 The `id` of the source must be unique for `gbx_polygons_to_bng`, `gbx_clean_geometries` and `gbx_migrate_mosaic_geometry`. A repeated `id` makes the merge fail. In `gbx_zonal_stats`, each `zone_id` must be unique in the zones and each `tile_id` in the tiles.
 
-`gbx_clean_geometries` keeps each `id` in one table per call. A geometry that is valid now is merged into the target and removed from the rejects. One that is invalid now goes to the rejects and is removed from the target. A row whose `id` is NULL is matched like any other. The four writes are not one transaction. They hold when the call succeeds. If it fails part-way, run it again to repair the tables.
+`gbx_clean_geometries` keeps each `id` in one table per call. A geometry that is valid now is merged into the target and removed from the rejects. One that is invalid now goes to the rejects and is removed from the target. A row whose `id` is NULL is matched like any other. The four writes are not one transaction. They hold when the call succeeds. If it fails part-way, a re-run repairs it.
 
 `gbx_points_to_h3_surface` adds the cells within `fill_rings` of a point's cell, with no value, before it fills. A cell no point fell in then takes the mean of the neighbours that have a value. So `fill_rings` fills gaps, not only the cells you gave with no value.
 

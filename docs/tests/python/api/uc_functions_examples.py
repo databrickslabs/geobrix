@@ -135,6 +135,76 @@ UC_RASTER_FILES_SQL = """SELECT scene,
          main.geobrix.gbx_rst_cog_convert(tile, 'AUTO', 512, 'AVERAGE'), array(2, 4, 8)) AS tile
 FROM rasters"""
 
+# Fill the empty H3 cells of a large table with the mean of their neighbours. Plain Spark SQL: no collect, no size limit.
+UC_H3_FILL_SQL = """WITH g AS (
+  SELECT grp, cellid, max(value) AS value FROM readings GROUP BY grp, cellid
+),
+holes AS (SELECT grp, cellid FROM g WHERE value IS NULL),
+nb AS (
+  SELECT h.grp, h.cellid, n.cellid AS nb, n.distance AS d
+  FROM holes h LATERAL VIEW inline(h3_kringdistances(h.cellid, 1)) n
+  WHERE n.distance >= 1
+),
+f AS (
+  SELECT nb.grp, nb.cellid, avg(g.value) AS mean_v
+  FROM nb JOIN g ON g.grp = nb.grp AND g.cellid = nb.nb AND g.value IS NOT NULL
+  GROUP BY nb.grp, nb.cellid
+)
+SELECT g.grp, g.cellid, coalesce(g.value, f.mean_v) AS value
+FROM g LEFT JOIN f ON f.grp = g.grp AND f.cellid = g.cellid"""
+
+# Union the quadbin cells of a large group with the built-in aggregate. The function gives only each cell polygon.
+UC_QUADBIN_UNION_SQL = """SELECT grp,
+       st_union_agg(st_geomfromewkb(main.geobrix.gbx_quadbin_aswkb(cell))) AS union_geom
+FROM cells
+GROUP BY grp"""
+
+# Union the chips of each BNG cell with the built-in aggregate. A core cell is its own polygon.
+UC_BNG_CHIP_UNION_SQL = """SELECT cellid,
+       CASE WHEN bool_or(core) THEN st_asbinary(st_geomfromewkb(main.geobrix.gbx_bng_aswkb(cellid)))
+            ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS union_wkb
+FROM chips
+GROUP BY cellid"""
+
+# Points to a raster: each point gets its pixel, GROUP BY reduces the points of a pixel, the finalize makes the tile.
+UC_BINPOINTS_SQL = """WITH b AS (
+  SELECT main.geobrix.gbx_rst_binpoints_partial(x, y, 0.0, 0.0, 10.0, 10.0, 10, 10) AS px, z FROM points
+),
+c AS (
+  SELECT px.col AS col, px.row AS row, max(z) AS value
+  FROM b
+  WHERE px IS NOT NULL AND z IS NOT NULL AND NOT isnan(z)
+  GROUP BY px.col, px.row
+)
+SELECT main.geobrix.gbx_rst_binpoints_finalize(
+         collect_list(struct(col, row, value)), 0.0, 0.0, 10.0, 10.0, 10, 10, 4326) AS tile
+FROM c"""
+
+# Any number of tiles for each key: the procedure works in levels, so no array limit applies.
+CALL_MOSAIC_BY_KEY_SQL = """CALL main.geobrix.gbx_mosaic_by_key(
+  source_table => 'main.geobrix.dem_tiles',
+  target_table => 'main.geobrix.dem_mosaics')"""
+
+CALL_COMBINE_BY_KEY_SQL = """CALL main.geobrix.gbx_combine_by_key(
+  source_table => 'main.geobrix.aligned_tiles',
+  target_table => 'main.geobrix.combined_tiles',
+  op => 'avg')"""
+
+# Compute the header once, in the ingest job, and save it as columns. A dashboard then reads the columns.
+# This runs in a session: the session functions are not UC functions.
+HEADERS_AT_INGEST_SQL = """CREATE OR REPLACE TABLE main.geobrix.rasters_with_headers AS
+SELECT *,
+       gbx_rst_width(tile) AS width,
+       gbx_rst_height(tile) AS height,
+       gbx_rst_srid(tile) AS srid,
+       gbx_rst_boundingbox(tile) AS bbox
+FROM main.geobrix.rasters"""
+
+# A small raster file (up to 64 MiB) becomes a tile with read_files and gbx_rst_fromcontent. No session is needed.
+UC_READ_FILES_SQL = """SELECT path,
+       main.geobrix.gbx_rst_fromcontent(content, 'GTiff') AS tile
+FROM read_files('/Volumes/main/geobrix/rasters/', format => 'binaryFile', pathGlobFilter => '*.tif')"""
+
 # Install the functions and the procedures that call them.
 INSTALL_PROCEDURES_PYTHON = '''import databricks.labs.gbx as gbx
 

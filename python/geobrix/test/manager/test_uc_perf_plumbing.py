@@ -342,7 +342,10 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
     assert not any("gbx_st_crs(" in s.split("\n")[0] for s in plain)
     with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)
     assert with_stubs[: len(plain)] == plain  # the same statements, then the stubs
-    (stub,) = [s for s in with_stubs[len(plain) :]]  # the aggregate gets none
+    extra = with_stubs[len(plain) :]
+    # the aggregate gets none; the shipped stub rows come along
+    (stub,) = [s for s in extra if ".gbx_st_crs(" in s]
+    assert len(extra) == 5 and not any("gbx_h3_cellfill" in s for s in extra)
     assert stub.startswith(
         "CREATE OR REPLACE FUNCTION `c`.`s`.gbx_st_crs(geom GEOMETRY(ANY))\nRETURNS STRING\nLANGUAGE SQL"
     )
@@ -364,6 +367,34 @@ def test_stubs_are_opt_in_scalars_only_and_raise_with_the_fix(monkeypatch):
         ddl.stub_ddl(
             man.functions["gbx_h3_cellfill"], "c", "s", "0.6.0"
         )  # an aggregate
+
+
+def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_scalars():
+    man = manifest.load()
+    stubs = {n: f.stub for n, f in man.functions.items() if f.stub}
+    assert set(stubs) == {
+        "gbx_st_crs",
+        "gbx_st_setcrs",
+        "gbx_st_transformcrs",
+        "gbx_rst_fromfile",
+        "gbx_rst_derivedband",
+    }
+    assert "st_srid" in stubs["gbx_st_crs"]
+    assert "st_setsrid" in stubs["gbx_st_setcrs"]
+    assert "st_transform(" in stubs["gbx_st_transformcrs"]
+    assert "gbx_rst_fromcontent" in stubs["gbx_rst_fromfile"]
+    assert "gbx_rst_mapalgebra" in stubs["gbx_rst_derivedband"]
+    assert "gbx_mvp_rst_materialize" not in stubs  # a probe name gets none
+    assert all(man.functions[n].kind == "scalar" for n in stubs)
+    # opt-in: a plain install creates none, stubs=True adds one statement for each
+    plain = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True)
+    with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)
+    assert not any("runs in a notebook or job session" in s for s in plain)
+    added = with_stubs[len(plain) :]
+    assert with_stubs[: len(plain)] == plain and len(added) == 5
+    for n, fix in stubs.items():
+        (stmt,) = [s for s in added if f".{n}(" in s.split("\n")[0]]
+        assert f"runs in a notebook or job session. Fix: {fix.replace(chr(39), chr(39) * 2)}" in stmt
 
 
 def test_only_may_be_a_generator_and_an_aggregate_stub_hint_names_its_session_route(

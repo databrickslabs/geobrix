@@ -364,3 +364,91 @@ def test_the_call_example_names_a_procedure_and_its_parameters():
     text = procedures.RECIPES["gbx_polygons_to_bng"]("main", "geobrix")
     for param in ("source_table", "target_table", "bng_resolution"):
         assert f"IN {param} STRING" in text and f"{param} =>" in ex.CALL_POLYGONS_TO_BNG_SQL
+
+
+def _flat(sql):
+    """The statement on one line, with no space inside a bracket: layout is not part of the recipe."""
+    text = " ".join(sql.replace("{q}", "main.geobrix.").split())
+    return re.sub(r"\s+\)", ")", re.sub(r"\(\s+", "(", text))
+
+
+def test_the_h3_fill_recipe_is_the_oracle_recipe_with_the_mean_fill():
+    from databricks.labs.gbx.bench.oracle_tables import cell_aggregate as ca
+
+    oracle = _flat(ca._C1.format(rows="X", ring=1, value="mean_v"))
+    doc = _flat(ex.UC_H3_FILL_SQL)
+    for part in (
+        "g AS (SELECT grp, cellid, max(value) AS value FROM",
+        "holes AS (SELECT grp, cellid FROM g WHERE value IS NULL)",
+        "LATERAL VIEW inline(h3_kringdistances(h.cellid, 1)) n WHERE n.distance >= 1",
+        "avg(g.value) AS mean_v",
+        "JOIN g ON g.grp = nb.grp AND g.cellid = nb.nb AND g.value IS NOT NULL GROUP BY nb.grp, nb.cellid",
+        "SELECT g.grp, g.cellid, coalesce(g.value, f.mean_v) AS value FROM g",
+        "LEFT JOIN f ON f.grp = g.grp AND f.cellid = g.cellid",
+    ):
+        assert part in doc and part in oracle, part
+
+
+def test_the_union_recipes_call_the_cell_polygon_function_the_oracle_rows_call():
+    from databricks.labs.gbx.bench.oracle_tables import cell_aggregate as ca
+
+    assert "st_union_agg(st_geomfromewkb(main.geobrix.gbx_quadbin_aswkb(cell)))" in _flat(ex.UC_QUADBIN_UNION_SQL)
+    assert "st_union_agg(st_geomfromewkb({q}gbx_quadbin_aswkb(c)))" in ca._C2.replace("{{q}}", "{q}")
+    chips = _flat(ex.UC_BNG_CHIP_UNION_SQL)
+    oracle = _flat(ca._C3.replace("{{q}}", "{q}"))
+    for part in (
+        "CASE WHEN bool_or(core) THEN st_asbinary(st_geomfromewkb(main.geobrix.gbx_bng_aswkb(cellid)))",
+        "ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS union_wkb",
+    ):
+        assert part in chips
+    assert part.replace("AS union_wkb", "AS out") in oracle
+
+
+def test_the_binpoints_recipe_is_the_oracle_statement():
+    from databricks.labs.gbx.bench.oracle_tables import raster_aggregate as ra
+
+    oracle = _flat(ra.d1_sql("max", source="points", canvas="0.0, 0.0, 10.0, 10.0, 10, 10"))
+    assert _flat(ex.UC_BINPOINTS_SQL).replace("AS tile FROM c", "AS out FROM c") == oracle
+
+
+def test_the_by_key_calls_name_the_parameters_of_their_procedures():
+    from databricks.labs.gbx.uc import procedures
+
+    for name, sql, params in (
+        ("gbx_mosaic_by_key", ex.CALL_MOSAIC_BY_KEY_SQL, ("source_table", "target_table")),
+        ("gbx_combine_by_key", ex.CALL_COMBINE_BY_KEY_SQL, ("source_table", "target_table", "op")),
+    ):
+        text = procedures.RECIPES[name]("main", "geobrix")
+        assert f"main.geobrix.{name}(" in sql
+        for param in params:
+            assert f"IN {param} STRING" in text and f"{param} =>" in sql
+
+
+def test_the_ingest_headers_are_session_accessors_with_one_argument():
+    man = manifest.load()
+    calls = re.findall(r"\b(gbx_rst_\w+)\(tile\)", ex.HEADERS_AT_INGEST_SQL)
+    assert len(calls) == 4 and "main.geobrix.gbx_" not in ex.HEADERS_AT_INGEST_SQL
+    for name in calls:
+        assert man.functions[name].min_args == 1 and name in _uc_names()
+
+
+def test_the_read_files_route_reaches_a_uc_function_with_two_arguments():
+    sql = ex.UC_READ_FILES_SQL
+    assert "format => 'binaryFile'" in sql
+    ((name, args),) = re.findall(r"main\.geobrix\.(gbx_\w+)\(([^()]*)\)", sql)
+    fn = manifest.load().functions[name]
+    assert name == "gbx_rst_fromcontent" and name in _uc_names()
+    assert fn.min_args <= len(_split_args(args)) <= len(fn.params)
+    # the limit the page states is the decode cap
+    from databricks.labs.gbx.pyrx.core.budget import UC_DECODED_CAP, UC_WINDOWED_DECODED_CAP
+
+    assert UC_DECODED_CAP == 64 << 20 and UC_WINDOWED_DECODED_CAP == 256 << 20
+
+
+def test_the_routes_table_lists_each_session_function_with_a_stub_text():
+    text = PAGE.read_text()
+    region = text.split("BEGIN GENERATED uc-routes", 1)[1].split("END GENERATED uc-routes", 1)[0]
+    listed = set(re.findall(r"^\| `(gbx_\w+)` \|", region, re.M))
+    stubs = {n for n, f in manifest.load().functions.items() if f.stub}
+    assert listed == stubs and len(stubs) == 30
+    assert not stubs & _uc_names()

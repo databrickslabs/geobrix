@@ -167,6 +167,10 @@ def plan(only: Optional[str] = None) -> Dict[Path, str]:
         out[AVAILABILITY] = S.replace_region(
             text, *S.mdx_markers("datasources"), sources_table
         )
+        ucpage = REPO / "docs/docs/api/uc-functions.mdx"
+        out[ucpage] = S.replace_region(
+            read(ucpage), *S.mdx_markers("uc-routes"), S.render_uc_routes(man)
+        )
     if want("examples"):
         out[EXAMPLES] = EXAMPLES_HEADER + S.render_examples(man)
     if want("counts"):

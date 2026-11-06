@@ -7,6 +7,7 @@ of one GENERATED region; gen_surfaces.py places it between the region's markers,
 from __future__ import annotations
 
 import ast
+import re
 import textwrap
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -549,6 +550,50 @@ def render_availability(man) -> Tuple[str, str]:
                 f"| `{d.name}` | {r} | {w} | {d.impl} | [{d.page}](../{d.page}) |"
             )
     return "\n".join(rows) + "\n", "\n".join(ds) + "\n"
+
+
+_UC_ROUTE_CODE = re.compile(
+    r"\bgbx_\w+|\bst_union_agg\b|\bh3_kringdistances\b|\bst_(?:srid|setsrid|transform)(?:\([^)]*\))?|\bread_files\b|\bbinaryFile\b"
+)
+_UC_KIND = {"scalar": "scalar", "aggregate": "aggregate", "generator": "table function"}
+
+
+def _uc_route_cell(text: str) -> str:
+    """A stub's Fix text as a table cell: the first letter capital, each name and each `collect_list(...)` call in code."""
+    text = text[:1].upper() + text[1:]
+    out, i = [], 0
+    while i < len(text):
+        j = text.find("collect_list(", i)
+        if j < 0:
+            out.append(_UC_ROUTE_CODE.sub(lambda m: f"`{m.group(0)}`", text[i:]))
+            break
+        out.append(_UC_ROUTE_CODE.sub(lambda m: f"`{m.group(0)}`", text[i:j]))
+        depth, k = 0, j + len("collect_list")
+        while True:
+            depth += {"(": 1, ")": -1}.get(text[k], 0)
+            k += 1
+            if depth == 0:
+                break
+        out.append(f"`{text[j:k]}`")
+        i = k
+    return "".join(out)
+
+
+def render_uc_routes(man) -> str:
+    """The session functions that have no Unity Catalog function of their name, and what to call on UC instead.
+
+    A row holds an L4 spec with only `stub` (the Fix text), which is also the text `install(stubs=True)` raises for a
+    scalar. The table lists every such row, so a session-only function with no route is the one that is missing.
+    """
+    rows = [
+        "| Session function | Kind | On Unity Catalog |",
+        "|---|---|---|",
+    ]
+    for f in sorted(man.functions.values(), key=lambda f: f.sql_name):
+        if f.stub and f.status == "stable":
+            kind = _UC_KIND.get(f.kind, f.kind)
+            rows.append(f"| `{f.sql_name}` | {kind} | {_uc_route_cell(f.stub)} |")
+    return "\n".join(rows) + "\n"
 
 
 def all_sql_names(man) -> List[str]:

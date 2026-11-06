@@ -5,7 +5,8 @@ that has a Unity Catalog level (an ``L4`` block). The ``Surfaces`` component tur
 that links to the Unity Catalog page. These tests pin the set of marked functions to the manifest and the
 note to its link.
 
-Structural only (json + regex over the mdx and the component): no Spark, runs on host.
+A session-only row with a stub text has no UC function and no pointer. Structural only (the loaded manifest + regex
+over the mdx and the component): no Spark, runs on host.
 """
 
 import json
@@ -25,10 +26,10 @@ _SECTION = re.compile(
 
 
 def _manifest_uc_set():
-    raw = json.loads(_MANIFEST.read_text())
-    return {
-        f["sql_name"] for f in raw["functions"] if "L4" in f.get("levels", {})
-    }
+    """Functions with a UC form. The loaded manifest drops a row whose L4 is only a stub (no UC function)."""
+    from databricks.labs.gbx import manifest
+
+    return {n for n, f in manifest.load().functions.items() if "L4" in f.levels}
 
 
 def _marked_on_pages():
@@ -54,6 +55,16 @@ def test_marked_functions_equal_manifest_uc_set():
 def test_every_unity_catalog_function_has_a_page_section():
     _, seen = _marked_on_pages()
     assert _manifest_uc_set() <= seen
+
+
+def test_a_stub_row_is_not_a_unity_catalog_function():
+    from databricks.labs.gbx import manifest
+
+    stubs = {n for n, f in manifest.load().functions.items() if f.stub}
+    assert {"gbx_st_crs", "gbx_rst_fromfile"} <= stubs
+    assert not stubs & _manifest_uc_set()
+    marked, _ = _marked_on_pages()
+    assert not stubs & marked
 
 
 def test_private_unity_catalog_forms_are_not_marked():

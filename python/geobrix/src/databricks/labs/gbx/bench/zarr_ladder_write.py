@@ -234,44 +234,47 @@ def source_table(
 def blocks_source(spark, store: str):
     """The blocks recipe's input: the store's ``t2m``, ``u10``, ``v10`` and coordinate blocks as read, plus a
     ``wind_speed`` block for each ``u10`` / ``v10`` pair, computed block by block (nothing is a table of cells).
+
+    The compute is a pandas UDF in a column, as in the writer page's recipe. The writer's first pass selects only
+    the block positions, so Spark drops the column there and the first pass does not decode a block's bytes in Python
+    (a ``mapInArrow`` stage cannot be dropped, and the pass would run the compute on every block).
     """
     import json as _json
 
-    import pyarrow as pa
+    import pandas as pd
     from pyspark.sql import functions as F
 
     from databricks.labs.gbx.zarr import gbx_zarr_read
-    from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW, BLOCKS_SCHEMA
 
     attrs = _json.dumps({"units": "m s-1", "long_name": "10 metre wind speed"})
 
-    def wind_speed_blocks(batches):
+    def wind_speed_block(u, v, dtype, fill):
+        # (pandas Series in and out; the type hints are left out because this module postpones annotations,
+        # which pyspark cannot read)
         # one wind_speed block per u10 / v10 pair; a cell missing in either stays missing
-        for b in batches:
-            rows = b.to_pylist()
-            for r in rows:
-                kind = r["dtype"]
-                u10 = np.frombuffer(r.pop("ud"), kind).astype("float64")
-                v10 = np.frombuffer(r.pop("vd"), kind).astype("float64")
-                fill = np.nan if r["fill_value"] is None else float(r["fill_value"])
-                missing = np.isnan(u10) | np.isnan(v10)
-                if not np.isnan(fill):
-                    missing |= (u10 == fill) | (v10 == fill)
-                speed = np.sqrt(u10**2 + v10**2)
-                speed[missing] = fill
-                r.update(
-                    variable="wind_speed",
-                    data=speed.astype(kind).tobytes(),
-                    attrs=attrs,
-                )
-            yield pa.RecordBatch.from_pylist(rows, schema=_BLOCKS_ARROW)
+        out = []
+        for ub, vb, kind, fv in zip(u, v, dtype, fill):
+            u10 = np.frombuffer(ub, kind).astype("float64")
+            v10 = np.frombuffer(vb, kind).astype("float64")
+            nofill = fv is None or pd.isna(fv)
+            fillv = np.nan if nofill else float(fv)
+            missing = np.isnan(u10) | np.isnan(v10)
+            if not np.isnan(fillv):
+                missing |= (u10 == fillv) | (v10 == fillv)
+            speed = np.sqrt(u10**2 + v10**2)
+            speed[missing] = fillv
+            out.append(speed.astype(kind).tobytes())
+        return pd.Series(out)
+
+    wind_speed_block = F.pandas_udf(wind_speed_block, "binary", F.PandasUDFType.SCALAR)
 
     blocks = gbx_zarr_read(
         spark, store, variables=["t2m", "u10", "v10", *_DIMS], output="blocks"
     )
     u = blocks.where("variable = 'u10'").alias("u")
     v = blocks.where("variable = 'v10'").alias("v")
-    pairs = u.join(v, F.col("u.start") == F.col("v.start")).select(
+    wind = u.join(v, F.col("u.start") == F.col("v.start")).select(
+        F.lit("wind_speed").alias("variable"),
         "u.dims",
         "u.start",
         "u.stop",
@@ -279,11 +282,10 @@ def blocks_source(spark, store: str):
         "u.coord_stop",
         "u.dtype",
         "u.shape",
-        F.col("u.data").alias("ud"),
-        F.col("v.data").alias("vd"),
+        wind_speed_block("u.data", "v.data", "u.dtype", "u.fill_value").alias("data"),
         "u.fill_value",
+        F.lit(attrs).alias("attrs"),
     )
-    wind = pairs.mapInArrow(wind_speed_blocks, BLOCKS_SCHEMA)
     return blocks.unionByName(wind)
 
 

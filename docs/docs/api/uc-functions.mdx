@@ -80,7 +80,7 @@ A warehouse reads rasters and vector files through the session readers. Ingest t
 | Custom grid cells | `gbx_custom_grid`, `gbx_custom_pointascell`, `gbx_custom_polyfill`, `gbx_custom_kring`, `gbx_custom_kloop`, `gbx_custom_geomkring`, `gbx_custom_geomkloop`, `gbx_custom_cellaswkb`, `gbx_custom_cellaswkt`, `gbx_custom_centroid`, `gbx_custom_distance`, `gbx_custom_cellfill_array` |
 | Vector | `gbx_st_explainvalidity`, `gbx_st_makevalid`, `gbx_st_wrapx`, `gbx_st_legacyaswkb`, `gbx_st_node`, `gbx_st_snap`, `gbx_st_split`, `gbx_st_simplifypreservetopology`, `gbx_st_reduceprecision`, `gbx_st_removerepeatedpoints`, `gbx_st_shiftlongitude`, `gbx_st_asmvt_array`, `gbx_st_coverageisvalid_array`, `gbx_st_coverageinvalidedges_array` |
 | Raster | See [Raster functions](#raster-functions) |
-| Table functions | `gbx_bng_kringexplode`, `gbx_bng_kloopexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_geomkloopexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_h3_geomkloopexplode`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode`, `gbx_st_asmvt_pyramid` |
+| Table functions | `gbx_bng_kringexplode`, `gbx_bng_kloopexplode`, `gbx_bng_geomkringexplode`, `gbx_bng_geomkloopexplode`, `gbx_bng_tessellateexplode`, `gbx_h3_geomkringexplode`, `gbx_h3_geomkloopexplode`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode`, `gbx_custom_geomkringexplode`, `gbx_custom_geomkloopexplode`, `gbx_st_asmvt_pyramid`, `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, `gbx_st_interpolateelevationgeom` |
 
 A function with default arguments installs as a SQL wrapper over a private function named `gbx__<name>`. Call the public name.
 
@@ -204,7 +204,8 @@ A tile function takes a tile column. An array function takes an `ARRAY` of tiles
 | Raster to grid | `gbx_rst_h3_rastertogrid_partial`, `gbx_rst_h3_rastertogridavg`, `gbx_rst_h3_rastertogridcount`, `gbx_rst_h3_rastertogridmax`, `gbx_rst_h3_rastertogridmedian`, `gbx_rst_h3_rastertogridmin`, `gbx_rst_h3_rastertogridstddev`, `gbx_rst_h3_rastertogridsum`, `gbx_rst_h3_rastertogridvariance`, `gbx_rst_quadbin_rastertogrid_partial`, `gbx_rst_quadbin_rastertogridavg`, `gbx_rst_quadbin_rastertogridcount`, `gbx_rst_quadbin_rastertogridmax`, `gbx_rst_quadbin_rastertogridmedian`, `gbx_rst_quadbin_rastertogridmin`, `gbx_rst_quadbin_rastertogridstddev`, `gbx_rst_quadbin_rastertogridsum`, `gbx_rst_quadbin_rastertogridvariance`, `gbx_rst_bng_rastertogrid_partial`, `gbx_rst_bng_rastertogridavg`, `gbx_rst_bng_rastertogridcount`, `gbx_rst_bng_rastertogridmax`, `gbx_rst_bng_rastertogridmedian`, `gbx_rst_bng_rastertogridmin`, `gbx_rst_bng_rastertogridstddev`, `gbx_rst_bng_rastertogridsum`, `gbx_rst_bng_rastertogridvariance`, `gbx_rst_custom_rastertogrid_partial`, `gbx_rst_custom_rastertogridavg`, `gbx_rst_custom_rastertogridcount`, `gbx_rst_custom_rastertogridmax`, `gbx_rst_custom_rastertogridmedian`, `gbx_rst_custom_rastertogridmin`, `gbx_rst_custom_rastertogridstddev`, `gbx_rst_custom_rastertogridsum`, `gbx_rst_custom_rastertogridvariance` |
 | Raster to vector | `gbx_rst_contour`, `gbx_rst_isoband` |
 | From file bytes | `gbx_rst_fromcontent` |
-| Web tiles | `gbx_rst_tilexyz` |
+| Tessellation (table functions) | `gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate`, `gbx_rst_custom_tessellate` |
+| Web tiles | `gbx_rst_tilexyz`, `gbx_rst_xyzpyramid` (table function) |
 
 ### Points as geometries
 
@@ -315,6 +316,32 @@ A tile between 64 and 256 MiB decoded is cut by these functions. A pixel functio
 
 A tile that cannot be read gives no rows, and so does a NULL size. The session gives one error tile for each. An error tile goes out as itself. A virtual tile is refused.
 A window below one pixel, or an overlap outside 0 to below 100, raises with a `Fix:`, also for a tile with nothing to read.
+
+### Tessellating a tile and rendering its web tiles
+
+`gbx_rst_h3_tessellate`, `gbx_rst_quadbin_tessellate`, `gbx_rst_bng_tessellate` and `gbx_rst_custom_tessellate` cut one tile into the tile of each grid cell it covers.
+`gbx_rst_xyzpyramid` renders the web tiles a tile touches across a range of zoom levels.
+All five are table functions with the columns of the session functions. They give the same cells and the same tiles in the same order. Call them in `FROM` with `LATERAL`.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_TESSELLATE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_RASTER_PYRAMID_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+These functions keep the 64 MiB limit of a pixel function, not the 256 MiB of the window readers. A tessellation holds one label for every pixel of the tile, and the BNG function warps the whole tile first. The pyramid renders through the same code as `gbx_rst_tilexyz`.
+
+- **The tiles are counted as they are made.** A tessellation or a pyramid that passes 64 MiB stops there and is refused with a `Fix:`. Nothing is truncated.
+- **A bad argument raises with a `Fix:`.** That covers an unknown assignment or coverage word, a resolution the grid does not define, and a bad zoom range, format or size.
+- **A tile that cannot be read gives no rows.** So does a NULL tile or resolution. The session gives one error tile for an unreadable tile. An error tile goes out as itself, and a virtual tile is refused.
+
+### Triangulating points
+
+`gbx_st_triangulate`, `gbx_st_interpolateelevationbbox` and `gbx_st_interpolateelevationgeom` are table functions over a surface of points and break lines. The points and break lines are `ARRAY<GEOMETRY(ANY)>`, so the Z of each point is kept. The session functions take WKB or WKT arrays.
+
+<CodeFromTest code={ucExamples} language="sql" functionName="UC_VECTOR_TRIANGULATE_SQL" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
+
+Each triangle comes out as 2D WKB and each elevation point as WKB with its Z. Wrap a column in `st_geomfromwkb` to get a `GEOMETRY`. The bytes carry no SRID, as in the session. The `'conforming'` mode runs on the JVM only, so the table functions refuse it with a `Fix:`.
+
+The result is sized before the surface is built. A triangulation can have at most two triangles for each point, and an elevation grid has one point for each cell. The estimate is never under the real size, so it can refuse a grid with cells outside the surface. Past 64 MiB the `Fix:` says to use fewer points, a coarser grid, or the session function.
 
 ## Python and Scala handlers
 

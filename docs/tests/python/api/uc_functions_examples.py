@@ -84,6 +84,21 @@ UC_RASTER_RETILE_SQL = """SELECT r.scene, t.window, t.raster
 FROM rasters AS r,
      LATERAL main.geobrix.gbx_rst_retile(r.tile, 512, 512) AS t"""
 
+# A tile is cut into the tiles of the grid cells it covers; the cell id is in cellid.
+UC_RASTER_TESSELLATE_SQL = """SELECT r.scene, t.cellid, t.raster
+FROM rasters AS r,
+     LATERAL main.geobrix.gbx_rst_h3_tessellate(r.tile, 5) AS t"""
+
+# A tile is rendered into the web tiles it touches across a range of zoom levels.
+UC_RASTER_PYRAMID_SQL = """SELECT r.scene, t.z, t.x, t.y, t.bytes
+FROM rasters AS r,
+     LATERAL main.geobrix.gbx_rst_xyzpyramid(r.tile, 4, 6) AS t"""
+
+# The points of a surface are collected as GEOMETRY values; each triangle comes out as 2D WKB.
+UC_VECTOR_TRIANGULATE_SQL = """SELECT t.triangle
+FROM (SELECT collect_list(CAST(geom AS GEOMETRY(ANY))) AS pts FROM spot_heights) AS s,
+     LATERAL main.geobrix.gbx_st_triangulate(s.pts, CAST(NULL AS ARRAY<GEOMETRY(ANY)>), 0.0, 0.0, 'NONENCROACHING') AS t"""
+
 # The points of a terrain are collected as GEOMETRY values; the Z of each point is kept.
 UC_RASTER_DTM_SQL = """SELECT main.geobrix.gbx_rst_dtmfromgeoms(
            collect_list(CAST(geom AS GEOMETRY(ANY))),

@@ -228,13 +228,24 @@ def test_the_raster_to_grid_example_is_the_oracle_recipe_called_in_a_subquery():
     assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
 
 
-@pytest.mark.parametrize("sql", [ex.UC_RASTER_RETILE_SQL, ex.UC_RASTER_BANDS_SQL])
+@pytest.mark.parametrize(
+    "sql", [ex.UC_RASTER_RETILE_SQL, ex.UC_RASTER_BANDS_SQL, ex.UC_RASTER_TESSELLATE_SQL, ex.UC_RASTER_PYRAMID_SQL]
+)
 def test_the_tile_splitting_examples_call_a_table_function_with_a_valid_argument_count(sql):
     man = manifest.load()
     ((name, args),) = re.findall(r"main\.geobrix\.(gbx_\w+)\(([^()]*)\)", sql)
     assert name in _uc_names() and man.functions[name].kind == "generator"
     assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
     assert "LATERAL" in sql
+
+
+def test_the_triangulate_example_passes_geometry_arrays_to_a_table_function():
+    man = manifest.load()
+    name = "gbx_st_triangulate"
+    args = ex.UC_VECTOR_TRIANGULATE_SQL.split(f"main.geobrix.{name}(", 1)[1].rsplit(") AS t", 1)[0]
+    assert man.functions[name].min_args <= len(_split_args(args)) <= len(man.functions[name].params)
+    assert man.functions[name].kind == "generator" and "LATERAL" in ex.UC_VECTOR_TRIANGULATE_SQL
+    assert "CAST(geom AS GEOMETRY(ANY))" in ex.UC_VECTOR_TRIANGULATE_SQL and "ARRAY<GEOMETRY(ANY)>" in args
 
 
 def test_the_terrain_example_has_a_valid_argument_count_and_geometry_arrays():

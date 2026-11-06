@@ -2709,7 +2709,7 @@ if _smoke["import_check"]["ok"] and LEVELS_MVP:
         _smoke["forms"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, status=_r.status, rows=_r.rows,
                                     tasks=_r.input_partitions, median_s=round(_r.iter_median_s, 3)))
         if _r.status == "error":
-            _smoke["errors"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, failure=_r.failure_mode[:700]))
+            _smoke["errors"].append(dict(fn=_r.fn, level=_r.level, form=_r.form, failure=_r.failure_mode[:2000]))
     print(_lv.summarize(_lv_rows), flush=True)
 HEARTBEAT.stop("done" if _smoke["import_check"]["ok"] and not _smoke["errors"] else "failed")
 """

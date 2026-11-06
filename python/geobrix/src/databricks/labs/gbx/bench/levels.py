@@ -218,6 +218,28 @@ _EXECUTOR_CAUSE = re.compile(
 )
 
 
+_TRACEBACK = "Traceback (most recent call last):"
+_FRAME_LINES = 12  # the last six frames (a "File" line and its code line each)
+_FRAMES_BUDGET = 1100
+
+
+def _worker_frames(lines: List[str]) -> str:
+    """The last frames of a Python worker's traceback (` || tb: ...`), where the failing file:line is; "" when the
+    error carries no traceback. The cause line alone ("IndexError: list index out of range") names no code.
+    """
+    start = max((i for i, ln in enumerate(lines) if _TRACEBACK in ln), default=None)
+    if start is None:
+        return ""
+    frames = []
+    for ln in lines[start + 1 :]:
+        if _EXC_LINE.match(ln):
+            break
+        frames.append(ln[:200])
+    if not frames:
+        return ""
+    return " || tb: " + " | ".join(frames[-_FRAME_LINES:])[-_FRAMES_BUDGET:]
+
+
 def failure_text(exc: BaseException) -> str:
     """A failed form's `failure_mode`: the exception class, its first line, and the cause. A Python worker's error
     names the cause in its LAST exception line (after the worker traceback), which a plain prefix cuts off.
@@ -234,7 +256,7 @@ def failure_text(exc: BaseException) -> str:
             cause = f"{cause[:250]} {root[:250]}"
     out = f"{type(exc).__name__}: {head}"
     if cause and cause != head:
-        return f"{out} ... {cause[:500]}"
+        return f"{out} ... {cause[:500]}{_worker_frames(lines)}"
     if len(lines) > 1:
         # no exception-class line to point at (a pip failure in a UC function environment is plain output): keep
         # the first lines, where the actionable one is, within the same budget

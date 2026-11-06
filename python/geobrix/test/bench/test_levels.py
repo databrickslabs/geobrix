@@ -1522,8 +1522,30 @@ def test_a_failed_form_keeps_the_python_workers_cause():
     assert got.startswith(
         "RuntimeError: An exception was thrown from the Python worker"
     )
-    assert got.endswith("ImportError: libgdal.so.39: cannot open shared object file")
+    assert "ImportError: libgdal.so.39: cannot open shared object file" in got
     assert failure_text(ValueError("bad window")) == "ValueError: bad window"
+
+
+def test_a_failed_form_keeps_the_last_frames_of_the_worker_traceback():
+    """`IndexError: list index out of range` names no code: the last frames of the worker traceback carry the
+    file:line, bounded so a deep traceback cannot flood the row."""
+    from databricks.labs.gbx.bench.levels import failure_text
+
+    frames = "".join(
+        f'  File "/databricks/spark/python/pyspark/worker.py", line {i}, in f{i}\n    call{i}()\n'
+        for i in range(40)
+    )
+    text = (
+        "[PYTHON_EXCEPTION] An exception was thrown from the Python worker: Traceback (most recent call last):\n"
+        + frames
+        + '  File "/local_disk0/gbx/pyrx/agg.py", line 211, in eval\n    first = parts[0]\n'
+        + "IndexError: list index out of range\n SQLSTATE: 38000"
+    )
+    got = failure_text(RuntimeError(text))
+    assert "IndexError: list index out of range" in got
+    assert 'agg.py", line 211, in eval' in got and "first = parts[0]" in got
+    assert "line 0, in f0" not in got  # only the last frames
+    assert len(got) < 1700
 
 
 def test_a_failed_form_keeps_the_executors_exception_class_and_reason():
@@ -1584,7 +1606,7 @@ def test_the_smoke_keeps_the_head_of_a_failure_not_its_tail():
                  heavyweight=False, levels_mvp="S", levels_only=True, wheel="/w.whl", smoke=True)
         )["cells"]
     )  # fmt: skip
-    assert "failure=_r.failure_mode[:700]" in src and "failure_mode[-400:]" not in src
+    assert "failure=_r.failure_mode[:2000]" in src and "failure_mode[-400:]" not in src
 
 
 def test_the_replicated_dem_input_has_n_rows_and_its_cache_is_released_with_its_rung(

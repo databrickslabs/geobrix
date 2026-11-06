@@ -45,9 +45,7 @@ def builder_b(spark, n, corpus, schema):
 
 
 def builder_rows(spark, n, corpus, schema):
-    held = lf._corpus_rows(
-        corpus
-    )  # reads the corpus rows: the corpus's tiles are part of the stamp
+    lf._corpus_rows(corpus)  # reads the corpus rows: its tiles are part of the stamp
     return lf._table(
         spark, schema, f"mvp_in_r_v{lf.RECIPE_VERSION}_{n}", lambda: spark.df()
     )

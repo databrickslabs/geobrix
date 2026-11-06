@@ -1270,7 +1270,10 @@ def _file_ref_member(tile, fref):
         and not ot._zarr_tiles.is_zarr_tile(vt)
     ):
         try:
-            return agg_core.Ref(dataclasses.replace(vt, path=str(fref.as_local_file())))
+            # the FileRef is kept with the member: a local copy it made lives as long as the object does
+            return agg_core.Ref(
+                dataclasses.replace(vt, path=str(fref.as_local_file())), hold=fref
+            )
         except Exception:  # noqa: BLE001 - no local file: the FileRef reads it
             pass
     with ot._open(tile, file_ref=fref) as ds:
@@ -5123,12 +5126,20 @@ def _arrow_grouped_agg_available() -> bool:
     """
     if os.environ.get("GBX_ARROW_AGG", "").strip() != "1":
         return False
-    from pyspark.sql.functions import (  # noqa: F401  (ImportError: the Fix is to unset GBX_ARROW_AGG)
-        arrow_udf,
-    )
-    from pyspark.sql.pandas.functions import ArrowUDFType
+    try:
+        from pyspark.sql.functions import arrow_udf  # noqa: F401
+        from pyspark.sql.pandas.functions import ArrowUDFType
 
-    return hasattr(ArrowUDFType, "GROUPED_AGG")
+        return hasattr(ArrowUDFType, "GROUPED_AGG")
+    except ImportError:
+        # Spark 4.0 (DBR 17.3 and 18) has none: the opt-in must not break the import of every function
+        warnings.warn(
+            "GBX_ARROW_AGG=1 is set, but this pyspark has no arrow_udf (Spark 4.1 or later): the grouped aggregates "
+            "stay pandas UDFs. Fix: unset GBX_ARROW_AGG on this runtime.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return False
 
 
 _ARROW_GROUPED_AGG = _arrow_grouped_agg_available()
@@ -5193,9 +5204,10 @@ def _only_errors(errors, others):
 
 def _refuse_serverless_bytes(spool):
     """On a Serverless task the group's bytes are all in this process before the merge begins: judge them first (the
-    references cost nothing here, so only the bytes members count)."""
+    references with nothing to apply cost nothing here; a reference with instructions was written out as bytes and
+    is held like any bytes member, so it counts)."""
     if _serverless_task():
-        held = [e.hdr.decoded for e in spool.entries if e.kind == "b"]
+        held = [e.hdr.decoded for e in spool.entries if e.kind != "r"]
         agg_core.refuse_group_over_task_cap(len(held), sum(held))
 
 

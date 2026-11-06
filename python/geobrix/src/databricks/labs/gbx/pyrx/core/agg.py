@@ -551,13 +551,22 @@ class _Entry:
     :func:`_ref_order`); a bytes member has none, it is placed by its bytes.
     """
 
-    __slots__ = ("kind", "hdr", "data", "path", "window", "vt", "order")
+    __slots__ = ("kind", "hdr", "data", "path", "window", "vt", "order", "hold")
 
     def __init__(
-        self, kind, hdr, *, data=None, path=None, window=None, vt=None, order=None
+        self,
+        kind,
+        hdr,
+        *,
+        data=None,
+        path=None,
+        window=None,
+        vt=None,
+        order=None,
+        hold=None,
     ):
         self.kind, self.hdr, self.data, self.path = kind, hdr, data, path
-        self.window, self.vt, self.order = window, vt, order
+        self.window, self.vt, self.order, self.hold = window, vt, order, hold
 
     def read_bytes(self) -> bytes:
         """The member as GTiff bytes in memory (the in-RAM merge's input; a reference is read now, one at a time)."""
@@ -891,10 +900,11 @@ class Ref:
     memory; one with instructions is written out once, one at a time (see :class:`_Entry`).
     """
 
-    __slots__ = ("tile",)
+    __slots__ = ("tile", "hold")
 
-    def __init__(self, tile):
+    def __init__(self, tile, hold=None):
         self.tile = tile
+        self.hold = hold  # an object the file depends on (a FileRef): kept alive until the merge is done with the member
 
 
 def _ref_order(vt) -> tuple:
@@ -916,7 +926,7 @@ def _plain_ref(vt):
     """``(local path, window or None, header)`` of a virtual tile the VRT can name as it is, else None.
 
     Plain: a window of a file with no bytes, no clip, no target CRS, no pending instruction and no Zarr store (the
-    tile ``open_tile.with_plain_window`` takes), whose file the VRT can read: it opens directly (a Volume file is
+    tile ``open_tile.with_plain_window`` takes), whose file the VRT can read: it is a local or FUSE absolute path (not a cloud URI or a /vsi name), it opens directly (a Volume file is
     probed with the transient-miss retry; a file that needs staging to local disk is not plain), is not a VRT itself,
     is north-up and not GCP-georeferenced, has bands, and the window lies inside it. The header is the window's.
     """
@@ -937,6 +947,10 @@ def _plain_ref(vt):
     ):
         return None
     local = to_local_path(vt.path)
+    # a VRT names a file GDAL opens by that name: a local or FUSE path. A cloud URI (s3://, abfss://, gs://) or a /vsi
+    # name is read through the front door, which hands it to rasterio, the one that turns a URI into a GDAL file system
+    if "://" in local or local.startswith("/vsi") or not os.path.isabs(local):
+        return None
     if _is_fuse_path(local):
         try:
             _probe_direct_open(local)
@@ -1047,7 +1061,15 @@ class _MemberSpool:
         if plain is not None:
             local, window, hdr = plain
             self.entries.append(
-                _Entry("r", hdr, path=local, window=window, vt=vt, order=_ref_order(vt))
+                _Entry(
+                    "r",
+                    hdr,
+                    path=local,
+                    window=window,
+                    vt=vt,
+                    order=_ref_order(vt),
+                    hold=ref.hold,
+                )
             )
             return
         # the one front door: the window, the instructions and the clip are applied as for any tile
@@ -1118,7 +1140,9 @@ class _MemberSpool:
         n = len(order)
         if n == 1 and (order[0].kind != "r" or order[0].hdr.decoded <= _merge_budget()):
             single = order[0].read_bytes()
-            return single if to_dir is None else self._publish(single, to_dir, prefix)
+            if to_dir is not None:
+                return self._publish(single, to_dir, prefix)
+            return _bounded(single, max_out, _vrt_fix(_MOSAIC_ROUTE, False))
         hdrs = [e.hdr for e in order]
         ref_crs = _pick_ref_crs(hdrs)
         mixed = _mixed_grid(hdrs, ref_crs)
@@ -1162,6 +1186,7 @@ class _MemberSpool:
             self._overflow = None
         for e in self.entries:
             e.data = None
+            e.hold = None
 
     def __del__(
         self,
@@ -1392,7 +1417,7 @@ def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> byte
     if not rasters:
         return None
     if len(rasters) == 1:
-        return bytes(rasters[0])
+        return _bounded(bytes(rasters[0]), max_out, _vrt_fix(_MOSAIC_ROUTE, False))
     return merge_members(rasters, max_out=max_out, stream=stream)
 
 

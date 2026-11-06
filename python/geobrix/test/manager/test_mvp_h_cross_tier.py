@@ -30,7 +30,7 @@ def test_a_virtual_member_is_not_decoded_into_a_row(spark, tmp_path, monkeypatch
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")  # the cap is read on the driver
     tile = oracles.resolve_arg(oracles.Build("tile_virtual"), str(tmp_path))
     df = spark.createDataFrame([("a", tile)], f"key string, tile {TILE_SQL}")
-    with pytest.raises(Exception, match="cap for bytes in a row"):
+    with pytest.raises(Exception, match="cap for the bytes of one row"):
         helpers.merge_by_key(df, ["key"], method="fold").collect()
 
 

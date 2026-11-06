@@ -2192,3 +2192,250 @@ def test_two_array_merges_of_one_size_write_two_files(tmp_path):
     assert first["path"] != second["path"]
     assert len(list(tmp_path.glob("pre_*.tif"))) == 2
     assert set(np.unique(_grid_and_pixels(_tile_from(first["path"]))[2])) == {1, 2}
+
+
+# --- review fixes -----------------------------------------------------------------------------------------------------
+
+
+def test_the_arrow_opt_in_on_a_pyspark_without_arrow_udf_falls_back_to_pandas_with_a_warning(
+    monkeypatch,
+):
+    """`GBX_ARROW_AGG=1` on Spark 4.0 (no `arrow_udf`) must not break the import of every function: the aggregates stay
+    pandas UDFs and a warning names the Fix."""
+    import pyspark.sql.functions as spark_functions
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    monkeypatch.delattr(spark_functions, "arrow_udf", raising=False)
+    monkeypatch.setenv("GBX_ARROW_AGG", "1")
+    with pytest.warns(RuntimeWarning, match="unset GBX_ARROW_AGG"):
+        assert fx._arrow_grouped_agg_available() is False
+
+
+def test_a_serverless_task_counts_a_reference_with_instructions_as_the_bytes_it_is_held_as(
+    tmp_path, monkeypatch
+):
+    """A reference with a clip is written out once as bytes and held (kind "m"): the Serverless gate before the merge
+    counts it with the bytes members, a plain reference it does not."""
+    import pandas as pd
+    from shapely.geometry import box
+
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    path = _write_tif(
+        tmp_path / "big.tif", np.full((64, 64), 5, dtype="uint8"), 0.0, 64.0
+    )  # 4 KiB decoded
+    clip = shapely.wkb.dumps(box(0.0, 0.0, 64.0, 64.0))
+    clipped = _ref(path, clip_polygon=clip, clip_crs="EPSG:32633").tile.to_row()
+    plain = _ref(path).tile.to_row()
+    monkeypatch.setattr(fx, "_serverless_task", lambda: True)
+    with _gdal_policy.carried(None, 1500):
+        with pytest.raises(agg.ReadCapRefused, match="merge_by_key"):
+            fx._merge_agg_bytes(pd.Series([clipped]), False)
+        assert fx._merge_agg_bytes(
+            pd.Series([plain]), False
+        )  # a plain reference costs the task nothing
+
+
+def test_a_reference_that_is_not_a_local_file_the_vrt_can_name_is_not_plain(tmp_path):
+    """`_plain_ref` takes a window of a local or FUSE file only: a cloud URI or a /vsi name, a relative path, a VRT, a
+    window outside the file, a clip, a target CRS and a rotated file go through the front door instead.
+    """
+    import rasterio
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    good = _write_tif(tmp_path / "good.tif", np.ones((8, 8), dtype="uint8"), 0.0, 8.0)
+
+    def plain(**kw):
+        return agg._plain_ref(VirtualTile(cellid=0, **{"path": good, **kw}))
+
+    assert plain() is not None and plain(window=(1, 1, 4, 4))[1] == (1, 1, 4, 4)
+    assert plain(window=(0, 0, 8, 8))[1] is None  # the whole file
+    for bad in (
+        "s3://bucket/a.tif",
+        "abfss://c@a.dfs.core.windows.net/a.tif",
+        "/vsimem/a.tif",
+        "/vsis3/b/a.tif",
+        "rel/a.tif",
+    ):
+        assert plain(path=bad) is None, bad
+    assert plain(window=(4, 4, 8, 8)) is None  # outside the file
+    assert (
+        plain(crs="EPSG:4326") is None
+        and plain(clip_polygon=b"x", clip_crs="EPSG:32633") is None
+    )
+    vrt = tmp_path / "m.vrt"
+    vrt.write_text(
+        '<VRTDataset rasterXSize="8" rasterYSize="8"><VRTRasterBand dataType="Byte" band="1"><SimpleSource>'
+        f'<SourceFilename relativeToVRT="0">{good}</SourceFilename><SourceBand>1</SourceBand></SimpleSource>'
+        "</VRTRasterBand></VRTDataset>"
+    )
+    assert plain(path=str(vrt)) is None
+    rotated = tmp_path / "rot.tif"
+    with rasterio.open(
+        rotated,
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:32633",
+        transform=rasterio.Affine(1.0, 0.2, 0.0, 0.2, -1.0, 4.0),
+    ) as dst:
+        dst.write(np.ones((1, 4, 4), dtype="uint8"))
+    assert plain(path=str(rotated)) is None
+
+
+def test_a_group_of_one_member_is_bounded_by_the_result_cap(tmp_path):
+    """The result of a one-member group comes back whole in a row like any other: over `max_out` it raises with the Fix
+    (bytes, a reference, and `merge_tiles`)."""
+    one = _ras(np.arange(64 * 64).reshape(64, 64) % 251)
+    ref = _ref(
+        _write_tif(
+            tmp_path / "one.tif",
+            np.arange(64 * 64, dtype="uint16").reshape(64, 64) % 251,
+            0.0,
+            64.0,
+        )
+    )
+    for call in (
+        lambda: agg.merge_members([one], max_out=100),
+        lambda: agg.merge_members([ref], max_out=100),
+        lambda: agg.merge_tiles([one], max_out=100),
+    ):
+        with pytest.raises(agg.OutputOverBudget, match="mint_vrt"):
+            call()
+    assert agg.merge_members([one], max_out=1 << 20) == one
+
+
+def test_a_failed_key_stream_closes_the_scratch_of_its_group():
+    """An error in the middle of a key's members closes that group's accumulator (its scratch directory) instead of
+    leaving it to the garbage collector."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.rasterx import helpers
+
+    class Acc:
+        closed = 0
+        seen = 0
+
+        def add(self, item):
+            Acc.seen += 1
+            if Acc.seen == 2:
+                raise RuntimeError("boom")
+
+        def finish(self):
+            return b"x"
+
+        def close(self):
+            Acc.closed += 1
+
+    batch = pa.RecordBatch.from_arrays(
+        [pa.array(["a", "a", "a"]), pa.array([b"1", b"2", b"3"])], names=["k", "v"]
+    )
+    stream = helpers._group_stream(
+        iter([batch]),
+        ["k"],
+        "v",
+        lambda v: v,
+        None,
+        1 << 20,
+        1 << 20,
+        "fix",
+        accumulator=Acc,
+    )
+    with pytest.raises(RuntimeError, match="boom"):
+        list(stream)
+    assert Acc.closed == 1
+
+
+def test_a_file_ref_is_kept_alive_with_the_member_until_the_merge_is_done(tmp_path):
+    """The Ref made from a FileRef holds it, and the spool holds the Ref's hold until it closes: a local copy the
+    FileRef made stays as long as the merge may read it."""
+    import gc
+    import weakref
+    from pathlib import Path
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    row = _virtual_rows(tmp_path, 1)[0]
+
+    class Fake:
+        def as_local_file(self):
+            return Path(row["path"])
+
+    fake = Fake()
+    watch = weakref.ref(fake)
+    member = fx._file_ref_member(row, fake)
+    spool = agg._MemberSpool()
+    spool.add(member)
+    del fake, member
+    gc.collect()
+    assert watch() is not None  # the spool's member holds it
+    spool.close()
+    gc.collect()
+    assert watch() is None
+
+
+def test_the_file_ref_fallbacks_read_through_the_front_door_as_bytes(tmp_path):
+    """A FileRef with no local file, and a tile with an instruction, are read through the front door with the FileRef: the
+    member is bytes of the same pixels as the reference to the file."""
+    from pathlib import Path
+
+    from shapely.geometry import box
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    row = _virtual_rows(tmp_path, 1)[0]
+
+    class NoLocal:
+        def as_local_file(self):
+            raise OSError("no local copy")
+
+    class Local:
+        def as_local_file(self):
+            return Path(row["path"])
+
+    member = fx._file_ref_member(row, NoLocal())
+    assert isinstance(member, bytes) and set(
+        np.unique(_grid_and_pixels(member)[2])
+    ) == {1}
+    clipped = dict(
+        row,
+        clip_polygon=shapely.wkb.dumps(box(0.0, 4.0, 4.0, 8.0)),
+        clip_crs="EPSG:32633",
+    )
+    member = fx._file_ref_member(clipped, Local())
+    assert isinstance(member, bytes)
+    assert set(np.unique(_grid_and_pixels(member)[2][:4, :4])) == {1}
+    assert isinstance(
+        fx._file_ref_member(row, None), agg.Ref
+    )  # no FileRef: the tile's own path
+
+
+def test_a_window_of_a_file_with_an_own_mask_takes_the_masks_window_in_the_vrt(
+    tmp_path,
+):
+    """`_build_mosaic_vrt(windows=)`: the mask band's source rectangle starts at the window too, so the mosaic's mask is
+    the window of the file's mask, not its top-left corner."""
+    import rasterio
+
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    values = np.arange(64, dtype="uint8").reshape(8, 8) + 1
+    mask = np.zeros((8, 8), dtype="uint8")
+    mask[3:6, 2:5] = 255
+    path = _write_tif(tmp_path / "m.tif", values, 0.0, 8.0, mask=mask, nodata=None)
+    vrt = _build_mosaic_vrt(
+        [path], str(tmp_path), vrt_paths="absolute", windows=[(2, 3, 4, 4)]
+    )
+    with rasterio.open(vrt) as ds:
+        assert (ds.width, ds.height) == (4, 4)
+        window_mask = mask[3:7, 2:6]
+        assert np.array_equal(ds.read_masks(1), window_mask)
+        assert np.array_equal(
+            ds.read(1), np.where(window_mask > 0, values[3:7, 2:6], 0)
+        )  # masked: not composited

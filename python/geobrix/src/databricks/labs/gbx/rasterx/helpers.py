@@ -546,38 +546,44 @@ def _group_stream(
         arrays.append(pa.array([raster], type=pa.binary()))
         return pa.RecordBatch.from_arrays(arrays, names=[*keys, "raster"])
 
-    for batch in batches:
-        names = batch.schema.names
-        key_cols = [batch.column(names.index(k)) for k in keys]
-        values = batch.column(names.index(value_col))
-        for i in range(batch.num_rows):
-            key_scalars = [c[i] for c in key_cols]
-            key = tuple(s.as_py() for s in key_scalars)
-            if not started or key != current:
-                if started:
-                    yield emit()
-                started, current, scalars, members, held = (
-                    True,
-                    key,
-                    key_scalars,
-                    [],
-                    0,
-                )
-                acc = None if accumulator is None else accumulator()
-            item = member(values[i].as_py())
-            if item is not None and acc is not None:
-                acc.add(item)
-            elif item is not None:
-                held += weigh(item)
-                if held > group_budget:
-                    raise ValueError(
-                        f"the tiles for key {current!r} hold more than "
-                        f"{group_budget / 2**20:.0f} MiB of encoded bytes, the cap for a group of "
-                        f"tiles in this session. Fix: {fix}"
+    try:
+        for batch in batches:
+            names = batch.schema.names
+            key_cols = [batch.column(names.index(k)) for k in keys]
+            values = batch.column(names.index(value_col))
+            for i in range(batch.num_rows):
+                key_scalars = [c[i] for c in key_cols]
+                key = tuple(s.as_py() for s in key_scalars)
+                if not started or key != current:
+                    if started:
+                        yield emit()
+                    started, current, scalars, members, held = (
+                        True,
+                        key,
+                        key_scalars,
+                        [],
+                        0,
                     )
-                members.append(item)
-    if started:
-        yield emit()
+                    acc = None if accumulator is None else accumulator()
+                item = member(values[i].as_py())
+                if item is not None and acc is not None:
+                    acc.add(item)
+                elif item is not None:
+                    held += weigh(item)
+                    if held > group_budget:
+                        raise ValueError(
+                            f"the tiles for key {current!r} hold more than "
+                            f"{group_budget / 2**20:.0f} MiB of encoded bytes, the cap for a group of "
+                            f"tiles in this session. Fix: {fix}"
+                        )
+                    members.append(item)
+        if started:
+            yield emit()
+    finally:
+        if (
+            acc is not None
+        ):  # a failed or abandoned stream: the group's scratch goes with it
+            acc.close()
 
 
 def _cap_bytes(df: DataFrame) -> int:

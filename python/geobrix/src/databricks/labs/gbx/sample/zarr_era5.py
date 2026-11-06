@@ -46,6 +46,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from databricks.labs.gbx.ds._scratch import new_scratch_dir, remove_scratch_dir
 from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 #: Where the cube sits in the bundle, relative to ``geobrix-examples``.
@@ -370,7 +371,7 @@ def write_era5_store(path, spec: _Spec, workers: Optional[int] = None) -> Path:
     dest = Path(path)
     fuse = str(dest).startswith("/Volumes/")
     work = (
-        Path(tempfile.mkdtemp(dir=local_temp_root())) / dest.name
+        Path(new_scratch_dir(local_temp_root())) / dest.name
         if fuse
         else dest.with_name(dest.name + ".partial")
     )
@@ -400,7 +401,7 @@ def write_era5_store(path, spec: _Spec, workers: Optional[int] = None) -> Path:
             os.rename(work, dest)
     finally:
         if fuse:
-            shutil.rmtree(work.parent, ignore_errors=True)
+            remove_scratch_dir(str(work.parent))
         else:
             shutil.rmtree(work, ignore_errors=True)
     return dest

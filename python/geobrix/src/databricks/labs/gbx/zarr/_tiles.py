@@ -1069,7 +1069,10 @@ def _read_box(rd: _Read, box: list[tuple[int, int]]) -> np.ndarray:
     root = _mounted(rd.root)
     slices = tuple(slice(a, b) for a, b in box)
     if not rd.table:  # a plain store: whatever bytes are there now
-        return read_box(open_plain_array(root, rd.array, engine="zarr"), slices)
+        arr = open_plain_array(
+            root, rd.array, engine="zarr", meta=rd.spec.meta, budget=rd.spec.cap
+        )
+        return read_box(arr, slices)
     from databricks.labs.gbx.zarr._access import reader_for
     from databricks.labs.gbx.zarr._meta import doc_bytes
     from databricks.labs.gbx.zarr._store import ManifestStore

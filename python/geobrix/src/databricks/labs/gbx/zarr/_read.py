@@ -71,6 +71,7 @@ from databricks.labs.gbx.zarr._plan import (
     unit_key,
 )
 from databricks.labs.gbx.zarr._select import AxisSel, resolve, touched_chunks
+from databricks.labs.gbx.zarr._spans import span
 from databricks.labs.gbx.zarr.errors import (
     ZarrAccessUnavailable,
     ZarrError,
@@ -207,14 +208,23 @@ def _budget_bytes() -> int:
     return decoded_budget_bytes("auto")
 
 
+_CLUSTER_TAGS = "spark.databricks.clusterUsageTags."
+
+
 def _task_slots(spark) -> int:
     """Tasks the session can run at once, as far as a conf says so (``1`` when none does).
 
     Reads session confs only, so it is safe on Spark Connect (Serverless), where there is no
     ``sparkContext``: ``spark.default.parallelism`` (a classic cluster sets it to its cores),
     else ``spark.executor.cores`` x ``spark.executor.instances``, else the ``N`` of a
-    ``local[N]`` master (``local[*]``: this machine's cores). A conf Spark Connect does not
-    expose, or one that is not a number, counts as absent; this never raises.
+    ``local[N]`` master (``local[*]``: this machine's cores), else the worker count a
+    Databricks cluster publishes (``clusterWorkers``, or ``clusterTargetWorkers`` while it
+    scales) times the cores of a worker. A Databricks job cluster sets none of the first
+    three, so the tags are what a planner sees there. No tag names the cores of a worker:
+    they are taken as this driver's when the worker and driver node types are the same
+    (``clusterNodeType`` and ``driverNodeType``); a cluster of mixed types counts as unknown.
+    A conf Spark Connect does not expose, or one that is not a number, counts as absent;
+    this never raises.
     """
 
     def conf(key: str):
@@ -239,6 +249,14 @@ def _task_slots(spark) -> int:
         if inside == "*":
             return os.cpu_count() or 1
         return count(inside) or 1
+    workers = count(conf(_CLUSTER_TAGS + "clusterWorkers")) or count(
+        conf(_CLUSTER_TAGS + "clusterTargetWorkers")
+    )
+    if workers:
+        worker_type = conf(_CLUSTER_TAGS + "clusterNodeType")
+        driver_type = conf(_CLUSTER_TAGS + "driverNodeType")
+        if not (worker_type and driver_type and worker_type != driver_type):
+            return workers * (os.cpu_count() or 1)
     return 1
 
 
@@ -334,15 +352,16 @@ class _Source:
         kw = {}
         if keys is not None:
             kw["shard_keys" if meta.shard is not None else "keys"] = keys
-        table = read_rows(
-            self.spark, self.snap, kinds=list(_ROWS), arrays=[meta.name], **kw
-        )
-        wanted = None if keys is None else set(keys)
-        grouped: dict[str, list[dict]] = {}
-        for row in table.to_pylist():
-            key = row_unit_key(meta, row)
-            if wanted is None or key in wanted:
-                grouped.setdefault(key, []).append(row)
+        with span("rows"):
+            table = read_rows(
+                self.spark, self.snap, kinds=list(_ROWS), arrays=[meta.name], **kw
+            )
+            wanted = None if keys is None else set(keys)
+            grouped: dict[str, list[dict]] = {}
+            for row in table.to_pylist():
+                key = row_unit_key(meta, row)
+                if wanted is None or key in wanted:
+                    grouped.setdefault(key, []).append(row)
         return grouped
 
     def reader(self):
@@ -364,7 +383,8 @@ def _open_source(spark, source, kind, version_as_of, timestamp_as_of) -> _Source
     from databricks.labs.gbx.zarr._register import _local_root, read_base_metadata
 
     root = _local_root(source)
-    metas, arrays, unsupported = read_base_metadata(root, tolerant=True)
+    with span("metadata"):
+        metas, arrays, unsupported = read_base_metadata(root, tolerant=True)
     return _Source("plain", root, None, metas, arrays, unsupported)
 
 
@@ -372,20 +392,23 @@ def _open_table(spark, table, version_as_of, timestamp_as_of) -> _Source:
     from databricks.labs.gbx.zarr._filemode import FileLayout
     from databricks.labs.gbx.zarr._manifest import read_props, read_rows, snapshot
 
-    props = read_props(spark, table, need_file=True)
-    snap = snapshot(
-        spark,
-        table,
-        version_as_of=version_as_of,
-        timestamp_as_of=timestamp_as_of,
-        files=FileLayout.of(props),
-    )
+    with span("props"):
+        props = read_props(spark, table, need_file=True)
+    with span("snapshot"):
+        snap = snapshot(
+            spark,
+            table,
+            version_as_of=version_as_of,
+            timestamp_as_of=timestamp_as_of,
+            files=FileLayout.of(props),
+        )
     metas = {}
-    for row in read_rows(spark, snap, kinds=["group", "array"]).to_pylist():
-        if row["meta"] is not None:
-            key = "/".join(p for p in (row["array"], row["key"]) if p)
-            metas[key] = row["meta"].encode()
-    arrays, unsupported = parse_documents(metas)
+    with span("metadata"):
+        for row in read_rows(spark, snap, kinds=["group", "array"]).to_pylist():
+            if row["meta"] is not None:
+                key = "/".join(p for p in (row["array"], row["key"]) if p)
+                metas[key] = row["meta"].encode()
+        arrays, unsupported = parse_documents(metas)
     if props.kind == "registered":
         # a registered store's own objects are under its base; what GeoBrix wrote is under
         # the overlay (a read-only registration has none, and so no gbx-origin rows)
@@ -863,9 +886,10 @@ def _plan(
     its unit still needs the config, and has no use for the units it was not handed.
     """
     arrays = src.arrays
-    dim_coords, stored, coords, axes = _resolve_axes(
-        src, variables, sel, isel, decode, flag
-    )
+    with span("axes"):
+        dim_coords, stored, coords, axes = _resolve_axes(
+            src, variables, sel, isel, decode, flag
+        )
 
     columns, typed = (), {}
     if output == "table":
@@ -888,16 +912,18 @@ def _plan(
         columns = _table_columns(variables, arrays, dim_coords, typed, decode, flag)
 
     budget = _budget_bytes()
-    slots = _task_slots(spark) if units else 1
+    with span("slots"):
+        slots = _task_slots(spark) if units else 1
     planned: list[Unit] = []
-    if units and output == "blocks":
-        for v in variables:
-            meta = arrays[v]
-            touched = touched_chunks(axes[v], meta.chunks)
-            by_key = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
-            planned += plan_units(meta, axes[v], by_key, budget, slots=slots)
-    elif units:
-        planned = _plan_table(src, variables, axes[variables[0]], budget, slots)
+    with span("units"):
+        if units and output == "blocks":
+            for v in variables:
+                meta = arrays[v]
+                touched = touched_chunks(axes[v], meta.chunks)
+                by_key = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
+                planned += plan_units(meta, axes[v], by_key, budget, slots=slots)
+        elif units:
+            planned = _plan_table(src, variables, axes[variables[0]], budget, slots)
 
     read = {v: arrays[v] for v in variables}
     cfg = _TaskConfig(
@@ -986,7 +1012,13 @@ class _UnitReader:
             if self.store is not None:
                 arr = open_manifest_array(self.store, name)
             else:  # tensorstore regresses inside tasks (spike), so tasks pass "zarr"
-                arr = open_plain_array(self.cfg.root, name, engine=self._engine)
+                arr = open_plain_array(
+                    self.cfg.root,
+                    name,
+                    engine=self._engine,
+                    meta=self.cfg.arrays.get(name),
+                    budget=_budget_bytes(),
+                )
             self._open[name] = arr
         return arr
 
@@ -1382,35 +1414,41 @@ def gbx_zarr_read(
                 'access="auto" or "fuse"',
             )
 
-    src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
+    with span("open"):
+        src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
     names = _choose_variables(variables, src)
     if output == "tiles":
-        plans = _plan_tile_set(
-            spark,
-            src,
-            names,
-            variables is not None,
-            sel,
-            isel,
-            decode,
-            use_zarr_fill_value_as_mask,
-            band_dim,
-            tile_size,
-        )
+        with span("tile_plans"):
+            plans = _plan_tile_set(
+                spark,
+                src,
+                names,
+                variables is not None,
+                sel,
+                isel,
+                decode,
+                use_zarr_fill_value_as_mask,
+                band_dim,
+                tile_size,
+            )
         # a virtual tile reads nothing now, and is opened later over the mount
-        reach = FUSE if virtual_tiles else source_access(spark, src, access)
-        return _tiles_frame(spark, plans, virtual_tiles, reach)
+        with span("access"):
+            reach = FUSE if virtual_tiles else source_access(spark, src, access)
+        with span("frame"):
+            return _tiles_frame(spark, plans, virtual_tiles, reach)
     units, cfg = _plan(
         spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
     )
-    reach = source_access(spark, src, access)
+    with span("access"):
+        reach = source_access(spark, src, access)
     schema = BLOCKS_SCHEMA if output == "blocks" else _table_struct(cfg)
-    if not units:
-        return spark.createDataFrame([], schema)
-    task, _ = bounded_closure(
-        spark, reach, lambda a: _task_function(dataclasses.replace(cfg, access=a))
-    )
-    return _work_frame(spark, units).mapInArrow(task, schema)
+    with span("frame"):
+        if not units:
+            return spark.createDataFrame([], schema)
+        task, _ = bounded_closure(
+            spark, reach, lambda a: _task_function(dataclasses.replace(cfg, access=a))
+        )
+        return _work_frame(spark, units).mapInArrow(task, schema)
 
 
 # --- tiles ---------------------------------------------------------------------------

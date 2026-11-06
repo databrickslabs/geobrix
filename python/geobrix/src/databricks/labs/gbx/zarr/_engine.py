@@ -52,6 +52,16 @@ _PLAIN_PIPELINES = ("auto", "zarrs", "default")
 # tensorstore: concurrent file reads. A FUSE read costs 40-50 ms of latency, so many
 # in flight pay off (the spike's setting).
 _TENSORSTORE_FILE_IO = 64
+# zarrs decodes on a Rust thread pool (rayon) that has as many threads as the machine has
+# cores, built when the first zarrs array opens. Reading a box of a sharded store over a
+# Volume is latency-bound (a FUSE read costs 40-50 ms), so the cores sit waiting and a
+# whole-grid tile of ~800 inner chunks takes seconds on four cores (measured with a 45 ms
+# delay on every file read: 10.4 s on four cores with the default pool, 2.5 s with 32 threads,
+# 1.6 s with 64). The pool is sized for the waiting instead, up to a memory bound: each thread holds one decoded inner chunk.
+_IO_THREADS_PER_CPU = 8
+_IO_THREADS_MAX = 64
+_IO_MEMORY_SHARE = 2  # the budget bounds the threads' chunks to 1 / this
+_RAYON_ENV = "RAYON_NUM_THREADS"
 _INSTALL_FIX = (
     "install the Zarr extra: [zarr] of the env6 wheel on DBR 19 and Serverless environment 6 "
     '("geobrix[zarr] @ <the +env6 wheel>"), or geobrix[zarr_dbr19] off Databricks'
@@ -151,6 +161,68 @@ _CONFIG_GATE = _ConfigGate()
 def _zarrs_scope():
     with _CONFIG_GATE.exclusive(), zarr.config.set({_PIPELINE_KEY: _ZARRS_PIPELINE}):
         yield
+
+
+def _usable_cpus() -> int:
+    """Cores this process may run on (its affinity, which zarrs' pool also follows)."""
+    try:
+        return len(os.sched_getaffinity(0)) or 1
+    except AttributeError:  # no affinity call on this platform
+        return os.cpu_count() or 1
+
+
+def plain_io_threads(chunk_bytes: int, budget: int, cpus: int | None = None) -> int:
+    """Threads for the zarrs pool of a task that reads arrays whose inner chunk decodes to
+    ``chunk_bytes`` within ``budget`` decoded bytes: ``_IO_THREADS_PER_CPU`` per core up to
+    ``_IO_THREADS_MAX``, lowered so the chunks the threads hold fit in a share of the budget,
+    and never below the core count (what zarrs uses on its own)."""
+    cpus = max(1, cpus or _usable_cpus())
+    ceiling = min(_IO_THREADS_MAX, cpus * _IO_THREADS_PER_CPU)
+    by_memory = int(budget) // max(1, _IO_MEMORY_SHARE * int(chunk_bytes))
+    return max(cpus, min(ceiling, by_memory))
+
+
+def inner_chunk_bytes(meta) -> int:
+    """Decoded bytes of one inner chunk, the unit a pool thread decodes (a sharded array
+    decodes the inner chunks of a shard one by one)."""
+    cells = 1
+    for n in meta.chunks:
+        cells *= int(n)
+    return cells * meta.itemsize
+
+
+_POOL_LOCK = threading.Lock()
+_pool_started = False  # the zarrs thread pool exists: its size can no longer be chosen
+_pool_threads: int | None = None  # what it was sized with (``None``: zarrs' own choice)
+
+
+def zarrs_pool_threads() -> int | None:
+    """The thread count this process sized the zarrs pool with, ``None`` if it did not."""
+    return _pool_threads
+
+
+@contextmanager
+def _zarrs_pool(threads: int | None):
+    """Around the first zarrs open of the process: ``threads`` size its thread pool.
+
+    zarrs builds the pool when an array first opens and takes its size from
+    ``RAYON_NUM_THREADS``, so the variable is set for the open and put back after (a
+    value the user set is kept and wins). Once a pool exists the size is fixed, so later
+    calls change nothing.
+    """
+    global _pool_started, _pool_threads
+    with _POOL_LOCK:
+        first = not _pool_started
+        sized = first and threads is not None and _RAYON_ENV not in os.environ
+        _pool_started = True
+        if sized:
+            _pool_threads = int(threads)
+            os.environ[_RAYON_ENV] = str(_pool_threads)
+        try:
+            yield
+        finally:
+            if sized:
+                del os.environ[_RAYON_ENV]
 
 
 def _open_array(*args, **kwargs) -> zarr.Array:
@@ -386,7 +458,13 @@ class _NativeManifestArray(PlainArray):
 
 
 def open_plain_array(
-    path: str, array: str, *, engine: str = "auto", pipeline: str = "auto"
+    path: str,
+    array: str,
+    *,
+    engine: str = "auto",
+    pipeline: str = "auto",
+    meta=None,
+    budget: int | None = None,
 ) -> PlainArray:
     """The array ``array`` of the plain Zarr store at ``path`` (a local or FUSE path).
 
@@ -400,6 +478,10 @@ def open_plain_array(
     zarr; with ``engine="tensorstore"`` it is an error. A benchmark measured zarrs slower than
     zarr's own pipeline for box reads over a Volume, so a reader that depends on it
     should measure.
+
+    ``meta`` (the ``ArrayMeta``) and ``budget`` (decoded bytes a task may hold) let the
+    first zarrs open of a process size its thread pool for reads that wait on a Volume
+    (``plain_io_threads``); without them the pool keeps zarrs' own size.
     """
     if engine not in _PLAIN_ENGINES:
         raise ValueError(f"engine must be one of {_PLAIN_ENGINES}, got {engine!r}")
@@ -417,7 +499,12 @@ def open_plain_array(
         engine = "tensorstore" if use_ts else "zarr"
     if engine == "tensorstore":
         return _open_tensorstore(root, path, array)
-    return _open_zarr(root, path, array, pipeline)
+    threads = (
+        None
+        if meta is None or budget is None
+        else plain_io_threads(inner_chunk_bytes(meta), budget)
+    )
+    return _open_zarr(root, path, array, pipeline, threads)
 
 
 def _tensorstore_importable() -> bool:
@@ -456,7 +543,9 @@ def _open_tensorstore(root: str, path: str, array: str) -> PlainArray:
     )
 
 
-def _open_zarr(root: str, path: str, array: str, pipeline: str) -> PlainArray:
+def _open_zarr(
+    root: str, path: str, array: str, pipeline: str, threads: int | None = None
+) -> PlainArray:
     if pipeline == "zarrs" and not _zarrs_importable():
         raise ZarrUnsupported(
             "the zarrs pipeline needs the zarrs package, which is not installed",
@@ -465,7 +554,7 @@ def _open_zarr(root: str, path: str, array: str, pipeline: str) -> PlainArray:
     use_zarrs = pipeline == "zarrs" or (pipeline == "auto" and _zarrs_importable())
     try:
         if use_zarrs:
-            with _zarrs_scope():
+            with _zarrs_scope(), _zarrs_pool(threads):
                 arr = _open_array(root, mode="r")
             if not np.dtype(arr.dtype).isnative:
                 # zarrs-python refuses to read a non-native byte order

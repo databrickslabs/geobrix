@@ -270,8 +270,16 @@ A `blocks` or `table` read packs whole chunks into tasks of about 16 MiB decoded
 that is spread over the cores of the session instead, down to 4 MiB per task, so a 100 MB read does not
 run as one task. A task never holds more than the compute's decoded-data limit (64 MiB on Serverless,
 1536 MiB on a classic cluster), whatever the target. The cores are read from the session's configuration, so
-the plan is the same on Serverless, where there is no `SparkContext`. A chunk counts only the cells inside
-the array: a 24-hour chunk of a 1-hour array counts one hour.
+the plan is the same on Serverless, where there is no `SparkContext`. On a Databricks cluster that sets no
+parallelism or executor configuration, the cores are the cluster's worker count times the cores of a worker; the
+cores of a worker are taken from the driver when both use the same node type, and a cluster of mixed node types
+is planned as one slot. A chunk counts only the cells inside the array: a 24-hour chunk of a 1-hour array counts
+one hour.
+
+A plain store on a Volume is decoded by a thread pool that is larger than the core count, because each chunk read
+waits on the mount. Its size is eight threads per core, at most 64, lowered when the chunks the threads hold would
+not fit in the task's decoded-data limit. Set `RAYON_NUM_THREADS` before the first read of a process to choose it
+yourself. A store registered in a table reads its chunks through the manifest, which overlaps its reads already.
 
 ## The `zarr_gbx` DataSource
 

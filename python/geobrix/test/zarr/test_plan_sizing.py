@@ -128,6 +128,64 @@ def test_task_slots_survive_a_session_that_refuses_a_conf():
     )
 
 
+_TAG = "spark.databricks.clusterUsageTags."
+
+
+@pytest.mark.parametrize(
+    "conf, expected",
+    [
+        # a classic job cluster: the master is spark://, no parallelism or executor conf
+        ({"spark.master": "spark://10.0.0.1:7077", _TAG + "clusterWorkers": "2"}, 8),
+        (
+            {
+                "spark.master": "spark://10.0.0.1:7077",
+                _TAG + "clusterWorkers": "0",
+                _TAG + "clusterTargetWorkers": "3",
+            },
+            12,
+        ),
+        (
+            {
+                _TAG + "clusterWorkers": "2",
+                _TAG + "clusterNodeType": "m6gd.xlarge",
+                _TAG + "driverNodeType": "m6gd.xlarge",
+            },
+            8,
+        ),
+        # worker and driver sizes differ: the cores of a worker are unknown
+        (
+            {
+                _TAG + "clusterWorkers": "2",
+                _TAG + "clusterNodeType": "m6gd.2xlarge",
+                _TAG + "driverNodeType": "m6gd.xlarge",
+            },
+            1,
+        ),
+        # the Spark confs win over the tags
+        ({"spark.default.parallelism": "5", _TAG + "clusterWorkers": "2"}, 5),
+        ({_TAG + "clusterWorkers": "not a number"}, 1),
+    ],
+)
+def test_task_slots_use_the_cluster_tags_of_a_databricks_cluster(
+    conf, expected, monkeypatch
+):
+    monkeypatch.setattr(_read.os, "cpu_count", lambda: 4)
+    spark = types.SimpleNamespace(
+        conf=types.SimpleNamespace(get=lambda k, d=None: conf.get(k, d))
+    )
+    assert _read._task_slots(spark) == expected
+
+
+def test_task_slots_ignore_tags_a_connect_session_refuses():
+    def refuse(key, default=None):
+        if key.startswith(_TAG):
+            raise RuntimeError("CONFIG_NOT_AVAILABLE")
+        return default
+
+    spark = types.SimpleNamespace(conf=types.SimpleNamespace(get=refuse))
+    assert _read._task_slots(spark) == 1
+
+
 def _steps_cfg(meta, n=48):
     """The parts of a sample config the time split reads: one other dimension (time)."""
     return types.SimpleNamespace(

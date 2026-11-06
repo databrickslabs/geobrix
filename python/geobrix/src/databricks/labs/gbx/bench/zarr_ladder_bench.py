@@ -39,6 +39,7 @@ import numpy as np
 
 from databricks.labs.gbx.bench import zarr_ladder as zl
 from databricks.labs.gbx.bench.results import ResultRow
+from databricks.labs.gbx.zarr import _spans as zspans
 
 __all__ = [
     "LADDER_CASES",
@@ -482,20 +483,34 @@ def _attribution(df, t0_epoch: float) -> dict:
         return {}
 
 
+def _median_spans(runs: List[Dict[str, float]]) -> Dict[str, float]:
+    """The median seconds of each planning span over the runs of a leg (a run without the span counts 0)."""
+    names = sorted({n for r in runs for n in r})
+    return {n: round(statistics.median(r.get(n, 0.0) for r in runs), 3) for n in names}
+
+
+def _spans_text(spans: Dict[str, float]) -> str:
+    """The planning spans of a leg as ``name 0.123 s`` pairs, the longest first."""
+    ranked = sorted(spans.items(), key=lambda kv: -kv[1])
+    return ", ".join(f"{n} {v}" for n, v in ranked) or "no spans"
+
+
 def _run_leg(
     leg: _Leg, g: zl.Geometry, store: str, layout: dict, cfg: LadderConfig
 ) -> dict:
     """Time ``cfg.reps`` runs of ``leg``; the metrics of the leg, as a flat dict."""
-    plans, execs, taps, busy, peaks = [], [], [], [], []
+    plans, execs, taps, busy, peaks, span_runs = [], [], [], [], [], []
     for _ in range(cfg.reps):
         with _tapped(layout["cps"]) as tap:
             t0 = time.perf_counter()
             wall0 = time.time()
-            df = leg.build()
+            with zspans.record() as spans:
+                df = leg.build()
             plan = time.perf_counter() - t0
             t1 = time.perf_counter()
             _noop(df)
             ex = time.perf_counter() - t1
+        span_runs.append(spans)
         plans.append(plan)
         execs.append(ex)
         taps.append(tap)
@@ -551,6 +566,7 @@ def _run_leg(
         "peak_exec_mem_mb": round(max(peaks) / 1e6, 1) if peaks else None,
         "cores": cfg.cores,
         "check": verdict or "ok",
+        "plan_spans": _median_spans(span_runs),
     }
     return out
 
@@ -620,7 +636,8 @@ def _run_all(spark, cfg, sink, collect) -> List[ResultRow]:
                             collect.append(m)
                         print(
                             f"ZARR-LADDER {family} {rung} {leg.case}: wall {m['wall_s']} s "
-                            f"(plan {m['plan_s']}), tasks {m['tasks']}, check {m['check']}",
+                            f"(plan {m['plan_s']}: {_spans_text(m['plan_spans'])}), "
+                            f"tasks {m['tasks']}, check {m['check']}",
                             flush=True,
                         )
                     except Exception as e:  # noqa: BLE001

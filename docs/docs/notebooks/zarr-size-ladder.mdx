@@ -19,7 +19,7 @@ Both stores have the variables of the [weather features notebook](zarr-weather-f
 
 It takes the store through three steps:
 
-1. **Read** the store five ways, each timed: the full table, a box over all time, 100 sites, wind speed with an hourly area mean, and one hour as a tile. Functions: `gbx_zarr_read` and `gbx_zarr_sample`.
+1. **Read** the store five ways, each timed. They are the full table, a box over all time, 100 sites, wind speed with an hourly area mean, and one hour as a tile. Functions: `gbx_zarr_read` and `gbx_zarr_sample`.
 2. **Write a table to Zarr.** Read the cells, add `wind_speed` in Spark columns, and write them as a plain store and as a managed store: `gbx_zarr_write`.
 3. **Append one more day** to both stores, read both back, and check that their sums equal the source.
 

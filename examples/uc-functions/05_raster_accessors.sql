@@ -78,3 +78,29 @@ ORDER BY name;
 SELECT gbx_rst_sample(tile, CAST(st_geomfromwkt('POINT(530125 180350)', 27700) AS GEOMETRY(ANY))) AS band_values
 FROM ex_rasters
 WHERE name = 'scene';
+
+-- cid: raster_statistics_partial
+-- The count, sum, spread (m2), minimum and maximum of each band. These add up across tiles.
+WITH parts AS (SELECT gbx_rst_stats_partial(tile) AS stats FROM ex_rasters WHERE name = 'scene')
+SELECT s.band, s.count, s.sum, s.m2, s.min, s.max
+FROM parts LATERAL VIEW inline(stats) s
+ORDER BY s.band;
+
+-- cid: raster_statistics_across_tiles
+-- Merge the partial of each tile: add the counts and sums, and add the squared distance of each tile mean to m2.
+-- The result is the statistics of the whole DEM, which was cut into tiles in the setup file.
+WITH parts AS (SELECT gbx_rst_stats_partial(tile) AS stats FROM ex_dem_tiles),
+p AS (SELECT s.* FROM parts LATERAL VIEW inline(stats) s),
+w AS (
+  SELECT *, try_divide(sum(sum) OVER (PARTITION BY band), sum(count) OVER (PARTITION BY band)) AS mu
+  FROM p
+)
+SELECT band,
+       sum(count) AS count,
+       try_divide(sum(sum), sum(count)) AS mean,
+       min(min) AS min,
+       max(max) AS max,
+       try_divide(sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2)), sum(count)) AS variance
+FROM w
+GROUP BY band
+ORDER BY band;

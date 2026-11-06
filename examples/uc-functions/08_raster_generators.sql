@@ -81,3 +81,58 @@ SELECT length(gbx_rst_h3_rasterize(collect_list(struct(cellid, value)), 4326, CA
                                    CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),
                                    CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 1)) AS geotiff_bytes
 FROM (SELECT h3_longlatash3(longitude, latitude, 8) AS cellid, avg(value) AS value FROM ex_points GROUP BY 1);
+
+-- cid: generator_bng_cells_to_raster
+-- Burn BNG cell values into a raster. The cell ids are text. The result is the bytes of a GeoTIFF.
+WITH t AS (
+  SELECT gbx_bng_polyfill(CAST(geom AS GEOMETRY(ANY)), '100m') AS cells FROM ex_parcels WHERE id = 3
+)
+SELECT length(gbx_rst_bng_rasterize(collect_list(struct(cellid, value)), 27700,
+       CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),
+       CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 1)) AS geotiff_bytes
+FROM (SELECT cellid, CAST(row_number() OVER (ORDER BY cellid) AS DOUBLE) AS value
+      FROM t LATERAL VIEW explode(cells) AS cellid);
+
+-- cid: generator_quadbin_cells_to_raster
+-- The same for quadbin cells. Here each cell holds the mean reading of the sensors in it.
+SELECT length(gbx_rst_quadbin_rasterize(collect_list(struct(cellid, value)), 4326,
+       CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),
+       CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 1)) AS geotiff_bytes
+FROM (SELECT gbx_quadbin_pointascell(longitude, latitude, 12) AS cellid, avg(value) AS value FROM ex_points GROUP BY 1);
+
+-- cid: generator_custom_grid_cells_to_raster
+-- The same for a custom grid. The grid goes in after the cells.
+WITH g AS (SELECT gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid),
+c AS (
+  SELECT g.grid, gbx_custom_pointascell(CAST(st_centroid(p.geom) AS GEOMETRY(ANY)), g.grid, 4) AS cellid, CAST(p.id AS DOUBLE) AS value
+  FROM ex_parcels AS p, g
+)
+SELECT length(gbx_rst_custom_rasterize(collect_list(struct(cellid, value)), first(grid), 27700,
+       CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE),
+       CAST(NULL AS INT), CAST(NULL AS INT), 'centroids', 1)) AS geotiff_bytes
+FROM c;
+
+-- cid: generator_h3_tessellate
+-- Cut the WGS84 scene into the tile of each H3 cell it covers. Each row is one cell and its tile bytes.
+SELECT count(*) AS cells, sum(length(t.raster)) AS tile_bytes
+FROM ex_rasters AS r, LATERAL gbx_rst_h3_tessellate(r.tile, 10) AS t
+WHERE r.name = 'scene_wgs84';
+
+-- cid: generator_bng_tessellate
+-- The same for BNG cells of 100 m. The resolution is text.
+SELECT count(*) AS cells, sum(length(t.raster)) AS tile_bytes
+FROM ex_rasters AS r, LATERAL gbx_rst_bng_tessellate(r.tile, '100m') AS t
+WHERE r.name = 'scene';
+
+-- cid: generator_quadbin_tessellate
+-- The same for quadbin cells at zoom 18.
+SELECT count(*) AS cells, sum(length(t.raster)) AS tile_bytes
+FROM ex_rasters AS r, LATERAL gbx_rst_quadbin_tessellate(r.tile, 18) AS t
+WHERE r.name = 'scene_wgs84';
+
+-- cid: generator_custom_grid_tessellate
+-- The same for a custom grid. The grid goes in after the tile.
+WITH g AS (SELECT gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid)
+SELECT count(*) AS cells, sum(length(t.raster)) AS tile_bytes
+FROM ex_rasters AS r, g, LATERAL gbx_rst_custom_tessellate(r.tile, g.grid, 5) AS t
+WHERE r.name = 'scene';

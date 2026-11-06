@@ -46,11 +46,11 @@ It fails when a statement errors or a query returns no rows. With `--upload` it 
 | `01_grids_bng.sql` | British National Grid cells, rings, polyfill, tessellation, chips and table functions |
 | `02_grids_quadbin_custom.sql` | Quadbin cells and custom grids |
 | `03_grids_h3.sql` | H3 rings of a geometry, cell bounding boxes and cell fill |
-| `04_vector.sql` | Geometry cleaners, coverage checks, vector tiles and legacy geometry migration |
-| `05_raster_accessors.sql` | Raster size, CRS, geotransform, metadata, coordinates and statistics |
-| `06_raster_operations.sql` | Warp, resample, clip, filters, combine, overviews, contours and web tiles |
+| `04_vector.sql` | Geometry cleaners, coverage checks, vector tiles, triangulation and legacy geometry migration |
+| `05_raster_accessors.sql` | Raster size, CRS, geotransform, metadata, coordinates and statistics that add up across tiles |
+| `06_raster_operations.sql` | Warp, resample, clip, filters, combine, overviews, contours, web tiles and web tile pyramids |
 | `07_raster_indices_and_terrain.sql` | Spectral indices, terrain, canopy height and land cover |
-| `08_raster_generators.sql` | Cut a tile into tiles, and build tiles from points and polygons |
+| `08_raster_generators.sql` | Cut a tile into tiles, tessellate it into grid cells, and build tiles from points, polygons and cells |
 | `09_raster_to_grid.sql` | Summarize pixels into H3, quadbin, BNG and custom cells |
 | `10_aggregation_recipes.sql` | Array and partial forms that replace aggregates |
 | `11_procedures.sql` | Whole ETL steps that run inside Unity Catalog |

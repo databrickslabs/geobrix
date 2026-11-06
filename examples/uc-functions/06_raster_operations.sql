@@ -120,3 +120,11 @@ WHERE name = 'dem';
 SELECT length(gbx_rst_tilexyz(tile, 18, 130988, 87118, 'PNG', 256, 'bilinear', 'auto')) AS png_bytes
 FROM ex_rasters
 WHERE name = 'scene_wgs84';
+
+-- cid: raster_web_tile_pyramid
+-- Render the web tiles the scene touches across a range of zoom levels. Each row is one tile.
+SELECT t.z, count(*) AS tiles, sum(length(t.bytes)) AS png_bytes
+FROM ex_rasters AS r, LATERAL gbx_rst_xyzpyramid(r.tile, 17, 18) AS t
+WHERE r.name = 'scene_wgs84'
+GROUP BY t.z
+ORDER BY t.z;

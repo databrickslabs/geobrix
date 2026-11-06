@@ -85,3 +85,26 @@ SELECT id, st_geometrytype(gbx_st_legacyaswkb(geom)) AS geometry_type,
        st_area(gbx_st_legacyaswkb(geom)) AS area, st_srid(gbx_st_legacyaswkb(geom)) AS srid
 FROM ex_legacy_geoms
 ORDER BY id;
+
+-- cid: vector_triangulate_spot_heights
+-- Triangulate points with a Z value. Each row is one triangle as 2D WKB. The points are an array of GEOMETRY.
+SELECT count(*) AS triangles, round(sum(st_area(st_geomfromwkb(t.triangle))), 1) AS total_area
+FROM (SELECT array(CAST(st_geomfromwkt('POINT Z(0 0 10)') AS GEOMETRY(ANY)), CAST(st_geomfromwkt('POINT Z(10 0 20)') AS GEOMETRY(ANY)),
+         CAST(st_geomfromwkt('POINT Z(0 10 30)') AS GEOMETRY(ANY)), CAST(st_geomfromwkt('POINT Z(10 10 40)') AS GEOMETRY(ANY))) AS pts) AS s,
+     LATERAL gbx_st_triangulate(s.pts, CAST(NULL AS ARRAY<GEOMETRY(ANY)>), 0.0, 0.0, 'NONENCROACHING') AS t;
+
+-- cid: vector_interpolate_elevation_on_a_bounding_box
+-- Interpolate the surface at the cells of a grid that fills a bounding box. Each row is one point with its Z.
+SELECT count(*) AS grid_points
+FROM (SELECT array(CAST(st_geomfromwkt('POINT Z(0 0 10)') AS GEOMETRY(ANY)), CAST(st_geomfromwkt('POINT Z(10 0 20)') AS GEOMETRY(ANY)),
+         CAST(st_geomfromwkt('POINT Z(0 10 30)') AS GEOMETRY(ANY)), CAST(st_geomfromwkt('POINT Z(10 10 40)') AS GEOMETRY(ANY))) AS pts) AS s,
+     LATERAL gbx_st_interpolateelevationbbox(s.pts, CAST(NULL AS ARRAY<GEOMETRY(ANY)>), 0.0, 0.0, 'NONENCROACHING',
+                                             0.0, 0.0, 10.0, 10.0, 5, 5, 3857) AS t;
+
+-- cid: vector_interpolate_elevation_on_a_grid
+-- The same on a grid you describe by an origin point, a column and row count and a cell size.
+SELECT count(*) AS grid_points
+FROM (SELECT array(CAST(st_geomfromwkt('POINT Z(0 0 10)') AS GEOMETRY(ANY)), CAST(st_geomfromwkt('POINT Z(10 0 20)') AS GEOMETRY(ANY)),
+         CAST(st_geomfromwkt('POINT Z(0 10 30)') AS GEOMETRY(ANY)), CAST(st_geomfromwkt('POINT Z(10 10 40)') AS GEOMETRY(ANY))) AS pts) AS s,
+     LATERAL gbx_st_interpolateelevationgeom(s.pts, CAST(NULL AS ARRAY<GEOMETRY(ANY)>), 0.0, 0.0, 'NONENCROACHING',
+                                             CAST(st_geomfromwkt('POINT(0 0)') AS GEOMETRY(ANY)), 5, 5, 2.0, 2.0) AS t;

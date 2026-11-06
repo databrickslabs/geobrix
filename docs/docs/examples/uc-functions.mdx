@@ -80,21 +80,21 @@ H3 rings of a geometry, cell bounding boxes and cell fill.
 </TabItem>
 <TabItem value="04" label="04 Vector">
 
-Geometry cleaners, coverage checks, vector tiles and legacy geometry migration.
+Geometry cleaners, coverage checks, vector tiles, triangulation and legacy geometry migration.
 
 <CodeBlock language="sql" title="04_vector.sql" showLineNumbers>{sql04}</CodeBlock>
 
 </TabItem>
 <TabItem value="05" label="05 Raster accessors">
 
-Size, CRS, geotransform, metadata, coordinates and band statistics.
+Size, CRS, geotransform, metadata, coordinates and band statistics, including statistics that add up across tiles.
 
 <CodeBlock language="sql" title="05_raster_accessors.sql" showLineNumbers>{sql05}</CodeBlock>
 
 </TabItem>
 <TabItem value="06" label="06 Raster operations">
 
-Warp, resample, clip, filters, combine, overviews, contours and web tiles.
+Warp, resample, clip, filters, combine, overviews, contours, web tiles and web tile pyramids.
 
 <CodeBlock language="sql" title="06_raster_operations.sql" showLineNumbers>{sql06}</CodeBlock>
 
@@ -108,7 +108,7 @@ Spectral indices, slope, aspect, hillshade, canopy height and land cover.
 </TabItem>
 <TabItem value="08" label="08 Raster generators">
 
-Cut a tile into tiles, and build tiles from points and polygons.
+Cut a tile into tiles, tessellate it into grid cells, and build tiles from points, polygons and cells.
 
 <CodeBlock language="sql" title="08_raster_generators.sql" showLineNumbers>{sql08}</CodeBlock>
 

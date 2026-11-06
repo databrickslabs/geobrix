@@ -275,6 +275,11 @@ def _natural_from_raw(kind: str, raw: np.ndarray) -> np.ndarray:
 # --- the passes over the dimension columns --------------------------------------------------
 
 
+def _unique(values: np.ndarray) -> np.ndarray:
+    """The distinct values, sorted: a hash pass over the batch, then a sort of the few."""
+    return np.sort(pc.unique(pa.array(values)).to_numpy(zero_copy_only=False))
+
+
 def _distinct_function(kinds: list, names: list):
     def run(batches):
         acc = [None] * len(kinds)
@@ -282,7 +287,7 @@ def _distinct_function(kinds: list, names: list):
         for b in batches:
             n += b.num_rows
             for i, (k, name) in enumerate(zip(kinds, names)):
-                u = np.unique(_raw(b.column(i), k, name))
+                u = _unique(_raw(b.column(i), k, name))
                 acc[i] = u if acc[i] is None else np.union1d(acc[i], u)
         for i, u in enumerate(acc):
             if u is None:
@@ -387,7 +392,7 @@ def _keys_function(groups: list):
         acc = [None] * len(groups)
         for b in batches:
             for gi, g in enumerate(groups):
-                u = np.unique(_unit_key(g, _absolute(b, g)))
+                u = _unique(_unit_key(g, _absolute(b, g)))
                 acc[gi] = u if acc[gi] is None else np.union1d(acc[gi], u)
         for gi, u in enumerate(acc):
             if u is not None:
@@ -431,16 +436,11 @@ def _locate_function(g: Group):
                 continue
             absolute = _absolute(b, g)
             key = _unit_key(g, absolute)
-            lo = [np.empty(len(key), np.int64) for _ in g.dims]
-            hi = [np.empty(len(key), np.int64) for _ in g.dims]
-            for k in np.unique(key):
-                sel = key == k
-                l, h = _box_of(g, int(k))
-                for d in range(len(g.dims)):
-                    lo[d][sel], hi[d][sel] = l[d], h[d]
             flat = np.zeros(len(key), np.int64)
-            for a, l, h in zip(absolute, lo, hi):
-                flat = flat * (h - l) + (a - l)
+            for a, u, w0, w1 in zip(absolute, g.unit, g.wlo, g.whi):
+                lo = np.maximum(a // u * u, w0)  # the unit's box within the window
+                hi = np.minimum(a // u * u + u, w1)
+                flat = flat * (hi - lo) + (a - lo)
             yield pa.RecordBatch.from_arrays(
                 [pa.array(key), pa.array(flat)] + [b.column(v) for v in g.vars],
                 names=["__k", "__c", *g.vars],
@@ -479,7 +479,7 @@ def _pack_function(g: Group):
                 raise ZarrError(
                     f"{cells - int(mask.sum())} cell(s) of the table share a position with "
                     f"another cell (in the unit {where})",
-                    fix="keep one row per cell: aggregate or drop the duplicate rows before "
+                    fix="keep one row per cell. Aggregate or drop the duplicate rows before "
                     "writing",
                 )
             rows = []

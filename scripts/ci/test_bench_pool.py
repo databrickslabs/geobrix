@@ -184,6 +184,7 @@ def test_up_makes_only_the_missing_clusters_with_a_60_minute_net_and_the_pool_ta
     made = [kw for kind, *rest in w.calls if kind == "create" for kw in rest]
     assert {kw["autotermination_minutes"] for kw in made} == {60}
     assert all(kw["custom_tags"]["gbx_bench_pool"] == "p" and kw["data_security_mode"] == "SINGLE_USER" for kw in made)
+    assert all(kw["aws_attributes"].zone_id == "auto" for kw in made)  # not pinned to one throttled zone
     assert {kw["cluster_name"] for kw in made} == {"gbx-bench-p-1", "gbx-bench-p-2"}
     assert pool.up(w, "p", 3, spark_version="x", node_type="y", workers=1, user="me") == ids and w.created == 2  # nothing missing
 

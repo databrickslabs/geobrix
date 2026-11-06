@@ -127,7 +127,11 @@ def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int
             single_user_name=user,
             custom_tags={POOL_TAG: name, "gbx_bench": "pool", JAR_TAG: NO_JAR},
             aws_attributes=(
-                compute.AwsAttributes(availability=compute.AwsAvailability.ON_DEMAND, first_on_demand=workers + 1)
+                compute.AwsAttributes(
+                    availability=compute.AwsAvailability.ON_DEMAND,
+                    first_on_demand=workers + 1,
+                    zone_id="auto",  # the workspace's default zone can be throttled for hours: let Databricks pick one
+                )
                 if on_demand
                 else None
             ),

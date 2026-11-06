@@ -29,17 +29,17 @@ Three states are always distinguishable under `coverage='complete'`:
 | Covered, all-NoData | `(cellid, NULL)` — count = 0, row present |
 | Outside raster footprint | Absent — no row emitted |
 
-The footprint used for covered-cell enumeration is the raster's **outline** (its four edges), not a NoData-aware region. A cloud hole entirely inside the raster correctly reads as *covered + NULL*, not out-of-coverage. When the raster's coordinate system differs from the grid's (H3 and quadbin cells are in EPSG:4326), the edges are reprojected with intermediate points along each one, so the footprint follows edges that curve in longitude and latitude, as those of a UTM scene do. A cell that holds a valid pixel is always emitted.
+The footprint used for covered-cell enumeration is the raster's **outline** (its four edges), not a NoData-aware region. A cloud hole entirely inside the raster correctly reads as *covered + NULL*, not out-of-coverage. H3 and quadbin cells are in EPSG:4326. When the raster's coordinate system differs from the grid's, the edges are reprojected with intermediate points along each one. The footprint then follows edges that curve in longitude and latitude, as those of a UTM scene do. A cell that holds a valid pixel is always emitted.
 
-`rst_h3_tessellate` and `rst_quadbin_tessellate` raise an error when this footprint crosses the antimeridian or encloses a pole (for example a polar stereographic scene that contains the pole), under `coverage='complete'` or `assignment='covering'`. Reproject such a raster (for example to EPSG:4326) or split it before tessellating.
+`rst_h3_tessellate` and `rst_quadbin_tessellate` raise an error when this footprint crosses the antimeridian or encloses a pole, under `coverage='complete'` or `assignment='covering'`. A polar stereographic scene that contains the pole is one example. Reproject such a raster (for example to EPSG:4326) or split it before tessellating.
 
 ### Assignment: `{centroid, covering}` (default: `centroid`)
 
 *Assignment* controls how pixels are distributed to cells.
 
-- **`centroid`** (default): each valid pixel is mapped to the single cell containing that pixel's centroid coordinate. Pixels **partition** into cells — every valid pixel appears in exactly one output chip, no pixel is counted twice, and the union of all chips reproduces the full valid-pixel set. A pixel is valid when it is valid in any band. With `rst_<grid>_tessellate`, each chip is cropped to the window of the pixels assigned to its cell; pixel values and positions are unchanged, and the other pixels of that window are NoData.
+- **`centroid`** (default): each valid pixel is mapped to the single cell containing that pixel's centroid coordinate. Pixels **partition** into cells. Every valid pixel appears in exactly one output chip, no pixel is counted twice, and the union of all chips reproduces the full valid-pixel set. A pixel is valid when it is valid in any band. With `rst_<grid>_tessellate`, each chip is cropped to the window of the pixels assigned to its cell. Pixel values and positions are unchanged, and the other pixels of that window are NoData.
 - **`covering`** — the meaning differs by function family:
-  - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData; a source without NoData gets its data type's fallback value (for example 65535 for `uint16`), and its pixels equal to that value are NoData too.
+  - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData. A source without NoData gets its data type's fallback value (for example 65535 for `uint16`), and its pixels equal to that value are NoData too.
   - **Scalar-reducing (`rst_<grid>_rastertogrid*`):** area-weighted. Each pixel contributes to every cell its footprint overlaps, weighted by the fraction of the pixel's area inside that cell. Interior pixels (entirely within one cell) carry weight 1; only boundary pixels split. This fills centroid-aliasing gaps — a cell that catches no centroid in `centroid` mode receives area-weighted contributions under `covering`. `sum` and `count` remain globally mass-conserving.
 
 The interaction between the two policies:
@@ -47,9 +47,9 @@ The interaction between the two policies:
 - `centroid + complete`: covered cells with no assigned centroid appear as `NULL` — aliasing gaps are *visible but not closed*.
 - `covering + complete`: aliasing gaps are *closed without interpolation* — the only `NULL` cells are those where every overlapping pixel was NoData. (Mechanism differs by family: covering-set clip for tessellate, area-weighted for rastertogrid\*; the coverage policy and null semantics are identical.)
 
-**When to use `centroid` (default):** binning a collection of overlapping tiles without double-counting; building a deduplication pipeline; aggregating a time-series composite where each pixel should be counted once.
+**When to use `centroid` (default):** binning a collection of overlapping tiles without double-counting. It also suits building a deduplication pipeline and aggregating a time-series composite where each pixel should be counted once.
 
-**When to use `covering` — tessellate family:** building a full-coverage index across tile boundaries; reconstructing a complete raster from chips; matching the semantics of Databricks-native `h3_tessellateaswkb` (which is also a covering-set clip). **For the rastertogrid\* family:** area-weighted assignment — each pixel contributes fractionally to every cell it overlaps — is useful when you need mass-conserving totals rather than single-cell centroid assignment.
+**When to use `covering` — tessellate family:** building a full-coverage index across tile boundaries. It also suits reconstructing a complete raster from chips and matching the semantics of Databricks-native `h3_tessellateaswkb` (which is also a covering-set clip). **For the rastertogrid\* family:** area-weighted assignment is useful when you need mass-conserving totals rather than single-cell centroid assignment. Each pixel contributes fractionally to every cell it overlaps.
 
 ### Fill: always a separate explicit step
 
@@ -68,7 +68,7 @@ One tie-break rule applies uniformly across H3, quadbin, BNG, and custom grids: 
 
 ### Large rasters
 
-`rst_<grid>_tessellate` with `assignment='centroid'` assigns pixels to cells a strip of rows at a time, so its memory grows with the pixel count, not with cells × pixels. With `assignment='covering'`, it reads only each cell's window of the raster. For scene-sized tiles, run `gbx_rst_retile` before tessellating to spread the work across tasks. A cell on a seam between two of those tiles then appears in more than one row, once per tile it overlaps; group by `cellid` to combine them. See [Large Rasters](./large-rasters) for preparing scenes that are too big to load whole.
+`rst_<grid>_tessellate` with `assignment='centroid'` assigns pixels to cells a strip of rows at a time, so its memory grows with the pixel count, not with cells × pixels. With `assignment='covering'`, it reads only each cell's window of the raster. For scene-sized tiles, run `gbx_rst_retile` before tessellating to spread the work across tasks. A cell on a seam between two of those tiles then appears in more than one row, once per tile it overlaps. Group by `cellid` to combine them. See [Large Rasters](./large-rasters) for preparing scenes that are too big to load whole.
 
 ---
 
@@ -173,7 +173,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **CRS handling:** tiles are reprojected to **EPSG:27700** (British National Grid) internally. Any CRS supported by GDAL is accepted.
 
-**Resolution:** an integer index 1–6 (1 = 100 km, 2 = 10 km, 3 = 1 km, 4 = 100 m, 5 = 10 m, 6 = 1 m), or a string key from the BNG resolution map (e.g., `"1km"`, `"100m"`). Negative indices (−1 to −6) select quadrant sub-cells.
+**Resolution:** an integer index 1–6, where 1 = 100 km, 2 = 10 km, and 3 = 1 km. Index 4 = 100 m, 5 = 10 m, and 6 = 1 m. A string key from the BNG resolution map (e.g., `"1km"`, `"100m"`) also works. Negative indices (−1 to −6) select quadrant sub-cells.
 
 **Available functions:**
 - `gbx_rst_bng_tessellate(tile, resolution, [assignment], [coverage])` — UDTF, one chip per cell
@@ -188,7 +188,7 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 **CRS handling:** the custom grid defines its own coordinate system. Tiles are expected to share the grid's CRS; no automatic reprojection is applied.
 
-**Resolution:** the grid struct defines the grid's origin, bounds, and root cell size; the separate `resolution` argument selects the subdivision level, filling the same role as for H3, quadbin, and BNG grids.
+**Resolution:** the grid struct defines the grid's origin, bounds, and root cell size. The separate `resolution` argument selects the subdivision level, filling the same role as for H3, quadbin, and BNG grids.
 
 **Available functions:**
 - `gbx_rst_custom_tessellate(tile, grid, resolution, [assignment], [coverage])` — UDTF, one chip per cell
@@ -203,15 +203,15 @@ See the [Helios notebooks](../notebooks/helios) for a worked example of `gbx_rst
 
 ## Custom-grid determinism {#custom-grid-determinism}
 
-Custom grids assign integer cell IDs using origin-relative arithmetic — `(x − boundXMin) / cellWidth`. These IDs are **not self-describing** and **not comparable across different grid definitions**: a cell ID produced by one grid struct cannot be compared to a cell ID produced by a different grid struct, even if both structs use the same cell size. Four rules govern reproducible use:
+Custom grids assign integer cell IDs using origin-relative arithmetic — `(x − boundXMin) / cellWidth`. These IDs are **not self-describing** and **not comparable across different grid definitions**. Cell IDs from two different grid structs cannot be compared, even if both structs use the same cell size. Four rules govern reproducible use:
 
-**R1 — carry the grid struct with any output.** Cell IDs are only meaningful relative to the grid struct that produced them. Any downstream join, aggregation, or storage operation that includes custom-grid cell IDs must carry the grid struct so that joins remain valid and IDs can be interpreted. Storing cell IDs without the grid struct makes the data uninterpretable in isolation.
+**R1 — carry the grid struct with any output.** Cell IDs are only meaningful relative to the grid struct that produced them. Any downstream join, aggregation, or storage operation that includes custom-grid cell IDs must carry the grid struct. This keeps joins valid and lets you interpret the IDs. Storing cell IDs without the grid struct makes the data uninterpretable in isolation.
 
-**R2 — fix bounds from a stable reference, not from the data.** Define the grid bounding box from a known geographic reference (e.g., a named study-area extent or a projection's natural bounds), never from the per-dataset raster extent. A dataset-derived extent shifts when input data changes, producing cell IDs that are silently incomparable across runs.
+**R2 — fix bounds from a stable reference, not from the data.** Define the grid bounding box from a known geographic reference (e.g., a named study-area extent or a projection's natural bounds). Never derive it from the per-dataset raster extent. A dataset-derived extent shifts when input data changes, producing cell IDs that are silently incomparable across runs.
 
-**R3 — bounds must strictly contain the raster extent.** If the raster extent falls outside the declared grid bounds, the function raises a clear error immediately — before any pixel is processed — rather than failing mid-aggregation when a boundary pixel triggers an out-of-bounds lookup. Validate your bounds before running large jobs.
+**R3 — bounds must strictly contain the raster extent.** If the raster extent falls outside the declared grid bounds, the function raises a clear error immediately, before any pixel is processed. It does not fail mid-aggregation when a boundary pixel triggers an out-of-bounds lookup. Validate your bounds before running large jobs.
 
-**R4 — lower-cell-owns, upper-exclusive (universal).** This is the boundary tie-break rule for all grids (H3, quadbin, BNG, and custom). For custom grids specifically, a pixel centroid coordinate exactly equal to the declared upper bound falls *outside* the grid and triggers an error rather than being silently assigned.
+**R4 — lower-cell-owns, upper-exclusive (universal).** This is the boundary tie-break rule for all grids (H3, quadbin, BNG, and custom). For custom grids specifically, a pixel centroid coordinate exactly equal to the declared upper bound falls *outside* the grid. It triggers an error rather than being silently assigned.
 
 ---
 
@@ -228,13 +228,13 @@ Several functions operate in the interpolation and gap-fill space. The table bel
 | `rst_gridfrompoints*` | points → raster | builds a new raster (IDW) | interpolate a raster from scattered point samples |
 | `rst_filter` / `rst_convolve` | raster → raster | all pixels | focal / neighbourhood stats & kernels (not gap-fill) |
 
-Rule of thumb: *sample* reads, *resample* changes resolution, *fill* replaces only the missing and leaves valid data untouched (pixel stage `rst_fillnodata`, cell stage `cellfill`), *gridfrompoints* builds from points, *focal* transforms every pixel.
+Rule of thumb: *sample* reads, *resample* changes resolution, *gridfrompoints* builds from points, and *focal* transforms every pixel. *Fill* replaces only the missing and leaves valid data untouched (pixel stage `rst_fillnodata`, cell stage `cellfill`).
 
 ---
 
 ## Geometry-aware expansion (`geomkring` / `geomkloop`) {#geometry-aware-expansion}
 
-The model above maps a **raster** onto grid cells. The geometry-aware ring functions do the complementary **vector** operation: they expand grid cells **outward from a vector geometry**, so you can grow a buffer band, an inward setback, or a hole fill entirely in cell space. `k=0` is the geometry's covering set — the same polyfill this page describes — and each step dilates that set by one ring of grid-topology neighbours (a Minkowski sum of the covering set with a `k`-disk, not `N` independent single-cell rings).
+The model above maps a **raster** onto grid cells. The geometry-aware ring functions do the complementary **vector** operation. They expand grid cells **outward from a vector geometry**. You can then grow a buffer band, an inward setback, or a hole fill entirely in cell space. `k=0` is the geometry's covering set, the same polyfill this page describes. Each step dilates that set by one ring of grid-topology neighbours (a Minkowski sum of the covering set with a `k`-disk). It is not `N` independent single-cell rings.
 
 - **`gbx_<grid>_geomkring(geom, resolution, k [, mode])`** — the **filled** disk: the covering set plus every cell within `k` steps.
 - **`gbx_<grid>_geomkloop(geom, resolution, k [, mode])`** — the **hollow** shell: only the cells at exactly `k` steps.

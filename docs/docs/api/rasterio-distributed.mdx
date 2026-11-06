@@ -89,7 +89,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
   {rioDist}
 </CodeFromTest>
 
-The test verifies that the pyrx-reprojected tile reports the correct target CRS (EPSG:3857) and that its geographic bounds agree with the bounds `calculate_default_transform` computes on the rasterio side, within 1%. Pixel-level equality between the two outputs was not asserted — rasterio's warp and pyrx's distributed warp agree on the reprojected grid geometry, not on every pixel value.
+The test verifies two things. The pyrx-reprojected tile reports the correct target CRS (EPSG:3857). Its geographic bounds agree, within 1%, with the bounds `calculate_default_transform` computes on the rasterio side. Pixel-level equality between the two outputs was not asserted. The rasterio warp and the pyrx distributed warp agree on the reprojected grid geometry, not on every pixel value.
 
 ---
 
@@ -119,7 +119,7 @@ The test verifies that the pyrx-reprojected tile reports the correct target CRS 
   {rioDist}
 </CodeFromTest>
 
-Both operations mask the raster to the provided geometry. The third argument to `rst_clip` controls border pixel inclusion (`True` = include any pixel that touches the geometry boundary; `False` = include only pixels fully inside). This corresponds to `rasterio.mask`'s `all_touched` parameter, but the border semantics of `rasterio.mask` and the GDAL cutline path used in the heavyweight tier can diverge on boundary pixels — both are shown here as the same distributed clip operation, not as pixel-level equivalents.
+Both operations mask the raster to the provided geometry. The third argument to `rst_clip` controls border pixel inclusion (`True` = include any pixel that touches the geometry boundary; `False` = include only pixels fully inside). This corresponds to `rasterio.mask`'s `all_touched` parameter. The border semantics of `rasterio.mask` and the GDAL cutline path used in the heavyweight tier can diverge on boundary pixels. Both are shown here as the same distributed clip operation, not as pixel-level equivalents.
 
 ---
 
@@ -163,7 +163,7 @@ Everything in the matrix above. Every `rst_*` function runs on the lightweight i
 
 A small number of capabilities run only on the heavyweight implementation:
 
-- **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes: `mode='constrained'` (constrained Delaunay, the default) works in both tiers; `mode='conforming'` (Steiner-point conforming Delaunay) requires a C-level refinement library not available in the lightweight stack and raises in `pyrx` with an informative message.
+- **Conforming TIN mode.** The VectorX function `st_triangulate` (`gbx_st_triangulate`) supports two triangulation modes. Constrained mode, `mode='constrained'` (constrained Delaunay, the default), works in both tiers. Conforming mode, `mode='conforming'` (Steiner-point conforming Delaunay), requires a C-level refinement library not available in the lightweight stack. It raises in `pyrx` with an informative message.
 
 See [Surfaces and levels](./execution-tiers) for how GeoBrix picks an implementation.
 
@@ -187,7 +187,7 @@ With the plain GeoBrix wheel, `rasterio` brings the GDAL bundled in PyPI's `rast
 
 The lightweight implementation distributes rasterio and NumPy compute over Spark via three mechanisms, none of which require the Spark JVM internals:
 
-- **Arrow scalar UDFs** (per-tile functions): each scalar `rst_*` function invoked via the Python Column API is a `@pandas_udf` (`tile_scalar_udf` / `tile_scalar_udf2` in `pyrx/_udf.py`) — it receives a batch of tiles' raster bytes as a Pandas Series, calls rasterio/NumPy once per tile within the batch, and returns transformed bytes. The Arrow batch crosses the JVM↔Python boundary **once per batch**, not once per row. The same functions are also registered as plain `@f.udf` for SQL use (so `DESCRIBE FUNCTION` and SQL calls work), but the Python Column API always routes through the `pandas_udf` path.
+- **Arrow scalar UDFs** (per-tile functions): each scalar `rst_*` function invoked via the Python Column API is a `@pandas_udf` (`tile_scalar_udf` / `tile_scalar_udf2` in `pyrx/_udf.py`). It receives a batch of tiles' raster bytes as a Pandas Series, calls rasterio/NumPy once per tile within the batch, and returns transformed bytes. The Arrow batch crosses the JVM↔Python boundary **once per batch**, not once per row. The same functions are also registered as plain `@f.udf` for SQL use (so `DESCRIBE FUNCTION` and SQL calls work). The Python Column API always routes through the `pandas_udf` path.
 - **Grouped-aggregate pandas UDFs** (merges and combineavg): `rst_merge_agg`, `rst_combineavg_agg`, and similar grouped aggregators use `@pandas_udf(BinaryType())` — Spark 4 auto-detects the grouped-aggregate eval type. Each receives all tiles in a group as a Pandas Series and merges them in one Python call.
 - **Streaming UDTFs** (fan-out): `rst_h3_tessellate`, `rst_quadbin_tessellate`, `rst_bng_tessellate`, `rst_maketiles`, `rst_retile`, `rst_xyzpyramid` use `@udtf` to yield one output row per chip or tile without materializing the full output in memory first.
 

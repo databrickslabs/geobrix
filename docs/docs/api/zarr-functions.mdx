@@ -52,7 +52,7 @@ these names, which stand for what is yours:
 Every error GeoBrix defines is a subclass of `ZarrError`, and its message ends with a `Fix:` that says how
 to resolve it; see [Errors](#errors). A mistake in an argument is a plain `ValueError`, which
 `except ZarrError` does not catch; the ones in the tables below end with a `Fix:` too. The tables list the
-errors you are most likely to meet, with the start of the fix each one gives (all of it where it is short,
+errors you are most likely to meet. Each row gives the start of the fix (all of it where it is short,
 and `<name>` where the message fills in a value).
 
 ## Learn the model first
@@ -80,7 +80,7 @@ gbx_zarr_read(spark, source, *, source_type="auto", variables=None, sel=None, is
 ```
 
 Reads a Zarr store, or a selection of it, into a DataFrame. The read is planned on the driver and run in
-tasks; a table read is pinned to one version of the manifest, so it is consistent whatever commits
+tasks. A table read is pinned to one version of the manifest, so it is consistent whatever commits
 meanwhile. Returns a `DataFrame` (the schema depends on `output`).
 
 | Parameter | Type | Description |
@@ -111,8 +111,8 @@ meanwhile. Returns a `DataFrame` (the schema depends on `output`).
   testFile="docs/tests/python/api/test_zarr_functions_examples.py"
   outputConstant="READ_A_STORE_output" />
 
-**Errors.** A mistake in the call is raised on the driver. The DataFrame is lazy, so an error raised while
-Spark runs the read arrives from the action as a `pyspark.errors.PythonException` whose message keeps
+**Errors.** A mistake in the call is raised on the driver. The DataFrame is lazy. An error raised while
+Spark runs the read arrives from the action as a `pyspark.errors.PythonException`. Its message keeps
 the GeoBrix error name and `Fix:` line.
 
 | Error | Raised when | The fix says |
@@ -148,8 +148,8 @@ gbx_zarr_sample(spark, points_df, source, *, geom_col="geom", crs=None, variable
                 use_zarr_fill_value_as_mask=None)
 ```
 
-Samples a store at the points of a DataFrame. Returns `points_df` with every column it had, then a column
-for each dimension other than latitude and longitude that `sel` leaves in (time as `TIMESTAMP`), then a
+Samples a store at the points of a DataFrame. Returns `points_df` with every column it had. Then it adds a column
+for each dimension other than latitude and longitude that `sel` leaves in (time as `TIMESTAMP`). Last it adds a
 column per variable, typed as in a table read. A point is repeated for each selected position of those
 dimensions, so one point's time series is its rows. Row order is not defined.
 
@@ -165,8 +165,8 @@ dimensions, so one point's time series is its rows. Row order is not defined.
 | `method` | `str` | `"nearest"` (the only one). `"bilinear"` is planned. |
 | `version_as_of`, `timestamp_as_of`, `access`, `use_zarr_fill_value_as_mask` | | As in [`gbx_zarr_read`](#gbx_zarr_read). |
 
-A point outside the grid (more than half a cell beyond its first or last cell), a missing or empty
-geometry, and a cell equal to the fill value all give `NULL`.
+Three cases give `NULL`. First, a point is outside the grid (more than half a cell beyond its first or last cell).
+Second, a geometry is missing or empty. Third, a cell equals the fill value.
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="sample_a_point"
   source="docs/tests/python/api/zarr_functions_examples.py"
@@ -202,8 +202,8 @@ are described under [Output: blocks](../readers/zarr#output-blocks).
 block_to_numpy(row)
 ```
 
-Returns the cells of a block row (a `Row`, or a dict from a blocks read) as a writable NumPy array of the
-block's `shape` and `dtype`, in C order.
+Returns the cells of a block row (a `Row`, or a dict from a blocks read) as a writable NumPy array.
+The array has the block's `shape` and `dtype`, in C order.
 
 ### `block_to_xarray`
 
@@ -322,8 +322,8 @@ gbx_zarr_register(spark, path, table, *, writable=False, overlay_root=None, file
 ```
 
 Registers the Zarr store at `path` as the manifest table `table`, in place. Nothing is copied and
-nothing in the store is written: the table's rows point at the store's own objects, each recorded with its
-identity so that a change made outside GeoBrix is detected on read. Many tables can register one store;
+nothing in the store is written. The table's rows point at the store's own objects. Each is recorded with its
+identity, so that a change made outside GeoBrix is detected on read. Many tables can register one store;
 each is its own branch with its own history. Returns the table's first store version, the one that holds
 the registered rows. Progress is printed, one line for each step.
 
@@ -338,10 +338,10 @@ the registered rows. Progress is printed, one line for each step.
 | `retain` | `str` | How long superseded versions stay readable. Default `"7 days"`. |
 
 An array GeoBrix cannot decode (a string coordinate, say) is registered like any other and listed under
-`unsupported` in the commit's metadata; reading it raises, and reading the rest works. Zero-byte objects
+`unsupported` in the commit's metadata. Reading it raises, and reading the rest works. Zero-byte objects
 and objects that are not chunks of any array are left out, with a warning. An array whose codecs are
-wrapped around `sharding_indexed` (zarr-python never writes that; anything but `sharding_indexed` as the
-only outer codec) is registered as one GeoBrix cannot decode, so it is unreadable until it is rewritten.
+wrapped around `sharding_indexed` is registered as one GeoBrix cannot decode, so it is unreadable until it is rewritten.
+This means anything but `sharding_indexed` as the only outer codec. zarr-python never writes that.
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="register_a_store"
   source="docs/tests/python/api/zarr_functions_examples.py"
@@ -415,9 +415,9 @@ gbx_zarr_optimize(spark, table, *, variables=None, target_file_mb=128)
 ```
 
 Folds the chunk rows of a store's sharded arrays into whole shards. Appends and updates add one manifest
-row per inner chunk they change, which keeps a write cheap but spreads a shard over many small pack
+row per inner chunk they change. This keeps a write cheap but spreads a shard over many small pack
 files. This copies each shard that has chunk rows, without decoding, into a new pack file as a standard
-Zarr v3 shard, with one shard row in place of the chunk rows. Chunks an all-fill write deleted (tombstones) are
+Zarr v3 shard. It writes one shard row in place of the chunk rows. Chunks an all-fill write deleted (tombstones) are
 folded away. Run it after many small appends, especially on a Volume; it changes no cell. Returns the
 version the fold committed, or the current version when there was nothing to fold.
 
@@ -472,10 +472,10 @@ file under the store's data root: `file` (relative to the root), `action` and `r
 
 A vacuum only touches files in the exact layout GeoBrix writes, `data/<array>/<write_id>/part-<id>.zpack`,
 under the store's own root. It never deletes the objects of a registered store, anything else in a root,
-or anything in a directory that another store owns, so one store's vacuum can never delete another
+or anything in a directory that another store owns. One store's vacuum can therefore never delete another
 store's files. A run that deletes records the instant before which versions are no longer promised
-(`geobrix.zarr.vacuum_horizon`) before it deletes anything, raises Delta's retention properties to the
-store's `retain` if they are lower, and never deletes a commit row, so a replayed `write_id` is still
+(`geobrix.zarr.vacuum_horizon`) before it deletes anything. It raises Delta's retention properties to the
+store's `retain` if they are lower. It never deletes a commit row, so a replayed `write_id` is still
 recognised.
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="vacuum_a_store"
@@ -582,7 +582,7 @@ gbx_zarr_restore(spark, table, *, version_as_of=None, timestamp_as_of=None)
 
 Makes the live rows equal an older version's, as a new commit. Returns the version. Pass `version_as_of` (an
 int or `"tag:<name>"`) or `timestamp_as_of`. The commit upserts the rows the version had and the live rows
-lack or have changed, and deletes the live rows it did not have, under compare-and-swap. Nothing is
+lack or have changed. The commit also deletes the live rows the version did not have, under compare-and-swap. Nothing is
 copied and nothing is removed, so older versions stay readable and the restore can itself be undone. A
 chunk hidden by a tombstone since comes back when the version predates the tombstone. A version already
 equal to the live rows commits nothing and returns the current version. A commit that meets a concurrent
@@ -631,8 +631,8 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
 | `version_as_of` | `int` or `str` | The version to export, an int or `"tag:<name>"`. Default: the latest. Not for `"publish"`. |
 | `access` | `str` | `"reference"` only. With `"direct"`, the reference names the cloud URL of each file (`s3://`, `abfss://`, `gs://`) for readers outside Databricks. |
 
-- **`copy`** writes a plain Zarr store at canonical keys, in the store's own format (a copy of a Zarr v2 store is
-  Zarr v2, and of a v3 store is v3), with the metadata written last, so a reader never sees a half-written store.
+- **`copy`** writes a plain Zarr store at canonical keys, in the store's own format.
+  A copy of a Zarr v2 store is Zarr v2, and of a v3 store is v3. It writes the metadata last, so a reader never sees a half-written store.
   Any tool that reads that format opens it. A store `gbx_zarr_write` made is Zarr v3, with sharding and the
   `crc32c` codec by default, and a GDAL before 3.13 cannot read those (see [the Raster Reader](../readers/raster)).
   `to` must be a path every node sees, such as a `/Volumes` path. Shards that are already in standard form are copied as bytes. Deleted chunks are left out, so readers see
@@ -645,7 +645,7 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
   runtimes preinstall an older one, which fails with `ReferenceNotReachable`. GeoBrix does not pin it, because
   the runtime shares `fsspec` with `s3fs`, `gcsfs` and `adlfs`.
 - **`publish`** writes the overlay of a writable registered store into the store itself, so every Zarr reader
-  sees it, and returns the version it committed; see the [Zarr Writer](../writers/zarr#publishing).
+  sees it, and returns the version it committed. See the [Zarr Writer](../writers/zarr#publishing).
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="export_a_copy"
   source="docs/tests/python/api/zarr_functions_examples.py"
@@ -680,15 +680,15 @@ Exports a version of the store whose manifest table is `source`. Returns the pat
 | `ZarrAccessUnavailable` | The version's files cannot be read for lack of permission on the Volume | `check that you have READ VOLUME (and WRITE VOLUME to write) on the Volume, then try again` |
 
 For a publish, the way back from either `ZarrWriteConflict` (a write landed, or Delta rejected the commit) or
-`ZarrStoreDrift` is `gbx_zarr_sync(spark, table)` and then the publish again; a lock left by a killed publish,
-once it is an hour old, is cleared with `break_lock=True`. See [Publishing](../writers/zarr#publishing).
+`ZarrStoreDrift` is `gbx_zarr_sync(spark, table)` and then the publish again. A lock left by a killed publish
+is cleared with `break_lock=True` once it is an hour old. See [Publishing](../writers/zarr#publishing).
 
 ## Errors
 
 Every error GeoBrix defines is a `ZarrError`, built as `ZarrError(message, fix="...")`. `str(error)` is
 `"<message> Fix: <fix>"`, and `error.fix` holds the action on its own. The errors pickle and unpickle with
-their details, so one raised on a Spark worker reaches the driver intact (wrapped, from an action, in a
-`pyspark.errors.PythonException` that keeps the name and the `Fix:` line). A bad argument is raised as a
+their details, so one raised on a Spark worker reaches the driver intact. From an action, it arrives wrapped in a
+`pyspark.errors.PythonException` that keeps the name and the `Fix:` line. A bad argument is raised as a
 `ValueError` instead, with its `Fix:` at the end of the message in the same way.
 
 <CodeFromTest code={zarrFunctions} language="python" functionName="catch_a_zarr_error"
@@ -710,8 +710,8 @@ their details, so one raised on a Spark worker reaches the driver intact (wrappe
 
 ## Next Steps
 
-- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook
-  that registers a weather cube in place, samples it into a features table, writes a derived
+- [Weather Features with Zarr](../notebooks/zarr-weather-features) — an end-to-end example notebook.
+  It registers a weather cube in place and samples it into a features table. It writes a derived
   variable back as a new version, maps it as raster tiles, and tags the version for training.
 - [Zarr Reader](../readers/zarr) and [Zarr Writer](../writers/zarr) — the how-to guides.
 - [Zarr Stores](./zarr-stores) — the transactional model, with topic pages for each part of it.

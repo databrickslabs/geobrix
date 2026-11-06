@@ -13,7 +13,7 @@ Understanding the internal structure of GeoBrix tiles is essential for advanced 
 
 ## Overview
 
-In GeoBrix, a **tile** is not a simple binary column—it's a **structured type** (struct) that represents a raster dataset along with its metadata, grid-cell information, and — when the tile is a bytes-free reference — the source path, window, and clip/CRS provenance. The same struct is shared by both execution tiers.
+In GeoBrix, a **tile** is not a simple binary column. It is a **structured type** (struct) that represents a raster dataset along with its metadata and grid-cell information. When the tile is a bytes-free reference, the struct also carries the source path, window, and clip/CRS provenance. The same struct is shared by both execution tiers.
 
 ## Tile Schema
 
@@ -100,7 +100,7 @@ Access tile components for custom processing. The reader returns virtual tiles b
 
 ### Materialized vs Virtual: path and raster
 
-A virtual tile has `tile.raster = null` and `tile.path` set to the source file path. A materialized tile is the opposite — `tile.raster` carries the encoded bytes, and `tile.path` is usually null; when it is set it only records where the bytes came from. Classify a tile by `tile.raster`, never by `tile.path` alone:
+A virtual tile has `tile.raster = null` and `tile.path` set to the source file path. A materialized tile is the opposite. Its `tile.raster` carries the encoded bytes, and `tile.path` is usually null. When the path is set, it only records where the bytes came from. Classify a tile by `tile.raster`, never by `tile.path` alone:
 
 <CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
 

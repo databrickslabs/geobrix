@@ -11,8 +11,8 @@ import vrtExamples from '!!raw-loader!../../tests/python/readers/vrt_mosaic_exam
 
 A **VRT mosaic** is a directory of COGs, or bounded mini-COG tiles, plus a lightweight
 GDAL VRT index (`mosaic.vrt`) that describes how they fit together. The index is
-a portable, spatially-aware XML file — a lens over the tile set that can be
-opened by any GDAL-based tool without knowing where the tiles came from. On the
+a portable, spatially-aware XML file. It is a lens over the tile set that any
+GDAL-based tool can open without knowing where the tiles came from. On the
 reading side, pointing a GeoBrix reader at `mosaic.vrt` expands it back into one
 virtual tile per member, so all `rst_*` functions work per-tile unchanged.
 
@@ -33,8 +33,8 @@ processing:
 ## Prepare: write a VRT mosaic
 
 Pass `vrtMosaic=true` to `cog_gbx` to enter mosaic mode. The writer reads each
-source file window-by-window (one tile at a time — the source is never fully
-materialised in RAM), writes one mini-COG per tile, and then builds `mosaic.vrt`
+source file window-by-window, one tile at a time. The source is never fully
+materialised in RAM. It writes one mini-COG per tile and then builds `mosaic.vrt`
 in the output directory. The tile grid defaults to `gridSystem="none"` (native
 pixel tiling), so you normally set only `vrtMosaic` and, optionally, `tileSize`.
 
@@ -52,10 +52,10 @@ mosaic/
   mosaic.vrt                     # VRT index referencing all tiles
 ```
 
-The `<discriminator>` is a stable, source-namespaced token
-(up to 16 alphanum characters of the source basename + 8 hex characters of a
-SHA-1 hash of the source path). Two sources in the same write never collide on
-tile names, and a re-run produces the same names for the same sources
+The `<discriminator>` is a stable, source-namespaced token.
+It combines up to 16 alphanum characters of the source basename with 8 hex characters of a
+SHA-1 hash of the source path. Two sources in the same write never collide on
+tile names. A re-run produces the same names for the same sources
 (`cogSkipIfExists=true` by default, so idempotent resumption is free).
 
 ### Options
@@ -93,7 +93,7 @@ full encoding option reference.
 
 When `gridSystem="quadbin"`, the writer reprojects each source to EPSG:3857 and
 writes one mini-COG per overlapping quadbin cell at the requested resolution.
-Tiles are aligned to the quadbin grid, making the output directly compatible
+Tiles are aligned to the quadbin grid. The output is directly compatible
 with XYZ/quadkey map rendering pipelines and spatial join workflows that operate
 on quadbin cell identifiers.
 
@@ -125,7 +125,7 @@ Set only `gridSystem` and `gridResolution`.
 When `gridSystem="h3"`, the writer reprojects each source to EPSG:4326 and
 writes one mini-COG per overlapping h3 cell at the requested resolution. Each
 cell's pixels are clipped to its hexagon boundary — pixels outside the hexagonal
-footprint become NoData. This aligns the raster output to the h3 grid and makes
+footprint become NoData. This aligns the raster output to the h3 grid. It makes
 the `cellid` field a plain equi-join key for unifying with any other h3-indexed
 dataset (gridded analytics, coverage tables, weather measurements, and similar).
 
@@ -210,7 +210,7 @@ member regardless of working directory.
 
 Pass an explicit `out` path to write the VRT to a fixed location instead of a
 temp directory. Choose the location by **who needs to open the `.vrt` file, and
-for how long** — its member tiles are always referenced by absolute path, so
+for how long**. Its member tiles are always referenced by absolute path, so
 they must be reachable from wherever the VRT is opened:
 
 ```python
@@ -229,7 +229,7 @@ A minted VRT is usable at a given place only if **both** the `.vrt` file and its
 absolute member paths resolve there.
 
 - **No `out` (temp dir) or a `/tmp` path** — driver-local and ephemeral. This is
-  the primary use of `mint_vrt`: build a VRT over a dynamic tile subset, open it
+  the primary use of `mint_vrt`. Build a VRT over a dynamic tile subset. Open it
   with rasterio **in the same driver/notebook process** for a windowed read, then
   discard it. It is invisible to workers and to later sessions, and you are
   responsible for deleting the temp file when you are done with it.
@@ -238,9 +238,8 @@ absolute member paths resolve there.
   process or be read from somewhere else. Because `mint_vrt` bakes **absolute**
   member paths, the tiles themselves must also be on the Volume.
 
-If you instead want a **portable, movable** index co-located with its tiles — one
-where you can copy or move the whole directory — prefer the writer's persisted
-`mosaic.vrt` (`writeVrt=true`), which uses **relative** paths by default. A
+If you instead want a **portable, movable** index co-located with its tiles, prefer the writer's persisted
+`mosaic.vrt` (`writeVrt=true`). You can copy or move the whole directory. The persisted index uses **relative** paths by default. A
 minted VRT is the tool for a *dynamic subset* (pinned or ephemeral); the persisted
 mosaic is the tool for the *whole tile set*.
 :::
@@ -271,7 +270,7 @@ VRT XML, enumerates member paths, and emits **one virtual tile row per member**:
 
 Each row is a whole-file virtual tile (`raster=NULL`, `path` set to the member
 file path, `window=NULL`). All downstream `rst_*` functions operate on the tile
-bytes read lazily from the member path on demand — no pixel data is loaded before
+bytes read lazily from the member path on demand. No pixel data is loaded before
 the operation actually needs it.
 
 ### Directory vs. VRT load
@@ -279,7 +278,7 @@ the operation actually needs it.
 When the load path points **directly at `mosaic.vrt`** the reader expands the
 VRT into one row per member. When the load path points at the **containing
 directory** the reader walks the directory for raster files and excludes
-`.vrt` files — they are indexes, not raster members, and including them would
+`.vrt` files. They are indexes, not raster members, and including them would
 double-count the mosaic. Both patterns produce one row per tile, but the VRT
 path is the canonical way to load a mosaic.
 
@@ -313,7 +312,7 @@ approximately 2 MB — well within the Serverless per-task budget regardless of
 how large the source raster is.
 
 `mint_vrt` and `_parse_vrt_members` (the VRT parser inside the reader) are pure
-Python — no GDAL Python bindings (`osgeo`), no native extension — so they work
+Python, with no GDAL Python bindings (`osgeo`) and no native extension. They work
 identically on Serverless and on classic compute.
 
 See [Serverless & Memory](../serverless-and-memory) for the full per-task memory
@@ -324,7 +323,7 @@ model and guidance on routing large files.
 ## What a VRT mosaic is good for
 
 - **Distributed processing of large rasters** — a single source file too large
-  to process whole is split into bounded mini-COGs; `rst_*` functions then run
+  to process whole is split into bounded mini-COGs. The `rst_*` functions then run
   per-tile across the cluster.
 - **Windowed locality** — a windowed read via `mint_vrt` or `rasterio.open(vrt)`
   touches only the mini-COGs whose spatial extent intersects the requested
@@ -334,9 +333,9 @@ model and guidance on routing large files.
   by QGIS, gdalinfo, rio-tiler, and any GDAL 2+ tool. With `vrtPaths="relative"`
   (the default), the whole directory (tiles + VRT) can be copied or moved and
   the index stays valid.
-- **Expandable to rows for distributed work** — pointing any GeoBrix reader at
+- **Expandable to rows for distributed work.** Pointing any GeoBrix reader at
   the VRT turns a static directory of tiles into a partitioned Spark DataFrame in
-  one line, feeding `rst_*` pipelines without any manual enumeration.
+  one line. This feeds `rst_*` pipelines without any manual enumeration.
 
 ---
 

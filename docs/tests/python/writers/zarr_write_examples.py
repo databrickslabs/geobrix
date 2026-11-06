@@ -167,6 +167,52 @@ def stage_the_blocks_first(spark, cube, table, staged, root):
     return version
 
 
+def create_from_a_table_of_cells(spark, cube, table, root):
+    """A table with one row per cell: name its dimension columns with `dim_cols`."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
+
+    cells = gbx_zarr_read(
+        spark,
+        cube,
+        variables=["t2m"],
+        isel={"time": slice(0, 6), "latitude": slice(0, 45), "longitude": slice(0, 90)},
+        output="table",
+    ).select("time", "latitude", "longitude", (F.col("t2m") - 273.15).alias("temp_c"))
+    version = gbx_zarr_write(
+        cells,
+        table,
+        mode="create",
+        root=root,
+        dim_cols={"time": "time", "latitude": "latitude", "longitude": "longitude"},
+    )
+    return version
+
+
+def append_a_table_of_cells(spark, cube, table):
+    """The next hours of the same table: the new `time` labels are placed after the store's."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
+
+    cells = gbx_zarr_read(
+        spark,
+        cube,
+        variables=["t2m"],
+        isel={"time": slice(6, 12), "latitude": slice(0, 45), "longitude": slice(0, 90)},
+        output="table",
+    ).select("time", "latitude", "longitude", (F.col("t2m") - 273.15).alias("temp_c"))
+    version = gbx_zarr_write(
+        cells,
+        table,
+        mode="append",
+        append_dim="time",
+        dim_cols={"time": "time", "latitude": "latitude", "longitude": "longitude"},
+    )
+    return version
+
+
 # --- overwrite, and variables the store lacks --------------------------------------------
 
 

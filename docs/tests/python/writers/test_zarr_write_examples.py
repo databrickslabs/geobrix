@@ -197,6 +197,18 @@ def test_a_plain_store_is_written_and_extended_with_no_manifest(
     np.testing.assert_array_equal(assemble(spark, path), truth["t2m"].values[:24])
 
 
+def test_a_table_of_cells_is_written_and_extended(spark, cube, truth, new_table, tmp_path):
+    table = new_table("cells")
+    assert ex.create_from_a_table_of_cells(spark, cube, table, str(tmp_path / "cells")) == 1
+    # a table derives ascending labels: the cube's latitude descends, so the rows read flipped
+    want = truth["t2m"].values[:6, :45, :90] - 273.15
+    got = assemble(spark, table, "temp_c")
+    np.testing.assert_allclose(got[:, ::-1], want, atol=1e-3)
+    assert ex.append_a_table_of_cells(spark, cube, table) == 2
+    want = truth["t2m"].values[:12, :45, :90] - 273.15
+    np.testing.assert_allclose(assemble(spark, table, "temp_c")[:, ::-1], want, atol=1e-3)
+
+
 def test_blocks_without_coordinates_make_a_store_labelled_by_position(
     spark, cube, new_table, tmp_path, caplog
 ):

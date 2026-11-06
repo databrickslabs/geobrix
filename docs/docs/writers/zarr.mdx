@@ -52,7 +52,7 @@ does not destroy what it replaces.
 
 ## Inputs
 
-`data` is one of three things.
+`data` is one of four things.
 
 **Blocks**: a DataFrame in the schema [`gbx_zarr_read`](../readers/zarr#output-blocks) returns
 (`BLOCKS_SCHEMA`). With `decode=True` values (the default of a read) the writer applies the array's CF
@@ -66,6 +66,9 @@ out-of-order append left unlabelled.
 
 **GeoBrix tiles**: a DataFrame with one tile column, found by its schema (other columns may stay).
 They have a section of their own, [Tiles](#tiles).
+
+**A table of cells**: a DataFrame with one row per cell, a column per dimension (named in `dim_cols`) and a
+column per variable. See [Write from a table of cells](#write-from-a-table-of-cells).
 
 ## Layouts
 
@@ -169,6 +172,10 @@ An `overwrite` replaces the variables it names:
 
 ### An input that is read more than once
 
+A table of cells needs no staging, whatever its cost to evaluate: the first pass reads its dimension columns only
+(not the values), and the write pass reads the table once. An input that changed between the passes is refused,
+as for blocks, so give it a deterministic one.
+
 A blocks DataFrame is read **once** by an `update` or an `overwrite`. A `create` and an `append` need the
 input's extent (and an append its new labels) before they can lay the chunks out, so they make a first
 pass over the block positions, which never reads the `data` column, and then the write pass. An opaque
@@ -224,6 +231,53 @@ The unit names that are understood are `days`, `hours`, `minutes`, `seconds`, `m
 UDUNITS abbreviations, such as `h` and `hrs`, are **not** understood: reading such an axis raises
 `ZarrUnsupported` ("is not a CF time unit") and writing times into it is refused too. Correct the
 `units` attribute, or read the raw numbers with `decode=False`.
+
+## Write from a table of cells
+
+A table with one row per cell, such as a query result, is written as it is: no packing into blocks and no
+staging table. Pass `dim_cols`, a dict of dimension to the column that holds the cell's label along it, in the
+order of the array's dimensions. Every other column is a variable (or name them with `variables=`).
+
+<CodeFromTest code={zarrWrite} language="python" functionName="create_from_a_table_of_cells"
+  source="docs/tests/python/writers/zarr_write_examples.py"
+  testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+The same call with `transactional=False` writes a plain store. `append` extends the store along `append_dim`:
+the table's new labels of that dimension are placed after the store's (on its step, as for any append), and the
+other dimensions' values must be labels the store has.
+
+<CodeFromTest code={zarrWrite} language="python" functionName="append_a_table_of_cells"
+  source="docs/tests/python/writers/zarr_write_examples.py"
+  testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+**How it is written.**
+
+- The driver reads the **dimension columns only** first: the distinct labels of each dimension that has none yet,
+  sorted ascending (a new store's dimensions, an append's new steps), and which shards the cells fall in. A table
+  that fills its grid (as many rows as the product of its labels) needs no second pass. The values columns are
+  read once, by the write itself.
+- The cells are shuffled **once**, by the shard they fall in (by the chunk, in an unsharded array), one
+  partition per shard touched and no more than the session's parallelism. Each task builds one shard at a time and
+  writes it where it is made, as a [create from blocks on the shard grid](#blocks-on-the-stores-grid) does. A
+  manifest `append` goes on through the writer's usual read-modify-write of the shards it touches.
+- A task holds one shard of every variable, plus a copy of one. A shard over the task budget is refused before
+  any work, with a Fix that names `shards=` and `chunks=`.
+
+**Rules.**
+
+- **Labels.** A new store's labels are the distinct values, ascending. To keep the order of another source
+  (latitude usually descends), pass `coords={"latitude": values, ...}` to `create`; a label the table lacks is then
+  a missing cell, and a table value that matches no label is refused. Floating-point labels match to a relative
+  1e-9; times and integers exactly.
+- **Missing cells** read as the array's fill value (NaN for floats, 0 for integers and booleans). A null value is
+  a missing cell. A null label is refused.
+- **Duplicate cells** (two rows at one position) are refused, never merged: the task that meets them raises
+  `ZarrError` ("share a position with another cell") and nothing is committed. Aggregate or drop the repeats first.
+- **Types.** A variable keeps its column's type in a new store (`float`, `double`, the integer types and
+  `boolean`); in an existing array the values are cast to the array's type, as for blocks. A `decimal` or string
+  column is refused with a Fix to cast it.
+- **Modes.** `create` and `append`. An `update` or an `overwrite` of cells would replace stored cells with the fill
+  value wherever the table has none, so they take blocks. An `append` writes arrays the store already has.
 
 ## Tiles
 

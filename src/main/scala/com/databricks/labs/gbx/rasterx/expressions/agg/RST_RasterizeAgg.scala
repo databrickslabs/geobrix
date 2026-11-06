@@ -2,9 +2,10 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
-import com.databricks.labs.gbx.util.SerializationUtil
+import com.databricks.labs.gbx.util.{GeomInput, SerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
+import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
 import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
@@ -142,11 +143,13 @@ case class RST_RasterizeAgg(
 
     override def createAggregationBuffer(): RasterizeAcc = RasterizeAcc.empty
 
+    /** The geometry is BINARY (WKB or EWKB) or STRING (WKT or EWKT); anything else is refused at analysis. */
+    override def checkInputDataTypes(): TypeCheckResult = GeomInput.checkType(geomExpr, "first")
+
     /** Catalyst-facing update: extract geom and value from the row, delegate to typed helper. */
     override def update(buffer: RasterizeAcc, input: InternalRow): RasterizeAcc = {
-        val raw = geomExpr.eval(input)
-        if (raw == null) return buffer
-        val wkb = raw.asInstanceOf[Array[Byte]]
+        val wkb = GeomInput.toWkb(geomExpr.eval(input))
+        if (wkb == null) return buffer // NULL or unparseable geometry text contributes no feature
         val vRaw = valueExpr.eval(input)
         if (vRaw == null) return buffer
         val v = vRaw.asInstanceOf[Double]

@@ -1,16 +1,14 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
-import com.databricks.labs.gbx.vectorx.jts.JTS
+import com.databricks.labs.gbx.util.GeomInput
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.analysis.TypeCheckResult
-import org.apache.spark.sql.catalyst.analysis.TypeCheckResult.{DataTypeMismatch, TypeCheckSuccess}
 import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
 import org.apache.spark.sql.types._
-import org.apache.spark.unsafe.types.UTF8String
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
 
@@ -78,38 +76,16 @@ final case class ST_AsMvt(
 
     /** The geometry argument is one geometry per row in any of the four formats: BINARY (WKB or
       * EWKB) or STRING (WKT or EWKT). NULL literals are accepted and contribute no feature. */
-    override def checkInputDataTypes(): TypeCheckResult = geom.dataType match {
-        case BinaryType | StringType | NullType => TypeCheckSuccess
-        case _ =>
-            DataTypeMismatch(
-              errorSubClass = "UNEXPECTED_INPUT_TYPE",
-              messageParameters = Map(
-                "paramIndex" -> "first",
-                "requiredType" -> """("BINARY" or "STRING")""",
-                "inputSql" -> s"\"${geom.sql}\"",
-                "inputType" -> s"\"${geom.dataType.sql}\""
-              )
-            )
-    }
+    override def checkInputDataTypes(): TypeCheckResult = GeomInput.checkType(geom, "first")
 
     override def update(buf: MvtAcc, input: InternalRow): MvtAcc = {
-        val wkb = geomToWkb(geom.eval(input))
+        val wkb = GeomInput.toWkb(geom.eval(input))
         if (wkb != null && wkb.length > 0) {
             val attrsRow = attrs.eval(input).asInstanceOf[InternalRow]
             val encoded = encodeAttrs(attrsRow)
             buf.add(wkb, encoded)
         }
         buf
-    }
-
-    /** BINARY passes through untouched (byte-identical to the WKB/EWKB the caller sent); STRING is
-      * parsed by the shared VectorX helper and re-encoded as WKB. Unparseable text is skipped. */
-    private def geomToWkb(v: Any): Array[Byte] = v match {
-        case b: Array[Byte] => b
-        case u: UTF8String =>
-            val g = CrsExpressionUtil.parseGeom(u)
-            if (g == null) null else JTS.toWKBAdaptive(g)
-        case _ => null
     }
 
     override def merge(a: MvtAcc, b: MvtAcc): MvtAcc = a.merge(b)

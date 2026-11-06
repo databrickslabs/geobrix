@@ -1,10 +1,9 @@
 package com.databricks.labs.gbx.vectorx.expressions
 
+import com.databricks.labs.gbx.util.GeomInput
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
-
-import scala.util.Try
 
 /** Shared utilities for the VectorX CRS expression companions (ST_Crs, ST_SetCrs, ST_TransformCrs).
   *
@@ -16,11 +15,7 @@ private[expressions] object CrsExpressionUtil {
     /** Parse a Catalyst-evaluated geometry value (Array[Byte] for BinaryType or UTF8String
       * for StringType) to a JTS Geometry. Returns null on parse failure — callers
       * treat null as a pass-through or no-op, never as an error. */
-    def parseGeom(geom: Any): Geometry = geom match {
-        case b: Array[Byte] => Try(JTS.fromWKB(b)).getOrElse(null)
-        case u: UTF8String  => Try(JTS.fromWKT(u.toString)).getOrElse(null)
-        case _              => null
-    }
+    def parseGeom(geom: Any): Geometry = GeomInput.parse(geom)
 
     /** Return true if the input is a text medium (UTF8String). */
     def isText(geom: Any): Boolean = geom match {

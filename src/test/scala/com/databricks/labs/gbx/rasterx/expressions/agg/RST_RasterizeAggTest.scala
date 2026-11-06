@@ -4,8 +4,8 @@ import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.expressions.Literal
-import org.apache.spark.sql.types.StringType
+import org.apache.spark.sql.catalyst.expressions.{BoundReference, Expression, Literal}
+import org.apache.spark.sql.types.{BinaryType, DoubleType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.gdal
@@ -74,10 +74,13 @@ class RST_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
      *  geomExpr and valueExpr are null literals -- not used in eval (only in update),
      *  so they do not need to produce real values here.
      */
-    private def makeAgg(): RST_RasterizeAgg =
+    private def makeAgg(
+        geomExpr: Expression = Literal.create(null, org.apache.spark.sql.types.BinaryType),
+        valueExpr: Expression = Literal(0.0)
+    ): RST_RasterizeAgg =
         RST_RasterizeAgg(
-            geomExpr     = Literal.create(null, org.apache.spark.sql.types.BinaryType),
-            valueExpr    = Literal(0.0),
+            geomExpr     = geomExpr,
+            valueExpr    = valueExpr,
             xminExpr     = Literal(0.0),
             yminExpr     = Literal(0.0),
             xmaxExpr     = Literal(100.0),
@@ -130,6 +133,22 @@ class RST_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         readPixel(result, 75, 75) shouldBe 20.0 +- 1e-6
         // Pixel at (col=75, row=25):  outside both -> -9999.0 (nodata)
         readPixel(result, 75, 25) shouldBe -9999.0 +- 1e-6
+    }
+
+    test("a WKT or EWKT geometry burns the same raster as the WKB geometry") {
+        val polyWkt = "POLYGON((0 50, 50 50, 50 100, 0 100, 0 50))"
+        def burn(geomType: org.apache.spark.sql.types.DataType, geom: Any): Array[Byte] = {
+            val agg = makeAgg(BoundReference(0, geomType, nullable = true), BoundReference(1, DoubleType, nullable = true))
+            val buf = agg.createAggregationBuffer()
+            agg.update(buf, InternalRow(geom, 10.0))
+            agg.eval(buf).asInstanceOf[InternalRow].getBinary(1)
+        }
+        val fromWkb  = burn(BinaryType, JTS.toWKB(JTS.fromWKT(polyWkt)))
+        val fromWkt  = burn(StringType, UTF8String.fromString(polyWkt))
+        val fromEwkt = burn(StringType, UTF8String.fromString("SRID=32633;" + polyWkt))
+        fromWkb should not be null
+        fromWkt shouldBe fromWkb
+        fromEwkt shouldBe fromWkb
     }
 
     test("overlap winner is deterministic regardless of update order (canonical fold)") {

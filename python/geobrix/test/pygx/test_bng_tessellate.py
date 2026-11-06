@@ -310,3 +310,19 @@ def test_bng_tessellate_udf_keep_core_geom_toggles_interior_chip():
     ), "light bng_tessellate default must be keep_core_geom=False (heavy parity)"
     # a NULL keep_core_geom behaves as the default
     assert _bng_tessellate(geom, res, None) == default
+
+
+def test_tessellate_500km_chips_lie_in_their_cell_and_sum_to_the_box():
+    """At the degenerate 500km resolution (ids that do not follow the digit layout) a box spanning the boundary
+    between two cells gets a chip in each, every chip inside its cell's square, and the chips' areas add up to the
+    box."""
+    g = box(450000, 100000, 550000, 200000)  # across the line at easting 500000
+    chips = _bng.tessellate(g, -1)
+    assert len(chips) == 2
+    assert not any(core for _, core, _ in chips)
+    for cell, _, chip in chips:
+        square = _bng.cell_id_to_geometry(cell)
+        assert square.buffer(1e-6).contains(chip)
+        assert chip.area == pytest.approx(50000 * 100000)
+    assert sum(chip.area for _, _, chip in chips) == pytest.approx(g.area)
+    assert len({c for c, _, _ in chips}) == 2

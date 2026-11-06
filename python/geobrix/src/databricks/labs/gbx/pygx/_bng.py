@@ -19,6 +19,7 @@ Mosaic-lineage bug status (validated against this port):
     here by the input-dimension filter on border chips in ``tessellate``.
 """
 
+import functools
 import math
 import re
 from typing import Any
@@ -454,11 +455,27 @@ def _loop_points(x: int, y: int, edge: int, k: int):
 
 
 def _cell_origin(cell_id: int):
-    """``(resolution, edge, x, y)`` of a Long cell id (its digits' resolution, edge size and south-west corner)."""
-    digits = cell_digits(cell_id)
-    resolution = get_resolution_from_digits(digits)
+    """``(resolution, edge, x, y)`` of a Long cell id (its digits' resolution, edge size and south-west corner).
+
+    The same digit logic as ``get_resolution_from_digits`` + ``get_x``/``get_y`` over the id's decimal string (a
+    negative id takes the digits of its magnitude), without a list of ints per call.
+    """
+    s = str(abs(int(cell_id)))
+    n = len(s)
+    quadrant = int(s[-1])
+    if n < 6:
+        resolution = -1
+    else:
+        k = (n - 6) // 2
+        resolution = -(k + 2) if quadrant > 0 else k + 1
     edge = get_edge_size(resolution)
-    return resolution, edge, get_x(digits, edge), get_y(digits, edge)
+    k = (n - 6) // 2
+    edge_adj = 2 * edge if quadrant > 0 else edge
+    x_offset = edge if quadrant in (3, 4) else 0
+    y_offset = edge if quadrant in (2, 3) else 0
+    x = int(s[1:3] + s[5 : 5 + k]) * edge_adj + x_offset
+    y = int(s[3:5] + s[5 + k : 5 + 2 * k]) * edge_adj + y_offset
+    return resolution, edge, x, y
 
 
 def _ids_at(e: np.ndarray, n: np.ndarray, resolution: int) -> list:
@@ -468,38 +485,175 @@ def _ids_at(e: np.ndarray, n: np.ndarray, resolution: int) -> list:
     return _point_to_cell_id_core(e, n, resolution).tolist()
 
 
+# The cells of a ring around a cell, in units of the cell edge, as indexes into the two axes of the square: a cell at
+# offset (dx, dy) takes the easting from axis position dx + K and the northing from dy + K (K = the largest offset).
+# The offsets depend only on k, so they are made once (a very large k is made per call and not kept).
+_RING_CACHE_MAX_K = 64
+
+
+class _RingShape:
+    __slots__ = ("size", "ie", "in_", "ie_l", "in_l", "axis")
+
+    def __init__(self, offsets_e, offsets_n, K):
+        self.size = 2 * K + 1
+        self.ie = np.array(offsets_e, dtype=np.int64) + K
+        self.in_ = np.array(offsets_n, dtype=np.int64) + K
+        self.ie_l = self.ie.tolist()
+        self.in_l = self.in_.tolist()
+        self.axis = np.arange(-K, K + 1, dtype=np.float64)
+
+
+def _make_ring_shape(k: int, ring: bool) -> _RingShape:
+    if ring:  # the loops 1..k (the cell itself is the caller's)
+        loops = [_loop_points(0, 0, 1, j) for j in range(1, k + 1)]
+        oe = [v for lp in loops for v in lp[0].tolist()]
+        on = [v for lp in loops for v in lp[1].tolist()]
+        K = max(k, 0)
+    else:  # the loop at k
+        e, n = _loop_points(0, 0, 1, k)
+        oe, on = e.tolist(), n.tolist()
+        K = abs(k)
+    return _RingShape([int(v) for v in oe], [int(v) for v in on], K)
+
+
+@functools.lru_cache(maxsize=64)
+def _cached_ring_shape(k: int, ring: bool) -> _RingShape:
+    return _make_ring_shape(k, ring)
+
+
+def _ring_shape(k: int, ring: bool) -> _RingShape:
+    if abs(k) <= _RING_CACHE_MAX_K:
+        return _cached_ring_shape(k, ring)
+    return _make_ring_shape(k, ring)
+
+
+_MAX_EXACT = 2**40  # origins well inside float64's exact integers
+
+
+def _ring_axes(resolution: int, edge: int, x: int, y: int, shape: _RingShape):
+    """``(letters, bins)`` int64 arrays of the easting axis then the northing axis of a ring around the cell at
+    ``(x, y)``: the 100 km letter index and the in-square bin of each axis position, by the encoder's own
+    operations. Only for a resolution above 0 (no quadrant), where an id is a sum of an easting part and a
+    northing part."""
+    m = shape.size
+    c = np.empty(2 * m, dtype=np.float64)
+    np.multiply(shape.axis, edge, out=c[:m])
+    c[m:] = c[:m]
+    c[:m] += x
+    c[m:] += y
+    c_int = np.trunc(c).astype(np.int64)
+    letters = np.trunc(c_int / 100000).astype(np.int64)
+    divisor = 10 ** (6 - resolution)
+    bins = np.floor((c_int % 100000) / divisor).astype(np.int64)
+    return letters, bins
+
+
+def _ring_ids(resolution: int, edge: int, x: int, y: int, shape: _RingShape) -> list:
+    """Long ids of the ring cells (:func:`k_ring`/:func:`k_loop` order) for a resolution above 0, from the two axes
+    instead of an encoder call per point: the id is the placeholder + an easting part + a northing part.
+    """
+    letters, bins = _ring_axes(resolution, edge, x, y, shape)
+    m = shape.size
+    n_positions = resolution
+    e_part = letters[:m] * 10 ** (1 + 2 * n_positions) + bins[:m] * 10**n_positions
+    n_part = letters[m:] * 10 ** (2 * n_positions - 1) + bins[m:] * 10
+    ids = e_part[shape.ie] + n_part[shape.in_] + 10 ** (2 * n_positions + 3)
+    return ids.tolist()
+
+
+def _ring_ids_generic(origin, k: int, ring: bool) -> list:
+    resolution, edge, x, y = origin
+    if ring:
+        loops = [_loop_points(x, y, edge, j) for j in range(1, k + 1)]
+        e = np.concatenate([lp[0] for lp in loops])
+        n = np.concatenate([lp[1] for lp in loops])
+    else:
+        e, n = _loop_points(x, y, edge, k)
+    return _ids_at(e, n, resolution)
+
+
 def k_loop(cell_id: int, k: int) -> list:
     """Hollow square ring of Long cell ids at radius k (BNG.kLoop).
 
     Walks the four corners plus the interior edge runs of the square at
     distance ``k * edgeSize`` around the cell centre, mapping each point back
     to a cell id. Mirrors the Scala ``until ... by edgeSize`` (exclusive upper
-    bound) edge runs via ``np.arange`` (also exclusive); the points are encoded in one array call.
+    bound) edge runs; the points are encoded in one pass.
     """
-    resolution, edge, x, y = _cell_origin(cell_id)
-    e, n = _loop_points(x, y, edge, k)
-    return _ids_at(e, n, resolution)
+    origin = _cell_origin(cell_id)
+    resolution, edge, x, y = origin
+    if resolution > 0 and abs(x) < _MAX_EXACT and abs(y) < _MAX_EXACT:
+        return _ring_ids(resolution, edge, x, y, _ring_shape(k, False))
+    return _ring_ids_generic(origin, k, False)
 
 
 def k_ring(cell_id: int, n: int) -> list:
     """Center + all k-loops 1..n of Long cell ids (BNG.kRing)."""
-    resolution, edge, x, y = _cell_origin(cell_id)
-    loops = [_loop_points(x, y, edge, k) for k in range(1, n + 1)]
-    if not loops:
+    origin = _cell_origin(cell_id)  # (an unreadable id raises here, whatever n is)
+    if n < 1:
         return [cell_id]
-    e = np.concatenate([lp[0] for lp in loops])
-    nn = np.concatenate([lp[1] for lp in loops])
-    return [cell_id] + _ids_at(e, nn, resolution)
+    resolution, edge, x, y = origin
+    if resolution > 0 and abs(x) < _MAX_EXACT and abs(y) < _MAX_EXACT:
+        return [cell_id] + _ring_ids(resolution, edge, x, y, _ring_shape(n, True))
+    return [cell_id] + _ring_ids_generic(origin, n, True)
+
+
+def _ring_strs(cell_id: int, n: int, ring: bool) -> list:
+    """The cell id strings of :func:`k_ring` (``ring``) or :func:`k_loop` around a Long cell id: what
+    ``[format(c) for c in k_ring(cell_id, n)]`` gives. For a resolution above 0 whose ring stays on the letter grid,
+    each string is built straight from the two axes (letters + the zero-padded bins) instead of an id and a slice.
+    """
+    origin = _cell_origin(cell_id)  # (an unreadable id raises here, whatever n is)
+    if ring and n < 1:
+        return [format(cell_id)]
+    resolution, edge, x, y = origin
+    if resolution > 0 and abs(x) < _MAX_EXACT and abs(y) < _MAX_EXACT:
+        shape = _ring_shape(n, ring)
+        letters, bins = _ring_axes(resolution, edge, x, y, shape)
+        m = shape.size
+        lt, bn = letters.tolist(), bins.tolist()
+        width = resolution - 1
+        if (
+            min(lt) >= 0
+            and max(lt[:m]) < len(LETTER_MAP[0])
+            and max(lt[m:]) < len(LETTER_MAP)
+            and min(bn) >= 0
+            and max(bn) < 10**width
+        ):
+            if width:
+                es = [str(b).zfill(width) for b in bn[:m]]
+                ns = [str(b).zfill(width) for b in bn[m:]]
+            else:
+                es = ns = [""] * m
+            # LETTER_MAP is indexed [northing letter][easting letter]
+            rows = [LETTER_MAP[v] for v in lt[m:]]
+            el = lt[:m]
+            out = [
+                rows[j][el[i]] + es[i] + ns[j] for i, j in zip(shape.ie_l, shape.in_l)
+            ]
+            return [format(cell_id)] + out if ring else out
+    ids = k_ring(cell_id, n) if ring else k_loop(cell_id, n)
+    return [format(c) for c in ids]
+
+
+def k_ring_strs(cell_id: int, n: int) -> list:
+    """Cell id strings of :func:`k_ring` for a Long cell id."""
+    return _ring_strs(cell_id, n, True)
+
+
+def k_loop_strs(cell_id: int, k: int) -> list:
+    """Cell id strings of :func:`k_loop` for a Long cell id."""
+    return _ring_strs(cell_id, k, False)
 
 
 def k_ring_str(cell_id_str: str, n: int) -> list:
     """String-id wrapper over :func:`k_ring` (parse -> walk -> format)."""
-    return [format(c) for c in k_ring(parse(cell_id_str), int(n))]
+    return k_ring_strs(parse(cell_id_str), int(n))
 
 
 def k_loop_str(cell_id_str: str, k: int) -> list:
     """String-id wrapper over :func:`k_loop` (parse -> walk -> format)."""
-    return [format(c) for c in k_loop(parse(cell_id_str), int(k))]
+    return k_loop_strs(parse(cell_id_str), int(k))
 
 
 # ---------------------------------------------------------------------------
@@ -586,12 +740,20 @@ def _seed_coords_array(geometry) -> np.ndarray:
     return _get_coordinates(geometry)
 
 
-def _origin_valid(ids: np.ndarray, resolution: int):
+class _ForeignResolution(Exception):
+    """A valid id whose digits say a resolution other than the walk's: only the one-cell-at-a-time walk, which reads
+    every id at its own digits' resolution, gives what it gives."""
+
+
+def _origin_valid(ids: np.ndarray, resolution: int, strict: bool = False):
     """``(x, y, valid)`` arrays for Long ids made at ``resolution``: the cell origins and :func:`is_valid`.
 
     The array walk needs the id's digit count to be the layout's. An id past it (a coordinate far outside the
-    grid, or a negative one) goes through the scalar :func:`is_valid`/``get_x``/``get_y``, so every id gives what
-    the scalar functions give.
+    grid, or one so negative its digits are not the layout's) goes through the scalar :func:`is_valid`/``get_x``/
+    ``get_y``, so every id gives what the scalar functions give. (The scalar functions read the digits of the id's
+    magnitude, and so does the array one, so a negative id with the layout's digit count agrees as it is.) With
+    ``strict``, such an id that is valid at a resolution other than ``resolution`` raises :class:`_ForeignResolution`:
+    the walk would build its square and neighbours at ``resolution``, the scalar walk at the id's own.
     """
     ab = np.abs(ids)
     n_positions = abs(resolution) if resolution >= -1 else abs(resolution) - 1
@@ -602,7 +764,9 @@ def _origin_valid(ids: np.ndarray, resolution: int):
         c = int(ids[i])
         valid[i] = is_valid(c)
         if valid[i]:
-            x[i], y[i] = _cell_origin(c)[2:]
+            own, _, x[i], y[i] = _cell_origin(c)
+            if strict and own != resolution:
+                raise _ForeignResolution
     return x, y, valid
 
 
@@ -657,7 +821,10 @@ def polyfill(geometry, resolution: int) -> list:
         visited.update(frontier.tolist())
         # out-of-GB / malformed cells (e.g. a raster reprojected to 27700 outside the BNG envelope) have no
         # geometry to test or walk: the fill yields nothing for them
-        x, y, valid = _origin_valid(frontier, resolution)
+        try:
+            x, y, valid = _origin_valid(frontier, resolution, strict=True)
+        except _ForeignResolution:
+            return _polyfill_scalar(geometry, resolution)
         frontier, x, y = frontier[valid], x[valid], y[valid]
         if not frontier.size:
             break

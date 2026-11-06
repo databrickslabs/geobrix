@@ -468,7 +468,7 @@ def _bng_kring(cellid, k):
     cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
     if cid is None:
         return None
-    return [_bng.format(c) for c in _bng.k_ring(cid, int(k))]
+    return _bng.k_ring_strs(cid, int(k))
 
 
 def _bng_kloop(cellid, k):
@@ -477,7 +477,7 @@ def _bng_kloop(cellid, k):
     cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
     if cid is None:
         return None
-    return [_bng.format(c) for c in _bng.k_loop(cid, int(k))]
+    return _bng.k_loop_strs(cid, int(k))
 
 
 def _bng_polyfill(geom, res):

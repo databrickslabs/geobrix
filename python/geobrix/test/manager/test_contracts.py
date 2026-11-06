@@ -76,7 +76,10 @@ def test_oracle_rows_fit_signature(fn):
             c.sql is not None
         ):  # a recipe row is one whole statement: no arguments to fit (`args` is only the data of its reference)
             assert not c.variants and "uc" in c.surfaces, c.cid
-            assert c.kind in ("ref", "grid_stats_json") or not c.args, c.cid
+            assert (
+                c.kind in ("ref", "grid_stats_json", "stats_merge_json", "pixels")
+                or not c.args
+            ), c.cid
             continue
         arg_rows = (
             c.args

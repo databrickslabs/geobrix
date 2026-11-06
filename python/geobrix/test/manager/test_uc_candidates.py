@@ -57,7 +57,8 @@ def test_the_two_rows_run_as_sql_on_uc_and_in_the_session_with_one_text():
         assert (
             "handler" in fn.levels["L4"]
         ), name  # the Python twin stays the oracle's reference
-    assert candidates.CANDIDATES == {}  # an adopted body leaves the candidate table
+    # an adopted body leaves the candidate table; the two BNG rings wait for warehouse numbers (2.6x slower than light locally)
+    assert set(candidates.CANDIDATES) == {"gbx_bng_kring", "gbx_bng_kloop"}
 
 
 # ---- mechanism: a candidate is data and never changes the default install ----------------------------------------

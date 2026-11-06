@@ -59,6 +59,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import subprocess
 import sys
 import time
 import uuid
@@ -709,6 +711,59 @@ def run_smoke_stage(
     return None
 
 
+def levels_functions(levels_mvp, root, only=()) -> dict:
+    """``{function: [form names]}`` for the forms a run of the set times (the opt-in ones are left out, as the run
+    leaves them out), in the set's order; `only` limits it to those form names. {} where the form table cannot load."""
+    src = str(Path(root) / "python/geobrix/src")
+    sys.path.insert(0, src)
+    try:
+        from databricks.labs.gbx.bench import levels_forms as lf
+
+        forms = lf.select_forms(levels_mvp, tuple(only))
+    except Exception:  # noqa: BLE001 - no pyspark here, or the form table did not load
+        return {}
+    finally:
+        try:
+            sys.path.remove(src)
+        except ValueError:
+            pass
+    out: dict = {}
+    for f in forms:
+        out.setdefault(f.fn, []).append(f.variant)
+    return out
+
+
+def split_by_function_args(argv, run_id, groups) -> list:
+    """The argv of one launch per function: this launch's own, without ``--split-by`` and with its own ``--run-id``
+    (``<run>-<function>``) and ``--levels-forms`` (the function's form names)."""
+    drop = {"--split-by": 1, "--run-id": 1, "--levels-forms": 1}
+    base, skip = [], 0
+    for a in argv:
+        if skip:
+            skip -= 1
+        elif a in drop:
+            skip = drop[a]
+        else:
+            base.append(a)
+    plans = []
+    for fn, variants in groups.items():
+        safe = re.sub(r"[^A-Za-z0-9_]+", "_", fn).strip("_")
+        plans.append((fn, base + ["--run-id", f"{run_id}-{safe}", "--levels-forms", ",".join(variants)]))
+    return plans
+
+
+def run_split(plans) -> int:
+    """Launch every plan as a launcher process of its own, all at once, and wait for them: the worst exit code."""
+    procs = []
+    for fn, args in plans:
+        print(f"[split] {fn}: run {args[args.index('--run-id') + 1]}", flush=True)
+        procs.append((fn, subprocess.Popen([sys.executable, str(Path(__file__).resolve()), *args])))
+    codes = {fn: p.wait() for fn, p in procs}
+    for fn, code in codes.items():
+        print(f"[split] {fn}: exit {code}", flush=True)
+    return max(codes.values(), default=0)
+
+
 def effective_form_caps(form_cap_min, form_cap_max_min, fail_fast, rung_cap_min, setup_cap_min):
     """``(1x form cap, ceiling after the scale multiply, note or None)`` in minutes, for the watchdog.
 
@@ -778,6 +833,10 @@ def main() -> int:
     bar_factor = float(_arg("--bar-factor", "1.5"))
     rung_cap_min = float(_arg("--rung-cap-min", "20"))
     setup_cap_min = float(_arg("--setup-cap-min", "10"))
+    warmup_skip_s = float(_arg("--warmup-skip-s", "120"))
+    if warmup_skip_s < 0:
+        print("ERROR: --warmup-skip-s must be 0 (always warm) or a number of seconds.", file=sys.stderr)
+        return 2
     if bar_factor <= 0 or rung_cap_min <= 0 or setup_cap_min <= 0:
         print("ERROR: --bar-factor, --rung-cap-min and --setup-cap-min must be positive numbers.", file=sys.stderr)
         return 2
@@ -1065,6 +1124,22 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    if _arg("--split-by", "") not in ("", "fn"):
+        print("ERROR: --split-by takes fn (one launch per function of the set).", file=sys.stderr)
+        return 2
+    if _arg("--split-by", "") == "fn":
+        if not levels_mvp:
+            print("ERROR: --split-by fn needs --levels <set>.", file=sys.stderr)
+            return 2
+        groups = levels_functions(
+            levels_mvp, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent), levels_forms
+        )
+        if len(groups) > 1:
+            return run_split(
+                split_by_function_args(
+                    sys.argv[1:], _arg("--run-id", "") or _default_run_id(), groups
+                )
+            )
     if (levels_only or levels_uc) and not levels_mvp:
         print(
             "ERROR: --levels-only and --levels-uc need --levels <set> (S, G, A, H, SE, IO or a function family).",
@@ -1373,6 +1448,7 @@ def main() -> int:
         bar_factor=bar_factor,
         rung_cap_s=rung_cap_min * 60.0,
         setup_cap_s=setup_cap_min * 60.0,
+        warmup_skip_s=warmup_skip_s,
         inject_stall=inject_stall,
         #  Phase-2 FILE legs (light-only, serialized):
         #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.

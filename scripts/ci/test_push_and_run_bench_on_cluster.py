@@ -399,3 +399,58 @@ def test_a_levels_form_table_that_cannot_load_leaves_the_set_names_unfiltered_an
     assert names[: len(LEVELS_LETTER_SETS)] == LEVELS_LETTER_SETS and len(names) > len(LEVELS_LETTER_SETS)
     assert sys.path == before  # the inserted path is gone
     assert "manifest did not load" in capsys.readouterr().err
+
+
+# ---- warmup skip, split by function
+
+
+def _grab(sdk, name):
+    (_, notebook), = sdk.uploads
+    lines = [l for c in notebook["cells"] for l in "".join(c["source"]).splitlines() if l.startswith(f"{name} =")]
+    assert len(lines) == 1
+    return lines[0].split("=")[1].strip()
+
+
+def test_the_warmup_skip_threshold_reaches_the_notebook(launch, sdk, capsys):
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
+    assert _grab(sdk, "WARMUP_SKIP_S") == "120.0"
+    sdk.uploads.clear()
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--warmup-skip-s", "45", "--no-wait") == 0
+    assert _grab(sdk, "WARMUP_SKIP_S") == "45.0"
+    sdk.uploads.clear()
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--warmup-skip-s", "-1", "--no-wait") == 2
+
+
+def test_split_by_fn_launches_one_job_per_function_with_its_own_run_id_and_forms(launch, sdk, monkeypatch):
+    import push_and_run_bench_on_cluster as mod
+
+    groups = {"gbx_rst_merge_agg": ["c0", "tvf"], "gbx_rst_bng_rasterize_agg": ["c0"]}
+    monkeypatch.setattr(mod, "levels_functions", lambda mvp, root, only=(): groups)
+    started = []
+
+    class Proc:
+        def __init__(self, cmd):
+            started.append(cmd[2:])
+            self.code = 3 if "bng_rasterize" in " ".join(cmd) else 0
+
+        def wait(self):
+            return self.code
+
+    monkeypatch.setattr(mod.subprocess, "Popen", Proc)
+    monkeypatch.setattr(sys, "argv", ["push_and_run_bench_on_cluster.py", "--levels", "IO", "--levels-only", "--run-id", "r1",
+                                      "--levels-forms", "ignored", "--split-by", "fn", "--no-wait"])
+    assert mod.main() == 3  # the worst exit code of the launches
+    assert len(started) == 2 and all("--split-by" not in a for a in started)
+    first, second = started
+    assert first[first.index("--run-id") + 1] == "r1-gbx_rst_merge_agg" and first[first.index("--levels-forms") + 1] == "c0,tvf"
+    assert second[second.index("--run-id") + 1] == "r1-gbx_rst_bng_rasterize_agg" and second[second.index("--levels-forms") + 1] == "c0"
+    assert first.count("--run-id") == 1 and first.count("--levels-forms") == 1  # the originals are replaced, not repeated
+
+
+def test_without_split_by_a_levels_run_is_one_job(launch, sdk, monkeypatch):
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
+    assert len(sdk.submits) == 1
+    import push_and_run_bench_on_cluster as mod
+
+    monkeypatch.setattr(sys, "argv", ["x", "--levels", "IO", "--split-by", "other"])
+    assert mod.main() == 2

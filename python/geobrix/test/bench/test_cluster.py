@@ -520,3 +520,41 @@ def test_the_zarr_cell_runs_alone_with_the_env_wheel_zarr_extra(
     assert "'geobrix @ file://' + WHL" in "".join(
         cl.build_bench_notebook(_cfg())["cells"][0]["source"]
     )
+
+
+def test_a_runner_notebook_starts_with_the_header_cell_when_the_launcher_gives_one():
+    nb = cl.build_bench_notebook(_cfg(header_md="## r\n- **Testing:** x\n"))
+    first = nb["cells"][0]
+    assert (
+        first["cell_type"] == "markdown"
+        and "outputs" not in first
+        and "execution_count" not in first
+    )
+    assert "".join(first["source"]).startswith("## r")
+    assert "WHL" in "".join(nb["cells"][1]["source"])  # the install cell follows it
+    assert (
+        cl.build_bench_notebook(_cfg())["cells"][0]["cell_type"] == "code"
+    )  # no header: as before
+
+
+def test_the_smoke_header_says_it_is_the_smoke_and_what_gates_on_it():
+    cfg = _cfg(
+        levels_mvp="IO", out_dir="/Volumes/o/r1-smoke", table="c.s.t", run_id="r1-smoke"
+    )
+    head = cl.bench_header(
+        cfg,
+        dict(
+            purpose="why",
+            smoke=True,
+            compute="dedicated",
+            profile="p",
+            sha="abc",
+            ceiling_min=60,
+        ),
+    )
+    assert (
+        head.startswith("## r1-smoke (smoke)")
+        and "1 scale (smoke rows)" in head
+        and "the smoke gates the real run" in head
+    )
+    assert "~2-3 min" in head

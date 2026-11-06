@@ -138,7 +138,7 @@ def launch(monkeypatch, sdk):
         monkeypatch.setattr(
             sys,
             "argv",
-            ["push_and_run_bench_on_cluster.py", "--no-smoke", "--skip-preflight", *args],
+            ["push_and_run_bench_on_cluster.py", "--no-smoke", "--skip-preflight", *(() if "--purpose" in args else ("--purpose", "a test run")), *args],
         )
         return module.main()
 
@@ -160,8 +160,8 @@ def test_serverless_zarr_installs_the_wheel_and_extras_through_the_job_environme
     assert any(d.startswith("zarr") for d in deps) and deps[-1] == "markdown"
     assert not any(d.startswith("geobrix[") for d in deps)  # extras are expanded
     (_, notebook), = sdk.uploads
-    install = "".join(notebook["cells"][0]["source"])
-    assert "installed by the job environment" in install and "pip" not in install
+    (install,) = ["".join(c["source"]) for c in notebook["cells"] if "installed by the job environment" in "".join(c["source"])]
+    assert "pip" not in install
 
 
 def _levels_scales_cell(sdk):
@@ -438,7 +438,7 @@ def test_split_by_fn_launches_one_job_per_function_with_its_own_run_id_and_forms
             return self.code
 
     monkeypatch.setattr(mod.subprocess, "Popen", Proc)
-    monkeypatch.setattr(sys, "argv", ["push_and_run_bench_on_cluster.py", "--levels", "IO", "--levels-only", "--run-id", "r1",
+    monkeypatch.setattr(sys, "argv", ["push_and_run_bench_on_cluster.py", "--levels", "IO", "--levels-only", "--run-id", "r1", "--purpose", "p",
                                       "--levels-forms", "ignored", "--split-by", "fn", "--no-wait"])
     assert mod.main() == 3  # the worst exit code of the launches
     assert len(started) == 2 and all("--split-by" not in a for a in started)
@@ -453,7 +453,7 @@ def test_without_split_by_a_levels_run_is_one_job(launch, sdk, monkeypatch):
     assert len(sdk.submits) == 1
     import push_and_run_bench_on_cluster as mod
 
-    monkeypatch.setattr(sys, "argv", ["x", "--levels", "IO", "--split-by", "other"])
+    monkeypatch.setattr(sys, "argv", ["x", "--levels", "IO", "--split-by", "other", "--purpose", "p"])
     assert mod.main() == 2
 
 
@@ -527,3 +527,49 @@ def test_a_pool_with_no_cluster_free_is_one_clear_line(launch, sdk, monkeypatch,
     monkeypatch.setattr(_cluster_pool, "lease_cluster", none_free)
     assert launch("--pool", "dev", "--lightweight-only", "--no-wait") == 2
     assert "every cluster of pool 'dev' is leased" in capsys.readouterr().err and not sdk.submits
+
+
+# ---- every runner notebook starts with what it is, and the launch says why
+
+
+def _header(sdk):
+    (_, notebook), = sdk.uploads
+    first = notebook["cells"][0]
+    assert first["cell_type"] == "markdown" and "outputs" not in first  # a markdown cell, and a valid one
+    return "".join(first["source"])
+
+
+def test_a_levels_run_starts_with_a_short_header_that_says_what_why_how_long_and_how_watched(launch, sdk):
+    assert launch("--serverless", "--levels", "IO", "--levels-only", "--levels-scales", "1,4", "--run-id", "h1",
+                  "--purpose", "does IO stay linear after the interrupt fix", "--no-wait") == 0  # fmt: skip
+    head = _header(sdk)
+    lines = head.strip().splitlines()
+    assert len(lines) <= 6 and lines[0] == "## h1"
+    assert "**Testing:** levels `IO`" in head and "1x/4x" in head and "**why:** does IO stay linear after the interrupt fix" in head
+    assert "rows in `" in head and "where run_id='h1'" in head and "forms x 2 scale(s)" in head
+    assert "**Expected time:** ~no prior run" in head and "at most" in head
+    assert "fail-fast ON (rung cap 20 min, setup cap 10 min, bar 1.5, warmup skip > 120 s, escalate 60 s)" in head
+    assert "/heartbeat.json" in head and "watchdog ceiling 60 min" in head and "jobs cancel-run <run id>" in head
+    (submit,) = sdk.submits
+    assert "does IO stay linear" in submit["run_name"] and submit["run_name"].startswith("geobrix-bench-h1 | ")
+
+
+def test_a_zarr_ladder_run_starts_with_its_own_header(launch, sdk):
+    assert launch("--serverless", "--zarr-only", "--zarr-ladder", "10MB,50MB", "--zarr-ladder-family", "county_wind",
+                  "--zarr-ladder-cases", "ZL-R1,ZL-R2", "--run-id", "h2", "--purpose", "ladder read legs", "--no-wait") == 0  # fmt: skip
+    head = _header(sdk)
+    assert "Zarr size ladder: rungs 10MB, 50MB, families county_wind, cases ZL-R1, ZL-R2" in head
+    assert "**why:** ladder read legs" in head and "4 ladder rows" in head
+
+
+def test_a_launch_on_compute_without_a_purpose_is_refused_with_the_fix(launch, sdk, monkeypatch, capsys):
+    import push_and_run_bench_on_cluster as mod
+
+    monkeypatch.setattr(sys, "argv", ["x", "--serverless", "--levels", "IO", "--levels-only", "--no-wait"])
+    assert mod.main() == 2
+    err = capsys.readouterr().err
+    assert "--purpose" in err and "Fix:" in err and not sdk.submits
+    # a dry run (--explain-only) may leave it out
+    monkeypatch.setattr(sys, "argv", ["x", "--serverless", "--explain-only", "--no-smoke", "--skip-preflight", "--no-wait"])
+    mod.main()
+    assert "--purpose" not in capsys.readouterr().err

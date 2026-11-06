@@ -711,6 +711,48 @@ def run_smoke_stage(
     return None
 
 
+def git_sha(root) -> str:
+    """The short sha of the commit this launch runs (``+dirty`` when the tree has uncommitted changes); "" where git is absent."""
+    try:
+        sha = subprocess.run(["git", "-C", str(root), "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip()
+        dirty = subprocess.run(["git", "-C", str(root), "status", "--porcelain", "--untracked-files=no"], capture_output=True, text=True, timeout=10).stdout.strip()
+        return sha + ("+dirty" if sha and dirty else "")
+    except Exception:  # noqa: BLE001 - the header never stops a launch
+        return ""
+
+
+def prior_wall(w, table, levels_mvp, compute, expected_rows) -> str:
+    """"~N min (median of K prior runs)" from the results table: runs of the same levels set on the same compute whose row
+    count is within a factor of two of this launch's; "" when there is none or the query fails (no warehouse, no table)."""
+    if not (levels_mvp and expected_rows):
+        return ""
+    wh = _discover_warehouse(w)
+    if not wh:
+        return ""
+    try:
+        res = w.statement_execution.execute_statement(
+            warehouse_id=wh,
+            statement=(
+                f"SELECT run_id, count(*) n, sum(setup_s + warmup_s + iter_total_wall_clock_s) wall FROM {table} "
+                f"WHERE category = 'mvp-{levels_mvp}' AND compute = '{compute}' AND run_id NOT LIKE '%-smoke' "
+                "AND status = 'ok' GROUP BY run_id"
+            ),
+            wait_timeout="30s",
+        )
+        rows = res.result.data_array if res and res.result and res.result.data_array else []
+        walls = sorted(float(r[2]) for r in rows if 0.5 * expected_rows <= float(r[1]) <= 2 * expected_rows)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not walls:
+        return ""
+    return f"{walls[len(walls) // 2] / 60.0:.0f} min (median of {len(walls)} prior run{'s' if len(walls) > 1 else ''})"
+
+
+def named_run(name: str, purpose: str, sha: str) -> str:
+    """The job run's name: the purpose and the commit ride on it, so the Jobs list says what each run is."""
+    return f"{name} | {' '.join(purpose.split())[:80]} | {sha or 'nogit'}"
+
+
 def levels_functions(levels_mvp, root, only=()) -> dict:
     """``{function: [form names]}`` for the forms a run of the set times (the opt-in ones are left out, as the run
     leaves them out), in the set's order; `only` limits it to those form names. {} where the form table cannot load."""
@@ -878,6 +920,16 @@ def _main(_stack) -> int:
     if explain_only:
         heavyweight = False
         lightweight = True
+    # --purpose "<one line why>": REQUIRED for a launch that runs on compute (a dry run, --explain-only, may leave it out).
+    # It heads the runner notebook and rides on the job run's name, so a list of runs says what each one is for.
+    purpose = " ".join(_arg("--purpose", "").split())
+    if not purpose and not explain_only:
+        print(
+            "ERROR: --purpose \"<one line: what this run tests and why>\" is required for a launch on compute.\n"
+            "Fix: add it, e.g. --purpose \"16x ladder of grid-generator after the interrupt fix\".",
+            file=sys.stderr,
+        )
+        return 2
     # --benchmark-readers: also run the reader benchmark (raster_gbx vs gdal) on-cluster.
     # --readers-only: ONLY run the reader benchmark, skip all fn benchmarks.
     benchmark_readers = "--benchmark-readers" in sys.argv
@@ -1594,6 +1646,8 @@ def _main(_stack) -> int:
     sys.path.insert(0, str(TESTS_DIR.parent.parent / "python" / "geobrix" / "src"))
     try:
         from databricks.labs.gbx.bench.cluster import (
+            _levels_plan,
+            bench_header,
             build_bench_notebook,
             install_extras,
         )
@@ -1702,6 +1756,17 @@ def _main(_stack) -> int:
         env_deps = _build_dep_list(wheel, install_extras(cfg), [], env_version) + ["markdown"]
         cfg["env_deps"] = True
         print(f"  env deps   : {len(env_deps)} (wheel + {', '.join(install_extras(cfg))})")
+    run_compute = "serverless" if serverless else ("standard" if access_mode == "standard" else "dedicated")
+    run_sha = git_sha(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent)
+    header_info = dict(
+        purpose=purpose, sha=run_sha, profile=profile, compute=run_compute, ceiling_min=form_cap_max_min,
+        pool=pool_name,
+    )  # fmt: skip
+    _plan = _levels_plan(cfg, run_compute) if levels_mvp else None
+    header_info["typical"] = prior_wall(
+        w, table, levels_mvp, run_compute, (_plan[1] * len(_plan[2])) if _plan else 0
+    )
+    cfg["header_md"] = bench_header(cfg, header_info)
     nb = build_bench_notebook(cfg)
 
     # Local preflight: refuse a launch that cannot work, with no compute (the checks of _preflight.py).
@@ -1832,6 +1897,7 @@ def _main(_stack) -> int:
             truncate_results=False, truncate_all=False, resume=False, redo_functions="",
             stall_cap_s=int(min(form_cap_min, SMOKE_FORM_CAP_MIN) * 60), launch_token=uuid.uuid4().hex,
         )  # fmt: skip
+        smoke_cfg["header_md"] = bench_header(smoke_cfg, {**header_info, "smoke": True})
         upload(smoke_path, build_bench_notebook(smoke_cfg))
 
     # Attach the bench tests.jar only for the heavyweight leg (it carries the bench Scala classes).
@@ -1929,6 +1995,7 @@ def _main(_stack) -> int:
 
     def submit(path, name, timeout_s):
         """Submit one notebook run (Serverless or the cluster) with a time limit; returns the run id."""
+        name = named_run(name, purpose, run_sha)
         if serverless:
             # Serverless submission: environment_version-pinned compute, no cluster_id, no JAR.
             # max_retries=0: a failed bench task must surface immediately, not auto-retry and mask

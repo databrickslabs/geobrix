@@ -149,6 +149,8 @@ Options:
   --bar-factor <x>      a rung projected (previous rung x scale ratio x this) past --rung-cap-min is skipped (default 1.5)
   --rung-cap-min <n>    the most one rung may take; past its deadline it is interrupted and recorded over-bar (default 20)
   --setup-cap-min <n>   the most a rung's setup may take at 1x (x the scale, held to the rung cap); past it, setup-bound (default 10)
+  --purpose "<why>"     REQUIRED on a launch: what the run tests and why (heads the notebook, rides on the run name; --explain-only may omit it)
+  --pool <name>         lease an idle cluster of the pool (gbx:bench:pool) instead of making one; --pool-wait-min <n> to wait (default 30)
   --warmup-skip-s <n>   a rung whose projected run is over n seconds skips its warmup (default 120; 0 keeps every warmup)
   --split-by fn         with --levels <set>: one job per function of the set, all started at once (run id <run>-<function>)
   --inject-stall <s>    TEST ONLY: add a form that sleeps s seconds on the driver (proves the watchdog)

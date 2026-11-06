@@ -188,13 +188,143 @@ def _cell(source: str, kind: str = "code", collapsed: bool = False) -> dict:
     meta = {}
     if collapsed:
         meta = {"jupyter": {"source_hidden": True}, "collapsed": True}
-    return {
+    cell = {
         "cell_type": kind,
         "metadata": meta,
         "outputs": [],
         "execution_count": None,
         "source": source.splitlines(keepends=True),
     }
+    if kind != "code":  # nbformat: only a code cell has outputs and an execution count
+        del cell["outputs"], cell["execution_count"]
+    return cell
+
+
+def _minutes(x) -> str:
+    try:
+        return f"{float(x):g}"
+    except (TypeError, ValueError):
+        return "?"
+
+
+def _plain(text) -> str:
+    return " ".join(str(text or "").split())
+
+
+def _csv_of(cfg: dict, key: str) -> list:
+    return [x.strip() for x in str(cfg.get(key, "") or "").split(",") if x.strip()]
+
+
+def _levels_plan(cfg: dict, compute: str):
+    """(functions, forms, scales) of the levels leg this notebook times on `compute`; None where the form table cannot load."""
+    try:
+        from databricks.labs.gbx.bench import levels as _lv
+        from databricks.labs.gbx.bench import levels_forms as _lf
+
+        mvp = cfg["levels_mvp"]
+        forms = [
+            f
+            for f in _lf.select_forms(mvp, tuple(cfg.get("levels_forms") or ()))
+            if compute in f.computes
+        ]
+        return (
+            sorted({f.fn for f in forms}),
+            len(forms),
+            _lv.ladder(mvp, cfg.get("levels_scales")),
+        )
+    except Exception:  # noqa: BLE001 - the header never stops a launch
+        return None
+
+
+def bench_header(cfg: dict, info: dict) -> str:
+    """The one short markdown cell a runner notebook starts with: what is tested and why, the expected output, the expected
+    time, and how it is watched. `cfg` is the notebook's config; `info` carries what the launcher knows around it:
+    purpose, sha, profile, compute, typical (a prior comparable run's wall, or "" for none), ceiling_min (the launcher
+    watchdog's), pool, smoke (True for the smoke notebook).
+    """
+    run_id = cfg["run_id"]
+    smoke = bool(info.get("smoke"))
+    compute = info.get("compute") or (
+        "serverless" if cfg.get("serverless") else "dedicated"
+    )
+    rung = float(cfg.get("rung_cap_s", 1200)) / 60.0
+    setup = float(cfg.get("setup_cap_s", 600)) / 60.0
+    out = ""
+    legs, bound_min = [], None
+    plan = _levels_plan(cfg, compute) if cfg.get("levels_mvp") else None
+    if cfg.get("levels_mvp"):
+        mvp = cfg["levels_mvp"]
+        if plan:
+            fns, nforms, scales = plan
+            names = ", ".join(fns[:3]) + (f" +{len(fns) - 3}" if len(fns) > 3 else "")
+            sc = "1 scale (smoke rows)" if smoke else "/".join(f"{x}x" for x in scales)
+            legs.append(
+                f"levels `{mvp}`: {len(fns)} function(s) ({names}), {nforms} forms at {sc} on {compute}"
+            )
+            out = f"{nforms} forms x {1 if smoke else len(scales)} scale(s) = {nforms * (1 if smoke else len(scales))} rows"
+            if not smoke:
+                bound_min = nforms * len(scales) * (rung + setup)
+        else:
+            legs.append(f"levels `{mvp}` on {compute}")
+    if cfg.get("zarr_ladder"):
+        rungs, fams, cases = (
+            _csv_of(cfg, "zarr_ladder"),
+            _csv_of(cfg, "zarr_ladder_family"),
+            _csv_of(cfg, "zarr_ladder_cases"),
+        )
+        legs.append(
+            f"Zarr size ladder: rungs {', '.join(rungs)}, families {', '.join(fams)}, cases {', '.join(cases) or 'ladder cases'}"
+        )
+        out = (
+            out
+            or f"{len(rungs) * len(fams) * max(len(cases), 1)} ladder rows (rung x family x case)"
+        )
+        out += (
+            f"; metrics in `{cfg.get('zarr_ladder_scratch', '')}`"
+            if cfg.get("zarr_ladder_scratch")
+            else ""
+        )
+    elif cfg.get("zarr_only") or cfg.get("benchmark_zarr"):
+        legs.append(f"Zarr cases {', '.join(_csv_of(cfg, 'zarr_cases'))}")
+    if not legs:
+        tiers = "+".join(
+            t
+            for t, on in (
+                ("light", cfg.get("lightweight")),
+                ("heavy", cfg.get("heavyweight")),
+            )
+            if on
+        )
+        legs.append(
+            f"function benchmark ({tiers or 'no tier'}): {cfg.get('functions') or 'set ' + str(cfg.get('set', 'core'))}, modes {cfg.get('modes')}, rows {cfg.get('row_counts')}"
+        )
+    purpose = _plain(info.get("purpose")) or "(no purpose given)"
+    typical = _plain(info.get("typical")) or "no prior run"
+    if smoke:
+        timing = "~2-3 min (worker import check, then each form once)"
+    else:
+        bound = f"{bound_min:.0f} min" if bound_min else "see the caps"
+        timing = f"~{typical} (last comparable run) / at most {bound} (rungs x (rung cap + setup cap)); smoke 2-3 min before it"
+    ff = cfg.get("fail_fast", True)
+    watch = (
+        f"fail-fast ON (rung cap {rung:g} min, setup cap {setup:g} min, bar {cfg.get('bar_factor', 1.5):g}, "
+        f"warmup skip > {cfg.get('warmup_skip_s', 120):g} s, escalate 60 s)"
+        if ff
+        else "fail-fast OFF"
+    )
+    where = f"pool `{info['pool']}` cluster" if info.get("pool") else compute
+    lines = [
+        f"## {run_id}{' (smoke)' if smoke else ''}",
+        f"- **Testing:** {'; '.join(legs)} - **why:** {purpose}",
+        f"- **Expected output:** rows in `{cfg.get('table')}` where run_id='{run_id}'"
+        + (f" ({out})" if out else "")
+        + "; verdict per form: linear / over-bar / skipped"
+        + (" - the smoke gates the real run" if smoke else ""),
+        f"- **Expected time:** {timing}",
+        f"- **Monitoring:** {watch}; heartbeat `{cfg.get('out_dir')}/heartbeat.json`; launcher watchdog ceiling "
+        f"{_minutes(info.get('ceiling_min'))} min; cancel: `databricks --profile {info.get('profile') or '<profile>'} jobs cancel-run <run id>`; on {where}, git {info.get('sha') or '?'}",
+    ]
+    return "\n".join(lines) + "\n"
 
 
 _PREAMBLE = """import json
@@ -3659,7 +3789,9 @@ def build_bench_notebook(cfg: dict) -> dict:
             "print('installs done; restarting Python', flush=True)\n"
             "dbutils.library.restartPython()\n"
         ).format(wheel=cfg["wheel"], extras=_install_extras_suffix(cfg))
-    cells = [
+    cells = (
+        [_cell(cfg["header_md"], kind="markdown")] if cfg.get("header_md") else []
+    ) + [
         # Ensure BOTH fresh geobrix code AND its dependency set every run. The wheel is the env
         # wheel for the compute's runtime (+env5: DBR 17.3 / 18, env 5; +env6: DBR 19, env 6): its
         # own Requires-Dist holds the runtime's packages, so step 2 is a plain install of it.

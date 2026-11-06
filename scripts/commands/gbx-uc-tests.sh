@@ -53,6 +53,9 @@ Behaviour:
   or pom.xml differs from HEAD. Docker is needed to build the wheel; a wheel in dist/env6 is reused when
   no wheel input changed since its commit. evidence.json records the scope. A change of the release
   version needs a full run: the QC check refuses core evidence for it.
+  Time: warehouse capacity bounds it. On a shared X-Small, one-cluster warehouse `core` took about 35 min
+  (about 70 min before batching); `full` takes well over an hour there. Use a larger warehouse with
+  --warehouse-id to go faster.
   Exit code: 0 when the result is pass, 1 on fail or refusal, 2 for bad options.
   Known failures: scripts/ci/uc_integration_known_failures.txt (empty).
 

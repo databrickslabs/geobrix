@@ -14,7 +14,10 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 - `--warehouse-id ID` - SQL warehouse. Default `GBX_UC_WAREHOUSE_ID` in `examples/tests/databricks_cluster_config.env`.
 - `--catalog C` - catalog of the schema. Default `geospatial_docs`.
 - `--volroot DIR` - Volume folder that holds `uc-it/<sha12>/`. Default `/Volumes/geospatial_docs/geobrix/sample-data`.
-- `--shards N` - parallel warehouse sessions for the slice. Default `8`.
+- `--batch N` - value cases per warehouse statement. Default `25`; `1` runs every case alone. The warehouse pays about 10 s per statement that calls a UC Python function, whatever it computes, so the cases of a batch share one statement (one row, one column per case). A case that must be refused (an expected error aborts a statement) and a recipe always run alone. A batch that fails as a whole is rerun case by case, so a failure still names its case. Every case is judged on its own, as without batching.
+- `--concurrency N` - warehouse statements in flight at once, per slice session. Default `16`.
+- `--shards N` - separate slice sessions (processes). Default `1`; each session batches only its own share of the cases, so more sessions mean smaller batches.
+- `--example-files-parallel N` - example files run side by side. Default `6`. File `00` (the setup that creates the tables the others read) runs first, alone; the statements of one file stay in order and the files' text is not batched.
 - `--rebuild` - build the wheel even when `dist/env6` holds one that fits HEAD.
 - `--keep` - keep the schema and the Volume folder (gated run).
 - `--install-timeout-min N` - time limit of the install job. Default `90`.
@@ -49,5 +52,5 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
 ## Limits
 
 - Dev-branch pushes (`streamline/*`, `beta/*`) are not gated.
-- Expect about 30 minutes for a gated `core` run. The `full` scope runs about 1,400 statements and takes much longer.
+- Warehouse time is bounded by the warehouse, not by the client: a shared X-Small, one-cluster warehouse (the default) ran `core` in about 35 minutes (366 cases as 122 statements plus 156 example statements; the same scope took about 70 minutes before batching). `full` is 1,510 cases as 509 statements; expect well over an hour on that warehouse, since 433 of them are refusals that cannot share a statement. A larger or multi-cluster warehouse (`--warehouse-id`) is the lever for a faster run; the example setup file (00) runs first and alone, so it is the floor of the examples leg.
 - Auth is the caller's job: run `bash ~/.claude/hooks/databricks-auth-status.sh PreDispatch` first.

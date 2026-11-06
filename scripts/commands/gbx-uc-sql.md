@@ -13,6 +13,8 @@ Each statement runs `--repeat` times and every wall time is recorded; the value 
 - `--catalog C`, `--schema S` — default catalog and schema for the statements
 - `--out <json>` — write `{cid: {"value": ..., "wall_s": [...]} | {"error": ...}}` here (rewritten after every statement, so a failure part-way keeps the results so far; bytes are stored as `{"$bytes": "<base64>"}`; `bench.oracles.load_uc_results` reads them back)
 - `--repeat N` — runs per statement (default 1)
+- `--batch N` — run up to N of the file's `-- batch` statements as ONE warehouse statement (one row, one column per case; the `-- batch` line after a `-- cid:` line is written by `bench.oracles.uc_sql_text` for value cases only). A batch that fails is rerun case by case. Default 0: every statement alone
+- `--concurrency N` — warehouse statements in flight at once (default 1)
 - `--timeout-s N` — cancel a statement still running after N seconds and record a timeout error for it (default 600)
 - `--no-decode-binary` — keep BINARY cells as base64 text
 - `--dry-run` — parse the file and print the plan: no workspace call, no auth

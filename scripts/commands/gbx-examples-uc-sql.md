@@ -12,6 +12,7 @@ Runs the Unity Catalog SQL examples in `examples/uc-functions/` on a SQL warehou
 - `--files <prefixes>` - comma list of file name prefixes to run, such as `00,05` (default all, in name order)
 - `--out-dir <folder>` - folder for the per-file result JSON (default `test-logs/uc-examples`)
 - `--timeout-s N` - cancel a statement still running after N seconds (default 600)
+- `--parallel N` - run N example files side by side (default 1). File `00` (the setup) runs first, alone; the statements of a file stay in order.
 - `--upload` - after a clean run, import the files into your workspace folder
 - `--upload-only` - import the files and run nothing
 - `--ws-dir <path>` - workspace folder to import into (default below)

@@ -1534,16 +1534,18 @@ def _tile_input(data, dim_cols):
 
 
 def _cells_args(tiles, mode, coords, chunks, shards, codecs, complete=False):
-    """The cells write's layout arguments; ``coords`` apply to a create of cells only."""
+    """The cells write's layout arguments; ``coords`` are a create's labels or an append's new
+    steps of the append dimension (the cells writer checks which dimension)."""
     if coords is not None and (tiles is None or tiles[0] is not None):
         raise ValueError(
             "coords gives the labels of a table of cells, and the data is not one. Fix: "
             "drop coords, or pass a table with one row per cell and dim_cols."
         )
-    if coords is not None and mode != "create":
+    if coords is not None and mode not in ("create", "append"):
         raise ValueError(
-            "coords applies to mode='create' only: an append takes the store's labels and "
-            "the table's new ones. Fix: drop coords."
+            "coords applies to mode='create' (every label) and mode='append' (the new labels "
+            "of the append dimension): update and overwrite take the store's labels. Fix: "
+            "drop coords."
         )
     if tiles is None or tiles[0] is not None:
         return None

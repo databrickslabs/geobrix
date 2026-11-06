@@ -12,15 +12,20 @@ fills its grid (as many cells as the product of its labels) needs no second pass
 these the driver plans every block: one per variable and unit, so a create or an append
 needs no position pass over the blocks, and the data pass reads the table once.
 
-**The data pass: one shuffle.** Each cell gets the key of its unit and its offset in it; the
-cells are repartitioned by that key (one partition per unit touched, no more than the
-session's parallelism), sorted within the partition, and a streaming packer builds one unit
-at a time, dense, with the fill value where no cell came. Its block (a unit of one variable)
-goes straight to the writer's pack stage, which encodes the chunks and writes the shard where
-the block was made. A unit is the most a task holds, plus one copy of one variable.
+**The data pass: combine, then one shuffle.** Each input partition locates its cells and
+gathers them by storage unit into *partial blocks* (a dense block with a mask, or the cells
+as they came when few), holding at most half the task budget and shipping the oldest first.
+The shuffle moves those partial blocks, keyed by unit, not a row per cell: a table that
+arrives roughly in chunk order (``gbx_zarr_read``'s) ships each unit in one or a few pieces.
+The blocks are repartitioned by the unit key (one partition per unit touched, no more than
+the session's parallelism), sorted within the partition, and a streaming merge builds one
+unit at a time, dense, with the fill value where no cell came. Its block (a unit of one
+variable) goes straight to the writer's pack stage, which encodes the chunks and writes the
+shard where the block was made. A unit is the most a task holds, plus the partials of that
+unit in the batch in hand.
 
 **Rules.** A cell missing from the table reads as the fill value. Two cells at one position
-refuse the write (the task that meets them raises ``ZarrError``) before anything is
+refuse the write (the task that meets them, on the map side or the merge, raises ``ZarrError``) before anything is
 committed. A null variable value is a missing cell; a null dimension value is refused.
 ``create`` and ``append`` take cells; ``update`` and ``overwrite`` would overwrite stored
 cells with fill wherever the table has none, so they take blocks.
@@ -30,6 +35,7 @@ Nothing here touches ``spark.conf``, ``sparkContext``, ``.rdd``, ``_jvm`` or ``_
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -429,107 +435,334 @@ def _survey_units(df, groups: list) -> list:
 # --- the data pass --------------------------------------------------------------------------
 
 
-def _locate_function(g: Group):
-    """Cells to ``(__k, __c, values...)``: the key of the unit a cell falls in, and its flat
-    offset in that unit's window."""
+def _partial_arrow(g: Group) -> pa.Schema:
+    """The rows the map side hands to the shuffle: one per partial block."""
+    fields = [
+        ("__k", pa.int64()),
+        ("__n", pa.int64()),
+        ("__box", pa.binary()),
+        ("__m", pa.binary()),
+    ]
+    return pa.schema(fields + [(f"__v{i}", pa.binary()) for i in range(len(g.vars))])
+
+
+def _partial_struct(g: Group):
+    from pyspark.sql import types as T
+
+    return T.StructType(
+        [T.StructField("__k", T.LongType())]
+        + [T.StructField("__n", T.LongType())]
+        + [T.StructField(n, T.BinaryType()) for n in ("__box", "__m")]
+        + [T.StructField(f"__v{i}", T.BinaryType()) for i in range(len(g.vars))]
+    )
+
+
+def _flat_offsets(g: Group, absolute: list) -> np.ndarray:
+    """The flat offset of each cell in its unit's window."""
+    flat = np.zeros(len(absolute[0]), np.int64)
+    for a, u, w0, w1 in zip(absolute, g.unit, g.wlo, g.whi):
+        lo = np.maximum(a // u * u, w0)  # the unit's box within the window
+        hi = np.minimum(a // u * u + u, w1)
+        flat = flat * (hi - lo) + (a - lo)
+    return flat
+
+
+def _values(col, g: Group, v: str) -> np.ndarray:
+    """A variable column as numbers: a null is NaN for a float, the fill value otherwise."""
+    if col.null_count and g.dtypes[v].kind != "f":
+        col = pc.fill_null(col, pa.scalar(g.fill[v], col.type))
+    return col.to_numpy(zero_copy_only=False)
+
+
+def _binary(buf) -> pa.Array:
+    """A one-element binary array over ``buf`` (bytes or a numpy array), without a copy."""
+    if isinstance(buf, np.ndarray):
+        raw = np.ascontiguousarray(buf).reshape(-1).view(np.uint8)
+        data = pa.py_buffer(raw)
+        size = raw.nbytes
+    else:
+        data = pa.py_buffer(buf)
+        size = len(buf)
+    offsets = pa.py_buffer(np.array([0, size], dtype=np.int32))
+    return pa.Array.from_buffers(pa.binary(), 1, [None, offsets, data])
+
+
+def _dup_error(g: Group, lo: tuple, shape: tuple, extra: int) -> ZarrError:
+    hi = tuple(a + n for a, n in zip(lo, shape))
+    where = ", ".join(
+        f"{d} {ax.label(a)}..{ax.label(min(b, len(ax)) - 1)}"
+        for d, ax, a, b in zip(g.dims, g.axes, lo, hi)
+        if a < len(ax)
+    )
+    return ZarrError(
+        f"{extra} cell(s) of the table share a position with another cell (in the unit "
+        f"{where})",
+        fix="keep one row per cell. Aggregate or drop the duplicate rows before writing",
+    )
+
+
+def _partial_limit(budget: int) -> int:
+    """Bytes of partial blocks one input partition holds before it ships the oldest: half
+    the task budget (the other half is the shuffle's own buffers and the batch in hand).
+    """
+    return max(1, budget // 2)
+
+
+class _Partial:
+    """The cells one input partition has for one storage unit.
+
+    Few cells are kept as they came (flat offset and values). Once they would take as many
+    bytes as the unit's dense arrays they are folded into those arrays with a mask. Either
+    ships as a partial block: sparse (offsets and values) when that is smaller, else the
+    bounding box of the cells that came, dense, with a packed mask unless the box is full.
+    """
+
+    def __init__(self, g: Group, key: int):
+        self.g, self.key = g, key
+        self.lo, hi = _box_of(g, key)
+        self.shape = tuple(b - a for a, b in zip(self.lo, hi))
+        self.size = int(np.prod(self.shape, dtype=np.int64))
+        self.item = sum(g.dtypes[v].itemsize for v in g.vars)
+        self.chunks: list = []  # (flat offsets, {variable: values}) while sparse
+        self.arrays: dict | None = None
+        self.mask: np.ndarray | None = None
+        self.cells = 0  # cells taken, a repeated position counted each time
+        self.nbytes = 0
+
+    def add(self, flat: np.ndarray, vals: dict) -> int:
+        """Take cells (owned arrays); returns the change in bytes held."""
+        before = self.nbytes
+        self.cells += len(flat)
+        if self.arrays is None:
+            self.chunks.append((flat, vals))
+            self.nbytes += len(flat) * (8 + self.item)
+            if self.nbytes >= self.size * (self.item + 1):
+                self._densify()
+        else:
+            self._put(flat, vals)
+        return self.nbytes - before
+
+    def _put(self, flat, vals) -> None:
+        for v, a in vals.items():
+            self.arrays[v][flat] = a
+        self.mask[flat] = True
+
+    def _densify(self) -> None:
+        g = self.g
+        self.arrays = {
+            v: np.full(self.size, g.fill[v], dtype=g.dtypes[v]) for v in g.vars
+        }
+        self.mask = np.zeros(self.size, dtype=bool)
+        for flat, vals in self.chunks:
+            self._put(flat, vals)
+        self.chunks = []
+        self.nbytes = self.size * (self.item + 1)
+
+    def emit(self, schema: pa.Schema) -> pa.RecordBatch:
+        g = self.g
+        if self.arrays is None:
+            flat = np.concatenate([c[0] for c in self.chunks])
+            vals = {v: np.concatenate([c[1][v] for c in self.chunks]) for v in g.vars}
+            return self._row(schema, self.cells, b"", flat, [vals[v] for v in g.vars])
+        present = int(self.mask.sum())
+        if present != self.cells:
+            raise _dup_error(g, self.lo, self.shape, self.cells - present)
+        m = self.mask.reshape(self.shape)
+        nd = len(self.shape)
+        box = []
+        for ax in range(nd):
+            hit = np.flatnonzero(m.any(axis=tuple(i for i in range(nd) if i != ax)))
+            box.append((int(hit[0]), int(hit[-1]) + 1))
+        box_cells = int(np.prod([b - a for a, b in box], dtype=np.int64))
+        if present * (8 + self.item) < box_cells * self.item + box_cells // 8:
+            flat = np.flatnonzero(self.mask)
+            return self._row(
+                schema, present, b"", flat, [self.arrays[v][flat] for v in g.vars]
+            )
+        sl = tuple(slice(a, b) for a, b in box)
+        mask = b"" if present == box_cells else np.packbits(m[sl].reshape(-1))
+        bounds = np.array([a for a, _ in box] + [b for _, b in box], dtype=np.int64)
+        return self._row(
+            schema,
+            present,
+            mask,
+            None,
+            [self.arrays[v].reshape(self.shape)[sl] for v in g.vars],
+            bounds,
+        )
+
+    def _row(self, schema, n, mask, flat, arrays, bounds=None) -> pa.RecordBatch:
+        if (
+            flat is not None
+        ):  # sparse: the offsets ride where a dense block has its mask
+            mask = flat
+        cols = [
+            pa.array([self.key], pa.int64()),
+            pa.array([n], pa.int64()),
+            _binary(b"" if bounds is None else bounds),
+            _binary(b"" if isinstance(mask, bytes) else mask),
+        ] + [_binary(a) for a in arrays]
+        return pa.RecordBatch.from_arrays(cols, schema=schema)
+
+
+def _combine_function(g: Group, limit: int):
+    """Cells to partial blocks, before the shuffle: each input partition gathers its cells
+    by unit and ships a unit's cells as one (or a few) partial blocks instead of a row per
+    cell. It holds at most ``limit`` bytes of partials (the oldest ship first); a partition
+    that reads in chunk order holds one unit at a time and ships it near full."""
+    schema = _partial_arrow(g)
 
     def run(batches):
+        held: OrderedDict = OrderedDict()
+        total = 0
         for b in batches:
             if not b.num_rows:
                 continue
             absolute = _absolute(b, g)
             key = _unit_key(g, absolute)
-            flat = np.zeros(len(key), np.int64)
-            for a, u, w0, w1 in zip(absolute, g.unit, g.wlo, g.whi):
-                lo = np.maximum(a // u * u, w0)  # the unit's box within the window
-                hi = np.minimum(a // u * u + u, w1)
-                flat = flat * (hi - lo) + (a - lo)
-            yield pa.RecordBatch.from_arrays(
-                [pa.array(key), pa.array(flat)] + [b.column(v) for v in g.vars],
-                names=["__k", "__c", *g.vars],
-            )
+            flat = _flat_offsets(g, absolute)
+            vals = {v: _values(b.column(v), g, v) for v in g.vars}
+            lo, hi = int(key.min()), int(key.max())
+            if lo == hi:
+                runs = [(lo, np.arange(len(key)))]
+            else:
+                order = np.argsort(key, kind="stable")
+                ks = key[order]
+                cuts = (np.flatnonzero(ks[1:] != ks[:-1]) + 1).tolist()
+                runs = [
+                    (int(ks[s]), order[s:e])
+                    for s, e in zip([0, *cuts], [*cuts, len(ks)])
+                ]
+            for k, sel in runs:
+                p = held.get(k)
+                if p is None:
+                    p = held[k] = _Partial(g, k)
+                else:
+                    held.move_to_end(k)
+                total += p.add(flat[sel], {v: vals[v][sel] for v in g.vars})
+                while total > limit and len(held) > 1:
+                    _, old = held.popitem(last=False)
+                    total -= old.nbytes
+                    yield old.emit(schema)
+        for p in held.values():
+            yield p.emit(schema)
 
     return run
 
 
-def _pack_function(g: Group):
-    """Sorted ``(__k, __c, values...)`` rows to blocks: a dense array per variable for one
-    unit at a time (the fill value where no cell came), emitted when the unit's rows end.
-    """
-    from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW
+class _Merge:
+    """The partial blocks of one unit, merged into the unit's dense arrays."""
 
-    dims = list(g.dims)
+    def __init__(self, g: Group, key: int):
+        self.g, self.key = g, key
+        self.lo, hi = _box_of(g, key)
+        self.shape = tuple(b - a for a, b in zip(self.lo, hi))
+        self.size = int(np.prod(self.shape, dtype=np.int64))
+        self.arrays: dict | None = None
+        self.present: np.ndarray | None = None  # None while every cell is there
+        self.claimed = 0
+
+    def _fresh(self) -> None:
+        g = self.g
+        self.arrays = {
+            v: np.full(self.size, g.fill[v], dtype=g.dtypes[v]) for v in g.vars
+        }
+        self.present = np.zeros(self.size, dtype=bool)
+
+    def take(self, batch, i: int) -> None:
+        g = self.g
+        n = batch.column("__n")[i].as_py()
+        box = np.frombuffer(batch.column("__box")[i].as_buffer(), dtype=np.int64)
+        mask = batch.column("__m")[i].as_buffer()
+        vals = {
+            v: np.frombuffer(batch.column(f"__v{j}")[i].as_buffer(), dtype=g.dtypes[v])
+            for j, v in enumerate(g.vars)
+        }
+        self.claimed += n
+        nd = len(self.shape)
+        whole = (
+            len(box)
+            and not mask.size
+            and tuple(box[:nd]) == (0,) * nd
+            and tuple(box[nd:]) == self.shape
+        )
+        if whole and self.arrays is None:
+            self.arrays = vals  # one block for the whole unit, read only: used as it is
+            return
+        if self.arrays is not None and self.present is None:
+            raise _dup_error(g, self.lo, self.shape, n)
+        if self.arrays is None:
+            self._fresh()
+        if not len(box):  # sparse: the mask slot holds the flat offsets
+            idx = np.frombuffer(mask, dtype=np.int64)
+            for v in g.vars:
+                self.arrays[v][idx] = vals[v]
+            self.present[idx] = True
+            return
+        sl = tuple(slice(int(a), int(b)) for a, b in zip(box[:nd], box[nd:]))
+        part = tuple(int(b) - int(a) for a, b in zip(box[:nd], box[nd:]))
+        pv = self.present.reshape(self.shape)[sl]
+        if mask.size:
+            m = np.unpackbits(np.frombuffer(mask, np.uint8), count=int(np.prod(part)))
+            m = m.astype(bool).reshape(part)
+        else:
+            m = np.ones(part, dtype=bool)
+        for v in g.vars:
+            view = self.arrays[v].reshape(self.shape)[sl]
+            view[m] = vals[v].reshape(part)[m]
+        pv[m] = True
+
+    def finish(self) -> pa.RecordBatch:
+        from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW
+
+        g = self.g
+        have = self.size if self.present is None else int(self.present.sum())
+        if have != self.claimed:
+            raise _dup_error(g, self.lo, self.shape, self.claimed - have)
+        dims = list(g.dims)
+        rows = []
+        for v in g.vars:
+            a = self.arrays[v].reshape(self.shape)
+            rows.append(
+                {
+                    "variable": v,
+                    "dims": dims,
+                    "start": [x - o for x, o in zip(self.lo, g.offsets)],
+                    "stop": [
+                        x + n - o for x, n, o in zip(self.lo, self.shape, g.offsets)
+                    ],
+                    "coord_start": None,
+                    "coord_stop": None,
+                    "dtype": a.dtype.str,
+                    "shape": list(self.shape),
+                    "data": a.tobytes(),
+                    "fill_value": None,
+                    "attrs": None,
+                }
+            )
+        return pa.RecordBatch.from_pylist(rows, schema=_BLOCKS_ARROW)
+
+
+def _merge_function(g: Group):
+    """Sorted partial blocks to blocks: the partials of one unit merged into a dense array
+    per variable (the fill value where no cell came), emitted when the unit's rows end. Two
+    partials that hold one position refuse the write."""
 
     def run(batches):
-        state = None  # key, lo, shape, arrays, mask, cells
-
-        def begin(k):
-            lo, hi = _box_of(g, k)
-            shape = tuple(b - a for a, b in zip(lo, hi))
-            size = int(np.prod(shape, dtype=np.int64))
-            arrays = {v: np.full(size, g.fill[v], dtype=g.dtypes[v]) for v in g.vars}
-            return [k, lo, shape, arrays, np.zeros(size, dtype=bool), 0]
-
-        def flush(s):
-            k, lo, shape, arrays, mask, cells = s
-            if int(mask.sum()) != cells:
-                hi = tuple(a + n for a, n in zip(lo, shape))
-                where = ", ".join(
-                    f"{d} {ax.label(a)}..{ax.label(min(b, len(ax)) - 1)}"
-                    for d, ax, a, b in zip(dims, g.axes, lo, hi)
-                    if a < len(ax)
-                )
-                raise ZarrError(
-                    f"{cells - int(mask.sum())} cell(s) of the table share a position with "
-                    f"another cell (in the unit {where})",
-                    fix="keep one row per cell. Aggregate or drop the duplicate rows before "
-                    "writing",
-                )
-            rows = []
-            for v in g.vars:
-                a = arrays[v].reshape(shape)
-                rows.append(
-                    {
-                        "variable": v,
-                        "dims": dims,
-                        "start": [x - o for x, o in zip(lo, g.offsets)],
-                        "stop": [x + n - o for x, n, o in zip(lo, shape, g.offsets)],
-                        "coord_start": None,
-                        "coord_stop": None,
-                        "dtype": a.dtype.str,
-                        "shape": list(shape),
-                        "data": a.tobytes(),
-                        "fill_value": None,
-                        "attrs": None,
-                    }
-                )
-            return pa.RecordBatch.from_pylist(rows, schema=_BLOCKS_ARROW)
-
+        state = None
         for b in batches:
             if not b.num_rows:
                 continue
-            k = b.column("__k").to_numpy(zero_copy_only=False)
-            c = b.column("__c").to_numpy(zero_copy_only=False)
-            cols = {}
-            for v in g.vars:
-                col = b.column(v)
-                if col.null_count and g.dtypes[v].kind != "f":
-                    col = pc.fill_null(col, pa.scalar(g.fill[v], col.type))
-                cols[v] = col.to_numpy(zero_copy_only=False)
-            cuts = np.flatnonzero(k[1:] != k[:-1]) + 1
-            for s, e in zip([0, *cuts.tolist()], [*cuts.tolist(), len(k)]):
-                key = int(k[s])
-                if state is None or state[0] != key:
+            ks = b.column("__k").to_numpy(zero_copy_only=False)
+            for i in range(b.num_rows):
+                key = int(ks[i])
+                if state is None or state.key != key:
                     if state is not None:
-                        yield flush(state)
-                    state = begin(key)
-                idx = c[s:e]
-                for v in g.vars:
-                    state[3][v][idx] = cols[v][s:e]
-                state[4][idx] = True
-                state[5] += e - s
+                        yield state.finish()
+                    state = _Merge(g, key)
+                state.take(b, i)
         if state is not None:
-            yield flush(state)
+            yield state.finish()
 
     return run
 
@@ -693,27 +926,40 @@ def _plan_groups(
     return out, units
 
 
-def _group_frame(df, g: Group, ks: np.ndarray, schema, parallelism: int):
-    """One group's data pass: locate each cell, shuffle once by unit key (a partition per unit
-    touched, no more than ``parallelism``), sort, and pack one unit at a time."""
+def _partials_frame(df, g: Group, limit: int):
+    """One group's map side: each input partition locates its cells and gathers them into
+    partial blocks per unit (``_combine_function``); a row of this frame is a partial block,
+    not a cell."""
     from pyspark.sql import functions as F
-    from pyspark.sql import types as T
 
     picked = [F.col(c).alias(f"__d_{d}") for d, c in zip(g.dims, g.cols)] + [
         F.col(v) for v in g.vars
     ]
-    located = T.StructType(
-        [T.StructField("__k", T.LongType()), T.StructField("__c", T.LongType())]
-        + [df.schema[v] for v in g.vars]
+    return df.select(*picked).mapInArrow(
+        _combine_function(g, limit), _partial_struct(g)
     )
+
+
+def _group_frame(df, g: Group, ks: np.ndarray, schema, parallelism: int, limit: int):
+    """One group's data pass: partial blocks per input partition, shuffled once by unit key
+    (a partition per unit touched, no more than ``parallelism``), sorted, and merged into one
+    unit at a time."""
     n = max(1, min(len(ks), parallelism))
     return (
-        df.select(*picked)
-        .mapInArrow(_locate_function(g), located)
+        _partials_frame(df, g, limit)
         .repartition(n, "__k")
         .sortWithinPartitions("__k")
-        .mapInArrow(_pack_function(g), schema)
+        .mapInArrow(_merge_function(g), schema)
     )
+
+
+def _window_keys(g: Group) -> np.ndarray:
+    """The sorted keys of every unit the window being written touches."""
+    ranges = [
+        np.arange(w0 // u, -(-w1 // u)) for w0, w1, u in zip(g.wlo, g.whi, g.unit)
+    ]
+    grid = np.meshgrid(*ranges, indexing="ij")
+    return np.sort(np.ravel_multi_index([x.ravel() for x in grid], g.nu))
 
 
 def _seen_rows(g: Group, ks: np.ndarray) -> list:
@@ -775,6 +1021,13 @@ def prepare(
         )
     if mode == "append":
         append_dim = _append_dim_of(dim_cols, store, append_dim)
+        stored = sorted(set(coords) - {append_dim})
+        if stored:
+            raise ValueError(
+                f"an append takes the store's labels for {stored}; coords gives the new "
+                f"labels of the append dimension {append_dim!r} only. Fix: drop coords for "
+                f"{stored}."
+            )
     axes, rows = _find_axes(df, mode, dim_cols, kinds, coords, store, append_dim)
     new_labels, at = None, 0
     if mode == "append":
@@ -792,17 +1045,19 @@ def prepare(
     )
     for g in plan_groups:
         _check_budget(g, budget)
-    # the units the cells fall in: every unit of a table that fills its grid, else one pass
-    full = mode == "create" and (
-        (args.complete and set(coords) == set(dims))
-        or (
-            rows is not None
-            and not coords
-            and rows == int(np.prod([len(axes[d]) for d in dims], dtype=np.int64))
-        )
+    # the units the cells fall in: every unit of the window when the caller says the table fills
+    # it (complete=True with every label fixed: all of a create's, an append's new steps) or the
+    # table has as many rows as the grid has cells, else one pass over the dimension columns
+    labels_fixed = (
+        set(coords) == set(dims) if mode == "create" else append_dim in coords
+    )
+    full = (args.complete and labels_fixed) or (
+        rows is not None
+        and not coords
+        and rows == int(np.prod([len(axes[d]) for d in dims], dtype=np.int64))
     )
     if full:
-        keys = [np.arange(int(np.prod(g.nu, dtype=np.int64))) for g in plan_groups]
+        keys = [_window_keys(g) for g in plan_groups]
     else:
         keys = _survey_units(df, plan_groups)
     frames, seen = [], []
@@ -812,7 +1067,9 @@ def prepare(
                 "the table has no cells to write. Fix: pass a table with rows."
             )
         seen += _seen_rows(g, ks)
-        frames.append(_group_frame(df, g, ks, schema, parallelism))
+        frames.append(
+            _group_frame(df, g, ks, schema, parallelism, _partial_limit(budget))
+        )
     frame = frames[0]
     for f in frames[1:]:
         frame = frame.unionByName(f)

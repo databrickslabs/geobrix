@@ -386,18 +386,16 @@ def test_update_and_overwrite_take_blocks_not_cells(
         )
 
 
-def test_coords_belong_to_a_create_of_cells(spark_delta, tmp_path, no_hooks):
+def test_coords_belong_to_a_create_or_an_append_of_cells(
+    spark_delta, tmp_path, no_hooks
+):
     ds = _dataset(hours=12)
-    with pytest.raises(ValueError, match="coords applies to mode='create' only"):
-        gbx_zarr_write(
-            _cells(spark_delta, ds),
-            str(tmp_path / "x.zarr"),
-            mode="append",
-            transactional=False,
-            dim_cols=DIM_COLS,
-            coords=_coords(ds),
-            spark=spark_delta,
-        )
+    with pytest.raises(ValueError, match="coords applies to mode='create'"):
+        _write._cells_args((None, DIM_COLS), "update", _coords(ds), None, None, None)
+    assert (
+        _write._cells_args((None, DIM_COLS), "append", _coords(ds), None, None, None)
+        is not None
+    )
     with pytest.raises(ValueError, match="coords gives the labels of a table of cells"):
         gbx_zarr_write(
             ds,
@@ -593,4 +591,255 @@ def test_an_offgrid_append_from_few_input_partitions_runs_in_a_task_per_block(
     for n in ("t2m", "u10"):
         np.testing.assert_array_equal(
             _read(spark_delta, table, n)[36:, :10], full[n].values[36:, :10]
+        )
+
+
+# --- map-side combine: the shuffle moves partial blocks, not cells ---------------------------
+
+
+@pytest.fixture
+def shuffled_rows(monkeypatch, spark_delta):
+    """The row counts entering each shuffle by unit key (``repartition(n, "__k")``), recorded
+    as the plan is built."""
+    DataFrame = type(spark_delta.range(1))
+    seen = []
+    real = DataFrame.repartition
+
+    def spy(self, n, *cols):
+        if cols == ("__k",):
+            seen.append(self.count())
+        return real(self, n, *cols)
+
+    monkeypatch.setattr(DataFrame, "repartition", spy)
+    return seen
+
+
+def _in_chunk_order(spark, ds, names=("t2m", "u10")):
+    """One partition, cells in the order a table read of the store has (time, then space)."""
+    pdf = ds[list(names)].to_dataframe().reset_index()
+    return spark.createDataFrame(pdf).coalesce(1)
+
+
+def test_the_shuffle_moves_partial_blocks_not_cells(
+    spark_delta, no_hooks, shuffled_rows
+):
+    """Fail-on-revert for the combine: 48 h x 10 x 12 cells in two shards reach the shuffle as
+    two partial blocks (one per unit the partition holds), not as 5760 rows."""
+    ds = _dataset()
+    prep = _prepare(spark_delta, _in_chunk_order(spark_delta, ds), coords=_coords(ds))
+    assert prep.frame.rdd.getNumPartitions() == 2
+    assert shuffled_rows == [2]
+    assert ds["t2m"].size == 5760
+
+
+@pytest.mark.parametrize("plain", [False, True], ids=["manifest", "plain"])
+def test_a_small_hold_budget_ships_more_smaller_partials_and_writes_the_same_store(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch, shuffled_rows, plain
+):
+    """The partials a partition holds are bounded: with the bound forced to a few KB and the
+    cells in no order, units ship in many pieces, and the store is still the cube."""
+    ds = _dataset()
+    monkeypatch.setattr(_write_cells, "_partial_limit", lambda budget: 4000)
+    args = dict(dim_cols=DIM_COLS, coords=_coords(ds), chunks=CHUNKS, shards=SHARDS)
+    if plain:
+        out = tmp_path / "small.zarr"
+        gbx_zarr_write(
+            _cells(spark_delta, ds, parts=2),
+            str(out),
+            transactional=False,
+            spark=spark_delta,
+            **args,
+        )
+        got = {n: _plain_read(out)[n].values for n in ("t2m", "u10")}
+    else:
+        table = "gbx_zarr_write_small_partials"
+        drop(table)
+        gbx_zarr_write(
+            _cells(spark_delta, ds, parts=2),
+            table,
+            root=str(tmp_path / "small"),
+            spark=spark_delta,
+            **args,
+        )
+        got = {n: _read(spark_delta, table, n) for n in ("t2m", "u10")}
+    for n in ("t2m", "u10"):
+        np.testing.assert_array_equal(got[n], ds[n].values)
+    (rows,) = shuffled_rows
+    assert (
+        2 < rows < ds["t2m"].size // 4
+    )  # more than a block per unit, far fewer than cells
+
+
+@pytest.mark.parametrize("limit", [1 << 30, 4000], ids=["dense", "sparse"])
+def test_a_cell_in_two_partials_is_refused(
+    spark_delta, no_hooks, monkeypatch, tmp_path, limit
+):
+    """Two input partitions each hold the same position: neither sees the repeat, the merge of
+    their partials does (dense and sparse partials alike)."""
+    ds = _dataset(hours=24)
+    pdf = _pdf(ds)
+    monkeypatch.setattr(_write_cells, "_partial_limit", lambda budget: limit)
+    one = spark_delta.createDataFrame(pdf).repartition(1)
+    two = spark_delta.createDataFrame(pdf.iloc[:3]).repartition(1)
+    with pytest.raises(
+        Exception, match=r"share a position.*Fix: keep one row per cell"
+    ):
+        gbx_zarr_write(
+            one.union(two),
+            str(tmp_path / "dup.zarr"),
+            transactional=False,
+            dim_cols=DIM_COLS,
+            spark=spark_delta,
+        )
+
+
+def test_the_partials_of_a_unit_merge_across_input_partitions_and_orders(
+    spark_delta, no_hooks, tmp_path
+):
+    """Cells split over partitions so each unit comes in several pieces (some full-box, some
+    sparse), with holes: equal to the cube where the table has cells, fill elsewhere."""
+    ds = _dataset()
+    keep = lambda p: (p["latitude"] != p["latitude"].iloc[0]) | (  # noqa: E731
+        p["time"] > p["time"].min() + pd.Timedelta(hours=6)
+    )
+    df = _cells(spark_delta, ds, keep=keep, parts=7)
+    out = tmp_path / "pieces.zarr"
+    gbx_zarr_write(
+        df,
+        str(out),
+        transactional=False,
+        dim_cols=DIM_COLS,
+        coords=_coords(ds),
+        chunks=CHUNKS,
+        shards=SHARDS,
+        spark=spark_delta,
+    )
+    pdf = _pdf(ds)
+    want = ds["t2m"].values.copy()
+    drop_rows = ~keep(pdf)
+    t_idx = np.searchsorted(ds["time"].values, pdf["time"].values[drop_rows])
+    y_idx = [
+        int(np.argmin(np.abs(ds["latitude"].values - v)))
+        for v in pdf["latitude"].values[drop_rows]
+    ]
+    x_idx = [
+        int(np.argmin(np.abs(ds["longitude"].values - v)))
+        for v in pdf["longitude"].values[drop_rows]
+    ]
+    want[t_idx, y_idx, x_idx] = np.nan
+    np.testing.assert_array_equal(_plain_read(out)["t2m"].values, want)
+
+
+# --- an append without a scan --------------------------------------------------------------
+
+
+def _scan_refused(*a, **k):
+    raise AssertionError("the table was scanned to plan the write")
+
+
+def _first_and_day():
+    full = _dataset(hours=60)
+    return full, full.isel(time=slice(0, 36)), full.isel(time=slice(36, 60))
+
+
+def _plain_first(spark, first, out):
+    gbx_zarr_write(
+        _cells(spark, first),
+        out,
+        transactional=False,
+        dim_cols=DIM_COLS,
+        coords=_coords(first),
+        chunks=CHUNKS,
+        shards=SHARDS,
+        spark=spark,
+    )
+
+
+def test_an_append_with_complete_coords_for_the_new_steps_runs_no_survey(
+    spark_delta, tmp_path, no_hooks, monkeypatch
+):
+    """Fail-on-revert: ``coords`` for the append dimension and ``complete=True`` plan the append
+    with no scan of the table (the other dimensions' labels are the store's), and the store is
+    the one a surveyed append makes."""
+    full, first, day = _first_and_day()
+    out = str(tmp_path / "noscan.zarr")
+    _plain_first(spark_delta, first, out)
+    monkeypatch.setattr(_write_cells, "_survey_distinct", _scan_refused)
+    monkeypatch.setattr(_write_cells, "_survey_units", _scan_refused)
+    gbx_zarr_write(
+        _cells(spark_delta, day),
+        out,
+        mode="append",
+        transactional=False,
+        dim_cols=DIM_COLS,
+        append_dim="time",
+        coords={"time": day["time"].values},
+        complete=True,
+        spark=spark_delta,
+    )
+    got = _plain_read(out)
+    for n in ("t2m", "u10"):
+        np.testing.assert_array_equal(got[n].values, full[n].values)
+    np.testing.assert_array_equal(got["time"].values, full["time"].values)
+
+
+def test_an_append_with_only_the_new_labels_surveys_the_units_not_the_labels(
+    spark_delta, tmp_path, no_hooks, monkeypatch
+):
+    full, first, day = _first_and_day()
+    out = str(tmp_path / "labels.zarr")
+    _plain_first(spark_delta, first, out)
+    monkeypatch.setattr(_write_cells, "_survey_distinct", _scan_refused)
+    gbx_zarr_write(
+        _cells(spark_delta, day),
+        out,
+        mode="append",
+        transactional=False,
+        dim_cols=DIM_COLS,
+        append_dim="time",
+        coords={"time": day["time"].values},
+        spark=spark_delta,
+    )
+    for n in ("t2m", "u10"):
+        np.testing.assert_array_equal(_plain_read(out)[n].values, full[n].values)
+
+
+def test_an_append_that_fills_its_grid_is_scanned_once_not_twice(
+    spark_delta, tmp_path, no_hooks, monkeypatch
+):
+    """Without coords the labels of the new steps need one pass; a table with as many rows as
+    the grid has cells then needs no second pass for its units."""
+    full, first, day = _first_and_day()
+    out = str(tmp_path / "once.zarr")
+    _plain_first(spark_delta, first, out)
+    monkeypatch.setattr(_write_cells, "_survey_units", _scan_refused)
+    gbx_zarr_write(
+        _cells(spark_delta, day),
+        out,
+        mode="append",
+        transactional=False,
+        dim_cols=DIM_COLS,
+        append_dim="time",
+        spark=spark_delta,
+    )
+    for n in ("t2m", "u10"):
+        np.testing.assert_array_equal(_plain_read(out)[n].values, full[n].values)
+
+
+def test_an_append_takes_coords_for_the_append_dimension_only(
+    spark_delta, tmp_path, no_hooks
+):
+    full, first, day = _first_and_day()
+    out = str(tmp_path / "only.zarr")
+    _plain_first(spark_delta, first, out)
+    with pytest.raises(ValueError, match=r"an append takes the store's labels"):
+        gbx_zarr_write(
+            _cells(spark_delta, day),
+            out,
+            mode="append",
+            transactional=False,
+            dim_cols=DIM_COLS,
+            append_dim="time",
+            coords=_coords(day),
+            spark=spark_delta,
         )

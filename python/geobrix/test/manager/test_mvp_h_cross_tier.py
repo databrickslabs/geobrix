@@ -21,14 +21,16 @@ def test_mvp_h_oracle_connect(spark_connect_local, tmp_path):
     assert _red(spark_connect_local, tmp_path) == []
 
 
-def test_a_virtual_member_over_the_cap_stops_the_fold(spark, tmp_path, monkeypatch):
-    """Decoding a virtual member into a row goes through the materialize cap, and the error says what to do."""
+def test_a_virtual_member_is_not_decoded_into_a_row(spark, tmp_path, monkeypatch):
+    """A virtual member goes to the merge by reference, never decoded into a row: only the result is bounded by the cap
+    for bytes in a row, and the error says what to do with a result that does not fit.
+    """
     from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")  # the cap is read on the driver
     tile = oracles.resolve_arg(oracles.Build("tile_virtual"), str(tmp_path))
     df = spark.createDataFrame([("a", tile)], f"key string, tile {TILE_SQL}")
-    with pytest.raises(Exception, match="method='vrt'"):
+    with pytest.raises(Exception, match="cap for bytes in a row"):
         helpers.merge_by_key(df, ["key"], method="fold").collect()
 
 
@@ -39,42 +41,33 @@ def _frame(spark, tmp_path, name):
     )
 
 
-def test_a_group_over_the_materialize_cap_stops_the_fold(spark, tmp_path, monkeypatch):
-    """A key's members (their encoded bytes, 2.2 KB here) are bounded by the materialize cap, before
-    the fold copies them; each member alone (about 0.6 KB) fits."""
+def test_a_group_over_the_materialize_cap_is_merged_not_held(
+    spark, tmp_path, monkeypatch
+):
+    """A key's members are not held: their encoded bytes (2.2 KB here) pass the cap for bytes in a row (1.5 KB), and the
+    merge still runs, its result (0.8 KB) being what the cap bounds. The group had a cap of its own once.
+    """
     from databricks.labs.gbx.rasterx import helpers
 
     monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1500")  # the cap is read on the driver
-    with pytest.raises(Exception, match="split the key"):
-        helpers.merge_by_key(_frame(spark, tmp_path, "quad_tiles"), ["key"]).collect()
+    for frame in ("quad_tiles", "quad_paths"):
+        rows = helpers.merge_by_key(_frame(spark, tmp_path, frame), ["key"]).collect()
+        assert len(rows) == 1 and 0 < len(rows[0]["raster"]) < 1500
 
 
-def test_a_member_that_decodes_over_the_tile_budget_stops_the_fold(
+def test_a_result_over_the_cap_is_refused_with_the_mosaic_route(
     spark, tmp_path, monkeypatch
 ):
-    """A member's decoded size comes from its header, also when its bytes are already in the row."""
+    """The merged result (0.8 KB here) is bounded by the cap for bytes in a row (0.5 KB), for tiles with bytes and for
+    paths, and the Fix names the files route: `merge_by_key` is bounded by the same cap.
+    """
     from databricks.labs.gbx.rasterx import helpers
 
-    monkeypatch.setattr(
-        "databricks.labs.gbx.pyrx.core.budget.decoded_budget_bytes",
-        lambda strategy: 100,  # a 16x16 float32 member decodes to 1 KB
-    )
-    with pytest.raises(Exception, match="MiB decoded, over the"):
-        helpers.merge_by_key(_frame(spark, tmp_path, "quad_tiles"), ["key"]).collect()
-
-
-def test_a_mosaic_over_the_cap_is_refused_before_it_is_read(
-    spark, tmp_path, monkeypatch
-):
-    """The vrt merge checks the size of its COG on disk; reading it whole first would be the OOM."""
-    from databricks.labs.gbx.rasterx import helpers
-
-    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")
-    with pytest.raises(Exception, match="merged mosaic is") as err:
-        helpers.merge_by_key(
-            _frame(spark, tmp_path, "quad_paths"), ["key"], method="vrt"
-        ).collect()
-    assert "mint_vrt" in str(err.value)
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "500")
+    for frame in ("quad_tiles", "quad_paths"):
+        with pytest.raises(Exception, match=r"mint_vrt|cog_gbx writer") as err:
+            helpers.merge_by_key(_frame(spark, tmp_path, frame), ["key"]).collect()
+        assert "cap" in str(err.value)
 
 
 def test_towers_to_crs_adds_the_counts_of_the_reprojected_viewshed(spark, tmp_path):

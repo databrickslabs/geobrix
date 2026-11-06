@@ -144,10 +144,10 @@ def test_merge_tiles_refuses_a_mosaic_it_cannot_stream_before_building_it(monkey
     headers, and past the COG ceiling the merge stops with a Fix: instead of streaming for ever or allocating.
     """
 
-    def never(_rasters):
+    def never(*_args, **_kwargs):
         raise AssertionError("streamed a mosaic it cannot hold")
 
-    monkeypatch.setattr(agg, "_merge_tiles_streaming", never)
+    monkeypatch.setattr(agg, "_stream_entries", never)
     near = _ras(np.full((16, 16), 1.0), ulx=0.0, uly=0.0, px=1e-4, epsg=4326)
     far = _ras(np.full((16, 16), 2.0), ulx=120.0, uly=-60.0, px=1e-4, epsg=4326)
     with pytest.raises(ValueError, match=r"GiB.*Fix:"):
@@ -510,14 +510,14 @@ def _grid_and_pixels(raster):
 
 
 def _streamed_calls(monkeypatch):
-    """Record the calls of the streaming merge (it still runs)."""
-    calls, real = [], agg._merge_tiles_streaming
+    """Record the calls of the streaming merge (it still runs): the number of members of each."""
+    calls, real = [], agg._stream_entries
 
-    def spy(rasters, **kwargs):
-        calls.append(len(rasters))
-        return real(rasters, **kwargs)
+    def spy(entries, *args, **kwargs):
+        calls.append(len(entries))
+        return real(entries, *args, **kwargs)
 
-    monkeypatch.setattr(agg, "_merge_tiles_streaming", spy)
+    monkeypatch.setattr(agg, "_stream_entries", spy)
     return calls
 
 
@@ -1531,13 +1531,13 @@ def test_the_force_output_merge_agg_refuses_a_serverless_group_over_its_cap(
     none = pd.Series([None, None])
     monkeypatch.setattr(fx, "_serverless_task", lambda: True)
     with _gdal_policy.carried(None, 20 * 1024):
-        out = fx._merge_agg_v2_udf.func(group, none, none)
+        out = fx._merge_agg_v2_pandas(group, none, none)
         assert out.startswith(fx._ERROR_MAGIC)
         text = out.decode("utf-8", "replace")
         assert "merge_by_key(" in text and "method=" in text and "vrt" in text, text
     monkeypatch.setattr(fx, "_serverless_task", lambda: False)
     with _gdal_policy.carried(None, 20 * 1024):
-        merged = fx._merge_agg_v2_udf.func(group, none, none)
+        merged = fx._merge_agg_v2_pandas(group, none, none)
         assert merged and not merged.startswith(fx._ERROR_MAGIC)
 
 
@@ -1565,3 +1565,585 @@ def test_serverless_task_is_the_serverless_runtime_without_a_carried_cap(
     else:
         with _gdal_policy.carried(None, carried):
             assert fx._serverless_task() is expected
+
+
+# --- the one streaming core: members by reference --------------------------------------------------------------------
+#
+# `agg.merge_members` is tested here once: a reference (a virtual tile) goes into the VRT as its file and window and is
+# never read into memory, a bytes member is kept in scratch, the overlap order is defined, and the masks carry. Each
+# consumer (the aggregate, its force-output form, the array merge, the table function, `merge_by_key`) has one test
+# that fails if it materializes a reference again.
+
+
+def _write_tif(path, data, ulx=0.0, uly=10.0, px=1.0, epsg=32633, nodata=0, mask=None):
+    """A one-band GTiff file at *path* (a pathlib.Path), optionally with an own mask band (255 valid)."""
+    import rasterio
+
+    data = np.asarray(data)
+    profile = dict(
+        driver="GTiff",
+        width=data.shape[1],
+        height=data.shape[0],
+        count=1,
+        dtype=str(data.dtype),
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(ulx, uly, px, px),
+    )
+    if nodata is not None:
+        profile["nodata"] = nodata
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="YES"):
+        with rasterio.open(path, "w", **profile) as dst:
+            dst.write(data, 1)
+            if mask is not None:
+                dst.write_mask(np.asarray(mask, dtype="uint8"))
+    return str(path)
+
+
+def _ref(path, window=None, **kw):
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    return agg.Ref(VirtualTile(cellid=0, path=str(path), window=window, **kw))
+
+
+def _no_materialize(monkeypatch):
+    """A reference is never read into bytes: materializing one fails the test."""
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    def boom(*_a, **_k):
+        raise AssertionError("a reference was materialized into bytes")
+
+    monkeypatch.setattr(ot, "materialize_to_bytes", boom)
+
+
+_MERGE_REFS_CHILD = """
+import gc, platform, resource, sys, tempfile, os
+
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
+
+from databricks.labs.gbx import _gdal_policy
+from databricks.labs.gbx.pyrx.core import agg
+from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+N, SIDE = int(sys.argv[1]), 1024
+rng = np.random.default_rng(1)
+root = tempfile.mkdtemp()
+refs = []
+for i in range(N):
+    path = os.path.join(root, f"t{i:03d}.tif")
+    data = rng.integers(0, 60000, (SIDE, SIDE), dtype="uint16")  # random: the encoded size is the decoded size
+    prof = dict(driver="GTiff", width=SIDE, height=SIDE, count=1, dtype="uint16", crs="EPSG:32633",
+                transform=from_origin(0.0, float(SIDE), 1.0, 1.0), nodata=0, compress="none")  # every member on one footprint
+    with rasterio.open(path, "w", **prof) as dst:
+        dst.write(data, 1)
+    refs.append(agg.Ref(VirtualTile(cellid=0, path=path)))
+    del data
+gc.collect()
+
+scale = 1024 if platform.system() == "Linux" else 1
+with _gdal_policy.carried(None, 1 << 20):  # a 1 MiB merge budget: every group streams
+    out_dir = os.path.join(root, "out")
+    agg.merge_members(refs[:2], to_dir=out_dir)  # warm the libraries up, so the delta is the merge's
+    gc.collect()
+    before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
+    out = agg.merge_members(refs, to_dir=out_dir)  # the mosaic goes to a file: the delta is the merge, not its result
+after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
+assert os.path.getsize(out) > 0
+print(after - before, flush=True)
+"""
+
+
+def _peak_rss_delta(n):
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _MERGE_REFS_CHILD, str(n)],
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    if proc.returncode != 0:
+        pytest.fail(f"child exited {proc.returncode}:\n{proc.stderr[-2000:]}")
+    return int(proc.stdout.strip().splitlines()[-1])
+
+
+def test_the_peak_memory_of_a_merge_of_references_does_not_grow_with_the_members():
+    """The same merge of 4 and of 64 references (2 MiB each, random so that encoded = decoded, one footprint, so the
+    mosaic is the same size): the peak RSS added by the merge differs by under 1.5x. (A mosaic's peak follows its
+    width, GDAL's COG writer reads strips of it, so the members cover one footprint.) Materializing the references,
+    the group's bytes in a list, 128 MiB for 64, is what this fails on."""
+    try:
+        import resource  # noqa: F401
+    except ImportError:
+        pytest.skip("resource module not available on this platform")
+    few, many = _peak_rss_delta(4), _peak_rss_delta(64)
+    print(
+        f"peak RSS added by the merge: 4 members {few / 2**20:.1f} MiB, 64 members {many / 2**20:.1f} MiB"
+    )
+    assert many < 1.5 * max(few, 8 << 20), (few, many)
+
+
+def test_a_window_of_a_file_is_the_source_rectangle_of_the_vrt(tmp_path, monkeypatch):
+    """A windowed reference mosaics the pixels of that window of its file (the VRT's source rectangle), nothing read
+    into memory first: the same pixels as the merge of the window materialized."""
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    rng = np.random.default_rng(5)
+    big = _write_tif(
+        tmp_path / "big.tif", rng.integers(1, 250, (40, 50), dtype="uint8"), 0.0, 40.0
+    )
+    side = _write_tif(
+        tmp_path / "side.tif", rng.integers(1, 250, (20, 20), dtype="uint8"), 50.0, 30.0
+    )
+    window = (10, 8, 30, 16)
+    expected = agg.merge_tiles(
+        [ot.materialize_to_bytes(_ref(big, window).tile).raster, _tile_from(side)]
+    )
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    got = agg.merge_members([_ref(big, window), _ref(side)])
+    (ge, te, pe, me), (gg, tg, pg, mg) = _grid_and_pixels(expected), _grid_and_pixels(
+        got
+    )
+    assert ge == gg and tuple(tg) == pytest.approx(tuple(te), abs=1e-9)
+    assert np.array_equal(pe, pg) and np.array_equal(me, mg)
+    assert gg[0] == 60  # columns 10 to 70: the window, not the file, sets the extent
+
+
+def _tile_from(path):
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def test_references_in_another_crs_are_reprojected_onto_the_reference_grid(
+    tmp_path, monkeypatch
+):
+    """Mixed CRS references take the spool path (reprojected one at a time into scratch): the grid and the pixels are
+    those of the merge of the same tiles as bytes."""
+    rng = np.random.default_rng(9)
+    a = _write_tif(
+        tmp_path / "a.tif",
+        rng.integers(1, 200, (12, 12), dtype="uint8"),
+        1.0e6,
+        5.0e6,
+        50000.0,
+        3857,
+    )
+    b = _write_tif(
+        tmp_path / "b.tif",
+        rng.integers(1, 200, (12, 12), dtype="uint8"),
+        9.0,
+        44.0,
+        0.4,
+        4326,
+    )
+    expected = agg.merge_tiles([_tile_from(a), _tile_from(b)])
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    got = agg.merge_members([_ref(a), _ref(b)])
+    (ge, te, pe, me), (gg, tg, pg, mg) = _grid_and_pixels(expected), _grid_and_pixels(
+        got
+    )
+    assert ge == gg and tuple(tg) == pytest.approx(tuple(te), abs=1e-6)
+    assert np.array_equal(pe, pg) and np.array_equal(me, mg)
+
+
+@pytest.mark.parametrize("streamed", [False, True], ids=["in-ram", "streamed"])
+def test_the_overlap_order_is_bytes_by_bytes_then_references_by_path_and_window(
+    tmp_path, monkeypatch, streamed
+):
+    """The last member in the fold order wins an overlap. The fold order is defined: the bytes members first, sorted by
+    their bytes, then the references, by (path, window). So a reference beats bytes, the later path beats the earlier,
+    and the arrival order does not matter."""
+    if streamed:
+        _force_streaming(monkeypatch)
+    ones, twos, threes = (np.full((6, 6), v, dtype="uint8") for v in (1, 2, 3))
+    first = _write_tif(tmp_path / "a_first.tif", twos, 0.0, 6.0)
+    second = _write_tif(tmp_path / "b_second.tif", threes, 0.0, 6.0)
+    as_bytes = _tile_in(ones, "EPSG:32633", 0.0, 6.0, 1.0)
+
+    def winner(members):
+        _, _, pixels, _ = _grid_and_pixels(agg.merge_members(members))
+        return set(np.unique(pixels))
+
+    assert winner([_ref(first), _ref(second)]) == {3}
+    assert winner([_ref(second), _ref(first)]) == {3}  # arrival order does not matter
+    assert winner([_ref(second), as_bytes, _ref(first)]) == {3}
+    assert winner([as_bytes, _ref(first)]) == {2}  # a reference folds after bytes
+    # a whole file folds before a window of it, and windows by position
+    top = _ref(second, (0, 0, 6, 3))
+    assert winner([_ref(first), top, _ref(second, (0, 3, 6, 3))]) == {3}
+    other_bytes = _tile_in(np.full((6, 6), 9), "EPSG:32633", 0.0, 6.0, 1.0)
+    first_by_bytes, second_by_bytes = sorted([as_bytes, other_bytes])
+    assert winner([first_by_bytes, second_by_bytes]) == winner(
+        [second_by_bytes, first_by_bytes]
+    )
+
+
+def test_a_gap_between_members_stays_invalid_when_a_member_has_a_mask(
+    tmp_path, monkeypatch
+):
+    """A member with an own mask band makes the mosaic carry one: the gap between two members, and the masked pixels,
+    stay invalid; a member without a mask is written with its validity as its mask. As the same group of bytes.
+    """
+    values = np.full((8, 8), 7, dtype="uint8")
+    mask = np.full((8, 8), 255, dtype="uint8")
+    mask[:2, :] = 0  # the top two rows are masked
+    left = _write_tif(tmp_path / "left.tif", values, 0.0, 8.0, mask=mask, nodata=None)
+    right = _write_tif(
+        tmp_path / "right.tif", values, 12.0, 8.0, nodata=None
+    )  # a gap of 4 columns, no mask
+    expected = agg.merge_tiles([_tile_from(left), _tile_from(right)])
+    _force_streaming(monkeypatch)
+    got = agg.merge_members([_ref(left), _ref(right)])
+    (_, _, pe, me), (gg, _, pg, mg) = _grid_and_pixels(expected), _grid_and_pixels(got)
+    assert gg[0] == 20
+    assert np.array_equal(me, mg)
+    assert (
+        mg[:, 8:12].max() == 0 and mg[:2, :8].max() == 0
+    )  # the gap and the masked rows are invalid
+    assert mg[2:, :8].min() == 255 and mg[:, 12:].min() == 255
+    assert np.array_equal(np.where(mg > 0, pg, 0), np.where(me > 0, pe, 0))
+
+
+def test_a_mosaic_written_to_a_directory_is_never_read_back(tmp_path, monkeypatch):
+    """With `to_dir` the COG goes from scratch to the directory by copy: its bytes are never read into Python (the
+    module does not open the COG for reading), and the path comes back."""
+    a = _write_tif(tmp_path / "a.tif", np.full((8, 8), 1, dtype="uint8"), 0.0, 8.0)
+    b = _write_tif(tmp_path / "b.tif", np.full((8, 8), 2, dtype="uint8"), 8.0, 8.0)
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    reads = []
+    real_open = open
+
+    def spy(file, mode="r", *args, **kwargs):
+        if "r" in mode and str(file).endswith("mosaic.tif"):
+            reads.append(file)
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr(agg, "open", spy, raising=False)
+    out = tmp_path / "out"
+    path = agg.merge_members([_ref(a), _ref(b)], to_dir=str(out), prefix="p")
+    assert (
+        isinstance(path, str)
+        and path.startswith(str(out))
+        and "p_0_0_0_16_8_" in path
+        and path.endswith(".tif")
+    )
+    assert reads == []
+    _, _, pixels, _ = _grid_and_pixels(_tile_from(path))
+    assert set(np.unique(pixels)) == {1, 2}
+    # the same call asking for bytes does read the COG back (the spy sees it), so the spy is not blind
+    agg.merge_members([_ref(a), _ref(b)])
+    assert reads
+
+
+def test_a_bytes_member_past_the_hold_limit_is_kept_in_a_scratch_file(monkeypatch):
+    """A spool that is handed members one at a time keeps their bytes in memory up to a quarter of the merge budget, and in
+    scratch files beyond it: a table function holds none of them in memory. The result is that of the same bytes
+    held, sorted by their bytes (the files compare as the bytes do)."""
+    tiles = [
+        _ras(np.full((4, 4), v), ulx=2.0 * v, uly=4.0, px=1.0) for v in (3, 1, 2, 5, 4)
+    ]
+    expected = agg.merge_tiles(tiles)
+    with _gdal_policy_carried(
+        4 * len(tiles[0])
+    ):  # the hold limit is a quarter of the budget: one member's size
+        spool = agg._MemberSpool(spill=True)
+        for t in tiles:
+            spool.add(t)
+        assert sum(len(e.data or b"") for e in spool.entries) <= len(tiles[0])
+        assert sum(e.path is not None for e in spool.entries) >= len(tiles) - 1
+        got = spool.result()
+        spool.close()
+    assert _grid_and_pixels(got)[2].tolist() == _grid_and_pixels(expected)[2].tolist()
+
+
+def _gdal_policy_carried(cap):
+    from databricks.labs.gbx import _gdal_policy
+
+    return _gdal_policy.carried(None, cap)
+
+
+def test_a_reference_with_an_instruction_is_applied_once_and_kept_as_bytes(
+    tmp_path, monkeypatch
+):
+    """A reference with a clip is not named in the VRT as it is: the front door applies it, once, and the result is a
+    member like bytes (the pixels outside the clip are NoData)."""
+    from shapely.geometry import box
+
+    full = _write_tif(
+        tmp_path / "full.tif", np.full((8, 8), 6, dtype="uint8"), 0.0, 8.0
+    )
+    clip = shapely.wkb.dumps(box(0.0, 4.0, 4.0, 8.0))
+    other = _write_tif(
+        tmp_path / "other.tif", np.full((8, 8), 9, dtype="uint8"), 8.0, 8.0
+    )
+    _force_streaming(monkeypatch)
+    got = agg.merge_members(
+        [_ref(full, clip_polygon=clip, clip_crs="EPSG:32633"), _ref(other)]
+    )
+    _, _, pixels, _ = _grid_and_pixels(got)
+    assert pixels.shape == (8, 16)
+    assert set(np.unique(pixels[:4, :4])) == {6} and set(np.unique(pixels[:, 8:])) == {
+        9
+    }
+    assert set(np.unique(pixels[4:, :4])) == {0}  # outside the clip: NoData
+
+
+# --- each shape of the grouped merge takes references as references ---------------------------------------------------
+
+
+def _virtual_rows(tmp_path, n=3):
+    """n path-only tile rows (dicts, as a grouped UDF receives them) of 8 x 8 uint8 files, adjacent along x."""
+    rows = []
+    for i in range(n):
+        path = _write_tif(
+            tmp_path / f"m{i}.tif", np.full((8, 8), i + 1, dtype="uint8"), 8.0 * i, 8.0
+        )
+        row = _ref(path).tile.to_row()
+        rows.append(row)
+    return rows
+
+
+def _expect_three_columns_of_values(raster, n=3):
+    (w, h, _), _, pixels, _ = _grid_and_pixels(raster)
+    assert (w, h) == (8 * n, 8)
+    assert [int(pixels[0, 8 * i]) for i in range(n)] == list(range(1, n + 1))
+
+
+def test_the_aggregate_merges_virtual_tiles_without_materializing_them(
+    tmp_path, monkeypatch
+):
+    """c0 (`gbx_rst_merge_agg`): a group of path-only tiles is taken by reference, from a pandas Series and from an Arrow
+    array. `_tile_raster_bytes` would have read each into bytes first."""
+    import pandas as pd
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    rows = _virtual_rows(tmp_path)
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    _expect_three_columns_of_values(fx._merge_agg_bytes(pd.Series(rows), False))
+    arrow = pa.array([{k: v for k, v in r.items() if k != "metadata"} for r in rows])
+    _expect_three_columns_of_values(fx._merge_agg_arrow(arrow, False))
+
+
+def test_the_force_output_aggregate_writes_the_mosaic_by_copy_and_reads_no_reference(
+    tmp_path, monkeypatch
+):
+    """The force-output form (`virtualize_dir`): the group of references is not materialized, the COG goes from scratch to
+    the directory, and the result is the path (`_VTPATH_MAGIC` + path)."""
+    import pandas as pd
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    rows = _virtual_rows(tmp_path)
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    out_dir = str(tmp_path / "forced")
+    got = fx._merge_agg_v2_pandas(
+        pd.Series(rows), pd.Series([out_dir] * 3), pd.Series(["pre"] * 3)
+    )
+    assert got.startswith(fx._VTPATH_MAGIC)
+    path = got[len(fx._VTPATH_MAGIC) :].decode()
+    assert path.startswith(out_dir) and "pre_" in path
+    _expect_three_columns_of_values(_tile_from(path))
+    # a second group with a mosaic of the same size is another file, not the first one overwritten
+    again = fx._merge_agg_v2_pandas(
+        pd.Series(rows), pd.Series([out_dir] * 3), pd.Series(["pre"] * 3)
+    )
+    assert again != got and len(list((tmp_path / "forced").glob("pre_*.tif"))) == 2
+
+
+def test_the_array_merge_takes_virtual_elements_by_reference(tmp_path, monkeypatch):
+    """The array merge (`gbx_rst_merge`, finalize): virtual elements are references, not bytes."""
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    rows = _virtual_rows(tmp_path)
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    merged, dropped = fx._merge_bytes(rows)
+    assert dropped == 0
+    _expect_three_columns_of_values(merged)
+
+
+def test_the_table_function_holds_no_member_bytes_and_takes_references_as_such(
+    tmp_path, monkeypatch
+):
+    """The table function (`gbx_rst_merge_tvf`) gets a row at a time: a virtual tile is a reference, and the bytes of
+    a materialized one go to scratch once past the hold limit; it has no list of member bytes.
+    """
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    rows = _virtual_rows(tmp_path)
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+    tvf = fx._RstMergeTvf.func()
+    assert not hasattr(tvf, "rasters")
+    for row in rows:
+        tvf.eval({"key": "k", "tile": row})
+    ((key, raster),) = list(tvf.terminate())
+    assert key == "k"
+    _expect_three_columns_of_values(raster)
+    # materialized members: past the hold limit they are in scratch files, not in the instance
+    with _gdal_policy_carried(4 * 200):
+        tvf = fx._RstMergeTvf.func()
+        tiles = [
+            _ras(np.full((4, 4), v), ulx=4.0 * v, uly=4.0, px=1.0) for v in range(6)
+        ]
+        for t in tiles:
+            tvf.eval({"key": "k", "tile": {"cellid": 0, "raster": t, "path": None}})
+        assert sum(len(e.data or b"") for e in tvf.spool.entries) <= 200
+        assert sum(e.path is not None for e in tvf.spool.entries) >= len(tiles) - 1
+        tvf.spool.close()
+
+
+def _tiles_df(spark, rows_by_key):
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    return spark.createDataFrame(
+        [(k, r) for k, rows in rows_by_key.items() for r in rows],
+        f"key string, tile {TILE_SQL}",
+    )
+
+
+def test_merge_by_key_streams_references_past_the_group_cap_in_parallel(
+    spark, tmp_path, monkeypatch
+):
+    """`merge_by_key`: the members of a key are not held, so a key whose members' bytes pass the cap for bytes in a row
+    merges (it stopped with `split the key`), a window of a file and a mixed grid are accepted, and the shuffle has an
+    explicit width AQE cannot coalesce."""
+    from databricks.labs.gbx.rasterx import helpers
+
+    monkeypatch.setenv(
+        "GBX_STREAM_MAX_BYTES", "4000"
+    )  # the cap for bytes in a row; read on the driver
+    stacked = (
+        []
+    )  # 12 members on one footprint: 12 x 1 KiB of bytes in a group, a result of 1 KiB
+    for i in range(12):
+        path = _write_tif(
+            tmp_path / f"s{i:02d}.tif",
+            np.full((32, 32), i + 1, dtype="uint8"),
+            0.0,
+            32.0,
+        )
+        stacked.append(_ref(path).tile.to_row())
+    big = _write_tif(
+        tmp_path / "big.tif",
+        np.arange(40 * 40).reshape(40, 40) % 250 + 1,
+        1.0e6,
+        5.0e6,
+        50000.0,
+        3857,
+    )
+    other = _write_tif(
+        tmp_path / "other.tif",
+        np.full((12, 12), 7, dtype="uint8"),
+        9.0,
+        44.0,
+        0.4,
+        4326,
+    )
+    windowed = [_ref(big, (5, 6, 20, 10)).tile.to_row(), _ref(other).tile.to_row()]
+    df = _tiles_df(spark, {"stack": stacked, "mixed": windowed})
+    out = helpers.merge_by_key(df, ["key"], num_partitions=5)
+    assert out.rdd.getNumPartitions() == 5
+    assert helpers.merge_by_key(df, ["key"]).rdd.getNumPartitions() >= 64
+    got = {r["key"]: bytes(r["raster"]) for r in out.collect()}
+    _, _, pixels, _ = _grid_and_pixels(got["stack"])
+    assert set(np.unique(pixels)) == {
+        12
+    }  # the last path in the (path, window) order wins
+    (w, h, crs), _, _, _ = _grid_and_pixels(got["mixed"])
+    assert (
+        crs == "EPSG:3857" and w >= 20 and h >= 10
+    )  # the window of `big` and the 4326 tile, on one grid
+    # method="vrt" takes the same virtual rows
+    assert helpers.merge_by_key(df, ["key"], method="vrt").count() == 2
+
+
+def test_the_grouped_aggregate_is_arrow_native_only_where_pyspark_has_it(monkeypatch):
+    """The grouped-aggregate UDFs are Arrow-native where pyspark has `arrow_udf` (Spark 4.1: DBR 19, Serverless env 6)
+    and pandas UDFs elsewhere (Spark 4.0: DBR 17.3 and 18), decided where the module is imported;
+    `GBX_ARROW_AGG=0` keeps the pandas form. Both run the same body (the c0 test above feeds it a Series and an Arrow array).
+    """
+    from pyspark.sql.functions import (  # noqa: F401 - the pandas form is always there
+        PandasUDFType,
+    )
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    monkeypatch.delenv("GBX_ARROW_AGG", raising=False)
+    try:
+        from pyspark.sql.functions import arrow_udf  # noqa: F401
+
+        has_arrow = True
+    except ImportError:
+        has_arrow = False
+    assert fx._arrow_grouped_agg_available() is has_arrow
+    assert fx._ARROW_GROUPED_AGG is has_arrow
+    monkeypatch.setenv("GBX_ARROW_AGG", "0")
+    assert fx._arrow_grouped_agg_available() is False
+
+
+def test_the_arrow_form_of_the_aggregate_reads_the_metadata_map_as_a_dict():
+    """A group of nothing but error tiles is the first error tile, also when the rows come as an Arrow array (the
+    form of Spark 4.1): the map field of a row is a dict, as the pandas form gives it.
+    """
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    err = _serde.build_error_tile("boom", 0)
+    row = {k: err[k] for k in ("cellid", "raster", "path", "metadata")}
+    arr = pa.array(
+        [row, row],
+        type=pa.struct(
+            [
+                ("cellid", pa.int64()),
+                ("raster", pa.binary()),
+                ("path", pa.string()),
+                ("metadata", pa.map_(pa.string(), pa.string())),
+            ]
+        ),
+    )
+    out = fx._merge_agg_arrow(arr, True)
+    assert out.startswith(fx._ERROR_MAGIC) and b"boom" in out
+    assert fx._merge_agg_arrow(arr, False) is None  # the SQL form gives NULL
+
+
+def test_a_spool_that_would_fill_the_local_disk_writes_its_members_under_the_volume_directory(
+    tmp_path, monkeypatch
+):
+    """With an `overflow_parent` (the `virtualize_dir` of the force-output form) a member written to scratch goes to a
+    `.gbx_scratch/<id>` directory under it when the local disk would be left under its reserve, and the spool removes it.
+    Without one, scratch stays local."""
+    import shutil
+
+    tiles = [_ras(np.full((4, 4), v), ulx=4.0 * v, uly=4.0, px=1.0) for v in range(3)]
+    parent = tmp_path / "vol"
+    parent.mkdir()
+    spool = agg._MemberSpool(spill=True, overflow_parent=str(parent))
+    spool._limit = 0  # every member is written
+    monkeypatch.setattr(
+        shutil, "disk_usage", lambda _p: shutil._ntuple_diskusage(10**12, 10**12 - 1, 1)
+    )
+    for t in tiles:
+        spool.add(t)
+    scratch = parent / ".gbx_scratch"
+    assert scratch.is_dir() and len(list(scratch.rglob("member_*.tif"))) == 3
+    got = spool.result(stream=True)
+    spool.close()
+    assert not any(scratch.rglob("*.tif"))
+    assert _grid_and_pixels(got)[0][0] == 12
+    local = agg._MemberSpool(spill=True)
+    local._limit = 0
+    for t in tiles:
+        local.add(t)
+    assert all(not e.path.startswith(str(parent)) for e in local.entries)
+    local.close()

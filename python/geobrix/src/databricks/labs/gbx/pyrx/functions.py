@@ -16,6 +16,7 @@ import json
 import math
 import os
 import re
+import warnings
 from typing import Optional
 
 import pandas as pd
@@ -1160,30 +1161,36 @@ def _array_without_members(tiles):
 # extent (reuses core.agg.merge_tiles, the same union-extent reducer the
 # heavyweight RST_MergeAgg uses). cellid = 0 (no aggregate group key here).
 def _merge_bytes(tiles):
-    """Shared merge body: collect each input tile's GTiff bytes, mosaic by extent.
-    Returns ``(merged_bytes, dropped)`` where ``dropped`` is the count of corrupt
-    members skipped, or ``None`` on an empty/all-corrupt array.
+    """Shared merge body: take each input tile as a member of the one merge core, mosaic by extent.
+    Returns ``(merged_bytes, dropped)`` where ``dropped`` is the count of members skipped (bytes that do
+    not open, a file that cannot be read), or ``None`` on an empty/all-dropped array.
 
     CRITICAL — materialized inputs pass their ORIGINAL bytes verbatim.
-    ``agg_core.merge_tiles`` sorts inputs on their RAW GTiff bytes to pick a
+    ``agg_core.merge_members`` sorts bytes members on their RAW GTiff bytes to pick a
     deterministic, tier-agreeing last-wins overlap winner (bitwise-identical
-    across light/heavy — see its docstring). Re-encoding a materialized tile
+    across light/heavy — see ``agg_core.merge_tiles``). Re-encoding a materialized tile
     (full read -> re-write) would change that sort key and diverge from heavy
-    for overlapping tiles, so materialized bytes are NEVER round-tripped. Only
-    a VIRTUAL input (raster None) is materialized here (it has no bytes yet)."""
+    for overlapping tiles, so materialized bytes are NEVER round-tripped. A VIRTUAL input (raster
+    None) is a reference: the core takes it as its path and window, never as bytes held here.
+    """
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
     elems = [t for t in tiles if t is not None and not _tile_is_empty(t)]
     if not elems:
         return None
-    # Validate the bytes are openable before collecting them; a corrupt member that passes the empty/None filter but
-    # cannot be opened by rasterio must be skipped here, not inside agg_core.merge_tiles (which opens every member and
-    # re-raises on the first failure).
-    rasters, _, dropped = arrays_core.collect_members(elems, _array_member_bytes)
-    if not rasters:
-        return None
-    return agg_core.merge_tiles(rasters), dropped
+    spool, dropped = agg_core._MemberSpool(spill=False), 0
+    try:
+        for t in elems:
+            member = _group_member(t)
+            # a member that cannot be made or opened is skipped (and counted), as the session does
+            if member is None or not spool.add(member, drop_bytes=True, drop_refs=True):
+                dropped += 1
+        if not len(spool):
+            return None
+        return spool.result(), dropped
+    finally:
+        spool.close()
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -4962,6 +4969,23 @@ def _tile_raster_bytes(row):
     return None
 
 
+def _group_member(tile):
+    """A tile as a member of a grouped merge, the form the merge core takes (``agg_core.merge_members``): the
+    bytes of a materialized tile verbatim, a ``Ref`` for a virtual tile (a path and no bytes; the core reads it
+    where, and as much as, the merge needs, never into the group's memory), or None for a NULL, empty or error
+    tile. The same rule as :func:`_tile_raster_bytes` for what is a member, without materializing a virtual one.
+    """
+    if tile is None:
+        return None
+    d = tile.asDict() if hasattr(tile, "asDict") else tile
+    raster = d["raster"] if "raster" in d else None
+    if raster is not None:
+        return bytes(raster)
+    if d.get("path") if hasattr(d, "get") else None:
+        return agg_core.Ref(tile)
+    return None
+
+
 # An aggregate over nothing but error tiles gives the first member's error tile as it is where its result is a
 # tile (every key of its metadata, so the upstream diagnostic survives), but the BINARY a grouped-agg UDF returns
 # has no place for one. The Python API's variants spell it as this prefix and the tile's cell id and metadata
@@ -5055,109 +5079,219 @@ def _serverless_task() -> bool:
     return capabilities.is_serverless() and carried_read_cap() is None
 
 
-def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
-    from databricks.labs.gbx.pyrx import _env
+def _arrow_grouped_agg_available() -> bool:
+    """True when this pyspark has the Arrow-native grouped-aggregate UDF (``arrow_udf`` with ``ArrowUDFType.GROUPED_AGG``,
+    Spark 4.1), which hands a group to the function as Arrow arrays: no pandas conversion, so the group is not held a
+    second time as one Python object per member. ``GBX_ARROW_AGG=0`` keeps the pandas form (the form of Spark 4.0 and
+    so of DBR 17.3 and 18); ``=1`` insists on the Arrow one and raises where it is missing. Decided where the module is
+    imported, with the pyspark that registers the UDF.
+    """
+    forced = os.environ.get("GBX_ARROW_AGG", "").strip()
+    if forced == "0":
+        return False
+    try:
+        from pyspark.sql.functions import arrow_udf  # noqa: F401
+        from pyspark.sql.pandas.functions import ArrowUDFType
 
-    _env.configure_gdal_env()
-    rasters = []
-    dropped = 0
-    decoded = 0
-    for r in tile:
-        candidate = _tile_raster_bytes(r)
-        if candidate is None:
+        return hasattr(ArrowUDFType, "GROUPED_AGG")
+    except ImportError:
+        if forced == "1":
+            raise
+        return False
+
+
+_ARROW_GROUPED_AGG = _arrow_grouped_agg_available()
+
+
+def _grouped_agg_udf(arrow_body, pandas_body):
+    """The grouped-aggregate UDF returning BINARY: *arrow_body* (arrays in) as an Arrow-native UDF where pyspark has one,
+    else *pandas_body* (Series in) as a pandas UDF. Both bodies run the one :func:`_merge_agg_group`.
+    """
+    if _ARROW_GROUPED_AGG:
+        from pyspark.sql.functions import arrow_udf
+        from pyspark.sql.pandas.functions import ArrowUDFType
+
+        # the function type is spelled out: the body has no type hints to read it from (pyspark warns it prefers them)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            return arrow_udf(arrow_body, BinaryType(), ArrowUDFType.GROUPED_AGG)
+    return pandas_udf(pandas_body, BinaryType())
+
+
+def _arrow_rows(array):
+    """The rows of an Arrow struct array (a group's tile column) one at a time, as dicts (None for a NULL row), their
+    map fields (the metadata) as dicts too, as the pandas form gives them: one member's bytes are a Python object at a
+    time, never the group's."""
+    for i in range(len(array)):
+        scalar = array[i]
+        if not scalar.is_valid:
+            yield None
             continue
         try:
-            with _serde.open_tile(
-                candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                decoded += agg_core._decoded_bytes(ds)
-            rasters.append(candidate)
-        except Exception:  # noqa: BLE001
-            dropped += 1
+            yield scalar.as_py(maps_as_pydicts="lossy")
+        except TypeError:  # pyarrow before 13: a map is a list of pairs
+            row = scalar.as_py()
+            if isinstance(row.get("metadata"), list):
+                row["metadata"] = dict(row["metadata"])
+            yield row
+
+
+def _fill_spool(rows, spool):
+    """Feed a group's rows to *spool* as members. Returns ``(errors, others)``: the error tiles among the rows that are
+    no members, and the count of rows that are (members, dropped or not). Bytes that do not open are dropped, as the
+    aggregate always did; a file that cannot be read stops the query."""
+    errors, others = [], 0
+    for r in rows:
+        if r is None:
             continue
-    if not rasters:
-        return _error_payload(_only_error_tiles(tile)) if error_channel else None
-    # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
-    # bare bytes; no struct/metadata assembly here). The skip still stops raising.
-    try:
-        if _serverless_task():
-            agg_core.refuse_group_over_task_cap(len(rasters), decoded)
-        # the bytes come back whole in one row: bounded by the cap the members are
-        return agg_core.merge_tiles(rasters, max_out=agg_core._merge_budget())
-    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
-        # Where the result is a tile this group's answer is its error tile. Bytes have no place for a reason and a
-        # NULL reads as an empty group, so the aggregate raises with the Fix, never a silent NULL.
-        if not error_channel:
-            raise
-        return _error_payload([_serde.build_error_tile(str(exc), 0)])
+        member = _group_member(r)
+        if member is None:
+            errors.append(_error_tile_of(r))
+            continue
+        others += 1
+        spool.add(member, drop_bytes=True)
+    return errors, others
 
 
-@pandas_udf(BinaryType())
-def _merge_agg_udf(tile: pd.Series) -> bytes:
-    return _merge_agg_bytes(tile, False)
+def _only_errors(errors, others):
+    """*errors* when the group has nothing but error tiles among its non-NULL rows, else an empty list."""
+    return (
+        errors if errors and not others and all(e is not None for e in errors) else []
+    )
 
 
-@pandas_udf(BinaryType())
-def _merge_agg_tile_udf(tile: pd.Series) -> bytes:
-    """The Python API's variant of :func:`_merge_agg_udf`: a group of nothing but error tiles is the error payload."""
-    return _merge_agg_bytes(tile, True)
+def _refuse_serverless_bytes(spool):
+    """On a Serverless task the group's bytes are all in this process before the merge begins: judge them first (the
+    references cost nothing here, so only the bytes members count)."""
+    if _serverless_task():
+        held = [e.hdr.decoded for e in spool.entries if e.kind == "b"]
+        agg_core.refuse_group_over_task_cap(len(held), sum(held))
 
 
-@pandas_udf(BinaryType())
-def _merge_agg_v2_udf(
-    tile: pd.Series,
-    virtualize_dir: pd.Series,
-    virtualize_prefix: pd.Series,
-) -> bytes:
-    """Force-output variant of _merge_agg_udf (Python API only).
-
-    Merges the group's tile rasters exactly like ``_merge_agg_udf``, then
-    writes the result to ``<virtualize_dir>/<prefix_>*.tif`` via
-    ``open_tile.shape_output`` (FUSE-safe local-temp→copyfile).  Returns the
-    destination path encoded as ``_VTPATH_MAGIC + path.encode("utf-8")``; the
-    companion scalar UDF ``_as_virtual_tile_from_path_udf`` decodes this back
-    into a V2 tile struct with ``raster=None``.
-
-    Every row in a group carries the same broadcast literal for
-    ``virtualize_dir`` and ``virtualize_prefix``; we take ``iloc[0]``.
+def _merge_agg_group(rows, error_channel: bool, spill: bool = False):
+    """The merge of a group of tile rows (the body of ``gbx_rst_merge_agg``): each row is taken as a member of the one
+    core, bytes as they are and a virtual tile as its path and window (``agg_core.merge_members``), so a group of
+    references costs the task nothing in bytes however many they are. *spill*: the rows are handed over one at a time
+    and none is held by the caller (an Arrow array), so bytes members are kept in scratch files past a quarter of the
+    merge budget.
     """
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
-    vdir = virtualize_dir.iloc[0] if len(virtualize_dir) > 0 else None
-    vprefix = virtualize_prefix.iloc[0] if len(virtualize_prefix) > 0 else None
-
-    rasters = []
-    decoded = 0
-    for r in tile:
-        candidate = _tile_raster_bytes(r)
-        if candidate is None:
-            continue
-        try:
-            with _serde.open_tile(
-                candidate, gate=False
-            ) as ds:  # a validity probe: the decode gates
-                decoded += agg_core._decoded_bytes(ds)
-            rasters.append(candidate)
-        except Exception:  # noqa: BLE001
-            continue
-    if not rasters:
-        return _error_payload(_only_error_tiles(tile))
-
+    spool = agg_core._MemberSpool(spill=spill)
     try:
-        if _serverless_task():
-            agg_core.refuse_group_over_task_cap(len(rasters), decoded)
-        merged_bytes = agg_core.merge_tiles(rasters)
-    except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
-        return _error_payload([_serde.build_error_tile(str(exc), 0)])
-    if (
-        vdir is None
-    ):  # materialize=True alone: the merged bytes, as the natural form returns them
-        return bytes(merged_bytes)
-    vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
-    shaped = ot.shape_output(vt, virtualize_dir=vdir, virtualize_prefix=vprefix)
-    # Encode the path into the BinaryType return channel.
-    return _VTPATH_MAGIC + shaped.path.encode("utf-8")
+        errors, others = _fill_spool(rows, spool)
+        if not len(spool):
+            return (
+                _error_payload(_only_errors(errors, others)) if error_channel else None
+            )
+        # NOTE: drop-count has no metadata carrier at this layer (a grouped-agg UDF returns bare bytes;
+        # no struct/metadata assembly here). The skip still stops raising.
+        try:
+            _refuse_serverless_bytes(spool)
+            # the bytes come back whole in one row: bounded by the cap the members are
+            return spool.result(max_out=agg_core._merge_budget())
+        except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
+            # Where the result is a tile this group's answer is its error tile. Bytes have no place for a reason and a
+            # NULL reads as an empty group, so the aggregate raises with the Fix, never a silent NULL.
+            if not error_channel:
+                raise
+            return _error_payload([_serde.build_error_tile(str(exc), 0)])
+    finally:
+        spool.close()
+
+
+def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
+    return _merge_agg_group(iter(tile), error_channel)
+
+
+def _merge_agg_arrow(tile, error_channel: bool):
+    return _merge_agg_group(_arrow_rows(tile), error_channel, spill=True)
+
+
+def _merge_agg_pandas(tile: pd.Series) -> bytes:
+    return _merge_agg_bytes(tile, False)
+
+
+def _merge_agg_arrow_sql(tile):
+    return _merge_agg_arrow(tile, False)
+
+
+def _merge_agg_tile_pandas(tile: pd.Series) -> bytes:
+    """The Python API's variant of :func:`_merge_agg_udf`: a group of nothing but error tiles is the error payload."""
+    return _merge_agg_bytes(tile, True)
+
+
+def _merge_agg_tile_arrow(tile):
+    return _merge_agg_arrow(tile, True)
+
+
+_merge_agg_udf = _grouped_agg_udf(_merge_agg_arrow_sql, _merge_agg_pandas)
+_merge_agg_tile_udf = _grouped_agg_udf(_merge_agg_tile_arrow, _merge_agg_tile_pandas)
+
+
+def _merge_agg_forced_group(rows, vdir, vprefix, spill: bool = False):
+    """The force-output merge: the group's mosaic written under *vdir* (``_VTPATH_MAGIC`` + the path) with the same
+    members and rules as :func:`_merge_agg_group`. The mosaic is copied from the local scratch straight to the directory
+    (``[<prefix>_]0_0_0_<w>_<h>_<id>.tif``), a streamed one's bytes never read back. With no *vdir*
+    (``materialize=True`` alone) the merged bytes come back as the natural form returns them.
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    spool = agg_core._MemberSpool(spill=spill, overflow_parent=vdir)
+    try:
+        errors, others = _fill_spool(rows, spool)
+        if not len(spool):
+            return _error_payload(_only_errors(errors, others))
+        try:
+            _refuse_serverless_bytes(spool)
+            merged = spool.result(to_dir=vdir, prefix=vprefix)
+        except (agg_core.MosaicTooLarge, agg_core.ReadCapRefused) as exc:
+            return _error_payload([_serde.build_error_tile(str(exc), 0)])
+    finally:
+        spool.close()
+    if isinstance(
+        merged, str
+    ):  # written to the directory: the path travels, not the bytes
+        return _VTPATH_MAGIC + merged.encode("utf-8")
+    return bytes(
+        merged
+    )  # no directory (``materialize=True`` alone): the bytes, as the natural form returns them
+
+
+def _first_scalar(values):
+    """The first value of a broadcast literal column (a pandas Series or an Arrow array), None for no row."""
+    if len(values) == 0:
+        return None
+    return values.iloc[0] if hasattr(values, "iloc") else values[0].as_py()
+
+
+def _merge_agg_v2_pandas(
+    tile: pd.Series, virtualize_dir: pd.Series, virtualize_prefix: pd.Series
+) -> bytes:
+    """Force-output variant of ``_merge_agg_udf`` (Python API only): the group's mosaic written to
+    ``<virtualize_dir>/<prefix_>*.tif`` and returned as ``_VTPATH_MAGIC + path``; the companion scalar UDF
+    ``_as_virtual_tile_from_path_udf`` decodes this back into a V2 tile struct with ``raster=None``.
+
+    Every row in a group carries the same broadcast literal for ``virtualize_dir`` and ``virtualize_prefix``; we
+    take the first.
+    """
+    return _merge_agg_forced_group(
+        iter(tile), _first_scalar(virtualize_dir), _first_scalar(virtualize_prefix)
+    )
+
+
+def _merge_agg_v2_arrow(tile, virtualize_dir, virtualize_prefix) -> bytes:
+    return _merge_agg_forced_group(
+        _arrow_rows(tile),
+        _first_scalar(virtualize_dir),
+        _first_scalar(virtualize_prefix),
+        spill=True,
+    )
+
+
+_merge_agg_v2_udf = _grouped_agg_udf(_merge_agg_v2_arrow, _merge_agg_v2_pandas)
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -6199,24 +6333,13 @@ def _burn_best(best, xmin, ymin, xmax, ymax, width, height):
     )
 
 
-def _member_bytes(tile):
-    """The raster bytes of a group member, or None for a member a merge drops: an error tile (it failed upstream), an
-    empty one, or one that does not open. Not a place to fail: the group still has an answer.
+def _table_member(tile):
+    """The member a table row's tile is for a merge: bytes verbatim, a ``Ref`` for a virtual tile, or None for an
+    error tile (it failed upstream) or an empty one. Not a place to fail: the group still has an answer.
     """
     if _error_tile_of(tile) is not None:
         return None
-    candidate = _tile_raster_bytes(
-        tile
-    )  # front-door bytes: a virtual tile is materialized
-    if candidate is None:
-        return None
-    try:
-        with _serde.open_tile(
-            candidate, gate=False
-        ):  # a validity probe: the decode gates
-            return candidate
-    except Exception:  # noqa: BLE001
-        return None
+    return _group_member(tile)
 
 
 def _table_column(row, fn_name, column, columns):
@@ -6274,14 +6397,19 @@ def _refuse_serverless_partition_by(fn_name, agg_name):
 
 @udtf(returnType="key string, raster binary")
 class _RstMergeTvf:
-    """`gbx_rst_merge_tvf`: the partition's tiles merged into one mosaic (the table function of `gbx_rst_merge_agg`)."""
+    """`gbx_rst_merge_tvf`: the partition's tiles merged into one mosaic (the table function of `gbx_rst_merge_agg`).
+
+    A row at a time goes to the one merge core (``agg_core._MemberSpool``): a virtual tile as its path and window, bytes
+    into a local scratch file once they pass a quarter of the merge budget. The task holds no more than that
+    however many rows the partition has."""
 
     def __init__(self):
         from databricks.labs.gbx.pyrx import _env
 
         _refuse_serverless_partition_by("gbx_rst_merge_tvf", "gbx_rst_merge_agg")
         _env.configure_gdal_env()
-        self.key, self.rasters, self.rows = None, [], 0
+        self.key, self.rows = None, 0
+        self.spool = agg_core._MemberSpool(spill=True)
 
     def eval(self, row):
         name, columns = "gbx_rst_merge_tvf", ("key", "tile")
@@ -6289,16 +6417,17 @@ class _RstMergeTvf:
             name, self.rows, self.key, _table_column(row, name, "key", columns)
         )
         self.rows += 1
-        b = _member_bytes(_table_tile(row, name, columns))
-        if b is not None:
-            self.rasters.append(b)
+        member = _table_member(_table_tile(row, name, columns))
+        if member is not None:
+            self.spool.add(member, drop_bytes=True)
 
     def terminate(self):
-        if self.rasters:
-            # as the aggregate: a group past what a merge can build raises with the Fix, never a silent missing group
-            yield self.key, agg_core.merge_tiles(
-                self.rasters, max_out=agg_core._merge_budget()
-            )
+        try:
+            if len(self.spool):
+                # as the aggregate: a group past what a merge can build raises with the Fix, never a silent missing group
+                yield self.key, self.spool.result(max_out=agg_core._merge_budget())
+        finally:
+            self.spool.close()
 
 
 @udtf(returnType="key string, raster binary")

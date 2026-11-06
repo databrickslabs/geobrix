@@ -65,7 +65,7 @@ import os
 import re
 import shutil
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
@@ -417,6 +417,7 @@ def _build_mosaic_vrt(
     out_dir: str,
     vrt_paths: str = "relative",
     carry_mask: bool = True,
+    windows: Optional[List[Optional[Tuple[int, int, int, int]]]] = None,
 ) -> str:
     """Build a GDAL VRT mosaic index at ``<out_dir>/mosaic.vrt``.
 
@@ -467,6 +468,10 @@ def _build_mosaic_vrt(
         ``True`` (default): when a tile has its own mask band the mosaic gets the union of the tiles'
         masks as its mask band. ``False``: tiles with a mask band are still composited by it
         (``UseMaskBand``) but the mosaic has none.
+    windows:
+        One entry per tile: ``None`` for the whole file, else the ``(col_off, row_off, width, height)``
+        window of it the mosaic takes (the source rectangle of its ``ComplexSource``; nothing is read
+        or copied to cut it). ``None`` (default): every tile whole.
 
     Returns
     -------
@@ -475,6 +480,8 @@ def _build_mosaic_vrt(
     """
     import copy
     import xml.etree.ElementTree as ET
+
+    from rasterio import Affine
 
     from databricks.labs.gbx.pyrx.core import _nodata
 
@@ -503,6 +510,26 @@ def _build_mosaic_vrt(
     if not metas:
         _logger.warning("_build_mosaic_vrt: no tile paths supplied; VRT not written.")
         return vrt_out
+
+    # A window of a file: the tile is that part of it (its own origin and size) and its source rectangle starts
+    # at the window; the rest of the metadata is the file's.
+    for meta, win in zip(metas, windows or [None] * len(metas)):
+        meta["src_off"] = (0, 0)
+        if win is not None:
+            col_off, row_off, win_w, win_h = (int(v) for v in win)
+            t = meta[
+                "transform"
+            ]  # the origin moves by the window's offset (spelled out: Affine's operators differ by version)
+            meta["transform"] = Affine(
+                t.a,
+                t.b,
+                t.c + col_off * t.a + row_off * t.b,
+                t.d,
+                t.e,
+                t.f + col_off * t.d + row_off * t.e,
+            )
+            meta["width"], meta["height"] = win_w, win_h
+            meta["src_off"] = (col_off, row_off)
 
     # ── Step 2: compute mosaic envelope ───────────────────────────────────
     # Use the first tile as the reference for CRS / pixel size.
@@ -614,8 +641,8 @@ def _build_mosaic_vrt(
                 src_el,
                 "SrcRect",
                 {
-                    "xOff": "0",
-                    "yOff": "0",
+                    "xOff": str(meta["src_off"][0]),
+                    "yOff": str(meta["src_off"][1]),
                     "xSize": str(tile_w),
                     "ySize": str(tile_h),
                 },
@@ -659,8 +686,8 @@ def _build_mosaic_vrt(
             ).text = fn_text
             ET.SubElement(src_el, "SourceBand").text = "mask,1"
             rect = {
-                "xOff": "0",
-                "yOff": "0",
+                "xOff": str(meta["src_off"][0]),
+                "yOff": str(meta["src_off"][1]),
                 "xSize": str(meta["width"]),
                 "ySize": str(meta["height"]),
             }

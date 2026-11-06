@@ -5,30 +5,25 @@ is the per-tower viewshed, the partition-scoped (``*_grouped``) pixel operations
 binning and the H3 grid canvas. Every function here takes or returns a DataFrame.
 
 ``retile_virtual`` and ``bng_tessellate_virtual`` plan windows from raster headers and hand back
-virtual tiles (a path, a window and, for tessellation, a clip: no pixels). ``merge_by_key`` and
-``combine_by_key`` shuffle by key and fold each group once, in a sorted Arrow stream: memory is the
-current group, and each member is decoded once.
+virtual tiles (a path, a window and, for tessellation, a clip: no pixels). ``combine_by_key`` shuffles by
+key and folds each group once, in a sorted Arrow stream: memory is the current group, and each member is
+decoded once. ``merge_by_key`` shuffles the same way but holds no group: each tile goes to the merge as it
+arrives (a virtual tile as its path and window, bytes into a scratch file), so a key's memory does not follow
+the number of its tiles.
 
 Each helper wraps what the light tier already has. The planners are the raster reader's: the window
 grid of ``tiling.plan_grid_windows`` (as Spark SQL), ``window_for_geom`` and the clip a virtual tile
 carries (what ``clipPolygons`` plans), and the BNG cell enumerator of the BNG mosaic. The folds are
-the aggregates' reducers (``agg.merge_tiles``, ``agg.combineavg_tiles``, ``agg.combine_max_tiles``)
-fed by the aggregates' own member rule, and the ``vrt`` merge is ``minted_vrt`` streamed through
-``cog_convert_file``. Compression and the materialize caps are theirs too, and a group's members
-are bounded by the canonical tile budget. Connect-safe: no ``.rdd``,
+the aggregates' reducers (``agg.merge_members``, ``agg.combineavg_tiles``, ``agg.combine_max_tiles``)
+fed by the aggregates' own member rule. Compression and the materialize caps are theirs too. Connect-safe: no ``.rdd``,
 ``_jvm``, ``_jsc`` or ``spark.conf.set``.
 
-Grouped merge and combine: ``merge_by_key`` and ``combine_by_key`` are the default on a dedicated
-cluster. Mind the memory: a fold holds a whole group in a task, and measured at 1000 groups its peak
-execution memory was 40.3 GB, where the aggregate ``gbx_rst_merge_agg`` streamed the same groups in
-7.4 GB. On Serverless the aggregate streams under the worker's read cap. A result over the cap stops
-with a ``Fix:`` that names the VRT-mosaic route: keep the tiles as files on a Volume and build the
-mosaic with ``databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")`` (or the cog_gbx
-writer's mosaic mode), then read the VRT, because ``merge_by_key`` also returns BINARY bounded by
-the same cap. ``merge_by_key(..., method="vrt")`` is the route for a group whose result fits the
-cap but whose members do not fit in memory: it reads paths only and streams the mosaic to a COG
-without decoding a member (1000 tiles completed in 28 minutes). ``combine_by_key`` folds under the
-same budget.
+Grouped merge and combine: ``merge_by_key`` is the keyed route to a mosaic per key on any compute: the shuffle is
+``repartition(N, keys)``, a width AQE cannot coalesce. A result over the cap for bytes in a row stops with a
+``Fix:`` that names the VRT-mosaic route: keep the tiles as files on a Volume and build the mosaic with
+``databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")`` (or the cog_gbx writer's mosaic mode),
+then read the VRT, because ``merge_by_key`` also returns BINARY bounded by the same cap. ``combine_by_key`` holds a
+group in a task, so size the key to it.
 """
 
 # Before the pyspark imports: one clear error when PySpark is missing.
@@ -42,8 +37,6 @@ from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import functions as f
 from pyspark.sql.types import BinaryType, DoubleType, StructField, StructType
-
-from databricks.labs.gbx._gdal_policy import open_data
 
 __all__ = [  # noqa: F822  (the last five load on first use)
     "retile_virtual",
@@ -510,6 +503,7 @@ def _group_stream(
     group_budget: int,
     fix: str,
     weigh=len,
+    accumulator=None,
 ):
     """Yield one Arrow batch (the key values and the folded raster) per finished key group.
 
@@ -517,15 +511,27 @@ def _group_stream(
     memory is the current group's members, and a group whose members (`weigh` each, their bytes)
     pass `group_budget` stops the query with `fix`, before the fold copies them. A group with no
     usable member gets a NULL raster, as an aggregate over an empty group does.
+
+    With `accumulator` (a zero-argument callable that makes an object with `add(item)`, `finish()` and `close()`)
+    each member is handed to it as it arrives and the group is never held here: the merge's spool keeps a bytes
+    member in a scratch file and a reference as its path, so `group_budget` does not apply, and `finish`/`member`
+    are not used.
     """
     import pyarrow as pa
 
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
 
     started, current, scalars, members, held = False, None, None, [], 0
+    acc = None
 
     def emit():
-        raster = finish(members)
+        if acc is not None:
+            try:
+                raster = acc.finish()
+            finally:
+                acc.close()
+        else:
+            raster = finish(members)
         if (
             raster is not None
             and materialize_decision(len(raster), "ingest", cap_bytes=cap_bytes)
@@ -557,8 +563,11 @@ def _group_stream(
                     [],
                     0,
                 )
+                acc = None if accumulator is None else accumulator()
             item = member(values[i].as_py())
-            if item is not None:
+            if item is not None and acc is not None:
+                acc.add(item)
+            elif item is not None:
                 held += weigh(item)
                 if held > group_budget:
                     raise ValueError(
@@ -634,45 +643,54 @@ def _fold_by_key(
     )
 
 
-def _vrt_mosaic(members, cap_bytes: int):
-    """One COG of the mosaic of whole-file members: a VRT over their paths, streamed to a COG block
-    by block, so no member is decoded into memory. The COG's size is checked against the cap before
-    it is read back."""
-    import os
-    import shutil
+# Partitions of the shuffle when the session names no task count (a Serverless session publishes none): a task for a
+# partition no key hashes to costs a few milliseconds, and AQE does not coalesce a count the caller gave.
+_KEY_PARTITIONS_FLOOR = 64
 
-    from databricks.labs.gbx.ds._mosaic import minted_vrt
-    from databricks.labs.gbx.ds.file_gbx import materialize_decision
-    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
-    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
-    if not members:
-        return None
-    for path, window in members:
-        if window is not None:
-            with open_data(path) as src:
-                if tuple(window) != (0, 0, src.width, src.height):
-                    raise ValueError(
-                        f"merge_by_key(method='vrt') mosaics whole files, and a member is the window "
-                        f"{tuple(window)} of {path!r}. Fix: use method='fold', which applies windows"
-                    )
-    scratch = new_local_temp_dir("gbx_merge_vrt")
+def _merge_partitions(spark) -> int:
+    """The width of the keyed shuffle when ``num_partitions`` is not given: the session's task slots (the planner the
+    Zarr readers size by, a session conf read, safe on Spark Connect), at least :data:`_KEY_PARTITIONS_FLOOR`.
+
+    ``repartition(*keys)`` without a count lets AQE coalesce a shuffle of rows this small (a path is about 100
+    bytes) to a few tasks, and the merges of all the keys then run one after another in them.
+    """
+    slots = 1
     try:
-        out = os.path.join(scratch, "mosaic.tif")
-        with minted_vrt(sorted({p for p, _ in members})) as vrt:
-            cog_convert_file(vrt, out, bigtiff="IF_SAFER")
-        size = os.path.getsize(out)
-        if materialize_decision(size, "ingest", cap_bytes=cap_bytes) == "error":
-            raise ValueError(
-                f"the merged mosaic is {size / 2**20:.0f} MiB, over the {cap_bytes / 2**20:.0f} MiB "
-                f"cap for bytes in a row. Fix: keep the tiles as files on a Volume and build the mosaic over "
-                f'them with databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...") (or the cog_gbx '
-                f"writer with vrtMosaic=true), then read the VRT; or split the groups"
-            )
-        with open(out, "rb") as fh:
-            return fh.read()
-    finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        from databricks.labs.gbx.zarr._read import _task_slots
+
+        slots = _task_slots(spark)
+    except Exception:  # noqa: BLE001 - the width is a hint, never a failure
+        pass
+    return max(slots, _KEY_PARTITIONS_FLOOR)
+
+
+class _MergeGroup:
+    """One key's merge as the keyed stream drives it: each tile is handed to the merge core as it arrives
+    (``agg.merge_members``: bytes into a scratch file past a quarter of the merge budget, a virtual tile as its
+    path and window), so the group is never held and has no size cap of its own. The result is bounded by the
+    cap for bytes in a row, judged before it is read."""
+
+    def __init__(self, cap_bytes: int):
+        from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+        self.cap = cap_bytes
+        self.spool = agg_core._MemberSpool(spill=True)
+
+    def add(self, tile) -> None:
+        from databricks.labs.gbx.pyrx.functions import _group_member
+
+        member = _group_member(tile)  # NULL, empty and error tiles are no members
+        if (
+            member is not None
+        ):  # bytes that do not open are left out, as the aggregates leave them
+            self.spool.add(member, drop_bytes=True)
+
+    def finish(self):
+        return self.spool.result(max_out=self.cap)
+
+    def close(self) -> None:
+        self.spool.close()
 
 
 def merge_by_key(
@@ -684,105 +702,74 @@ def merge_by_key(
 ) -> DataFrame:
     """Mosaic each key's tiles once: ``DataFrame[keys..., raster BINARY]``, a GeoTIFF per key.
 
-    This is the default for a grouped merge on a dedicated cluster. Its memory follows the group: a
-    fold holds the group in a task (measured at 1000 groups: 40.3 GB peak execution memory, against
-    7.4 GB for the ``gbx_rst_merge_agg`` aggregate). On Serverless, ``method='vrt'`` is the route for
-    a group whose result fits the worker's read cap but whose members do not fit in memory. The result
-    is BINARY, bounded by that same cap: a mosaic over the cap is kept as files instead (the cog_gbx
-    writer's mosaic mode, or ``databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")``,
-    then read the VRT), and this call stops with a ``Fix:`` that says so.
+    The tiles are shuffled by key and each group is merged in a sorted Arrow stream by the merge ``gbx_rst_merge_agg``
+    runs. A tile is handed to the merge as it arrives and the group is never held: a virtual tile (a path and a window)
+    goes into the mosaic's VRT as its own file, nothing of it read into memory, and bytes are kept in a scratch file.
+    So the memory of a key does not follow the number of its tiles, and the group has no size limit of its own
+    (the cap for bytes in a row bounds the result, and what one tile costs to decode when it must be reprojected or
+    rewritten with its mask is bounded by the worker's read cap). A member that is NULL, an error tile or
+    unreadable is left out; a group with no usable member gets a NULL raster.
 
-    ``method='fold'`` shuffles the tiles by key and merges each group in a sorted Arrow stream with
-    the merge ``gbx_rst_merge_agg`` runs (overlaps resolve the same way; a member that is NULL, an
-    error tile or unreadable is left out; a group with no usable member gets a NULL raster). Materialized
-    and virtual tiles both work, and a virtual member's window and instructions are applied.
+    Tiles may be materialized or virtual, whole files or windows of one, and on one CRS and pixel size or not: a mixed
+    group is put on the grid of the first tile of the lowest EPSG code, as the aggregate does. The result is BINARY,
+    bounded by the worker's read cap: a mosaic over it is kept as files instead (the cog_gbx writer's mosaic mode, or
+    ``databricks.labs.gbx.rasterx.helpers.mint_vrt(paths, out="/Volumes/...")``, then read the VRT), and this call
+    stops with a ``Fix:`` that says so.
 
-    ``method='vrt'`` takes virtual tiles that are whole files and shuffles only their paths: the
-    mosaic is a VRT over the files, streamed to a COG, so no member is decoded into memory. The
-    members must share a CRS, pixel size, band count and data type: bring a mixed group to one CRS and
-    pixel size first (``gbx_rst_transform``, ``gbx_rst_resample_to_res``). A member that is a smaller window
-    of its file, or that has a clip, stops the query with a ``Fix:`` message.
+    Overlaps: the tiles with bytes fold first, in the order of their GeoTIFF bytes, then the virtual tiles, in the order
+    of ``(path, window)``; the last one folds last and wins, so a result does not depend on the order the rows arrive.
+    A mosaic that fits the worker's memory budget is built in RAM (a striped zstd GeoTIFF); a larger one is streamed
+    through a VRT to a Cloud Optimized GeoTIFF. The pixels are the same.
 
-    The two methods agree wherever the members do not overlap. Where they overlap, ``fold`` lets the
-    member whose encoded GeoTIFF bytes sort last win, as the aggregate does, and ``vrt`` lets the
-    last path in sorted order win: the aggregate's order comes from the decoded, re-encoded tiles, which this
-    method never reads, so it cannot follow it. The ``vrt`` result is a COG (DEFLATE, with overviews;
-    a BigTIFF from about 2 GiB uncompressed, GDAL's ``IF_SAFER`` rule), where ``fold`` gives a plain
-    zstd GeoTIFF. Use ``fold`` where the aggregate's winner matters.
+    ``method='fold'`` takes any tile. ``method='vrt'`` takes virtual tiles only and shuffles no pixel bytes; a row
+    with raster bytes stops the query with a ``Fix:`` message. Both run the merge above.
 
-    For ``fold``, a key's members may hold the materialize cap in encoded bytes (64 MiB on Serverless
-    and Connect, 256 MiB on classic), and each member's decoded size, from its header, must fit the
-    decoded-tile budget (``decoded_budget_bytes``: 64 MiB on Serverless and Connect, 1.5 GiB on
-    classic), for tiles with bytes as much as for paths. Over either, the query stops with a ``Fix:``
-    to split the key, cut the tiles smaller, or use ``method='vrt'``. The Arrow batches that carry the
-    rows are sized by Spark and held in memory besides.
+    The shuffle is ``repartition(N, keys)`` with ``N`` = ``num_partitions``, else the session's task slots (at least
+    64): a count is never coalesced by AQE, so the keys merge in parallel. On Serverless, pass the tiles the readers
+    give by default (virtual) for the largest groups.
 
     Args:
         df: a DataFrame with the key columns and a tile column.
         keys: the key column names.
         tile_col: the tile column.
         method: ``'fold'`` or ``'vrt'``.
-        num_partitions: the shuffle's parallelism (``repartition(N, keys)``); the session default if None.
+        num_partitions: the shuffle's parallelism (``repartition(N, keys)``); the session's task slots if None.
     """
-    from databricks.labs.gbx.pyrx.core import agg as agg_core
-
     if method not in ("fold", "vrt"):
         raise ValueError(
             f"merge_by_key: method must be 'fold' or 'vrt'; got {method!r}"
         )
     keys, n = _by_key(df, keys, tile_col, num_partitions)
-    if method == "fold":
-        return _fold_by_key(
-            df,
-            keys,
-            tile_col,
-            n,
-            agg_core.merge_tiles,
-            _FIX_SPLIT + ", or use method='vrt', which reads paths only",
-            _FIX_CUT + ", or use method='vrt', which reads paths only",
-        )
-    t = F.col(tile_col)
     cap = _cap_bytes(df)
-    paths = _sorted_by_key(
-        _require_virtual(df, tile_col, "merge_by_key(method='vrt')").select(
-            *keys,
-            F.struct(
-                t["path"].alias("path"),
-                t["window"].alias("window"),
-                t["clip_polygon"].isNotNull().alias("clipped"),
-            ).alias("_gbx_m"),
-        ),
-        keys,
-        n,
+    if method == "vrt":
+        df = _require_virtual(df, tile_col, "merge_by_key(method='vrt')")
+    shuffled = _sorted_by_key(
+        df.select(*keys, tile_col), keys, n or _merge_partitions(df.sparkSession)
     )
-
-    def member(m):
-        if m is None or m["path"] is None:
-            return None
-        if m["clipped"]:
-            raise ValueError(
-                f"merge_by_key(method='vrt') mosaics whole files, and a member of {m['path']!r} has a "
-                f"clip. Fix: use method='fold', which applies clips"
-            )
-        w = m["window"]
-        return m["path"], (
-            None if w is None else (w["col_off"], w["row_off"], w["width"], w["height"])
-        )
 
     def run(batches):
         return _group_stream(
             batches,
             keys,
-            "_gbx_m",
-            member,
-            lambda members: _vrt_mosaic(members, cap),
+            tile_col,
+            lambda tile: tile,
+            None,
             cap,
             cap,
             _FIX_SPLIT,
-            weigh=lambda m: 0,  # paths only: no tile bytes are held
+            accumulator=lambda: _MergeGroup(cap),
         )
 
-    return paths.mapInArrow(run, _out_schema(df, keys))
+    # the driver's read cap goes to the workers with the closure (a standard-access worker cannot work it out itself):
+    # the gate the merge applies is the one the session names, as for a registered function
+    from databricks.labs.gbx._gdal_policy import carrying
+    from databricks.labs.gbx.ds.file_gbx import session_read_cap
+
+    read_cap = session_read_cap(df.sparkSession)
+    return shuffled.mapInArrow(
+        run if read_cap is None else carrying(run, None, read_cap),
+        _out_schema(df, keys),
+    )
 
 
 def combine_by_key(

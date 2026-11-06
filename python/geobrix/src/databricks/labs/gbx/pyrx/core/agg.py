@@ -17,8 +17,10 @@ import logging
 import math
 import os
 import shutil
+import uuid
 import warnings
 from contextlib import contextmanager
+from functools import cmp_to_key
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -425,20 +427,28 @@ class _Hdr:
     )
 
 
+def _header_of(ds, encoded: int) -> _Hdr:
+    """What a merge reads of the header of an open dataset *ds* (or of a view of a window of one): *encoded* is
+    the size of the member's bytes (the in-RAM estimate counts them)."""
+    h = _Hdr()
+    h.crs, h.bounds, h.transform = ds.crs, tuple(ds.bounds), ds.transform
+    h.count, h.dtypes = ds.count, tuple(ds.dtypes)
+    h.width, h.height, h.decoded = ds.width, ds.height, _decoded_bytes(ds)
+    h.own_mask, h.alpha = _nodata.has_own_mask(ds), _nodata.has_alpha(ds)
+    h.fill_as_data = _fill_reads_as_data(ds)
+    h.encoded = encoded
+    return h
+
+
+def _bytes_header(b: bytes) -> _Hdr:
+    """The header of one member's bytes (no pixel is read; one copy of the member is open)."""
+    with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
+        return _header_of(ds, len(b))
+
+
 def _scan_headers(rasters: List[bytes]) -> List[_Hdr]:
     """The header of each member, opened one at a time (no pixel is read, and one copy of one member is in memory)."""
-    out = []
-    for b in rasters:
-        with MemoryFile(bytes(b)) as mf, open_bytes(mf) as ds:
-            h = _Hdr()
-            h.crs, h.bounds, h.transform = ds.crs, tuple(ds.bounds), ds.transform
-            h.count, h.dtypes = ds.count, tuple(ds.dtypes)
-            h.width, h.height, h.decoded = ds.width, ds.height, _decoded_bytes(ds)
-            h.own_mask, h.alpha = _nodata.has_own_mask(ds), _nodata.has_alpha(ds)
-            h.fill_as_data = _fill_reads_as_data(ds)
-            h.encoded = len(b)
-            out.append(h)
-    return out
+    return [_bytes_header(b) for b in rasters]
 
 
 def _reprojected_decoded(h, ref_crs, res) -> int:
@@ -526,20 +536,96 @@ def _output_refusal(size: int, cap: int, route: str) -> str:
     )
 
 
-def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
-    """Out-of-core merge path: stream tiles through a VRT to a COG file.
+def _byte_drivers() -> list:
+    """The drivers a member's bytes may use (``open_bytes``': the allowed ones less the class that can name other files)."""
+    return [n for n in allowed_names() if n not in set(bytes_refused_light_names())]
 
-    Used when the mosaic, or what the in-RAM merge would hold beside it (:func:`_in_ram_bytes`), exceeds the
-    merge budget (:func:`_merge_budget`). ``max_out`` bounds the COG's encoded size (a BINARY aggregate returns it whole).
-    Writes each tile to a local scratch dir ONE AT A TIME (reprojecting to the reference
-    CRS when needed), builds a GDAL VRT mosaic index, then runs ``cog_convert_file``
-    (bounded GDAL cache, block-by-block) to produce the final COG.  Reads the COG back
-    as bytes and returns them.
 
-    DETERMINISM: ``sorted_rasters`` arrives already sorted by raw GTiff bytes (identical
-    sort key to the in-RAM path).  ``_build_mosaic_vrt`` emits ComplexSource entries (with
-    ``<NODATA>`` masking) in input order; GDAL's last-valid-source-wins resolution matches
-    ``method="last"`` nodata handling in the in-RAM path.
+class _Entry:
+    """One member of a merge, as the spool keeps it (the header, and where the member is: never its pixels).
+
+    ``kind``: ``"b"`` a bytes member (``data`` in memory, or ``path`` a file of the spool); ``"r"`` a reference the VRT
+    names as it is (``path`` the source file, ``window`` the part of it, ``vt`` the virtual tile); ``"m"`` a reference
+    with instructions (a clip, a CRS, a pending band, nodata or SRID, a Zarr store) that was written out once,
+    one at a time, as bytes (``data`` / ``path``). ``order`` places a reference among the references (see
+    :func:`_ref_order`); a bytes member has none, it is placed by its bytes.
+    """
+
+    __slots__ = ("kind", "hdr", "data", "path", "window", "vt", "order")
+
+    def __init__(
+        self, kind, hdr, *, data=None, path=None, window=None, vt=None, order=None
+    ):
+        self.kind, self.hdr, self.data, self.path = kind, hdr, data, path
+        self.window, self.vt, self.order = window, vt, order
+
+    def read_bytes(self) -> bytes:
+        """The member as GTiff bytes in memory (the in-RAM merge's input; a reference is read now, one at a time)."""
+        if self.kind == "r":
+            from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+            return ot.materialize_to_bytes(self.vt).raster
+        if self.data is not None:
+            return self.data
+        with open(self.path, "rb") as fh:
+            return fh.read()
+
+    def release(self) -> None:
+        """Let go of the member's bytes (and its spool file): the merge needs them no more."""
+        self.data = None
+        if self.kind != "r" and self.path is not None:
+            try:
+                os.remove(self.path)
+            except OSError:
+                pass
+            self.path = None
+
+
+@contextmanager
+def _open_member(e: _Entry):
+    """The member as an open dataset: a reference's window is read (and its instructions applied) by the one front
+    door, a bytes member is opened under the byte-open driver policy, from memory or from its spool file.
+    """
+    if e.kind == "r":
+        from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+        with ot._open(e.vt) as ds:
+            yield ds
+    elif e.data is not None:
+        with MemoryFile(e.data) as mf, open_bytes(mf) as ds:
+            yield ds
+    else:
+        ds = open_data(e.path, driver=_byte_drivers())
+        try:
+            yield ds
+        finally:
+            ds.close()
+
+
+def _stream_entries(
+    entries: List[_Entry],
+    scratch: str,
+    max_out=None,
+    to_dir=None,
+    prefix=None,
+    spool_dir=None,
+):
+    """Out-of-core merge path: stream the members through a VRT to a COG file.
+
+    *entries* are in fold order, a later member winning where members overlap (:func:`_fold_order`). Used when the
+    mosaic, or what the in-RAM merge would hold beside it (:func:`_in_ram_bytes`), exceeds the merge budget
+    (:func:`_merge_budget`). ``max_out`` bounds the COG's encoded size (a BINARY aggregate returns it whole). With
+    ``to_dir`` the COG is copied from *scratch* straight to that directory and its path is returned: it is never read
+    back. *scratch* is a local directory the caller owns. *spool_dir*, if given, maps the size of a bytes member to the
+    directory it is written to when it needs nothing done to it (the spool's overflow, see :class:`_MemberSpool`).
+
+    A reference with no instruction to apply (a whole file, or a window of one) goes into the VRT as it is, its window
+    as the source rectangle: nothing of it is read before the COG pass. A bytes member that needs nothing done to it
+    is a file of the scratch (written when it arrived, or here) the VRT names. A member that is reprojected, or
+    rewritten with its mask, is decoded whole, one at a time, into a new file of the scratch, and let go of.
+
+    DETERMINISM: ``_build_mosaic_vrt`` emits ComplexSource entries (with ``<NODATA>`` masking) in the entries' order;
+    GDAL's last-valid-source-wins resolution matches ``method="last"`` nodata handling in the in-RAM path.
 
     MASKS: when some tile has an own mask band the mosaic carries the union of the tiles' masks
     (``mask,1`` of each scratch tile), which is band 1's mask alone for a tile without one. Each such
@@ -550,118 +636,155 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
     transparent pixel of a later tile would hide an opaque one under it. A group with no mask band of its
     own gets no mask band in the mosaic (the alpha band carries it).
 
-    MEMORY: peak RSS ≈ one tile's encoded bytes (decoded too, for a tile written with a mask) +
-    GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated, and no member is held open
-    while the next is written. A member is never decoded whole unless it must be reprojected or rewritten with its
-    mask; that one is refused with a Fix (:class:`ReadCapRefused`) when it is over the merge budget at the size it is
-    decoded at (the reprojected tile, for a reprojected one).
+    MEMORY: peak RSS is one member (decoded whole only for a reprojected one or one rewritten with its mask) + GDAL's
+    COG cache (<=200 MiB); the full decoded mosaic array is NEVER allocated, no member is held open while the next is
+    written, and a reference is never read into memory. A member decoded whole is refused with a Fix
+    (:class:`ReadCapRefused`) when it is over the merge budget at the size it is decoded at (the reprojected tile, for a
+    reprojected one).
     """
+    # Pass 1: the headers (read when each member arrived), to determine ref_crs and per-tile CRS.
+    # Also capture the reference tile's pixel size so CRS-mismatched tiles can
+    # be reprojected onto the same pixel grid (fixing sub-pixel drift).
+    hdrs = [e.hdr for e in entries]
+    ref_crs = _pick_ref_crs(hdrs)
+    mixed = _mixed_grid(hdrs, ref_crs)
+    tile_crses = [h.crs for h in hdrs]
+    ref_tile = _reference_tile(hdrs, ref_crs)
+    ref_pixel_res = _pixel_size(ref_tile)
+    ref_corner = _grid_corner(ref_tile)
+    has_mask = [h.own_mask for h in hdrs]
+    has_alpha = [h.alpha for h in hdrs]
+    # a tile reprojected below is written with the footprint of its warp as a mask
+    # band when its fill would read as data (see :func:`_reproject_dataset`)
+    has_mask = [
+        m
+        or (
+            ref_crs is not None
+            and h.crs is not None
+            and h.crs != ref_crs
+            and h.fill_as_data
+        )
+        for m, h in zip(has_mask, hdrs)
+    ]
+
+    # Pass 2: one member at a time. In a group with an own-masked tile every tile without one is written with its
+    # validity as its mask band (see MASKS above).
+    group_masked = any(has_mask)
+    tile_paths, windows = [], []
+    budget = _merge_budget()
+    for i, (e, tile_crs) in enumerate(zip(entries, tile_crses)):
+        tile_path, window = os.path.join(scratch, f"tile_{i}.tif"), None
+        needs_reproject = (
+            ref_crs is not None and tile_crs is not None and tile_crs != ref_crs
+        )
+        rewrite = (group_masked and not has_mask[i]) or has_alpha[i]
+        if needs_reproject or rewrite:
+            # this member is decoded whole to be reprojected or rewritten with its mask, at the size of the tile
+            # that results (the reprojected one is on the reference grid); a member copied to the scratch dir as
+            # it is is only ever read a window at a time, whatever its size
+            whole = (
+                _reprojected_decoded(hdrs[i], ref_crs, ref_pixel_res)
+                if needs_reproject
+                else hdrs[i].decoded
+            )
+            if whole > budget:
+                raise ReadCapRefused(_merge_refusal(whole, budget, mixed))
+            with _open_member(e) as src:
+                if needs_reproject:
+                    # Reproject to ref_crs, snapping to the reference pixel grid via
+                    # target_res so all tiles share the same pixel boundaries and the
+                    # VRT mosaic has no sub-pixel placement drift.  Nearest resampling
+                    # preserves source values; nodata is carried through.
+                    rep_mf, rep_ds = _reproject_dataset(
+                        src, ref_crs, target_res=ref_pixel_res, anchor=ref_corner
+                    )
+                    try:
+                        _write_masked_tile(
+                            rep_ds,
+                            tile_path,
+                            (
+                                _valid_u8(rep_ds)
+                                if group_masked or has_alpha[i]
+                                else None
+                            ),
+                        )
+                    finally:
+                        rep_ds.close()
+                        rep_mf.close()
+                else:
+                    _write_masked_tile(src, tile_path, _valid_u8(src))
+            e.release()
+        elif e.kind == "r":
+            # a reference with nothing to apply: the VRT names the file, and the window is its source rectangle
+            tile_path, window = e.path, e.window
+        elif e.path is not None:
+            tile_path = e.path  # a bytes member the spool wrote when it arrived
+        else:
+            # Same CRS (or no CRS): write raw GTiff bytes straight to disk, and let go of them.
+            if spool_dir is not None:
+                tile_path = os.path.join(spool_dir(len(e.data)), f"tile_{i}.tif")
+            with open(tile_path, "wb") as fh:
+                fh.write(e.data)
+            e.data = None
+        tile_paths.append(tile_path)
+        windows.append(window)
+
+    # Build a GDAL VRT mosaic index (pure rasterio + ElementTree, no osgeo).
+    # VRT emits ComplexSource entries (with <NODATA> masking) in tile_paths order;
+    # GDAL last-valid-source-wins on overlapping pixels (ComplexSource skips nodata
+    # values), matching method="last" nodata handling in the in-RAM path.
+    # The mosaic carries a mask band only where the group had one; a tile with an alpha band was
+    # rewritten with its validity as its mask so that it is composited by it, not by that band.
+    extra = {"windows": windows} if any(w is not None for w in windows) else {}
+    vrt_path = _build_mosaic_vrt(
+        tile_paths, scratch, vrt_paths="absolute", carry_mask=group_masked, **extra
+    )
+
+    # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
+    # the full mosaic into a numpy array).
+    cog_path = os.path.join(scratch, "mosaic.tif")
+    cog_convert_file(vrt_path, cog_path)
+
+    if to_dir is not None:
+        return _publish_cog(cog_path, to_dir, prefix)
+    # Read the COG back as bytes and return (a bound on a BINARY aggregate's row is judged before the read).
+    if max_out is not None and os.path.getsize(cog_path) > max_out:
+        raise OutputOverBudget(
+            _output_refusal(
+                os.path.getsize(cog_path), max_out, _vrt_fix(_MOSAIC_ROUTE, mixed)
+            )
+        )
+    with open(cog_path, "rb") as fh:
+        return fh.read()
+
+
+def _publish_cog(cog_path: str, to_dir: str, prefix) -> str:
+    """Copy the file at *cog_path* into *to_dir* (a Volume directory) as ``[<prefix>_]0_0_0_<w>_<h>_<id>.tif`` and return
+    the path: the bytes of the mosaic are never read into Python. The name is the one ``open_tile.shape_output`` gives
+    a produced tile of cell 0, plus a random id: two groups with a mosaic of one size would otherwise be written to
+    the same file, the second over the first. The copy is content-only (``copyfile``: a Volume FUSE mount refuses the
+    stat calls of ``copy2``).
+    """
+    with open_data(cog_path) as ds:
+        w, h = ds.width, ds.height
+    name = f"0_0_0_{w}_{h}_{uuid.uuid4().hex[:12]}.tif"
+    out = os.path.join(to_dir, f"{prefix}_{name}" if prefix else name)
+    os.makedirs(to_dir, exist_ok=True)
+    shutil.copyfile(cog_path, out)
+    return out
+
+
+def _merge_tiles_streaming(sorted_rasters: List[bytes], max_out=None) -> bytes:
+    """The out-of-core merge of members that are bytes already in fold order (:func:`_stream_entries`): each is
+    written to a local scratch directory one at a time, a VRT is built over them and streamed to a COG, and the COG
+    is read back as bytes."""
     scratch = new_local_temp_dir("gbx_merge")
     try:
-        # Pass 1: header-only scan, one member open at a time, to determine ref_crs and per-tile CRS.
-        # Also capture the reference tile's pixel size so CRS-mismatched tiles can
-        # be reprojected onto the same pixel grid (fixing sub-pixel drift).
-        # No pixel is decoded and no member is held open, so this holds one member's
-        # encoded bytes, NOT the group's.
-        hdrs = _scan_headers(sorted_rasters)
-        ref_crs = _pick_ref_crs(hdrs)
-        mixed = _mixed_grid(hdrs, ref_crs)
-        tile_crses = [h.crs for h in hdrs]
-        ref_tile = _reference_tile(hdrs, ref_crs)
-        ref_pixel_res = _pixel_size(ref_tile)
-        ref_corner = _grid_corner(ref_tile)
-        has_mask = [h.own_mask for h in hdrs]
-        has_alpha = [h.alpha for h in hdrs]
-        # a tile reprojected below is written with the footprint of its warp as a mask
-        # band when its fill would read as data (see :func:`_reproject_dataset`)
-        has_mask = [
-            m
-            or (
-                ref_crs is not None
-                and h.crs is not None
-                and h.crs != ref_crs
-                and h.fill_as_data
-            )
-            for m, h in zip(has_mask, hdrs)
+        entries = [
+            _Entry("b", h, data=b)
+            for h, b in zip(_scan_headers(sorted_rasters), sorted_rasters)
         ]
-
-        # Pass 2: write tiles one-at-a-time to the scratch dir. In a group with an own-masked tile
-        # every tile without one is written with its validity as its mask band (see MASKS above).
-        group_masked = any(has_mask)
-        tile_paths = []
-        budget = _merge_budget()
-        for i, (rb, tile_crs) in enumerate(zip(sorted_rasters, tile_crses)):
-            tile_path = os.path.join(scratch, f"tile_{i}.tif")
-            needs_reproject = (
-                ref_crs is not None and tile_crs is not None and tile_crs != ref_crs
-            )
-            if needs_reproject or (group_masked and not has_mask[i]) or has_alpha[i]:
-                # this member is decoded whole to be reprojected or rewritten with its mask, at the size of the tile
-                # that results (the reprojected one is on the reference grid); a member copied to the scratch dir as
-                # it is is only ever read a window at a time, whatever its size
-                whole = (
-                    _reprojected_decoded(hdrs[i], ref_crs, ref_pixel_res)
-                    if needs_reproject
-                    else hdrs[i].decoded
-                )
-                if whole > budget:
-                    raise ReadCapRefused(_merge_refusal(whole, budget, mixed))
-            if needs_reproject:
-                # Reproject to ref_crs, snapping to the reference pixel grid via
-                # target_res so all tiles share the same pixel boundaries and the
-                # VRT mosaic has no sub-pixel placement drift.  Nearest resampling
-                # preserves source values; nodata is carried through.
-                with MemoryFile(rb) as src_mf:
-                    with open_bytes(src_mf) as src:
-                        rep_mf, rep_ds = _reproject_dataset(
-                            src, ref_crs, target_res=ref_pixel_res, anchor=ref_corner
-                        )
-                        try:
-                            _write_masked_tile(
-                                rep_ds,
-                                tile_path,
-                                (
-                                    _valid_u8(rep_ds)
-                                    if group_masked or has_alpha[i]
-                                    else None
-                                ),
-                            )
-                        finally:
-                            rep_ds.close()
-                            rep_mf.close()
-            elif (group_masked and not has_mask[i]) or has_alpha[i]:
-                with MemoryFile(rb) as src_mf, open_bytes(src_mf) as src:
-                    _write_masked_tile(src, tile_path, _valid_u8(src))
-            else:
-                # Same CRS (or no CRS): write raw GTiff bytes straight to disk.
-                with open(tile_path, "wb") as fh:
-                    fh.write(rb)
-            tile_paths.append(tile_path)
-
-        # Build a GDAL VRT mosaic index (pure rasterio + ElementTree, no osgeo).
-        # VRT emits ComplexSource entries (with <NODATA> masking) in tile_paths order;
-        # GDAL last-valid-source-wins on overlapping pixels (ComplexSource skips nodata
-        # values), matching method="last" nodata handling in the in-RAM path.
-        # The mosaic carries a mask band only where the group had one; a tile with an alpha band was
-        # rewritten with its validity as its mask so that it is composited by it, not by that band.
-        vrt_path = _build_mosaic_vrt(tile_paths, scratch, carry_mask=group_masked)
-
-        # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
-        # the full mosaic into a numpy array).
-        cog_path = os.path.join(scratch, "mosaic.tif")
-        cog_convert_file(vrt_path, cog_path)
-
-        # Read the COG back as bytes and return (a bound on a BINARY aggregate's row is judged before the read).
-        if max_out is not None and os.path.getsize(cog_path) > max_out:
-            raise OutputOverBudget(
-                _output_refusal(
-                    os.path.getsize(cog_path),
-                    max_out,
-                    _vrt_fix(_MOSAIC_ROUTE, mixed),
-                )
-            )
-        with open(cog_path, "rb") as fh:
-            return fh.read()
+        return _stream_entries(entries, scratch, max_out)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -760,95 +883,353 @@ def _merge_route(hdrs, ref_crs, mixed: bool, n: int, stream: bool) -> str:
     return how
 
 
-def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> bytes:
-    """Merge the group's tile rasters into one spatial mosaic (GTiff bytes). ``max_out`` bounds the encoded result: a
-    BINARY aggregate returns it whole in a row, so a larger one raises :class:`OutputOverBudget` with a Fix.
-    ``stream=False`` is for a caller that cannot stream (a Unity Catalog function: no scratch COG, no pyspark): a group
-    the merge would stream, or a member it must decode over the budget, raises :class:`ReadCapRefused` with the same
-    Fix instead, and nothing outside this module's pyspark-free imports is read.
+class Ref:
+    """A group member kept by reference: a virtual tile (a path, a window and any instruction), no pixels.
 
-    Each GTiff carries its own georef/CRS, so ``rasterio.merge.merge`` places
-    them by extent and the output spans the union extent (mirrors the
-    heavyweight RST_MergeAgg / MergeRasters ``gdalbuildvrt -resolution highest``
-    mosaic). On overlap we use ``method="last"`` so the LAST source in the fold
-    order wins, matching the heavyweight ``gdalbuildvrt`` (overlapping pixels
-    take the last-listed source).
-
-    DETERMINISM: a Spark ``groupBy().agg()`` does not guarantee the order rows
-    reach the reducer, so a last-wins mosaic would otherwise pick a different
-    overlap winner from run to run (and from the heavyweight). To make the fold
-    order-invariant we sort the inputs by their raw GTiff byte content -- a total
-    order intrinsic to each tile that has NO ties for distinct content -- before
-    merging; the highest-bytes tile folds last and wins the overlap. The
-    heavyweight RST_MergeAgg sorts on the identical key (the same serialized tile
-    bytes each row carries), so the two tiers pick the same winner for ALL inputs
-    -- including same-origin overlapping tiles, which a geotransform-origin key
-    could not separate (it tied on origin and fell back to a per-open
-    ``/vsimem/<uuid>`` description, i.e. random). Raw bytes are bitwise-identical
-    across tiers, so no cross-tier hash agreement is required.
-
-    PIXEL PLACEMENT (tiles in another CRS): such a tile is reprojected onto the pixel
-    size AND the pixel grid of the reference tile (:func:`cellraster.snap_bounds`; the grid
-    line at or beyond its top-left corner, so it can grow by up to a pixel on each
-    side). The in-RAM merge and the streamed one (a VRT) place a tile by different
-    rounding, ``floor(offset + 0.1)`` pixels in ``rasterio.merge`` and ``round(offset)``
-    in the VRT. A reprojected tile whose corner is off the reference grid can set the
-    mosaic's origin, which makes the offset of every other tile from it fractional: at
-    0.5 to 0.9 of a pixel the two merges put that tile one pixel apart (measured: a
-    12-pixel 4326 tile, reprojected, beside a 12-pixel 3857 tile at 50 km pixels; the
-    3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
-    in both). On the reference grid every offset is whole and both paths agree.
-
-    MASKS (tiles in another CRS): the pixels of the reprojected tile's box that the warp does not
-    reach are zeros, which read as data unless the tile has a NoData, an alpha band or a mask band
-    to mark them. A tile with none of those, and every tile with a mask band of its own, is
-    written with the footprint of its warp as its mask band (:func:`_reproject_dataset`), so it
-    does not overwrite the pixels of the tile beside it, and the mosaic then carries a mask band
-    (a pixel no tile reaches is invalid). A group whose tiles are all in the reference CRS is
-    merged as before: a gap between tiles with no NoData is zeros, valid.
-
-    IN RAM AND STREAMED: the two merges give the same grid, NoData and pixels, tile by tile: each
-    source is skipped where it is NoData by ITS OWN NoData (``rasterio.merge`` reads every source
-    that way, and the streamed mosaic index takes the NoData of each tile, not of the first). They
-    differ in layout, so never in a byte comparison: the in-RAM result is a striped zstd GeoTIFF, the
-    streamed one a Cloud Optimized GeoTIFF (512-pixel tiles, overviews, DEFLATE).
-
-    TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
-    merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
-    differs, and returns ONE tile, the one that sorts first in byte order (probed against
-    the JVM tier: a 4326 and a 3857 tile gave a single 12 x 12 tile). Here both are
-    mosaicked, so there is nothing in the heavyweight output to place them against.
+    *tile* is a ``VirtualTile`` or a tile struct (a dict or Row) of the V2 schema. A whole-file or windowed
+    reference goes into the merge's VRT as its own file (the window as the source rectangle) and is never read into
+    memory; one with instructions is written out once, one at a time (see :class:`_Entry`).
     """
-    if not rasters:
+
+    __slots__ = ("tile",)
+
+    def __init__(self, tile):
+        self.tile = tile
+
+
+def _ref_order(vt) -> tuple:
+    """Where a reference folds among the references: by ``(path, window)`` (a whole file before any of its windows),
+    then by what else tells two references of one window apart (clip, CRS, instructions), so the order is total.
+    """
+    window = tuple(vt.window) if vt.window is not None else (-1, -1, -1, -1)
+    return (
+        vt.path or "",
+        window,
+        bytes(vt.clip_polygon or b""),
+        vt.clip_crs or "",
+        vt.crs or "",
+        tuple(sorted((vt.metadata or {}).items())),
+    )
+
+
+def _plain_ref(vt):
+    """``(local path, window or None, header)`` of a virtual tile the VRT can name as it is, else None.
+
+    Plain: a window of a file with no bytes, no clip, no target CRS, no pending instruction and no Zarr store (the
+    tile ``open_tile.with_plain_window`` takes), whose file the VRT can read: it opens directly (a Volume file is
+    probed with the transient-miss retry; a file that needs staging to local disk is not plain), is not a VRT itself,
+    is north-up and not GCP-georeferenced, has bands, and the window lies inside it. The header is the window's.
+    """
+    from rasterio.windows import Window
+
+    from databricks.labs.gbx.core._retry import _retry_transient
+    from databricks.labs.gbx.ds._listing import to_local_path
+    from databricks.labs.gbx.ds.file_gbx import _is_fuse_path, _probe_direct_open
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    if (
+        vt.raster is not None
+        or not vt.path
+        or vt.clip_polygon is not None
+        or vt.crs
+        or ot._has_pending(vt.metadata)
+        or ot._zarr_tiles.is_zarr_tile(vt)
+    ):
         return None
-    if len(rasters) == 1:
-        return bytes(rasters[0])
-    # Sort by raw GTiff bytes so the last-wins overlap winner is deterministic
-    # (and tier-agreeing) regardless of caller/row-arrival order.
-    rasters = sorted((bytes(r) for r in rasters))
+    local = to_local_path(vt.path)
+    if _is_fuse_path(local):
+        try:
+            _probe_direct_open(local)
+        except Exception:  # noqa: BLE001 - the file needs staging: not plain
+            return None
+    src = _retry_transient(lambda: ot.open_raster(local))
+    try:
+        t = src.transform
+        if (
+            src.driver == "VRT"
+            or src.count < 1
+            or t.b != 0
+            or t.d != 0
+            or not t.a > 0
+            or not t.e < 0
+            or _warp.gcp_georef(src) is not None
+        ):
+            return None
+        window, view = None, src
+        if vt.window is not None:
+            c, r, w, h = (int(v) for v in vt.window)
+            if (
+                min(c, r) < 0
+                or min(w, h) <= 0
+                or c + w > src.width
+                or r + h > src.height
+            ):
+                return None
+            if (c, r, w, h) != (0, 0, src.width, src.height):
+                window = (c, r, w, h)
+                view = ot._WindowHeaderView(src, Window(c, r, w, h))
+        hdr = _header_of(view, 0)
+        hdr.encoded = (
+            hdr.decoded
+        )  # no bytes exist: the estimate counts the decoded size, an upper bound
+        return local, window, hdr
+    finally:
+        src.close()
+
+
+# Free local disk a spool write must leave: the COG the merge writes, and the files it rewrites, need room too.
+_LOCAL_DISK_RESERVE = 1 << 29
+
+
+class _MemberSpool:
+    """The members of one merge, kept without their pixels.
+
+    ``add`` takes a member at a time: bytes, or a :class:`Ref`. Its header is read at once and nothing of it is kept
+    but that, and, for a bytes member, its bytes: in memory, or (``spill=True``) in files of a local scratch
+    directory once they pass a quarter of the merge budget. A caller whose members are in memory already, in the
+    Arrow batch of an aggregate, passes ``spill=False``: files would gain nothing. A reference with nothing to
+    apply is kept as its path and window; one with instructions is written out once, as bytes, and kept like a
+    bytes member.
+
+    ``result`` merges them in the fold order of :meth:`ordered`; ``close`` removes the scratch. With
+    ``overflow_parent`` (a Volume directory) a spool file that would leave the local disk under
+    :data:`_LOCAL_DISK_RESERVE` is written to a scratch directory under it instead (``ds._scratch.new_scratch_dir``):
+    the COG and the members that are rewritten stay on the local disk.
+    """
+
+    def __init__(self, spill: bool = False, overflow_parent: Optional[str] = None):
+        self.entries: List[_Entry] = []
+        self._spill_on = spill
+        self._limit = _merge_budget() // 4
+        self._held = 0
+        self._spilled = False
+        self._local: Optional[str] = None
+        self._overflow: Optional[str] = None
+        self._overflow_parent = overflow_parent
+        self._written = 0
+
+    def __len__(self):
+        return len(self.entries)
+
+    # -- adding --
+    def add(self, member, *, drop_bytes: bool = False, drop_refs: bool = False) -> bool:
+        """Take one member. False for a member that is dropped (``drop_bytes`` / ``drop_refs``: its bytes, or its
+        file, do not open); otherwise a member that cannot be opened raises."""
+        if isinstance(member, Ref):
+            try:
+                self._add_ref(member)
+            except Exception:  # noqa: BLE001
+                if drop_refs:
+                    return False
+                raise
+            return True
+        try:
+            hdr = _bytes_header(member)
+        except Exception:  # noqa: BLE001
+            if drop_bytes:
+                return False
+            raise
+        e = _Entry("b", hdr)
+        self._keep(e, bytes(member))
+        self.entries.append(e)
+        return True
+
+    def _add_ref(self, ref: Ref) -> None:
+        from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+        vt = ot._to_virtual_tile(ref.tile)
+        if vt.raster is not None:  # bytes after all
+            e = _Entry("b", _bytes_header(vt.raster))
+            self._keep(e, bytes(vt.raster))
+            self.entries.append(e)
+            return
+        plain = _plain_ref(vt)
+        if plain is not None:
+            local, window, hdr = plain
+            self.entries.append(
+                _Entry("r", hdr, path=local, window=window, vt=vt, order=_ref_order(vt))
+            )
+            return
+        # the one front door: the window, the instructions and the clip are applied as for any tile
+        data = ot.materialize_to_bytes(vt).raster
+        e = _Entry("m", _bytes_header(data), order=_ref_order(vt))
+        self._keep(e, data)
+        self.entries.append(e)
+
+    # -- where the bytes of a member are kept --
+    def scratch(self) -> str:
+        """The local scratch directory (the rewritten members, the VRT and the COG go here)."""
+        if self._local is None:
+            self._local = new_local_temp_dir("gbx_merge")
+        return self._local
+
+    def _spool_dir(self, need: int) -> str:
+        local = self.scratch()
+        if self._overflow is None and self._overflow_parent:
+            if shutil.disk_usage(local).free < need + _LOCAL_DISK_RESERVE:
+                from databricks.labs.gbx.ds._scratch import new_scratch_dir
+
+                self._overflow = new_scratch_dir(self._overflow_parent)
+                os.makedirs(self._overflow, exist_ok=True)
+        return self._overflow or local
+
+    def _write(self, data: bytes) -> str:
+        self._written += 1
+        path = os.path.join(self._spool_dir(len(data)), f"member_{self._written}.tif")
+        with open(path, "wb") as fh:
+            fh.write(data)
+        return path
+
+    def _keep(self, e: _Entry, data: bytes) -> None:
+        if not self._spill_on or (
+            not self._spilled and self._held + len(data) <= self._limit
+        ):
+            e.data = data
+            self._held += len(data)
+            return
+        if not self._spilled:
+            self._spilled = True
+            for held in self.entries:
+                if held.data is not None:
+                    held.path, held.data = self._write(held.data), None
+            self._held = 0
+        e.path = self._write(data)
+
+    # -- the order --
+    def ordered(self) -> List[_Entry]:
+        """The members in fold order: the bytes members first, sorted by their bytes (the order of the heavyweight
+        aggregate), then the references, sorted by ``(path, window)``. The last folds last and wins an overlap.
+        """
+        by_bytes = [e for e in self.entries if e.kind == "b"]
+        refs = sorted((e for e in self.entries if e.kind != "b"), key=lambda e: e.order)
+        if all(e.data is not None for e in by_bytes):
+            by_bytes.sort(key=lambda e: e.data)
+        else:
+            by_bytes.sort(key=cmp_to_key(lambda x, y: _compare_files(x, y)))
+        return by_bytes + refs
+
+    # -- the merge --
+    def result(self, max_out=None, stream: bool = True, to_dir=None, prefix=None):
+        """The merge of the members: GTiff bytes, ``None`` for no member, or, with ``to_dir``, the path of the file
+        written there (see :func:`merge_members`)."""
+        order = self.ordered()
+        if not order:
+            return None
+        n = len(order)
+        if n == 1 and (order[0].kind != "r" or order[0].hdr.decoded <= _merge_budget()):
+            single = order[0].read_bytes()
+            return single if to_dir is None else self._publish(single, to_dir, prefix)
+        hdrs = [e.hdr for e in order]
+        ref_crs = _pick_ref_crs(hdrs)
+        mixed = _mixed_grid(hdrs, ref_crs)
+        how = _merge_route(hdrs, ref_crs, mixed, n, stream)
+
+        def streamed():
+            return _stream_entries(
+                order, self.scratch(), max_out, to_dir, prefix, self._spool_dir
+            )
+
+        if how == "driver":
+            return streamed()
+        rasters = [e.read_bytes() for e in order]
+
+        def fall_back():
+            rasters.clear()
+            return streamed()
+
+        merged = _merge_in_ram(rasters, ref_crs, mixed, max_out, stream, fall_back)
+        return (
+            merged
+            if to_dir is None or isinstance(merged, str)
+            else self._publish(merged, to_dir, prefix)
+        )
+
+    def _publish(self, data: bytes, to_dir: str, prefix) -> str:
+        """Write mosaic *data* (built in RAM) to *to_dir*, by local file and copy as a streamed one is."""
+        local = os.path.join(self.scratch(), "published.tif")
+        with open(local, "wb") as fh:
+            fh.write(data)
+        return _publish_cog(local, to_dir, prefix)
+
+    def close(self) -> None:
+        if self._local is not None:
+            shutil.rmtree(self._local, ignore_errors=True)
+            self._local = None
+        if self._overflow is not None:
+            from databricks.labs.gbx.ds._scratch import remove_scratch_dir
+
+            remove_scratch_dir(self._overflow)
+            self._overflow = None
+        for e in self.entries:
+            e.data = None
+
+    def __del__(
+        self,
+    ):  # a merge that failed before it closed the spool: its scratch goes with it
+        try:
+            self.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _compare_files(x: _Entry, y: _Entry) -> int:
+    """-1, 0 or 1 as the bytes of the spool file of *x* sort before, with or after those of *y* (a chunk at a time)."""
+    with open(x.path, "rb") as fa, open(y.path, "rb") as fb:
+        while True:
+            ca, cb = fa.read(1 << 20), fb.read(1 << 20)
+            if ca != cb:
+                n = min(len(ca), len(cb))
+                if ca[:n] != cb[:n]:
+                    return -1 if ca[:n] < cb[:n] else 1
+                return -1 if len(ca) < len(cb) else 1
+            if not ca:
+                return 0
+
+
+def merge_members(
+    members,
+    max_out=None,
+    stream: bool = True,
+    to_dir=None,
+    prefix=None,
+    spill: bool = False,
+    overflow_parent=None,
+):
+    """Merge the group's members into one spatial mosaic: GTiff bytes, ``None`` for no member.
+
+    *members* is an iterable of GTiff ``bytes`` and :class:`Ref` (a virtual tile kept by reference), taken one at a
+    time. This is the one core under :func:`merge_tiles` and every grouped merge (the aggregate and its force-output
+    form, the array merge, the table function, ``merge_by_key``): what a member costs is judged where it arrives,
+    so the memory of the merge does not grow with the number of members that are references. See
+    :func:`merge_tiles` for the rules of the merge itself.
+
+    OVERLAP ORDER: the last member in the fold order wins where members overlap, and the fold order is defined: the
+    bytes members first, sorted by their raw GTiff bytes, then the references, sorted by ``(path, window)``. A
+    reference folds after a bytes member, so it wins an overlap with one; a group of bytes members is ordered as it
+    always was.
+
+    With ``to_dir`` (a Volume directory) the mosaic is copied from the local scratch to
+    ``[<prefix>_]0_0_0_<w>_<h>_<id>.tif`` there and the path is returned, a ``str``: a streamed mosaic's bytes are never
+    read back into Python. ``spill``: keep the bytes members in
+    local scratch files once they pass a quarter of the merge budget (for a caller that is handed them one at a
+    time and holds none). ``overflow_parent``: see :class:`_MemberSpool`.
+    """
+    spool = _MemberSpool(spill=spill, overflow_parent=overflow_parent)
+    try:
+        for m in members:
+            spool.add(m)
+        return spool.result(max_out, stream, to_dir, prefix)
+    finally:
+        spool.close()
+
+
+def _merge_in_ram(rasters, ref_crs, mixed, max_out, stream, fall_back):
+    """The in-RAM merge of *rasters* (GTiff bytes in fold order): ``rasterio.merge`` over the open members. A member
+    decoded over the read cap that this path would hold whole goes to *fall_back* (the streamed merge) instead.
+    """
     memfiles, datasets = [], []
     extra = []  # (memfile, dataset) pairs for reprojected sources, closed in finally
     try:
-        # --- SIZE GATE ---
-        # The headers are read one member at a time (no pixel is read and no member stays open), and the canonical
-        # COG decision (`materialize_decision`, kind "cog_write") says what to do with the decoded size of the
-        # union-extent mosaic: within the memory budget of this call (`_merge_budget`: the read cap the driver
-        # carried) the merge is built in RAM ("stream"); beyond it the merge streams through a VRT and a COG
-        # ("driver": bounded GDAL cache, the mosaic is never decoded whole); beyond the COG ceiling it stops here
-        # ("error"). Tiles a continent apart (or in places far apart once put in one CRS) make an extent of
-        # terabytes that is nearly all NoData: streaming that takes hours and a COG of gigabytes, so it is refused
-        # with a Fix: before anything is opened for reading or written. In RAM the merge also holds a copy of
-        # each member it must reproject or rewrite, a mask per member, and the members open beside the mosaic,
-        # so a group that adds up to more than the budget streams too: the peak does not grow with the number of
-        # members. A failure to compute the size falls back to the in-RAM path rather than crashing.
-        hdrs = _scan_headers(rasters)
-        ref_crs = _pick_ref_crs(hdrs)
-        mixed = _mixed_grid(hdrs, ref_crs)
-        how = _merge_route(hdrs, ref_crs, mixed, len(rasters), stream)
-        streaming = {} if max_out is None else {"max_out": max_out}
-        if how == "driver":
-            # Delegate to the streaming path: it reads the headers again, one member at a time.
-            return _merge_tiles_streaming(rasters, **streaming)
         try:
             memfiles, datasets = _open_all(rasters)
         except ReadCapRefused as exc:
@@ -858,12 +1239,12 @@ def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> byte
                 ) from exc
             # a member decoded over the read cap that the in-RAM path would hold whole: the streaming path copies it as
             # it is (or refuses it with its own Fix if it must be decoded whole there)
-            return _merge_tiles_streaming(rasters, **streaming)
+            return fall_back()
         # Reconcile CRS before merging: real AOIs that straddle a UTM zone boundary
         # (e.g. Sentinel-2 over SE Alaska -> EPSG:32608 + 32609) yield groups whose
         # tiles span multiple CRSs, but rasterio.merge requires one. Reproject any
         # mismatched source to the reference CRS, onto the pixel size of the reference
-        # tile (a tile in that CRS, whichever stands first in byte order): the merge takes
+        # tile (a tile in that CRS, whichever stands first in the fold order): the merge takes
         # the pixel size of its first tile, which is then that size whichever tile that
         # is, as in the streamed merge. Same-CRS groups are untouched.
         ref_tile = _reference_tile(datasets, ref_crs)
@@ -930,6 +1311,89 @@ def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> byte
                 rds.close()
             mf.close()
         _close_all(memfiles, datasets)
+
+
+def merge_tiles(rasters: List[bytes], max_out=None, stream: bool = True) -> bytes:
+    """Merge the group's tile rasters into one spatial mosaic (GTiff bytes). ``max_out`` bounds the encoded result: a
+    BINARY aggregate returns it whole in a row, so a larger one raises :class:`OutputOverBudget` with a Fix.
+    ``stream=False`` is for a caller that cannot stream (a Unity Catalog function: no scratch COG, no pyspark): a group
+    the merge would stream, or a member it must decode over the budget, raises :class:`ReadCapRefused` with the same
+    Fix instead, and nothing outside this module's pyspark-free imports is read.
+
+    The members are bytes, held by the caller; a caller whose members are tiles that may be references, or that
+    receives them one at a time, calls :func:`merge_members`, which this is a call of.
+
+    Each GTiff carries its own georef/CRS, so ``rasterio.merge.merge`` places
+    them by extent and the output spans the union extent (mirrors the
+    heavyweight RST_MergeAgg / MergeRasters ``gdalbuildvrt -resolution highest``
+    mosaic). On overlap we use ``method="last"`` so the LAST source in the fold
+    order wins, matching the heavyweight ``gdalbuildvrt`` (overlapping pixels
+    take the last-listed source).
+
+    DETERMINISM: a Spark ``groupBy().agg()`` does not guarantee the order rows
+    reach the reducer, so a last-wins mosaic would otherwise pick a different
+    overlap winner from run to run (and from the heavyweight). To make the fold
+    order-invariant we sort the inputs by their raw GTiff byte content -- a total
+    order intrinsic to each tile that has NO ties for distinct content -- before
+    merging; the highest-bytes tile folds last and wins the overlap. The
+    heavyweight RST_MergeAgg sorts on the identical key (the same serialized tile
+    bytes each row carries), so the two tiers pick the same winner for ALL inputs
+    -- including same-origin overlapping tiles, which a geotransform-origin key
+    could not separate (it tied on origin and fell back to a per-open
+    ``/vsimem/<uuid>`` description, i.e. random). Raw bytes are bitwise-identical
+    across tiers, so no cross-tier hash agreement is required. A tile that is a reference
+    (:class:`Ref`, see :func:`merge_members`) has no bytes to sort by: it folds after every bytes member, by
+    ``(path, window)``.
+
+    PIXEL PLACEMENT (tiles in another CRS): such a tile is reprojected onto the pixel
+    size AND the pixel grid of the reference tile (:func:`cellraster.snap_bounds`; the grid
+    line at or beyond its top-left corner, so it can grow by up to a pixel on each
+    side). The in-RAM merge and the streamed one (a VRT) place a tile by different
+    rounding, ``floor(offset + 0.1)`` pixels in ``rasterio.merge`` and ``round(offset)``
+    in the VRT. A reprojected tile whose corner is off the reference grid can set the
+    mosaic's origin, which makes the offset of every other tile from it fractional: at
+    0.5 to 0.9 of a pixel the two merges put that tile one pixel apart (measured: a
+    12-pixel 4326 tile, reprojected, beside a 12-pixel 3857 tile at 50 km pixels; the
+    3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
+    in both). On the reference grid every offset is whole and both paths agree.
+
+    MASKS (tiles in another CRS): the pixels of the reprojected tile's box that the warp does not
+    reach are zeros, which read as data unless the tile has a NoData, an alpha band or a mask band
+    to mark them. A tile with none of those, and every tile with a mask band of its own, is
+    written with the footprint of its warp as its mask band (:func:`_reproject_dataset`), so it
+    does not overwrite the pixels of the tile beside it, and the mosaic then carries a mask band
+    (a pixel no tile reaches is invalid). A group whose tiles are all in the reference CRS is
+    merged as before: a gap between tiles with no NoData is zeros, valid.
+
+    IN RAM AND STREAMED: the two merges give the same grid, NoData and pixels, tile by tile: each
+    source is skipped where it is NoData by ITS OWN NoData (``rasterio.merge`` reads every source
+    that way, and the streamed mosaic index takes the NoData of each tile, not of the first). They
+    differ in layout, so never in a byte comparison: the in-RAM result is a striped zstd GeoTIFF, the
+    streamed one a Cloud Optimized GeoTIFF (512-pixel tiles, overviews, DEFLATE).
+
+    TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
+    merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
+    differs, and returns ONE tile, the one that sorts first in byte order (probed against
+    the JVM tier: a 4326 and a 3857 tile gave a single 12 x 12 tile). Here both are
+    mosaicked, so there is nothing in the heavyweight output to place them against.
+
+    SIZE GATE: the headers are read one member at a time (no pixel is read and no member stays open), and the
+    canonical COG decision (`materialize_decision`, kind "cog_write") says what to do with the decoded size of the
+    union-extent mosaic: within the memory budget of this call (`_merge_budget`: the read cap the driver carried) the
+    merge is built in RAM ("stream"); beyond it the merge streams through a VRT and a COG ("driver": bounded GDAL
+    cache, the mosaic is never decoded whole); beyond the COG ceiling it stops with a Fix ("error"). Tiles a continent
+    apart (or in places far apart once put in one CRS) make an extent of terabytes that is nearly all NoData:
+    streaming that takes hours and a COG of gigabytes, so it is refused with a Fix: before anything is opened for
+    reading or written. In RAM the merge also holds a copy of each member it must reproject or rewrite, a mask per
+    member, and the members open beside the mosaic, so a group that adds up to more than the budget streams too: the
+    peak does not grow with the number of members. A failure to compute the size falls back to the in-RAM path rather
+    than crashing.
+    """
+    if not rasters:
+        return None
+    if len(rasters) == 1:
+        return bytes(rasters[0])
+    return merge_members(rasters, max_out=max_out, stream=stream)
 
 
 # The working set of a per-pixel fold, in bytes per pixel of one band in the window (a multiplier on the window, not a

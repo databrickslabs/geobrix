@@ -25,9 +25,9 @@ gbx.register(spark)   # the gbx_* SQL functions and the *_gbx readers and writer
 
 :::warning Quote the `geobrix[<extras>] @ file://…` requirement
 Install with the **named, quoted** form above. Do **not** put an extra on the
-path (`'/Volumes/…/…whl[vizx]'`): on **Serverless**, `%pip` writes the
-requirement to a file *including the quotes*, so pip reads `[vizx]` as part of
-the filename and fails with *"Expected package name at the start of dependency
+path (`'/Volumes/…/…whl[vizx]'`). On **Serverless**, `%pip` writes the
+requirement to a file *including the quotes*. Pip then reads `[vizx]` as part of
+the filename and fails. The error is *"Expected package name at the start of dependency
 specifier."* The named form installs cleanly on Serverless, standard/shared,
 and ARM.
 :::

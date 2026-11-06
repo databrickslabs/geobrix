@@ -10,7 +10,7 @@ import commonExamples from '!!raw-loader!../tests/python/readers/common_function
 
 Every lightweight reader and writer is built on **one shared file-access base**
 (`databricks.labs.gbx.ds.file_gbx`). This page catalogs the common functions that
-base exposes, and draws the two boundaries that decide which one you reach for:
+base exposes. It draws the two boundaries that decide which one you reach for:
 **FUSE vs FILE** and **generic vs format-specific**.
 
 ![GBX common functions — three tiers: a session-ful generic function layer with gbx_file_read and gbx_file_write; a format-specific decoder/encoder layer with rst_fromfile and vector_file_read; and a session-free core floor with list_local_files, enumerate_files, and to_local_path; with FUSE-vs-FILE tier bands](../../resources/images/diagrams/rasterx/gbx-common-functions.png)
@@ -62,8 +62,8 @@ each path into tile structs, compose with `rst_fromfile` (the canonical raster p
 These functions require no `SparkSession` to function — their minimum viable mode is
 FUSE (`os.walk` / `stat`), which is always available. `list_local_files` is FUSE-only.
 `enumerate_files` accepts an optional `spark=` and issues Spark SQL (`read_files` /
-`list_files`) when a FILE-capable session is present, degrading to a FUSE list when not —
-it is **not** session-free in the strict sense but degrades gracefully. All are
+`list_files`) when a FILE-capable session is present, degrading to a FUSE list when not.
+It is **not** session-free in the strict sense but degrades gracefully. All are
 **Connect-safe**: no `sparkContext`, `.rdd`, `_jvm`, or `conf.set`.
 
 `list_local_files` is the single shared enumeration routine every DataSource reader
@@ -107,8 +107,8 @@ FILE handles. The format-specific decoders/encoders (`rst_fromfile`, `vector_fil
 
 `access="auto"` and `file_mode="auto"` silently use the best available tier. An explicit
 `"managed"` / `"external"` on a runtime without FILE raises a clear, actionable error that
-names the DBR version requirement and the `"fuse"` and `"auto"` options — never a silent
-downgrade. A write with no `file_mode` is `"fuse"`: a plain Delta table that reads on every compute.
+names the DBR version requirement and the `"fuse"` and `"auto"` options. It never downgrades
+silently. A write with no `file_mode` is `"fuse"`: a plain Delta table that reads on every compute.
 
 See [Shared file-access base](./readers-writers#file-gbx) for tier detection details and the
 access-flow diagram.

@@ -9,7 +9,7 @@ import sdpExamples from '!!raw-loader!../../tests/python/ingestion/lakeflow_sdp_
 # Lakeflow SDP
 
 [Lakeflow Spark Declarative Pipelines](https://docs.databricks.com/aws/en/dlt/) (SDP) run tables
-as a pipeline: you declare each table and what it reads, and every update brings them up to date
+as a pipeline. You declare each table and what it reads, and every update brings them up to date
 in order. The GeoBrix lightweight tier runs inside a pipeline, and both pipeline routes,
 [Auto Loader ingestion](./auto-loader) (`declare_ingest`) and the
 [Lakeflow connector](./lakeflow-connector), are pipeline source files. This page covers what they
@@ -21,16 +21,16 @@ deploying a pipeline as code.
 :::tip Production examples
 Two GeoBrix examples ship as complete Lakeflow SDP bundles. Each opens on its Lakeflow tab:
 - **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: a production SDP
-  bundle. An Auto Loader `laz_inventory` streaming table inventories staged USGS 3DEP LiDAR,
-  [`read_paths`](./read-paths) reads the inventoried files, and materialized views build DSM, DTM
-  and CHM surfaces and H3 grids from them; a job task after the pipeline computes the tower
+  bundle. An Auto Loader `laz_inventory` streaming table inventories staged USGS 3DEP LiDAR.
+  [`read_paths`](./read-paths) reads the inventoried files. Materialized views build DSM, DTM
+  and CHM surfaces and H3 grids from them. A job task after the pipeline computes the tower
   viewsheds. Its silver table
   [`wc_lidar_pts`](../notebooks/wireless-coverage?flavor=lakeflow) is a streaming table: each
   update reads only the newly inventoried tiles, with `read_paths` over the bronze inventory
   stream. Shows streaming tables over Auto Loader, `read_paths` in a streaming table, and an Asset
   Bundle.
 - **[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow)**: an SDP and AI/BI Maps bundle. Five
-  raw sources land on a Volume and become a bronze streaming-table inventory; materialized views
+  raw sources land on a Volume and become a bronze streaming-table inventory. Materialized views
   read the inventoried satellite files with `read_paths`, do the silver detection and attribution
   and produce gold map-ready tables and PMTiles. Shows streaming tables over Auto Loader,
   `read_paths` joined back to its inventory, and an Asset Bundle with a dashboard.
@@ -50,7 +50,7 @@ version. Install the GeoBrix env wheel for that runtime:
 
 Channels move to newer runtimes over time. Check the
 [current channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions)
-when you create or update a pipeline, and change the wheel when the runtime changes: a DBR 19
+when you create or update a pipeline, and change the wheel when the runtime changes. A DBR 19
 runtime takes the `+env6` wheel, whichever channel it is on (the other family's wheel refuses to
 import). See [Installation](../installation) for the wheels and their extras.
 
@@ -96,8 +96,8 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
   `num_partitions`; without it a large raster is read by one task. See
   [Parallelism](./read-paths#parallelism).
 - **Materialized views recompute.** A materialized view whose query calls Python UDFs, as the
-  GeoBrix lightweight functions are, is recomputed in full at each update, while a streaming table
-  over Auto Loader processes only the new files. To re-run only some tables, refresh them
+  GeoBrix lightweight functions are, is recomputed in full at each update. A streaming table
+  over Auto Loader, by contrast, processes only the new files. To re-run only some tables, refresh them
   selectively, for example `databricks bundle run <pipeline> --refresh <table>,<table>`.
 - **Check product `st_*` functions against the channel's runtime.** Databricks `st_*` functions
   arrive with runtime releases, so a pipeline can lack one that a notebook on a newer runtime has.
@@ -148,7 +148,7 @@ run with `databricks bundle run`. A minimal pipeline resource:
 - `serverless: true` is the simplest compute. For memory-heavy runs, switch to classic compute
   (`serverless: false` and a cluster) for dedicated memory, and match the cluster's runtime to the
   GeoBrix extra.
-- The two production examples at the top of this page are complete bundles to start from: see
+- The two production examples at the top of this page are complete bundles to start from. See
   the README in each example's `lakeflow` folder for deploy and run steps.
 
 ## See also

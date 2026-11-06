@@ -13,7 +13,7 @@ _Since:_ **v0.6.0** · _(light-only — no heavyweight tier)_
 
 GeoBrix ships a Lakeflow Connect community connector, `geobrix`, for governed, low-code ingestion.
 An admin creates one Unity Catalog connection to a landing folder on a Volume. After that, each
-table is a name plus a few options, and each pipeline update appends the rows of the files that
+table is a name plus a few options. Each pipeline update appends the rows of the files that
 are new since the last update. Rows carry the columns of the GeoBrix reader for their format, plus
 the [lineage columns](./read-paths#lineage-columns) `_source_path` and `_source_mtime`.
 
@@ -37,8 +37,8 @@ Pipeline setup that every route shares (the channel, the GeoBrix extra, Serverle
 - **The schema comes from the table's first file**, so stage one file before you create the
   table.
 - **A folder that mixes file kinds needs `format`.**
-- **Each update lists the table's folder** to find new files. That is fine for thousands of files;
-  for very large or fast-growing landing folders, use [Auto Loader ingestion](./auto-loader),
+- **Each update lists the table's folder** to find new files. That is fine for thousands of files.
+  For very large or fast-growing landing folders, use [Auto Loader ingestion](./auto-loader),
   where Auto Loader keeps track of the files.
 - **An unreadable file fails the update** for most formats: the connector does not set bad data
   aside. Remove the file or replace it with a readable copy, then run the update again. See
@@ -48,7 +48,7 @@ Pipeline setup that every route shares (the channel, the GeoBrix extra, Serverle
 
 ## Formats
 
-The reader for a table is its `format` [table option](#table-options), or is inferred from the file
+The reader for a table is its `format` [table option](#table-options). Otherwise it is inferred from the file
 extension when every file in the dataset has the same one. `format` takes the same reader names as
 [`read_paths`](./read-paths#supported-formats): the `_gbx` suffix is optional and case is ignored,
 so `gpkg`, `GPKG` and `gpkg_gbx` are the same reader.
@@ -115,12 +115,12 @@ Create a Unity Catalog connection of type `COMMUNITY` (once) with these options:
 The allowlist names the [table options](#table-options) a pipeline may pass to the connector. The
 pipeline framework's own options, such as `tableName`, don't need to be on it.
 
-Databricks describes two ways to create the connection of a community connector: the **Create
+Databricks describes two ways to create the connection of a community connector. One is the **Create
 connection** step of the Add data flow ([community connectors](https://docs.databricks.com/aws/en/ingestion/community-connectors),
 and [custom connectors](https://docs.databricks.com/aws/en/ingestion/custom-connectors) for one that
-is not in the catalog), and the `create_connection` command of the
-[Community Connector CLI](https://github.com/databrickslabs/lakeflow-community-connectors/tree/master/tools/community_connector),
-which checks the options against the connector's `connector_spec.yaml` (GeoBrix's is in
+is not in the catalog). The other is the `create_connection` command of the
+[Community Connector CLI](https://github.com/databrickslabs/lakeflow-community-connectors/tree/master/tools/community_connector).
+The CLI checks the options against the connector's `connector_spec.yaml` (GeoBrix's is in
 `connectors/lakeflow/sources/geobrix`) and sets the allowlist for you.
 
 Grant `USE CONNECTION` on it to the people who build pipelines on it.
@@ -139,9 +139,9 @@ environment's dependencies. Set `connection_name` and list one entry per table i
   testFile="docs/tests/python/ingestion/test_lakeflow_connector_examples.py"
 />
 
-The file registers `GeoBrixDataSource`, the connector's PySpark data source; the framework serves
+The file registers `GeoBrixDataSource`, the connector's PySpark data source. The framework serves
 its tables through `GeoBrixLakeflowConnect`, the connector's implementation of the framework's
-`LakeflowConnect` interface (table discovery, schemas and offsets), which needs no registration of
+`LakeflowConnect` interface (table discovery, schemas and offsets). It needs no registration of
 its own.
 
 Each pipeline update creates or appends to one streaming table per entry. `source_table` names a
@@ -169,20 +169,20 @@ If a managed ingestion pipeline fails at startup, see [Troubleshooting](#trouble
 | `mode` | `lidar`, `exif` and `netcdf` only. Reader mode: `points` (default) or `metadata` for LiDAR, `metadata` (default) or `qc` for EXIF, `raster` (default) or `vector` for NetCDF. |
 
 "Vector" means the `vector`, `gpkg`, `geojson`, `geojsonl`, `shapefile` and `file_gdb` readers.
-`path`, `format` and `file_glob` apply to every table. Set on a table whose reader does not take
-it, any other option fails with an error that names the option and the readers it applies to.
+`path`, `format` and `file_glob` apply to every table. Any other option fails when set on a table whose reader does not take
+it. The error names the option and the readers it applies to.
 Raster (`raster`, `gtiff`, `cog`) and `pmtiles` tables take none of them.
 
 ## Discovery
 
 - **With `root_path`, every folder, and every file with a recognized extension, directly under it
-  is a table**, named after the entry without its extension (lower case, other characters replaced
+  is a table**. Each table is named after the entry without its extension (lower case, other characters replaced
   by `_`). Without `root_path`, each table sets `path` to an absolute path.
 - **A folder is one dataset**, and its files are read recursively.
 - **`path` is relative to `root_path`, or absolute inside it.** A path outside `root_path` fails.
 - **Folders and files whose names start with `_` or `.` are ignored**, as Spark's file sources
   ignore them: use `_archive/` or `_staging/` to keep files out of a table.
-- **`file_glob` picks files by name**, with the same syntax as the `glob` of `declare_ingest`: a
+- **`file_glob` picks files by name**, with the same syntax as the `glob` of `declare_ingest`. The syntax is a
   Spark `pathGlobFilter` (Hadoop glob) pattern, case-sensitive, where `{a,b}` matches either
   alternative and a backslash escapes a pattern character (`\*` matches a literal `*`). With
   `format` set, `file_glob` alone picks the folder's files, so for shapefiles end it in `.shp`
@@ -193,7 +193,7 @@ Raster (`raster`, `gtiff`, `cog`) and `pmtiles` tables take none of them.
 
 - **Incremental by file.** Each update records the newest modification time it has read, and the
   files at that time. The next update reads the files that are newer (or at that time but not yet
-  read). A file replaced in place gets a new modification time and is read again; a copy that
+  read). A file replaced in place gets a new modification time and is read again. A copy that
   keeps the source's modification time (`cp -p`, `rsync -t`) may not be seen as new.
 - **One Spark partition per file**, read as Arrow batches.
 - **The schema comes from the table's first file** (in path order). Every later file must have the

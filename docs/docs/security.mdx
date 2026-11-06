@@ -24,8 +24,8 @@ itself — they apply to every release we publish.
 ### Pinned third-party GitHub Actions
 
 Every third-party Action referenced under `.github/` is locked to a full commit
-SHA from a release published before the policy cutoff, rather than a movable
-tag like `@v3`. Tag names are kept inline as comments for readability, but the
+SHA, rather than a movable
+tag like `@v3`. The SHA comes from a release published before the policy cutoff. Tag names are kept inline as comments for readability, but the
 SHA is what GitHub resolves. This means a compromised upstream Action repo
 cannot retroactively change what runs in our CI.
 
@@ -56,17 +56,17 @@ minimum, so an older Maven stops at the first build step with a message that
 names `./mvnw`.
 
 The one Maven fetch outside the project build is for the open-source Delta Lake
-jars (`delta-spark` and `delta-storage`) that the lightweight CI job and the
-development container use to test the Zarr manifest locally. They are test-only
-and are never part of a shipped artifact. Because the PGP step runs inside the
-project build, it does not cover them; instead
+jars (`delta-spark` and `delta-storage`). The lightweight CI job and the
+development container use them to test the Zarr manifest locally. They are test-only
+and are never part of a shipped artifact. The PGP step runs inside the
+project build, so it does not cover them. Instead,
 [`scripts/ci/fetch-delta-test-jars.sh`](https://github.com/databrickslabs/geobrix/blob/main/scripts/ci/fetch-delta-test-jars.sh)
 pins the Maven plugin version, runs Maven with `-C`, and checks each jar against
 a fixed sha256. The script repeats that check every time it runs, including when
 the jars are already present, and fails on any mismatch. CI and the development
 container's test command both run it before the Zarr tests. The tests themselves
-only locate the jars and do not re-hash them, so a test run started without the
-script is not covered by the check.
+only locate the jars and do not re-hash them. A test run started without the
+script is therefore not covered by the check.
 
 ### Hash-pinned Python dependencies
 
@@ -74,8 +74,8 @@ Every Python install path that we control — CI, the development container,
 and the notebook test harness — uses a lockfile generated with
 `uv pip compile --generate-hashes` and installed via
 `pip install --require-hashes`. pip refuses to install any wheel whose
-sha256 doesn't match what was recorded at lock time, so a compromised mirror
-serving a same-version-but-different-bytes wheel fails closed.
+sha256 doesn't match what was recorded at lock time. A compromised mirror
+serving a same-version-but-different-bytes wheel therefore fails closed.
 
 | Path | Lockfile |
 |---|---|
@@ -93,15 +93,15 @@ lightweight `pyrx` build path in CI uses the env wheel's rasterio, which is hash
 
 Version bumps are proposed automatically (Dependabot) but never land on the bump alone.
 Each is accepted only after its `uv pip compile --generate-hashes` lockfiles are
-regenerated across every install path we control — CI, the development container, and the
-notebook test harness — so the new sha256 for each wheel is recorded and re-verified before
+regenerated across every install path we control: CI, the development container, and the
+notebook test harness. The new sha256 for each wheel is then recorded and re-verified before
 anything installs it. A bump that edits a version constraint without refreshing the hashed
 lockfile is rejected, keeping the two in lock-step.
 
 All of this resolution flows through a single controlled artifact mirror: `uv` and `pip`
 use it as their index, Maven and npm as their proxy. Neither a routine build nor a
-dependency update ever fetches from a public registry directly, so the mirror is the one
-place trust is anchored — and the `--generate-hashes` / `--require-hashes` chain above means
+dependency update ever fetches from a public registry directly. The mirror is therefore the one
+place trust is anchored. The `--generate-hashes` / `--require-hashes` chain above also means
 even the mirror cannot serve same-version-but-different-bytes without failing closed.
 
 ### Pinned native GDAL stack and its trust chain {#pinned-gdal-native--multi-layer-trust-chain}
@@ -134,7 +134,7 @@ sources. Nothing is fetched or compiled on a cluster at start. The trust chain h
 
 All CI jobs run on Databricks-managed hardened runner groups registered for
 the `databrickslabs` org. Each job gets a fresh, ephemeral VM that is
-destroyed at the end of the run, so nothing persists between jobs and no
+destroyed at the end of the run. Nothing persists between jobs, and no
 state can be carried forward by a malicious step. Org-level allowlisting
 controls which workflows can request those runners and which secrets they
 can see.
@@ -142,16 +142,17 @@ can see.
 ### Short-lived registry tokens (JFrog OIDC)
 
 Pip, Maven, and npm in CI authenticate to our artifact mirror via short-lived
-OIDC tokens minted per run, not long-lived registry credentials checked into
+OIDC tokens minted per run. They do not use long-lived registry credentials checked into
 GitHub secrets. The token's lifetime is the workflow run; there is nothing
 durable to leak.
 
 ### Gated deploy environment
 
 Workflows that need elevated tokens (pushing back to PR branches, deploying
-docs) run under a GitHub Environment with deployment-branch restrictions
+docs) run under a GitHub Environment.
+The environment has deployment-branch restrictions
 (`main` only), required CODEOWNER review, and the environment-scoped
-`REPO_ACCESS_TOKEN` as a fine-grained PAT limited to `contents:write` on this
+`REPO_ACCESS_TOKEN`, a fine-grained PAT limited to `contents:write` on this
 repository. Secrets are not released until those gates pass.
 
 ## How you can build on this foundation
@@ -192,8 +193,8 @@ cluster configuration and only bump deliberately. See the
 GeoBrix wraps GDAL/OGR, which can read a very large number of raster and
 vector formats. When you ingest data from third-party sources, narrow the
 driver list with `GDAL_SKIP` or the per-format options described in the
-[Readers](./readers/overview) and [Writers](./writers/overview) sections,
-rather than leaving every driver enabled by default. The smaller the
+[Readers](./readers/overview) and [Writers](./writers/overview) sections.
+Do not leave every driver enabled by default. The smaller the
 allowlist, the smaller the attack surface from a malicious input file.
 
 ### 5. Report suspected vulnerabilities privately
@@ -214,41 +215,41 @@ individual `combineavg` / `derivedband` call (via the internal
 `GDALManager.withVrtPython` bracket). The four built-in functions inject
 pyfunc source generated by GeoBrix itself, never by user input.
 
-If your own code consumes Python-pixel VRTs from less-trusted sources
-(e.g. you pull VRT XML from object storage that other principals can
-write to), keep the option `NO` and pre-translate to GTiff. With the
+If your own code consumes Python-pixel VRTs from less-trusted sources,
+keep the option `NO` and pre-translate to GTiff. For example, you might pull VRT XML from object storage that other principals can
+write to. With the
 driver policy on (§ 7), GeoBrix sets `GDAL_VRT_ENABLE_PYTHON=NO` for the
 whole process on both tiers, and a value you set does not apply. On the
 lightweight tier, `GDAL_VRT_ENABLE_PYTHON=TRUSTED_MODULES` with a narrow
 `GDAL_VRT_PYTHON_TRUSTED_MODULES` allowlist works only with the policy
-switched off; the heavyweight tier keeps the setting `NO` whatever the
+switched off. The heavyweight tier keeps the setting `NO` whatever the
 switch, outside its own `combineavg` / `derivedband` calls. See
 [RasterX Function Reference § VRT Python pixel functions](./api/raster-functions#vrt-python-pixel-functions)
 for the full how-to.
 
 ### 7. Raster data other principals can write
 
-GeoBrix reads rasters that anyone who can write a table or a Volume can name, and a raster
-file can name more: a VRT names its sources, a tile index names its tiles, a pipeline names
-its inputs, a super-overlay names the documents it links. GDAL opens all of them. So GeoBrix
+GeoBrix reads rasters that anyone who can write a table or a Volume can name. A raster
+file can name more. A VRT names its sources, and a tile index names its tiles. A pipeline names
+its inputs, and a super-overlay names the documents it links. GDAL opens all of them. So GeoBrix
 applies a driver policy to each process, on both tiers, before any raster is opened:
 
-- **The refused drivers are removed from GDAL.** The stored-pipeline driver (`GDALG`), the
-  tile indexes and catalogs that open other rasters (`GTI`, `STACTA`, `STACIT`), the service
-  drivers (`WMS`, `WMTS`, `WCS`, `OGCAPI`, `HTTP`), the network APIs (`PLMOSAIC`,
-  `PLSCENES`, `EEDAI`, `DAAS`, `NGW`, and the OGR network drivers `WFS`, `CSW`, `EEDA`), and
-  three drivers that act on what a file names: `KMLSUPEROVERLAY` (it fetches a `NetworkLink`
-  or `Icon` `href` over HTTP), `ESRIC` (it fetches a coordinate reference system that its
-  `conf.xml` gives as an http(s) URL) and `MRF` (it opens a source its file names and, on a
-  read, writes cache files at paths its file names). They are not registered, so GDAL cannot
+- **The refused drivers are removed from GDAL.** They are the stored-pipeline driver (`GDALG`),
+  and the tile indexes and catalogs that open other rasters (`GTI`, `STACTA`, `STACIT`). They are also the service
+  drivers (`WMS`, `WMTS`, `WCS`, `OGCAPI`, `HTTP`), and the network APIs (`PLMOSAIC`,
+  `PLSCENES`, `EEDAI`, `DAAS`, `NGW`, and the OGR network drivers `WFS`, `CSW`, `EEDA`). Last are
+  three drivers that act on what a file names. The `KMLSUPEROVERLAY` driver fetches a `NetworkLink`
+  or `Icon` `href` over HTTP. The `ESRIC` driver fetches a coordinate reference system that its
+  `conf.xml` gives as an http(s) URL. The `MRF` driver opens a source its file names and, on a
+  read, writes cache files at paths its file names. None of the refused drivers is registered, so GDAL cannot
   open them at any depth.
 - **The VRT settings that read a file's bytes as pixels, or run code, are off**
   (`GDAL_VRT_ENABLE_RAWRASTERBAND=NO`, `GDAL_VRT_ENABLE_PYTHON=NO`).
 - **Every raster GeoBrix reads from data is opened with the allowed drivers only.** The allowed drivers
   are the ones GeoBrix has classified as allowed; drivers GeoBrix has not classified for the GDAL
   in use are refused. GDAL is given that list on every read of a raster file and of a tile's
-  bytes, including the rasters GeoBrix hands to rio-tiler or copies to a COG; the only other
-  reads are of scratch files GeoBrix writes and reads back itself, and of the files the
+  bytes. This includes the rasters GeoBrix hands to rio-tiler or copies to a COG. The only other
+  reads are of two kinds. One is scratch files GeoBrix writes and reads back itself. The other is the files the
   development-only sample-data generator downloads and converts. A source that a
   VRT or an index names is opened through GDAL's own registry, from which the refused drivers
   are removed. Where the full defence applies (below), a named file is also identified first,
@@ -266,95 +267,96 @@ applies a driver policy to each process, on both tiers, before any raster is ope
 
   The error names the format and gives a fix: store the tile as a GeoTIFF, or pass the VRT as a
   virtual tile (a path). A format that finds its header in a separate file is named only if the
-  tile's own bytes identify it: the data file of an `ENVI` or `EHdr` raster has no signature
+  tile's own bytes identify it. The data file of an `ENVI` or `EHdr` raster has no signature
   without its `.hdr`, so it is not named. It is not opened either, and fails with the reader's
   own "not recognized" error. netCDF, HDF5, HFA, JP2 and GPKG bytes still open. On the heavyweight tier,
   `gbx_rst_transformcrs`, `gbx_rst_slope` and `gbx_rst_mapalgebra` open a tile's non-TIFF bytes only
-  with a short list of single-file drivers, so they refuse the same formats and more.
+  with a short list of single-file drivers. They therefore refuse the same formats and more.
 
-**Remote paths that come from data.** On the lightweight tier, a path that comes from data is
+**Remote paths that come from data.** On the lightweight tier, a path from data is
 opened only when it names a local or Volume path (`/Volumes/…`, `/Workspace/…`), a cloud object
-store (`s3://`, `s3a://`, `abfss://`, `abfs://`, `az://`, `gs://`, `wasbs://`, or `/vsis3/`,
+store, or `/vsimem/`. The cloud object store forms are
+`s3://`, `s3a://`, `abfss://`, `abfs://`, `az://`, `gs://`, `wasbs://`, or `/vsis3/`,
 `/vsiaz/`, `/vsiadls/`, `/vsigs/` and their `/vsis3_streaming/`, `/vsiaz_streaming/`,
-`/vsigs_streaming/` forms; `/vsizip/`, `/vsitar/` and `/vsigzip/` around one of these), or
-`/vsimem/`. The paths it checks are a virtual tile's `path`, the path `rst_fromfile` is given (a
-column's value is data), the rows of a `manifest` or a tile index, the sources of a `.vrt` that
-`raster_gbx` reads, the `path` column that `vector_file_read` reads from a table, and a virtual
+`/vsigs_streaming/` forms. A wrapper of `/vsizip/`, `/vsitar/` or `/vsigzip/` around one of these counts too.
+The check covers a virtual tile's `path` and the path `rst_fromfile` is given (a
+column's value is data). It also covers the rows of a `manifest` or a tile index, and the sources of a `.vrt` that
+`raster_gbx` reads. Finally, it covers the `path` column that `vector_file_read` reads from a table, and a virtual
 tile that a vizx plot opens. A path that names `/vsicurl/`, `/vsicurl_streaming/`, `http://`,
 `https://`, `ftp://` or another GDAL virtual file system, directly or inside a wrapper such as
-`/vsizip//vsicurl/…`, raises an error that names it, before anything is opened: for
+`/vsizip//vsicurl/…`, raises an error that names it. The error comes before anything is opened: for
 `rst_fromfile`, at its first evaluation. A scheme counts as rasterio and pyogrio read it, so
 `https:host/a.tif`, written without `//`, is the URL they would open. The check runs in every
 open GeoBrix makes of a raster or a vector file, so a path from data is never opened without it.
-A path you pass yourself to a call that runs on the driver is your own choice and is not checked:
-`StacClient(catalog=url)`, and the path you give `plot_file`, `plot_cog`, `plot_mosaic`, a map
+A path you pass yourself to a call that runs on the driver is your own choice and is not checked.
+Examples are `StacClient(catalog=url)`, and the path you give `plot_file`, `plot_cog`, `plot_mosaic`, a map
 layer or `segment_raster`.
 
 To open remote paths from data you trust, set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's
-environment (in the notebook, `os.environ["GBX_ALLOW_REMOTE_PATHS"] = "true"`) before
-`register()` and before the column or the read is built. The workers never read it: the SQL
+environment before
+`register()` and before the column or the read is built. In the notebook, that is `os.environ["GBX_ALLOW_REMOTE_PATHS"] = "true"`. The workers never read it: the SQL
 functions and readers that `register()` installs, `rst_fromfile` and `vector_file_read` take the
 driver's value to them, so it works on Serverless too. After you change it, call `register()`
 again. The other Python column functions, called without the SQL functions, do not carry it: on a
-worker they refuse a remote path. The sources GDAL opens by itself are outside this check: the
+worker they refuse a remote path. The sources GDAL opens by itself are outside this check. These are the
 sources of a VRT that a virtual tile's path names, and the netCDF CRS URL below. A VRT held as tile
 bytes is refused, as listed above.
 
 **Hrefs that come from data.** `StacClient.download` and `repair`, and the Overture downloader's HTTP
 fallback, fetch hrefs that a catalog or a table names. Each href must be an `http(s)` URL whose host resolves only to
-public addresses: a cloud metadata address (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`), a loopback,
-link-local or unspecified one, and any other address that is not public (the documentation and benchmark ranges,
-multicast, reserved) are refused always, even for a host you list, while a private (RFC 1918, `fc00::/7`) or
+public addresses. These addresses are always refused, even for a host you list: a cloud metadata address (`169.254.169.254`, `fd00:ec2::254`, `100.100.100.200`), and a loopback,
+link-local or unspecified one. Any other address that is not public is also always refused (the documentation and benchmark ranges,
+multicast, reserved). A private (RFC 1918, `fc00::/7`) or
 carrier-grade NAT (`100.64.0.0/10`) address is refused unless you name the host in `allowed_hosts=` (an internal
-catalog); an `allowed_hosts=` list, when you pass one, refuses any other host. Azure's WireServer address
+catalog). An `allowed_hosts=` list, when you pass one, refuses any other host. Azure's WireServer address
 (`168.63.129.16`), a platform endpoint, is refused with the cloud metadata addresses. A 6to4 address (`2002::/16`) is
 refused too, whatever IPv4 address it embeds. The host checked is the one the HTTP client
-connects to: an href whose host the client reads differently from the check (a backslash in it, for example) is
-refused. The fetch connects to an address the check approved, with the host's name in the request and in TLS, so a
-DNS answer that changes after the check is never used. Each redirect hop is checked the same way, and no
+connects to. An href whose host the client reads differently from the check (a backslash in it, for example) is
+refused. The fetch connects to an address the check approved, with the host's name in the request and in TLS. A
+DNS answer that changes after the check is therefore never used. Each redirect hop is checked the same way, and no
 `~/.netrc` is read. See [STAC § Constructor](./api/stac#constructor).
 
 **Spark's GDAL settings on the JVM.** A `spark.gdal.*` or `spark.databricks.labs.gbx.gdal.*` setting applies to the
-whole executor JVM: on dedicated compute, the first GDAL use in each JVM applies it for every job that JVM then runs.
+whole executor JVM. On dedicated compute, the first GDAL use in each JVM applies it for every job that JVM then runs.
 The heavyweight tier runs on dedicated compute only, and is refused on standard access mode.
 
 GeoBrix sets the policy when it is imported, in the environment GDAL reads when it registers
-its drivers, and completes it at its first GDAL use. With the policy on, importing GeoBrix
-changes the process environment: it adds the refused drivers to `GDAL_SKIP` (a value you set
-stays, with the refused names added), and sets `GDAL_VRT_ENABLE_PYTHON` and
+its drivers. It completes the policy at its first GDAL use. With the policy on, importing GeoBrix
+changes the process environment. It adds the refused drivers to `GDAL_SKIP` (a value you set
+stays, with the refused names added). It sets `GDAL_VRT_ENABLE_PYTHON` and
 `GDAL_VRT_ENABLE_RAWRASTERBAND` to `NO`, replacing a value you set. Subprocesses the process
 starts inherit these values. With `GBX_GDAL_DRIVER_POLICY=off` set before the import, the
 environment is left as it is.
 
 **Known limitation: behind a proxy, the proxy picks the address.** With `HTTP_PROXY` or
 `HTTPS_PROXY` set (and the host not in `NO_PROXY`), the proxy resolves the href's host and
-connects to it, so the address checks above do not bound where it goes, and a host that does not
-resolve on the node is left to it. The proxy is your egress control there: name the hosts you
+connects to it. The address checks above therefore do not bound where it goes. A host that does not
+resolve on the node is left to the proxy. The proxy is your egress control there: name the hosts you
 trust in `allowed_hosts=`, which still applies.
 
 **Known limitation: GDAL connects on its own on a windowed read.** With `bbox`, GeoBrix follows the
 href's redirects itself, each hop checked, and GDAL opens the URL they end at. GDAL then resolves
-the host again for its range reads (a DNS answer that changes after the check is used there), and
-a redirect the server returns to one of those reads is followed by GDAL without the checks.
+the host again for its range reads (a DNS answer that changes after the check is used there).
+A redirect the server returns to one of those reads is followed by GDAL without the checks.
 Download without `bbox` (the fetch connects to the checked address, and each hop is checked) and
 window the file afterwards, or name the hosts in `allowed_hosts=`.
 
 **Known limitation: a netCDF CRS given as a URL.** A netCDF variable whose `crs` attribute is
-an http(s) URL makes GDAL fetch that URL when the file is opened, and no GDAL setting turns that
-off. GeoBrix's netCDF readers need GDAL's netCDF driver, so it stays allowed: a netCDF file
+an http(s) URL makes GDAL fetch that URL when the file is opened. No GDAL setting turns that
+off. GeoBrix's netCDF readers need GDAL's netCDF driver, so it stays allowed. A netCDF file
 another principal wrote can make the reading process send a request to a URL the file names.
 
 **Full and partial defence.** Which one a Python process gets depends on the GDAL its rasterio
 runs.
 
-- The **full** defence is the env wheel's: its vendored rasterio and osgeo share one GDAL, so
-  GeoBrix also deregisters any refused driver that was registered before it ran, and identifies
+- The **full** defence is the env wheel's. Its vendored rasterio and osgeo share one GDAL.
+  GeoBrix therefore also deregisters any refused driver that was registered before it ran, and identifies
   a file before it opens it.
 - The **partial** defence is a process whose rasterio brings its own GDAL (the PyPI wheel). The
   refused drivers are kept out of GDAL's registration and every open uses the allowed drivers
-  only. A binding can register them before GeoBrix is imported: rasterio at its first open, a
-  PyPI pyogrio (which bundles a GDAL of its own) at its import. On Linux GeoBrix removes them
-  then from each GDAL the process has loaded; elsewhere it cannot, and warns once, naming each
+  only. A binding can register them before GeoBrix is imported. This happens at its first open for rasterio, and at its import
+  for a PyPI pyogrio (which bundles a GDAL of its own). On Linux GeoBrix removes them
+  then from each GDAL the process has loaded. Elsewhere it cannot, and warns once, naming each
   binding and the drivers it keeps. To avoid it, import `databricks.labs.gbx` before rasterio
   opens anything and before pyogrio is imported, or install the env wheel.
 
@@ -368,32 +370,32 @@ runs.
 | The env wheel with `[vizx]`: the wheel vendors geopandas and contextily, so no PyPI rasterio, pyogrio, pyproj or shapely is installed | the wheel's vendored rasterio and osgeo | full |
 | A partial path where rasterio or pyogrio registered GDAL's drivers before GeoBrix was imported | the binding's own GDAL | partial: on Linux the refused drivers are removed at the import, elsewhere with the warning |
 
-The JVM side is the same on every install path: the GeoBrix JAR skips the refused drivers and
+The JVM side is the same on every install path. The GeoBrix JAR skips the refused drivers and
 sets the two VRT settings when the JVM's GDAL starts, whichever GDAL it loads. A JVM runs one
-GDAL, the build the JAR's GDAL classes come from: an older GDAL JNI (a system GDAL from an
-earlier release), or a second GDAL on the JVM's library path, is refused at the first GDAL use,
-with an error that names it and the fix, before any GDAL call.
+GDAL, the build the JAR's GDAL classes come from. An older GDAL JNI (a system GDAL from an
+earlier release) is refused at the first GDAL use. So is a second GDAL on the JVM's library path.
+The error names it and the fix, and comes before any GDAL call.
 
 A `spark.gdal.GDAL_SKIP` value adds to the refused drivers; it cannot remove one. In a Python
 process a `GDAL_SKIP` environment value adds to them the same way. Neither
 `spark.gdal.GDAL_VRT_ENABLE_RAWRASTERBAND` nor `spark.gdal.GDAL_VRT_ENABLE_PYTHON` turns
 those settings back on. The switch below is the one way to turn the policy off.
 
-A refused raster raises an error (a query error on a read, an error tile on a virtual tile)
-whose message names what was refused and says why GeoBrix does not open it.
+A refused raster raises an error (a query error on a read, an error tile on a virtual tile).
+The message names what was refused and says why GeoBrix does not open it.
 
-The policy is process-wide, as it is on the JVM: once GeoBrix runs in a Python process (on
-the driver and on each executor), that process no longer finds the refused drivers, for any
+The policy is process-wide, as it is on the JVM. Once GeoBrix runs in a Python process (on
+the driver and on each executor), that process no longer finds the refused drivers. This holds for any
 code in it. On the JVM the same drivers are skipped when GDAL starts, as on the
 [raster reader](./readers/raster) page.
 
 **To turn the policy off**, set one switch, on either tier, before the process's first GDAL
-use: a change later in the session has no effect. In a Python process, set
+use. A change later in the session has no effect. In a Python process, set
 `GBX_GDAL_DRIVER_POLICY=off` in the environment before GeoBrix is imported. On the JVM, set
 `spark.databricks.labs.gbx.gdal.driver_policy=off` in the cluster's Spark config, or
 `GBX_GDAL_DRIVER_POLICY=off` in the cluster's environment. Off means GDAL is left as GDAL has
 it, with no refused driver removed and no VRT setting changed.
-Only turn it off for data you trust: a virtual tile or a raster from another principal can then
+Only turn it off for data you trust. A virtual tile or a raster from another principal can then
 run a stored pipeline or read a raw band.
 
 ## Next steps

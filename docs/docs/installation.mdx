@@ -54,7 +54,7 @@ GeoBrix supports the following Databricks Runtime releases:
 | **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
 | **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
+A **single JAR** runs on 17.3, 18, and 19. Scala 2.13 minor versions are binary-compatible. The JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
 On Databricks, GeoBrix installs as the **env wheel** for the runtime's family. There is one wheel per
 family, and no light extra to pick:
@@ -89,12 +89,12 @@ The env wheel is a single Python wheel for your runtime — **no separate JAR an
 | `[zarr]` | Zarr transactional stores (`zarr`, `numcodecs`, `zarrs`, `tensorstore`, `obstore`) | env6 |
 | `[databricks]` | The Databricks SDK, for the sample-data uploads | env5, env6 |
 
-*What an install changes on the runtime. The env wheel and its extras keep the runtime's preinstalled packages, with these exceptions. Every install upgrades `idna` (the runtime ships 3.7 or 3.11) and installs `httpx2` and `httpcore2`, which `rio-tiler` uses to read remote rasters and which need `idna` 3.18 or later. On Serverless environment 5 and DBR 17.3 / 18 it also upgrades `anyio` and `typing_extensions` (`rio-tiler` 9 needs 4.13 or later), on DBR 17.3 `h11` (to 0.16, the fix for CVE-2025-43859) and `httpcore` (from 1.0.2, which does not accept that `h11`, to 1.0.9), and on DBR 19 ML and Serverless environment 6 ML `lazy_loader`. On those env5 runtimes `[stac]` and `[vizx]` also raise `requests` from 2.32.3 to the latest 2.32 release, which fixes CVE-2024-47081. Databricks may show a one-time "a core package changed" notice; it is harmless, and the restart that follows the install picks up the new versions.*
+*What an install changes on the runtime. The env wheel and its extras keep the runtime's preinstalled packages, with these exceptions. Every install upgrades `idna` (the runtime ships 3.7 or 3.11) and installs `httpx2` and `httpcore2`, which `rio-tiler` uses to read remote rasters and which need `idna` 3.18 or later. On Serverless environment 5 and DBR 17.3 / 18 it also upgrades `anyio` and `typing_extensions` (`rio-tiler` 9 needs 4.13 or later). On DBR 17.3 it also upgrades `h11` (to 0.16, the fix for CVE-2025-43859) and `httpcore` (from 1.0.2, which does not accept that `h11`, to 1.0.9). On DBR 19 ML and Serverless environment 6 ML it also upgrades `lazy_loader`. On those env5 runtimes `[stac]` and `[vizx]` also raise `requests` from 2.32.3 to the latest 2.32 release, which fixes CVE-2024-47081. Databricks may show a one-time "a core package changed" notice; it is harmless, and the restart that follows the install picks up the new versions.*
 
-*`[overture]` and `[earthdata]` are not extras of the env wheels: each changes further preinstalled packages. Install their packages as a **separate step** after the wheel, if you need them, and accept the changes: `%pip install "overturemaps>=1.0.2,<2"` (the Overture CLI, the fast path of [Overture Maps](./sample-data/overture-downloader); it raises `click` to 8.5 and `tqdm` to 4.70 or later, and installs PyPI's `shapely`, which a GeoBrix process does not use) and `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` ([NASA Earthdata / EMIT](./sample-data/emit-downloader); it raises `fsspec` from 2023.5.0 to a current release). The Overture downloader works without the CLI, through the STAC catalog.*
+*`[overture]` and `[earthdata]` are not extras of the env wheels: each changes further preinstalled packages. Install their packages as a **separate step** after the wheel, if you need them, and accept the changes. For Overture, run `%pip install "overturemaps>=1.0.2,<2"` (the Overture CLI, the fast path of [Overture Maps](./sample-data/overture-downloader)). It raises `click` to 8.5 and `tqdm` to 4.70 or later, and installs PyPI's `shapely`, which a GeoBrix process does not use. For Earthdata, run `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` ([NASA Earthdata / EMIT](./sample-data/emit-downloader)). It raises `fsspec` from 2023.5.0 to a current release. The Overture downloader works without the CLI, through the STAC catalog.*
 
-The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
-the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
+The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume. See
+the install steps below for the exact pattern, including the PEP 508 `package @ file://` quoting
 required on Serverless.
 :::
 
@@ -129,7 +129,7 @@ The wheels ship as **GitHub release artifacts** — they are **not** published t
 
 1. **Download** the env wheel for your runtime, `geobrix-<version>+env6-py3-none-any.whl` or `geobrix-<version>+env5-py3-none-any.whl`, from the [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases).
 2. **Stage** it in a Unity Catalog Volume your compute can read, e.g. `/Volumes/<catalog>/<schema>/<volume>/geobrix/`.
-3. **Install** it — either notebook-scoped with the `%pip` magic (installs across the whole cluster for the notebook session; plain `pip` installs only on the driver), or as a [cluster-scoped library](https://docs.databricks.com/aws/en/libraries/notebooks-python-libraries#manage-libraries-with-pip-commands) pointing at the same Volume path (works on Serverless and Classic):
+3. **Install** it in one of two ways. Notebook-scoped, use the `%pip` magic (it installs across the whole cluster for the notebook session; plain `pip` installs only on the driver). Or add a [cluster-scoped library](https://docs.databricks.com/aws/en/libraries/notebooks-python-libraries#manage-libraries-with-pip-commands) pointing at the same Volume path (works on Serverless and Classic):
 
 ```python
 %pip install "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>+env6-py3-none-any.whl"
@@ -138,10 +138,10 @@ The wheels ship as **GitHub release artifacts** — they are **not** published t
 :::warning Serverless install form
 **Use the quoted `geobrix[<extras>] @ file://…` form.** Install with the **PEP 508
 named form above**, wrapped in quotes as a single argument. Do **not** put an
-extra on the path (`'/Volumes/…/geobrix-<version>+env6-py3-none-any.whl[vizx]'`): on
+extra on the path (`'/Volumes/…/geobrix-<version>+env6-py3-none-any.whl[vizx]'`). On
 **Serverless**, `%pip` writes the requirement to a file *including the
-surrounding quotes*, so pip reads `[vizx]` as part of the filename and fails
-with *"Expected package name at the start of dependency specifier."* The named
+surrounding quotes*. Pip then reads `[vizx]` as part of the filename and fails.
+The error is *"Expected package name at the start of dependency specifier."* The named
 form installs cleanly on **Serverless**, standard/shared, and ARM.
 :::
 
@@ -155,7 +155,7 @@ dbutils.library.restartPython()
 ```
 
 On DBR 17.3 or 18, use the `+env5` wheel instead. For a Serverless job, add the requirement as a
-dependency line of the job's environment, written **without spaces around `@`**, with the wheel for
+dependency line of the job's environment, written **without spaces around `@`**. Use the wheel for
 its environment version (`+env5` for version 5, `+env6` for version 6):
 
 ```text
@@ -163,9 +163,9 @@ geobrix@https://github.com/databrickslabs/geobrix/releases/download/v<version>/g
 ```
 
 Environment dependencies are installed with an unquoted `%pip install`, so spaces around `@` split
-the requirement and the install fails. A Lakeflow pipeline's dependency lines follow the same rule,
-but the pipeline runs on the Databricks Runtime of its channel, not on a Serverless environment
-version, so it takes the wheel for that runtime (`+env5` for DBR 18, `+env6` for DBR 19). See
+the requirement and the install fails. A Lakeflow pipeline's dependency lines follow the same rule.
+The pipeline runs on the Databricks Runtime of its channel, not on a Serverless environment
+version. It therefore takes the wheel for that runtime (`+env5` for DBR 18, `+env6` for DBR 19). See
 [Lakeflow SDP](./ingestion/lakeflow-sdp#environment).
 
 Workspaces that restrict outbound network access (for example, Serverless egress controls) can

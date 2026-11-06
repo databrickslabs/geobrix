@@ -42,7 +42,7 @@ Development and CI use a **Docker** image (`geobrix-dev`) for a consistent envir
 
 ### Testing on a Databricks cluster
 
-You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster so that Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).
+You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster. This way, Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).
 
 **Config** — Copy `examples/tests/databricks_cluster_config.example.env` to `examples/tests/databricks_cluster_config.env` and set:
 
@@ -52,7 +52,7 @@ You can run the **Essential bundle** and **primitive Volume tests** on a live Da
 - **GBX_ARTIFACT_VOLUME** — directory for artifacts (e.g. `/Volumes/.../artifacts`). JAR and wheel are uploaded directly here (no subpaths). Wheel path for the notebook is derived as `GBX_ARTIFACT_VOLUME/geobrix-<version>-py3-none-any.whl` unless overridden.
 - Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH` — override full wheel path for the notebook pip cells.
 - Optional: `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` — use existing wheel (no build/upload); notebook still gets the pip and restart cells.
-- Optional: `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` — when running stage-wheel, skip the JAR build and upload (same as `GBX_BUNDLE_SKIP_JAR=1`); when running stage-jar alone, still build the JAR locally and skip only the upload. `GBX_BUNDLE_SKIP_JAR=1` skips the JAR step entirely (no build, no upload) in both.
+- Optional: `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` — when running stage-wheel, skip the JAR build and upload (same as `GBX_BUNDLE_SKIP_JAR=1`). When running stage-jar alone, it still builds the JAR locally and skips only the upload. `GBX_BUNDLE_SKIP_JAR=1` skips the JAR step entirely (no build, no upload) in both.
 - Optional: `GBX_RUNNER_DIR`, `GBX_BUNDLE_RUNNER_NOTEBOOK`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` — where to upload the runner notebooks.
 
 **Commands** — From the repo root:
@@ -68,7 +68,7 @@ You can run the **Essential bundle** and **primitive Volume tests** on a live Da
 
 The repo provides `gbx:*` commands so both humans and AI agents can run tests, coverage, docs, and Docker in a consistent way. Each command is a `.md` registration + `.sh` implementation under `scripts/commands/` (the directory name is historical; the commands are usable from any shell).
 
-Conventions and architectural guidance live in [`CLAUDE.md`](https://github.com/databrickslabs/geobrix/blob/main/CLAUDE.md) at the repo root — read that for cross-language naming, BNG resolution rules, GDAL resource management, doc-test single-source pattern, and the user-facing-docs voice rule. Agents (Cursor or Claude) read CLAUDE.md as their entry point.
+Conventions and architectural guidance live in [`CLAUDE.md`](https://github.com/databrickslabs/geobrix/blob/main/CLAUDE.md) at the repo root. Read that for cross-language naming, BNG resolution rules, GDAL resource management, doc-test single-source pattern, and the user-facing-docs voice rule. Agents (Cursor or Claude) read CLAUDE.md as their entry point.
 
 ### Commands
 
@@ -179,7 +179,7 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 | `gbx:ci:docs` | Doc-test CI menu | Run doc tests locally (python/scala), status, trigger, watch, logs (or no args for menu) |
 | `gbx:ci:setup` | One-time CI setup | Install and authenticate GitHub CLI (`gh`) |
 
-Most commands accept `--help`. Common options: `--log <path>` for test/output logs (truncated each run), `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`). **Doc test commands** set `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container by default so the minimal bundle is used (required for remote/CI); use `--no-sample-data-root` to leave it unset and use the full-bundle path or your own env. They do not run a sample-data download; the minimal or full bundle must be present via the Volumes mount.
+Most commands accept `--help`. Common options: `--log <path>` for test/output logs (truncated each run), `--open` for coverage reports, and command-specific flags (e.g. `--suite`, `--path`, `--skip-build`). **Doc test commands** set `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` in the container by default, so the minimal bundle is used (required for remote/CI). Use `--no-sample-data-root` to leave it unset and use the full-bundle path or your own env. They do not run a sample-data download; the minimal or full bundle must be present via the Volumes mount.
 
 ### Working with agents
 
@@ -188,7 +188,7 @@ When working with Claude or Cursor in this repo, agents should:
 - **Read `CLAUDE.md` first** — it documents project conventions and translates cross-project working patterns into geobrix-specific behavior (Docker container, `gh` account switching, etc.).
 - **Dispatch long-running work to subagents** — `gbx:*` test/build commands typically take minutes and benefit from running in an isolated context, freeing the main session for review.
 - **Use `gbx:*` commands rather than ad-hoc shell** for tests, coverage, docs, and Docker — they handle env vars, log paths, and container setup consistently.
-- **Add or fix a command rather than work around it** — if a `gbx:*` command is broken, fix the script in `scripts/commands/<name>.sh`; don't invoke the underlying tool directly and let the command rot.
+- **Add or fix a command rather than work around it** — if a `gbx:*` command is broken, fix the script in `scripts/commands/<name>.sh`. Do not invoke the underlying tool directly and let the command rot.
 
 ---
 
@@ -236,17 +236,17 @@ Pushing to a branch (except `python/**` and `scala/**`) **successfully triggers*
 
 ### Build environment and caching
 
-The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `python_build/`) use a **shared environment** so that when both run in the same job (e.g. **build main**), caches stay warm:
+The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `python_build/`) use a **shared environment**. When both run in the same job (e.g. **build main**), caches stay warm:
 
 - **Apt** — Both actions restore `.cache/apt-archives` at the start of the GDAL step and save it at the end. Workflows cache `.cache/apt-archives` with a key derived from both action files, so one cache serves Scala and Python; changing either action’s apt steps invalidates the cache.
 - **Pip** — Both use the same pip cache key (`.ci-pip-cache-key`, created by the workflow from ref + matrix). That avoids duplicate pip installs when Scala runs first and Python reuses the same interpreter and cache.
 - **Maven** — Scala uses `setup-java` with `cache: 'maven'` and `cache-dependency-path: 'pom.xml'`. Every Maven call in CI is `./mvnw`, which runs the version pinned in `.mvn/wrapper/maven-wrapper.properties`; the dev image installs the same version, and `pom.xml` requires it as a minimum.
 
-The two actions intentionally mirror each other (same apt repos, same GDAL/natives, same pip stack: numpy, pyspark, gdal). Scala adds JDK, Maven, `zip`/`unzip`, and the JNI `.so` copy; Python adds pytest and `pip install python/geobrix[dev]`. **Lint (ScalaStyle, isort/black/flake8)** runs in CI on every build, but the build **fails on lint errors only for PRs targeting main**; pushes and PRs to other branches do not fail on lint. Config: `scalastyle-config.xml`, `python/geobrix/pyproject.toml`. Use **`gbx:lint:scalastyle`** and **`gbx:lint:python`** locally (or **`gbx:lint:python --fix`** with dev deps on the host). A future refactor could extract a single “setup GDAL + pip” composite used by both; for now the duplication is small and the structure is aligned for easy comparison.
+The two actions intentionally mirror each other (same apt repos, same GDAL/natives, same pip stack: numpy, pyspark, gdal). Scala adds JDK, Maven, `zip`/`unzip`, and the JNI `.so` copy; Python adds pytest and `pip install python/geobrix[dev]`. **Lint (ScalaStyle, isort/black/flake8)** runs in CI on every build, but the build **fails on lint errors only for PRs targeting main**. Pushes and PRs to other branches do not fail on lint. Config: `scalastyle-config.xml`, `python/geobrix/pyproject.toml`. Use **`gbx:lint:scalastyle`** and **`gbx:lint:python`** locally (or **`gbx:lint:python --fix`** with dev deps on the host). A future refactor could extract a single “setup GDAL + pip” composite used by both. For now the duplication is small and the structure is aligned for easy comparison.
 
 ### Releasing the DCS image
 
-The Databricks Container Services (DCS) image for dedicated clusters is built and published separately from the JAR and wheel. It is released for two architectures, Graviton (arm64, the default) and x86 (amd64), and each architecture is built, verified and released on its own. The release owner publishes it; the publish command never runs `docker login` or handles credentials, so log in to Docker Hub (`docker login`) with an account that can push to the image repository first.
+The Databricks Container Services (DCS) image for dedicated clusters is built and published separately from the JAR and wheel. It is released for two architectures, Graviton (arm64, the default) and x86 (amd64), and each architecture is built, verified and released on its own. The release owner publishes it. The publish command never runs `docker login` or handles credentials. Log in to Docker Hub (`docker login`) first, with an account that can push to the image repository.
 
 Run steps 1 to 4 once per architecture. `--arch` selects it on both commands: omit it (or pass `--arch arm64`) for the Graviton image, and pass `--arch amd64` for the x86 image. The architecture sets the base image and the tag suffix: `-arm` on `databricksruntime/environment:v6-standard-arm`, `-x86` on `databricksruntime/environment:v6-standard`.
 
@@ -263,7 +263,7 @@ Run steps 1 to 4 once per architecture. `--arch` selects it on both commands: om
    The first command releases the Graviton image and the second the x86 image; each takes the digest of its own candidate, never the other architecture's. `--release` refuses unless `--confirm` equals the version being released, so run it only after the verification in step 3. `--expect-digest` refuses unless the local `-rc` image is the one with that digest, which is the image you verified. The command re-tags the candidate image you pushed and verified as `<ver>-env6-<arm|x86>` and `env6-<arm|x86>`, and refuses an `-rc` image that was never pushed. Don't rebuild between steps 2 and 4: a rebuilt image needs a new candidate push and verification. Record each architecture's released `DIGEST=` line in the description of the GitHub release that step 5 attaches the Dockerfile to, not in the docs release notes.
 5. The release workflow attaches `geobrix-<ver>-dcs.Dockerfile` to the GitHub release.
 
-Do the image release (step 4) for both architectures before the docs that name the release tags are deployed from `main`: the [Databricks Container Service](./installation/dcs.mdx) page tells readers to pull `<ver>-env6-arm` and `env6-arm` on Graviton, and `<ver>-env6-x86` and `env6-x86` on x86, and those tags must exist first.
+Do the image release (step 4) for both architectures before the docs that name the release tags are deployed from `main`. The [Databricks Container Service](./installation/dcs.mdx) page tells readers to pull `<ver>-env6-arm` and `env6-arm` on Graviton, and `<ver>-env6-x86` and `env6-x86` on x86. Those tags must exist first.
 
 ### Summary
 

@@ -42,7 +42,7 @@ Spatial K-Nearest Neighbors is not yet ported:
 ## Coordinate Reference Systems (PROJ version skew)
 
 GeoBrix's GDAL stack and DBR's built-in spatial functions each carry
-their own PROJ runtime — they coexist on the cluster but are not the
+their own PROJ runtime. They coexist on the cluster but are not the
 same library, and the two PROJ versions can diverge slightly:
 
 - **GeoBrix's GDAL** comes from the env wheel: GDAL 3.13.3, PROJ 9.9.0 and GEOS 3.15.0, in the
@@ -55,26 +55,27 @@ same library, and the two PROJ versions can diverge slightly:
 
 The two run side-by-side in the same JVM/Python process without
 conflict, because they're loaded from distinct paths. The cost is
-**CRS-catalog skew at the edges**: any EPSG code added or refined
-between PROJ 9.7.1 and 9.9.0 (newly-added projections, updated
-grid-shift definitions, transformation pipeline changes) may be
-interpreted slightly differently by a GeoBrix function vs. a DBR
+**CRS-catalog skew at the edges**. Any EPSG code added or refined
+between PROJ 9.7.1 and 9.9.0 may be interpreted slightly differently.
+The difference shows between a GeoBrix function and a DBR
 built-in operating on the same geometry.
+It covers newly-added projections, updated
+grid-shift definitions, and transformation pipeline changes.
 
 For the common EPSG codes you're most likely to use day-to-day —
 `EPSG:4326`, `EPSG:3857`, `EPSG:27700`, the UTM zones — this is
 invisible. For freshly-added projections or very precise datum
 transformations, it may surface.
 
-If you run into a CRS-related discrepancy between a GeoBrix function
+If you find a CRS-related discrepancy between a GeoBrix function
 and a DBR `ST_*` built-in on the same input, please
-[file an issue](https://github.com/databrickslabs/geobrix/issues) with
-the EPSG code and a minimal repro — that's the signal we'd use to
+[file an issue](https://github.com/databrickslabs/geobrix/issues).
+Include the EPSG code and a minimal repro. That is the signal we would use to
 decide whether GeoBrix should follow DBR's PROJ version.
 
 ## Compute Requirements
 
-The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them — it runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
+The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (the env wheel for the runtime, e.g. `geobrix-<version>+env6`, with its own GDAL) has none of them. It runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
 
 The heavyweight tier runs on **dedicated clusters**. Install the env wheel and the GeoBrix JAR as cluster libraries, or use the GeoBrix [DCS image](./installation/dcs.mdx). See [Choose an install path](./installation.mdx#choose-an-install-path).
 - **Not** compatible with Serverless compute (use the lightweight tier there)
@@ -91,7 +92,7 @@ Databricks Runtime:
 
 On Serverless compute most Spark properties are locked to platform defaults and cannot be
 overridden (for example, adaptive-query-execution toggles are ignored). Serverless does, however,
-accept a **limited set** of Spark configs — including **`spark.sql.files.maxPartitionBytes`**, which
+accept a **limited set** of Spark configs. These include **`spark.sql.files.maxPartitionBytes`**, which
 you can tune down (e.g. `"32m"`) to reduce the rows/bytes per partition on file and Delta scans. This
 is a useful lever for controlling memory per task in decode-heavy pipelines (each partition holds
 fewer files/rows, so each task decodes less at once). See the Databricks docs on
@@ -106,15 +107,15 @@ GeoBrix reads, registers and writes [Zarr stores](./api/zarr-stores) within thes
 - **Runtimes.** Databricks Runtime 19 and Serverless environment 6 (Python 3.12), in the lightweight tier only.
   Databricks Runtime 17.3 and 18 and Serverless environment 5 are not supported. The heavyweight tier reads
   Zarr data only as materialized GeoBrix tiles.
-- **Data types.** Numeric types and CF times. Strings and objects are not supported: an array GeoBrix cannot
-  decode is left out of reads, and a complex array cannot be read as a table (a table has no column for
-  complex numbers; read it as blocks).
+- **Data types.** Numeric types and CF times. Strings and objects are not supported. An array GeoBrix cannot
+  decode is left out of reads. A complex array cannot be read as a table, because a table has no column for
+  complex numbers. Read it as blocks.
 - **Tiles.** `output="tiles"` needs the coordinates to form a regular grid. Read an irregular or curvilinear
   grid as blocks or a table.
 - **Codecs.** The codecs that zarr-python, numcodecs and zarrs can decode. Writes use `zstd` and `crc32c`
   unless you pass `codecs`. A Zarr v3 array that has any codec beside `sharding_indexed` in its own codec list
-  (a transpose before it, a compressor after it) is not supported: registering the store records the array as
-  one GeoBrix cannot decode, a default read leaves it out with a warning, and naming it in `variables` raises
+  (a transpose before it, a compressor after it) is not supported. Registering the store records the array as
+  one GeoBrix cannot decode. A default read leaves it out with a warning, and naming it in `variables` raises
   `ZarrUnsupported`. Rewrite the array so that `sharding_indexed` is its only outer codec, with compression and
   other codecs inside it. zarr-python does not write that layout.
 - **Reading with GDAL.** A GDAL before 3.13 cannot read sharded Zarr v3 stores, or ones that use the `crc32c`

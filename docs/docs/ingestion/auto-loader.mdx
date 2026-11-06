@@ -10,8 +10,8 @@ import autoLoaderExamples from '!!raw-loader!../../tests/python/ingestion/auto_l
 
 _Since:_ **v0.6.0** · _(light-only — no heavyweight tier)_
 
-`declare_ingest` declares a complete ingestion flow in a Lakeflow pipeline: Auto Loader watches a
-Volume folder, each new or changed file is read with the GeoBrix reader you name, and the rows land
+`declare_ingest` declares a complete ingestion flow in a Lakeflow pipeline. Auto Loader watches a
+Volume folder, and the GeoBrix reader you name reads each new or changed file. The rows land
 in a table. `on_change` decides what happens when a file is overwritten: keep every version
 (`scd2`, the default), keep only the latest content (`replace`), or append every delivery
 (`append`). Data that cannot be read is set aside in a bad-records table, and the rest is written
@@ -73,9 +73,9 @@ that are spread across tasks, and only the latest content of each file is kept:
   `rsync -t` can give new content an older time than the version it replaces (see
   [Query the latest content](#query-the-latest-content-and-past-content)).
 - **Bad data is set aside, not fatal.** By default (`on_error="quarantine"`) a file, a feature, a
-  raster window or a run of LiDAR points that cannot be read goes to `<t>_bad_records`, and the
+  raster window or a run of LiDAR points that cannot be read goes to `<t>_bad_records`. The
   rest of the micro-batch is written. Each micro-batch is staged in a hidden folder under
-  `scratch_dir` (default `source_dir`), so the pipeline must be able to write there; landing folders
+  `scratch_dir` (default `source_dir`), so the pipeline must be able to write there. Landing folders
   are often read-only to the pipeline, so set `scratch_dir` to a Volume folder it can write. See
   [Unreadable data](#unreadable-data).
 :::
@@ -101,9 +101,9 @@ declare_ingest(target, source_dir, format, options=None, *,
 | `on_error` | `"quarantine"` | What to do with data that cannot be read: `"quarantine"` sets it aside in `<t>_bad_records` and writes the rest; `"fail"` fails the update. See [Unreadable data](#unreadable-data). |
 | `scratch_dir` | `source_dir` | Volume folder (`/Volumes/...`, shared by every node) where `on_error="quarantine"` stages each micro-batch, in a hidden `.gbx_scratch` folder that is removed when the micro-batch ends. The pipeline must be able to write it. Set it when the landing folder is read-only to the pipeline. |
 
-Auto Loader delivers every file under `source_dir` on its own, so the file pattern must leave out
+Auto Loader delivers every file under `source_dir` on its own. The file pattern must therefore leave out
 the other files of a multi-file dataset: a shapefile's sidecars, or the files inside an unzipped
-`.gdb` folder. The format's default pattern does; a `glob` you set replaces it, so for shapefiles
+`.gdb` folder. The format's default pattern does. A `glob` you set replaces it, so for shapefiles
 end it in `.shp`. See [Default file patterns](./read-paths#default-file-patterns).
 
 ## Choosing `on_change`
@@ -121,8 +121,8 @@ place is delivered again. `on_change` decides what the table does with that seco
 | **Use when** | You need the latest content and a record of what it used to be | Only the latest content matters | You want a log of every delivery |
 
 Here `<t>` is the last part of `target`. `scd2` and `replace` compare a SHA-256 hash of the file's
-bytes (`_source_hash`) with what is already stored, so a file that is re-delivered without a content
-change is recognized and skipped. `append` does not hash anything.
+bytes (`_source_hash`) with what is already stored. A file that is re-delivered without a content
+change is therefore recognized and skipped. `append` does not hash anything.
 
 Each mode declares these objects in the catalog and schema of `target`:
 
@@ -134,8 +134,8 @@ Each mode declares these objects in the catalog and schema of `target`:
 | `<target>_current`: a view of the rows for each file's latest version | yes | no | no |
 | `<t>_bad_records`: one row per bad record, created when the first one is found | yes | yes | no |
 
-In `scd2` and `replace` the rows table is written by the pipeline's batch sink: it is a regular
-Delta table, created on the first update and clustered by `_source_path`, not a dataset the
+In `scd2` and `replace` the rows table is written by the pipeline's batch sink. It is a regular
+Delta table, created on the first update and clustered by `_source_path`. It is not a dataset the
 pipeline manages.
 
 ## Query the latest content and past content
@@ -143,9 +143,9 @@ pipeline manages.
 `<target>_current` returns the rows of each file's latest readable version: the newest version
 whose content has rows in the table. It is a plain view that scans the rows table, so filter it by
 `_source_path` to look up one file quickly. A delivery that could not be read is still recorded as the
-file's newest version in `<t>_file_versions`, but it does not hide the content that was read before
+file's newest version in `<t>_file_versions`. It does not hide the content that was read before
 it (see [Unreadable data](#unreadable-data)). To read what was current at an earlier time, join the
-rows to the versions table on both `_source_path` and `_source_hash`, and keep the version whose
+rows to the versions table on both `_source_path` and `_source_hash`. Keep the version whose
 interval contains the time:
 
 <CodeFromTest
@@ -163,7 +163,7 @@ file's content could not be read, the query returns no rows for that file.
 
 "Current" means the version with the newest modification time. A copy that keeps or backdates the
 source's modification time (`cp -p`, `rsync -t`) can give an overwrite an older time than the
-version it replaces; that content is then recorded as history and does not become current. Copy
+version it replaces. That content is then recorded as history and does not become current. Copy
 without preserving times when you overwrite a file.
 
 ## Unreadable data
@@ -175,31 +175,30 @@ without preserving times when you overwrite a file.
 | `"quarantine"` (default) | Each file is read on its own, and what cannot be read is a **bad record**: it is written to `<t>_bad_records`, then the rest of the micro-batch is written to the rows table. The update succeeds. |
 | `"fail"` | The first error fails the update, with an error that names the file. |
 
-A bad record is the smallest part of a file its reader can set aside: a whole file that cannot be
-opened, or whose columns differ from the table schema; a feature whose geometry bytes are not
-readable, or whose text is not valid UTF-8; a GeoJSONSeq line that is not JSON; a raster tile
-window; a run of LiDAR points; a PMTiles tile; a NetCDF variable or slice. Rows read from a file
+A bad record is the smallest part of a file its reader can set aside. It can be a whole file that cannot be
+opened, or whose columns differ from the table schema. It can be a feature whose geometry bytes are not
+readable, or whose text is not valid UTF-8. It can be a GeoJSONSeq line that is not JSON. It can also be a raster tile
+window, a run of LiDAR points, a PMTiles tile, or a NetCDF variable or slice. Rows read from a file
 before an error stay in the table. The [Unreadable files](./read-paths#unreadable-files) reference
 lists what each format sets aside, and the damage no reader can detect.
 
-A NULL or empty geometry is data, not a bad record: a feature without a location
+A NULL or empty geometry is data, not a bad record. A feature without a location
 (`"geometry": null` in GeoJSON) or a `POINT EMPTY` is written like any other row. GDAL also returns
 NULL for a geometry it cannot decode (an unknown geometry type, unreadable coordinates, a damaged
-GeoPackage or shapefile record), so those rows are written too. To watch for them, query the
+GeoPackage or shapefile record). Those rows are therefore written too. To watch for them, query the
 geometry column with `IS NULL` (it is `geom_0` for GeoJSON) and `ST_IsEmpty`. Curves and
 surfaces (`CircularString`, `CompoundCurve`, `CurvePolygon`, `MultiCurve`, `MultiSurface`,
 `PolyhedralSurface`, `TIN`, `Triangle`) are data too.
 
 Errors of the environment are not bad data either. Out of memory, a missing module (such as a LAZ
-decompression backend), an I/O error of the Volume (retried first), and an image too large to read
-whole in `exif_gbx` `qc` mode fail the micro-batch, so Spark retries the task or the update fails
-with that error, and no bad record is written for them.
+decompression backend), and an I/O error of the Volume (retried first) fail the micro-batch. So does an image too large to read
+whole in `exif_gbx` `qc` mode. Spark then retries the task, or the update fails
+with that error. No bad record is written for them.
 
 :::caution Other damage to a LAZ file can still stop the worker
-A LAZ file whose chunk table or LASzip record is implausible or cannot be decoded, or (point
-formats with GPS time) whose compressed points hold a run of `0xFF` bytes, is set aside before it
-is decoded. Other damage, inside the compressed points or in a chunk table that is wrong but
-plausible, still reaches the native LAZ decoder (`lazrs`), and can crash it and end the worker
+A LAZ file is set aside before it is decoded when its chunk table or LASzip record is implausible or cannot be decoded. The same holds when (point
+formats with GPS time) its compressed points hold a run of `0xFF` bytes. Other damage, inside the compressed points or in a chunk table that is wrong but
+plausible, still reaches the native LAZ decoder (`lazrs`). It can crash the decoder and end the worker
 process. A crash cannot be caught, so the file is not set aside: the task fails, Spark retries it,
 and then the update fails. Remove the file or replace it with a readable copy to continue.
 :::
@@ -244,7 +243,7 @@ found:
 
 - **A file with bad records still has its version.** Under `scd2` the delivery is recorded in
   `<t>_file_versions` like any other. When part of a file's new content was set aside, the rows
-  that were read are written under the new hash, and that version is current. When all of it was
+  that were read are written under the new hash. That version is current. When all of it was
   set aside, the version has no rows, so `<target>_current` keeps showing the file's last readable
   content, and `<t>_bad_records` explains the empty version. Removing the bad file keeps it that
   way. The same holds for a file overwritten with content that has no rows (an emptied file):
@@ -253,22 +252,22 @@ found:
   file's earlier rows with the rows that were read. A delivery set aside entirely (a
   `NothingReadable` record) leaves the file's earlier rows in place.
 - **The same bad bytes are not read twice.** A re-delivery with the same content is skipped when it
-  has rows in the table, or when it was set aside entirely: it would be set aside again. A
+  has rows in the table, or when it was set aside entirely. It would be set aside again. A
   re-delivery with new content is read.
-- **Each micro-batch is staged in `scratch_dir`.** The files are read once: the rows go to a
+- **Each micro-batch is staged in `scratch_dir`.** The files are read once. The rows go to a
   hidden `.gbx_scratch` folder under `scratch_dir` (default `source_dir`), in a subfolder of its own
-  for each target table, while the bad records are collected there. Then the bad records are
+  for each target table. The bad records are collected there. Then the bad records are
   appended to `<t>_bad_records`, then the rows to the table, and the folder is removed. A bad record
-  already in the table is not appended again, so a micro-batch that fails between the two writes
-  and is retried neither loses nor repeats one. A staging folder left by a killed micro-batch is
-  removed a day later, by the next micro-batch of the same table; pipelines that share a
+  already in the table is not appended again. A micro-batch that fails between the two writes
+  and is retried therefore neither loses nor repeats one. A staging folder left by a killed micro-batch is
+  removed a day later, by the next micro-batch of the same table. Pipelines that share a
   `scratch_dir` never touch each other's folders. When the pipeline cannot write to
   `scratch_dir`, the micro-batch fails with an error that says so.
 - **To read a file that was set aside again**, for example after fixing a reader option, delete
   its `NothingReadable` rows from `<t>_bad_records` (`DELETE FROM ... WHERE _source_path = '...'
   AND error_class = 'NothingReadable'`), then touch the file or deliver it again. Until then an
   identical delivery is skipped. A delivery that was partly read has rows under its
-  `_source_hash`, so the same bytes delivered again are skipped as stored: to read it again,
+  `_source_hash`, so the same bytes delivered again are skipped as stored. To read it again,
   delete its rows for that hash from the table (`DELETE FROM ... WHERE _source_path = '...' AND
   _source_hash = '...'`) before you touch or deliver it, or deliver changed content.
 - **`append` has no bad-records table.** Its rows table is a plain streaming table, so bad records
@@ -278,11 +277,11 @@ found:
 ### With `on_error="fail"`
 
 The update fails with the reader's error, which names the file. Nothing from that micro-batch is
-written to the rows table, and the flow's progress is not saved, so the next update reads the same
+written to the rows table, and the flow's progress is not saved. The next update reads the same
 files again and fails the same way until the file is dealt with. To recover, remove the file or
 replace it with a readable copy, then start an update. A file deleted before it is read is skipped
-with a warning (see [Files deleted before they are read](./read-paths#files-deleted-before-they-are-read));
-a replacement is delivered again and handled like any overwritten file (see
+with a warning (see [Files deleted before they are read](./read-paths#files-deleted-before-they-are-read)).
+A replacement is delivered again and handled like any overwritten file (see
 [Choosing `on_change`](#choosing-on_change)). The [Lakeflow connector](./lakeflow-connector)
 always reads this way.
 
@@ -295,13 +294,13 @@ always reads this way.
 - **A file modified after it was hashed is skipped** (`scd2` and `replace`) until its newer delivery
   arrives, so a row's `_source_hash` describes the content it was read from. Before reading, each
   file must still have its delivered size and a modification time within one second of the
-  delivered one. A file overwritten in the instant between that check and the read, or rewritten
-  with the same size within that second, can still be stored under the earlier hash; its next
+  delivered one. A file can still be stored under the earlier hash if it is overwritten in the instant between that check and the read.
+  The same holds if it is rewritten with the same size within that second. Its next
   delivery is written as usual (and under `scd2` recorded as the current version).
 - **A file deleted before it is read is skipped** with a warning (all modes), and Auto Loader counts
   it as processed. Deleting a file does not remove rows that were already written, with one rare
-  exception: under `replace`, a file deleted in the instant between that check and the read is
-  still part of the micro-batch's `replaceWhere`, so its earlier rows are removed and no new rows
+  exception. Under `replace`, a file deleted in the instant between that check and the read is
+  still part of the micro-batch's `replaceWhere`. Its earlier rows are therefore removed, and no new rows
   are written for it.
 
 ## See also

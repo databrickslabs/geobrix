@@ -93,7 +93,7 @@ Measured on 1,000 raster tiles or 100k vector features; times are whole-job wall
 | **Directory** | `list_files` — enumerate (metadata only) | DBR 18+ | ~10 s / 10k *(enumerate)* | ~same | used when `read_files` is unavailable |
 | **Directory** | FUSE walk + **per-tile open** (`raster_gbx` DataSource) | all | **~30 s / 1k** ⚠️ | ~20 s / 1k | fallback tile read (no FILE tier); slower than the Delta-table path on all runtimes |
 
-The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing — the Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic and **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
+The `read_files`/`list_files` rows time the **listing** step (per 10k files, comparable, metadata-bound). The Delta-scan and DataSource rows time the actual tile **read/open** (per 1k tiles). The performance gap is the per-tile open/decode cost, not listing. The Delta-scan FILE-column-table path (~2 s) beats the DataSource directory scan by ~10× on classic. It beats it by **~16–17× on Serverless** (~2 s vs. ~30 s per 1k tiles). **On Serverless, prefer reading from a FILE-column table (Delta scan).** See [Serverless & Memory](./serverless-and-memory) for the connect-aware stream caps (64 MiB on Serverless/Connect, 256 MiB on classic) and a full guide to memory-safe pipelines.
 
 The **no-gating rule**: `access="auto"` on readers and `file_mode="auto"` on writers silently
 downgrade to the best available tier and never error. Explicitly requesting
@@ -110,15 +110,15 @@ The resolver checks the tier and picks a strategy:
 
 - **FILE-capable runtime (DBR 13.3+):** routes to the FILE API. Files at or under
   `GBX_STREAM_MAX_BYTES` (default **64 MiB on Serverless/Connect**, 256 MiB on classic)
-  open a byte-range **stream** — one round-trip, no FUSE, no local copy, and the fastest
-  path for typical tile sizes. Files over the cap fall through to `as_local_file()` — a
-  lazy local-file reference backed by the FILE handle — which pages bytes from the Volume
+  open a byte-range **stream**. The stream is one round-trip, no FUSE, no local copy, and the fastest
+  path for typical tile sizes. Files over the cap fall through to `as_local_file()`, a
+  lazy local-file reference backed by the FILE handle. It pages bytes from the Volume
   on demand and is a **memory-safety mechanism, not a performance optimization**. A blanket
   FUSE-direct path for small files is slower, not faster; the streaming path is preferred
   whenever the file fits in the cap. Open dataset handles are held in a per-partition LRU
   cache keyed by source path, amortising the open cost across all windows of the same source.
 - **FUSE fallback (OSS / DBR < 13):** resolves to the bare `/Volumes/…` path and uses a
-  probe-then-stage strategy — tries random-access directly; falls back to a sequential
+  probe-then-stage strategy. It tries random-access directly and falls back to a sequential
   copy only if the probe fails.
 
 ### Write committer
@@ -151,8 +151,8 @@ The `layout` parameter controls row ordering in the output Delta table:
 ### File enumeration
 
 `enumerate_files(path, *, recursive=True, include_hidden=False, extensions=None, path_glob_filter=None)`
-lists files in a directory and returns a Spark DataFrame (FILE-capable tiers) or a Python list (FUSE tier),
-with columns `path`, `size`, and `file` (a FILE reference when available, `None` on FUSE).
+lists files in a directory and returns a Spark DataFrame (FILE-capable tiers) or a Python list (FUSE tier).
+The result has columns `path`, `size`, and `file` (a FILE reference when available, `None` on FUSE).
 
 By default, files whose names start with `_` or `.` (Spark/Hadoop metadata files such as
 `_SUCCESS`, `_committed_*`, `.crc`) are **skipped**. Pass `include_hidden=True` to include them.
@@ -187,7 +187,7 @@ on it. A reader plans from the table rather than from a directory listing, so it
 them. The table has versions that you can read as they were: `versionAsOf` and `timestampAsOf` on
 `read_tiles_table`, `version_as_of` and `timestamp_as_of` on [`gbx_zarr_read`](./readers/zarr#choosing-the-source).
 
-What differs is who looks after the files, and a Zarr store comes in two kinds: one you create, whose
+What differs is who looks after the files. A Zarr store comes in two kinds: one you create, whose
 files GeoBrix writes, and one you register in place, whose files other tools own.
 
 | | FILE-column table or tile index | Zarr store you create | Zarr store you register |

@@ -6213,6 +6213,22 @@ def _table_tile(row, fn_name, columns):
     return tile
 
 
+def _refuse_serverless_partition_by(fn_name, agg_name):
+    """Raise on Serverless: its Python table-function engine (`_udtf.py`, `_get_table_arg`) raises an opaque
+    `IndexError: list index out of range` on the second row a task passes to ANY `TABLE(...) PARTITION BY` function
+    (measured on environments 6 with a plain pyspark UDTF, so not a GeoBrix fault). The aggregate is the
+    Serverless form of the same result; a dedicated or standard cluster runs the table function.
+    """
+    from databricks.labs.gbx.manager.capabilities import is_serverless
+
+    if is_serverless():
+        raise RuntimeError(
+            f"{fn_name}: Serverless cannot run a table function over TABLE(...) PARTITION BY "
+            "(its Python engine fails with IndexError in _udtf.py _get_table_arg once a task holds more than one row). "
+            f"Fix: call {agg_name} on Serverless, or run {fn_name} on a dedicated or standard cluster."
+        )
+
+
 @udtf(returnType="key string, raster binary")
 class _RstMergeTvf:
     """`gbx_rst_merge_tvf`: the partition's tiles merged into one mosaic (the table function of `gbx_rst_merge_agg`)."""
@@ -6220,6 +6236,7 @@ class _RstMergeTvf:
     def __init__(self):
         from databricks.labs.gbx.pyrx import _env
 
+        _refuse_serverless_partition_by("gbx_rst_merge_tvf", "gbx_rst_merge_agg")
         _env.configure_gdal_env()
         self.key, self.rasters, self.rows = None, [], 0
 
@@ -6250,6 +6267,9 @@ class _RstBngRasterizeTvf:
     def __init__(self):
         from databricks.labs.gbx.pyrx import _env
 
+        _refuse_serverless_partition_by(
+            "gbx_rst_bng_rasterize_tvf", "gbx_rst_bng_rasterize_agg"
+        )
         _env.configure_gdal_env()
         self.key, self.best, self.canvas, self.rows = None, {}, None, 0
 

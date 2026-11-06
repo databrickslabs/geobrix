@@ -194,7 +194,7 @@ For large groups, two table functions stream the group one row at a time. They r
 - `gbx_rst_merge_tvf` merges each key's tiles into one mosaic.
 - `gbx_rst_bng_rasterize_tvf` burns each key's BNG cells onto one canvas.
 
-Both need less memory than the grouped aggregate and produce the same pixels. A key whose mosaic is too large to build raises with the VRT-mosaic `Fix:`.
+Both need less memory than the grouped aggregate and produce the same pixels. Neither runs on Serverless, whose table-function engine fails `PARTITION BY` once a task holds more than one row: call the aggregate there. A key whose mosaic is too large to build raises with the VRT-mosaic `Fix:`.
 
 Some aggregates have no twin. They are session aggregates, called with `GROUP BY`:
 

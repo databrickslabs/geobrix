@@ -953,6 +953,31 @@ def test_a_table_function_raises_when_a_partition_holds_two_keys(spark):
         ).collect()
 
 
+@pytest.mark.parametrize(
+    "cls_name,agg",
+    [
+        ("_RstMergeTvf", "gbx_rst_merge_agg"),
+        ("_RstBngRasterizeTvf", "gbx_rst_bng_rasterize_agg"),
+    ],
+)
+def test_a_table_function_on_serverless_names_the_aggregate_not_an_index_error(
+    monkeypatch, cls_name, agg
+):
+    """Serverless's Python table-function engine fails `PARTITION BY` with `IndexError` on a task's second row (a
+    plain pyspark UDTF fails the same way there), so the function says so, with the Fix, instead.
+    """
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    cls = getattr(prx, cls_name).func
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.4.1")
+    with pytest.raises(
+        RuntimeError, match=rf"Serverless.*Fix: call {agg} on Serverless"
+    ):
+        cls()
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "19.0")
+    cls()  # a dedicated or standard cluster builds it
+
+
 def test_a_binary_tile_column_of_a_table_function_raises_with_the_fix(spark):
     from databricks.labs.gbx import register
 

@@ -1160,8 +1160,17 @@ def _a_light(fn, shapes, inputs):
             out.append(
                 _a(fn, "L3", "tree" + sfx, inp, shapes["tree"], setup="setup_a_probes")
             )
+        # Serverless's table-function engine fails PARTITION BY on a task's second row (the function says so)
         out.append(
-            _a(fn, "L3", "tvf" + sfx, inp, shapes["tvf"], setup="setup_a_probes")
+            _a(
+                fn,
+                "L3",
+                "tvf" + sfx,
+                inp,
+                shapes["tvf"],
+                setup="setup_a_probes",
+                computes=("dedicated", "standard"),
+            )
         )
     return out
 

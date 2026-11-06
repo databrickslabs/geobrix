@@ -3258,6 +3258,18 @@ else:
             if not _zcfg.serverless:  # a classic session: the task slots, and the Spark UI's worker seconds and peak memory
                 _zl["cores"] = int(spark.sparkContext.defaultParallelism)
                 _zl["attribution"] = True
+                from databricks.labs.gbx.zarr import _read as _zr
+                _zconf = {}
+                for _k in ("spark.default.parallelism", "spark.executor.cores", "spark.executor.instances", "spark.master"):
+                    try:
+                        _zconf[_k] = spark.conf.get(_k, None)
+                    except Exception as _e:
+                        _zconf[_k] = f"unreadable: {type(_e).__name__}"
+                _zconf.update(planner_slots=_zr._task_slots(spark), default_parallelism=_zl["cores"])
+                print("ZARR-LADDER slots", _zconf, flush=True)
+                with open(f"{OUT}/zarr_ladder_slots.json", "w") as _zf:
+                    import json as _zj0
+                    _zj0.dump(_zconf, _zf)
             _zrows += _zlb.run_ladder(spark, _zlb.LadderConfig(**_zl), sink=_zsink, collect=_zlm)
             from databricks.labs.gbx.bench import zarr_ladder_write as _zlw
             import json as _zj

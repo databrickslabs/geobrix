@@ -5,9 +5,9 @@ title: Clipping - xView
 
 # Clipping - xView — Per-Object Raster Clipping with GeoBrix
 
-An end-to-end example showing how to load high-resolution aerial GeoTIFFs from the [xView Detection Challenge](https://challenge.xviewdataset.org/) dataset into Lakehouse tables and clip rasters to labeled objects in the accompanying GeoJSON, using GeoBrix RasterX together with Databricks built-in Spatial SQL functions.
+An end-to-end example showing how to load high-resolution aerial GeoTIFFs from the [xView Detection Challenge](https://challenge.xviewdataset.org/) dataset into Lakehouse tables. It also shows how to clip rasters to labeled objects in the accompanying GeoJSON. It uses GeoBrix RasterX together with Databricks built-in Spatial SQL functions.
 
-The single notebook moves from raw xView TGZ archives → a raster table loaded by the built-in `gtiff` reader → GeoJSON-derived object table (EWKT with SRID) → per-object clipped tiles, written back to a Unity Catalog Volume as individual TIFs by the built-in `gtiff` writer.
+The single notebook starts from raw xView TGZ archives. It loads a raster table with the built-in `gtiff` reader. It builds a GeoJSON-derived object table (EWKT with SRID). It then clips per-object tiles. The built-in `gtiff` writer writes the clipped tiles back to a Unity Catalog Volume as individual TIFs.
 
 ![xView — clip aerial rasters to labeled objects](../../../resources/images/diagrams/xview/xview-clipping.png)
 
@@ -68,7 +68,7 @@ gtiff writer (nameCol)
 
 - **GeoBrix RasterX** (`rx.rst_*`): `rst_boundingbox`, `rst_srid`, `rst_summary`, `rst_clip` (with EWKT input).
 - **Databricks built-in ST** (`DBF.*`): `st_geomfromgeojson`, `st_asewkt` — used to emit each feature's polygon as `SRID=4326;POLYGON(...)` so that the SRID travels with the WKT into `rst_clip`.
-- **Readers**: the GeoBrix `gtiff` reader (`format("gtiff_gbx")`) loads each `.tif` straight into a `tile` column — the default `sizeInMB=-1` means no windowed split, i.e. one whole-image tile per file, so every label clips against the single tile that contains it; `json` (multiline) reads the xView labels GeoJSON. Readers/writers are installed by `register(spark)`.
+- **Readers**: the GeoBrix `gtiff` reader (`format("gtiff_gbx")`) loads each `.tif` straight into a `tile` column. The default `sizeInMB=-1` means no windowed split. Each file is therefore one whole-image tile, so every label clips against the single tile that contains it. The `json` (multiline) reader reads the xView labels GeoJSON. `register(spark)` installs the readers and writers.
 - **Writers**: the GeoBrix `gtiff` writer (`format("gtiff_gbx")`) materializes clipped TIFs as individual files on the Volume; `nameCol` points at the `source` column for deterministic `<index_right>_<type_id>_<feature_id>.tif` names.
 
 ---
@@ -77,7 +77,7 @@ gtiff writer (nameCol)
 
 - **xView is session-signed**: download links from `challenge.xviewdataset.org` are time-limited. If `download_extract` hangs or returns tiny files, regenerate your links and re-run — the helper cleans `/tmp` on each run, so it is safe to retry.
 - **Pass `[E]WKT` strings or `[E]WKB` bytes — not native geometry columns**: `rst_clip` expects a `String`/`Binary` column. Do **not** pass `st_geomfromtext(...)` / `st_geomfromwkb(...)` / DBR geometry or geography types directly. Serialize with `st_asewkt` (preferred — carries SRID) or `st_aswkb` / `st_asewkb` first.
-- **Prefer EWKT/EWKB for `rst_clip` (SRID handling)**: **EWKT/EWKB is the recommended input** because the SRID travels with the geometry, so `rst_clip` reprojects the cutline to the raster CRS automatically when they differ. Plain **WKT**/**WKB** (no SRID) is assumed to already be in the raster's CRS and is **not reprojected** — silently wrong if it isn't. xView imagery is EPSG:4326, and `st_asewkt(st_geomfromgeojson(...))` emits `SRID=4326;...`, so the two match for this dataset — but EWKT keeps the pipeline correct when sources differ.
+- **Prefer EWKT/EWKB for `rst_clip` (SRID handling)**: **EWKT/EWKB is the recommended input** because the SRID travels with the geometry. So `rst_clip` reprojects the cutline to the raster CRS automatically when they differ. Plain **WKT**/**WKB** (no SRID) is assumed to already be in the raster's CRS and is **not reprojected** — silently wrong if it isn't. xView imagery is EPSG:4326, and `st_asewkt(st_geomfromgeojson(...))` emits `SRID=4326;...`, so the two match for this dataset — but EWKT keeps the pipeline correct when sources differ.
 - **`gtiff` writer enforces an exact `(source, tile)` schema**: to control output filenames, set `nameCol` and put the desired basename in `source` (the writer emits `<source>.tif`). Drop any extra columns down to exactly `source` + `tile` before `.save(...)` — extras or a missing column both fail.
 - **Filter before clipping for demo runs**: `xview_object` contains hundreds of thousands of features across 60+ classes. The notebook filters to `type_name = 'Yacht'` (type_id=50) before the join + clip so the demo finishes quickly. Remove the filter for a full materialization.
 - **Class label dictionary is inline**: `xv_type_dict` is copied from the [xView baseline repo](https://github.com/DIUx-xView/xView1_baseline/blob/master/xview_class_labels.txt); update it if xView publishes new classes.

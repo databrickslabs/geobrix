@@ -5,11 +5,11 @@ title: Helios — Tiling to PMTiles
 
 # Helios — Distributed Tiling to PMTiles
 
-A four-notebook series that takes one San Francisco bounding box and turns it into self-contained [PMTiles](https://protomaps.com/docs/pmtiles) archives — one per data modality — then shows how to shard a layer into a multi-archive mosaic for web-scale delivery, using GeoBrix on Databricks.
+A four-notebook series that takes one San Francisco bounding box and turns it into self-contained [PMTiles](https://protomaps.com/docs/pmtiles) archives, one per data modality. It then shows how to shard a layer into a multi-archive mosaic for web-scale delivery. The series uses GeoBrix on Databricks.
 
-The notebooks follow a solar site-selection narrative: identify candidate rooftops (vector, NB01), overlay an aerial basemap for visual validation (raster, NB02), and layer terrain-derived slope, aspect, and hillshade to score each candidate by sun exposure (elevation, NB03). A final notebook re-publishes the vector layer as a distributed, sharded PMTiles mosaic — many archives plus a catalog and manifest — for web-scale delivery (NB04). The single-archive outputs feed a single `plot_pmtiles` / `plot_cog` viewer, giving a single-browser-tab deliverable with no tile server.
+The notebooks follow a solar site-selection narrative. First, they identify candidate rooftops (vector, NB01) and overlay an aerial basemap for visual validation (raster, NB02). Then they layer terrain-derived slope, aspect, and hillshade to score each candidate by sun exposure (elevation, NB03). A final notebook re-publishes the vector layer as a distributed, sharded PMTiles mosaic — many archives plus a catalog and manifest — for web-scale delivery (NB04). The single-archive outputs feed a single `plot_pmtiles` / `plot_cog` viewer, giving a single-browser-tab deliverable with no tile server.
 
-This series is an on-ramp to Databricks-native spatial: NB01 uses the built-in `st_area` / `st_centroid` and `h3_longlatash3` functions directly on the WKB column for roof metrics and H3 density; NB03 bins slope and aspect into H3 cells via `gbx_rst_h3_rastertogridavg` and joins them with native Databricks SQL to produce a `solar_score` — no format conversion required at any step.
+This series is an on-ramp to Databricks-native spatial. NB01 uses the built-in `st_area` / `st_centroid` and `h3_longlatash3` functions directly on the WKB column for roof metrics and H3 density. NB03 bins slope and aspect into H3 cells via `gbx_rst_h3_rastertogridavg`. It joins them with native Databricks SQL to produce a `solar_score`. No format conversion is required at any step.
 
 :::tip View on GitHub
 **[examples/notebooks/helios](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/helios)** — download the folder and import `config_nb.ipynb` and the four numbered notebooks into your Databricks workspace to run.
@@ -20,7 +20,7 @@ The series uses the `rasterx` and `vectorx` Python API plus the `geobrix[stac,vi
 :::
 
 :::note PMTiles viewer — inline, no tile server
-`plot_pmtiles` (from [`gbx.vizx`](../api/vizx)) renders a `.pmtiles` archive directly in the notebook by embedding the archive as base64 in a self-contained MapLibre GL JS page (FileSource; in a Databricks notebook an archive over ~4–5 MB — after the cell-output cap and `displayHTML`'s ~2–3× inflation — falls back to a static thumbnail). `plot_cog` renders a Cloud-Optimized GeoTIFF over a contextily basemap as a static matplotlib figure. See the [PMTiles function reference](../api/pmtiles-functions) for the archive aggregator and writer.
+`plot_pmtiles` (from [`gbx.vizx`](../api/vizx)) renders a `.pmtiles` archive directly in the notebook by embedding the archive as base64 in a self-contained MapLibre GL JS page (FileSource). In a Databricks notebook, an archive over ~4–5 MB falls back to a static thumbnail. The cell-output cap and `displayHTML`'s ~2–3× inflation set this limit. `plot_cog` renders a Cloud-Optimized GeoTIFF over a contextily basemap as a static matplotlib figure. See the [PMTiles function reference](../api/pmtiles-functions) for the archive aggregator and writer.
 
 The notebooks ship with `INTERACTIVE_PLOTS = False` so the committed `.ipynb` renders fast, GitHub-compatible static maps. Set `INTERACTIVE_PLOTS = True` in `config_nb` or in a cell right after `%run ./config_nb` for interactive MapLibre multi-layer maps.
 :::
@@ -41,7 +41,7 @@ The notebooks ship with `INTERACTIVE_PLOTS = False` so the committed `.ipynb` re
 
 ![Notebook 02 — NAIP aerial → Web Mercator → XYZ pyramid → PMTiles archive → plot_pmtiles](../../../resources/images/diagrams/helios/helios-02.png)
 
-- **Distributed Web Mercator reprojection** — `gbx_rst_to_webmercator` reprojects each NAIP scene across the cluster to the standard slippy-map CRS, scaling linearly with tile count rather than running serially on the driver.
+- **Distributed Web Mercator reprojection** — `gbx_rst_to_webmercator` reprojects each NAIP scene across the cluster to the standard slippy-map CRS. It scales linearly with tile count rather than running serially on the driver.
 - **Full-resolution XYZ pyramid** — `gbx_rst_xyzpyramid` generates all zoom levels in a single distributed pass, matching the zoom range of the vector layer in NB01.
 - **Raster PMTiles** — `gbx_pmtiles_agg` writes the XYZ tile set into `sf_naip.pmtiles`; `plot_pmtiles` renders it inline. With `INTERACTIVE_PLOTS = True`, `plot_interactive` layers the aerial basemap under the NB01 building footprints in a single MapLibre map (buildings layer degrades gracefully if NB01 has not run).
 
@@ -49,17 +49,17 @@ The notebooks ship with `INTERACTIVE_PLOTS = False` so the committed `.ipynb` re
 
 ![Notebook 03 — 3DEP DEM → COGs + STAC Delta → slope/aspect/hillshade → PMTiles → solar score per H3 cell](../../../resources/images/diagrams/helios/helios-03.png)
 
-- **`DemDownloader` → COG + STAC Delta catalog** — the `gbx.sample` `DemDownloader` stages a 3DEP DEM (windowed to the AOI), then `gbx_rst_cog_convert` converts it to a Cloud-Optimized GeoTIFF in a distributed pass; the resulting COG paths are written to a managed STAC Delta table for incremental updates and downstream notebook access.
+- **`DemDownloader` → COG + STAC Delta catalog** — the `gbx.sample` `DemDownloader` stages a 3DEP DEM (windowed to the AOI). Then `gbx_rst_cog_convert` converts it to a Cloud-Optimized GeoTIFF in a distributed pass. The notebook writes the resulting COG paths to a managed STAC Delta table for incremental updates and downstream notebook access.
 - **Terrain analytics at scale** — `gbx_rst_slope`, `gbx_rst_aspect`, and `gbx_rst_hillshade` derive terrain layers in parallel across all DEM tiles; `gbx_rst_xyzpyramid` + `gbx_pmtiles_agg` package the hillshade into `sf_hillshade.pmtiles`. With `INTERACTIVE_PLOTS = True`, `plot_interactive` layers the hillshade and the NB01 building footprints as PMTiles and the H3 `solar_score` as a grid layer — all in one MapLibre map.
-- **Databricks-native solar scoring** — `gbx_rst_h3_rastertogridavg` bins slope and aspect rasters into H3 cells; the resulting per-cell values are joined and scored with native Databricks SQL expressions to produce a `solar_score` column; `h3_centeraswkb` reconstructs geometry for map rendering — all without leaving the warehouse.
+- **Databricks-native solar scoring** — `gbx_rst_h3_rastertogridavg` bins slope and aspect rasters into H3 cells. Native Databricks SQL expressions join and score the resulting per-cell values to produce a `solar_score` column. The `h3_centeraswkb` function reconstructs geometry for map rendering. All of this happens without leaving the warehouse.
 
 ### 04 — Distributed Sharding & Mosaic
 
 ![Notebook 04 — MVT pyramid → shard by parent tile → per-shard PMTiles archives → mosaic catalog + manifest](../../../resources/images/diagrams/helios/helios-04.png)
 
-- **Spatial sharding into parallel work units** — each pyramid tile is assigned to a coarse parent tile (z11) via `shiftright(x, z-11)`, then `groupBy(shard).agg(gbx_pmtiles_agg(...))` fans archive packing out across the cluster — one `.pmtiles` per shard instead of one monolithic file. The SF AOI spans four z11 parent tiles, but only the three containing buildings produce an archive (the SW tile is open water) — shards form only where there is data.
-- **Shard catalog + mosaic manifest** — a `sf_building_shards` Delta table maps each shard key to its archive path and bounds (`pmtiles_info`), and a `mosaic.json` manifest lets a client discover and assemble the shards with no tile server.
-- **Web-scale delivery pattern** — buffering the source query while keeping output tiles non-overlapping across shards keeps boundaries clean and avoids double-rendering; the mosaic pattern scales a single AOI into the per-file size range that object stores and CDNs serve efficiently.
+- **Spatial sharding into parallel work units** — the notebook assigns each pyramid tile to a coarse parent tile (z11) via `shiftright(x, z-11)`. Then `groupBy(shard).agg(gbx_pmtiles_agg(...))` fans archive packing out across the cluster, with one `.pmtiles` per shard instead of one monolithic file. The SF AOI spans four z11 parent tiles. Only the three containing buildings produce an archive (the SW tile is open water). Shards form only where there is data.
+- **Shard catalog + mosaic manifest** — a `sf_building_shards` Delta table maps each shard key to its archive path and bounds (`pmtiles_info`). A `mosaic.json` manifest lets a client discover and assemble the shards with no tile server.
+- **Web-scale delivery pattern** — buffering the source query while keeping output tiles non-overlapping across shards keeps boundaries clean. It also avoids double-rendering. The mosaic pattern scales a single AOI into the per-file size range that object stores and CDNs serve efficiently.
 
 ---
 
@@ -131,8 +131,8 @@ sf_buildings.pmtiles   sf_naip.pmtiles              sf_hillshade.pmtiles
 ## Gotchas
 
 - **PMTiles is driver-side only.** `gbx_pmtiles_agg` produces the archive via a distributed reduce but the final file lands on the driver Volume path — it cannot be read back via `spark.read`. Use `pmtiles_info` / `plot_pmtiles` for inspection.
-- **`plot_pmtiles` base64 size guard.** The inline embed is bounded by the notebook cell-output cap (~10 MB default, 20 MB max), and `displayHTML` inflates the payload ~2–3× — so an archive over **~4–5 MB** falls back to a static thumbnail. Scope the AOI/zoom range, use `interactive_fit="downzoom"`, or stream from an `https://` URL if the archive exceeds the ceiling.
+- **`plot_pmtiles` base64 size guard.** The notebook cell-output cap bounds the inline embed (~10 MB default, 20 MB max). `displayHTML` inflates the payload ~2–3×. An archive over **~4–5 MB** therefore falls back to a static thumbnail. Scope the AOI/zoom range, use `interactive_fit="downzoom"`, or stream from an `https://` URL if the archive exceeds the ceiling.
 - **Overture cloud-path vs. HTTP-href.** `OvertureClient` first tries a direct cloud-storage path; if that is not reachable from the cluster network it falls back to an HTTP href. Classic clusters with S3 VPC endpoints reach the cloud path; Serverless always reaches the HTTP href.
 - **NAIP and 3DEP network reachability.** Both sources require outbound internet access via Planetary Computer and have no offline fallback — NB02 (`NaipDownloader`) and NB03 (`DemDownloader`) skip or error if the endpoint is unreachable.
 - **Repartition by column on Serverless.** A number-only `repartition(N)` is AQE-coalesced on Serverless. Always repartition by a data column (e.g., `repartition(N, "tile_x")`) before distributed UDF calls.
-- **Wheel install is a 2-step pattern.** `config_nb` installs the wheel with `--no-deps` first (to force fresh bytes), then reinstalls with `geobrix[stac,vizx]` (the env6 wheel, with the Overture CLI as a separate step) (to pull extras). A bare single-step `--no-deps` install drops the extras and causes `ModuleNotFoundError` at import.
+- **Wheel install is a 2-step pattern.** `config_nb` installs the wheel with `--no-deps` first (to force fresh bytes). It then reinstalls with `geobrix[stac,vizx]` (the env6 wheel, with the Overture CLI as a separate step) to pull extras. A bare single-step `--no-deps` install drops the extras and causes `ModuleNotFoundError` at import.

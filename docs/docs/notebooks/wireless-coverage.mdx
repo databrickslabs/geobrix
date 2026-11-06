@@ -10,10 +10,10 @@ import TabItem from '@theme/TabItem';
 # Wireless Coverage — LiDAR to Tower Siting
 
 Wireless Coverage turns a USGS 3DEP LiDAR point cloud over San Francisco into ranked candidate
-cell-tower sites, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks: LiDAR
-returns become DSM / DTM / CHM surfaces, the surfaces are indexed to H3, and exact H3
-line-of-sight viewsheds score each candidate site. It comes in two flavors: a **production-ready
-Lakeflow pipeline** that runs the whole flow as a scheduled job, and an **interactive notebook
+cell-tower sites, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks. LiDAR
+returns become DSM / DTM / CHM surfaces. The surfaces are indexed to H3. Exact H3
+line-of-sight viewsheds score each candidate site. It comes in two flavors. One is a **production-ready
+Lakeflow pipeline** that runs the whole flow as a scheduled job. The other is an **interactive notebook
 series** that walks through each step and the GeoBrix functions behind it.
 
 :::note Minimum GeoBrix version
@@ -28,17 +28,17 @@ series** that walks through each step and the GeoBrix functions behind it.
 
 ## Executed output — full San Francisco
 
-These screenshots are pulled from the executed [Notebook Series](?flavor=notebooks) run end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks ship the smaller Golden Gate Park demo (`DEMO=True`).
+These screenshots come from the executed [Notebook Series](?flavor=notebooks), run end to end over the whole San Francisco AOI (`DEMO=False`). The committed notebooks ship the smaller Golden Gate Park demo (`DEMO=True`).
 
-First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
+First, the surface stack over all of San Francisco: bare earth (DEM) beside the full surface (DSM). Buildings and canopy read as the difference between them:
 
 ![Full San Francisco — DEM (bare earth) vs DSM (surface: buildings + canopy) elevation bands at H3 resolution 10, side by side (Part 3a). The surface model rises above bare earth over downtown and the ridgelines.](../../../resources/images/screenshots/wireless-coverage/wc-full-dem-vs-dsm.png)
 
-Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully summarizes the underlying 1 m pixels — a hex reads as the color of the pixels beneath it:
+Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully summarizes the underlying 1 m pixels. A hex reads as the color of the pixels beneath it:
 
 ![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap, so a hex reads as the color of the pixels it summarizes (Part 3a).](../../../resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
 
-Finally — zooming to the Golden Gate Park demo, where the ranked sites are legible — Part 4 scores each candidate by how many res-12 cells it can see, so the best sites rise to the top:
+Finally, the Golden Gate Park demo makes the ranked sites legible. Part 4 scores each candidate by how many res-12 cells it can see, so the best sites rise to the top:
 
 ![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer, with the sited towers marked (Part 4).](../../../resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
 
@@ -51,10 +51,10 @@ Finally — zooming to the Golden Gate Park demo, where the ranked sites are leg
 
 A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task. A [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) packages it, and it runs entirely on **Serverless** compute with the GeoBrix Python API.
 
-This is the production counterpart to the notebook series (see the other tab) — same San Francisco AOI and USGS 3DEP LiDAR sources, but running as a scheduled medallion pipeline instead of one-off notebook outputs: a `land` downloader task stages the data, then the pipeline cascades bronze → silver → gold through declared table-to-table dependencies, a `siting` task runs the H3-native tower analysis, and a `validate` notebook confirms all outputs.
+This is the production counterpart to the notebook series (see the other tab). It uses the same San Francisco AOI and USGS 3DEP LiDAR sources. It runs as a scheduled medallion pipeline instead of one-off notebook outputs. A `land` downloader task stages the data. The pipeline then cascades bronze → silver → gold through declared table-to-table dependencies. A `siting` task runs the H3-native tower analysis. A `validate` notebook confirms all outputs.
 
 :::warning `wc_lidar_pts` is a streaming table — upgrading needs a one-time rebuild
-**Each update reads only the new tiles.** `wc_lidar_pts` is a streaming table over the `laz_inventory` stream: [`read_paths`](../ingestion/read-paths) reads the `.laz` tiles inventoried since the last update, instead of re-reading every tile (about 817 M points for full San Francisco) on each update. Each row keeps the settings of the update that read it.
+**Each update reads only the new tiles.** `wc_lidar_pts` is a streaming table over the `laz_inventory` stream. [`read_paths`](../ingestion/read-paths) reads only the `.laz` tiles inventoried since the last update. It does not re-read every tile (about 817 M points for full San Francisco) on each update. Each row keeps the settings of the update that read it.
 
 **Upgrading an existing deployment.** In earlier versions of this example `wc_lidar_pts` was a materialized view. A pipeline table cannot change type in place, so the first update after `databricks bundle deploy` fails with:
 
@@ -63,7 +63,7 @@ This is the production counterpart to the notebook series (see the other tab) �
 To change the dataset type, please drop the existing dataset first.
 ```
 
-A full refresh fails with the same error, and the failed update still resets the tables it names: a full refresh that names `laz_inventory` empties the inventory. Drop the old table once, in your catalog and schema, then run the pipeline. The update rebuilds `wc_lidar_pts` from every inventoried tile:
+A full refresh fails with the same error. The failed update still resets the tables it names. A full refresh that names `laz_inventory` empties the inventory. Drop the old table once, in your catalog and schema, then run the pipeline. The update rebuilds `wc_lidar_pts` from every inventoried tile:
 
 ```sql
 DROP MATERIALIZED VIEW geospatial_docs.wireless_coverage_lf.wc_lidar_pts;
@@ -79,7 +79,7 @@ databricks bundle run wireless_coverage_lf_job
 **Changes that need a full refresh.** A setting `wc_lidar_pts` applies while it reads a tile holds only for the tiles read after the change:
 
 - `full_aoi` (the AOI clip and the tile grid), `wireless_coverage.tile_m`, `wireless_coverage.srid`, or a GeoBrix upgrade that changes the LiDAR reader: run `databricks bundle run wireless_coverage_lf_pipeline --full-refresh wc_lidar_pts`.
-- `laz_dir` (or `volume`, which sets the default LAZ folder), a `.laz` file deleted from the Volume (its points stay), or a tile that `on_error="skip"` skipped or that was replaced at the same path (later updates read neither): run `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. Always reset `laz_inventory` together with `wc_lidar_pts`.
+- For `laz_dir` (or `volume`, which sets the default LAZ folder), run `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. Run the same command for a `.laz` file deleted from the Volume (its points stay). Run it also for a tile that `on_error="skip"` skipped or that was replaced at the same path (later updates read neither). Always reset `laz_inventory` together with `wc_lidar_pts`.
 - The other settings (`simplify`, `water_mask_dir`, `wireless_coverage.pixel_m`, `wireless_coverage.tin_max_pts`, `h3_res` and the siting keys) are used by the materialized views and the siting task, which recompute on the next run: no reset.
 :::
 
@@ -99,30 +99,30 @@ A scheduled run takes raw USGS 3DEP LiDAR `.laz` files through six stages:
 
 1. **Land** — a downloader task stages USGS 3DEP LiDAR EPT nodes and Overture water polygons onto a Unity Catalog Volume. Nothing is interpreted yet — data just arrives.
 2. **Bronze — inventory** — Auto Loader records one row per `.laz` file as it appears, so re-runs pick up only newly staged data.
-3. **Silver — surface stack** — GeoBrix `read_paths` reads the `.laz` files as they arrive on the inventory stream, so each update parses only the newly staged tiles; the classified returns are tile-indexed in the streaming table `wc_lidar_pts` and binned into 1 m DSM and TIN DTM rasters per tile; `rst_chm` derives the Canopy Height Model.
+3. **Silver — surface stack** — GeoBrix `read_paths` reads the `.laz` files as they arrive on the inventory stream, so each update parses only the newly staged tiles. The pipeline tile-indexes the classified returns in the streaming table `wc_lidar_pts`. It bins them into 1 m DSM and TIN DTM rasters per tile. The `rst_chm` function derives the Canopy Height Model.
 4. **Gold — H3 grids** — the surfaces are reprojected to EPSG:4326, isobanded, and indexed to H3 cells at resolution 10. Each table carries a stable res-9 join key so downstream consumers join on one column.
-5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task).
+5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis. The analysis uses a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors. The `h3_viewshed_towers` function distributes the viewsheds, with one tower per Spark task.
 6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks quality assertions.
 
-Each stage reads only the one before it — declared as table-to-table dependencies — so Lakeflow builds the lineage graph, runs stages in order, and recomputes only what changed.
+Each stage reads only the one before it. The pipeline declares these as table-to-table dependencies. Lakeflow then builds the lineage graph, runs stages in order, and recomputes only what changed.
 
 ## What it uses from GeoBrix
 
 - **Bronze**: a plain Auto Loader `binaryFile` stream lists the staged `.laz` files (`laz_inventory`); it reads no point data.
-- **Silver**: [`read_paths`](../ingestion/read-paths) runs the `lidar_gbx` reader over the files that arrive on the inventory stream (`wc_lidar_pts`, a streaming table: each update reads only the tiles inventoried since the last one): one row per return plus `_source_path`, the file it came from, spread over 512 tasks, with `on_error="skip"`, so a file that cannot be decoded is skipped with a warning in the executor logs and the pipeline keeps going instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](../ingestion/lakeflow-sdp) for the pipeline setup.
+- **Silver**: [`read_paths`](../ingestion/read-paths) runs the `lidar_gbx` reader over the files that arrive on the inventory stream. The output is `wc_lidar_pts`, a streaming table: each update reads only the tiles inventoried since the last one. It has one row per return plus `_source_path`, the file it came from. The rows are spread over 512 tasks. With `on_error="skip"`, the reader skips a file that cannot be decoded and writes a warning in the executor logs. The pipeline keeps going instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](../ingestion/lakeflow-sdp) for the pipeline setup.
 - **Surfaces and grids**: RasterX on Serverless: `bin_points_tiled`, `rst_dtmfromgeoms_agg` and `rst_chm` build the surfaces; `rst_transform`, `rst_clip`, `rst_isoband` and `gbx_rst_h3_rastertogridmax` turn them into the H3 grids.
 
 ## What a run looks like
 
-The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in sequence — `land` stages the data, `pipeline` refreshes the Lakeflow pipeline, `siting` ranks the tower sites, and `validate` checks the outputs:
+The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in sequence. The `land` task stages the data, `pipeline` refreshes the Lakeflow pipeline, `siting` ranks the tower sites, and `validate` checks the outputs:
 
 ![The wireless_coverage_lf_job run graph in Databricks: the land, pipeline, siting, and validate tasks chained left to right, all on Serverless.](../../../resources/images/screenshots/wireless-coverage/wc-lf-job-run.png)
 
-Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles, which roll up into the res-10 H3 gold grids:
+Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles. These tiles roll up into the res-10 H3 gold grids:
 
 ![A full San Francisco wireless_coverage_lf_pipeline run: wc_lidar_pts (817 M records) feeding wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands, and the gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids, each dataset with its type, duration, output record count, and expectations. This run is from an earlier version of the example, where wc_lidar_pts was a materialized view.](../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
 
-This run is from an earlier version of the example, where `wc_lidar_pts` was a materialized view that re-read every tile on each update (shown as *Full recompute*). It is now a streaming table: after the first update, an update reads only the newly inventoried tiles.
+This run is from an earlier version of the example. There, `wc_lidar_pts` was a materialized view that re-read every tile on each update (shown as *Full recompute*). It is now a streaming table: after the first update, an update reads only the newly inventoried tiles.
 
 ## Table catalog
 
@@ -153,7 +153,7 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 ### Siting
 
-The siting tables are regular Delta tables, overwritten each run. H3-indexed tables (`*_res*`) carry both a BIGINT `cellid` column and a STRING `h3` column (for map tools that query string H3 keys) and are liquid-clustered on the BIGINT cell column for fast spatial queries. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
+The siting tables are regular Delta tables, overwritten each run. H3-indexed tables (`*_res*`) carry both a BIGINT `cellid` column and a STRING `h3` column (for map tools that query string H3 keys). They are liquid-clustered on the BIGINT cell column for fast spatial queries. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
 
 | Table | Description |
 |---|---|
@@ -175,7 +175,7 @@ databricks bundle run wireless_coverage_lf_job
 The bundle validates and deploys with the committed defaults in `databricks.yml` out of the box. To point it at your own workspace, copy `databricks.override.yml.example` to `databricks.override.yml` (git-ignored) and fill in your CLI profile; it is layered in automatically via `include: ["*.override.yml"]`. A fresh clone with no override file still validates/deploys.
 
 - **Schedule**: the job ships paused (`pause_status: PAUSED`, daily at `0 0 7 * * ?` America/Chicago) — unpause it in the workspace once you've confirmed a manual run.
-- **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download. See `databricks.override.yml.example` for the exact paths.
+- **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file. This reuses those files and skips the ~830 MB download. See `databricks.override.yml.example` for the exact paths.
 - **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0+env6-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
 ## Configuration
@@ -219,16 +219,16 @@ Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys i
 
 ## Validation notebook
 
-The `validate` task (`validate/validate_wc_lf.ipynb`) runs after the siting task completes, reads all output tables, confirms each is non-empty, and prints summary statistics. It also compares the source files in `wc_lidar_pts` with the files `laz_inventory` lists and prints how many have no points, because `read_paths(..., on_error="skip")` skips an unreadable file with only a warning in the executor logs (a file with no point inside the AOI counts too). `wc_lidar_pts` is a streaming table, so a file skipped once stays without points on later updates; reset both tables (see the note at the top of this tab) to read it again. Run it manually from the workspace as a quick sanity check after a fresh deploy or configuration change.
+The `validate` task (`validate/validate_wc_lf.ipynb`) runs after the siting task completes, reads all output tables, confirms each is non-empty, and prints summary statistics. It also compares the source files in `wc_lidar_pts` with the files `laz_inventory` lists. It prints how many have no points (a file with no point inside the AOI counts too). This check matters because `read_paths(..., on_error="skip")` skips an unreadable file with only a warning in the executor logs. `wc_lidar_pts` is a streaming table, so a file skipped once stays without points on later updates. Reset both tables (see the note at the top of this tab) to read it again. Run it manually from the workspace as a quick sanity check after a fresh deploy or configuration change.
 
 </TabItem>
 <TabItem value="notebooks" label="Notebook Series">
 
 # Wireless Coverage — LiDAR Surface Foundations
 
-A notebook series that builds the **elevation and surface data foundation** for wireless-coverage analysis directly from a USGS 3DEP **LiDAR point cloud** — data first, analytics later. The surfaces produced here (Canopy Height Model, Digital Surface Model, bare-earth Digital Terrain Model) are the inputs that later parts consume for antenna siting via H3-native line-of-sight analysis.
+A notebook series that builds the **elevation and surface data foundation** for wireless-coverage analysis directly from a USGS 3DEP **LiDAR point cloud**. It puts data first and analytics later. The surfaces produced here (Canopy Height Model, Digital Surface Model, bare-earth Digital Terrain Model) are the inputs for later parts. Those parts consume them for antenna siting via H3-native line-of-sight analysis.
 
-The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (-122.55, 37.70, -122.35, 37.85)`), reading the staged 3DEP LiDAR (`.laz` Entwine Point Tile nodes) with the GeoBrix `lidar_gbx` reader and binning returns into 1 m rasters **per spatial tile**. A single 1 m raster over SF is ~460 M pixels, so binning is tiled and **bounded** — `rx.bin_points_tiled` bins each tile with memory proportional to the raster grid (W×H), not the point count, so a full-resolution (`DECIMATE=1`) tile never OOMs. The binned surfaces are persisted to **permanent tables** you own (a `CATALOG.SCHEMA` you set) and read back downstream.
+The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (-122.55, 37.70, -122.35, 37.85)`). It reads the staged 3DEP LiDAR (`.laz` Entwine Point Tile nodes) with the GeoBrix `lidar_gbx` reader and bins returns into 1 m rasters **per spatial tile**. A single 1 m raster over SF is ~460 M pixels, so binning is tiled and **bounded**. The `rx.bin_points_tiled` function bins each tile with memory proportional to the raster grid (W×H), not the point count. A full-resolution (`DECIMATE=1`) tile therefore never OOMs. The binned surfaces are persisted to **permanent tables** you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 
 ![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
 
@@ -262,7 +262,7 @@ Part 1 is the shortest path from returns to canopy: it keeps only the CHM.
 
 ![Wireless Coverage Part 2a — LiDAR point cloud to DSM + TIN DTM + CHM permanent tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-02a.png)
 
-The main arc. Builds directly on the LiDAR point cloud from Part 1 and persists the complete surface stack as reusable **permanent tables** you own (a governed Delta table of tiles in a `CATALOG.SCHEMA` you set; optional GeoTIFF export via `gtiff_gbx`). The production bare-earth DTM is a **TIN surface** — a Delaunay triangulation of the classified ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free raster. Because it works directly from the point cloud's own classification, it is a beyond-pixels surface: terrain reconstructed from the actual ground returns rather than approximated from raster values. The binned-`min` DTM is shown alongside for comparison:
+The main arc. It builds directly on the LiDAR point cloud from Part 1. It persists the complete surface stack as reusable **permanent tables** you own. Each is a governed Delta table of tiles in a `CATALOG.SCHEMA` you set. Optional GeoTIFF export uses `gtiff_gbx`. The production bare-earth DTM is a **TIN surface** — a Delaunay triangulation of the classified ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free raster. Because it works directly from the point cloud's own classification, it is a beyond-pixels surface. It is terrain reconstructed from the actual ground returns rather than approximated from raster values. The binned-`min` DTM is shown alongside for comparison:
 
 - **TIN DTM** — a Delaunay triangulation of the ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free bare earth. Points are built with `st_makepoint(x, y, z)`, so Z carries through the WKB into the triangulation. This is the production terrain.
 - **Binned DTM** — `min` z of ground returns per pixel (fast; can leave tiny gaps where no ground return landed). Shown for comparison.
@@ -273,61 +273,61 @@ Writes the canonical `wc_surface_{dsm,dtm,chm}` tables and `OUT_DIR` GeoTIFFs th
 
 ![Wireless Coverage Part 2b — DSM raster to approximate DTM + CHM via morphological opening](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-02b.png)
 
-An alternative on-ramp for when a LiDAR point cloud is not available. Starting from a DSM raster only, it approximates the bare-earth DTM by applying a morphological opening to the DSM — `rst_filter` min then max — and then deriving the CHM with `rst_chm`. The result is a **pixel-only approximation**: without ground-classified returns, the bare earth is estimated from the surface shape rather than reconstructed from the point cloud. The Parts 1–2a LiDAR path produces a more accurate terrain for production use; when no point cloud is available, a published terrain product such as USGS 3DEP is the recommended production alternative. Part 2b lands the same canonical `wc_surface_{dsm,dtm,chm}` tables as Part 2a, so Parts 3 and 4 work unchanged either way.
+An alternative on-ramp for when a LiDAR point cloud is not available. Starting from a DSM raster only, it approximates the bare-earth DTM by applying a morphological opening to the DSM (`rst_filter` min then max). It then derives the CHM with `rst_chm`. The result is a **pixel-only approximation**: without ground-classified returns, the bare earth is estimated from the surface shape rather than reconstructed from the point cloud. The Parts 1–2a LiDAR path produces a more accurate terrain for production use. When no point cloud is available, a published terrain product such as USGS 3DEP is the recommended production alternative. Part 2b lands the same canonical `wc_surface_{dsm,dtm,chm}` tables as Part 2a, so Parts 3 and 4 work unchanged either way.
 
 ### Part 3a — H3 Gridding (`03a_h3_gridding.ipynb`)
 
 ![Wireless Coverage Part 3a — DEM/DSM/CHM surfaces to H3-indexed tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03a.png)
 
-Takes the surface tables from Parts 1–2a (or 2b) and prepares them for global-grid analysis by
-H3-indexing each surface at a parameterized resolution (default: H3 resolution 10, ≈65 m
-edge). DEM and DSM elevation bands are extracted as contiguous isoband polygons via
-`rst_isoband` and indexed to H3 cells with the Databricks product `h3_try_coverash3`;
-cumulative elevation tiers give each cell a coverage-depth value. The Canopy Height Model
+Takes the surface tables from Parts 1–2a (or 2b) and prepares them for global-grid analysis.
+It H3-indexes each surface at a parameterized resolution (default: H3 resolution 10, ≈65 m
+edge). The `rst_isoband` function extracts DEM and DSM elevation bands as contiguous isoband polygons.
+The Databricks product `h3_try_coverash3` indexes them to H3 cells.
+Cumulative elevation tiers give each cell a coverage-depth value. The Canopy Height Model
 is aggregated to the maximum canopy height per H3 cell via `gbx_rst_h3_rastertogridmax`.
 Interior gaps are filled with `h3_cellfill` (k=1, IDW, land mask re-applied after fill).
 All three H3 tables — `wc_h3_dem`, `wc_h3_dsm`, `wc_h3_chm` — are prepared for
 downstream analysis in Part 4. Each H3-cell output table carries a stable res-9 rollup join
-key — `parent_cellid` (the `h3_toparent` of each cell at res 9) and `parent_cellid_res` —
-so they join in one column to any external grid keyed at H3 resolution 9 (coverage, demand,
+key: `parent_cellid` (the `h3_toparent` of each cell at res 9) and `parent_cellid_res`.
+This key lets the tables join in one column to any external grid keyed at H3 resolution 9 (coverage, demand,
 population). This key is present on the Part 3a `wc_h3_*` tables, Part 4's
 `wc_h3_coverage*` tables, and Part 3b's `wc_rpx_h3_coverage` table.
 
 H3 resolution is a choice, not a ceiling. Part 1 stored one res-15 cell per LiDAR return
 (`cellid_r15`, ≈0.9 m² — sub-metre, finer than a 1 m pixel). `h3_toparent` rolls any
-res-15 cell to any coarser resolution in a GROUP BY, so the same underlying data feeds
+res-15 cell to any coarser resolution in a GROUP BY. The same underlying data therefore feeds
 res-10 visualization grids and res-12 viewshed buffers alike.
 
 ### Part 3b — Raster-Pixel Surfaces (`03b_raster_pixel_surfaces.ipynb`)
 
 ![Wireless Coverage Part 3b — raster-pixel contrast: 1 m DSM vs H3 cells, raster and H3 viewshed](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03b.png)
 
-The honest counterpoint to Part 3a. Where Part 3a takes the LiDAR surfaces *beyond pixels*
-into an H3 discrete global grid, Part 3b holds the **native 1 m raster** representation up
-next to that H3 grid — and then re-runs Part 4's tower-siting question on the raster side so
-you can see how the two paradigms score the same ground.
+The honest counterpoint to Part 3a. Part 3a takes the LiDAR surfaces *beyond pixels*
+into an H3 discrete global grid. Part 3b holds the **native 1 m raster** representation up
+next to that H3 grid. It then re-runs Part 4's tower-siting question on the raster side.
+This shows how the two paradigms score the same ground.
 
 **Part A — representation contrast.** Over a 2 km window around Golden Gate Park, the same
-DSM surface is rendered as 1 m-pixel tiles and as H3 cells at resolution 10. The contrast
+DSM surface renders as 1 m-pixel tiles and as H3 cells at resolution 10. The contrast
 makes the resolution-dial framing concrete: the raster is fixed at 1 m; H3 dials to *any*
-resolution via `h3_toparent`. The res-15 cells stored in Part 1 (≈0.9 m² per cell — finer
-than a 1 m pixel) roll to resolution 10, 12, or any other target with a GROUP BY, so H3's
+resolution via `h3_toparent`. The res-15 cells stored in Part 1 are finer
+than a 1 m pixel (≈0.9 m² per cell). They roll to resolution 10, 12, or any other target with a GROUP BY. So H3's
 resolution is a dial, not a ceiling.
 
-**Part B — viewshed foil.** An independent spread of candidate towers over the DSM footprint
-is scored with the per-tower raster viewshed (`rst_viewshed_towers`) and, inline, the same
-res-12 H3 line-of-sight model (`h3_los_visible`) — so Part 3b runs standalone and the two
+**Part B — viewshed foil.** The notebook scores an independent spread of candidate towers over the DSM footprint
+with the per-tower raster viewshed (`rst_viewshed_towers`). It also scores them inline with the same
+res-12 H3 line-of-sight model (`h3_los_visible`). So Part 3b runs standalone, and the two
 engines are compared head-to-head. The candidate lattice regenerates Part 4's res-9 centroid
-pattern independently — Part 3b reads only the Part 2 DSM, Part 3a's H3 grids, and
-`config_nb`; it never touches a Part 4 table. `rst_viewshed_towers` selects the in-radius
+pattern independently. Part 3b reads only the Part 2 DSM, Part 3a's H3 grids, and
+`config_nb`. It never touches a Part 4 table. `rst_viewshed_towers` selects the in-radius
 1 m DSM tiles for each tower, mints a bytes-free VRT, runs one pixel-level viewshed, and
-histograms in-radius coverage — one tower per Spark task, the natural fan-out unit at full
+histograms in-radius coverage. It runs one tower per Spark task, the natural fan-out unit at full
 San Francisco scale. No raster bytes cross a shuffle.
 
-The trade-off is stated honestly: Part 4's H3 viewshed bins one max-height per ~17 m
-res-12 cell, which smooths fine blockers that a 1 m raster line-of-sight respects. That
-makes the H3 viewshed an **optimistic screening estimate** — suitable for ruling out
-candidates quickly across the full lattice — while the raster viewshed is the **strict
+The trade-off is stated honestly. Part 4's H3 viewshed bins one max-height per ~17 m
+res-12 cell. This smooths fine blockers that a 1 m raster line-of-sight respects. That
+makes the H3 viewshed an **optimistic screening estimate**, suitable for ruling out
+candidates quickly across the full lattice. The raster viewshed is the **strict
 pixel-level confirmation** of a shortlisted site's exact coverage footprint. The large
 coverage gap between the two outputs is the expected signature of that resolution smoothing,
 not a defect in either approach.
@@ -349,7 +349,7 @@ coverage depth: two paradigms, one scene.
 ![Wireless Coverage Part 4 — naive H3-native tower siting pipeline](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-04.png)
 
 With the LiDAR surfaces from Parts 2a/2b and the H3 grids from Part 3a in hand, Part 4 asks the
-siting question: which candidate tower locations are worth the detailed analysis? The approach is
+siting question. Which candidate tower locations are worth the detailed analysis? The approach is
 deliberately **naive** — a baseline screen, not a final plan — and stays entirely in the H3 domain
 rather than operating on pixels.
 
@@ -365,9 +365,9 @@ reduces 176 candidates to 62 survivors (~65% discarded) before any fine-resoluti
 **Exact H3 line-of-sight.** Each surviving candidate is evaluated with the library function
 `h3_los_visible` (from `databricks.labs.gbx.gridx.helpers`). It is a pure-Python H3 primitive that runs an exact
 ray-march test for every cell in the buffer. The observer sits at the DSM surface height plus a 10 m
-antenna clearance; the target is the ground surface (DTM) plus a 1.6 m receiver height. The buffer
+antenna clearance. The target is the ground surface (DTM) plus a 1.6 m receiver height. The buffer
 radius is 2.5 km. The line-of-sight test uses the binned H3 surface as both the blocker map and the
-ground reference, so it is a surface-relative check — the only shortcut is the H3 binning resolution,
+ground reference. It is therefore a surface-relative check. The only shortcut is the H3 binning resolution,
 not the line-of-sight geometry.
 
 **Two-factor scoring.** Each site is scored on two independent factors kept as separate columns:
@@ -381,9 +381,9 @@ Sites are ranked by `viewshed_cells` descending, then `required_mast` ascending 
 Combining the two into a single score — balancing cost against coverage — is a decision left to
 the analyst.
 
-**Nearest-ground fallback.** Where a cell has a DSM surface value but no bare-earth DTM value
-(typical at water bodies or dense-canopy edges), the ground height for `required_mast` is filled
-from the mean of the nearest populated H3 ring (expanding up to 3 rings). A site with no ground
+**Nearest-ground fallback.** Some cells have a DSM surface value but no bare-earth DTM value
+(typical at water bodies or dense-canopy edges). For these cells, the notebook fills the ground height for `required_mast`
+from the mean of the nearest populated H3 ring. The search expands up to 3 rings. A site with no ground
 anywhere in those rings keeps `required_mast` as NULL — honestly uncostable rather than guessed.
 
 **Outputs** (all gated on `FORCE_RELOAD`; once the tables exist a re-run loads them and skips the
@@ -396,12 +396,12 @@ per-tower viewsheds):
 | `wc_h3_coverage` | Per-cell LOS depth: how many sited towers can see each H3 cell |
 | `wc_h3_coverage_top10` | Same, aggregated over only the top-10 sites by coverage |
 
-**Four maps** trace the rule-out funnel: (A) all candidates colored by coarse coverage fraction;
-(B) survivors that cleared the quick-pass; (C) per-cell coverage depth with all sited towers and
-their 2.5 km buffers overlaid; (D) the ten best sites with their viewsheds and buffers.
+**Four maps** trace the rule-out funnel. Map A shows all candidates colored by coarse coverage fraction.
+Map B shows survivors that cleared the quick-pass. Map C shows per-cell coverage depth with all sited towers and
+their 2.5 km buffers overlaid. Map D shows the ten best sites with their viewsheds and buffers.
 
-**Next.** A forthcoming `land_cover` notebook adds the demand side — weighting coverage by where
-people and buildings are, excluding water, parks, and no-build zones — and optimizes placement
+**Next.** A forthcoming `land_cover` notebook adds the demand side.
+It weights coverage by where people and buildings are, excluding water, parks, and no-build zones. It also optimizes placement
 within each cell, turning this naive screen into a smarter siting tool.
 
 ---
@@ -479,15 +479,15 @@ Canopy Height Model tiles  (Float32, NoData = −9999)
 - **Bin per tile, bounded.** A single 1 m raster over all of San Francisco is ~460 M pixels — far too large for one tile. `rx.bin_points_tiled` assigns per-tile extents and bins each tile with memory bounded by the grid (W×H), not the point count, so full-density (`DECIMATE=1`) binning never OOMs. (Calling `rst_binpoints_agg` directly realizes a whole tile's points and can exhaust RAM at full density — see [Memory & scale](../api/raster-functions#rst_binpoints_agg).)
 - **Ground is ASPRS class 2.** The bare-earth DTM bins only classification 2 (ground); the DSM bins all returns. Filtering the point DataFrame to class 2 before the `min` bin is what makes the DTM "bare earth."
 - **Z must survive to the TIN.** `rst_dtmfromgeoms_agg` needs `POINT Z` geometry. Build points with the product `st_makepoint(x, y, z)` and pass `st_asbinary(...)` — the WKB carries Z, so the triangulation interpolates real elevations rather than collapsing to 2D.
-- **Thin the points that feed the TIN.** A Delaunay TIN holds **all** its points in memory to triangulate — unlike the binned DTM (memory bounded by the raster grid), a triangulation is inherently global and can't be grid-bounded. At `DECIMATE=1` a single tile's ground returns can exhaust a worker, so Part 2a samples them to a bounded count (`TIN_MAX_PTS`) before triangulating; a bare-earth TIN is near-identical from a representative subset. See [RasterX › Memory & scale](../api/raster-functions#rst_dtmfromgeoms_agg).
-- **Empty / corrupt point-cloud nodes are skipped.** The `lidar_gbx` reader skips 0-byte or unreadable `.laz` files with a warning instead of failing the whole distributed read, so one bad EPT node can't take down the job.
+- **Thin the points that feed the TIN.** A Delaunay TIN holds **all** its points in memory to triangulate. Unlike the binned DTM (memory bounded by the raster grid), a triangulation is inherently global and can't be grid-bounded. At `DECIMATE=1` a single tile's ground returns can exhaust a worker, so Part 2a samples them to a bounded count (`TIN_MAX_PTS`) before triangulating. A bare-earth TIN is near-identical from a representative subset. See [RasterX › Memory & scale](../api/raster-functions#rst_dtmfromgeoms_agg).
+- **Empty / corrupt point-cloud nodes are skipped.** The `lidar_gbx` reader skips 0-byte or unreadable `.laz` files with a warning instead of failing the whole distributed read. One bad EPT node therefore can't take down the job.
 - **Serverless-safe throughout.** No `spark.conf.set`, `_jvm`, `.rdd`, `.cache()` / `.persist()`. Surfaces are persisted to **permanent tables** you own (`CATALOG.SCHEMA`) — a governed Delta table of tiles, reused across cells and sessions rather than a session temp table. An optional `gtiff_gbx` export writes GeoTIFF files to a Volume.
 
 ---
 
 ## Related
 
-- **DEM extra** — [H3 Rasterize](./h3-rasterize) takes the complementary path: a ready-made **10 m seamless DEM** over the Bay Area run through the full raster→H3 pipeline (`rst_clip` → `rst_isoband` → product H3 → `rst_h3_rasterize_agg` → `rst_frombands_agg`). No LiDAR required — it shows the "if the elevation raster already exists" route to the same kind of coverage-tier model.
+- **DEM extra** — [H3 Rasterize](./h3-rasterize) takes the complementary path. It runs a ready-made **10 m seamless DEM** over the Bay Area through the full raster→H3 pipeline (`rst_clip` → `rst_isoband` → product H3 → `rst_h3_rasterize_agg` → `rst_frombands_agg`). No LiDAR required — it shows the "if the elevation raster already exists" route to the same kind of coverage-tier model.
 
 </TabItem>
 </Tabs>

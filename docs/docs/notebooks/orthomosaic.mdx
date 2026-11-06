@@ -9,25 +9,25 @@ import TabItem from '@theme/TabItem';
 
 # Orthomosaic Photogrammetry — Drone Survey to Georeferenced Map
 
-A notebook series that takes a **raw drone image dataset** end-to-end through
+A notebook series that takes a **raw drone image dataset** end-to-end. It covers
 EXIF/GPS telemetry extraction, quality screening, Structure-from-Motion (SfM)
 reconstruction, georeferenced orthomosaic production, and object + land-cover
-classification — from individual JPEGs to a cloud-optimized GeoTIFF ready for tile
-serving, and on to georeferenced object polygons and a land-cover region map. Sparse
+classification. The series goes from individual JPEGs to a cloud-optimized GeoTIFF ready for tile
+serving. It then continues to georeferenced object polygons and a land-cover region map. Sparse
 reconstruction runs on CPU; an optional dense pass and the object-segmentation part of
 the capstone run on GPU (land cover runs on CPU).
 
 ![Orthomosaic series overview — config_nb shared setup, 01a CPU sparse SfM (with the monitor progress watcher off to the side), optional 01b GPU dense MVS, 02_publish color correct to COG/PMTiles, and optional 03_segment objects + land cover + served endpoint](../../../resources/images/diagrams/orthomosaic/orthomosaic-overview.png)
 
 The pipeline reads EXIF metadata and GPS telemetry per-image with the GeoBrix `exif_gbx`
-reader, computes per-image GSD and (optionally) sharpness metrics, then runs incremental
+reader. It computes per-image GSD and (optionally) sharpness metrics. It then runs incremental
 SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster (`01a`). An optional
 GPU notebook (`01b`) adds dense MVS for a higher-fidelity orthomosaic. The orthomosaic is
 written as a GeoTIFF, converted to a COG with the `cog_gbx` writer, and packaged as a
 PMTiles archive for interactive map preview. An optional capstone notebook (`03_segment`)
-then derives two complementary views of the published COG: georeferenced **object**
-polygons with GeoSAM (`gbx.models`) — in-notebook across 1..N GPUs, or behind a served
-Unity Gateway GPU Model Serving endpoint — and a **land-cover** region map with RasterX's
+then derives two complementary views of the published COG. The first view is georeferenced **object**
+polygons with GeoSAM (`gbx.models`). GeoSAM runs in-notebook across 1..N GPUs, or behind a served
+Unity Gateway GPU Model Serving endpoint. The second view is a **land-cover** region map with RasterX's
 `rst_land_cover`, entirely on CPU. See [Geospatial Models](../models/overview),
 [GeoSAM](../models/geosam), and [RasterX functions](../api/raster-functions#rst_land_cover).
 
@@ -66,8 +66,8 @@ needs no GPU. The notebook is standalone (no `%run ./config_nb`) and can run any
 
 ## Executed output — Old Orchard drone survey
 
-These screenshots are pulled from the executed notebook series, run over the Old Orchard GoPro survey
-(~170 overlapping, GPS-tagged frames) that the committed notebooks download by default.
+These screenshots come from the executed notebook series. The series ran over the Old Orchard GoPro survey
+(~170 overlapping, GPS-tagged frames). The committed notebooks download that survey by default.
 
 The raw inputs: an evenly spaced contact sheet of the unstitched frames that SfM must align and stitch:
 
@@ -146,9 +146,10 @@ three checkpointed stages:
 2. **Cloud-optimized GeoTIFF** — the `cog_gbx` writer converts the corrected raster to a
    COG with internal tiling and overview levels, producing `orthomosaic_cog.tif` for
    efficient range-request reads downstream.
-3. **PMTiles** — the COG is warped onto the WebMercatorQuad grid with `gbx_rst_xyzpyramid`
-   and encoded into a self-contained `orthomosaic.pmtiles` archive by the `pmtiles_gbx`
-   writer, previewable in a browser (PMTiles + MapLibre GL or Leaflet) with no tile server.
+3. **PMTiles** — `gbx_rst_xyzpyramid` warps the COG onto the WebMercatorQuad grid.
+   The `pmtiles_gbx` writer encodes the result into a self-contained `orthomosaic.pmtiles`
+   archive. You can preview the archive in a browser (PMTiles + MapLibre GL or Leaflet) with
+   no tile server.
 
 Each stage is checkpointed per group; set `FORCE_CORRECTED` / `FORCE_COG` /
 `FORCE_PMTILES` in `config_nb` to recompute a stage.
@@ -162,24 +163,24 @@ COG — discrete **objects** and a **land-cover** region map — then serves the
 It runs no new photogrammetry; it only reads `orthomosaic_cog.tif`.
 
 1. **Instance objects (GPU)** — a single [`segment_raster`](../models/geosam) call chips
-   the COG into an overlapping grid, runs GeoSAM's automatic-mask segmenter across the
-   node's GPU(s) (`gpus="all"`), stitches each chip's label mask into whole-object polygons
-   using its own true per-window georeferencing, and returns a `pandas.DataFrame` of
+   the COG into an overlapping grid. It runs GeoSAM's automatic-mask segmenter across the
+   node's GPU(s) (`gpus="all"`). It stitches each chip's label mask into whole-object polygons
+   using its own true per-window georeferencing. It returns a `pandas.DataFrame` of
    `label` (int), `geom` (WKB bytes), and `score` (float). Automatic-mask GeoSAM is
-   class-agnostic (instance segmentation) — each object gets an id, not a semantic type —
+   class-agnostic (instance segmentation). Each object gets an id, not a semantic type,
    so the preview colors objects by instance id with a legend.
-2. **Land cover (CPU)** — the complementary view: partition the *whole scene* into
+2. **Land cover (CPU)** — this is the complementary view. It partitions the *whole scene* into
    contiguous region classes (vegetation / bare / impervious / dark) with RasterX's
-   [`rst_land_cover`](../api/raster-functions#rst_land_cover), composed from the existing
-   `rst_*` family — `rst_fromfile` → `rst_resample` (downsample so a single tile fits
+   [`rst_land_cover`](../api/raster-functions#rst_land_cover). The function composes from the existing
+   `rst_*` family. The chain is `rst_fromfile` → `rst_resample` (downsample so a single tile fits
    worker memory) → `rst_land_cover` (an Int32 class-mask tile) → `gbx_rst_polygonize` →
-   labeled polygons, filtered to regions at or above a metric minimum area via
+   labeled polygons. The notebook filters the polygons to regions at or above a metric minimum area via
    `core.crs.area_m2`. The notebook runs both `method="spectral"` (fixed thresholds) and
-   `method="kmeans"` (adaptive clustering) side by side so the two can be compared —
-   `method="hybrid"` (`rst_land_cover`'s default) is the pragmatic blend of the two.
-3. **Served endpoint** — the same GeoSAM backend wrapped as an MLflow pyfunc
-   (`build_geosam_pyfunc`), registered to the Unity Catalog model registry
-   (`register_to_unity_gateway`), and stood up behind a GPU [Model Serving
+   `method="kmeans"` (adaptive clustering) side by side so the two can be compared.
+   The `method="hybrid"` setting (`rst_land_cover`'s default) is the pragmatic blend of the two.
+3. **Served endpoint** — the notebook wraps the same GeoSAM backend as an MLflow pyfunc
+   (`build_geosam_pyfunc`). It registers the pyfunc to the Unity Catalog model registry
+   (`register_to_unity_gateway`). It then stands the model up behind a GPU [Model Serving
    endpoint](../models/serving) (`create_endpoint`, `scale_to_zero=True` by default) for
    programmatic, notebook-free access.
 
@@ -193,7 +194,7 @@ with `mlflow` installed.
 
 Once registered to Unity Catalog and served behind the Unity Gateway, the endpoint is a
 standard **[Databricks Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving)**
-REST endpoint — callable from a notebook, an app, a job, or SQL with no GeoBrix package
+REST endpoint. You can call it from a notebook, an app, a job, or SQL, with no GeoBrix package
 and no GPU attached on the calling side. All four forms below hit the same
 `.../serving-endpoints/geosam-ortho-endpoint/invocations` URL with the same `image_b64`
 input and get back the same shape:
@@ -295,18 +296,18 @@ SELECT ai_query('geosam-ortho-endpoint',
 
 Calls the endpoint inline from SQL or a Lakeflow pipeline via
 **[`ai_query`](https://docs.databricks.com/aws/en/sql/language-manual/functions/ai_query)**
-— the columnar, at-scale path: fan segmentation out over a whole **table** of image
-tiles with one query, no notebook or Python client involved.
+This is the columnar, at-scale path. It fans segmentation out over a whole **table** of image
+tiles with one query. No notebook or Python client is involved.
 
 </TabItem>
 </Tabs>
 
 See the
 **[Unity Catalog model lifecycle](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)**
-docs for how a registered, versioned model like this one is governed, and the
-[Serving](../models/serving) reference page for GeoBrix's own wrappers —
-`serving.query`, `register_to_unity_gateway`, `build_geosam_pyfunc`, and
-`geosam_signature` — that `03_segment` uses to get here.
+docs for how a registered, versioned model like this one is governed. See the
+[Serving](../models/serving) reference page for GeoBrix's own wrappers that
+`03_segment` uses to get here: `serving.query`, `register_to_unity_gateway`,
+`build_geosam_pyfunc`, and `geosam_signature`.
 
 ### `monitor` (optional) — live SfM progress
 
@@ -388,13 +389,13 @@ end-to-end, in five stages:
    `mapInPandas` map (one task per image, fanned out via `repartition(n, "source")`) and
    written to the caller-supplied `feature_table`.
 2. **GPS pair discovery** — `ST_DistanceSphere` (a Databricks-runtime built-in) filters
-   candidate image pairs to those within `max_pair_dist_m` metres of each other, keeping
+   candidate image pairs to those within `max_pair_dist_m` metres of each other. This keeps
    pair count linear in image count instead of the exhaustive, quadratic alternative.
 3. **Distributed matching** — each candidate pair is matched with `pycolmap`'s CPU matcher
    as a further `mapInPandas` map, and verified two-view geometries are written to
    `match_table`.
-4. **COLMAP master-DB assembly** — the extracted features and verified matches are
-   collected to the driver and assembled into one COLMAP SQLite database, including
+4. **COLMAP master-DB assembly** — the run collects the extracted features and verified
+   matches to the driver. It assembles them into one COLMAP SQLite database, including
    GPS-prior encoding and best-init-pair selection.
 5. **Incremental mapping** — `pycolmap.incremental_mapping` runs on the driver over the
    assembled database, recovering camera poses and a sparse 3-D point cloud.
@@ -413,7 +414,7 @@ Parameters:
 - **`feature_table`, `match_table`** (required, keyword-only) — caller-controlled,
   fully-qualified Delta table names (e.g. `catalog.schema.extracted_features_grp_c0`) that
   back the extracted-feature and verified-match caches. `run_sfm` reuses a non-empty table
-  across calls unless the matching `force_*` flag is set; `feature_table` additionally
+  across calls unless the matching `force_*` flag is set. `feature_table` additionally
   treats an existing-but-empty table as stale and rebuilds it automatically, rather than
   silently producing zero matches downstream.
 - **`max_pair_dist_m`** (required, keyword-only) — the GPS pairing radius, in metres, used
@@ -431,11 +432,11 @@ Parameters:
   out-of-memory fallback that runs one SIFT extraction at a time instead of fanning out, at
   the cost of wall-clock time.
 
-Returns a `dict` with `sparse_dir` (the COLMAP sparse-model directory path), `gps_json`
-(the path to the persisted GPS-prior JSON), `models` (the number of reconstructions
-`incremental_mapping` produced, `None` on the reuse and pre-existing-database paths), and
-`registered` (the number of images registered into the model, likewise `None` on those
-paths) — plus `reused: True` when the result came from the `persist_dir` short-circuit.
+Returns a `dict` with these keys. `sparse_dir` is the COLMAP sparse-model directory path.
+`gps_json` is the path to the persisted GPS-prior JSON. `models` is the number of reconstructions
+`incremental_mapping` produced. `registered` is the number of images registered into the model.
+Both `models` and `registered` are `None` on the reuse and pre-existing-database paths.
+The `dict` also holds `reused: True` when the result came from the `persist_dir` short-circuit.
 Raises `RuntimeError` if feature extraction yields zero images or matching yields zero
 verified pairs.
 
@@ -454,8 +455,8 @@ pair_id = image_ids_to_pair_id(image_id1, image_id2)
 ```
 
 Encodes two COLMAP image ids into the single integer pair id that COLMAP's
-`two_view_geometries` table keys on, matching COLMAP's own convention: the smaller id is
-always ordered first (the two ids are swapped beforehand if needed), and the result is
+`two_view_geometries` table keys on. It matches COLMAP's own convention. The smaller id is
+always ordered first (the two ids are swapped beforehand if needed). The result is
 `2147483647 * id1 + id2`. Pure integer arithmetic with no `pycolmap` dependency —
 `run_sfm` uses it internally when assembling the master database's verified-match rows.
 
@@ -470,8 +471,8 @@ dependency: the pure math (`umeyama_sim3`, `apply_sim3`, and `rasterize_enu_orth
 called with `gps_tf=None`) is plain NumPy and imports with no optional dependency. The
 orchestration functions that actually drive a dense reconstruction
 (`place_clusters_shared_enu`, `dense_clusters_to_products`, `dense_reconstruct_clusters`,
-`dense_orthomosaic`) import `pycolmap` lazily — directly, or through the primitives they
-call — and raise a clear `ImportError` when it is missing — install the `photogrammetry`
+`dense_orthomosaic`) import `pycolmap` lazily, directly or through the primitives they
+call. They raise a clear `ImportError` when it is missing. Install the `photogrammetry`
 extra to use them.
 
 ### `dense_orthomosaic` — dense orthomosaic in one call
@@ -500,19 +501,19 @@ used_cids, merged_laz_path = ortho.dense_orthomosaic(
 )
 ```
 
-`dense_orthomosaic` is the one-call entry point for dense MVS on **net-new data**:
-reconstruct every GPS cluster — undistort, patch-match stereo across the node's GPUs,
-fuse to a point cloud — then georeference and export the ortho/DSM/LAZ products, all in
+`dense_orthomosaic` is the one-call entry point for dense MVS on **net-new data**.
+It reconstructs every GPS cluster: undistort, patch-match stereo across the node's GPUs,
+fuse to a point cloud. It then georeferences and exports the ortho/DSM/LAZ products, all in
 one call. It composes two library functions: the mid-level `dense_reconstruct_clusters`
 (below) for reconstruction, then `dense_clusters_to_products` (above) for shared-ENU
 placement and product export.
 
 It takes every output path (`merged_ortho`, `merged_dsm`, `merged_laz`, `cluster_paths`)
-and an optional checkpoint `Manifest` as explicit arguments, and `spark` is an explicit
-parameter rather than a notebook global — so, unlike a hand-wired notebook cell, it has no
-dependency on notebook-specific config helpers and can be called from any context holding
-a session. `checkpoint=None` disables skip/resume (always recomputes); `ply_root=None`
-keeps fused point clouds local under `work_root` with no Volume copy; `force=True` bypasses
+and an optional checkpoint `Manifest` as explicit arguments. `spark` is also an explicit
+parameter rather than a notebook global. Unlike a hand-wired notebook cell, it has no
+dependency on notebook-specific config helpers. You can call it from any context holding
+a session. `checkpoint=None` disables skip/resume (always recomputes). `ply_root=None`
+keeps fused point clouds local under `work_root` with no Volume copy. `force=True` bypasses
 the checkpoint. It raises `RuntimeError` when every cluster's reconstruction failed (no
 points to place) rather than calling `dense_clusters_to_products` with nothing. Returns
 `(used_cids, path_to_dense_merged_laz)` — the same shape as `dense_clusters_to_products`.
@@ -544,7 +545,7 @@ used_cids, merged_laz_path = ortho.dense_clusters_to_products(
 
 For each cluster it undistorts against the sparse model, runs one
 `recommend_dense_allocation` plus a patch-match pool over the to-do set, and fuses to
-`fused.ply` — skipping clusters already checkpointed (unless `force=True`) and dropping
+`fused.ply`. It skips clusters already checkpointed (unless `force=True`). It drops
 clusters whose patch-match failed (reported through `on_event`, when given). `geom_consistency`
 threads to both the patch-match pass and the fuse step. Returns `{cid: fused.ply path}`,
 including checkpointed clusters — exactly what `dense_orthomosaic` calls internally before
@@ -576,15 +577,15 @@ This is what `01b` calls once per group, after fusing every cluster's depth maps
    overlapping visually;
 2. writes a **per-cluster** ortho + DSM GeoTIFF pair for each entry in `cluster_paths`;
 3. writes **sharded per-cluster LAZ parts** through the `lidar_gbx` DataSource writer, then
-   folds them into one **`dense_merged.laz`** with `overlap="drop"` — a seam-de-duplicated
+   folds them into one **`dense_merged.laz`** with `overlap="drop"`. The result is a seam-de-duplicated
    union, not a raw concatenation that double-counts points in the overlap band; and
 4. writes one **merged, co-registered** ortho + DSM over all clusters
    (`merged_ortho`/`merged_dsm`).
 
 It returns the list of cluster ids that produced usable points and the path to the merged
-LAZ — or, if the merge step is skipped because the cloud exceeds the merge memory budget,
-the directory of sharded parts (still readable through the `lidar_gbx` reader as a
-directory of parts). `spark` is an explicit parameter, not a notebook global, so the
+LAZ. If the merge step is skipped because the cloud exceeds the merge memory budget,
+it returns the directory of sharded parts instead. The `lidar_gbx` reader can still read
+that directory of parts. `spark` is an explicit parameter, not a notebook global, so the
 function can be called from any context holding a session. Requires the `photogrammetry`
 extra (`pycolmap`).
 
@@ -598,10 +599,10 @@ placement = ortho.place_clusters_shared_enu(cluster_models)  # {cid: (sparse_dir
 
 Aligns every GPS cluster's COLMAP reconstruction into one shared ENU (east-north-up,
 metres) frame. The largest cluster becomes the anchor — georeferenced to its own GPS
-priors via a least-squares Sim(3) fit (`umeyama_sim3`). Each remaining cluster is then tied
-to the already-placed set through cameras it **shares** with them (matching image names)
-rather than fit to GPS independently, so neighboring clusters agree in the overlap band; a
-cluster with no shared cameras falls back to its own GPS fit. A single-cluster input
+priors via a least-squares Sim(3) fit (`umeyama_sim3`). The function ties each remaining
+cluster to the already-placed set through cameras it **shares** with them (matching image names).
+It does not fit the cluster to GPS independently, so neighboring clusters agree in the overlap band.
+A cluster with no shared cameras falls back to its own GPS fit. A single-cluster input
 degenerates to the anchor-only case, matching a direct GPS fit of that one cluster.
 Requires `pycolmap`.
 
@@ -632,7 +633,7 @@ Top-surface-rasterizes a colored ENU point cloud into a georeferenced RGB ortho 
 
 `umeyama_sim3(src, dst)` fits a least-squares similarity transform — scale, rotation, and
 translation — mapping one `(N, 3)` point set onto another (Umeyama, 1991), returning
-`(scale, R, t)`; it raises if fewer than 3 non-degenerate point pairs are given.
+`(scale, R, t)`. It raises if fewer than 3 non-degenerate point pairs are given.
 `apply_sim3(T, pts)` applies that `(scale, R, t)` tuple to an `(N, 3)` point array. Both are
 plain NumPy — no `pycolmap` dependency — and are the building blocks
 `place_clusters_shared_enu` composes into a multi-cluster alignment.
@@ -644,7 +645,7 @@ and are usable on their own:
 
 - `utm_epsg_for(lon, lat)` — the WGS84 UTM zone EPSG code (`326zz` north / `327zz` south)
   for a representative lon/lat. `dense_clusters_to_products` uses it to pick the metric
-  projected CRS for the exported LAZ, so the point cloud carries real metre units instead
+  projected CRS for the exported LAZ. This gives the point cloud real metre units instead
   of a geographic CRS forcing a coarse LAS scale in degrees.
 - `enu_to_lonlat(east, north, ref_lat, ref_lon)` / `lonlat_to_enu(lon, lat, ref_lat,
   ref_lon)` — the equirectangular (local-tangent-plane) approximation converting between
@@ -702,10 +703,10 @@ Drone JPEGs (local or Volume)
   large datasets (thousands of images), collect only the matched pair list, not the image
   bytes.
 - **Sparse vs. dense**. `01a` sparse SfM recovers camera poses and a thin point cloud via
-  feature matching only, and assembles the orthomosaic by back-projecting each registered
-  image onto a planar ground estimate — not a true surface model. For higher-fidelity
+  feature matching only. It assembles the orthomosaic by back-projecting each registered
+  image onto a planar ground estimate, not a true surface model. For higher-fidelity
   workflows, the optional `01b` dense pass adds MVS depth maps (`patch_match_stereo`) and
-  fused point clouds on the Serverless GPU AI Runtime, yielding a dense ortho, DSM, and LAZ.
+  fused point clouds on the Serverless GPU AI Runtime. This yields a dense ortho, DSM, and LAZ.
 - **`exif_gbx` QC materialize cap**. In `qc` mode, each image is fully read into executor
   RAM. Images larger than the Serverless materialize cap (64 MiB) are skipped with a
   warning. Typical 12–24 MP JPEGs well within this limit; RAW or large TIFF sources may
@@ -715,18 +716,18 @@ Drone JPEGs (local or Volume)
   pipeline re-reads them by path across cells.
 - **Model Serving's request size limit**. Base64-encoding inflates a payload by roughly
   4/3, so posting a whole published COG to the `03_segment` served endpoint can exceed
-  the endpoint's request limit — a real orthomosaic COG can already be close to it.
+  the endpoint's request limit. A real orthomosaic COG can already be close to it.
   Production callers should tile a large raster and query per-tile, as `03_segment`
   itself does when it crops a representative window before calling `serving.query`.
-- **Land cover classifies one downsampled tile**. `rst_land_cover` is columnar — Spark can
-  apply it per tile across a grid — but `03_segment`'s example runs it as a single call
-  over an `rst_resample`-downsampled tile, sized to fit worker memory and appropriate for a
+- **Land cover classifies one downsampled tile**. `rst_land_cover` is columnar, so Spark can
+  apply it per tile across a grid. However, `03_segment`'s example runs it as a single call
+  over an `rst_resample`-downsampled tile. The tile is sized to fit worker memory and suits a
   map-preview scale. Full-resolution, tiled fan-out over a large scene (e.g. a whole city)
   is a follow-on, not what the notebook demonstrates.
 - **`min_area` is not an `rst_land_cover` / `rst_polygonize` parameter**. Filter small
   land-cover regions *after* polygonizing, in metric square meters, via
-  `core.crs.area_m2(geom, crs)` — a raw `geom.area` on the COG's geographic CRS is in square
-  degrees and would silently drop every region against a metric threshold.
+  `core.crs.area_m2(geom, crs)`. A raw `geom.area` on the COG's geographic CRS is in square
+  degrees. It would silently drop every region against a metric threshold.
 
 ---
 

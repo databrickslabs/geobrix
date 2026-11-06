@@ -18,7 +18,7 @@ The series uses the `rasterx` Python API plus the `geobrix[stac,vizx]` env6 whee
 :::
 
 :::note Planetary Computer free tier
-Downloads are throttled on the Planetary Computer free tier. Notebooks use [`StacClient`](../api/stac) — which re-signs URLs on every retry attempt, validates each file with a rasterio read, and publishes to the Volume only when the file is valid. Calling `client.repair("band_b02")` re-downloads any files that failed validation without re-running the full download pass.
+Downloads are throttled on the Planetary Computer free tier. Notebooks use [`StacClient`](../api/stac). It re-signs URLs on every retry attempt, validates each file with a rasterio read, and publishes to the Volume only when the file is valid. Calling `client.repair("band_b02")` re-downloads any files that failed validation without re-running the full download pass.
 :::
 
 ---
@@ -38,14 +38,14 @@ Downloads are throttled on the Planetary Computer free tier. Notebooks use [`Sta
 ![Notebook 02 — STAC items fanning out to per-band downloads with retry loop and per-band Delta tables](../../../resources/images/diagrams/eo-series/eo-series-02.png)
 
 - **Distributed download via `StacClient`** — `stac_client.download(band_rows, out_dir, asset_names=[band], ...)` fans out one task per unique `(item_id, asset_name)`, writing each GeoTIFF to a Volume and returning `out_file_path`, `out_file_sz`, and `is_out_file_valid` per file.
-- **Resilient and self-healing** — the client re-signs URLs on every retry, validates each file with a rasterio window read (rejecting throttled error bodies and truncated files), and publishes to the Volume only when the file passes. Calling `stac_client.repair("band_b02")` re-downloads invalid rows and merges the results back via Delta MERGE.
-- **Cleanly bounded scope** — only the bands you ask for (B02 / B03 / B04 / B08 by default) are pulled; the same flow extends to any other Sentinel-2 band.
+- **Resilient and self-healing** — the client re-signs URLs on every retry and validates each file with a rasterio window read. The read rejects throttled error bodies and truncated files. The client publishes to the Volume only when the file passes. Calling `stac_client.repair("band_b02")` re-downloads invalid rows and merges the results back via Delta MERGE.
+- **Cleanly bounded scope** — the notebooks pull only the bands you ask for (B02 / B03 / B04 / B08 by default). The same flow extends to any other Sentinel-2 band.
 
 ### 03 — Tessellate rasters to H3 cells
 
 ![Notebook 03 — Sentinel-2 scene → typed tile struct → H3 res-7 tessellation → per-cell timeseries](../../../resources/images/diagrams/eo-series/eo-series-03.png)
 
-- **Virtual-tile ingestion — bytes-free.** The `gtiff_gbx` reader loads each Sentinel-2 scene as [virtual tiles](../api/virtual-tiles): with `.option("tileSize", "2048,2048")` a 5490×5490 scene fans into ~9 windows, and each tile row carries a source `path` + pixel `window` **instead of raster bytes** — so `band_b0X_tile` is a table of lightweight references (`tile.raster` is `null`; `tile.path`/`tile.window` set), no pixels in Delta. `rst_initnodata` records a pending nodata instruction and `rst_srid`/`rst_boundingbox` answer from the header, all without materializing.
+- **Virtual-tile ingestion — bytes-free.** The `gtiff_gbx` reader loads each Sentinel-2 scene as [virtual tiles](../api/virtual-tiles). With `.option("tileSize", "2048,2048")`, a 5490×5490 scene fans into ~9 windows. Each tile row carries a source `path` + pixel `window` **instead of raster bytes**. As a result, `band_b0X_tile` is a table of lightweight references (`tile.raster` is `null`; `tile.path`/`tile.window` set) with no pixels in Delta. The `rst_initnodata` function records a pending nodata instruction, and `rst_srid`/`rst_boundingbox` answer from the header. All of this happens without materializing.
 - **Spatial-indexed raster tables (the materialization cut-over)** — `rst_h3_tessellate` shreds each scene into H3 resolution-7 cells, producing `band_b0X_h3` Delta tables that join cleanly across bands and dates. This is where the virtual tiles **materialize**: each window's pixels are read once, at tessellation.
 - **Raster analytics from SQL/PySpark** — `rst_summary` for per-tile stats, `h3_kring` + `rst_merge_agg` for spatial neighborhoods, and the `rst_apply` escape-hatch for raster-to-timeseries projection — no driver-side rasterio loops.
 
@@ -85,7 +85,7 @@ Downloads are throttled on the Planetary Computer free tier. Notebooks use [`Sta
 1. Open `config_nb.ipynb`, set `catalog_name` / `schema_name`, and verify the Volume exists.
 2. Run notebooks in numeric order: **01 → 02 → 03 → 04**. Each notebook starts with `%run ./config_nb` so the shared state is re-established every time.
 
-Each notebook is safe to re-run — Delta tables use `do_overwrite=False` / `do_append=False` by default, and `StacClient.download` skips assets whose files already exist and passed read-validation. To force a full rebuild of a notebook's outputs (re-run every step regardless of existing tables/files), set `FORCE_REBUILD = True` in a cell right after `%run ./config_nb`; it feeds the existing `do_overwrite` / skip-guards.
+Each notebook is safe to re-run — Delta tables use `do_overwrite=False` / `do_append=False` by default, and `StacClient.download` skips assets whose files already exist and passed read-validation. To force a full rebuild of a notebook's outputs, set `FORCE_REBUILD = True` in a cell right after `%run ./config_nb`. A full rebuild re-runs every step regardless of existing tables/files. The flag feeds the existing `do_overwrite` / skip-guards.
 
 ---
 
@@ -131,6 +131,6 @@ gtiff writer → stacked TIFs + rst_clip
 - **Antimeridian**: Alaska straddles the 180° meridian, so interactive map renderings can show results on both sides of the map.
 - **SRID awareness**: Sentinel-2 tiles arrive in UTM zones (e.g. `32608`, `32609`), not EPSG:4326 — reproject bboxes before plotting on a web map.
 - **Free-tier auth-failure payloads**: Planetary Computer returns a ~550-byte XML error body when SAS tokens expire or rate limits hit. `StacClient.download` validates each file with a rasterio window read, so these truncated/error responses are caught and marked `is_out_file_valid = false`. Call `stac_client.repair("band_b02")` to re-download and merge the repaired rows.
-- **Shuffle partitioning (Serverless-guarded)**: `StacClient.search` and `StacClient.download` control parallelism via `partitions=`; for your own steps use `DataFrame.repartition(N, "col")` — **hash by a column**, since on Serverless a number-only `repartition(N)` (round-robin) is coalesced by AQE back toward one partition (= serial). Any Spark-conf tuning in the notebooks goes through `set_conf_safe()`, which **no-ops on Serverless** (runtime Spark-conf mutation is disallowed there) and applies on classic clusters.
-- **Prefer EWKB for `rst_clip` cutlines**: notebook 04 uses `DBF.st_asewkb(DBF.st_envelope("buffer"))` so the cutline's SRID travels with the bytes into `rst_clip`. Plain WKB (no SRID) is assumed to already be in the raster's CRS and is **not** reprojected; EWKB (or EWKT) with a valid SRID triggers reprojection when it differs from the raster CRS. Use `st_asewkb` / `st_asewkt` for robust, CRS-agnostic clipping.
+- **Shuffle partitioning (Serverless-guarded)**: `StacClient.search` and `StacClient.download` control parallelism via `partitions=`. For your own steps, use `DataFrame.repartition(N, "col")` and **hash by a column**. On Serverless, AQE coalesces a number-only `repartition(N)` (round-robin) back toward one partition (= serial). Any Spark-conf tuning in the notebooks goes through `set_conf_safe()`, which **no-ops on Serverless** (runtime Spark-conf mutation is disallowed there) and applies on classic clusters.
+- **Prefer EWKB for `rst_clip` cutlines**: notebook 04 uses `DBF.st_asewkb(DBF.st_envelope("buffer"))` so the cutline's SRID travels with the bytes into `rst_clip`. Plain WKB (no SRID) is assumed to already be in the raster's CRS and is **not** reprojected. EWKB (or EWKT) with a valid SRID triggers reprojection when it differs from the raster CRS. Use `st_asewkb` / `st_asewkt` for robust, CRS-agnostic clipping.
 - **Scalar booleans pass through directly**: `rx.rst_clip("tile", "clip_wkb", True)` accepts a bare Python `True` for the `cutToCutline` flag — no `F.lit(True)` wrapping needed.

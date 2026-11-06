@@ -1054,6 +1054,11 @@ EXAMPLES = {
         "srid",
         "SELECT gbx_rst_srid(c0) AS out FROM gbx_example",
     ),
+    "gbx_rst_stats_partial": (
+        "RASTER_STAT",
+        "stats_partial",
+        "SELECT gbx_rst_stats_partial(c0) AS out FROM gbx_example",
+    ),
     "gbx_rst_subdatasets": (
         "RASTER_ACCESSOR",
         "subdatasets",

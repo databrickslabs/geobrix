@@ -3605,6 +3605,8 @@ _ARG_CHECKS = {
     "mvt_layer": _oracle_check("check_mvt_layer"),
     "grid_partial": _oracle_check("check_grid_partial"),
     "grid_stats_json": _oracle_check("check_grid_stats_json"),
+    "stats_partial": _oracle_check("check_stats_partial"),
+    "stats_merge_json": _oracle_check("check_stats_merge_json"),
 }
 
 

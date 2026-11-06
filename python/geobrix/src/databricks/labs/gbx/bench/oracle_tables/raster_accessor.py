@@ -9,7 +9,7 @@ corner is (400000, 5760000); `tile_4326` is the 64 x 48 oracle tile (0.01 degree
 
 import math
 
-from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
+from databricks.labs.gbx.bench.oracle_tables._uc_tile import BOTH, edges, recipe, share
 from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builder
 
 NODATA = -9999.0
@@ -510,3 +510,40 @@ RASTER_STAT = share(
     Case("uc_tryopen_null_tile", "gbx_rst_tryopen", (None,), "null", None, ("uc",)),
     Case("uc_sample_null_geom", "gbx_rst_sample", (STATS, None), "null", None, ("uc",)),
 )  # fmt: skip
+
+# --- gbx_rst_stats_partial: the mergeable state of each band, in one pass --------------------------------------------
+# One struct per band: count, sum, m2 (the squared deviations from the mean), min, max. The values are recomputed with
+# numpy over the masked pixels (`check_stats_partial`); the fixtures' own arithmetic is held to as well: `acc_stats` holds
+# 2..12 (mean 7, M2 110), `acc_two_band` 1..12 (M2 143) and 2..24 in steps of 2 (M2 572). A band with no valid pixel has a
+# count of 0 and NULL for the rest. The merge recipe cuts `rtg_ll` into its two halves, merges the two states in SQL
+# (Chan's update for M2), and the answer is the statistics of the WHOLE tile, which is the union of their pixels: the
+# session's per-tile answers averaged would not be.
+SP = "gbx_rst_stats_partial"
+_MERGE = (
+    "WITH rasters AS (SELECT {tile:rtg_ll_west} AS tile UNION ALL SELECT {tile:rtg_ll_east} AS tile), "
+    "parts AS (SELECT {q}gbx_rst_stats_partial(tile) AS s FROM rasters), "
+    "p AS (SELECT c.* FROM parts LATERAL VIEW inline(s) c), "
+    "w AS (SELECT *, try_divide(sum(sum) OVER (PARTITION BY band), sum(count) OVER (PARTITION BY band)) AS mu FROM p), "
+    "m AS (SELECT band, sum(count) AS count, sum(sum) AS sum, min(min) AS min, max(max) AS max, "
+    "try_divide(sum(sum), sum(count)) AS avg, "
+    "try_divide(sum(m2) + sum(count * pow(try_divide(sum, count) - mu, 2)), sum(count)) AS variance "
+    "FROM w GROUP BY band) "
+    "SELECT to_json(collect_list(named_struct('band', band, 'count', count, 'sum', sum, 'avg', avg, "
+    "'variance', variance, 'min', min, 'max', max))) AS out FROM m"
+)
+RASTER_STAT += (
+    Case("stats_partial", SP, (STATS,), "stats_partial", [(11.0, 77.0, 110.0, 2.0, 12.0)], BOTH),
+    Case(
+        "stats_partial_two_band", SP, (TWO,), "stats_partial",
+        [(12.0, 78.0, 143.0, 1.0, 12.0), (12.0, 156.0, 572.0, 2.0, 24.0)], BOTH,
+    ),
+    # single-precision pixels are accumulated in double, as rst_avg does
+    Case("stats_partial_float32", SP, (T4326,), "stats_partial", None, BOTH),
+    Case("stats_partial_all_nodata", SP, (EMPTY,), "stats_partial", [(0.0, None, None, None, None)], BOTH),
+    Case("stats_partial_null_tile", SP, (None,), "null", None, BOTH),
+    Case("stats_partial_error_tile", SP, (ERR,), "null", None, BOTH),
+    Case("stats_partial_corrupt_tile", SP, (CORRUPT,), "null", None, BOTH),
+    recipe(
+        "recipe_stats_partial_merge", SP, _MERGE, "stats_merge_json", None, BOTH, args=(Build("rtg_ll"),),
+    ),
+) + edges(stats_partial=())  # fmt: skip

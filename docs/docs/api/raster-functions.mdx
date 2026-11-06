@@ -985,6 +985,37 @@ _Examples use the CMIP5 NetCDF fixture (`prAdjust_day_HadGEM2-CC_*.nc`) which ha
   testFile="docs/tests/python/api/test_rasterx_functions_sql.py"
 />
 
+### rst_stats_partial
+
+{/* BEGIN GENERATED gbx_rst_stats_partial: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session uc python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_rst_stats_partial(tile)` | `array<struct<band:int,count:double,sum:double,m2:double,min:double,max:double>>` |
+| SQL (Unity Catalog) | `<catalog>.<schema>.gbx_rst_stats_partial(tile)` | `array<struct<band:int,count:double,sum:double,m2:double,min:double,max:double>>` |
+| Python | `rasterx.functions.rst_stats_partial(tile)` | Column |
+
+| Parameter | SQL type | UC type | Default | Description |
+|---|---|---|---|---|
+| `tile` | `TILE` | `TILE` |  | The tile to summarize. |
+{/* END GENERATED gbx_rst_stats_partial */}
+
+Give the mergeable state of each band of a tile, in one pass over the pixels.
+Each row of the array holds `count`, `sum`, `m2`, `min` and `max` for one band.
+The average of a band is `sum / count`. The variance is `m2 / count`, and the standard deviation is its square root.
+
+```sql
+SELECT t.band, t.sum / t.count AS avg, t.max - t.min AS spread
+FROM rasters r LATERAL VIEW inline(gbx_rst_stats_partial(r.tile)) t
+```
+
+The state merges across tiles of one table. Sum `count` and `sum`, and take the least `min` and the greatest `max`.
+Combine `m2` with the update on the Unity Catalog functions page, so the variance of a band that spans two tiles is exact.
+The average of the per-tile averages is not the average of the union, because the tiles hold different numbers of pixels.
+Tiles must not overlap. A pixel in two tiles counts twice.
+On Unity Catalog a virtual tile is refused, and so is a tile over the size limit.
+
 ### rst_summary
 
 {/* BEGIN GENERATED gbx_rst_summary: edit manifest/functions.json, then run gbx:manifest:gen */}

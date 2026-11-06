@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 164 functions, organized by category --------------------------------
+# --- Data: 165 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -74,7 +74,7 @@ CARDS_LEFT = [
             ]),
             Section("Statistics", [
                 "rst_min", "rst_max", "rst_avg", "rst_median", "rst_summary",
-                "rst_sample", "rst_histogram",
+                "rst_sample", "rst_histogram", "rst_stats_partial",
             ]),
         ],
     ),
@@ -415,7 +415,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'164 SQL functions for raster data on Spark &#8212; registered as '
+        f'165 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -524,7 +524,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'164 SQL functions for raster data on Spark &#8212; registered as '
+        f'165 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '

@@ -5541,6 +5541,31 @@ def rst_srid(
     )
 
 
+def rst_stats_partial(
+    tile: ColLike,
+) -> Column:
+    """Give the mergeable state of each band of a tile, so a statistic over many tiles needs no pixel.
+
+    Args:
+        tile: The tile to summarize.
+
+    Returns:
+        An array of structs, one per band: `band` (from 1), `count`, `sum`, `m2`, `min`
+        and `max`. `m2` is the sum of the squared deviations from the band's mean. A
+        band with no valid pixel has a `count` of 0 and NULL for the rest. The average
+        of a band is `sum / count` and its variance `m2 / count`. Tiles of one table
+        merge by summing `count` and `sum`, taking the least `min` and the greatest
+        `max`, and combining `m2` as the recipe on the Unity Catalog page shows. NULL
+        for a NULL tile, an error tile or a tile that cannot be read.
+
+    SQL: ``gbx_rst_stats_partial(tile)``
+    """
+    return _api.call(
+        "gbx_rst_stats_partial",
+        tile,
+    )
+
+
 def rst_subdatasets(
     tile: ColLike,
 ) -> Column:

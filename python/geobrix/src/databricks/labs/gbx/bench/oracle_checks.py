@@ -344,6 +344,96 @@ def check_grid_stats_json(case, out, args) -> Optional[str]:
     return check_grid_stats(case, json.loads(out), args)
 
 
+def _stats_reference(args):
+    """Per band of the tile `args[0]`, from numpy over the masked pixels (not the function under test): (count, sum, M2,
+    least, greatest, valid values); a band with no valid pixel is (0.0, None, None, None, None, []).
+    """
+    from databricks.labs.gbx.bench.oracles import _ref_dataset
+
+    out = []
+    with _ref_dataset(args) as src:
+        for b in range(1, src.count + 1):
+            band = src.read(b, masked=True)
+            v = band.compressed().astype("float64")
+            if v.size == 0:
+                out.append((0.0, None, None, None, None, v))
+                continue
+            out.append(
+                (
+                    float(v.size),
+                    float(v.sum()),
+                    float(((v - v.sum() / v.size) ** 2).sum()),
+                    float(v.min()),
+                    float(v.max()),
+                    v,
+                )
+            )
+    return out
+
+
+def _same_number(a, b) -> bool:
+    import math
+
+    if a is None or b is None:
+        return a is None and b is None
+    return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def check_stats_partial(case, out, args) -> Optional[str]:
+    """`stats_partial`: `out` is the array of structs (band, count, sum, m2, min, max), one per band of the tile in order.
+    Each is recomputed with numpy over the valid pixels (count, sum, M2 from the mean, least, greatest); a band with no
+    valid pixel is (0.0, NULL, NULL, NULL, NULL). A list in `expect` is held to as well (the fixture's own arithmetic).
+    """
+    if out is None:
+        return f"{case.cid}: got NULL, want one state for each band"
+    rows = list(out)
+    want = _stats_reference(args)
+    if [int(_field(r, "band")) for r in rows] != list(range(1, len(want) + 1)):
+        return f"{case.cid}: the bands are {[_field(r, 'band') for r in rows]}, want 1..{len(want)}"
+    fields = ("count", "sum", "m2", "min", "max")
+    for r, w in zip(rows, want):
+        got = tuple(_field(r, f) for f in fields)
+        if not all(_same_number(g, x) for g, x in zip(got, w[:5])):
+            return f"{case.cid}: band {_field(r, 'band')} is {got}, want {w[:5]}"
+    if case.expect is not None:
+        for r, e in zip(rows, case.expect):
+            got = tuple(_field(r, f) for f in fields)
+            if not all(_same_number(g, x) for g, x in zip(got, e)):
+                return f"{case.cid}: band {_field(r, 'band')} is {got}, the fixture's arithmetic gives {e}"
+        if len(rows) != len(case.expect):
+            return f"{case.cid}: {len(rows)} bands, want {len(case.expect)}"
+    return None
+
+
+def check_stats_merge_json(case, out, args) -> Optional[str]:
+    """`stats_merge_json`: a recipe's one value, the JSON text of the rows (band, count, sum, avg, variance, min, max) it
+    merged from the partial states of tiles cut from one tile. `args[0]` is the WHOLE tile, so the merged statistics are
+    those of the union of the pixels: the count, sum, mean, variance (M2 over the count), least and greatest.
+    """
+    import json
+
+    if out is None:
+        return f"{case.cid}: got NULL, want the merged statistics of each band"
+    rows = sorted(json.loads(out), key=lambda r: r["band"])
+    want = _stats_reference(args)
+    if [r["band"] for r in rows] != list(range(1, len(want) + 1)):
+        return f"{case.cid}: the bands are {[r['band'] for r in rows]}, want 1..{len(want)}"
+    for r, w in zip(rows, want):
+        n, s, m2, lo, hi, _ = w
+        ref = {
+            "count": n,
+            "sum": s,
+            "avg": s / n,
+            "variance": m2 / n,
+            "min": lo,
+            "max": hi,
+        }
+        bad = {k: (r[k], v) for k, v in ref.items() if not _same_number(r[k], v)}
+        if bad:
+            return f"{case.cid}: band {r['band']} differs from the union (got, want): {bad}"
+    return None
+
+
 def _band_cells(args, e):
     """Per band the valid pixel values of each cell (a dict cell id -> list), the bands (masked) and the pixel centres,
     from the tile `args[0]`: a pixel is in the cell its centre is in (the same reading as `check_grid_stats`).

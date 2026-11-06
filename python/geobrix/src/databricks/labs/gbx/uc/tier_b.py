@@ -243,6 +243,7 @@ rst_min = _scalar("gbx_rst_min", "accessors", "minimum")
 rst_max = _scalar("gbx_rst_max", "accessors", "maximum")
 rst_median = _scalar("gbx_rst_median", "accessors", "median")
 rst_pixelcount = _scalar("gbx_rst_pixelcount", "accessors", "pixelcount")
+rst_stats_partial = _scalar("gbx_rst_stats_partial", "accessors", "stats_partial")
 rst_summary = _scalar("gbx_rst_summary", "accessors", "summary")
 # an error tile has no valid pixel: it is empty
 rst_isempty = _scalar("gbx_rst_isempty", "accessors", "isempty", on_empty=True)

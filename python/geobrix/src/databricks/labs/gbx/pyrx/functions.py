@@ -423,11 +423,27 @@ _uf_boundingbox = _header_accessor_udf_file(accessors.boundingbox, BinaryType())
 # Pixel-reading (_open — materialises the window):
 _uf_isempty = _pixel_accessor_udf_file(accessors.isempty, BooleanType(), on_empty=True)
 
+# The mergeable state of each band (count, sum, m2, min, max): one pass, the whole band as the group of the grid partial.
+_STATS_PARTIAL_SCHEMA = ArrayType(
+    StructType(
+        [
+            StructField("band", IntegerType(), True),
+            StructField("count", DoubleType(), True),
+            StructField("sum", DoubleType(), True),
+            StructField("m2", DoubleType(), True),
+            StructField("min", DoubleType(), True),
+            StructField("max", DoubleType(), True),
+        ]
+    )
+)
 # Group 1 pixel accessors — FILE-aware 2-arg singletons.
 _uf_avg = _pixel_accessor_udf_file(accessors.avg, ArrayType(DoubleType()))
 _uf_min = _pixel_accessor_udf_file(accessors.minimum, ArrayType(DoubleType()))
 _uf_max = _pixel_accessor_udf_file(accessors.maximum, ArrayType(DoubleType()))
 _uf_median = _pixel_accessor_udf_file(accessors.median, ArrayType(DoubleType()))
+_uf_stats_partial = _pixel_accessor_udf_file(
+    accessors.stats_partial, _STATS_PARTIAL_SCHEMA
+)
 _uf_pixelcount = _pixel_accessor_udf_file(accessors.pixelcount, ArrayType(LongType()))
 
 # Group 1 header accessors — FILE-aware 2-arg singletons.
@@ -546,6 +562,7 @@ _u_max = _pixel_accessor_udf(accessors.maximum, ArrayType(DoubleType()))
 _u_median = _pixel_accessor_udf(accessors.median, ArrayType(DoubleType()))
 _u_pixelcount = _pixel_accessor_udf(accessors.pixelcount, ArrayType(LongType()))
 _u_avg = _pixel_accessor_udf(accessors.avg, ArrayType(DoubleType()))
+_u_stats_partial = _pixel_accessor_udf(accessors.stats_partial, _STATS_PARTIAL_SCHEMA)
 # HEADER-only accessors (open_header — answer from the header, no pixel read).
 _u_rotation = _header_accessor_udf(accessors.rotation, DoubleType())
 _u_skewx = _header_accessor_udf(accessors.skewx, DoubleType())

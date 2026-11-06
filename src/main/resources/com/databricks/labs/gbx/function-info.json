@@ -1628,6 +1628,17 @@
       ],
       "since": "0.2.0"
     },
+    "gbx_rst_stats_partial": {
+      "examples": "Examples:\n      > SELECT gbx_rst_stats_partial(c0) AS out FROM gbx_example;",
+      "usage_args": "tile",
+      "description": "Give the mergeable state of each band of a tile, so a statistic over many tiles needs no pixel.",
+      "surfaces": [
+        "session",
+        "uc",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_rst_subdatasets": {
       "examples": "Examples:\n      > SELECT gbx_rst_subdatasets(tile) AS subdatasets FROM netcdf_rasters;",
       "usage_args": "tile",

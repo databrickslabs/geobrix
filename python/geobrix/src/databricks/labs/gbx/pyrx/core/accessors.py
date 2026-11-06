@@ -170,6 +170,28 @@ def maximum(ds) -> List[Optional[float]]:
     return out
 
 
+def stats_partial(ds) -> List[dict]:
+    """The mergeable state of each band's valid pixels, one dict per band (``band`` from 1, then ``count``, ``sum``,
+    ``m2``, ``min``, ``max``): the state of one group of the raster-to-grid partial, with the whole band as the group
+    (``gridagg._grouped_measures``, one kernel). ``m2`` is the sum of the squared deviations from the band's mean. A band
+    with no valid pixel has a ``count`` of 0.0 and None for the rest. Tiles of one table merge by summing ``count`` and
+    ``sum``, taking the least ``min`` and greatest ``max``, and adding to each ``m2`` the count times the squared distance
+    of its mean from the merged mean (Chan's update)."""
+    from databricks.labs.gbx.pyrx.core import gridagg
+
+    out: List[dict] = []
+    for bi in range(1, ds.count + 1):
+        vals = _valid_values(ds, bi)
+        if vals.size:
+            _, (state,) = gridagg._grouped_measures(
+                np.zeros(vals.size, dtype=np.intp), vals, gridagg._PARTIAL
+            )
+        else:
+            state = gridagg._EMPTY_STATE
+        out.append({"band": bi, **dict(zip(gridagg.PARTIAL_FIELDS, state))})
+    return out
+
+
 def median(ds) -> List[Optional[float]]:
     """Per-band median of valid pixels; None (SQL NULL) for empty/all-invalid bands."""
     out: List[Optional[float]] = []

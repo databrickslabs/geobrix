@@ -10,7 +10,7 @@ import vizxViewers from '!!raw-loader!../../tests/python/api/vizx_viewers.py';
 
 [VizX Overview](./vizx) · [Multi-Layer Compositor](./vizx-layers) · [Vector](./vizx-vector) · [Raster](./vizx-raster)
 
-These helpers render a `.pmtiles` archive or a Cloud-Optimized GeoTIFF in a notebook — driver-side, no tile server, no distributed op. See the [Helios notebooks](../notebooks/helios) for a worked end-to-end example: `plot_pmtiles` renders all three archives (vector MVT, raster XYZ, hillshade) and `plot_cog` visualizes a 3DEP terrain COG inline in a Databricks notebook.
+These helpers render a `.pmtiles` archive or a Cloud-Optimized GeoTIFF in a notebook — driver-side, no tile server, no distributed op. See the [Helios notebooks](../notebooks/helios) for a worked end-to-end example. There `plot_pmtiles` renders all three archives (vector MVT, raster XYZ, hillshade), and `plot_cog` visualizes a 3DEP terrain COG inline in a Databricks notebook.
 
 ## `pmtiles_info`
 
@@ -50,9 +50,9 @@ plot_pmtiles(
 
 Render a `.pmtiles` archive inline in a Databricks or Jupyter notebook.
 
-**Interactive path (default):** when the archive fits within `max_embed_mb` (base64-inflated size), builds a self-contained MapLibre GL JS + pmtiles.js page with the archive embedded inline as an in-browser `FileSource`. No tile server, no remote range requests. Vector (MVT) archives render as a vector layer; raster archives (PNG/JPEG/WebP/AVIF) render as a raster layer — auto-detected from the archive header.
+**Interactive path (default):** when the archive fits within `max_embed_mb` (base64-inflated size), builds a self-contained MapLibre GL JS + pmtiles.js page. The archive is embedded inline as an in-browser `FileSource`. No tile server, no remote range requests. Vector (MVT) archives render as a vector layer; raster archives (PNG/JPEG/WebP/AVIF) render as a raster layer — auto-detected from the archive header.
 
-**Static fallback:** when the embedded archive would exceed `max_embed_mb` and `fallback=True` (the default), decodes tiles on the driver instead — raster archives → `plot_raster`; vector archives → decode MVT to geometries and `plot_static` over a contextily basemap. Pass `max_embed_mb=0` to always take the static path (useful for GitHub-renderable notebooks where interactive HTML renders blank).
+**Static fallback:** when the embedded archive would exceed `max_embed_mb` and `fallback=True` (the default), decodes tiles on the driver instead. Raster archives go to `plot_raster`. Vector archives decode MVT to geometries and go to `plot_static` over a contextily basemap. Pass `max_embed_mb=0` to always take the static path (useful for GitHub-renderable notebooks where interactive HTML renders blank).
 
 **Parameters:**
 
@@ -76,7 +76,7 @@ The interactive page pins CDN versions for reproducibility: MapLibre GL JS 4.7.1
 />
 
 :::warning Notebook embed ceiling
-The interactive embed is bounded by the **notebook cell-output cap**, not by `max_embed_mb` alone. Databricks caps cell output at **~10 MB by default (20 MB max**, which `vizx` raises automatically via `%set_cell_max_output_size_in_mb`), and `displayHTML` inflates the embedded payload **~2–3×** — so an archive over **~4–5 MB cannot embed inline** and takes the static fallback. Raising `max_embed_mb` past the cell ceiling does **not** help; reduce what you embed or stream from a URL instead.
+The interactive embed is bounded by the **notebook cell-output cap**, not by `max_embed_mb` alone. Databricks caps cell output at **~10 MB by default (20 MB max**, which `vizx` raises automatically via `%set_cell_max_output_size_in_mb`). `displayHTML` inflates the embedded payload **~2–3×**, so an archive over **~4–5 MB cannot embed inline** and takes the static fallback. Raising `max_embed_mb` past the cell ceiling does **not** help; reduce what you embed or stream from a URL instead.
 :::
 
 To inspect a small archive interactively, just call `plot_pmtiles` — it embeds inline, no server. For a large archive, drop the densest zooms until it fits, or stream full detail from a URL:
@@ -117,7 +117,7 @@ Render a Cloud-Optimized GeoTIFF over a contextily basemap as a static matplotli
 | `basemap_source` | | `None` | Override the default `contextily.providers.CartoDB.Positron`. |
 | `title` | `str` or `None` | `None` | Axes title (defaults to `"COG"`). |
 
-Requires the `[vizx]` extra plus `rasterio`. Integer rasters with values above 255 (typical for EO data — Sentinel-2 UInt16 reflectance, Landsat, etc.) are automatically stretched to the 2nd–98th percentile range so the visible range is not clipped.
+Requires the `[vizx]` extra plus `rasterio`. Integer rasters with values above 255 are automatically stretched to the 2nd–98th percentile range so the visible range is not clipped. This is typical for EO data, such as Sentinel-2 UInt16 reflectance and Landsat.
 
 <CodeFromTest
   code={vizxViewers}

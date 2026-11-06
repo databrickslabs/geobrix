@@ -20,7 +20,7 @@ register(spark)
 ```
 :::
 
-Geometries that cross the 180° antimeridian (the international date line) are a recurring problem in global datasets: a polygon whose vertices span from 170°E to 170°W appears as a 340°-wide shape in standard `[-180, 180]` longitude space, breaks bounding-box calculations, and confuses most spatial engines that expect well-behaved planar coordinates.
+Geometries that cross the 180° antimeridian (the international date line) are a recurring problem in global datasets. A polygon whose vertices span from 170°E to 170°W appears as a 340°-wide shape in standard `[-180, 180]` longitude space. It breaks bounding-box calculations. It also confuses most spatial engines that expect well-behaved planar coordinates.
 
 GeoBrix provides three composable functions — `gbx_st_shiftlongitude`, `gbx_st_split`, and `gbx_st_wrapx` — that together normalize such geometries into a clean `MULTIPOLYGON` with one piece on each side of the antimeridian. These functions assume geographic coordinates in **EPSG:4326** (degrees latitude/longitude).
 
@@ -28,10 +28,10 @@ GeoBrix provides three composable functions — `gbx_st_shiftlongitude`, `gbx_st
 
 The full pattern runs four steps:
 
-1. **Shift** the polygon from `[-180, 180]` into `[0, 360]` longitude space with `gbx_st_shiftlongitude`. This makes a crossing polygon contiguous — its western vertices (e.g. −170°) move to 190°, and the entire shape now sits around the 180° line without any coordinate-wrap artefacts.
+1. **Shift** the polygon from `[-180, 180]` into `[0, 360]` longitude space with `gbx_st_shiftlongitude`. This makes a crossing polygon contiguous. Its western vertices (e.g. −170°) move to 190°. The entire shape now sits around the 180° line without any coordinate-wrap artefacts.
 2. **Split** the contiguous polygon at the 180° meridian with `gbx_st_split`. The result is a `GEOMETRYCOLLECTION` containing two separate pieces.
 3. **Dump** the collection with the built-in `ST_Dump`, which returns the pieces as an `ARRAY<GEOMETRY>`. Index them positionally — `geom_split[0]` and `geom_split[1]`.
-4. **Wrap only the eastern piece** back into `[-180, 0]` with `gbx_st_wrapx`. The conditional `CASE WHEN ST_XMax(piece) > 180` is essential: the eastern piece (all x ≥ 180) needs wrapping; the western piece (all x ≤ 180) is already in standard longitude range and must not be touched. Applying `gbx_st_wrapx` uniformly to both pieces would shift the western piece's 180° shared edge to −180°, producing a 350°-wide polygon instead of a clean 10° strip.
+4. **Wrap only the eastern piece** back into `[-180, 0]` with `gbx_st_wrapx`. The conditional `CASE WHEN ST_XMax(piece) > 180` is essential. The eastern piece (all x ≥ 180) needs wrapping. The western piece (all x ≤ 180) is already in standard longitude range and must not be touched. Applying `gbx_st_wrapx` uniformly to both pieces would shift the western piece's 180° shared edge to −180°, producing a 350°-wide polygon instead of a clean 10° strip.
 
 The final `ST_Union(geom_0, geom_1)` / `ST_Multi` reassembles the two normalized pieces into a `MULTIPOLYGON`.
 

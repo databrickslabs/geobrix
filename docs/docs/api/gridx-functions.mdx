@@ -21,7 +21,7 @@ Complete reference for all GridX discrete-global-grid functions — CARTO Quadbi
 
 ## Overview
 
-GridX is GeoBrix's discrete-global-grid indexing package. It ships **CARTO quadbin v0** for web-mercator-aligned global indexing, **British National Grid (BNG)** for Great Britain workloads, and **custom user-defined grids** — and pairs with the product's native H3 for global hex indexing.
+GridX is GeoBrix's discrete-global-grid indexing package. It ships **CARTO quadbin v0** for web-mercator-aligned global indexing, **British National Grid (BNG)** for Great Britain workloads, and **custom user-defined grids**. It pairs with the product's native H3 for global hex indexing.
 
 - **Quadbin (CARTO v0)** — a global zoom-indexed tile addressing scheme aligned with web-mercator slippy maps, compatible with CARTO's CDB_QuadKey IDs. Cell `(z, x, y)` coordinates align with the same XYZ tile grid that PMTiles / MVT readers consume — natural for slippy-map heatmaps and global analytics.
 - **BNG (British National Grid)** — the Ordnance Survey National Grid (OSGB36) used in Great Britain for spatial indexing and location-based services. Specialized for UK-based spatial data.
@@ -82,7 +82,7 @@ The examples on this page read from **ten canonical DataFrames**, one per fixtur
 All ten views are built from inline literals in the doc-test fixture helpers (no external files or `/Volumes` dependency, so the examples run anywhere).
 
 :::tip Map any GridX cell set with `plot_static`
-[`vizx.plot_static`](./vizx-vector#static-maps) renders a column of cell ids straight from a Spark DataFrame as a **static, GitHub-renderable map over a basemap** — and it's the one helper that covers **every** GridX grid: pass `grid_system="quadbin"`, `"bng"`, or `"custom"` (as well as `"h3"`). Each grid's native CRS is handled for you (e.g. BNG's EPSG:27700 is reprojected for the basemap), and `"custom"` takes the same grid spec via `grid_conf=`. It's the quickest way to eyeball the cells the functions below produce. See [`plot_static`](./vizx-vector#static-maps) for the full parameter list.
+[`vizx.plot_static`](./vizx-vector#static-maps) renders a column of cell ids straight from a Spark DataFrame as a **static, GitHub-renderable map over a basemap**. It is the one helper that covers **every** GridX grid: pass `grid_system="quadbin"`, `"bng"`, or `"custom"` (as well as `"h3"`). Each grid's native CRS is handled for you (e.g. BNG's EPSG:27700 is reprojected for the basemap), and `"custom"` takes the same grid spec via `grid_conf=`. It's the quickest way to eyeball the cells the functions below produce. See [`plot_static`](./vizx-vector#static-maps) for the full parameter list.
 :::
 
 ---
@@ -141,7 +141,7 @@ POLYGON (... (WKT)
 The following rules apply to **all BNG functions** (`gbx_bng_*`):
 
 - **Coordinate system** — BNG geometry inputs (points and polygons) must be in **EPSG:27700** eastings/northings. WGS84 lon/lat coordinates (e.g. `POINT(-0.1278 51.5074)`) yield **empty arrays or null results** — this is the most common source of confusion.
-- **Resolution** — accepts **integer indices ±1..±6** (1 = 100km, 2 = 10km, 3 = 1km, 4 = 100m, 5 = 10m, 6 = 1m; negative values are quadrants) **or** string keys from the resolution map (e.g. `'1km'`, `'100m'`, `'10m'`). **Never** pass metres-as-integer (e.g. `1000`) — that interpretation is not supported by `BNG.getResolution` and raises an error.
+- **Resolution** — accepts **integer indices ±1..±6** **or** string keys from the resolution map (e.g. `'1km'`, `'100m'`, `'10m'`). The indices are 1 = 100km, 2 = 10km, 3 = 1km, 4 = 100m, 5 = 10m, 6 = 1m, and negative values are quadrants. **Never** pass metres-as-integer (e.g. `1000`) — that interpretation is not supported by `BNG.getResolution` and raises an error.
 - **`bng_cellarea` returns square kilometres** — not square metres. A 1km cell returns `1.0`.
 - **Cell-id format** — standard BNG grid references (e.g. `'TQ3080'`). At resolution 3 (1km), the format is two letters + four digits; the resolution level is encoded in the string length.
 
@@ -657,7 +657,7 @@ The `coverage` argument (**default `'coveras'`**) takes one of these exact value
 | `'polyfill'` | …has its *centre* inside the region (standard polyfill). |
 | `'core'` | …is *entirely* inside the region (strictest; no false positives). |
 
-Nesting: `coveras ⊇ polyfill ⊇ core`. Point and line geometries are covered only under `'coveras'` (they have no cell whose centre is inside them or that fully contains them, so `'polyfill'`/`'core'` return empty for them).
+Nesting: `coveras ⊇ polyfill ⊇ core`. Point and line geometries are covered only under `'coveras'`. They have no cell whose centre is inside them or that fully contains them, so `'polyfill'`/`'core'` return empty for them.
 
 ### quadbin_geomkring
 
@@ -1850,7 +1850,7 @@ Rows: `cellid` `STRING`, `core` `BOOLEAN`, `chip` `BINARY`.
 Explode tessellated cells into separate rows.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per tessellated cell, each carrying the cell ID and chip geometry (WKB in EPSG:27700, no SRID).
+It is powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF. It emits one output row per tessellated cell, each carrying the cell ID and chip geometry (WKB in EPSG:27700, no SRID).
 :::
 
 **Returns:**
@@ -1896,7 +1896,7 @@ Major 100km grid squares in Great Britain:
 
 Custom-grid functions run on every compute with identical `gbx_custom_*` SQL names. The Python level is a **pure-Python port of the custom-grid system** plus **shapely**. It needs no external grid library. Cell IDs are `BIGINT` values. Geometry outputs are plain WKB with **no SRID**, and the grid's `srid` is metadata only. Geometry inputs accept **WKB, EWKB, WKT, or EWKT**. Cell sets have exact parity with the JVM level. `gbx_custom_grid` returns the same descriptor struct at every level.
 
-A custom grid is a user-defined regular rectangular grid specified by its spatial extent, root cell size, and a recursive split factor. Cell IDs are `BIGINT` values; hierarchy is controlled by `cell_splits` (each level subdivides root cells into `cell_splits x cell_splits` sub-cells). Use custom grids when neither BNG nor quadbin matches your coordinate reference system or cell-size requirements — for example, a national grid in EPSG:27700 with non-standard tile sizes.
+A custom grid is a user-defined regular rectangular grid specified by its spatial extent, root cell size, and a recursive split factor. Cell IDs are `BIGINT` values; hierarchy is controlled by `cell_splits` (each level subdivides root cells into `cell_splits x cell_splits` sub-cells). Use custom grids when neither BNG nor quadbin matches your coordinate reference system or cell-size requirements. An example is a national grid in EPSG:27700 with non-standard tile sizes.
 
 ### custom_grid
 
@@ -2491,7 +2491,7 @@ register(spark)
 df.withColumn("kring", hx.h3_geomkring("geom_col", 9, 1))
 ```
 
-**Dilation modes** work the same as for BNG/quadbin/custom, and all six operate on holed geometries: `'hole-in'`, `'hole-out'`, and `'hole-out-ignore-geom'` expand from the geometry's holes; `'boundary-in-ignore-holes'` treats the polygon as solid, expanding inward across holes as if they were filled.
+**Dilation modes** work the same as for BNG/quadbin/custom, and all six operate on holed geometries. The modes `'hole-in'`, `'hole-out'`, and `'hole-out-ignore-geom'` expand from the geometry's holes. The mode `'boundary-in-ignore-holes'` treats the polygon as solid, expanding inward across holes as if they were filled.
 
 ### h3_geomkring
 
@@ -2647,13 +2647,13 @@ Streaming version of `h3_geomkloop` — one row per cell at exactly `k` steps. C
 
 `h3_viewshed_towers` runs a per-tower line-of-sight viewshed entirely in H3 cell space and
 returns one row per `(tower, visible cell)`. It is the H3-native sibling of the raster
-`rst_viewshed_towers`: for each tower it tests the in-buffer H3 cells with the exact
-`h3_los_visible` line of sight — the blocker is the surface map (DSM, or DSM + canopy), the
-observer sits at the tower-top absolute elevation, and each target receiver is the ground
+`rst_viewshed_towers`. For each tower it tests the in-buffer H3 cells with the exact
+`h3_los_visible` line of sight. The blocker is the surface map (DSM, or DSM + canopy). The
+observer sits at the tower-top absolute elevation. Each target receiver is the ground
 (DTM) elevation plus `target_height`. The two surface/ground maps are collected once to the
-driver (bounded at `viewshed_res`) and the per-tower work is fanned one-tower-per-task with
-`mapInPandas` over the towers frame repartitioned by `tower_id_col`, so the same code path runs
-on Databricks Serverless and on classic clusters. This is the mechanism that lets the Wireless
+driver (bounded at `viewshed_res`). The per-tower work is fanned one-tower-per-task with
+`mapInPandas` over the towers frame repartitioned by `tower_id_col`. The same code path
+therefore runs on Databricks Serverless and on classic clusters. This is the mechanism that lets the Wireless
 Coverage tower siting scale across Spark. H3 cell ids flow as `BIGINT` (the integer H3
 representation) in every column, matching the Databricks product H3 convention.
 

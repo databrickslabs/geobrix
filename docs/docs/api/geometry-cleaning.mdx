@@ -21,7 +21,7 @@ register(spark)
 ```
 :::
 
-Geometry *cleaning* and *normalization* act on **already-valid** geometry — geometry that passes `ST_IsValid`. This is a distinct capability from validity repair: if your geometry is invalid (self-intersections, ring topology violations, coordinate errors), fix it first with `gbx_st_makevalid` (see the [Geometry Validity](./geometry-validity) page), then clean it. If your geometry is already valid, the functions on this page improve its quality: reduce redundant vertices, snap coordinates to a precision grid, resolve linework intersections, or align features to a reference.
+Geometry *cleaning* and *normalization* act on **already-valid** geometry — geometry that passes `ST_IsValid`. This is a distinct capability from validity repair. If your geometry is invalid (self-intersections, ring topology violations, coordinate errors), fix it first with `gbx_st_makevalid` (see the [Geometry Validity](./geometry-validity) page), then clean it. If your geometry is already valid, the functions on this page improve its quality. They reduce redundant vertices, snap coordinates to a precision grid, resolve linework intersections, or align features to a reference.
 
 GeoBrix provides five cleaning functions:
 
@@ -33,13 +33,13 @@ GeoBrix provides five cleaning functions:
 
 ## Topology-preserving simplify vs the product's st_simplify
 
-The product's built-in `st_simplify` applies the Douglas-Peucker algorithm with `preserve_topology=False`. This is a vertex-dropping algorithm: it aggressively removes vertices to meet a tolerance, and in doing so it **can split a polygon into multiple pieces or collapse a small polygon to nothing**. For most use cases — rendering at small scale, reducing transfer size — this is fine, but it is not suitable for overlay, union, or intersection workflows where ring connectivity must be maintained.
+The product's built-in `st_simplify` applies the Douglas-Peucker algorithm with `preserve_topology=False`. This is a vertex-dropping algorithm. It aggressively removes vertices to meet a tolerance. In doing so it **can split a polygon into multiple pieces or collapse a small polygon to nothing**. For most use cases, such as rendering at small scale or reducing transfer size, this is fine. It is not suitable for overlay, union, or intersection workflows where ring connectivity must be maintained.
 
-`gbx_st_simplifypreservetopology` uses `preserve_topology=True`. The same Douglas-Peucker algorithm runs, but GEOS guarantees that the output geometry has the same topological class as the input: a polygon stays a polygon (not a multipolygon or an empty result), a ring stays closed, and holes stay inside their outer ring. **Use `gbx_st_simplifypreservetopology` when you need to reduce vertex count without breaking spatial relationships.** Use the product's `st_simplify` when maximum compression matters more than topology.
+`gbx_st_simplifypreservetopology` uses `preserve_topology=True`. The same Douglas-Peucker algorithm runs, but GEOS guarantees that the output geometry has the same topological class as the input. A polygon stays a polygon (not a multipolygon or an empty result), a ring stays closed, and holes stay inside their outer ring. **Use `gbx_st_simplifypreservetopology` when you need to reduce vertex count without breaking spatial relationships.** Use the product's `st_simplify` when maximum compression matters more than topology.
 
 ## gbx_st_simplifypreservetopology
 
-Simplify a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped, but the resulting geometry is guaranteed to be of the same topological class as the input and to remain valid.
+Simplify a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped. The resulting geometry is guaranteed to be of the same topological class as the input and to remain valid.
 
 **Signature:** `gbx_st_simplifypreservetopology(geom, tolerance)`
 
@@ -160,7 +160,7 @@ Node a geometry's linework: split at all self-intersections and pairwise interse
 
 Snap `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. This is useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
 
-This function is complementary to the product's `ST_ClosestPoint(g1, g2)`, which returns the single exact point on `g1` nearest to `g2` (Euclidean, 2D, no tolerance gate). Use `gbx_st_snap` to bulk-align a geometry's vertices to a reference within a tolerance; use `ST_ClosestPoint` when you need one exact nearest or projected point — for example, to project a vertex that falls outside the snap tolerance onto the reference.
+This function is complementary to the product's `ST_ClosestPoint(g1, g2)`, which returns the single exact point on `g1` nearest to `g2` (Euclidean, 2D, no tolerance gate). Use `gbx_st_snap` to bulk-align a geometry's vertices to a reference within a tolerance. Use `ST_ClosestPoint` when you need one exact nearest or projected point. An example is projecting a vertex that falls outside the snap tolerance onto the reference.
 
 **Signature:** `gbx_st_snap(geom, reference, tolerance)`
 

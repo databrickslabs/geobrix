@@ -18,16 +18,16 @@ interactive map from GeoBrix results: it is **scale-safe** and
 **Databricks-safe**, neither of which a bare `GeoDataFrame.explore()` is.
 
 - **Scale-safe.** The whole map is assembled into one self-contained HTML string
-  and embedded inline, so its size is bounded by an **embed budget**
+  and embedded inline. Its size is therefore bounded by an **embed budget**
   (`max_embed_mb`), not by a tile server. When the layers exceed the budget,
-  `plot_interactive` degrades gracefully — by default (`fallback=True`) it falls
-  back to `plot_static`; the [Multi-Layer Compositor](./vizx-layers#the-embed-size-ladder)
+  `plot_interactive` degrades gracefully. By default (`fallback=True`) it falls
+  back to `plot_static`. The [Multi-Layer Compositor](./vizx-layers#the-embed-size-ladder)
   documents the full delivery ladder (inline embed, URL streaming, downzoom,
   static). Pass `dry_run=True` to inspect the size audit without rendering.
 - **Databricks-safe.** It renders via `displayHTML` internally and returns
   `None`. Returning a folium map (or calling `.explore()`) does **not**
-  auto-render in a Databricks notebook; `plot_interactive` does the right thing in
-  both Databricks and plain Jupyter (outside a notebook — e.g. in tests — it
+  auto-render in a Databricks notebook. `plot_interactive` does the right thing in
+  both Databricks and plain Jupyter. Outside a notebook (e.g. in tests) it
   returns the HTML string so callers can assert on it).
 
 ### `plot_interactive`
@@ -74,7 +74,7 @@ plot_interactive(grid_layer(cells_df, grid_system="h3", column="band_level"))
 ```
 
 For a multi-layer overlay (say a raster DEM under vector boundaries under grid
-cells), pass a **list** of layers — see the
+cells), pass a **list** of layers. See the
 [Multi-Layer Compositor](./vizx-layers) for the layer constructors, the
 embed-size ladder, and the audit/simplify workflow.
 
@@ -83,13 +83,13 @@ embed-size ladder, and the audit/simplify workflow.
 > For compositing multiple layers in a single map, see the [Multi-Layer Compositor](./vizx-layers) — it explains the embed-size ladder, Layer types, and the audit/simplify workflow.
 
 `plot_static` renders Spark- or GeoPandas-derived geometries (or H3 cells) over
-a basemap as a **static** matplotlib figure — the GitHub-renderable counterpart
+a basemap as a **static** matplotlib figure. It is the GitHub-renderable counterpart
 to `GeoDataFrame.explore()` (whose Leaflet/folium output renders a blank
 *"Make this Notebook Trusted"* placeholder on GitHub and the docs site).
 
 The basemap is fetched from a web tile server (via `contextily`) **at execution
-time** and rasterized into the figure, so it bakes into the committed notebook
-output PNG — GitHub then displays it with no network. If the executing
+time** and rasterized into the figure. It therefore bakes into the committed notebook
+output PNG, and GitHub then displays it with no network. If the executing
 environment has no egress, the map renders without a basemap and a warning is
 emitted (never a hard error).
 
@@ -106,7 +106,7 @@ plot_static(
 ```
 
 `cmap`, `alpha`, `edgecolor`, and `markersize` left unset resolve to values
-derived from `emphasis` (`"blend"` default / `"data"`); `debug_mode` controls
+derived from `emphasis` (`"blend"` default / `"data"`). The `debug_mode` setting controls
 `[vizx]` status verbosity (`0`/`1`/`2`), and `sample_seed` selects how the
 `max_rows` cap is filled (`None` = first rows; an int = a reproducible sample).
 
@@ -161,9 +161,9 @@ plot_static(grid_gdf, ax=ax, fill=False, edgecolor="red", basemap=False)
 
 ## Adapters
 
-The vector adapters collect to the driver for interactive mapping. By default they cap the collect at `max_rows=10_000` and emit a warning if the input has more rows (pass `max_rows=None` to collect everything — at your own risk on large frames). The returned `GeoDataFrame` is in EPSG:4326, ready for `.plot()` (matplotlib) or — for an interactive map — [`plot_interactive`](#plot_interactive).
+The vector adapters collect to the driver for interactive mapping. By default they cap the collect at `max_rows=10_000` and emit a warning if the input has more rows. Pass `max_rows=None` to collect everything, at your own risk on large frames. The returned `GeoDataFrame` is in EPSG:4326, ready for `.plot()` (matplotlib) or — for an interactive map — [`plot_interactive`](#plot_interactive).
 
-For interactive (pan/zoom) maps, prefer [`plot_interactive`](#plot_interactive) over a raw `GeoDataFrame.explore()`: it is scale-safe (bare `.explore()` embeds every vertex inline, so millions of vertices hang folium and render blank) and Databricks-safe (it renders via `displayHTML`, whereas a returned folium map does not auto-render in a Databricks notebook). Calling `gdf.explore()` directly still works for small in-memory frames in plain Jupyter.
+For interactive (pan/zoom) maps, prefer [`plot_interactive`](#plot_interactive) over a raw `GeoDataFrame.explore()`. It is scale-safe (bare `.explore()` embeds every vertex inline, so millions of vertices hang folium and render blank). It is also Databricks-safe (it renders via `displayHTML`, whereas a returned folium map does not auto-render in a Databricks notebook). Calling `gdf.explore()` directly still works for small in-memory frames in plain Jupyter.
 
 ### `as_gdf`
 
@@ -217,7 +217,7 @@ st_asbinary(st_union_agg(st_geomfromwkb(h3_boundaryaswkb({cell_col}))))
 ```
 grouped by `dissolve_by`. This pushes the geometry union into the cluster, so only one small row per group is collected to the driver. The `max_rows` cap does not apply on this path.
 
-**Oversize guard**: on any driver-collect path (non-dissolve or `dissolve_engine="geopandas"`) where `max_rows` was not supplied explicitly, if the frame count exceeds 500,000 cells a `ValueError` is raised before the collect. Pass `max_rows=<n>`, `sample_seed=<int>`, or `dissolve_by=<col>` to proceed.
+**Oversize guard**: this applies on any driver-collect path (non-dissolve or `dissolve_engine="geopandas"`) where `max_rows` was not supplied explicitly. If the frame count exceeds 500,000 cells, a `ValueError` is raised before the collect. Pass `max_rows=<n>`, `sample_seed=<int>`, or `dissolve_by=<col>` to proceed.
 
 Without `dissolve_by`, each row represents one cell (useful for per-cell tooltips in `.explore()`). With `dissolve_by`, rows are merged per group into a single union footprint — far fewer geometries for large cell sets:
 

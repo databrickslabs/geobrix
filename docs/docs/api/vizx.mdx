@@ -20,10 +20,10 @@ These are driver-side, single-node helpers for inspecting results in a notebook 
 ## Key Features
 
 - **Raster plotting** — `plot_raster` / `plot_file` render tile bytes or files (single-band, RGB, percentile stretch, coverage-depth, and mask-layer composites)
-- **VRT mosaic rendering** — `plot_mosaic` renders a whole mini-COG VRT mosaic (from the `cog_gbx` `vrtMosaic` writer) as one memory-safe georeferenced image, with a bbox viewport and an optional h3 cell overlay
+- **VRT mosaic rendering** — `plot_mosaic` renders a whole mini-COG VRT mosaic (from the `cog_gbx` `vrtMosaic` writer) as one memory-safe georeferenced image. It offers a bbox viewport and an optional h3 cell overlay
 - **DataFrame → GeoPandas adapters** — `as_gdf` / `cells_as_gdf` / `grid_as_gdf` turn Spark geometry, H3-cell, and gridspec DataFrames into GeoDataFrames for `.plot()` / `.explore()`
 - **Multi-layer compositor** — `plot_static` / `plot_interactive` overlay vector, raster, grid, and PMTiles layers in a single map
-- **3-D point-cloud viewer** — `plot_point_cloud` renders a LAS/LAZ or point DataFrame as a true-color 3-D view: an interactive deck.gl orbit in a notebook, a static matplotlib PNG for GitHub
+- **3-D point-cloud viewer** — `plot_point_cloud` renders a LAS/LAZ or point DataFrame as a true-color 3-D view. It gives an interactive deck.gl orbit in a notebook and a static matplotlib PNG for GitHub
 - **PMTiles & COG viewers** — `plot_pmtiles`, `plot_cog`, and `pmtiles_info` inspect and render archives inline
 - **Python-only** — works with `rasterx` tiles; a driver-side notebook helper, not a SQL/Spark package
 

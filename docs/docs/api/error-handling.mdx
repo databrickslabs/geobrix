@@ -8,7 +8,7 @@ title: Error Handling
 GeoBrix distinguishes a **bad parameter** from **bad data**.
 
 - A **bad or non-executable parameter** — an invalid CRS code, a malformed argument, a string that cannot be resolved — raises a clear error. It is a fix-your-code problem and fails fast so you catch it during development.
-- **Bad data flowing through a column** — a corrupt geometry, a coordinate outside the target CRS's valid area — degrades to `NULL` (or an empty result) rather than failing the whole job. One bad row never kills the stage.
+- **Bad data flowing through a column** degrades to `NULL` (or an empty result) rather than failing the whole job. Examples are a corrupt geometry or a coordinate outside the target CRS's valid area. One bad row never kills the stage.
 
 This separation keeps large-scale spatial pipelines reliable: parameter mistakes surface immediately, while data quality issues in individual records are isolated and observable.
 
@@ -153,7 +153,7 @@ FROM my_table
 
 ### Bad CRS argument
 
-If the CRS argument cannot be resolved — an unrecognised authority code, an empty string, a value that is not a valid CRS — the function raises an error. This is a parameter problem: the CRS string is a constant in your query, not data flowing through the column.
+If the CRS argument cannot be resolved, the function raises an error. Examples are an unrecognised authority code, an empty string, or a value that is not a valid CRS. This is a parameter problem: the CRS string is a constant in your query, not data flowing through the column.
 
 ```sql
 -- This raises an error: "FAKE:9999" is not a valid CRS.
@@ -164,7 +164,7 @@ Fix the CRS string; do not expect this to degrade quietly.
 
 ### Reprojection domain check
 
-`gbx_st_transformcrs` checks whether each geometry falls within the target CRS's valid area. A geometry that lies outside that area — for example, a point at longitude 0° being reprojected into a CRS whose valid area covers only the eastern United States — returns `NULL` rather than producing a silently nonsensical coordinate. A geometry that straddles the boundary also returns `NULL`, erring on the side of correctness.
+`gbx_st_transformcrs` checks whether each geometry falls within the target CRS's valid area. A geometry that lies outside that area returns `NULL` rather than producing a silently nonsensical coordinate. An example is a point at longitude 0° reprojected into a CRS whose valid area covers only the eastern United States. A geometry that straddles the boundary also returns `NULL`, erring on the side of correctness.
 
 Reprojections that fell outside the target CRS's valid area are returned as `NULL`. To find them:
 
@@ -181,7 +181,7 @@ When the target CRS carries no declared area of use, the domain check is skipped
 
 ## GridX
 
-GridX functions (BNG, Quadbin, Custom) return cell ids, geometries, arrays, or structs — there is no metadata carrier — so `NULL` is the single degrade signal for bad-data conditions, the same pattern as VectorX. GridX has no crash-on-error switch.
+GridX functions (BNG, Quadbin, Custom) return cell ids, geometries, arrays, or structs, and there is no metadata carrier. So `NULL` is the single degrade signal for bad-data conditions, the same pattern as VectorX. GridX has no crash-on-error switch.
 
 ### Bad cell-id or geometry data
 
@@ -195,11 +195,11 @@ FROM my_cells
 
 **Aggregators** (`gbx_bng_cellunion_agg`, `gbx_bng_cellintersection_agg`) skip a corrupt member and continue over the remaining valid cell ids.
 
-**Generators** (`gbx_bng_kringexplode`, `gbx_bng_tessellateexplode`) emit zero rows for a bad input cell rather than a single NULL row. An inner join against a generator silently drops those inputs; if you need to surface which inputs produced nothing, join the generator's output back against your source table using an anti-join or left join on the original id.
+**Generators** (`gbx_bng_kringexplode`, `gbx_bng_tessellateexplode`) emit zero rows for a bad input cell rather than a single NULL row. An inner join against a generator silently drops those inputs. To find inputs that produced nothing, join the generator's output back to your source table with an anti-join or left join on the original id.
 
 ### Bad resolution or grid argument
 
-An out-of-range resolution, an unrecognised resolution string, or an invalid custom-grid specification raises an error rather than returning `NULL`. This is a parameter problem: the resolution is a constant in your query, not per-row data, so the error surfaces immediately during development rather than silently degrading at scale.
+An out-of-range resolution, an unrecognised resolution string, or an invalid custom-grid specification raises an error rather than returning `NULL`. This is a parameter problem. The resolution is a constant in your query, not per-row data, so the error surfaces immediately during development rather than silently degrading at scale.
 
 ```sql
 -- This raises an error: 99 is not a valid BNG resolution index.

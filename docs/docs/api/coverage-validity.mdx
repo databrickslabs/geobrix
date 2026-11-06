@@ -21,9 +21,9 @@ register(spark)
 ```
 :::
 
-A **coverage** is a set of polygons that together partition a region: each polygon may be valid on its own (passes `ST_IsValid`), yet the *set* may still be invalid because polygons overlap, or because gaps appear between them. Coverage validity is a set-level question that single-geometry validity functions cannot answer.
+A **coverage** is a set of polygons that together partition a region. Each polygon may be valid on its own (passes `ST_IsValid`). Yet the *set* may still be invalid because polygons overlap, or because gaps appear between them. Coverage validity is a set-level question that single-geometry validity functions cannot answer.
 
-The canonical use cases are polygon layers where precise boundary alignment matters: administrative boundaries, parcels, land-cover patches, building footprints, or any layer where features share edges. Gaps and overlaps in such layers cause double-counting, broken spatial joins, and tile-rendering seams.
+The canonical use cases are polygon layers where precise boundary alignment matters. Examples are administrative boundaries, parcels, land-cover patches, building footprints, or any layer where features share edges. Gaps and overlaps in such layers cause double-counting, broken spatial joins, and tile-rendering seams.
 
 GeoBrix provides two SQL grouped-aggregate functions plus one Python-API helper:
 
@@ -100,7 +100,7 @@ Same constraint as `gbx_st_coverageisvalid` — always pass the second argument 
 
 ## coverage_simplify (Python API)
 
-Topology-preserving simplification of a whole coverage. Unlike `gbx_st_simplifypreservetopology` (which simplifies each geometry independently), `coverage_simplify` simplifies the entire coverage as a unit — vertices on shared edges are dropped or kept together in both polygons, so boundaries that were shared before simplification remain shared after.
+Topology-preserving simplification of a whole coverage. Unlike `gbx_st_simplifypreservetopology` (which simplifies each geometry independently), `coverage_simplify` simplifies the entire coverage as a unit. Vertices on shared edges are dropped or kept together in both polygons, so boundaries that were shared before simplification remain shared after.
 
 This is a **Python-API only** function. There is no SQL form; it operates directly on a Spark DataFrame.
 
@@ -145,7 +145,7 @@ result = coverage_simplify(df, "admin_level", "geom_wkb", tolerance=50.0)
 
 ## Scale ceiling
 
-`gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges`, and `coverage_simplify` all require the **entire coverage group to be resident on a single executor** — GEOS needs to see all polygons in the group at once to evaluate shared edges. This is a fundamental constraint of coverage-level operations.
+`gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges`, and `coverage_simplify` all require the **entire coverage group to be resident on a single executor**. GEOS needs to see all polygons in the group at once to evaluate shared edges. This is a fundamental constraint of coverage-level operations.
 
 **Practical limit:** A coverage group that fits in one executor's Python worker (typically ~1–3 GB on Serverless, more on dedicated clusters) will process without issue. Large administrative boundary datasets with thousands of polygons and complex geometries may exceed this limit.
 

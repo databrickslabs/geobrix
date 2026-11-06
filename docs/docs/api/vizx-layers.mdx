@@ -8,9 +8,9 @@ import vizxLayers from '!!raw-loader!../../tests/python/api/vizx_layers.py';
 
 # Multi-Layer Compositor
 
-A single GeoBrix analysis often produces several result layers at once — vector zone boundaries, a raster DEM, discrete H3 grid cells, and a pre-tiled PMTiles archive. `plot_static` and `plot_interactive` accept a **list of layers** and composite them in order, so one function call produces one map.
+A single GeoBrix analysis often produces several result layers at once. Examples are vector zone boundaries, a raster DEM, discrete H3 grid cells, and a pre-tiled PMTiles archive. `plot_static` and `plot_interactive` accept a **list of layers** and composite them in order, so one function call produces one map.
 
-When the total GeoJSON + PNG payload fits within the embed budget (small by default in a notebook — see the ladder below), `plot_interactive` embeds everything inline in the HTML string — no tile server, no separate request. When it doesn't fit, the embed-size ladder picks the right path automatically. The runnable example below composites two vector layers; raster- and grid-layer usage is shown in the [Vector](./vizx-vector) and [Raster](./vizx-raster) references.
+The embed budget is small by default in a notebook (see the ladder below). When the total GeoJSON + PNG payload fits within it, `plot_interactive` embeds everything inline in the HTML string. It needs no tile server and no separate request. When it doesn't fit, the embed-size ladder picks the right path automatically. The runnable example below composites two vector layers; raster- and grid-layer usage is shown in the [Vector](./vizx-vector) and [Raster](./vizx-raster) references.
 
 :::note Opt-in extra
 The compositor requires the `[vizx]` extra. On Databricks, install it with the env wheel for your runtime, as [Installation](../installation#whl-only) describes. Off Databricks, use the plain wheel:
@@ -45,7 +45,7 @@ from databricks.labs.gbx.vizx import (
 
 ### Point clouds
 
-`point_cloud_layer` renders a LiDAR/point cloud as a decimated 2D scatter through the static compositor — the way to *see* a LAS/LAZ cloud (e.g. a dense-photogrammetry `.laz`) as points rather than only as a derived DSM/CHM raster. Points are colored by elevation `z` by default (a continuous `cmap` + colorbar), or by a `column` — pass `category_colors` for a categorical attribute like classification. Clouds larger than `max_points` (default 150k) are randomly decimated so the render stays in memory, and points reproject to Web Mercator so a cloud composes over a raster/vector layer.
+`point_cloud_layer` renders a LiDAR/point cloud as a decimated 2D scatter through the static compositor. This is the way to *see* a LAS/LAZ cloud (e.g. a dense-photogrammetry `.laz`) as points rather than only as a derived DSM/CHM raster. Points are colored by elevation `z` by default (a continuous `cmap` + colorbar), or by a `column` — pass `category_colors` for a categorical attribute like classification. Clouds larger than `max_points` (default 150k) are randomly decimated so the render stays in memory. Points reproject to Web Mercator so a cloud composes over a raster/vector layer.
 
 ```python
 from databricks.labs.gbx.vizx import plot_static, raster_layer, point_cloud_layer
@@ -120,11 +120,11 @@ Each constructor exposes a `label=` argument used in audit output and map legend
 | `"linear"` (default) | Ramp position = `(value − min) / (max − min)` | Values are roughly uniform across their range. |
 | `"quantile"` | Ramp position = the value's **percentile rank** | Values are **skewed** — a dense low range with a long tail. |
 
-Linear normalization crushes a skewed distribution into one end of the ramp: if most cells hold a small value with a few large outliers (e.g. roof counts of 1–25 in a 1–128 range), nearly every cell renders as the same pale color. `"quantile"` spreads the dense range across the full ramp so those cells stay distinguishable; the legend gains a median tick to keep the (non-linear) mapping honest.
+Linear normalization crushes a skewed distribution into one end of the ramp. Most cells may hold a small value with a few large outliers (e.g. roof counts of 1–25 in a 1–128 range). Then nearly every cell renders as the same pale color. `"quantile"` spreads the dense range across the full ramp so those cells stay distinguishable; the legend gains a median tick to keep the (non-linear) mapping honest.
 
 ### Explicit category colors
 
-For a **categorical** column — where the values are class names, not a numeric scale — a colormap assigns colors in arbitrary (alphabetical) order, so `vegetation` might land on a colormap's red while `impervious` gets its green. Pass `vector_layer(category_colors=…)` with a `{value: color}` map to fix each category to a meaningful color; the discrete legend then lists the categories present in the map's order. A value present in the data but absent from the map falls back to a neutral gray and is appended to the legend.
+For a **categorical** column, the values are class names, not a numeric scale. A colormap assigns colors in arbitrary (alphabetical) order, so `vegetation` might land on a colormap's red while `impervious` gets its green. Pass `vector_layer(category_colors=…)` with a `{value: color}` map to fix each category to a meaningful color; the discrete legend then lists the categories present in the map's order. A value present in the data but absent from the map falls back to a neutral gray and is appended to the legend.
 
 ```python
 from databricks.labs.gbx.vizx import plot_static, raster_layer, vector_layer
@@ -168,7 +168,7 @@ When total payload grows beyond the embed budget, `plot_interactive` walks throu
 | **3 — simplify** | Over budget, `simplify_tiles_spec=` provided | Runs `tippecanoe` to produce a budget-sized PMTiles archive, then re-embeds. |
 | **4 — static** | Over budget, no simplify path | Falls back to `plot_static`; GitHub-renderable PNG. |
 
-The `max_embed_mb` threshold applies to the assembled HTML byte length, not to individual layer sizes. In a Databricks notebook the practical ceiling is lower still: cell output is capped (~10 MB default, 20 MB max — `vizx` raises it automatically), and `displayHTML` inflates the payload ~2–3×, so an archive over **~4–5 MB** takes rung 3 or 4 rather than embedding.
+The `max_embed_mb` threshold applies to the assembled HTML byte length, not to individual layer sizes. In a Databricks notebook the practical ceiling is lower still. Cell output is capped (~10 MB default, 20 MB max — `vizx` raises it automatically). `displayHTML` inflates the payload ~2–3×, so an archive over **~4–5 MB** takes rung 3 or 4 rather than embedding.
 
 ## Multi-layer static composite
 
@@ -183,11 +183,11 @@ The `max_embed_mb` threshold applies to the assembled HTML byte length, not to i
   functionName="multilayer_static_example"
 />
 
-The static path renders every listed layer type except `pmtiles_layer` (which emits a warning and produces no output — use `plot_interactive` for PMTiles, or let the budget ladder decode them automatically on the fallback path).
+The static path renders every listed layer type except `pmtiles_layer`. That layer emits a warning and produces no output. Use `plot_interactive` for PMTiles, or let the budget ladder decode them automatically on the fallback path.
 
 ## Multi-layer interactive map
 
-`plot_interactive` converts each layer to MapLibre GL sources, assembles one self-contained HTML string, and either embeds it inline or streams it from a URL depending on the embed-size ladder above. Use `dry_run=True` to inspect the size audit without rendering.
+`plot_interactive` converts each layer to MapLibre GL sources and assembles one self-contained HTML string. It either embeds that string inline or streams it from a URL, depending on the embed-size ladder above. Use `dry_run=True` to inspect the size audit without rendering.
 
 <CodeFromTest
   code={vizxLayers}
@@ -251,7 +251,7 @@ When the embed budget is tight, `simplify_tiles_from_source` lets you pre-tile d
   functionName="simplify_durable_example"
 />
 
-If you already have a PMTiles archive and only need an overview embed (for example, cutting a detailed 0–14 archive down so it fits an interactive cell), you don't need to re-tile from source. Pass the archive to `plot_pmtiles(archive, interactive_fit="downzoom")` — the interactive embedder drops the highest (densest) zoom levels until the rendered archive fits the embed budget. This reduction is binary-free (no `tippecanoe`) and works for both raster and vector tiles, since it rebuilds a smaller archive from the tiles already present.
+If you already have a PMTiles archive and only need an overview embed, you don't need to re-tile from source. An example is cutting a detailed 0–14 archive down so it fits an interactive cell. Pass the archive to `plot_pmtiles(archive, interactive_fit="downzoom")` — the interactive embedder drops the highest (densest) zoom levels until the rendered archive fits the embed budget. This reduction is binary-free (no `tippecanoe`) and works for both raster and vector tiles, since it rebuilds a smaller archive from the tiles already present.
 
 :::note Requires tippecanoe
 `simplify_tiles_from_source` requires the `tippecanoe` binary (the `interactive_fit="downzoom"` archive reduction above does not).
@@ -280,17 +280,17 @@ plot_interactive(layers)
 
 ## Scale guidance
 
-The default embed budget is intentionally small — a few MB — because a Databricks notebook caps cell output (~10 MB, 20 MB max) and `displayHTML` inflates the payload ~2–3×, capping the inline archive at **~4–5 MB**. Modest vector layers embed comfortably; when your data is larger:
+The default embed budget is intentionally small, a few MB. That is because a Databricks notebook caps cell output (~10 MB, 20 MB max). `displayHTML` also inflates the payload ~2–3×, which caps the inline archive at **~4–5 MB**. Modest vector layers embed comfortably; when your data is larger:
 
 1. **Pre-tile with `simplify_tiles_from_source`** to generate a compact overview archive, then embed or stream it.
 2. **Stage the archive on a Volumes URL** and use `pmtiles_layer("https://...")` — URL mode has zero embed cost regardless of archive size.
 3. For very large datasets requiring distributed tile generation, the [Helios notebooks](../notebooks/helios) show how to produce multi-shard PMTiles archives with `gbx_pmtiles_agg` and serve them directly.
 
-**Dynamic zoom cut-over (live kernel).** `plot_interactive_dynamic(layers, simplify_tiles_spec=…)` embeds a low-zoom overview of the archive inline and streams higher-zoom detail on pan/zoom (with optional neighbour prefetch). This avoids serving the full archive at once, so it stretches the usable embed budget further. It requires a **live kernel** — it is an ipywidget and does not render in a committed `.ipynb` on GitHub or in the docs site; the static composite covers that surface.
+**Dynamic zoom cut-over (live kernel).** `plot_interactive_dynamic(layers, simplify_tiles_spec=…)` embeds a low-zoom overview of the archive inline and streams higher-zoom detail on pan/zoom (with optional neighbour prefetch). This avoids serving the full archive at once, so it stretches the usable embed budget further. It requires a **live kernel**. It is an ipywidget and does not render in a committed `.ipynb` on GitHub or in the docs site. The static composite covers that surface.
 
-**Beyond the embed budget — Databricks App tile server.** When a single archive is too large even for the dynamic cut-over, or when you need indefinite interactivity for end users outside a notebook, the long-term path is a **Databricks App** that acts as a tile server backed by your PMTiles archive on Volumes. This is a planned capability; for now, URL-mode streaming (`pmtiles_layer("https://...")`) and multi-shard archives via `gbx_pmtiles_agg` cover most production cases.
+**Beyond the embed budget — Databricks App tile server.** The long-term path is a **Databricks App** that acts as a tile server backed by your PMTiles archive on Volumes. Use it when a single archive is too large even for the dynamic cut-over. Use it also when you need indefinite interactivity for end users outside a notebook. This is a planned capability; for now, URL-mode streaming (`pmtiles_layer("https://...")`) and multi-shard archives via `gbx_pmtiles_agg` cover most production cases.
 
-The static fallback (`plot_static`) is always available as a last resort. It produces a GitHub-renderable PNG that bakes the basemap in at execution time via `contextily` — no network needed at render time, and the output displays correctly on GitHub and in docs.
+The static fallback (`plot_static`) is always available as a last resort. It produces a GitHub-renderable PNG that bakes the basemap in at execution time via `contextily`. No network is needed at render time, and the output displays correctly on GitHub and in docs.
 
 ## Next steps
 

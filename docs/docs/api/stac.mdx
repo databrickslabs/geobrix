@@ -7,7 +7,7 @@ title: STAC Client
 
 `databricks.labs.gbx.stac.StacClient` is a lightweight, Serverless-safe client for **distributed STAC search**, **resilient asset download**, and **repair** of invalid files — against any STAC catalog (default: [Planetary Computer](https://planetarycomputer.microsoft.com/)).
 
-Where a single-node STAC script serializes search requests and downloads, `StacClient` fans both operations out across the Spark cluster — one task per AOI row (search) and one task per asset (download). On Serverless, parallelism is controlled via `partitions=` and `DataFrame.repartition()`, with no `spark.conf.set` calls.
+Where a single-node STAC script serializes search requests and downloads, `StacClient` fans both operations out across the Spark cluster. It uses one task per AOI row (search) and one task per asset (download). On Serverless, parallelism is controlled via `partitions=` and `DataFrame.repartition()`, with no `spark.conf.set` calls.
 
 :::info Opt-in extra
 `StacClient` requires the `[stac]` extra (on Databricks, the env wheel with `[stac]`; see [Installation](../installation)). The `[stac]` extra pulls in `pystac-client`, `planetary-computer`, `tenacity`, and `requests`. Serverless environment version 6 (Python 3.12) is required.
@@ -15,7 +15,7 @@ Where a single-node STAC script serializes search requests and downloads, `StacC
 
 ## Ready-made downloaders
 
-For common sources you usually don't call `StacClient` directly — the `gbx.sample` package ships AOI-driven downloaders that wrap it (or the same distributed STAC pattern) with source-specific defaults, each following a **discover → download → read** flow:
+For common sources you usually don't call `StacClient` directly. The `gbx.sample` package ships AOI-driven downloaders that wrap it (or the same distributed STAC pattern) with source-specific defaults. Each follows a **discover → download → read** flow:
 
 | Downloader | Source | STAC backing |
 |---|---|---|
@@ -28,8 +28,8 @@ Reach for `StacClient` directly when you need a catalog these don't cover, or fu
 ## Installation
 
 From a Databricks notebook (Serverless or classic), install the env wheel for the runtime with the
-`[stac]` extra (`+env6` on Serverless environment 6 and DBR 19, `+env5` on environment 5 and DBR 17.3
-/ 18):
+`[stac]` extra. Use `+env6` on Serverless environment 6 and DBR 19, and `+env5` on environment 5 and DBR 17.3
+/ 18:
 
 ```python
 %pip install --quiet "geobrix[stac] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>+env6-py3-none-any.whl"
@@ -64,16 +64,16 @@ StacClient(
 | `allowed_hosts` | `None` | When set, `download` and `repair` fetch an asset only from these hosts: `"example.com"` is that host, `".example.com"` is it and every host under it (for example `".blob.core.windows.net"` for Planetary Computer assets). A host you list may resolve to a private address (an internal catalog). `None` allows any public host. |
 
 **Asset hrefs are data.** The catalog, or the table you pass to `download` or `repair`, names each href, so
-`download` checks where it goes. An href must be an `http(s)` URL whose host does not resolve to a loopback,
+`download` checks where it goes. An href must be an `http(s)` URL. Its host must not resolve to a loopback,
 link-local (such as the cloud metadata address `169.254.169.254`), cloud metadata (`fd00:ec2::254`) or unspecified
-address, even when you list it, nor to a private address unless you list the host in `allowed_hosts`; and it must be
-in `allowed_hosts` when you set it. The host checked is the one the download connects to, at an address the check
+address, even when you list it. Nor may it resolve to a private address unless you list the host in `allowed_hosts`.
+When you set `allowed_hosts`, the host must be in it. The host checked is the one the download connects to, at an address the check
 approved. Redirects are followed one at a time, and each hop is checked the same way. A
 refused asset is not retried: its row has a NULL `out_file_path` and `is_out_file_valid = false`. The download
-reads no `~/.netrc`; the `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` settings and the `REQUESTS_CA_BUNDLE` bundle of
-the environment still apply (behind a proxy, the proxy picks the address, so `allowed_hosts` is what bounds it). With
-`bbox`, the redirects are followed before GDAL opens the asset, and GDAL opens the URL they end at, resolving its host
-again; a redirect the server returns later, to one of GDAL's range reads, is followed by GDAL itself.
+reads no `~/.netrc`. The `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` settings and the `REQUESTS_CA_BUNDLE` bundle of
+the environment still apply. Behind a proxy, the proxy picks the address, so `allowed_hosts` is what bounds it. With
+`bbox`, the redirects are followed before GDAL opens the asset. GDAL opens the URL they end at, resolving its host
+again. A redirect the server returns later, to one of GDAL's range reads, is followed by GDAL itself.
 
 ---
 
@@ -243,7 +243,7 @@ repaired = client.repair("band_b02", where="is_out_file_valid = false")
 
 `StacClient` is designed for Serverless (environment version 5, Python 3.12):
 
-- **No `spark.conf.set`.** Parallelism is controlled entirely via `partitions=` in `search` and `download`, and via `DataFrame.repartition(N, "col")` in your notebook — **hash by a column**, since on Serverless a number-only `repartition(N)` is coalesced by AQE back toward one partition.
+- **No `spark.conf.set`.** Parallelism is controlled entirely via `partitions=` in `search` and `download`, and via `DataFrame.repartition(N, "col")` in your notebook. **Hash by a column**, since on Serverless a number-only `repartition(N)` is coalesced by AQE back toward one partition.
 - **No `.cache()` / `.persist()`.** Materialize search results and downloaded-file metadata to Delta tables — Delta time travel is a more durable alternative to in-memory caching and survives session restarts.
 - **One task per asset.** Each download task is independent; Serverless autoscaling routes tasks across available workers without pinning.
 

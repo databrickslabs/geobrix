@@ -16,7 +16,7 @@ import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 
 ## Overview
 
-VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, authority-string CRS handling, antimeridian normalization, distributed-shapely geometry validity, cleaning, and coverage-validity, and legacy-geometry migration.
+VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, authority-string CRS handling, antimeridian normalization, distributed-shapely geometry validity, cleaning, and coverage-validity. It also covers legacy-geometry migration.
 
 ## Key Features
 
@@ -87,7 +87,7 @@ The examples on this page read from **four canonical DataFrames**, one per funct
 | `vector_geoms` | `geom STRING` | EWKT literal `'SRID=4326;POINT (13 42)'` | CRS examples: `st_crs`, `st_setcrs`, `st_transformcrs` |
 | `legacy_geoms` | `geom_legacy STRUCT<typeId,srid,boundaries,holes>` | Legacy Mosaic struct for POINT(13, 42) | Migration: `st_legacyaswkb` |
 
-All four views are built from inline literals in the doc-test fixture helpers (no external files or `/Volumes` dependency, so the examples run anywhere): WKB `POINT Z` mass points for `tin_survey`, tile-local WKB points for `mvt_features`, an EWKT string for `vector_geoms`, and a legacy Mosaic struct for `legacy_geoms`.
+All four views are built from inline literals in the doc-test fixture helpers. There is no external file or `/Volumes` dependency, so the examples run anywhere. The views hold WKB `POINT Z` mass points for `tin_survey`, tile-local WKB points for `mvt_features`, an EWKT string for `vector_geoms`, and a legacy Mosaic struct for `legacy_geoms`.
 
 ---
 
@@ -162,7 +162,7 @@ The Python entry takes the input DataFrame first and returns it joined with the 
 
 ## Vector tile output {#vector-tile-output}
 
-Encode features into [Mapbox Vector Tile (MVT)](https://github.com/mapbox/vector-tile-spec) protobufs. Pair the per-tile MVT bytes with [`gbx_pmtiles_agg`](./pmtiles-functions#pmtiles_agg) or the [PMTiles writer](../writers/pmtiles) to publish a vector pyramid as a single `.pmtiles` archive targeting MapLibre, deck.gl, Mapbox GL JS, or Felt.
+Encode features into [Mapbox Vector Tile (MVT)](https://github.com/mapbox/vector-tile-spec) protobufs. Pair the per-tile MVT bytes with [`gbx_pmtiles_agg`](./pmtiles-functions#pmtiles_agg) or the [PMTiles writer](../writers/pmtiles) to publish a vector pyramid as a single `.pmtiles` archive. The archive targets MapLibre, deck.gl, Mapbox GL JS, or Felt.
 
 `st_asmvt` and `st_asmvt_pyramid` have the same names and output columns on every compute. Call `register(spark)` once, then use them:
 
@@ -195,7 +195,7 @@ Every level encodes MVT feature attributes with native protobuf value types:
 - **Boolean → bool value**
 - **String (and anything else) → string value**
 
-This means downstream clients (MapLibre GL JS, Mapbox GL JS, deck.gl) receive numbers as numbers and booleans as booleans — enabling numeric data-driven styles, filter expressions, and arithmetic without a client-side `parseFloat` call.
+This means downstream clients (MapLibre GL JS, Mapbox GL JS, deck.gl) receive numbers as numbers and booleans as booleans. This enables numeric data-driven styles, filter expressions, and arithmetic without a client-side `parseFloat` call.
 
 ---
 
@@ -509,7 +509,7 @@ The `'constrained'` mode (default) runs at every level. The `'conforming'` mode 
 
 ## Coordinate reference systems {#crs}
 
-Read, stamp, and reproject a geometry's CRS by **CRS string** — an ESRI code, a WKT definition, or a PROJ4 string, not only an EPSG integer. These complement the product's built-in `ST_SRID` / `ST_SetSRID` / `ST_Transform`, which take an integer SRID: use the built-ins when an EPSG code is all you need, and these when the CRS can only be named as a string. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model shared with RasterX.
+Read, stamp, and reproject a geometry's CRS by **CRS string** — an ESRI code, a WKT definition, or a PROJ4 string, not only an EPSG integer. These complement the product's built-in `ST_SRID` / `ST_SetSRID` / `ST_Transform`, which take an integer SRID. Use the built-ins when an EPSG code is all you need. Use these when the CRS can only be named as a string. See [Coordinate Reference Systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model shared with RasterX.
 
 All three have the same names and results at every level.
 
@@ -517,7 +517,7 @@ All three have the same names and results at every level.
 
 **Geometry input** — every geometry argument accepts **WKB, EWKB, WKT, and EWKT**. WKB/WKT carry no SRID; EWKB/EWKT carry one.
 
-**SQL output is always BINARY.** `gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB/EWKB) whichever encoding the geometry argument arrived in — a STRING geometry input still yields BINARY. One function has one declared return type: an input-dependent return type cannot be used in a view or any fixed schema, and WKB is how the rest of `gbx_st_*` and the built-in `ST_*` functions exchange geometries. To read a CRS back as text, wrap the result in `gbx_st_crs`; to hand it to a built-in, use `ST_GeomFromEWKB` for EWKB output (a stamped SRID) and `ST_GeomFromWKB` for plain WKB. `gbx_st_crs` returns `STRING`.
+**SQL output is always BINARY.** `gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB/EWKB) whichever encoding the geometry argument arrived in — a STRING geometry input still yields BINARY. One function has one declared return type. An input-dependent return type cannot be used in a view or any fixed schema. WKB is how the rest of `gbx_st_*` and the built-in `ST_*` functions exchange geometries. To read a CRS back as text, wrap the result in `gbx_st_crs`. To hand it to a built-in, use `ST_GeomFromEWKB` for EWKB output (a stamped SRID) and `ST_GeomFromWKB` for plain WKB. `gbx_st_crs` returns `STRING`.
 
 **Errors are the exception, not the rule.** These functions degrade rather than fail a whole column:
 
@@ -603,7 +603,7 @@ Stamps a CRS on a geometry **without reprojecting** — it relabels, it does not
 
 **Raises** when `crs` has no integer authority code, because a geometry can store only an integer SRID. That covers:
 
-- **authority-less definitions** — a raw `PROJCS[...]` WKT or a PROJ4 string such as `'+proj=utm +zone=33 +datum=WGS84'`. PROJ's fuzzy matcher *would* pair that PROJ4 string with `EPSG:32633` at partial confidence, but a geometry SRID is an exact identity claim — a guess is never silently written into one. Use `gbx_st_transformcrs` if you want the coordinates in that CRS.
+- **authority-less definitions** — a raw `PROJCS[...]` WKT or a PROJ4 string such as `'+proj=utm +zone=33 +datum=WGS84'`. PROJ's fuzzy matcher *would* pair that PROJ4 string with `EPSG:32633` at partial confidence, but a geometry SRID is an exact identity claim. A guess is never silently written into one. Use `gbx_st_transformcrs` if you want the coordinates in that CRS.
 
   This distinction is not academic: a PROJ4 string that resembles a registry CRS is not necessarily equivalent to it. One that omits a datum shift (`+towgs84=0,0,0,0,0,0,0`) can place coordinates **hundreds of metres** from the EPSG code it superficially matches. GeoBrix treats such a definition as its own CRS throughout — including when selecting the transformation used to reproject — rather than silently substituting the near-match. If you want the registry CRS, name it explicitly (`'EPSG:28992'`).
 - **non-numeric authority codes** — `'OGC:CRS84'`, `'IGNF:LAMB93'`: real, resolvable CRSes whose code simply is not an integer.

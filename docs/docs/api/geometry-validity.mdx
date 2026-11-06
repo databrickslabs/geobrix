@@ -21,7 +21,7 @@ register(spark)
 ```
 :::
 
-The **OGC Simple Features Specification (SFS)** defines what makes a geometry valid: every ring must be closed, holes must lie inside their outer boundary, no ring may properly self-intersect, every ring must have at least four points, and coordinates must be finite. Databricks Runtime's `ST_IsValid` checks these rules and returns a boolean. What it does not provide is the *why*, the *where*, or the *fix* — and at scale, a single malformed geometry can fail a worker or a shuffle.
+The **OGC Simple Features Specification (SFS)** defines what makes a geometry valid. Every ring must be closed, and holes must lie inside their outer boundary. No ring may properly self-intersect. Every ring must have at least four points, and coordinates must be finite. Databricks Runtime's `ST_IsValid` checks these rules and returns a boolean. What it does not provide is the *why*, the *where*, or the *fix*. At scale, a single malformed geometry can fail a worker or a shuffle.
 
 GeoBrix fills those gaps with two functions:
 
@@ -132,7 +132,7 @@ Repairs a geometry to OGC-SFS validity. Uses GEOS `make_valid` under the hood (v
 
 ## gbx_st_explainvalidity
 
-Diagnoses geometry validity and returns a JSON string with four fields. The `valid` and `reason` fields are always present. The `code` and `location` fields are best-effort: GEOS embeds the violation coordinate in the reason string as `Reason[x y]`, and `gbx_st_explainvalidity` extracts it to a `POINT(x y)` WKT string; `code` maps the GEOS reason prefix to a stable integer from the table below. Both are `null` when GEOS does not provide them. Nothing throws.
+Diagnoses geometry validity and returns a JSON string with four fields. The `valid` and `reason` fields are always present. The `code` and `location` fields are best-effort. GEOS embeds the violation coordinate in the reason string as `Reason[x y]`, and `gbx_st_explainvalidity` extracts it to a `POINT(x y)` WKT string. The `code` field maps the GEOS reason prefix to a stable integer from the table below. Both are `null` when GEOS does not provide them. Nothing throws.
 
 **Signature:** `gbx_st_explainvalidity(geom)`
 

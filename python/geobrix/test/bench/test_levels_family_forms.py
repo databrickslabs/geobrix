@@ -253,3 +253,73 @@ def test_a_probe_over_a_corpus_with_too_few_tiles_is_an_error_naming_both_number
     corpus = _corpus(tmp_path, 5)
     with pytest.raises(Exception, match="5.*20|20.*5"):
         lf.INPUTS["probe_paths"](spark_session_local, 20, corpus, None)
+
+
+def test_the_empty_dir_twin_sets_the_mode_in_the_worker_that_opens_the_tiles(
+    spark_session_local, tmp_path
+):
+    """Spark runs two Python UDFs in separate workers unless it chains them into one evaluation node: the `-empty` twin
+    sets `GDAL_DISABLE_READDIR_ON_OPEN` in a UDF and opens in `rst_fromfile`, so one evaluation node must hold both
+    calls (a pandas UDF beside it runs in another worker), else the twin would time the same open as the plain one.
+    """
+    corpus = _corpus(tmp_path, 24)
+    spark = spark_session_local
+    src = lf.INPUTS["probe_paths"](spark, probe.PROBE_CALLS, corpus, None)
+    sql = "SELECT count(*) AS n, sum(length(tile.raster)) AS fp, count(tile) AS n_out FROM {src}"
+    *_, df = probe._probe_run(sql, True, "t_plan")(spark, src)
+    plan = df._jdf.queryExecution().executedPlan().toString()
+    nodes = [ln for ln in plan.splitlines() if "EvalPython" in ln]
+    assert nodes and all(
+        "open_tile" in ln for ln in nodes
+    ), plan  # the open is in the UDF that sets the mode
+    assert len({ln.strip(" +-") for ln in nodes}) == 1, plan  # one node, so one worker
+
+
+def test_the_aggregate_set_keeps_its_2000_tile_input_beside_the_family_input():
+    """The family sets read 250 grouped tiles through their own input; the A set's `tiles_grouped` (and the baselines
+    stored against it) stay at 2000, and the two cached tables have different names.
+    """
+    assert lf.BASE_ROWS["tiles_grouped"] == 2000
+    assert lf.BASE_ROWS["tiles_grouped_family"] == 250
+    inputs = {
+        f.input for f in lf.FORMS["raster-aggregate"] if f.fn == "gbx_rst_merge_agg"
+    }
+    assert "tiles_grouped_family" in inputs and "tiles_grouped" not in inputs
+    a_inputs = {f.input for f in lf.FORMS["A"] if f.fn == "gbx_rst_merge_agg"}
+    assert "tiles_grouped" in a_inputs and "tiles_grouped_family" not in a_inputs
+
+
+def test_a_representative_the_manifest_lost_is_skipped_with_a_warning_not_a_crash(
+    monkeypatch,
+):
+    """`install` runs when levels_forms is imported: a KeyError there broke every set, the preflight and the worker
+    UDF imports. The manifest-pin test is what names the drift.
+    """
+    gone = fam.Rep(
+        "raster-accessor", "gbx_rst_nope", "tiles_n", fam._SCALAR, "{fn}(tile)", "int"
+    )
+    monkeypatch.setattr(fam, "REPS", [gone] + fam.REPS)
+    with pytest.warns(UserWarning, match="gbx_rst_nope"):
+        got = fam.family_forms()
+    assert "raster-accessor" in got
+    assert all(f.fn != "gbx_rst_nope" for f in got["raster-accessor"])
+
+
+def test_a_short_bng_corpus_names_the_bng_count_and_the_real_corpus_size(
+    spark_session_local, tmp_path
+):
+    """The BNG tile input found 3 EPSG:27700 tiles in a corpus of 8: the error says that, and the generator range
+    starts after the 8 tiles there are (not after the 3 BNG ones, which overlaps rows that exist).
+    """
+    from databricks.labs.gbx.bench import oracles
+
+    rows = tmp_path / "rows"
+    rows.mkdir()
+    for i in range(8):
+        crs = "EPSG:27700" if i % 3 == 0 else "EPSG:4326"
+        (rows / f"r{i}.tif").write_bytes(oracles._tile_bytes(crs, 16, 16))
+    with pytest.raises(ValueError) as e:
+        lf.INPUTS["tiles_gb_mat"](spark_session_local, 10, str(tmp_path), None)
+    why = str(e.value)
+    assert "10" in why and "3" in why and "8 tiles" in why, why
+    assert "--rows-from 8 " in why and "--rows-from 3" not in why, why

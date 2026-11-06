@@ -354,7 +354,15 @@ def _gb_tiles(virtual: bool):
         )
         if not gb:
             return None
-        corpus_guard("tiles_gb", os.path.join(corpus, "rows"), len(gb), n)
+        if len(gb) < n:
+            # about a quarter of the corpus is EPSG:27700, so the gap in BNG tiles is about four times as many corpus tiles
+            held = len(sources)
+            raise ValueError(
+                f"the scale asks for {n} British National Grid tiles but the {held} tiles of "
+                f"{os.path.join(corpus, 'rows')} hold only {len(gb)}. "
+                f"Fix: gbx:bench:gen-data --on-databricks --rows-from {held} --rows-to {held + 4 * (n - len(gb)) - 1} "
+                "(generated on Databricks, not uploaded)"
+            )
         kind = "virt" if virtual else "mat"
         return _table(
             spark,
@@ -446,8 +454,10 @@ def _plan_grouped_tiles(sources, n, skew, spark=None):
     return pairs
 
 
-def _grouped_tiles(skew: bool):
-    """`(key, tile)`: the corpus row tiles in groups of one CRS (see :func:`_plan_grouped_tiles`)."""
+def _grouped_tiles(skew: bool, label: str = ""):
+    """`(key, tile)`: the corpus row tiles in groups of one CRS (see :func:`_plan_grouped_tiles`). `label` keeps the
+    cached table of another consumer of the same recipe apart (the tile family reads fewer tiles than the aggregates).
+    """
 
     def build(spark, n, corpus, schema):
         sources = _corpus_rows(corpus)
@@ -463,7 +473,7 @@ def _grouped_tiles(skew: bool):
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_grouped_{kind}_v{RECIPE_VERSION}_{n}",
+            f"mvp_in_tiles_grouped{label}_{kind}_v{RECIPE_VERSION}_{n}",
             lambda: _tile_column(spark, pairs, False, keyed=True),
         )
 

@@ -44,24 +44,32 @@ def _probe_paths(spark, n, corpus, schema):
     )
 
 
-def _force_empty_dir(paths):
-    """A pandas UDF body: set the readdir mode of this worker process to EMPTY_DIR, pass the paths through."""
-    os.environ[READDIR_ENV] = "EMPTY_DIR"
-    return paths
+def _open_tile(empty: bool, cap_bytes):
+    """A row UDF that opens one tile as `rst_fromfile(materialize=True)` does (`pyrx.functions._fromfile_impl`), after
+    setting the readdir mode of its worker to EMPTY_DIR when `empty`. The mode is set and the open made in ONE UDF
+    because `rst_fromfile` beside a setter UDF is two Python evaluation nodes, so two workers, and the open would never
+    see the mode.
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    def open_tile(path):
+        from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+        if empty:
+            os.environ[READDIR_ENV] = "EMPTY_DIR"
+        return _fromfile_impl(path, "GTiff", True, cap_bytes=cap_bytes)
+
+    return F.udf(open_tile, TILE_SQL)
 
 
 def _probe_run(sql: str, empty: bool, name: str):
     def run(spark, src):
-        from pyspark.sql import functions as F
+        from databricks.labs.gbx.pyrx.core.budget import session_read_cap
 
-        from databricks.labs.gbx.rasterx import functions as rx
-
-        path = F.col("path")
-        if empty:
-            path = F.pandas_udf(_force_empty_dir, "string")(path)
-        tiles = spark.table(src).select(
-            rx.rst_fromfile(path, "GTiff", materialize=True).alias("tile")
-        )
+        opener = _open_tile(empty, session_read_cap(spark))
+        tiles = spark.table(src).select(opener("path").alias("tile"))
         view = f"_probe_tiles_{name}"
         tiles.createOrReplaceTempView(view)
         df = spark.sql(sql.format(src=view, uc=""))

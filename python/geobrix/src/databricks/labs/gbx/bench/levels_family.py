@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import warnings
 from typing import Dict, List, Optional, Tuple
 
 from databricks.labs.gbx.bench.levels import Form
@@ -272,7 +273,7 @@ _REUSED_FLOORS = {
         ("gbx_rst_bng_tessellate", "tiles_gb_mat", _TILE_SCAN),
     ],
     "raster-aggregate": [
-        ("gbx_rst_merge_agg", "tiles_grouped", _TILE_SCAN),
+        ("gbx_rst_merge_agg", "tiles_grouped_family", _TILE_SCAN),
     ],
     "raster-array-op": [("gbx_rst_combineavg", "tiles_aligned_mat", _TILE_SCAN)],
     "raster-tile-op": [("gbx_rst_transformcrs", "tiles_n", _TILE_SCAN)],
@@ -482,8 +483,13 @@ def family_forms() -> Dict[str, List[Form]]:
     out: Dict[str, List[Form]] = {}
     for i, rep in enumerate(REPS):
         row = rows.get(rep.fn)
-        if row is None:  # a representative the manifest no longer has: a test pins this
-            raise KeyError(f"{rep.fn} is not in the manifest")
+        if row is None:
+            # a representative the manifest no longer has: this runs when `levels_forms` is imported, so raising would
+            # break every set, the preflight and the worker UDF imports. The manifest-pin test names the drift.
+            warnings.warn(
+                f"levels: {rep.fn} is not in the manifest; its forms are skipped"
+            )
+            continue
         lv = row.levels
         tag = _label(rep.inp)
         forms: List[Form] = []
@@ -524,6 +530,10 @@ def family_forms() -> Dict[str, List[Form]]:
     return out
 
 
+# the input a reused form reads in its family: the one n-row tile input, and the family-sized grouped tiles
+_FAMILY_INPUT = {"tiles_mat": "tiles_n", "tiles_grouped": "tiles_grouped_family"}
+
+
 def reused_forms(lf) -> Dict[str, List[Form]]:
     out: Dict[str, List[Form]] = {}
     for fam, forms in _reused(lf).items():
@@ -532,7 +542,7 @@ def reused_forms(lf) -> Dict[str, List[Form]]:
             dataclasses.replace(
                 f,
                 mvp=fam,
-                input="tiles_n" if f.input == "tiles_mat" else f.input,
+                input=_FAMILY_INPUT.get(f.input, f.input),
                 # a JVM level of the BNG scalar is its own form, not a second "-"
                 variant=(
                     f"{f.level.lower()}@pts"
@@ -563,6 +573,7 @@ def install(lf) -> None:
     lf.INPUTS.update(
         {
             "tiles_n": _tiles_n,
+            "tiles_grouped_family": lf._grouped_tiles(False, "_family"),
             "points_arrays": _points_arrays,
             "file_bytes": _file_bytes,
             "mvt_rows": _mvt_rows,
@@ -577,8 +588,9 @@ def install(lf) -> None:
             "mvt_rows": 100_000,
             "tin_points": 2000,
             # the aggregate family reads a tile family's 250 tiles (five groups of about 50), not the 2000 tiles
-            # (32 GB, forty groups) the aggregate set reads: that input took a form's whole cap to build
-            "tiles_grouped": 250,
+            # (32 GB, forty groups) the aggregate set reads: that input took a form's whole cap to build. It is its
+            # own input, so the aggregate set's `tiles_grouped` (and its stored baselines) keep their 2000
+            "tiles_grouped_family": 250,
         }
     )
     for fam, forms in reused_forms(lf).items():

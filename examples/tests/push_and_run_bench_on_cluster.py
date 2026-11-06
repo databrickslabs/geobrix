@@ -416,6 +416,16 @@ def levels_set_names(root) -> tuple:
         families = sorted({f["family"] for f in json.loads(path.read_text())["functions"]})
     except (OSError, ValueError, KeyError):
         families = []
+    # A family with no forms (web-tiles is pending; the light-only families have no level to time) would pass here and
+    # fail on the cluster, after the cold start: keep the ones that have forms. Without pyspark the form table cannot be
+    # read, and every manifest family stays (the preflight says so).
+    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    try:
+        from databricks.labs.gbx.bench import levels_forms as lf
+
+        families = [f for f in families if lf.FORMS.get(f)]
+    except ImportError:
+        pass
     return LEVELS_LETTER_SETS + tuple(families)
 
 

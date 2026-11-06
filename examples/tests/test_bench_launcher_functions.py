@@ -381,3 +381,16 @@ def test_with_jar_needs_a_job_cluster_made_for_the_run(monkeypatch, capsys):
     assert launcher.main() == 2
     err = capsys.readouterr().err
     assert "--with-jar" in err and "--new-cluster" in err
+
+
+def test_a_family_with_no_forms_is_not_an_accepted_levels_set(monkeypatch, capsys):
+    """`--levels web-tiles` (pending) and the light-only families have no forms: they are refused here with exit 2, not
+    started and failed on the cluster after the cold start."""
+    pytest.importorskip("pyspark")
+    root = launcher.TESTS_DIR.parent.parent
+    sets = launcher.levels_set_names(root)
+    assert "raster-aggregate" in sets and "S" in sets
+    assert "web-tiles" not in sets
+    _no_work(monkeypatch, "--levels", "web-tiles", "--levels-scales", "1")
+    assert launcher.main() == 2
+    assert "--levels must be one of" in capsys.readouterr().err

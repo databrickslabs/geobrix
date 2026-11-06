@@ -7,8 +7,11 @@ that a cube cannot (miss cells, repeat them, carry nulls) and the shape of the w
 shuffle, no staging table, a partition per unit touched, a unit that fits in a task.
 """
 
+from dataclasses import replace
+
 import numpy as np
 import pandas as pd
+import pyarrow as pa
 import pytest
 
 zarr = pytest.importorskip("zarr")
@@ -1281,3 +1284,66 @@ def test_the_sink_keeps_a_whole_shard_in_memory_and_a_streamed_one_on_disk(
     assert not (tmp_path / "out" / "t2m" / "c" / "0" / "0" / "0").exists()
     sink.flush()
     assert (tmp_path / "out" / "t2m" / "c" / "0" / "0" / "0").exists()
+
+
+# --- what a task really holds: a complete unit ships at once, a block's bytes are not copied ----
+
+
+class _IntAxis:
+    kind = "i"
+
+    def locate(self, raw):
+        return raw, np.ones(len(raw), dtype=bool)
+
+
+def _cell_batch(t0, t1):
+    t, la, lo = np.meshgrid(
+        np.arange(t0, t1), np.arange(10), np.arange(12), indexing="ij"
+    )
+    n = t.size
+    return pa.RecordBatch.from_pydict(
+        {
+            "__d_time": t.reshape(-1),
+            "__d_latitude": la.reshape(-1),
+            "__d_longitude": lo.reshape(-1),
+            "v0": np.ones(n, np.float32),
+            "v1": np.ones(n, np.float32),
+        }
+    )
+
+
+def test_a_complete_unit_ships_at_once_not_when_the_limit_or_the_input_ends():
+    """A cell is in one place, so a unit that has all its cells will get no more: holding it
+    to the end of the input kept a whole shard in memory beside the next batch."""
+    g = _write_cells._by_shard(
+        replace(_group(), axes=(_IntAxis(),) * 3, ckinds=("i", "i", "i"))
+    )
+    fed = []
+
+    def batches():
+        for t0, t1 in ((0, 24), (24, 48)):
+            fed.append(t0)
+            yield _cell_batch(t0, t1)
+
+    run = _write_cells._combine_function(g, 1 << 40, np.array([0, 1]), 2)
+    first = next(iter(run(batches())))
+    assert first.num_rows == 1 and fed == [
+        0
+    ]  # shipped before the second batch was read
+
+
+def test_a_merged_block_is_the_unit_array_itself_not_a_copy_of_it():
+    """The block rows of a unit were ``tobytes()`` copies of every variable, then copied again
+    into Arrow, while the budget counts the dense arrays and one copy of one variable.
+    """
+    g = _group()
+    m = _write_cells._Merge(g, 0)
+    m.arrays = {v: np.zeros(m.size, dtype=g.dtypes[v]) for v in g.vars}
+    m.claimed = m.size
+    addr = {v: m.arrays[v].ctypes.data for v in g.vars}
+    out = list(m.finish())
+    assert [b.num_rows for b in out] == [1] * len(g.vars)  # a batch per variable
+    for b in out:
+        v = b.column("variable")[0].as_py()
+        assert b.column("data").buffers()[2].address == addr[v]
+        assert tuple(b.column("shape")[0].as_py()) == m.shape

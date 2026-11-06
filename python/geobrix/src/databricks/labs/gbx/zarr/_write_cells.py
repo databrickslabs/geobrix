@@ -616,6 +616,12 @@ class _Partial:
             self._put(flat, vals)
         return self.nbytes - before
 
+    @property
+    def complete(self) -> bool:
+        """Every cell of the unit is here (a repeated position is counted each time, so a
+        duplicate is still refused by ``emit`` and the merge)."""
+        return self.cells >= self.size
+
     def _put(self, flat, vals) -> None:
         for v, a in vals.items():
             self.arrays[v][flat] = a
@@ -735,6 +741,11 @@ def _combine_function(g: Group, limit: int, shards: np.ndarray, n: int):
                 else:
                     held.move_to_end(k)
                 total += p.add(flat[sel], {v: vals[v][sel] for v in g.vars})
+                if p.complete:  # a cell is in one place: this unit gets no more
+                    del held[k]
+                    total -= p.nbytes
+                    yield place(p.emit(schema))
+                    continue
                 while total > limit and len(held) > 1:
                     _, old = held.popitem(last=False)
                     total -= old.nbytes
@@ -807,7 +818,11 @@ class _Merge:
             view[m] = vals[v].reshape(part)[m]
         pv[m] = True
 
-    def finish(self) -> pa.RecordBatch:
+    def finish(self):
+        """The unit as blocks, a batch per variable. A block's bytes are the variable's array
+        itself (no ``tobytes()`` copy, no second copy into Arrow) and the array is let go once
+        its batch is out, so a unit holds its dense arrays and no more: what ``_unit_bytes``
+        counts."""
         from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW
 
         g = self.g
@@ -815,27 +830,24 @@ class _Merge:
         if have != self.claimed:
             raise _dup_error(g, self.lo, self.shape, self.claimed - have)
         dims = list(g.dims)
-        rows = []
+        at = _BLOCKS_ARROW.get_field_index("data")
         for v in g.vars:
-            a = self.arrays[v].reshape(self.shape)
-            rows.append(
-                {
-                    "variable": v,
-                    "dims": dims,
-                    "start": [x - o for x, o in zip(self.lo, g.offsets)],
-                    "stop": [
-                        x + n - o for x, n, o in zip(self.lo, self.shape, g.offsets)
-                    ],
-                    "coord_start": None,
-                    "coord_stop": None,
-                    "dtype": a.dtype.str,
-                    "shape": list(self.shape),
-                    "data": a.tobytes(),
-                    "fill_value": None,
-                    "attrs": None,
-                }
-            )
-        return pa.RecordBatch.from_pylist(rows, schema=_BLOCKS_ARROW)
+            a = self.arrays.pop(v).reshape(self.shape)
+            row = {
+                "variable": v,
+                "dims": dims,
+                "start": [x - o for x, o in zip(self.lo, g.offsets)],
+                "stop": [x + n - o for x, n, o in zip(self.lo, self.shape, g.offsets)],
+                "coord_start": None,
+                "coord_stop": None,
+                "dtype": a.dtype.str,
+                "shape": list(self.shape),
+                "data": None,
+                "fill_value": None,
+                "attrs": None,
+            }
+            b = pa.RecordBatch.from_pylist([row], schema=_BLOCKS_ARROW)
+            yield b.set_column(at, _BLOCKS_ARROW.field(at), _binary(a))
 
 
 def _merge_function(g: Group):
@@ -853,11 +865,11 @@ def _merge_function(g: Group):
                 key = int(ks[i])
                 if state is None or state.key != key:
                     if state is not None:
-                        yield state.finish()
+                        yield from state.finish()
                     state = _Merge(g, key)
                 state.take(b, i)
         if state is not None:
-            yield state.finish()
+            yield from state.finish()
 
     return run
 

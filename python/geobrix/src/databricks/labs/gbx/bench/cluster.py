@@ -3265,7 +3265,7 @@ else:
                         _zconf[_k] = spark.conf.get(_k, None)
                     except Exception as _e:
                         _zconf[_k] = f"unreadable: {type(_e).__name__}"
-                _zconf.update(planner_slots=_zr._task_slots(spark), default_parallelism=_zl["cores"])
+                _zconf.update(planner_slots=_zr._task_slots(spark), planner_slots_source=_zr.slots_source(spark), default_parallelism=_zl["cores"])
                 print("ZARR-LADDER slots", _zconf, flush=True)
                 with open(f"{OUT}/zarr_ladder_slots.json", "w") as _zf:
                     import json as _zj0

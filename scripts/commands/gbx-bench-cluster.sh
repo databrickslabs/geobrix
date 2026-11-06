@@ -102,14 +102,14 @@ Options:
                         (default <catalog>.gbx_zarr_scratch)
   --zarr-cases <csv>    Cases to run (default R1,R2,R3,W1,W2)
   --zarr-reps <n>       Runs per leg, the first cold (default 3)
-  --zarr-ladder <csv>   Also run the size-ladder read and write legs (ZL-R1..ZL-R5, ZL-W1..ZL-W5) on these rungs (of 10MB..10GB). Alone, it runs only
+  --zarr-ladder <csv>   Also run the size-ladder read and write legs (ZL-R1..ZL-R5, ZL-W1..ZL-W6) on these rungs (of 10MB..10GB). Alone, it runs only
                         the ladder (it implies --zarr-only and drops R1..W2 unless --zarr-cases is given)
   --zarr-ladder-family <csv>  county_wind and/or global_11km (default both)
   --zarr-ladder-root <path>   Stores <family>/<rung>.zarr, from gbx:bench:gen-data --zarr-ladder (default
                         <volume>/_probe/zarr/ladder)
   --zarr-ladder-cases <csv>   ZL-R1 full table, ZL-R2 box, ZL-R3 100 sites, ZL-R4 wind speed + mean, ZL-R5 one hour as a tile;
                         ZL-W1 table of cells to a manifest store, ZL-W2 to a plain store, ZL-W3 baseline (tasks write staged shards),
-                        ZL-W4 / ZL-W5 append a day to the manifest / plain store, ZL-W1s/W2s/W4s/W5s the same by pack+stage (default: all)
+                        ZL-W4 / ZL-W5 append a day to the manifest / plain store, ZL-W1s/W2s/W4s/W5s the same by pack+stage, ZL-W6 the blocks recipe (read blocks, wind speed per block, plain store) (default: all)
   --zarr-ladder-scratch <path>  Where the write legs put their stores, emptied by them (default <volume>/_probe/zarr/ladder_out/<run-id>)
   --zarr-ladder-generate      The job makes the ladder stores that are missing (on the driver's local disk, then copied to the root)
   --zarr-ladder-budget-mib <n>  Plan the reads with this decoded unit budget (the planner packs chunks into tasks up to it)

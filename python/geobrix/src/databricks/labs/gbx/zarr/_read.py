@@ -226,7 +226,18 @@ def _task_slots(spark) -> int:
     A conf Spark Connect does not expose, or one that is not a number, counts as absent;
     this never raises.
     """
+    return _slots_and_source(spark)[0]
 
+
+def slots_source(spark) -> str:
+    """Where ``_task_slots`` got its number: ``parallelism`` (``spark.default.parallelism``),
+    ``executors`` (``spark.executor.cores`` x instances), ``local`` (the ``local[N]`` master),
+    ``cluster-tags`` (the workers a Databricks cluster publishes) or ``fallback`` (no conf
+    said, so ``1``). The bench records it beside the slot count."""
+    return _slots_and_source(spark)[1]
+
+
+def _slots_and_source(spark) -> tuple[int, str]:
     def conf(key: str):
         try:
             return spark.conf.get(key, None)
@@ -240,15 +251,15 @@ def _task_slots(spark) -> int:
             return 0
 
     if n := count(conf("spark.default.parallelism")):
-        return n
+        return n, "parallelism"
     if cores := count(conf("spark.executor.cores")):
-        return cores * max(1, count(conf("spark.executor.instances")))
+        return cores * max(1, count(conf("spark.executor.instances"))), "executors"
     master = str(conf("spark.master") or "")
     if master.startswith("local"):
         inside = master.partition("[")[2].partition("]")[0].partition(",")[0].strip()
         if inside == "*":
-            return os.cpu_count() or 1
-        return count(inside) or 1
+            return os.cpu_count() or 1, "local"
+        return count(inside) or 1, "local"
     workers = count(conf(_CLUSTER_TAGS + "clusterWorkers")) or count(
         conf(_CLUSTER_TAGS + "clusterTargetWorkers")
     )
@@ -256,8 +267,8 @@ def _task_slots(spark) -> int:
         worker_type = conf(_CLUSTER_TAGS + "clusterNodeType")
         driver_type = conf(_CLUSTER_TAGS + "driverNodeType")
         if not (worker_type and driver_type and worker_type != driver_type):
-            return workers * (os.cpu_count() or 1)
-    return 1
+            return workers * (os.cpu_count() or 1), "cluster-tags"
+    return 1, "fallback"
 
 
 # --- documents -----------------------------------------------------------------------

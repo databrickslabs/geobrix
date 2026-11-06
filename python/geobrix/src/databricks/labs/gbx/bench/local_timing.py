@@ -750,7 +750,7 @@ def main(argv=None) -> int:
     )
     zl_group.add_argument(
         "--zarr-cases",
-        default="ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5,ZL-W1,ZL-W2,ZL-W3,ZL-W4,ZL-W5,ZL-W1s,ZL-W2s,ZL-W4s,ZL-W5s",
+        default="ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5,ZL-W1,ZL-W2,ZL-W3,ZL-W4,ZL-W5,ZL-W1s,ZL-W2s,ZL-W4s,ZL-W5s,ZL-W6",
         help="read (ZL-R*) and write (ZL-W*) legs to run",
     )
     zl_group.add_argument(

@@ -186,6 +186,37 @@ def test_task_slots_ignore_tags_a_connect_session_refuses():
     assert _read._task_slots(spark) == 1
 
 
+@pytest.mark.parametrize(
+    "conf, source",
+    [
+        ({"spark.default.parallelism": "16"}, "parallelism"),
+        ({"spark.executor.cores": "4"}, "executors"),
+        ({"spark.master": "local[6]"}, "local"),
+        (
+            {"spark.master": "spark://h:7077", _TAG + "clusterWorkers": "2"},
+            "cluster-tags",
+        ),
+        (
+            {
+                _TAG + "clusterWorkers": "2",
+                _TAG + "clusterNodeType": "a",
+                _TAG + "driverNodeType": "b",
+            },
+            "fallback",
+        ),
+        ({}, "fallback"),
+    ],
+)
+def test_slots_source_names_the_conf_that_gave_the_count(conf, source, monkeypatch):
+    """The bench records where its slot count came from, beside the count itself."""
+    monkeypatch.setattr(_read.os, "cpu_count", lambda: 4)
+    spark = types.SimpleNamespace(
+        conf=types.SimpleNamespace(get=lambda k, d=None: conf.get(k, d))
+    )
+    assert _read.slots_source(spark) == source
+    assert _read._task_slots(spark) == _read._slots_and_source(spark)[0]
+
+
 def _steps_cfg(meta, n=48):
     """The parts of a sample config the time split reads: one other dimension (time)."""
     return types.SimpleNamespace(

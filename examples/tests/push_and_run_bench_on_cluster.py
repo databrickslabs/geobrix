@@ -1133,7 +1133,7 @@ def main() -> int:
     zarr_ladder_root = _arg("--zarr-ladder-root", f"{volroot}/_probe/zarr/ladder")
     zarr_ladder_cases = _arg(
         "--zarr-ladder-cases",
-        "ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5,ZL-W1,ZL-W2,ZL-W3,ZL-W4,ZL-W5,ZL-W1s,ZL-W2s,ZL-W4s,ZL-W5s",
+        "ZL-R1,ZL-R2,ZL-R3,ZL-R4,ZL-R5,ZL-W1,ZL-W2,ZL-W3,ZL-W4,ZL-W5,ZL-W1s,ZL-W2s,ZL-W4s,ZL-W5s,ZL-W6",
     )
     # the write legs' stores (emptied by them) and, with --zarr-ladder-generate, the job makes the missing ladder stores first
     zarr_ladder_scratch = _arg("--zarr-ladder-scratch", f"{volroot}/_probe/zarr/ladder_out/{run_id}")

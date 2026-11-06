@@ -1,4 +1,4 @@
-"""Write legs of the Zarr size ladder (``ZL-W1`` .. ``ZL-W5``): a table of cells to a Zarr v3 store.
+"""Write legs of the Zarr size ladder (``ZL-W1`` .. ``ZL-W6``): a table of cells to a Zarr v3 store.
 
 The AccuWeather path, per store of the ladder (``bench.zarr_ladder``):
 
@@ -12,7 +12,10 @@ The AccuWeather path, per store of the ladder (``bench.zarr_ladder``):
    blocks on the store's shard grid and **stage** them in a Delta table (the writer plans a create from the block
    positions and then writes, so a block input that is a query would be evaluated twice), then write the staged blocks
    (``ZL-W1s``, ``ZL-W2s``, ``ZL-W4s``, ``ZL-W5s``);
-5. verify each output by a read-back: the cell count and the sums of the four variables equal the table's.
+5. ``ZL-W6`` is the blocks recipe, with no table of cells: ``gbx_zarr_read(output="blocks")`` of ``t2m``, ``u10``,
+   ``v10`` and the coordinates, ``wind_speed`` computed per block by a pandas UDF over the ``u10`` and ``v10`` blocks (as the
+   ``zarr-weather-features`` notebook does), and ``gbx_zarr_write(blocks, path, transactional=False)``;
+6. verify each output by a read-back: the cell count and the sums of the four variables equal the table's.
 
 Per write the leg records the wall, the steps the writer exposes (the survey of the dimension columns of a table of cells,
 position pass, ownership claim, manifest table, data files, commit; for a plain store the survey, position pass, data
@@ -74,6 +77,11 @@ WRITE_CASES: Dict[str, Tuple[str, str]] = {
     "ZL-W5s": (
         "append_day_plain_staged",
         "pack + stage a day, append it to the plain store",
+    ),
+    # read -> compute -> write with no table of cells: blocks in, a pandas UDF per block, blocks out
+    "ZL-W6": (
+        "blocks_recipe_to_zarr_plain",
+        "read blocks, wind speed per block, plain store (the Zarr-to-Zarr recipe)",
     ),
 }
 GATE_PER_GB = 1.5
@@ -221,6 +229,62 @@ def source_table(
     if shift:
         df = df.withColumn("time", F.col("time") + F.expr(f"INTERVAL {shift} HOURS"))
     return df
+
+
+def blocks_source(spark, store: str):
+    """The blocks recipe's input: the store's ``t2m``, ``u10``, ``v10`` and coordinate blocks as read, plus a
+    ``wind_speed`` block for each ``u10`` / ``v10`` pair, computed block by block (nothing is a table of cells).
+    """
+    import json as _json
+
+    import pyarrow as pa
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.zarr import gbx_zarr_read
+    from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW, BLOCKS_SCHEMA
+
+    attrs = _json.dumps({"units": "m s-1", "long_name": "10 metre wind speed"})
+
+    def wind_speed_blocks(batches):
+        # one wind_speed block per u10 / v10 pair; a cell missing in either stays missing
+        for b in batches:
+            rows = b.to_pylist()
+            for r in rows:
+                kind = r["dtype"]
+                u10 = np.frombuffer(r.pop("ud"), kind).astype("float64")
+                v10 = np.frombuffer(r.pop("vd"), kind).astype("float64")
+                fill = np.nan if r["fill_value"] is None else float(r["fill_value"])
+                missing = np.isnan(u10) | np.isnan(v10)
+                if not np.isnan(fill):
+                    missing |= (u10 == fill) | (v10 == fill)
+                speed = np.sqrt(u10**2 + v10**2)
+                speed[missing] = fill
+                r.update(
+                    variable="wind_speed",
+                    data=speed.astype(kind).tobytes(),
+                    attrs=attrs,
+                )
+            yield pa.RecordBatch.from_pylist(rows, schema=_BLOCKS_ARROW)
+
+    blocks = gbx_zarr_read(
+        spark, store, variables=["t2m", "u10", "v10", *_DIMS], output="blocks"
+    )
+    u = blocks.where("variable = 'u10'").alias("u")
+    v = blocks.where("variable = 'v10'").alias("v")
+    pairs = u.join(v, F.col("u.start") == F.col("v.start")).select(
+        "u.dims",
+        "u.start",
+        "u.stop",
+        "u.coord_start",
+        "u.coord_stop",
+        "u.dtype",
+        "u.shape",
+        F.col("u.data").alias("ud"),
+        F.col("v.data").alias("vd"),
+        "u.fill_value",
+    )
+    wind = pairs.mapInArrow(wind_speed_blocks, BLOCKS_SCHEMA)
+    return blocks.unionByName(wind)
 
 
 def _pack_stage(
@@ -376,8 +440,9 @@ def _write_call(
         kw["append_dim"] = "time"
     if cells:
         kw["dim_cols"] = {d: d for d in _DIMS}
-        if coords is not None and mode == "create":
+        if coords is not None:
             # every label is known and every storage unit has cells: the writer plans without a survey scan
+            # (a create's whole grid; an append's new steps, the other labels being the store's)
             kw["coords"], kw["complete"] = coords, True
     if kind == "plain":
         kw["transactional"] = False
@@ -594,6 +659,11 @@ def run_writes(  # noqa: C901
                     )
                 if {c4, c5} & mine and g.hours >= 2:
                     dayf = source_table(spark, store, g, hours=day, shift=g.hours)
+                    day_labels = {
+                        "time": (
+                            labels["time"][:day] + np.timedelta64(g.hours, "h")
+                        ).astype("datetime64[ns]")
+                    }
                     day_s = 0.0
                     if direct:
                         dsrc = dayf.select(*_DIMS, *VARS_OUT)
@@ -606,7 +676,15 @@ def run_writes(  # noqa: C901
                         dsrc = spark.read.table(stage_day)
                     if c4 in want:
                         wall, ph = _write_call(
-                            spark, "managed", dsrc, tbl, None, g, "append", direct
+                            spark,
+                            "managed",
+                            dsrc,
+                            tbl,
+                            None,
+                            g,
+                            "append",
+                            direct,
+                            day_labels,
                         )
                         record(c4, "managed", wall, ph, root, day_s)
                         if verify:
@@ -616,7 +694,15 @@ def run_writes(  # noqa: C901
                         note(c4, f"managed append {wall:.2f} s")
                     if c5 in want:
                         wall, ph = _write_call(
-                            spark, "plain", dsrc, plain, None, g, "append", direct
+                            spark,
+                            "plain",
+                            dsrc,
+                            plain,
+                            None,
+                            g,
+                            "append",
+                            direct,
+                            day_labels,
                         )
                         record(c5, "plain", wall, ph, plain, day_s)
                         if verify:
@@ -624,6 +710,24 @@ def run_writes(  # noqa: C901
                                 _compare(_agg(spark, plain), expect_after) or "ok"
                             )
                         note(c5, f"plain append {wall:.2f} s")
+            if "ZL-W6" in want:
+                plain6 = os.path.join(scratch, f"p6_{tag}.zarr")
+                paths.append(plain6)
+                wall, ph = _write_call(
+                    spark,
+                    "plain",
+                    blocks_source(spark, store),
+                    plain6,
+                    None,
+                    g,
+                    "create",
+                )
+                record("ZL-W6", "plain", wall, ph, plain6)
+                if verify:
+                    runs["ZL-W6"]["check"] = (
+                        _compare(_agg(spark, plain6), expect) or "ok"
+                    )
+                note("ZL-W6", f"blocks recipe {wall:.2f} s")
             if "ZL-W3" in want:
                 basel = os.path.join(scratch, f"b_{tag}.zarr")
                 paths.append(basel)

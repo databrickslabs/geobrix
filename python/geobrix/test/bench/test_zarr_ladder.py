@@ -131,7 +131,7 @@ def test_cases_are_registered_with_the_notebooks_steps():
     assert list(zlb.LADDER_CASES) == [
         "ZL-R1", "ZL-R2", "ZL-R3", "ZL-R4", "ZL-R5",
         "ZL-W1", "ZL-W2", "ZL-W3", "ZL-W4", "ZL-W5",
-        "ZL-W1s", "ZL-W2s", "ZL-W4s", "ZL-W5s",
+        "ZL-W1s", "ZL-W2s", "ZL-W4s", "ZL-W5s", "ZL-W6",
     ]  # fmt: skip
     names = [zlb.ladder_case(c)[0] for c in zlb.LADDER_CASES]
     assert names == [
@@ -149,6 +149,7 @@ def test_cases_are_registered_with_the_notebooks_steps():
         "table_to_zarr_plain_staged",
         "append_day_managed_staged",
         "append_day_plain_staged",
+        "blocks_recipe_to_zarr_plain",
     ]
     with pytest.raises(KeyError, match="no Zarr ladder case"):
         zlb.ladder_case("ZL-R9")

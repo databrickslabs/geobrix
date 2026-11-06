@@ -1,0 +1,162 @@
+---
+sidebar_position: 9
+title: Zarr at Scale
+sidebar_label: Zarr at Scale
+---
+
+import ZarrNav from '@site/src/components/ZarrNav';
+
+# Zarr at Scale: Reads and Writes from 10 MB to 10 GB
+
+<ZarrNav current="sizeladder" />
+
+A notebook that shows what reading and writing Zarr costs as a store grows from 10 MB to 10 GB. It follows two workloads:
+
+- **County wind:** a model that reads a small grid for a long time. The grid is 0.01 degrees (about 1 km) over a one degree box, hourly.
+- **Global 11 km:** a model that reads the global 0.1 degree grid, hourly.
+
+Both stores have the variables of the [weather features notebook](zarr-weather-features): `t2m`, `u10`, `v10` and `msl`. The notebook makes the store itself, with `write_era5_cube`. The `RUNG` setting picks its size.
+
+It takes the store through three steps:
+
+1. **Read** the store five ways, each timed: the full table, a box over all time, 100 sites, wind speed with an hourly area mean, and one hour as a tile. Functions: `gbx_zarr_read` and `gbx_zarr_sample`.
+2. **Write a table to Zarr.** Read the cells, add `wind_speed` in Spark columns, and write them as a plain store and as a managed store: `gbx_zarr_write`.
+3. **Append one more day** to both stores, read both back, and check that their sums equal the source.
+
+:::tip View on GitHub
+**[examples/notebooks/zarr-weather-features](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/zarr-weather-features)** — download `02_zarr_size_ladder.ipynb` and import it into your Databricks workspace to run.
+:::
+
+:::info Runs on Serverless (`geobrix[zarr]`, env6 wheel)
+Zarr needs no JAR. The notebook targets **Serverless environment 6** with the env6 wheel and `geobrix[zarr]`. On a classic **Databricks Runtime 19** cluster, install the same wheel and extra. See [Zarr Stores](../api/zarr-stores#what-you-need).
+:::
+
+---
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `02_zarr_size_ladder.ipynb` | Make or reuse a store, time five reads, write a table to a plain and a managed store, append a day, and print the timings. |
+
+---
+
+## Settings
+
+The first cell holds the settings. Change them to run another size or shape.
+
+| Setting | Values | Meaning |
+|---|---|---|
+| `CATALOG`, `SCHEMA` | a schema you can write to | Holds the managed store's manifest table. |
+| `WORK_DIR` | a Volume folder | Holds the input store and each run's output. |
+| `FAMILY` | `county_wind`, `global_11km` | The shape of the store. |
+| `RUNG` | `10MB`, `50MB`, `100MB`, `500MB`, `1GB`, `2GB`, `5GB`, `10GB` | The uncompressed size of the four variables. The store grows along time. |
+| `GENERATE` | `True`, `False` | `True` makes the store when it is missing and reuses it when it is there. `False` expects a store that exists. |
+| `CLEAN_UP`, `DROP_STORE` | `True`, `False` | `CLEAN_UP` drops this run's table and folder. `DROP_STORE` also deletes the input store. |
+
+Every run gets its own `RUN_ID`, so its table and folder never collide with another run's.
+
+---
+
+## Run order
+
+1. **Install and restart.** The `%pip install` cell is followed by `%restart_python`.
+2. **Settings.** Set the schema, the Volume, the family and the rung. A second cell names this run's table and folders.
+3. **The shape of the store.** `ladder_shape` turns the family and the rung into a number of hours and a window of the grid.
+4. **Make or reuse the store.** `write_era5_cube` builds the store one shard at a time. The notebook then reads its labels with xarray.
+5. **Reads.** Each read prints one line: its wall-clock time and what it returned.
+6. **Table to Zarr.** The notebook writes the cells as a plain store and as a managed store, and reads both back.
+7. **Append a day.** The notebook adds 24 hours to both stores and checks them against the source plus the new day. A one-hour store skips this step.
+8. **Timings, reference timings and clean up.**
+
+---
+
+## Data flow
+
+```text
+write_era5_cube(hours, step, box, chunks, shards)       Zarr v3, sharded, zstd, float32
+        │
+        ▼  <WORK_DIR>/<family>/<rung>.zarr
+        ├─▶ gbx_zarr_read(output="table")          full table
+        ├─▶ gbx_zarr_read(sel=area)                 a box over all time
+        ├─▶ gbx_zarr_sample(100 sites)              the hourly series at the sites
+        ├─▶ gbx_zarr_read(u10, v10) + Spark         wind speed and the hourly area mean
+        ├─▶ gbx_zarr_read(output="tiles")           one hour as a tile
+        │
+        ▼  cells + wind_speed (Spark columns)
+           gbx_zarr_write(dim_cols, coords, complete=True, transactional=False)   plain store
+           gbx_zarr_write(dim_cols, coords, complete=True)                        managed store
+        │
+        ▼  gbx_zarr_write(mode="append", append_dim="time")   one more day, both stores
+Read both back: same cell count and sums as the source
+```
+
+---
+
+## Plain or managed
+
+A **plain** store (`transactional=False`) is a Zarr v3 store at a path. It has no manifest table, no versions and no commit. Other tools read it as it is. Use it for one writer at a time.
+
+A **managed** store (the default) adds a manifest table. It gives all-or-nothing writes, versions, time travel and safe concurrent writers. Use it when more than one job writes, or when you need an earlier version.
+
+See [Plain stores](../writers/zarr#plain-stores-opt-in) and [Write from a table of cells](../writers/zarr#write-from-a-table-of-cells).
+
+---
+
+## Reference timings
+
+These timings were measured on two kinds of compute. **Your numbers will differ.** Compute, the Volume, and the
+other work on the cluster all change them.
+
+- **DBR 19:** Databricks Runtime 19, two workers of four cores each (`m6gd.xlarge`), dedicated access.
+- **Serverless:** Serverless environment 6. Its compute varies from run to run, so use these numbers to see the
+  shape of the cost, not to compare with a fixed cluster.
+
+Each time is the median of three runs, in seconds, for the steps in this notebook. The first run is cold. The
+global stores below 500 MB are one hour of a regional window, so "100 MB" global is a different shape from "1 GB".
+
+**County wind** (0.01 degree grid over a one degree box; 24 hours in a chunk)
+
+| Store | Compute | Full table | Box | 100 sites | Wind speed | One-hour tile | Write plain | Write managed |
+|---|---|---|---|---|---|---|---|---|
+| 100 MB | DBR 19 | 2.9 s | 2.5 s | 2.7 s | 2.3 s | 2.7 s | 9.8 s | 23.6 s |
+| 100 MB | Serverless | 3.2 s | 3.0 s | 3.3 s | 2.9 s | 2.2 s | 10.6 s | 16.0 s |
+| 1 GB | DBR 19 | 13.1 s | 9.7 s | 7.1 s | 6.9 s | 3.1 s | 37.8 s | 40.6 s |
+| 1 GB | Serverless | 14.9 s | 13.7 s | 10.0 s | 9.5 s | 2.3 s | 41.7 s | 45.8 s |
+| 10 GB | DBR 19 | 113.3 s | 86.0 s | 53.0 s | 53.7 s | 3.3 s | 333.6 s | 307.8 s |
+| 10 GB | Serverless | 55.0 s | 42.6 s | 18.7 s | 22.7 s | 3.2 s | 112.3 s | 149.6 s |
+
+**Global 11 km** (0.1 degree grid)
+
+| Store | Compute | Full table | Box | 100 sites | Wind speed | One-hour tile | Write plain | Write managed |
+|---|---|---|---|---|---|---|---|---|
+| 100 MB | DBR 19 | 12.8 s | 1.5 s | 1.2 s | 1.3 s | 4.6 s | 21.2 s | 21.4 s |
+| 100 MB | Serverless | 18.3 s | 2.2 s | 1.7 s | 2.0 s | 5.3 s | 32.0 s | 38.3 s |
+| 1 GB | DBR 19 | 23.8 s | 2.7 s | 1.4 s | 1.7 s | 4.4 s | 45.2 s | 48.5 s |
+| 1 GB | Serverless | 13.2 s | 5.8 s | 2.0 s | 2.1 s | 6.8 s | 22.0 s | 30.6 s |
+| 10 GB | DBR 19 | 151.3 s | 2.4 s | 3.0 s | 2.0 s | 10.0 s | 284.6 s | 297.4 s |
+| 10 GB | Serverless | 54.6 s | 2.9 s | 2.9 s | 2.5 s | 7.8 s | 94.8 s | 71.9 s |
+
+What the numbers show:
+
+- **A full-table read grows with the size of the store.** At 10 GB it takes 113 s (county) and 151 s (global) on DBR 19, and about 55 s on Serverless.
+- **Reads of a part of the store stay short.** On the global grid the box, the 100 sites, the wind speed and the one-hour tile take 10 s or less at every rung. They read only the chunks they need.
+- **A county store has one spatial chunk.** Its box, site and wind-speed reads therefore grow with the length of the series.
+- **Plain and managed writes are close from 1 GB.** At 100 MB the plain write is faster, by a fixed cost of seconds that the manifest and the commit add.
+
+---
+
+## Gotchas
+
+- **A warm-up read comes first.** The first read of a session starts the Zarr readers on the cluster. The notebook does it before the timings, so they leave out the start-up.
+- **Pass `coords` and `complete=True`.** Without them the writer scans the table once before it writes. With them the table is read once. See [Zarr to Zarr: compute on cells](../writers/zarr#zarr-to-zarr-compute-on-cells).
+- **Small global rungs are one hour.** Below 500 MB the global store is one hour of a window of the grid. It has no day to append.
+- **The data is synthetic.** The values are smooth made-up fields with noise. They compress like real weather data, so read the timings as the shape of the cost, not as a forecast of yours.
+
+---
+
+## Next steps
+
+- [Zarr Performance and Limits](../api/zarr-performance) — what reads and writes cost, and why
+- [Zarr Reader](../readers/zarr) and [Zarr Writer](../writers/zarr)
+- [Weather Features with Zarr](zarr-weather-features) — the transactional workflow: register, write back, version and tag

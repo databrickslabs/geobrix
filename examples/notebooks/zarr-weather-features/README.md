@@ -34,6 +34,15 @@ speed over the whole grid and clipped to Australia, and tags version 2 `training
 reproduce from the tag with no row different. A last check confirms the cube's files are
 unchanged. The committed outputs are from a run on Serverless environment 6.
 
+### 02\_zarr\_size\_ladder.ipynb
+
+Reads and writes at scale. It makes (or reuses) an ERA5-like store of 10 MB to 10 GB in one of two
+shapes, a county box at 0.01 degrees or the global 0.1 degree grid, and times five reads on it: the
+full table, a box over all time, 100 sites, wind speed with an hourly area mean, and one hour as a
+tile. It then writes the cells with a `wind_speed` column as a plain store and as a managed store,
+appends one more day to both, and checks that both read back equal. It ends with the timings of the
+run and reference timings from Databricks Runtime 19 and Serverless. It needs only the `zarr` extra.
+
 ---
 
 ## Files
@@ -41,6 +50,7 @@ unchanged. The committed outputs are from a run on Serverless environment 6.
 | File | Purpose |
 |---|---|
 | `01_zarr_weather_features.ipynb` | The walk-through: register → read → sample → write back → history → tiles → tag. |
+| `02_zarr_size_ladder.ipynb` | Scale: make a store, time five reads, write a table to Zarr (plain and managed), append a day. |
 
 ---
 

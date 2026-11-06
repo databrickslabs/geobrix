@@ -30,7 +30,10 @@ const ROWS = [
   },
   {
     label: 'Example',
-    items: [['notebook', 'Weather features notebook', '/docs/notebooks/zarr-weather-features']],
+    items: [
+      ['notebook', 'Weather features notebook', '/docs/notebooks/zarr-weather-features'],
+      ['sizeladder', 'Zarr at scale notebook', '/docs/notebooks/zarr-size-ladder'],
+    ],
   },
 ];
 

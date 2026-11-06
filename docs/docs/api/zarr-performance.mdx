@@ -20,6 +20,8 @@ and layouts GeoBrix supports, with the fix for each refusal.
 What a store costs to read and write depends on its layout and on the compute. The figures below were
 measured on Databricks to show the shape of the trade-offs. They are not a guarantee.
 
+To time reads and writes on your own data and compute, run the [Zarr at scale notebook](../notebooks/zarr-size-ladder). It runs the same steps on stores from 10 MB to 10 GB.
+
 **In short**
 
 - **Reading a box over many hours is fast.** A read fetches only the chunks the box touches, in a few
@@ -182,4 +184,5 @@ Details behind the table:
 
 - [Lifecycle and retention](./zarr-lifecycle): `gbx_zarr_optimize` brings read times back after many small writes.
 - [Zarr Writer](../writers/zarr): `chunks` presets and shaping blocks to the store's grid.
+- [Zarr at scale](../notebooks/zarr-size-ladder): a notebook that times five reads and a table to Zarr write from 10 MB to 10 GB, with reference timings.
 - [Limitations](../limitations): the limits that apply across GeoBrix.

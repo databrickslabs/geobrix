@@ -44,6 +44,7 @@ Zarr stores need no JAR. The notebook targets **Serverless environment 6** with 
 | File | Purpose |
 |---|---|
 | `01_zarr_weather_features.ipynb` | The walk-through: register → read → sample → write back → history → tiles → tag, with a last check that the cube's files are unchanged. |
+| `02_zarr_size_ladder.ipynb` | A second notebook, [Zarr at Scale](zarr-size-ladder): reads and table to Zarr writes timed from 10 MB to 10 GB. |
 | `README.md` | Setup instructions, requirements, and a summary of each step. |
 
 ---
@@ -119,3 +120,5 @@ Tagged version: outlives retain and vacuum; the 4,800 feature rows reproduce fro
 - **Not every Delta version is a GeoBrix commit.** A store version is a version of the manifest table, and Delta may compact the table on its own. In the committed run the tag landed at version 4, because version 3 was an automatic `OPTIMIZE`; `gbx_zarr_history` lists only GeoBrix commits, so it shows versions 1, 2 and 4.
 - **Versions last for `retain`.** Old versions stay readable for the store's `retain` period (7 days by default); a tag keeps one for as long as the tag exists.
 - **The data is synthetic.** The sample cube's fields are smooth made-up patterns, so values such as the sites' mean wind speeds sit close together; they illustrate the workflow, not the weather.
+
+For the cost of reads and writes as a store grows, see [Zarr at Scale](zarr-size-ladder).

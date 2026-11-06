@@ -58,6 +58,7 @@ const sidebars = {
             'notebooks/vapor-eyes',
             'notebooks/orthomosaic',
             'notebooks/zarr-weather-features',
+            'notebooks/zarr-size-ladder',
           ],
         },
         {

@@ -269,10 +269,13 @@ def _tile_column(spark, pairs, virtual: bool, keyed: bool):
 def _grouped(recipe: str, virtual: bool):
     """Groups of tiles for the by-key helpers: each corpus row tile with the members the multi-tile
     recipe of ``bench.synth`` writes beside it (merge: two offset copies; combineavg: two aligned
-    copies), keyed by the recipe directory's hash. The members are files under the corpus, written once, and
-    written by the tasks that read them: one row per source tile is spread over the compute's slots, each task
-    writes its sources' members and reads them, so the driver does neither (writing them one after another on the
-    driver took 540-825 s at 1x).
+    copies), keyed by the recipe directory's hash.
+
+    The merge members are files under the corpus, written once, by tasks (one row per source tile, spread over the
+    compute's slots; writing them one after another on the driver took 540-825 s at 1x) in a job of their own, so the
+    write and the table build are timed apart. The combineavg members are the source tile twice: the recipe's two
+    copies hold the source's pixels, grid, CRS and NoData unchanged (``synth._synth_combineavg`` writes the same
+    arrays with the source's profile), so the group is `explode(array(src, src))` and nothing is written to the Volume.
     """
 
     def build(spark, n, corpus, schema):
@@ -286,37 +289,49 @@ def _grouped(recipe: str, virtual: bool):
         from databricks.labs.gbx.rasterx import functions as rx
 
         corpus_guard("tiles_grouped", os.path.join(corpus, "rows"), len(sources), n)
-        plan = [
-            (
-                os.path.basename(
-                    synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe)
-                ),
-                src,
-                synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe),
-            )
-            for src in sources[:n]
-        ]
+        plan = []
+        for src in sources[:n]:
+            out = synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe)
+            plan.append((os.path.basename(out), src, out))
         kind = "virt" if virtual else "mat"
 
         def tiles():
-            members = F.udf(
-                lambda src, out: synth.synthesize(src, recipe, out), "array<string>"
+            spread = family_partitions(spark, len(plan))
+            plan_df = client_dataframe(
+                spark,
+                plan,
+                "key string, src string, out string",
+                what="grouped tile plan",
             )
-            return (
-                client_dataframe(
+            if recipe == "combineavg":
+                members = plan_df.select("key", F.col("src").alias("path"))
+                members = members.union(members)
+            else:
+                writer = F.udf(
+                    lambda src, out: synth.synthesize(src, recipe, out), "array<string>"
+                )
+                t0 = time.perf_counter()
+                written = (
+                    plan_df.repartition(spread)
+                    .select("key", F.explode(writer("src", "out")).alias("path"))
+                    .collect()
+                )
+                print(
+                    f"[LEVELS input] {len(written)} group members written by tasks in "
+                    f"{time.perf_counter() - t0:.1f} s",
+                    flush=True,
+                )
+                members = client_dataframe(
                     spark,
-                    plan,
-                    "key string, src string, out string",
-                    what="grouped tile plan",
+                    [(r["key"], r["path"]) for r in written],
+                    "key string, path string",
+                    what="group member paths",
                 )
-                .repartition(family_partitions(spark, len(plan)))
-                .select("key", F.explode(members("src", "out")).alias("path"))
-                .select(
-                    "key",
-                    rx.rst_fromfile(
-                        F.col("path"), "GTiff", materialize=not virtual
-                    ).alias("tile"),
-                )
+            return members.repartition(spread).select(
+                "key",
+                rx.rst_fromfile(F.col("path"), "GTiff", materialize=not virtual).alias(
+                    "tile"
+                ),
             )
 
         return _table(
@@ -326,7 +341,10 @@ def _grouped(recipe: str, virtual: bool):
             tiles,
         )
 
-    build.writes_under_corpus = True  # the group members land in `<corpus>/_synth`
+    build.recipe = recipe
+    build.writes_under_corpus = (
+        recipe != "combineavg"
+    )  # the merge members land in `<corpus>/_synth`
     return build
 
 

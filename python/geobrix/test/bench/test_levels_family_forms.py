@@ -323,3 +323,63 @@ def test_a_short_bng_corpus_names_the_bng_count_and_the_real_corpus_size(
     why = str(e.value)
     assert "10" in why and "3" in why and "8 tiles" in why, why
     assert "--rows-from 8 " in why and "--rows-from 3" not in why, why
+
+
+def test_the_combineavg_group_is_the_source_twice_and_writes_nothing(
+    spark_session_local, tmp_path
+):
+    """The recipe's two copies are the source's pixels on the source's grid, so the group is the source twice: the same
+    combine work with no copy written to the Volume (they were tens of GB through FUSE, rebuilt per scale).
+    """
+    import numpy as np
+
+    from databricks.labs.gbx._gdal_policy import open_data
+    from databricks.labs.gbx.bench import synth
+
+    corpus = _corpus(tmp_path, 12)
+    src = lf._corpus_rows(corpus)[0]
+    out = tmp_path / "synth_out"
+    copies = synth.synthesize(src, "combineavg", str(out))
+    with open_data(src) as a:
+        for (
+            c
+        ) in copies:  # what the recipe wrote IS the source: pixels, grid, CRS, NoData
+            with open_data(c) as b:
+                assert np.array_equal(a.read(), b.read())
+                assert (a.transform, a.crs, a.nodatavals) == (
+                    b.transform,
+                    b.crs,
+                    b.nodatavals,
+                )
+    n = 6
+    table = lf.INPUTS["tiles_aligned_mat"](spark_session_local, n, corpus, None)
+    got = spark_session_local.table(table)
+    assert got.count() == 2 * n
+    assert {r[0] for r in got.groupBy("key").count().select("count").collect()} == {2}
+    import os
+
+    assert not os.path.isdir(os.path.join(corpus, "_synth", "combineavg"))
+    assert not getattr(lf.INPUTS["tiles_aligned_mat"], "writes_under_corpus")
+
+
+def test_a_synthesised_group_that_is_there_is_not_decoded_again(tmp_path, monkeypatch):
+    """The check that the copies exist comes before the source is read (a whole tile decoded for nothing)."""
+    from databricks.labs.gbx.bench import synth
+
+    corpus = _corpus(tmp_path, 3)
+    src = lf._corpus_rows(corpus)[0]
+    for recipe in ("combineavg", "merge"):
+        out = str(tmp_path / f"o_{recipe}")
+        first = synth.synthesize(src, recipe, out)
+
+        calls = []
+        real = synth.open_data
+
+        def spy(path, *a, **k):
+            calls.append(str(path))
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(synth, "open_data", spy)
+        assert synth.synthesize(src, recipe, out) == first
+        assert src not in calls, calls
+        monkeypatch.undo()

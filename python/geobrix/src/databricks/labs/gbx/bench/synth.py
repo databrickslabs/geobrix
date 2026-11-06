@@ -151,17 +151,17 @@ def _synth_frombands(src_path: str, out: Path) -> List[str]:
 
 def _synth_combineavg(src_path: str, out: Path) -> List[str]:
     """Two ALIGNED copies of the source (identical grid) for a per-pixel mean."""
-    paths: List[str] = []
+    paths = [str(out / f"copy_{i}.tif") for i in range(2)]
+    if all(_readable(Path(p)) for p in paths):
+        return paths  # nothing to read or write: the source is not decoded for copies that are there
     with open_data(src_path) as ds:
         data = ds.read()
         profile = source_profile(ds.profile, unless_jpeg=True)
         profile.update(driver="GTiff")
-        for i in range(2):
-            p = out / f"copy_{i}.tif"
-            paths.append(str(p))
-            if _readable(p):
+        for p in paths:
+            if _readable(Path(p)):
                 continue
-            _write(profile, [data[b] for b in range(data.shape[0])], p)
+            _write(profile, [data[b] for b in range(data.shape[0])], Path(p))
     return paths
 
 
@@ -173,7 +173,9 @@ def _synth_merge(src_path: str, out: Path) -> List[str]:
     extents are distinct and abut/overlap into a larger union. The pixel size and
     CRS are unchanged so both copies snap onto one common grid for the mosaic.
     """
-    paths: List[str] = []
+    paths = [str(out / f"part_{i}.tif") for i in range(2)]
+    if all(_readable(Path(p)) for p in paths):
+        return paths  # nothing to read or write: the source is not decoded for parts that are there
     with open_data(src_path) as ds:
         data = ds.read()
         base = ds.transform
@@ -185,7 +187,6 @@ def _synth_merge(src_path: str, out: Path) -> List[str]:
         offset = Affine(base.a, base.b, base.c + dx, base.d, base.e, base.f + dy)
         for i, tr in enumerate((base, offset)):
             p = out / f"part_{i}.tif"
-            paths.append(str(p))
             if _readable(p):
                 continue
             profile = source_profile(ds.profile, unless_jpeg=True)

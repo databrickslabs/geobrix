@@ -477,12 +477,17 @@ def test_every_input_that_writes_under_the_corpus_is_marked_so():
     import inspect
 
     for key, build in lf.INPUTS.items():
-        writes = "synth" in inspect.getsource(build)
+        # the combineavg group is the source twice: it calls no synthesiser, so it writes nothing
+        writes = (
+            "synth" in inspect.getsource(build)
+            and getattr(build, "recipe", "") != "combineavg"
+        )
         assert bool(getattr(build, "writes_under_corpus", False)) == writes, key
     marked = {
         k for k, b in lf.INPUTS.items() if getattr(b, "writes_under_corpus", False)
     }
-    assert {"tiles_grouped_mat", "tiles_aligned_mat", "dsm_towers"} <= marked
+    assert {"tiles_grouped_mat", "dsm_towers"} <= marked
+    assert "tiles_aligned_mat" not in marked
     assert "io_rows" not in marked and "tiles_mat" not in marked
 
 

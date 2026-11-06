@@ -401,7 +401,7 @@ def test_the_union_recipes_call_the_cell_polygon_function_the_oracle_rows_call()
         "ELSE st_asbinary(st_union_agg(st_geomfromewkb(chip))) END AS union_wkb",
     ):
         assert part in chips
-    assert part.replace("AS union_wkb", "AS out") in oracle
+        assert part.replace("AS union_wkb", "AS out") in oracle
 
 
 def test_the_binpoints_recipe_is_the_oracle_statement():

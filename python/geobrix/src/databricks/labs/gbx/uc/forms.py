@@ -5,8 +5,9 @@ handler first runs. Each handler is a thin function over the pure core of the li
 
 - ``st_asmvt_pyramid_cells`` is the array behind the table function ``gbx_st_asmvt_pyramid``
   (``pyvx._mvt.pyramid_tiles``);
-- ``rst_h3_rasterize`` is ``gbx_rst_h3_rasterize`` (``pyrx.core.cellraster``, the kernel of the session twin of
-  ``gbx_rst_h3_rasterize_agg``);
+- ``rst_h3_rasterize``, ``rst_quadbin_rasterize``, ``rst_bng_rasterize`` and ``rst_custom_rasterize`` are the
+  ``gbx_rst_<grid>_rasterize`` array twins of the cell rasterize aggregates (``pyrx.core.cellraster``, the kernel of the
+  session twins);
 - ``h3_cellfill_cells`` and ``st_asmvt_features`` are private (``gbx__h3_cellfill_cells``, ``gbx__st_asmvt_features``):
   the array twins of ``gbx_h3_cellfill`` and ``gbx_st_asmvt``, called by the procedures only.
 
@@ -164,6 +165,127 @@ def _check_cells(fn: str, cells, session_fn: str) -> None:
         raise _too_big(fn, "the array of cells", size, session_fn)
 
 
+def _burn_cells(
+    fn,
+    session_fn,
+    grid,
+    adapter,
+    srid,
+    ids,
+    values,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    key=True,
+):
+    """The shared burn of the cell rasterizers: the canvas is refused over the cap before it is allocated, a repeated
+    cell keeps its largest value (a NaN never beats a number), and the encoded raster is held to the cap as a backstop.
+    ``key`` False hands the cells to the adapter as they are (the custom grid keys by its own ids).
+    """
+    from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+    from databricks.labs.gbx.uc import tier_b
+
+    def check_canvas(
+        w, h
+    ):  # the canvas given or derived from the cells, refused before it is allocated
+        tier_b.check_made(
+            fn,
+            w,
+            h,
+            ["float64"],
+            int(w) * int(h) * 8 * 3,
+            session_fn=session_fn,
+        )
+
+    _env.configure_gdal_env()
+    vals = [None if v is None or v != v else float(v) for v in values]
+    cell_values = cr.max_value_per_cell(
+        ids, vals, adapter.to_key if key else None, typed=True
+    )
+    made = cr.rasterize_cells(
+        cell_values,
+        ids,
+        adapter,
+        grid,
+        srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        check_canvas=check_canvas,
+    )
+    if (
+        made is not None and len(made) > DECODED_CAP
+    ):  # the encoded size: a backstop to the canvas check
+        raise _too_big(fn, "the raster", len(made), session_fn)
+    return made
+
+
+def _lonlat_rasterize(
+    grid,
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs,
+):
+    """gbx_rst_<h3|quadbin>_rasterize: the cells of a lon/lat grid, the output CRS ``out_srid`` or ``out_crs`` (not both,
+    else EPSG:4326)."""
+    from databricks.labs.gbx.core.crs import parse_uc_crs
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    fn = f"gbx_rst_{grid}_rasterize"
+    session_fn = f"{fn}_agg"
+    if cells is None:
+        return None
+    _check_cells(fn, cells, session_fn)
+    ids, values = _cells(cells)
+    if not ids:
+        return None
+    if out_crs is not None and str(out_crs).strip():
+        out_crs = parse_uc_crs(
+            out_crs, fn=fn
+        ).code  # a CRS form UC takes, as an authority code
+    srid = cr.cell_out_srid(fn, out_srid, out_crs)
+    return _burn_cells(
+        fn,
+        session_fn,
+        grid,
+        cr._adapter(grid),
+        srid,
+        [int(c) for c in ids],
+        values,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+    )
+
+
 def rst_h3_rasterize(
     cells,
     out_srid,
@@ -180,48 +302,10 @@ def rst_h3_rasterize(
 ):
     """gbx_rst_h3_rasterize: the same bytes as the aggregate ``gbx_rst_h3_rasterize_agg`` over the same cells (GeoTIFF,
     Float64, NoData -9999); NULL for an array with no cell."""
-    from databricks.labs.gbx.core.crs import parse_uc_crs
-    from databricks.labs.gbx.pyrx import _env
-    from databricks.labs.gbx.pyrx.core import cellraster as cr
-    from databricks.labs.gbx.uc import tier_b
-
-    fn = "gbx_rst_h3_rasterize"
-    if cells is None:
-        return None
-    _check_cells(fn, cells, "gbx_rst_h3_rasterize_agg")
-    ids, values = _cells(cells)
-    if not ids:
-        return None
-    if out_crs is not None and str(out_crs).strip():
-        out_crs = parse_uc_crs(
-            out_crs, fn=fn
-        ).code  # a CRS form UC takes, as an authority code
-    srid = cr.cell_out_srid(fn, out_srid, out_crs)
-
-    def check_canvas(
-        w, h
-    ):  # the canvas given or derived from the cells, refused before it is allocated
-        tier_b.check_made(
-            fn,
-            w,
-            h,
-            ["float64"],
-            int(w) * int(h) * 8 * 3,
-            session_fn="gbx_rst_h3_rasterize_agg",
-        )
-
-    _env.configure_gdal_env()
-    ad = cr._adapter("h3")
-    vals = [None if v is None or v != v else float(v) for v in values]
-    cell_values = cr.max_value_per_cell(
-        [int(c) for c in ids], vals, ad.to_key, typed=True
-    )
-    made = cr.rasterize_cells(
-        cell_values,
-        [int(c) for c in ids],
-        ad,
+    return _lonlat_rasterize(
         "h3",
-        srid,
+        cells,
+        out_srid,
         pixel_size,
         xmin,
         ymin,
@@ -231,13 +315,150 @@ def rst_h3_rasterize(
         height,
         mode,
         kring_pad,
-        check_canvas=check_canvas,
+        out_crs,
     )
-    if (
-        made is not None and len(made) > DECODED_CAP
-    ):  # the encoded size: a backstop to the canvas check
-        raise _too_big(fn, "the raster", len(made), "gbx_rst_h3_rasterize_agg")
-    return made
+
+
+def rst_quadbin_rasterize(
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs,
+):
+    """gbx_rst_quadbin_rasterize: the same bytes as ``gbx_rst_quadbin_rasterize_agg`` over the same cells; NULL for an
+    array with no cell."""
+    return _lonlat_rasterize(
+        "quadbin",
+        cells,
+        out_srid,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        out_crs,
+    )
+
+
+def rst_bng_rasterize(
+    cells,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+    out_crs=None,
+):
+    """gbx_rst_bng_rasterize: the same bytes as ``gbx_rst_bng_rasterize_agg`` over the same cells. The output is always
+    EPSG:27700 (``out_srid`` is not read) and a non-NULL ``out_crs`` is refused; NULL for an array with no cell.
+    """
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+
+    fn = "gbx_rst_bng_rasterize"
+    if cells is None:
+        return None
+    if out_crs is not None:
+        raise _parameter(
+            fn,
+            "out_crs is not supported; the output is always EPSG:27700. "
+            "Fix: pass NULL for out_crs, then reproject the tile with gbx_rst_transformcrs.",
+        )
+    _check_cells(fn, cells, "gbx_rst_bng_rasterize_agg")
+    ids, values = _cells(cells)
+    if not ids:
+        return None
+    return _burn_cells(
+        fn,
+        "gbx_rst_bng_rasterize_agg",
+        "bng",
+        cr._adapter("bng"),
+        27700,
+        [str(c) for c in ids],
+        values,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+    )
+
+
+def rst_custom_rasterize(
+    cells,
+    grid,
+    out_srid,
+    pixel_size,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width,
+    height,
+    mode,
+    kring_pad,
+):
+    """gbx_rst_custom_rasterize: the same bytes as ``gbx_rst_custom_rasterize_agg`` over the same cells. The output CRS
+    is ``out_srid``, else the grid's own; a grid with none needs ``out_srid``. NULL for an array with no cell.
+    """
+    from databricks.labs.gbx.pyrx.core import cellraster as cr
+    from databricks.labs.gbx.uc.handlers import _custom_conf
+
+    fn = "gbx_rst_custom_rasterize"
+    if cells is None or grid is None:
+        return None
+    _check_cells(fn, cells, "gbx_rst_custom_rasterize_agg")
+    ids, values = _cells(cells)
+    if not ids:
+        return None
+    conf = _custom_conf(fn, grid)
+    if out_srid is not None:
+        srid = int(out_srid)
+    elif conf.srid != -1:
+        srid = conf.srid
+    else:
+        raise _parameter(
+            fn, "the grid has no CRS (srid=-1). Fix: supply out_srid explicitly."
+        )
+    return _burn_cells(
+        fn,
+        "gbx_rst_custom_rasterize_agg",
+        "custom",
+        cr._CustomAdapter(conf, fallback_srid=srid),
+        srid,
+        [int(c) for c in ids],
+        values,
+        pixel_size,
+        xmin,
+        ymin,
+        xmax,
+        ymax,
+        width,
+        height,
+        mode,
+        kring_pad,
+        key=False,
+    )
 
 
 # --- H3 cell fill: the array twin of the aggregate -----------------------------------------------------------------
@@ -837,6 +1058,9 @@ HANDLERS = {
     "gbx_st_asmvt_array": st_asmvt_array,
     "gbx__st_asmvt_pyramid_cells": st_asmvt_pyramid_cells,
     "gbx_rst_h3_rasterize": rst_h3_rasterize,
+    "gbx_rst_quadbin_rasterize": rst_quadbin_rasterize,
+    "gbx_rst_bng_rasterize": rst_bng_rasterize,
+    "gbx_rst_custom_rasterize": rst_custom_rasterize,
     "gbx__h3_cellfill_cells": h3_cellfill_cells,
     "gbx_quadbin_cellfill_array": quadbin_cellfill_array,
     "gbx_bng_cellfill_array": bng_cellfill_array,

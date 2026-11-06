@@ -46,8 +46,18 @@ ONLY = ("session",)
 
 
 def _surfaces(fn):
-    """The surfaces of a scalar twin's rows: the H3 twin is also a Unity Catalog function."""
-    return ("session", "uc") if fn == "gbx_rst_h3_rasterize" else ONLY
+    """The surfaces of a scalar twin's rows: every cell rasterizer twin is also a Unity Catalog function."""
+    return (
+        ("session", "uc")
+        if fn
+        in (
+            "gbx_rst_h3_rasterize",
+            "gbx_rst_bng_rasterize",
+            "gbx_rst_quadbin_rasterize",
+            "gbx_rst_custom_rasterize",
+        )
+        else ONLY
+    )
 
 
 MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
@@ -930,7 +940,7 @@ RASTER_AGGREGATE += (
         (Build("qbrt_dup_max"), *_CELLS["qb"][3], "EPSG:3857"),
         "raises",
         "Fix: set one",
-        ONLY,
+        _surfaces(QBT),
     ),
     # No value given (an untyped NULL: SQL `NULL`, Python `None`) is the presence mask: every covered cell burns 1.0,
     # where a NULL in a typed column burns NaN (h3r_dup_max).
@@ -989,7 +999,7 @@ RASTER_AGGREGATE += (
         (BNG_CELLS, *CANVAS),
         "pixels",
         [[NAN, NAN, -9999.0], [3.0, 2.0, -9999.0]],
-        ONLY,
+        BOTH,
     ),
     Case(
         "brt_nan_beside_numbers",
@@ -997,7 +1007,7 @@ RASTER_AGGREGATE += (
         (BNG_NAN, *CANVAS),
         "pixels",
         [[-9999.0, -9999.0, -9999.0], [4.0, 2.0, -9999.0]],
-        ONLY,
+        BOTH,
     ),
     Case(
         "brt_null_cell_skipped",
@@ -1005,9 +1015,9 @@ RASTER_AGGREGATE += (
         ([(None, 1.0), ("TQ3080", 5.0)], *CANVAS),
         "pixels",
         [[-9999.0, -9999.0, -9999.0], [5.0, -9999.0, -9999.0]],
-        ONLY,
+        BOTH,
     ),
-    Case("brt_empty", BRT, ([(None, 1.0)], *CANVAS), "null", None, ONLY),
+    Case("brt_empty", BRT, ([(None, 1.0)], *CANVAS), "null", None, BOTH),
     # a non-NULL out_crs is refused: the output is always EPSG:27700
     Case(
         "brt_out_crs_refused",
@@ -1015,8 +1025,93 @@ RASTER_AGGREGATE += (
         (BNG_CELLS, *CANVAS, "EPSG:3857"),
         "raises",
         "out_crs",
-        ONLY,
+        BOTH,
     ),
+)
+
+
+# --- the pre-reduction recipe: the rows of the cell rasterizer twins, reduced to one value per cell in SQL first ------
+# `max(value) GROUP BY cellid` ahead of `collect_list(struct(cellid, value))` keeps the array to one entry per cell. A
+# NaN is made NULL first (Spark's `max` ranks NaN above every number; the rasterizer's rule is that a NaN never beats a
+# number), and a cell of nothing but NULLs burns NaN, as the unreduced group does: the pixels are those of the twin's rows.
+def _prereduce_literal(v):
+    if v is None:
+        return "NULL"
+    if isinstance(v, str):
+        return "'" + v.replace("'", "''") + "'"
+    if isinstance(v, float) and v != v:
+        return "CAST('NaN' AS DOUBLE)"
+    return repr(v)
+
+
+_CUSTOM_GRID_SQL = (
+    "named_struct('bound_x_min', CAST(0 AS BIGINT), 'bound_x_max', CAST(1000000 AS BIGINT), "
+    "'bound_y_min', CAST(0 AS BIGINT), 'bound_y_max', CAST(1000000 AS BIGINT), 'cell_splits', 2, "
+    "'root_cell_size_x', 1000, 'root_cell_size_y', 1000, 'srid', 27700)"
+)
+
+
+def _prereduce_sql(fn, members, canvas, id_type, grid_sql=None):
+    values = ", ".join(
+        f"({'CAST(' + str(c) + ' AS ' + id_type + ')' if id_type == 'BIGINT' else _prereduce_literal(c)}, "
+        f"{'CAST(NULL AS DOUBLE)' if v is None else ('CAST(' + _prereduce_literal(v) + ' AS DOUBLE)')})"
+        for c, v in members
+        if c is not None
+    )
+    consts = ", ".join(_prereduce_literal(v) for v in canvas)
+    head = f"{grid_sql}, " if grid_sql else ""
+    return (
+        "WITH d AS (SELECT cellid, max(CASE WHEN isnan(value) THEN NULL ELSE value END) AS value "
+        f"FROM VALUES {values} AS t(cellid, value) GROUP BY cellid) "
+        f"SELECT {{q}}{fn}(collect_list(struct(cellid, value)), {head}{consts}) AS out FROM d"
+    )
+
+
+def _prereduce(prefix, fn, kind):
+    short = {"h3": "h3rt", "bng": "brt", "qb": "qbrt", "cg": "cgrt"}[prefix]
+    cid = f"recipe_{short}_pre_reduced_{kind}"
+    if prefix == "bng":
+        members, canvas, want = (
+            (BNG_CELLS, CANVAS, [[NAN, NAN, -9999.0], [3.0, 2.0, -9999.0]])
+            if kind == "dup_max"
+            else (
+                BNG_NAN,
+                CANVAS,
+                [[-9999.0, -9999.0, -9999.0], [4.0, 2.0, -9999.0]],
+            )
+        )
+        return recipe(
+            cid,
+            fn,
+            _prereduce_sql(fn, members, canvas, "STRING"),
+            "pixels",
+            want,
+            args=(None, *canvas),
+        )
+    return recipe(
+        cid,
+        fn,
+        _prereduce_sql(
+            fn,
+            _members(prefix, kind),
+            _CELLS[prefix][3],
+            "BIGINT",
+            _CUSTOM_GRID_SQL if prefix == "cg" else None,
+        ),
+        "pixels",
+        _pixels(prefix, kind),
+        args=(
+            None,
+            *((dict(CUSTOM_GRID),) if prefix == "cg" else ()),
+            *_CELLS[prefix][3],
+        ),
+    )
+
+
+RASTER_AGGREGATE += tuple(
+    _prereduce(prefix, fn, kind)
+    for prefix, fn in (("h3", H3T), ("bng", BRT), ("qb", QBT), ("cg", CGT))
+    for kind in ("dup_max", "nan_beside")
 )
 
 

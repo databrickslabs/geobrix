@@ -124,6 +124,7 @@
       "description": "Rasterize an array of BNG cells into one tile (pixel-centroid burn).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.6.0"
@@ -465,6 +466,7 @@
       "description": "Rasterize an array of custom cells into one tile (pixel-centroid burn).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.6.0"
@@ -1241,6 +1243,7 @@
       "description": "Rasterize an array of quadbin cells into one tile (pixel-centroid burn).",
       "surfaces": [
         "session",
+        "uc",
         "python"
       ],
       "since": "0.6.0"

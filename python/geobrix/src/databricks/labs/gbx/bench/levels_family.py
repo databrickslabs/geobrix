@@ -180,6 +180,16 @@ REPS: List[Rep] = [
         "{fn}(cellid, 2)",
         "array<string>",
     ),
+    # the BNG rasterize aggregate on the aggregate family's canvas (n is the input rows, not the groups)
+    Rep(
+        "raster-aggregate",
+        "gbx_rst_bng_rasterize_agg",
+        "bng_cells",
+        _AGG,
+        "{fn}(cellid, value, 27700, NULL, CAST(500000.0 AS DOUBLE), CAST(100000.0 AS DOUBLE), "
+        "CAST(600000.0 AS DOUBLE), CAST(200000.0 AS DOUBLE), CAST(200 AS INT), CAST(200 AS INT), 'centroids', 0)",
+        floor_sql=_AGG_FLOOR.format(col="cellid", src="{src}"),
+    ),
     # vectors
     Rep(
         "vector-scalar",
@@ -263,11 +273,6 @@ _REUSED_FLOORS = {
     ],
     "raster-aggregate": [
         ("gbx_rst_merge_agg", "tiles_grouped", _TILE_SCAN),
-        (
-            "gbx_rst_bng_rasterize_agg",
-            "bng_cells",
-            _AGG_FLOOR.format(col="cellid", src="{src}"),
-        ),
     ],
     "raster-array-op": [("gbx_rst_combineavg", "tiles_aligned_mat", _TILE_SCAN)],
     "raster-tile-op": [("gbx_rst_transformcrs", "tiles_n", _TILE_SCAN)],
@@ -525,7 +530,15 @@ def reused_forms(lf) -> Dict[str, List[Form]]:
         # the materialized tiles come from the one n-row input every generated form reads
         keep = [
             dataclasses.replace(
-                f, mvp=fam, input="tiles_n" if f.input == "tiles_mat" else f.input
+                f,
+                mvp=fam,
+                input="tiles_n" if f.input == "tiles_mat" else f.input,
+                # a JVM level of the BNG scalar is its own form, not a second "-"
+                variant=(
+                    f"{f.level.lower()}@pts"
+                    if fam == "grid-scalar" and f.variant == "-"
+                    else f.variant
+                ),
             )
             for f in forms
         ]

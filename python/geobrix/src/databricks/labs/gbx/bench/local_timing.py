@@ -161,7 +161,13 @@ def _family_sets() -> Dict[str, SetSpec]:
             "raster-constructor", "gbx_rst_fromcontent", "bytes"
         ),
         "raster-rasterize": gen_fn(
-            "raster-rasterize", "gbx_rst_binpoints", "pts", (200, 800, 3200)
+            "raster-rasterize",
+            "gbx_rst_binpoints",
+            "pts",
+            (200, 800, 3200),
+            exempt=(
+                "l1",
+            ),  # the JVM binning is ~5x the light one per row: a finding, not a scaling defect
         ),
         "raster-generator": SetSpec(
             mvp="raster-generator",
@@ -179,12 +185,11 @@ def _family_sets() -> Dict[str, SetSpec]:
             fn="gbx_rst_combineavg",
             **tiles,
         ),
-        "raster-aggregate": SetSpec(
-            mvp="raster-aggregate",
-            forms=("c0", "udaf", "floor"),
-            reference="c0",
-            ns=(100_000, 400_000, 1_600_000),
-            fn="gbx_rst_bng_rasterize_agg",
+        "raster-aggregate": gen_fn(
+            "raster-aggregate",
+            "gbx_rst_bng_rasterize_agg",
+            "cells",
+            (400_000, 1_600_000, 6_400_000),
         ),
         "cell-aggregate": gen_fn(
             "cell-aggregate", "gbx_bng_cellfill", "cells", (100_000, 400_000, 1_600_000)
@@ -210,7 +215,13 @@ def _family_sets() -> Dict[str, SetSpec]:
             ),  # the JVM transform is ~25x the light one per row: a finding, not a scaling defect
         ),
         "vector-aggregate": gen_fn(
-            "vector-aggregate", "gbx_st_asmvt", "mvt", (20_000, 80_000, 320_000)
+            "vector-aggregate",
+            "gbx_st_asmvt",
+            "mvt",
+            (20_000, 80_000, 320_000),
+            exempt=(
+                "l1",
+            ),  # the JVM encoder is ~4x the light one per row: a finding, not a scaling defect
         ),
         "vector-generator": gen_fn(
             "vector-generator", "gbx_st_triangulate", "tin", (800, 3_200, 12_800), "l3"
@@ -220,7 +231,13 @@ def _family_sets() -> Dict[str, SetSpec]:
 
 SETS.update(_family_sets())
 # the BNG scalar's forms are the grid-scalar family's
-SETS["grid-scalar"] = dataclasses.replace(SETS["S"], mvp="grid-scalar")
+SETS["grid-scalar"] = dataclasses.replace(
+    SETS["S"],
+    mvp="grid-scalar",
+    forms=("l1@pts", "l2@pts", "c0", "c1", "floor"),
+    reference="c1",
+    ns=(500_000, 2_000_000, 8_000_000),
+)
 
 
 def needs(spec: SetSpec) -> Tuple[bool, bool]:

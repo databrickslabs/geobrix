@@ -213,6 +213,34 @@ def append_a_table_of_cells(spark, cube, table):
     return version
 
 
+def transform_cells_into_a_new_store(spark, cube, path):
+    """Zarr to Zarr: read cells, compute in Spark columns, write the cells with their labels."""
+    import xarray as xr
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.zarr import gbx_zarr_read, gbx_zarr_write
+
+    window = {"time": slice(0, 12), "latitude": slice(0, 45), "longitude": slice(0, 90)}
+    cells = gbx_zarr_read(
+        spark, cube, variables=["u10", "v10"], isel=window, output="table"
+    ).select(
+        "time",
+        "latitude",
+        "longitude",
+        F.hypot("u10", "v10").cast("float").alias("wind_speed"),
+    )
+    labels = xr.open_zarr(cube, consolidated=False).isel(window)
+    return gbx_zarr_write(
+        cells,
+        path,
+        transactional=False,
+        dim_cols={"time": "time", "latitude": "latitude", "longitude": "longitude"},
+        coords={d: labels[d].values for d in ("time", "latitude", "longitude")},
+        complete=True,
+        spark=spark,
+    )
+
+
 def transform_blocks_into_a_new_store(spark, cube, path):
     """Zarr to Zarr: read blocks, compute on each block, write the blocks."""
     import json

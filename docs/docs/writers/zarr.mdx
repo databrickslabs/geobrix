@@ -256,12 +256,13 @@ other dimensions' values must be labels the store has.
   sorted ascending (a new store's dimensions, an append's new steps), and which shards the cells fall in. A table
   that fills its grid (as many rows as the product of its labels) needs no second pass. The values columns are
   read once, by the write itself.
-- The cells are shuffled **once**, by the shard they fall in (by the chunk, in an unsharded array), one
-  partition per shard touched and no more than the session's parallelism. Each task builds one shard at a time and
-  writes it where it is made, as a [create from blocks on the shard grid](#blocks-on-the-stores-grid) does. A
-  manifest `append` goes on through the writer's usual read-modify-write of the shards it touches.
-- A task holds one shard of every variable, plus a copy of one. A shard over the task budget is refused before
-  any work, with a Fix that names `shards=` and `chunks=`.
+- The cells are shuffled **once**, by the chunk they fall in, and a task owns whole shards: one partition per
+  shard touched, up to four per slot of the session's parallelism. Each task builds one chunk at a time and adds it
+  to its shard where it is made, as a [create from blocks on the shard grid](#blocks-on-the-stores-grid) does. A
+  plain store spools a shard's chunks on local disk and writes the shard from there. A manifest `append` goes on
+  through the writer's usual read-modify-write of the shards it touches.
+- A task holds one chunk of every variable, plus a copy of one, whatever the size of the shard. A chunk over the
+  task budget is refused before any work, with a Fix that names `chunks=`.
 
 **Rules.**
 
@@ -289,24 +290,39 @@ other dimensions' values must be labels the store has.
 - **Modes.** `create` and `append`. An `update` or an `overwrite` of cells would replace stored cells with the fill
   value wherever the table has none, so they take blocks. An `append` writes arrays the store already has.
 
-## Zarr to Zarr: transform blocks
+## Zarr to Zarr: compute on cells
 
-To read a store, compute on it and write the result, stay with blocks. `gbx_zarr_read` returns blocks by
-default. A pandas UDF changes the bytes of each block, and `gbx_zarr_write` takes the result. No table of
-cells sits in between, so no row is made per cell and no data is shuffled.
+To read a store, compute on it and write the result, read the cells and compute in Spark columns. Read with
+`output="table"`, derive the new columns, and write the table with `coords=` and `complete=True`. Pass
+`transactional=False` for a plain store.
+
+<CodeFromTest code={zarrWrite} language="python" functionName="transform_cells_into_a_new_store"
+  source="docs/tests/python/writers/zarr_write_examples.py"
+  testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
+
+- `coords=` fixes the labels and keeps their order, so the new store is labelled like the source.
+- `complete=True` skips the planning scan. The table is read once, by the write.
+- This is the fastest Zarr to Zarr path on a cluster. A computed column costs nothing extra, and the write
+  needs no pass over the input beyond the one that feeds it.
+
+### Compute on blocks
+
+Use blocks when the compute is shaped like a block, such as a pandas UDF over the bytes of each block.
+`gbx_zarr_read` returns blocks by default, and `gbx_zarr_write` takes the result. No row is made per cell.
 
 <CodeFromTest code={zarrWrite} language="python" functionName="transform_blocks_into_a_new_store"
   source="docs/tests/python/writers/zarr_write_examples.py"
   testFile="docs/tests/python/writers/test_zarr_write_examples.py" />
 
+- A `create` from blocks reads its input twice: once to plan, once to write. The Zarr reader cannot skip
+  the data columns in the first pass. If the input is expensive, stage it first
+  ([see above](#an-input-that-is-read-more-than-once)).
 - Join the blocks of the inputs on `start`, so each pair covers the same cells. Keep `dims`, `start`, `stop` and
   `shape` from one side.
 - Read the coordinate arrays too (`time`, `latitude`, `longitude`) and add them to the result, or a
   new store is labelled by position only.
-- A join or a UDF is an opaque input, which a `create` evaluates twice
-  ([see above](#an-input-that-is-read-more-than-once)). Keep the compute deterministic.
-- Use a table of cells instead when the compute needs the neighbours of a cell, or when the source
-  is not a Zarr store.
+- Keep the compute deterministic, since the input is evaluated twice.
+- Use cells instead when the compute needs the neighbours of a cell, or when the source is not a Zarr store.
 
 ## Tiles
 

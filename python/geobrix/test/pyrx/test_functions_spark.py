@@ -755,6 +755,43 @@ def test_rst_rasterize_agg(spark):
     assert np.all(arr[:, 1] == 2.0)
 
 
+def test_rst_rasterize_agg_accepts_text_geometry(spark):
+    """WKT and EWKT strings burn the same raster as WKB; NULL and unparseable text add no feature."""
+    import shapely.wkb
+    from shapely.geometry import box
+
+    boxes = [(box(0, 0, 2, 4), 1.0), (box(1, 0, 4, 4), 2.0)]
+
+    def burn(geoms, schema):
+        rows = [("g", g, v) for g, (_, v) in zip(geoms, boxes)]
+        rows.append(("g", None, 9.0))
+        if "string" in schema.split("geom")[1].split(",")[0]:
+            rows.append(("g", "not a geometry", 9.0))
+        df = spark.createDataFrame(rows, schema=schema)
+        tile = (
+            df.groupBy("k")
+            .agg(
+                prx._light_rst_rasterize_agg(
+                    "geom", "val", 0, 0, 4, 4, 4, 4, 32633
+                ).alias("t")
+            )
+            .first()["t"]
+        )
+        with _serde.open_tile(bytes(tile["raster"])) as ds:
+            return ds.read(1)
+
+    wkb = burn(
+        [shapely.wkb.dumps(b) for b, _ in boxes], "k string, geom binary, val double"
+    )
+    wkt = burn([b.wkt for b, _ in boxes], "k string, geom string, val double")
+    ewkt = burn(
+        [f"SRID=32633;{b.wkt}" for b, _ in boxes], "k string, geom string, val double"
+    )
+    assert np.all(wkb[:, 0] == 1.0) and np.all(wkb[:, 1] == 2.0)
+    assert np.array_equal(wkt, wkb)
+    assert np.array_equal(ewkt, wkb)
+
+
 PYFUNC_SUM_AGG = """
 def addbands(in_ar, out_ar, *args, **kwargs):
     import numpy as np

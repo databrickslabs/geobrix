@@ -4908,7 +4908,8 @@ def rst_rasterize_agg(
     """Burn a group's `(geom, value)` features into one tile.
 
     Args:
-        geom: The feature geometry as WKB. A NULL one is skipped.
+        geom: The feature geometry: WKB, EWKB, WKT or EWKT. A NULL or unparseable one is
+            skipped.
         value: The value burned where the geometry covers a pixel centre. A NULL value
             skips the row.
         xmin: The west edge of the output.

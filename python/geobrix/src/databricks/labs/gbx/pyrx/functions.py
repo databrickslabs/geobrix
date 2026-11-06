@@ -5309,6 +5309,22 @@ def _frombands_agg_file_udf(
     return agg_core.frombands_tiles(indexed)
 
 
+def _agg_geom_wkb(g):
+    """One aggregate geometry as WKB bytes: WKB and EWKB bytes pass through untouched (the canonical burn order
+    sorts on them); WKT and EWKT text is parsed by the shared ``parse_geom``. NULL, blank or unparseable text is
+    None, so the row contributes no feature, as on the heavy tier."""
+    if g is None:
+        return None
+    if isinstance(g, (bytes, bytearray, memoryview)):
+        return bytes(g)
+    from databricks.labs.gbx._geom import geom_to_wkb
+
+    try:
+        return geom_to_wkb(g)
+    except Exception:  # noqa: BLE001 - text that is not a geometry skips the row
+        return None
+
+
 @pandas_udf(BinaryType())
 def _rasterize_agg_udf(
     geom_wkb: pd.Series,
@@ -5325,10 +5341,11 @@ def _rasterize_agg_udf(
 
     _env.configure_gdal_env()
     features_list = [
-        (bytes(g), float(v))
+        (w, float(v))
         for g, v in zip(geom_wkb, value)
-        if g is not None
-        and not pd.isna(v)  # a NULL value arrives as NaN: the row is skipped
+        if not pd.isna(v)  # a NULL value arrives as NaN: the row is skipped
+        for w in (_agg_geom_wkb(g),)
+        if w is not None
     ]
     if not features_list:
         return None

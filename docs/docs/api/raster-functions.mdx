@@ -1860,7 +1860,7 @@ Rasterize an array of custom-grid cells into one tile, the scalar twin of [`rst_
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
-| `geom` | `BINARY` |  | The feature geometry as WKB. A NULL one is skipped. |
+| `geom` | `BINARY` or `STRING` |  | The feature geometry: WKB, EWKB, WKT or EWKT. A NULL or unparseable one is skipped. |
 | `value` | `DOUBLE` |  | The value burned where the geometry covers a pixel centre. A NULL value skips the row. |
 | `xmin` | `DOUBLE` |  | The west edge of the output. |
 | `ymin` | `DOUBLE` |  | The south edge. |

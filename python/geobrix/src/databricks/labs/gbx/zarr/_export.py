@@ -504,16 +504,32 @@ def _documents(metas: dict[str, bytes]) -> dict[str, bytes]:
 
 
 def _write_documents(to_path: str, docs: dict[str, bytes], write_id: str) -> None:
-    """Every document, each through a temp name and a rename. The root's go last, and the
-    document that makes the root a group the very last: a reader that finds it finds the
-    objects."""
+    """Every document, each through a temp name and a rename. The arrays' go first, together
+    (each is a small file, and on a Volume every create and rename costs a round trip, so a
+    store of a few arrays would wait a second or two for them one by one), then the root's,
+    and the document that makes the root a group the very last: a reader that finds it finds
+    the objects."""
+    from concurrent.futures import ThreadPoolExecutor
 
-    def order(key: str):
-        root = "/" not in key
-        return (root, root and key in ("zarr.json", ".zgroup"), key)
+    def path(key: str) -> str:
+        return os.path.join(to_path, *key.split("/"))
 
-    for key in sorted(docs, key=order):
-        _atomic_write(os.path.join(to_path, *key.split("/")), [docs[key]], write_id)
+    nested = [k for k in sorted(docs) if "/" in k]
+    if len(nested) > 1:
+        with ThreadPoolExecutor(min(8, len(nested))) as pool:
+            for f in [
+                pool.submit(_atomic_write, path(k), [docs[k]], write_id) for k in nested
+            ]:
+                f.result()  # the first failure ends the write, as the one-by-one loop did
+    else:
+        for k in nested:
+            _atomic_write(path(k), [docs[k]], write_id)
+    roots = sorted(
+        (k for k in docs if "/" not in k),
+        key=lambda k: (k in ("zarr.json", ".zgroup"), k),
+    )
+    for k in roots:
+        _atomic_write(path(k), [docs[k]], write_id)
 
 
 # --- the two methods --------------------------------------------------------------------

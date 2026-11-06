@@ -6,6 +6,8 @@ write path's chunk, shard and codec choices. The Spark runs are the local sessio
 reads of what was written use zarr-python and xarray, the readers other tools would use.
 """
 
+import os
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -416,3 +418,27 @@ def test_transactional_is_still_the_default(spark_delta, tmp_path, no_hooks):
     """Without the opt-in the target is a manifest table and the root a separate argument."""
     with pytest.raises(ValueError, match="root"):
         gbx_zarr_write(_dataset(), str(tmp_path / "t"), spark=spark_delta)
+
+
+def test_documents_of_arrays_are_written_together_and_the_root_group_last(
+    tmp_path, monkeypatch
+):
+    """The arrays' documents may go in any order, but every one is down before the root's, and the document
+    that makes the root a group is the last file written."""
+    from databricks.labs.gbx.zarr import _export
+
+    order = []
+    real = _export._atomic_write
+
+    def spy(path, parts, write_id, **kw):
+        order.append(os.path.relpath(path, tmp_path).replace(os.sep, "/"))
+        return real(path, parts, write_id, **kw)
+
+    monkeypatch.setattr(_export, "_atomic_write", spy)
+    docs = {f"v{i}/zarr.json": b"{}" for i in range(6)}
+    docs.update({"zarr.json": b"{}", "zarr.metadata.json": b"{}"})
+    _export._write_documents(str(tmp_path), docs, "w1")
+    assert sorted(order[:6]) == sorted(k for k in docs if "/" in k)
+    assert order[-2:] == ["zarr.metadata.json", "zarr.json"]
+    assert all((tmp_path / k).read_bytes() == b"{}" for k in docs)
+    assert not [p for p in tmp_path.rglob(".*.tmp")]

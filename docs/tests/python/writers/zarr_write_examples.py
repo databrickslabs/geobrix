@@ -122,7 +122,7 @@ def create_from_xarray(spark, cube, table, root):
 
     from databricks.labs.gbx.zarr import gbx_zarr_write
 
-    cube_ds = xr.open_zarr(cube, consolidated=False)
+    cube_ds = xr.open_zarr(cube)
     first = cube_ds[["t2m"]].isel(time=slice(0, 12)).load()
     version = gbx_zarr_write(first, table, mode="create", root=root, spark=spark)
     return version
@@ -134,7 +134,7 @@ def create_a_plain_store(spark, cube, path):
 
     from databricks.labs.gbx.zarr import gbx_zarr_write
 
-    first = xr.open_zarr(cube, consolidated=False)[["t2m"]].isel(time=slice(0, 12)).load()
+    first = xr.open_zarr(cube)[["t2m"]].isel(time=slice(0, 12)).load()
     summary = gbx_zarr_write(first, path, transactional=False, spark=spark)
     return summary
 
@@ -145,7 +145,7 @@ def append_to_a_plain_store(spark, cube, path):
 
     from databricks.labs.gbx.zarr import gbx_zarr_write
 
-    later = xr.open_zarr(cube, consolidated=False)[["t2m"]].isel(time=slice(12, 24)).load()
+    later = xr.open_zarr(cube)[["t2m"]].isel(time=slice(12, 24)).load()
     summary = gbx_zarr_write(
         later, path, transactional=False, mode="append", append_dim="time", spark=spark
     )
@@ -229,7 +229,7 @@ def transform_cells_into_a_new_store(spark, cube, path):
         "longitude",
         F.hypot("u10", "v10").cast("float").alias("wind_speed"),
     )
-    labels = xr.open_zarr(cube, consolidated=False).isel(window)
+    labels = xr.open_zarr(cube).isel(window)
     return gbx_zarr_write(
         cells,
         path,

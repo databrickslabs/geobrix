@@ -118,13 +118,11 @@ def test_a_normal_bundle_run_fails_only_when_a_clipped_dataset_does(
 
 # --- the default call is the sample cube, file for file; other sizes are streamed -----------------
 
-# Recorded from the cube before write_era5_cube took size and layout arguments: the names of its 102 files,
+# Recorded from the cube before write_era5_cube took size and layout arguments: the names of its files (103 since the stores carry consolidated metadata, 102 before),
 # the digest of its metadata documents, and its size in bytes (compression may differ a little by version).
-_SAMPLE_d21ecbcb1974fd82ab84c42ddddb786e076295cefef71c3c469e6ff9705390e3 = (
-    "d21ecbcb1974fd82ab84c42ddddb786e076295cefef71c3c469e6ff9705390e3"
-)
-_SAMPLE_META_SHA = "e4e4ddaa14a98a7c1a781cee16ed96b578e20f4579af7d270e4d1c83665317f3"
-_SAMPLE_BYTES = 6_829_350
+_SAMPLE_FILES_SHA = "0d019c1804b4c8b280460f388d6637d318258ec83dac82bd54c49f9abf1e0fc0"
+_SAMPLE_META_SHA = "357b0bf269b4dbb3d0273ef4212a71d950f8c7ccf2103f4f16b300ca12e2d542"
+_SAMPLE_BYTES = 6_842_860
 
 
 def test_default_call_still_writes_the_same_files(cube):
@@ -136,14 +134,11 @@ def test_default_call_still_writes_the_same_files(cube):
             rel = f"{name}/{f.relative_to(root).as_posix()}"
             files.append(rel)
             total += f.stat().st_size
-            if f.name in ("zarr.json", ".zarray", ".zattrs", ".zgroup"):
+            if f.name in ("zarr.json", ".zarray", ".zattrs", ".zgroup", ".zmetadata"):
                 meta.update(rel.encode())
                 meta.update(f.read_bytes())
-    assert len(files) == 102
-    assert (
-        hashlib.sha256("\n".join(files).encode()).hexdigest()
-        == _SAMPLE_d21ecbcb1974fd82ab84c42ddddb786e076295cefef71c3c469e6ff9705390e3
-    )
+    assert len(files) == 103
+    assert hashlib.sha256("\n".join(files).encode()).hexdigest() == _SAMPLE_FILES_SHA
     assert meta.hexdigest() == _SAMPLE_META_SHA
     assert abs(total - _SAMPLE_BYTES) < 0.03 * _SAMPLE_BYTES
 
@@ -241,3 +236,47 @@ def test_noise_and_precision_make_a_cube_that_compresses_like_weather_data(tmp_p
         assert np.array_equal(ds[name].values, want[name]), name
     default = era5_block(VARIABLES, 0, 24, ds.latitude.values, ds.longitude.values)
     assert not np.array_equal(default["t2m"], want["t2m"])
+
+
+# --- consolidated metadata: the way a vendor's to_zarr leaves a store -------------------------------
+
+
+def _assert_consolidated(path):
+    """The root carries consolidated metadata for every array, and ``xr.open_zarr`` default raises no warning."""
+    import json
+    import warnings
+
+    path = Path(path)
+    if (path / ".zmetadata").is_file():
+        names = set(
+            k.split("/")[0]
+            for k in json.loads((path / ".zmetadata").read_text())["metadata"]
+            if "/" in k
+        )
+    else:
+        block = json.loads((path / "zarr.json").read_text())["consolidated_metadata"]
+        names = set(block["metadata"])
+    assert set(VARIABLES) <= names
+    with warnings.catch_warnings(record=True) as seen:
+        warnings.simplefilter("always")
+        xr.open_zarr(path, chunks=None).close()
+    assert not [w for w in seen if "consolidated" in str(w.message)]
+
+
+def test_the_sample_cube_is_consolidated_in_both_layouts(cube):
+    _assert_consolidated(cube[V3_NAME])
+    _assert_consolidated(cube[V2_NAME])
+
+
+def test_a_streamed_store_is_consolidated_after_its_last_shard(tmp_path):
+    out = write_era5_cube(
+        tmp_path,
+        hours=26,
+        step=1.0,
+        box=(60.0, 30.0, 0.0, 40.0),
+        chunks=(12, 16, 21),
+        shards=(24, 32, 42),
+        v3_name="c.zarr",
+        workers=2,
+    )
+    _assert_consolidated(out["c.zarr"])

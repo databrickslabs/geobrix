@@ -486,6 +486,8 @@ all open: one file per chunk, or per shard for a sharded array, and the metadata
 store. Tasks write the files where the blocks are made. When blocks start and stop on the shard grid,
 nothing is shuffled.
 
+Plain stores and `gbx_zarr_export` copies carry consolidated metadata, kept current after an append, so `xarray.open_zarr(path)` opens them without a warning.
+
 **What it drops.** No manifest table, ownership ledger or marker file, and no Delta commit. So there are
 no versions or time travel, no retention or vacuum, and no overlay. A write is not all-or-nothing, and
 two writers at once are not guarded: use one writer at a time, or keep a managed store.

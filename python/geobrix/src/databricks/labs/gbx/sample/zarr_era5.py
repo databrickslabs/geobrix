@@ -12,6 +12,10 @@ bytes on every run in one environment (``tree_digest`` tells). The values are ro
 a coarse step (0.25 K, 0.25 m/s, 10 Pa), as ERA5's own packed files are, which keeps both
 stores to a few MB in all.
 
+Both stores carry consolidated metadata (the root's ``consolidated_metadata`` block in v3, ``.zmetadata`` in v2),
+as a vendor's ``to_zarr`` leaves them, so ``xarray.open_zarr(path)`` opens them without the "failed to open with
+consolidated metadata" warning.
+
 Layout of each store (the bundle holds both under ``global/era5-weather/``):
 
 - ``era5_like_v3.zarr``: Zarr v3, inner chunks ``(12, 91, 180)``, shards ``(24, 182, 360)``
@@ -102,6 +106,21 @@ def tree_digest(path) -> str:
             for block in iter(lambda: fh.read(1 << 20), b""):
                 digest.update(block)
     return digest.hexdigest()
+
+
+def _consolidate(path, zarr_format: int) -> None:
+    """Consolidate the metadata of the finished store at ``path`` (the root's ``consolidated_metadata`` block in
+    v3, ``.zmetadata`` in v2), as xarray's ``to_zarr`` does by default. Call it once every array exists: the copy
+    is a snapshot of the documents."""
+    import warnings
+
+    import zarr
+
+    with (
+        warnings.catch_warnings()
+    ):  # zarr warns that v3 consolidation is not in the spec
+        warnings.simplefilter("ignore")
+        zarr.consolidate_metadata(str(path), zarr_format=zarr_format)
 
 
 def write_era5_cube(
@@ -198,6 +217,8 @@ def _write_sample_cube(out_dir) -> Dict[str, Path]:
                 compressor=numcodecs.Blosc(cname="zstd", clevel=3),
             ),
         }
+        _consolidate(built[V3_NAME], 3)
+        _consolidate(built[V2_NAME], 2)
         written = {}
         for name, src in built.items():
             dest = out / name
@@ -393,6 +414,7 @@ def write_era5_store(path, spec: _Spec, workers: Optional[int] = None) -> Path:
             raise RuntimeError(
                 f"wrote {cells} cells, expected {spec.hours * spec.shape[1] * spec.shape[2]}"
             )
+        _consolidate(work, 3)  # last: every array and shard exists
         if dest.exists():
             shutil.rmtree(dest)
         if fuse:

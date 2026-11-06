@@ -131,3 +131,66 @@ def test_the_family_forms_run_at_the_light_level_and_report_a_fingerprint(
         assert all(r.output_fingerprint for r in rows), family
         ran.append(family)
     assert len(ran) >= 10, ran
+
+
+# ---- the one-worker readdir probe twins of the JVM forms
+
+from databricks.labs.gbx.bench import levels_probe as probe  # noqa: E402
+from databricks.labs.gbx.bench import preflight  # noqa: E402
+
+
+def _jvm_tile_forms():
+    return [
+        (family, f)
+        for family, forms in lf.FORMS.items()
+        for f in forms
+        if f.level in ("L1", "L2") and f.input == "tiles_n" and f.sql and not f.opt_in
+    ]
+
+
+def test_every_jvm_tile_form_has_both_probe_twins_and_only_by_name():
+    seen = set()
+    jvm = []
+    # one pair per (fn, variant): a variant shared by an L1 and an L2 form takes the L1
+    for family, f in _jvm_tile_forms():
+        if (family, f.fn, f.variant) not in seen:
+            seen.add((family, f.fn, f.variant))
+            jvm.append((family, f))
+    assert jvm, "the family sets have JVM forms that read tiles"
+    for family, f in jvm:
+        twins = {t.variant: t for t in lf.FORMS[family] if t.opt_in and t.fn == f.fn}
+        for suffix in ("probe-readdir", "probe-readdir-empty"):
+            t = twins[f"{f.variant}@{suffix}"]
+            assert t.input == "probe_paths" and t.level in ("L1", "L2") and t.run
+            assert t.computes == ("dedicated",)
+        # the default run skips them; naming them selects exactly them
+        assert not [t for t in lf.select_forms(family) if t.opt_in]
+        ids = [f"{f.variant}@probe-readdir", f"{f.variant}@probe-readdir-empty"]
+        assert [t.variant for t in lf.select_forms(family, ids)] == ids or {
+            t.variant for t in lf.select_forms(family, ids)
+        } == set(ids)
+        assert preflight.unknown_form_names(family, ids) == []
+        assert not [t for t in preflight.forms_of(family) if t.opt_in]
+    assert lf.BASE_ROWS["probe_paths"] == probe.PROBE_CALLS == 20
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_a_probe_reads_twenty_corpus_tiles_on_one_task(
+    spark_session_local, tmp_path, empty
+):
+    """The probe query reads `PROBE_CALLS` tiles on one partition; the -empty twin sets EMPTY_DIR on the worker."""
+    corpus = _corpus(tmp_path, 24)
+    spark = spark_session_local
+    src = lf.INPUTS["probe_paths"](spark, probe.PROBE_CALLS, corpus, None)
+    assert spark.table(src).rdd.getNumPartitions() == 1
+    sql = "SELECT count(*) AS n, sum(length(tile.raster)) AS fp, count(tile) AS n_out FROM {src}"
+    n, fp, n_out, _df = probe._probe_run(sql, empty, f"t_{empty}")(spark, src)
+    assert (n, n_out) == (20, 20) and fp > 0
+
+
+def test_a_probe_over_a_corpus_with_too_few_tiles_is_an_error_naming_both_numbers(
+    spark_session_local, tmp_path
+):
+    corpus = _corpus(tmp_path, 5)
+    with pytest.raises(Exception, match="5.*20|20.*5"):
+        lf.INPUTS["probe_paths"](spark_session_local, 20, corpus, None)

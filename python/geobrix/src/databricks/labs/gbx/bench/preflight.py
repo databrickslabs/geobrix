@@ -39,7 +39,11 @@ def forms_of(mvp: str, selected=()) -> list:
     if mvp not in lf.FORMS:
         known = ", ".join(sorted([*lf.FORMS, *NO_FORM_TABLE]))
         raise ValueError(f"unknown levels set {mvp!r} (the sets are: {known})")
-    return [f for f in lf.FORMS[mvp] if not selected or f.variant in selected]
+    return [
+        f
+        for f in lf.FORMS[mvp]
+        if (f.variant in selected if selected else not f.opt_in)
+    ]
 
 
 def unknown_form_names(mvp: str, selected) -> List[str]:

@@ -65,6 +65,9 @@ class Form:
     # A form that is a memory or scale probe BY DESIGN (it collects a whole partition, or runs on the big tiles):
     # the local preflight checks statements, it does not run these.
     memory_probe: bool = False
+    # A form that runs only when `--levels-forms` names it (the one-worker readdir probes): the default run of a set
+    # skips it, the local preflight judges it only when it is selected.
+    opt_in: bool = False
 
 
 def detect_compute(spark) -> str:

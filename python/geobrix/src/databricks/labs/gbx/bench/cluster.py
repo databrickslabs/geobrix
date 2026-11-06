@@ -2660,10 +2660,9 @@ _CELL_LEVELS = """# Levels leg (perf matrix + attribution split): every form of 
 # timed at 1x/4x/16x. Rows land in the same results table; the split is in the row's own columns.
 from databricks.labs.gbx.bench import levels as _lv
 print("=== levels leg starting:", LEVELS_MVP, flush=True)
-if LEVELS_FORMS:
-    from databricks.labs.gbx.bench import levels_forms as _lf
-    _lf.FORMS[LEVELS_MVP] = [_f for _f in _lf.FORMS[LEVELS_MVP] if _f.variant in LEVELS_FORMS]
-    print("=== levels forms limited to:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
+from databricks.labs.gbx.bench import levels_forms as _lf
+_lf.FORMS[LEVELS_MVP] = _lf.select_forms(LEVELS_MVP, LEVELS_FORMS)
+print("=== levels forms:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
 # Each (form, scale) row is sunk the moment that scale has run, and the heartbeat names the form in progress.
 _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, corpus=CORPUS,
                        schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
@@ -2699,10 +2698,9 @@ except Exception as _e:
 
 if _smoke["import_check"]["ok"] and LEVELS_MVP:
     from databricks.labs.gbx.bench import levels as _lv
-    if LEVELS_FORMS:
-        from databricks.labs.gbx.bench import levels_forms as _lf
-        _lf.FORMS[LEVELS_MVP] = [_f for _f in _lf.FORMS[LEVELS_MVP] if _f.variant in LEVELS_FORMS]
-        print("=== levels forms limited to:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
+    from databricks.labs.gbx.bench import levels_forms as _lf
+    _lf.FORMS[LEVELS_MVP] = _lf.select_forms(LEVELS_MVP, LEVELS_FORMS)
+    print("=== levels forms:", sorted(_f.variant for _f in _lf.FORMS[LEVELS_MVP]), flush=True)
     _lv_rows = _lv.run_mvp(spark, LEVELS_MVP, RUN_ID, 0, 1, corpus=CORPUS,
                            schema=".".join(TABLE.split(".")[:2]), uc=(LEVELS_UC or None), where="cluster",
                            scales=(1,), base_rows=SMOKE_ROWS, on_form=_sink, heartbeat=HEARTBEAT,

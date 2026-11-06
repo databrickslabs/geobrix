@@ -1504,7 +1504,7 @@ def test_notebook_runs_the_levels_leg_alone_when_asked():
     assert "LEVELS_FORMS = ('h_combine_avg',)" in sources(
         levels_forms=("h_combine_avg",)
     )
-    assert "_f.variant in LEVELS_FORMS" in both
+    assert "select_forms(LEVELS_MVP, LEVELS_FORMS)" in both
 
 
 def test_a_failed_form_keeps_the_python_workers_cause():

@@ -1983,3 +1983,15 @@ def client_bytes(input_key: str, rows: int) -> int:
 from databricks.labs.gbx.bench import levels_family as _levels_family  # noqa: E402
 
 _levels_family.install(__import__(__name__, fromlist=["x"]))
+
+
+def select_forms(mvp: str, names=()) -> List[Form]:
+    """The forms of `mvp` a run times: those whose variant is in `names` (the ``--levels-forms`` ids, probe twins
+    included), or, with no names, every form that is not opt-in."""
+    return [f for f in FORMS[mvp] if (f.variant in names if names else not f.opt_in)]
+
+
+# The one-worker readdir probe twins of the JVM forms (`bench.levels_probe`), opt-in
+from databricks.labs.gbx.bench import levels_probe as _levels_probe  # noqa: E402
+
+_levels_probe.install(__import__(__name__, fromlist=["x"]))

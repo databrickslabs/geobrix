@@ -17,6 +17,7 @@ from databricks.labs.gbx import _rs
 from databricks.labs.gbx.bench import attribution
 from databricks.labs.gbx.bench import cluster as cl
 from databricks.labs.gbx.bench import levels
+from databricks.labs.gbx.bench import levels_family as fam
 from databricks.labs.gbx.bench import levels_forms as lf
 from databricks.labs.gbx.bench import results
 
@@ -271,7 +272,10 @@ def test_a_virtual_tile_input_is_spread_over_partitions_like_a_materialized_one(
         virt = lf.INPUTS["tiles_virt"](spark_session_local, n, str(tmp_path), None)
         got = spark_session_local.table(virt)
         assert got.count() == n
-        assert got.rdd.getNumPartitions() == lf.io_partitions(spark_session_local, n)
+        # the cap of a materialized family: a pixel-producing op decodes each tile and holds a partition's outputs at once
+        assert got.rdd.getNumPartitions() == fam.family_partitions(
+            spark_session_local, n
+        )
         assert got.rdd.getNumPartitions() > 1
 
 

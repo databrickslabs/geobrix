@@ -169,13 +169,20 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
         if subdir == "rows":
             corpus_guard(name or "tiles", rows, len(_corpus_rows(corpus) or []), n)
         # a virtual table's rows are paths: its few KB would be read by ONE task (a serial run that also holds every
-        # output of the op in one batch), so it is written spread over `io_partitions` files, as the IO inputs are
-        label = f"mvp_in_tiles_{name or ('virtsp' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
-        spread = (
-            (lambda df: df.repartition(io_partitions(spark, n)))
-            if virtual
-            else (lambda df: df)
-        )
+        # output of the op in one batch), so it is written spread like the materialized tile families: at most
+        # FAMILY_ROWS_PER_PARTITION tiles in a partition, because a pixel-producing op decodes each virtual tile it
+        # is given and holds the whole partition's outputs in one batch (8 to a partition at 4000 rows lost the
+        # executors on a dedicated cluster and passed the 1 GB limit on Serverless; the materialized input, 2 to a
+        # partition, ran)
+        label = f"mvp_in_tiles_{name or ('virtfp' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
+
+        def spread(df):
+            if not virtual:
+                return df
+            from databricks.labs.gbx.bench.levels_family import family_partitions
+
+            return df.repartition(family_partitions(spark, n))
+
         first = (
             _corpus_rows(corpus) if subdir == "rows" and n <= SMALL_INPUT_ROWS else None
         )
@@ -262,28 +269,61 @@ def _tile_column(spark, pairs, virtual: bool, keyed: bool):
 def _grouped(recipe: str, virtual: bool):
     """Groups of tiles for the by-key helpers: each corpus row tile with the members the multi-tile
     recipe of ``bench.synth`` writes beside it (merge: two offset copies; combineavg: two aligned
-    copies), keyed by the recipe directory's hash. The members are files under the corpus, written once.
+    copies), keyed by the recipe directory's hash. The members are files under the corpus, written once, and
+    written by the tasks that read them: one row per source tile is spread over the compute's slots, each task
+    writes its sources' members and reads them, so the driver does neither (writing them one after another on the
+    driver took 540-825 s at 1x).
     """
 
     def build(spark, n, corpus, schema):
         sources = _corpus_rows(corpus)
         if not sources:
             return None
+        from pyspark.sql import functions as F
+
         from databricks.labs.gbx.bench import synth
+        from databricks.labs.gbx.bench.levels_family import family_partitions
+        from databricks.labs.gbx.rasterx import functions as rx
 
         corpus_guard("tiles_grouped", os.path.join(corpus, "rows"), len(sources), n)
-        pairs = []
-        for src in sources[:n]:
-            out = synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe)
-            pairs += [
-                (os.path.basename(out), m) for m in synth.synthesize(src, recipe, out)
-            ]
+        plan = [
+            (
+                os.path.basename(
+                    synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe)
+                ),
+                src,
+                synth.synth_dir(corpus, "rows/" + os.path.basename(src), recipe),
+            )
+            for src in sources[:n]
+        ]
         kind = "virt" if virtual else "mat"
+
+        def tiles():
+            members = F.udf(
+                lambda src, out: synth.synthesize(src, recipe, out), "array<string>"
+            )
+            return (
+                client_dataframe(
+                    spark,
+                    plan,
+                    "key string, src string, out string",
+                    what="grouped tile plan",
+                )
+                .repartition(family_partitions(spark, len(plan)))
+                .select("key", F.explode(members("src", "out")).alias("path"))
+                .select(
+                    "key",
+                    rx.rst_fromfile(
+                        F.col("path"), "GTiff", materialize=not virtual
+                    ).alias("tile"),
+                )
+            )
+
         return _table(
             spark,
             schema,
             f"mvp_in_tiles_grouped_{recipe}_{kind}_v{RECIPE_VERSION}_{n}",
-            lambda: _tile_column(spark, pairs, virtual, keyed=True),
+            tiles,
         )
 
     build.writes_under_corpus = True  # the group members land in `<corpus>/_synth`

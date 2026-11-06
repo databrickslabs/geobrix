@@ -115,6 +115,35 @@ def test_the_grouped_tile_input_is_spread_not_read_by_a_task_or_two(
     assert sum(sizes) == n and max(sizes) <= fam.FAMILY_ROWS_PER_PARTITION, sizes
 
 
+def test_the_combine_input_members_are_written_by_tasks_not_the_driver(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """The by-key helpers' groups (a source tile and the members the recipe writes beside it) were written one after
+    another on the driver (540-825 s at 1x). The driver now plans only (key, source, directory) rows: it never calls the
+    synthesiser, and the members land in the table spread over many tasks, every group intact.
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import synth
+
+    def driver_must_not_synthesize(*a, **k):
+        raise AssertionError("the driver wrote group members")
+
+    monkeypatch.setattr(synth, "synthesize", driver_must_not_synthesize)
+    corpus = _corpus(tmp_path, 40)
+    n = 20
+    src = lf.INPUTS["tiles_grouped_mat"](spark_session_local, n, corpus, None)
+    df = spark_session_local.table(src)
+    assert df.columns == ["key", "tile"]
+    per_group = [r[0] for r in df.groupBy("key").count().select("count").collect()]
+    assert len(per_group) == n and set(per_group) == {2}, per_group
+    sizes = [
+        r[0]
+        for r in df.groupBy(F.spark_partition_id()).count().select("count").collect()
+    ]
+    assert max(sizes) < 2 * n and len(sizes) > 1, sizes
+
+
 @pytest.mark.parametrize(
     "inp", ["tiles_n", "tiles_mat", "tiles_virt", "tiles_grouped", "file_bytes"]
 )

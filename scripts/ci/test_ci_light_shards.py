@@ -111,11 +111,13 @@ def _oracle_tables():
     sys.path.insert(0, str(PKG / "src"))
     from databricks.labs.gbx import manifest
 
-    return {
+    tables = {
         f.oracle
         for f in manifest.load().functions.values()
         if f.status == "stable" and f.oracle not in own
     }
+    # the helpers table has rows of rasterx.helpers and no manifest function
+    return tables | {"MVP_H"}
 
 
 def test_the_shards_run_every_light_test_file_exactly_once():

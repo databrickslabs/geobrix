@@ -194,10 +194,10 @@ jobs:
           # The family oracle tables of test/manager (~27 min) in three: every oracle table of the manifest in exactly one.
           - name: manager family 1/3
             paths: test/manager/test_family_cross_tier.py
-            oracle_tables: CELL_AGGREGATE,GRID_GENERATOR,RASTER_ARRAY_OP,RASTER_TO_GRID,RASTER_VECTORIZE,SPEC_ANALYSIS,SPEC_WARP,WEB_TILES
+            oracle_tables: CELL_AGGREGATE,GRID_GENERATOR,MVP_G,MVP_S,RASTER_ARRAY_OP,RASTER_TO_GRID,RASTER_VECTORIZE,SPEC_ANALYSIS,SPEC_WARP,WEB_TILES
           - name: manager family 2/3
             paths: test/manager/test_family_cross_tier.py
-            oracle_tables: GRID_ARRAY,RASTER_ACCESSOR,RASTER_GENERATOR,RASTER_RASTERIZE,SPEC_DEM,VECTOR_GENERATOR,VECTOR_SCALAR
+            oracle_tables: GRID_ARRAY,MVP_H,RASTER_ACCESSOR,RASTER_GENERATOR,RASTER_RASTERIZE,SPEC_DEM,VECTOR_GENERATOR,VECTOR_SCALAR
           - name: manager family 3/3
             paths: test/manager/test_family_cross_tier.py
             oracle_tables: GRID_SCALAR,RASTER_AGGREGATE,RASTER_CONSTRUCTOR,RASTER_FILE_OP,RASTER_STAT,RASTER_TILE_OP,SPEC_CALC,VECTOR_AGGREGATE

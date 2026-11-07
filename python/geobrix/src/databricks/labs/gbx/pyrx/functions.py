@@ -13,10 +13,12 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 import contextlib
 import dataclasses
 import functools
+import itertools
 import json
 import math
 import os
 import re
+import threading
 import warnings
 from typing import Optional
 
@@ -5107,50 +5109,75 @@ def _serverless_task() -> bool:
     return capabilities.is_serverless() and carried_read_cap() is None
 
 
-def _arrow_grouped_agg_available() -> bool:
-    """True when the grouped-aggregate UDFs are Arrow-native: ``GBX_ARROW_AGG=1`` AND this pyspark has ``arrow_udf`` with
-    ``ArrowUDFType.GROUPED_AGG`` (Spark 4.1). An Arrow UDF hands a group to the function as Arrow arrays, with no
-    pandas conversion. Unset or any other value keeps the pandas form (the form of Spark 4.0, so of DBR 17.3 and 18).
+class SessionGroupedAgg:
+    """A grouped-aggregate UDF returning BINARY whose FORM is chosen by the session that uses it, not at import.
 
-    The default is pandas because the measured gain is nil: on pyspark 4.1.1 the worker's peak RSS for the same
-    group was within 0 to 6% of the pandas form (both about twice the group; the Arrow serializer concatenates the
-    group's batches), and the client's pyspark can name an eval type a Serverless server lacks. An env6 measurement
-    decides whether it becomes the default there (env6 leads when it wins). Decided where the module is imported.
+    One body of work (:func:`_merge_agg_group`), up to three forms: *pandas_body* (Series in; the form of Spark 4.0, so of
+    DBR 17.3 and 18, and what every session can run), *arrow_body* (Arrow arrays in; ``arrow_udf`` + ``GROUPED_AGG``) and
+    *iter_body* (an iterator of a group's Arrow batches in; ``GROUPED_AGG_ITER``, which streams them into the merge so the
+    group is not held whole). Which one runs is the capability registry's answer for the session
+    (``capabilities.path(spark, op)``): the arrow forms need ``arrow_grouped_agg`` / ``arrow_grouped_agg_iter``, which
+    need the client API AND a server of the right Spark version, and are off by default (``GBX_CAP_ARROW_GROUPED_AGG=1``,
+    or the legacy ``GBX_ARROW_AGG=1``, ``GBX_CAP_ARROW_GROUPED_AGG_ITER=1``). The forms are built on first use.
+
+    To the machinery that reads a UDF object (``is_light_udf``, ``carrying``) it looks like the pandas form; a registrar
+    and a Column-API call ask for the session's form with :meth:`for_session`.
     """
-    if os.environ.get("GBX_ARROW_AGG", "").strip() != "1":
-        return False
-    try:
-        from pyspark.sql.functions import arrow_udf  # noqa: F401
-        from pyspark.sql.pandas.functions import ArrowUDFType
 
-        return hasattr(ArrowUDFType, "GROUPED_AGG")
-    except ImportError:
-        # Spark 4.0 (DBR 17.3 and 18) has none: the opt-in must not break the import of every function
-        warnings.warn(
-            "GBX_ARROW_AGG=1 is set, but this pyspark has no arrow_udf (Spark 4.1 or later): the grouped aggregates "
-            "stay pandas UDFs. Fix: unset GBX_ARROW_AGG on this runtime.",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return False
+    def __init__(self, op: str, pandas_body, arrow_body, iter_body):
+        self._op = op
+        self._bodies = {
+            "arrow_iter": iter_body,
+            "arrow": arrow_body,
+            "pandas": pandas_body,
+        }
+        self._forms = {"pandas": pandas_udf(pandas_body, BinaryType())}
+        self._lock = threading.Lock()
+
+    def form(self, label: str):
+        """The UDF of form *label* (``pandas``, ``arrow`` or ``arrow_iter``), built once."""
+        with self._lock:
+            if label not in self._forms:
+                from pyspark.sql.functions import arrow_udf
+                from pyspark.sql.pandas.functions import ArrowUDFType
+
+                kind = {
+                    "arrow": ArrowUDFType.GROUPED_AGG,
+                    "arrow_iter": getattr(ArrowUDFType, "GROUPED_AGG_ITER", None),
+                }[label]
+                # the function type is spelled out: the body has no type hints to read it from (pyspark warns)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)
+                    self._forms[label] = arrow_udf(
+                        self._bodies[label], BinaryType(), kind
+                    )
+            return self._forms[label]
+
+    def for_session(self, spark):
+        """The UDF form *spark* runs: the registry's choice for this aggregate on that session."""
+        from databricks.labs.gbx.manager import capabilities
+
+        return self.form(capabilities.path(spark, self._op).split(":", 1)[1])
+
+    def __call__(self, *cols):
+        from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
+
+        spark = _resolve_session_for_cap()
+        udf = self._forms["pandas"] if spark is None else self.for_session(spark)
+        return udf(*cols)
+
+    def __getattr__(self, name):
+        # the pandas form's attributes (func, returnType, evalType, ...): only for a name not found on the instance
+        forms = self.__dict__.get("_forms")
+        if forms is None or name.startswith("__"):
+            raise AttributeError(name)
+        return getattr(forms["pandas"], name)
 
 
-_ARROW_GROUPED_AGG = _arrow_grouped_agg_available()
-
-
-def _grouped_agg_udf(arrow_body, pandas_body):
-    """The grouped-aggregate UDF returning BINARY: *arrow_body* (arrays in) as an Arrow-native UDF where pyspark has one,
-    else *pandas_body* (Series in) as a pandas UDF. Both bodies run the one :func:`_merge_agg_group`.
-    """
-    if _ARROW_GROUPED_AGG:
-        from pyspark.sql.functions import arrow_udf
-        from pyspark.sql.pandas.functions import ArrowUDFType
-
-        # the function type is spelled out: the body has no type hints to read it from (pyspark warns it prefers them)
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", UserWarning)
-            return arrow_udf(arrow_body, BinaryType(), ArrowUDFType.GROUPED_AGG)
-    return pandas_udf(pandas_body, BinaryType())
+def _grouped_agg_udf(op, pandas_body, arrow_body, iter_body):
+    """The grouped-aggregate UDF returning BINARY for aggregate *op*, in the form each session picks (see
+    :class:`SessionGroupedAgg`). All the bodies run the one :func:`_merge_agg_group`."""
+    return SessionGroupedAgg(op, pandas_body, arrow_body, iter_body)
 
 
 def _arrow_rows(array):
@@ -5245,6 +5272,18 @@ def _merge_agg_arrow(tile, error_channel: bool):
     return _merge_agg_group(_arrow_rows(tile), error_channel, spill=True)
 
 
+def _batches_rows(batches):
+    """The rows of a group's tile column from an iterator of Arrow arrays (``GROUPED_AGG_ITER``): each batch's rows in
+    turn, so only the batch at hand is held besides what the merge keeps (the spool), never the whole group.
+    """
+    for array in batches:
+        yield from _arrow_rows(array)
+
+
+def _merge_agg_arrow_iter(batches, error_channel: bool):
+    return _merge_agg_group(_batches_rows(batches), error_channel, spill=True)
+
+
 def _merge_agg_pandas(tile: pd.Series) -> bytes:
     return _merge_agg_bytes(tile, False)
 
@@ -5262,8 +5301,23 @@ def _merge_agg_tile_arrow(tile):
     return _merge_agg_arrow(tile, True)
 
 
-_merge_agg_udf = _grouped_agg_udf(_merge_agg_arrow_sql, _merge_agg_pandas)
-_merge_agg_tile_udf = _grouped_agg_udf(_merge_agg_tile_arrow, _merge_agg_tile_pandas)
+def _merge_agg_arrow_sql_iter(batches):
+    return _merge_agg_arrow_iter(batches, False)
+
+
+def _merge_agg_tile_arrow_iter(batches):
+    return _merge_agg_arrow_iter(batches, True)
+
+
+_merge_agg_udf = _grouped_agg_udf(
+    "merge_agg", _merge_agg_pandas, _merge_agg_arrow_sql, _merge_agg_arrow_sql_iter
+)
+_merge_agg_tile_udf = _grouped_agg_udf(
+    "merge_agg",
+    _merge_agg_tile_pandas,
+    _merge_agg_tile_arrow,
+    _merge_agg_tile_arrow_iter,
+)
 
 
 def _merge_agg_forced_group(rows, vdir, vprefix, spill: bool = False):
@@ -5327,7 +5381,25 @@ def _merge_agg_v2_arrow(tile, virtualize_dir, virtualize_prefix) -> bytes:
     )
 
 
-_merge_agg_v2_udf = _grouped_agg_udf(_merge_agg_v2_arrow, _merge_agg_v2_pandas)
+def _merge_agg_v2_arrow_iter(batches) -> bytes:
+    """The iterator form of :func:`_merge_agg_v2_arrow`: each batch is ``(tile, virtualize_dir, virtualize_prefix)``;
+    the two literals are read off the first batch (they are the same in every row of the group).
+    """
+    batches = iter(batches)
+    head = next(batches, None)
+    if head is None:  # a group with no batch: nothing to merge
+        return _merge_agg_forced_group(iter(()), None, None, spill=True)
+    rows = itertools.chain.from_iterable(
+        _arrow_rows(b[0]) for b in itertools.chain([head], batches)
+    )
+    return _merge_agg_forced_group(
+        rows, _first_scalar(head[1]), _first_scalar(head[2]), spill=True
+    )
+
+
+_merge_agg_v2_udf = _grouped_agg_udf(
+    "merge_agg", _merge_agg_v2_pandas, _merge_agg_v2_arrow, _merge_agg_v2_arrow_iter
+)
 
 
 @f.udf(V2_TILE_SCHEMA)

@@ -112,7 +112,13 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
 
         target = jvm._priv(fn, "L3d")
     if "variants" in spec:
-        reg.udf.register(target, resolve_ref(spec["variants"][variant]))
+        udf = resolve_ref(spec["variants"][variant])
+        for_session = getattr(udf, "for_session", None)
+        if (
+            for_session is not None
+        ):  # a UDF whose form the session chooses (a capability): the form it runs
+            udf = for_session(spark)
+        reg.udf.register(target, udf)
     elif "factory" in spec:
         reg.udf.register(target, built)
     elif "callable" in spec:

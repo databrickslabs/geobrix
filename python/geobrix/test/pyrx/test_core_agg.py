@@ -2067,24 +2067,129 @@ def test_merge_by_key_streams_references_past_the_group_cap_in_parallel(
     assert helpers.merge_by_key(df, ["key"], method="vrt").count() == 2
 
 
-def test_the_grouped_aggregate_is_pandas_unless_arrow_is_asked_for(monkeypatch):
-    """The grouped-aggregate UDFs are pandas UDFs by default (the measured gain of the Arrow form is nil, and the
-    client can name an eval type a server lacks); `GBX_ARROW_AGG=1` makes them Arrow-native where pyspark has
-    `arrow_udf` (Spark 4.1). Both forms run the same body (the c0 test above feeds it a Series and an Arrow array).
+class _Server:
+    """A session as the capability registry reads it: the server's `version` and a `conf`."""
+
+    def __init__(self, version):
+        self.version = version
+
+        class _Conf:
+            @staticmethod
+            def get(key, default=None):
+                return default
+
+        self.conf = _Conf()
+
+
+def _merge_agg_udfs(fx):
+    """The three merge aggregates as built at import (the Column-API wrappers hold them as `_f`)."""
+    return [
+        getattr(u, "_f", u)
+        for u in (fx._merge_agg_udf, fx._merge_agg_tile_udf, fx._merge_agg_v2_udf)
+    ]
+
+
+def test_the_grouped_aggregate_form_is_the_sessions_choice_not_the_imports(monkeypatch):
+    """The merge aggregates are pandas UDFs unless the SESSION proves the Arrow form (client API and a server of Spark
+    4.1+; 4.2+ for the iterator form) AND it is turned on (`GBX_CAP_ARROW_GROUPED_AGG`, the legacy `GBX_ARROW_AGG`,
+    `GBX_CAP_ARROW_GROUPED_AGG_ITER`): the form is asked per session, nothing is fixed at import.
     """
+    from databricks.labs.gbx.manager import capabilities as caps
     from databricks.labs.gbx.pyrx import functions as fx
 
-    monkeypatch.delenv("GBX_ARROW_AGG", raising=False)
-    assert fx._arrow_grouped_agg_available() is False
-    assert fx._ARROW_GROUPED_AGG is False  # the module is imported without the variable
-    monkeypatch.setenv("GBX_ARROW_AGG", "0")
-    assert fx._arrow_grouped_agg_available() is False
-    try:
-        from pyspark.sql.functions import arrow_udf  # noqa: F401
-    except ImportError:
-        return
-    monkeypatch.setenv("GBX_ARROW_AGG", "1")
-    assert fx._arrow_grouped_agg_available() is True
+    for var in (
+        "GBX_ARROW_AGG",
+        "GBX_CAP_ARROW_GROUPED_AGG",
+        "GBX_CAP_ARROW_GROUPED_AGG_ITER",
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(
+        caps, "_has_arrow_eval", lambda name: True
+    )  # a client with every API
+    asked = []
+    for udf in _merge_agg_udfs(fx):
+        monkeypatch.setattr(udf, "form", lambda label: asked.append(label) or label)
+
+    def form_on(version):
+        s = _Server(version)
+        asked.clear()
+        caps.forget(s)
+        return _merge_agg_udfs(fx)[0].for_session(s), asked[:]
+
+    assert form_on("4.3.0")[0] == "pandas"  # off by default, on every server
+    monkeypatch.setenv("GBX_ARROW_AGG", "1")  # the legacy name
+    assert (
+        form_on("4.0.0")[0] == "pandas"
+    )  # Spark 4.0 has no Arrow aggregate: refused, not forced
+    assert form_on("4.1.1")[0] == "arrow"
+    assert form_on("4.3.0")[0] == "arrow"
+    monkeypatch.setenv("GBX_CAP_ARROW_GROUPED_AGG_ITER", "1")
+    assert (
+        form_on("4.1.1")[0] == "arrow"
+    )  # a newer client with a 4.1 server never gets the iterator type
+    assert form_on("4.2.0")[0] == "arrow_iter"
+    monkeypatch.setenv("GBX_CAP_ARROW_GROUPED_AGG", "0")
+    monkeypatch.setenv("GBX_CAP_ARROW_GROUPED_AGG_ITER", "0")
+    assert form_on("4.3.0")[0] == "pandas"
+
+
+def test_the_arrow_forms_of_the_aggregate_carry_the_eval_type_of_their_capability():
+    """Where this pyspark has `arrow_udf`, the lazily built forms are the Arrow UDFs of their eval types (the 4.0 client
+    has neither, and builds the pandas form only)."""
+    from databricks.labs.gbx.manager import capabilities as caps
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    for udf in _merge_agg_udfs(fx):
+        assert udf.form("pandas").evalType == 202  # SQL_GROUPED_AGG_PANDAS_UDF
+    if not caps._has_arrow_eval("GROUPED_AGG"):
+        pytest.skip("this pyspark has no arrow_udf (Spark 4.1+)")
+    from pyspark.sql.pandas.functions import ArrowUDFType
+
+    for udf in _merge_agg_udfs(fx):
+        assert udf.form("arrow").evalType == ArrowUDFType.GROUPED_AGG
+        if caps._has_arrow_eval("GROUPED_AGG_ITER"):
+            assert udf.form("arrow_iter").evalType == ArrowUDFType.GROUPED_AGG_ITER
+
+
+def test_the_iterator_form_merges_a_groups_batches_as_the_one_array_does(
+    tmp_path, monkeypatch
+):
+    """`GROUPED_AGG_ITER` hands the body an iterator of a group's Arrow batches (one array for one column, a tuple per
+    batch for the force-output form): the merge of the batches is the merge of the group, for the three aggregates.
+    """
+    import os
+
+    import pyarrow as pa
+
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    rows = _virtual_rows(tmp_path, n=4)
+    _force_streaming(monkeypatch)
+    _no_materialize(monkeypatch)
+
+    def arrow(rs):
+        return pa.array([{k: v for k, v in r.items() if k != "metadata"} for r in rs])
+
+    batches = [arrow(rows[:1]), arrow(rows[1:3]), arrow(rows[3:])]
+    _expect_three_columns_of_values(fx._merge_agg_arrow_sql_iter(iter(batches)), n=4)
+    _expect_three_columns_of_values(fx._merge_agg_tile_arrow_iter(iter(batches)), n=4)
+    out_dir = str(tmp_path / "forced")
+    lits = [pa.array([out_dir] * len(b)) for b in batches]
+    pre = [pa.array(["pre"] * len(b)) for b in batches]
+    got = fx._merge_agg_v2_arrow_iter(iter(zip(batches, lits, pre)))
+    assert got.startswith(fx._VTPATH_MAGIC)
+    written = got[len(fx._VTPATH_MAGIC) :].decode()
+    assert os.path.dirname(written) == out_dir
+    assert os.path.basename(written).startswith("pre_")
+    with open(
+        written, "rb"
+    ) as fh:  # the mosaic of the four members, written under the directory
+        _expect_three_columns_of_values(fh.read(), n=4)
+    # a group with no batch is an empty group, as the other forms see one
+    assert fx._merge_agg_arrow_sql_iter(iter(())) is None
+    assert fx._merge_agg_v2_arrow_iter(iter(())) == fx._merge_agg_forced_group(
+        iter(()), None, None
+    )
 
 
 def test_the_arrow_form_of_the_aggregate_reads_the_metadata_map_as_a_dict():
@@ -2200,16 +2305,19 @@ def test_two_array_merges_of_one_size_write_two_files(tmp_path):
 def test_the_arrow_opt_in_on_a_pyspark_without_arrow_udf_falls_back_to_pandas_with_a_warning(
     monkeypatch,
 ):
-    """`GBX_ARROW_AGG=1` on Spark 4.0 (no `arrow_udf`) must not break the import of every function: the aggregates stay
-    pandas UDFs and a warning names the Fix."""
+    """`GBX_ARROW_AGG=1` on Spark 4.0 (no `arrow_udf`) must not break any function: the aggregate stays a pandas UDF and a
+    warning names the Fix."""
     import pyspark.sql.functions as spark_functions
 
+    from databricks.labs.gbx.manager import capabilities as caps
     from databricks.labs.gbx.pyrx import functions as fx
 
     monkeypatch.delattr(spark_functions, "arrow_udf", raising=False)
     monkeypatch.setenv("GBX_ARROW_AGG", "1")
+    session = _Server("4.3.0")  # a server that has it: the client is what lacks it
+    caps.forget(session)
     with pytest.warns(RuntimeWarning, match="unset GBX_ARROW_AGG"):
-        assert fx._arrow_grouped_agg_available() is False
+        assert _merge_agg_udfs(fx)[0].for_session(session).evalType == 202
 
 
 def test_a_serverless_task_counts_a_reference_with_instructions_as_the_bytes_it_is_held_as(

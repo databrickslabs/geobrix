@@ -35,6 +35,20 @@ class _DataSource:
         self.owner.sources.append(cls.name())
 
 
+class _ReadOnlyConf:
+    """`spark.conf` as a Connect session lets the library use it: read (`get`), never set."""
+
+    def __init__(self, owner):
+        self.owner = owner
+
+    def get(self, key, default=None):
+        return default
+
+    def __getattr__(self, name):
+        self.owner.__dict__.setdefault("touched", []).append(f"conf.{name}")
+        raise AssertionError(f"forbidden on Connect: conf.{name}")
+
+
 class ConnectStub:
     def __init__(self):
         self.touched, self.registered, self.sql_text = [], [], []
@@ -43,6 +57,7 @@ class ConnectStub:
         self.udf = _Udf(self)
         self.udtf = _Udtf(self)
         self.dataSource = _DataSource(self)
+        self.conf = _ReadOnlyConf(self)
 
     def sql(self, text):
         self.sql_text.append(text)
@@ -59,7 +74,7 @@ class ConnectStub:
         self.artifacts.extend(path)
 
     def __getattr__(self, name):
-        if name in ("_jvm", "_jsc", "sparkContext", "_jsparkSession", "conf"):
+        if name in ("_jvm", "_jsc", "sparkContext", "_jsparkSession"):
             self.__dict__.setdefault("touched", []).append(name)
             raise AssertionError(f"forbidden on Connect: {name}")
         raise AttributeError(name)

@@ -337,8 +337,18 @@ class CapCarryingCall:
         self._f = f
 
     def __call__(self, *cols):
+        f = self._f
+        for_session = getattr(f, "for_session", None)
+        if (
+            for_session is not None
+        ):  # a UDF whose form the session chooses (a capability): the form it runs
+            from databricks.labs.gbx.ds.file_gbx import _resolve_session_for_cap
+
+            spark = _resolve_session_for_cap()
+            if spark is not None:
+                f = for_session(spark)
         cap = _session_read_cap_now()
-        return (self._f if cap is None else _with_cap(self._f, cap))(*cols)
+        return (f if cap is None else _with_cap(f, cap))(*cols)
 
     def __getattr__(self, name):
         # only reached for a name not found on the instance: `_f` itself is missing on a copy or an unpickled object

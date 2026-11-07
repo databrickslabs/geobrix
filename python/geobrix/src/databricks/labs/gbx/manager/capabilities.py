@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
+import re
 import threading
+import warnings
 import weakref
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from databricks.labs.gbx import __version__
 
@@ -228,6 +231,9 @@ def forget(spark) -> None:
     try:
         _CACHE.pop(spark, None)
         _SQLFN.pop(spark, None)
+        real = _real(spark)
+        _RESOLVED.pop(real, None)
+        _SERVER.pop(real, None)
     except TypeError:
         pass
 
@@ -261,3 +267,498 @@ def _detect_uncached(spark, need_jvm: bool) -> Capabilities:
     gdal_reason, jvm_gdal = _gdal(spark, connect) if jar is not None else (reason, "")
     sqlf = _sql_functions(spark)
     return Capabilities(connect, False, jar, reason, gdal_reason, sqlf, jvm_gdal)
+
+
+# ---------------------------------------------------------------------------
+# Spark-feature capabilities: use a newer Spark feature where the SESSION proves it has it, else the older path.
+#
+# The server decides, not the client: on Spark Connect the client library (databricks-connect, pyspark) can be a
+# Spark minor AHEAD of the server, and a client that can name an eval type the server lacks must not register it.
+# Order of evidence for one capability, cheapest first:
+#   1. an override: the env var ``GBX_CAP_<NAME>`` (or a legacy alias), else the Spark conf ``spark.geobrix.cap.<name>``
+#      (read, never set): 1/true/yes/on forces the capability on WHERE IT IS AVAILABLE, 0/false/no/off forces it off;
+#   2. the client API is present (the pyspark that built the call);
+#   3. the SERVER's ``spark.version`` is at least the capability's minimum (one round trip per session on Connect);
+#   4. only where a version cannot decide (a bug fix that is not versioned, a backport): a tiny functional probe,
+#      run once per session under a time limit. Any error counts as "absent".
+# Nothing is decided at import. A decision is made by the first use that has a session, kept for that session and
+# logged once. An ON that is not available is refused (with a warning), never forced: it would fail in the worker.
+# ---------------------------------------------------------------------------
+
+_log = logging.getLogger(__name__)
+
+CAP_ENV_PREFIX = "GBX_CAP_"
+CAP_CONF_PREFIX = "spark.geobrix.cap."
+PROBE_TIMEOUT_S = 60.0
+
+Version = Tuple[int, int]
+
+
+@dataclass(frozen=True)
+class Verified:
+    """One run that confirmed a capability on a runtime: the evidence behind trusting it there."""
+
+    runtime: str  # the runtime key, e.g. "19.x-snapshot-scala2.13" or "serverless-env6"
+    spark_version: str  # the server's ``spark.version`` in that run
+    arch: str
+    date: str
+    result: str = "pass"
+
+
+@dataclass(frozen=True)
+class Capability:
+    """A named Spark feature with its detectors and its default.
+
+    ``client``: True when this pyspark offers the API (None: no client requirement). ``min_server``: the first Spark
+    (major, minor) of the server that has it (None: no server requirement). ``conf_key``: a Spark conf the feature
+    owns, read (never set) for the report, and the probe of a server older than ``min_server`` (a backport shows its
+    conf). ``probe``: ``f(spark) -> (ok, detail)``, the functional test for what a version cannot say.
+    ``default_when_present``: whether the feature is used when available and not overridden. ``aliases``: legacy env
+    var names that mean the same as ``GBX_CAP_<NAME>``. ``verified_on``: the runs that confirmed it (empty until probed).
+    """
+
+    name: str
+    why: str
+    client: Optional[Callable[[], bool]] = None
+    min_server: Optional[Version] = None
+    conf_key: Optional[str] = None
+    probe: Optional[Callable[[Any], Tuple[bool, str]]] = None
+    default_when_present: bool = False
+    aliases: Tuple[str, ...] = ()
+    verified_on: Tuple[Verified, ...] = ()
+
+
+@dataclass(frozen=True)
+class Resolved:
+    """What one session decided for one capability.
+
+    ``value``: use it (available AND enabled). ``available``: the session has it (None: not known, a probe has not run).
+    ``source``: who decided: ``override``, ``client`` / ``server`` / ``probe`` (the layer that said it is absent, or
+    for a conf feature that found it), ``default`` (available; the capability's own default decided), ``unprobed``.
+    ``verified``: the server's Spark minor is one a ``verified_on`` run covers.
+    """
+
+    name: str
+    value: bool
+    available: Optional[bool]
+    source: str
+    detail: str = ""
+    verified: bool = False
+
+
+def parse_version(text: Any) -> Optional[Version]:
+    """(major, minor) of a Spark version string (``4.3.0``, ``4.3.0.dev0+databricks.connect.19.1``), None if unreadable."""
+    m = re.match(r"\s*(\d+)\.(\d+)", str(text or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+# session -> (major, minor) | None: the SERVER's version, asked once (a round trip on Connect)
+_SERVER: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+# session -> {name: Resolved}
+_RESOLVED: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_CAP_LOCK = threading.RLock()
+_UNKNOWN = object()
+
+
+def _real(spark):
+    from databricks.labs.gbx import _gdal_policy
+
+    return _gdal_policy.real_session(spark)
+
+
+def server_version(spark) -> Optional[Version]:
+    """The (major, minor) of the Spark SERVER of ``spark`` (on Connect ``spark.version`` is the server's, not the
+    client's), None when it cannot be read. Cached per session."""
+    real = _real(spark)
+    try:
+        known = _SERVER.get(real, _UNKNOWN)
+    except TypeError:
+        return _read_server_version(real)
+    if known is _UNKNOWN:
+        known = _SERVER[real] = _read_server_version(real)
+    return known
+
+
+def _read_server_version(real) -> Optional[Version]:
+    try:
+        return parse_version(real.version)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a session that cannot say is a session without the feature
+        return None
+
+
+def client_version() -> str:
+    try:
+        import pyspark
+
+        return str(pyspark.__version__)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _has_arrow_eval(name: str) -> bool:
+    """This pyspark has ``arrow_udf`` and ``ArrowUDFType.<name>`` (Spark 4.1+ for GROUPED_AGG, 4.2+ for GROUPED_AGG_ITER)."""
+    try:
+        from pyspark.sql.functions import arrow_udf  # noqa: F401
+        from pyspark.sql.pandas.functions import ArrowUDFType
+
+        return hasattr(ArrowUDFType, name)
+    except ImportError:
+        return False
+
+
+def _has_function(name: str) -> bool:
+    try:
+        from pyspark.sql import functions
+
+        return hasattr(functions, name)
+    except ImportError:
+        return False
+
+
+def _conf_value(real, key: str) -> Optional[str]:
+    """The value of a Spark conf as the session reports it, None when unset or unreadable. Never sets anything."""
+    try:
+        v = real.conf.get(
+            key
+        )  # no default: a conf the session does not know raises, and reads as unset
+    except Exception:  # noqa: BLE001 - an unknown or forbidden key
+        return None
+    return v if isinstance(v, str) else None
+
+
+def _udtf_partition_probe(
+    use_arrow: Optional[bool],
+) -> Callable[[Any], Tuple[bool, str]]:
+    """A probe of ``TABLE(...) PARTITION BY`` into a Python UDTF with two rows in one partition (the second row of a
+    task is where the Serverless failure shows): passes when both rows come back. *use_arrow*: the UDTF's ``useArrow``
+    (None: the session default)."""
+
+    def probe(spark) -> Tuple[bool, str]:
+        import uuid
+
+        from pyspark.sql.functions import udtf
+
+        tag = uuid.uuid4().hex[:8]
+        name, view = f"gbx__probe_udtf_{tag}", f"gbx__probe_view_{tag}"
+
+        class _Handler:
+            def eval(self, row):
+                yield (row["v"],)
+
+        kw = {} if use_arrow is None else {"useArrow": use_arrow}
+        fn = udtf(_Handler, returnType="v INT", **kw)
+        try:
+            spark.udtf.register(name, fn)
+            spark.createDataFrame(
+                [(0, 1), (0, 2)], "k INT, v INT"
+            ).createOrReplaceTempView(view)
+            n = spark.sql(
+                f"SELECT count(*) AS n FROM {name}(TABLE(SELECT * FROM {view}) PARTITION BY k)"
+            ).first()["n"]
+            return n == 2, f"{n} of 2 rows"
+        finally:
+            try:
+                spark.catalog.dropTempView(view)
+            except Exception:  # noqa: BLE001
+                pass
+
+    return probe
+
+
+def _caps(*items: Capability) -> Dict[str, Capability]:
+    return {c.name: c for c in items}
+
+
+REGISTRY: Dict[str, Capability] = _caps(
+    Capability(
+        "arrow_scalar_udf",
+        "scalar UDFs as Arrow arrays in and out (no pandas hop); the pandas UDF where absent",
+        client=lambda: _has_arrow_eval("SCALAR"),
+        min_server=(4, 1),
+        default_when_present=True,  # what the scalar seams already do where the client has arrow_udf
+    ),
+    Capability(
+        "arrow_grouped_agg",
+        "grouped aggregates as Arrow arrays (ArrowUDFType.GROUPED_AGG); the pandas UDF where absent",
+        client=lambda: _has_arrow_eval("GROUPED_AGG"),
+        min_server=(4, 1),
+        aliases=("GBX_ARROW_AGG",),
+        default_when_present=False,  # measured 0-6% on 4.1.1: off until an env6 run shows a win
+    ),
+    Capability(
+        "arrow_grouped_agg_iter",
+        "grouped aggregates over an iterator of a group's Arrow batches (GROUPED_AGG_ITER, SPARK-53615): "
+        "the aggregate holds one batch at a time, not the whole group",
+        client=lambda: _has_arrow_eval("GROUPED_AGG_ITER"),
+        min_server=(4, 2),
+        default_when_present=False,  # decided by the peak-RSS probe (P2)
+    ),
+    Capability(
+        "arrow_udtf_native",
+        "UDTFs as Arrow batches (arrow_udtf); the row UDTF where absent",
+        client=lambda: _has_function("arrow_udtf"),
+        min_server=(4, 1),
+        default_when_present=False,
+    ),
+    Capability(
+        "udtf_table_partition_ok",
+        "a Python UDTF behind TABLE(...) PARTITION BY returns every row of a partition on the session's UDTF default",
+        client=lambda: _has_function("udtf"),
+        probe=_udtf_partition_probe(None),
+        default_when_present=False,  # nothing consumes it yet: the Serverless refusal still stands
+    ),
+    Capability(
+        "udtf_table_partition_noarrow_ok",
+        "the same with useArrow=False (the row UDTF): the way out when only the non-Arrow form passes",
+        client=lambda: _has_function("udtf"),
+        probe=_udtf_partition_probe(False),
+        default_when_present=False,
+    ),
+    Capability(
+        "arrow_max_bytes_per_batch",
+        "the Arrow batch byte cap conf exists (report only: pyrx never sets conf)",
+        min_server=(4, 0),
+        conf_key="spark.sql.execution.arrow.maxBytesPerBatch",
+        default_when_present=True,  # report only: "on" reads as "the session has it"
+    ),
+    Capability(
+        "python_udf_max_bytes_per_batch",
+        "pickled Python UDF input batches bounded by bytes (SPARK-57593, Spark 4.3; report only)",
+        min_server=(4, 3),
+        conf_key="spark.sql.execution.python.udf.maxBytesPerBatch",
+        default_when_present=True,  # report only: "on" reads as "the session has it"
+    ),
+)
+
+
+def _truthy(raw: str) -> Optional[bool]:
+    v = raw.strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    return None
+
+
+def _override(real, cap: Capability) -> Tuple[Optional[bool], str]:
+    """(True / False, where it was set) when the capability is overridden, else (None, "")."""
+    for var in (CAP_ENV_PREFIX + cap.name.upper(),) + cap.aliases:
+        raw = os.environ.get(var)
+        want = _truthy(raw) if raw is not None else None
+        if want is not None:
+            return want, var
+    key = CAP_CONF_PREFIX + cap.name
+    # Serverless allows no conf of ours: do not ask (a refused read is a failed round trip for nothing)
+    raw = None if is_serverless() else _conf_value(real, key)
+    want = _truthy(raw) if raw is not None else None
+    return (want, key) if want is not None else (None, "")
+
+
+def _run_probe(real, cap: Capability) -> Tuple[bool, str]:
+    """The capability's probe under a time limit; any error or a timeout is "absent"."""
+    out: Dict[str, Tuple[bool, str]] = {}
+
+    def work() -> None:
+        try:
+            out["r"] = cap.probe(real)
+        except Exception as exc:  # noqa: BLE001
+            out["r"] = (False, f"{type(exc).__name__}: {str(exc)[:160]}")
+
+    t = threading.Thread(target=work, name=f"gbx-cap-probe-{cap.name}", daemon=True)
+    t.start()
+    t.join(PROBE_TIMEOUT_S)
+    return out.get("r", (False, f"probe did not finish in {PROBE_TIMEOUT_S:.0f}s"))
+
+
+def _availability(
+    real, cap: Capability, allow_probe: bool
+) -> Tuple[Optional[bool], str, str]:
+    """(available, the layer that decided, detail). available None: a probe is needed and not allowed here."""
+    if cap.client is not None:
+        try:
+            ok = bool(cap.client())
+        except Exception:  # noqa: BLE001
+            ok = False
+        if not ok:
+            return False, "client", f"this pyspark ({client_version()}) lacks it"
+    layer = "client"
+    if cap.min_server is not None:
+        layer = "server"
+        sv = server_version(real)
+        if sv is None:
+            return False, "server", "the server's Spark version is unknown"
+        if sv < cap.min_server:
+            if cap.conf_key and _conf_value(real, cap.conf_key) is not None:
+                layer = "probe"  # a backport: the feature's own conf is there
+            else:
+                return (
+                    False,
+                    "server",
+                    f"server Spark {sv[0]}.{sv[1]} < {cap.min_server[0]}.{cap.min_server[1]}",
+                )
+    if cap.probe is not None:
+        if not allow_probe:
+            return None, "probe", "not probed"
+        ok, detail = _run_probe(real, cap)
+        return ok, "probe", detail
+    detail = ""
+    if cap.conf_key:
+        detail = f"{cap.conf_key}={_conf_value(real, cap.conf_key)}"
+    return True, layer, detail
+
+
+def _verified(real, cap: Capability) -> bool:
+    sv = server_version(real)
+    return sv is not None and any(
+        parse_version(v.spark_version) == sv for v in cap.verified_on
+    )
+
+
+def _decide(real, cap: Capability, probe: bool) -> Resolved:
+    want, via = _override(real, cap)
+    verified = _verified(real, cap)
+    if want is False:
+        avail, _, detail = _availability(real, cap, allow_probe=False)
+        return Resolved(
+            cap.name,
+            False,
+            avail,
+            "override",
+            f"{via} turns it off; {detail}".rstrip("; "),
+            verified,
+        )
+    avail, layer, detail = _availability(real, cap, allow_probe=probe or want is True)
+    if avail is None:
+        return Resolved(cap.name, False, None, "unprobed", detail, verified)
+    if not avail:
+        if want is True:
+            warnings.warn(
+                f"{via} turns on '{cap.name}', but this session does not have it ({detail}): the older path is "
+                f"used. Fix: unset {via} on this runtime.",
+                RuntimeWarning,
+                stacklevel=4,
+            )
+        return Resolved(cap.name, False, False, layer, detail, verified)
+    if want is True:
+        return Resolved(
+            cap.name,
+            True,
+            True,
+            "override",
+            f"{via} turns it on; {detail}".rstrip("; "),
+            verified,
+        )
+    return Resolved(
+        cap.name,
+        cap.default_when_present,
+        True,
+        "probe" if layer == "probe" else "default",
+        detail,
+        verified,
+    )
+
+
+def resolve(spark, name: str, *, probe: bool = True) -> Resolved:
+    """The decision of ``spark`` for capability *name*, made once per session and kept (`forget` drops it).
+    *probe*: run the capability's functional probe if it has one and a version cannot decide (False: report it as
+    ``unprobed`` and keep nothing)."""
+    try:
+        cap = REGISTRY[name]
+    except KeyError:
+        raise ValueError(
+            f"unknown capability {name!r}; known: {', '.join(sorted(REGISTRY))}"
+        ) from None
+    real = _real(spark)
+    try:
+        seen = _RESOLVED.setdefault(real, {})
+    except TypeError:  # a session that cannot be weakly referenced is judged every time
+        return _decide(real, cap, probe)
+    with _CAP_LOCK:
+        got = seen.get(name)
+        if got is None:
+            got = _decide(real, cap, probe)
+            if got.source != "unprobed":
+                seen[name] = got
+                _log.info(
+                    "capability %s=%s (%s%s)",
+                    name,
+                    got.value,
+                    got.source,
+                    f": {got.detail}" if got.detail else "",
+                )
+    return got
+
+
+def has(spark, name: str) -> bool:
+    """Whether to use the newer path of capability *name* on ``spark``: available there AND enabled."""
+    return resolve(spark, name).value
+
+
+def available(spark, name: str) -> bool:
+    """Whether ``spark`` has capability *name* at all, enabled or not."""
+    return resolve(spark, name).available is True
+
+
+def report(spark, *, probe: bool = False) -> Dict[str, Dict[str, Any]]:
+    """``{name: {value, available, source, detail, verified}}`` for every capability, for logs and bench rows. A probe
+    runs only with ``probe=True`` (a probe starts Spark work); otherwise a capability that needs one is ``unprobed``
+    unless a use already decided it."""
+    out = {}
+    for name in REGISTRY:
+        r = resolve(spark, name, probe=probe)
+        out[name] = {
+            "value": r.value,
+            "available": r.available,
+            "source": r.source,
+            "detail": r.detail,
+            "verified": r.verified,
+        }
+    return out
+
+
+def _merge_agg_path(spark) -> str:
+    if has(spark, "arrow_grouped_agg_iter"):
+        return "arrow_iter"
+    return "arrow" if has(spark, "arrow_grouped_agg") else "pandas"
+
+
+# op -> which path a session takes for it (the label a log line or a bench row carries)
+_PATHS: Dict[str, Callable[[Any], str]] = {"merge_agg": _merge_agg_path}
+
+
+def path(spark, op: str) -> str:
+    """The code path *op* takes on ``spark``, as ``op:label`` (``merge_agg:arrow_iter``): what a capability chose."""
+    try:
+        chooser = _PATHS[op]
+    except KeyError:
+        raise ValueError(
+            f"no capability-chosen path for {op!r}; known: {', '.join(sorted(_PATHS))}"
+        ) from None
+    return f"{op}:{chooser(spark)}"
+
+
+def runtime_info(spark=None) -> Dict[str, str]:
+    """Where this run is: the server's Spark version (on Connect, the server's), the client pyspark, the Databricks
+    runtime and the Serverless environment version. "" for what cannot be read. Read-only, Serverless-safe.
+    """
+    info = {
+        "spark_version": "",
+        "pyspark_version": client_version(),
+        "dbr_version": os.environ.get("DATABRICKS_RUNTIME_VERSION", "").strip(),
+        "env_version": os.environ.get("DATABRICKS_ENV_VERSION", "").strip(),
+    }
+    if spark is None:
+        return info
+    real = _real(spark)
+    try:
+        info["spark_version"] = str(real.version)
+    except Exception:  # noqa: BLE001
+        pass
+    if not is_serverless():
+        # a classic cluster names its runtime ("19.x-snapshot-scala2.13"); the environment variable only its number
+        tag = _conf_value(real, "spark.databricks.clusterUsageTags.sparkVersion")
+        if tag:
+            info["dbr_version"] = tag
+    return info

@@ -23,17 +23,46 @@ _GDAL_TO_NP = {
 }
 
 
-def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None):
+def clip_shape(ds_crs, geom, geom_crs=None):
+    """The cutline of *geom* in the CRS *ds_crs* of the raster it clips (a shapely geometry, or the GeoJSON-like dict of
+    its reprojection).
+
+    Mirrors heavyweight ``RST_Clip``: if the cutline carries a positive SRID and the raster has a CRS, reproject the
+    cutline from EPSG:srid to the raster CRS before masking. Otherwise (srid 0/unknown, or no raster CRS) the cutline is
+    assumed to already be in the raster CRS and used as-is. Any failure to build the source CRS or transform falls back
+    to using the cutline as-is.
+    """
+    mask_shape = geom
+    srid = shapely.get_srid(geom)  # 0 when no SRID is set
+    # Rule 1 source-CRS: embedded SRID wins; else the explicit geom_crs (int SRID
+    # or CRS string, incl. ESRI/WKT); else None (assume aligned, never error).
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+    src_crs = resolve_source_crs(srid, crs=geom_crs)
+    if src_crs is not None and ds_crs is not None:
+        try:
+            from rasterio.warp import transform_geom
+            from shapely.geometry import mapping
+
+            if src_crs != ds_crs:
+                # transform_geom returns a GeoJSON-like dict; rasterio.mask
+                # accepts GeoJSON geometries directly.
+                mask_shape = transform_geom(src_crs, ds_crs, mapping(geom))
+        except Exception:
+            # Unknown EPSG / transform failure -> fall back to as-is (heavy's
+            # "fall back to the raster's CRS" intent: assume already aligned).
+            mask_shape = geom
+    return mask_shape
+
+
+def clip_to_geom(
+    ds, geom, all_touched: bool = False, geom_crs=None, nodata=None, crop: bool = True
+):
     """Clip a raster to a geometry; return GTiff bytes, or ``None`` on non-overlap.
 
     ``geom`` may be a shapely geometry (preferred — carries SRID via
-    ``shapely.set_srid``) or raw WKB/EWKB ``bytes`` (back-compat).
-
-    Mirrors heavyweight ``RST_Clip``: if the cutline carries a positive SRID and
-    the raster has a CRS, reproject the cutline from EPSG:srid to the raster CRS
-    before masking. Otherwise (srid 0/unknown, or no raster CRS) the cutline is
-    assumed to already be in the raster CRS and used as-is. Any failure to build
-    the source CRS or transform falls back to using the cutline as-is.
+    ``shapely.set_srid``) or raw WKB/EWKB ``bytes`` (back-compat). The cutline is put in the
+    raster's CRS as :func:`clip_shape` says.
 
     If the (reprojected) cutline does NOT overlap the raster, ``rasterio.mask``
     raises ``ValueError: Input shapes do not overlap raster.``. Heavy GDAL Warp
@@ -45,35 +74,37 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None
     ``nodata``, when given, fills the pixels outside the geometry and is declared
     on the output. Otherwise the fill is the source NoData, or 0 with no NoData
     declared when the source has none.
+
+    ``crop=False`` keeps the raster's own grid (the output is as large as the raster, the pixels outside the geometry
+    filled): the clip of one window of a raster that is cropped as a whole (see :func:`clip_masked`).
     """
     if isinstance(geom, (bytes, bytearray)):
         geom = shapely.wkb.loads(bytes(geom))  # handles WKB and EWKB
+    return clip_masked(
+        ds,
+        clip_shape(ds.crs, geom, geom_crs),
+        all_touched=all_touched,
+        nodata=nodata,
+        crop=crop,
+    )
 
-    mask_shape = geom
-    srid = shapely.get_srid(geom)  # 0 when no SRID is set
-    dst_crs = ds.crs  # rasterio CRS or None
-    # Rule 1 source-CRS: embedded SRID wins; else the explicit geom_crs (int SRID
-    # or CRS string, incl. ESRI/WKT); else None (assume aligned, never error).
-    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
 
-    src_crs = resolve_source_crs(srid, crs=geom_crs)
-    if src_crs is not None and dst_crs is not None:
-        try:
-            from rasterio.warp import transform_geom
-            from shapely.geometry import mapping
-
-            if src_crs != dst_crs:
-                # transform_geom returns a GeoJSON-like dict; rasterio.mask
-                # accepts GeoJSON geometries directly.
-                mask_shape = transform_geom(src_crs, dst_crs, mapping(geom))
-        except Exception:
-            # Unknown EPSG / transform failure -> fall back to as-is (heavy's
-            # "fall back to the raster's CRS" intent: assume already aligned).
-            mask_shape = geom
-
+def clip_masked(
+    ds,
+    mask_shape,
+    all_touched: bool = False,
+    nodata=None,
+    crop: bool = True,
+    transform=None,
+):
+    """GTiff bytes of *ds* masked by the cutline *mask_shape* (already in the CRS of *ds*; see :func:`clip_shape`), or
+    ``None`` when a ``crop`` finds no overlap. See :func:`clip_to_geom`. ``transform``, when given, is the output's
+    geotransform in place of the one the clip derives (a window of a clip that is cropped as a whole places it from
+    the crop's transform, to the last bit).
+    """
     try:
         out_image, out_transform = _rio_mask(
-            ds, [mask_shape], crop=True, all_touched=bool(all_touched), nodata=nodata
+            ds, [mask_shape], crop=crop, all_touched=bool(all_touched), nodata=nodata
         )
     except ValueError as exc:
         # rasterio.mask raises ValueError("Input shapes do not overlap raster.")
@@ -87,7 +118,7 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None
         driver="GTiff",
         height=out_image.shape[1],
         width=out_image.shape[2],
-        transform=out_transform,
+        transform=out_transform if transform is None else transform,
     )
     if nodata is not None:
         profile.update(nodata=nodata)

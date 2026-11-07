@@ -3960,16 +3960,17 @@ class _RstMakeTilesUDTF:
             # Key size_bytes on the materialized raster bytes when present (byte-identical
             # to pre-change behavior for materialized tiles; preserves the encoded byte
             # length the old path used via len(raster)). For virtual tiles (tile.raster
-            # is None, whether opened via FILE stream or FUSE path), fall back to
-            # _encoded_size_bytes (dataset re-encode), matching heavy BalancedSubdivision.
+            # is None, whether opened via FILE stream or FUSE path) size_bytes=None and the
+            # opened dataset estimates its own (matching heavy BalancedSubdivision): the
+            # encoded window where it fits the read cap, else the decoded size from the
+            # header, and the tiles are cut as windows of the open file (see
+            # ``open_tile.open_tile_windows``), so a window over the cap is never decoded whole.
+            # With compressed virtual inputs the estimate may differ slightly from a
+            # materialized tile of the same content, so split-count may vary slightly --
+            # this divergence is inherent to streaming and expected.
             raster_bytes = tile.raster
             size_bytes = len(raster_bytes) if raster_bytes is not None else None
-            # NOTE: For virtual tiles (raster=None), size_bytes=None so iter_make_tiles
-            # uses the re-encoded dataset size rather than the original bytes length.
-            # With compressed virtual inputs the re-encoded size may differ slightly
-            # from a materialized tile of the same content, so split-count may vary
-            # slightly — this divergence is inherent to streaming and expected.
-            with ot._open(tile, file_ref=file_ref, gate=False) as ds:
+            with ot.open_tile_windows(tile, file_ref=file_ref) as ds:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps

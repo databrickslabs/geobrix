@@ -764,8 +764,10 @@ Every raster function follows the same order of checks on both implementations.
   - `rst_align_to` reads only the header of the reference tile, so a large reference no longer turns every aligned tile into an error tile.
 - **A virtual tile is refused when the window it reads passes the cap.** Before, only a tile that carried bytes was judged, so a large window could run a Serverless task out of memory. The refusal text and `Fix:` are the same as for a tile with bytes.
   - The size is the window's width and height, times the bands it reads, times the size of the type. A small window of a large file is read.
-  - `rst_retile` and `rst_tooverlappingtiles` cut a virtual tile window by window from its file. They need the memory of one piece, whatever the size of the tile.
-  - A window that is clipped, reprojected or read from a file with its own mask band is decoded whole, so it is judged.
+  - `rst_maketiles`, `rst_retile` and `rst_tooverlappingtiles` stream huge virtual tiles. They cut the tile window by window from its file, so they need the memory of one piece.
+  - This holds when the tile is clipped, reprojected or read from a file with its own mask band. A piece keeps that mask band.
+  - `rst_maketiles` sizes a tile over the cap from its header, as its decoded size. A tile under the cap is split as before.
+  - A reprojected piece of a huge tile may take another source pixel than the whole tile would, at a few borderline pixels.
   - Reads that decode no window are not judged: the plain-window warp, a merge by reference and the block-streaming write.
 - **Heavyweight and lightweight functions take the same tile drivers and refuse the same oversized tiles.** The JVM reads tile bytes of netCDF, HDF, HFA, JP2 and GPKG as a GeoTIFF. Subdatasets and extra metadata domains are not kept. These reads failed before 0.6.0.
   - `gbx_rst_subdatasets` and `gbx_rst_getsubdataset` read a netCDF or HDF tile as its own dataset, so they keep working.

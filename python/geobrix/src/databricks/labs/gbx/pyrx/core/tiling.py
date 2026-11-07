@@ -7,6 +7,7 @@ import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
@@ -148,9 +149,14 @@ def cut_window(ds, win) -> bytes:
     """GTiff bytes of one pixel window of *ds*; *win* is ``(col_off, row_off, width, height)``.
 
     The window is the part of the raster that lies inside it (the caller clamps it to the raster
-    edge); the output keeps the source's CRS, nodata, mask and band layout, positioned by the
+    edge); the output keeps the source's CRS, nodata, own mask band and band layout, positioned by the
     window's geotransform.
+
+    A ``ds`` that makes its own windows (a virtual tile cut as it is read: ``cut_window`` on its class) is asked for
+    the window; any other dataset is read.
     """
+    if getattr(type(ds), "cut_window", None) is not None:
+        return ds.cut_window(win)
     col, row, w, h = (int(v) for v in win)
     window = Window(col, row, w, h)
     profile = ds.profile.copy()
@@ -160,7 +166,11 @@ def cut_window(ds, win) -> bytes:
         height=h,
         transform=ds.window_transform(window),
     )
-    return _comp.write_gtiff(profile, ds.read(window=window), alpha_like=ds.colorinterp)
+    # a source masked by its own mask band keeps it: the pixels alone do not carry it
+    mask = ds.read_masks(1, window=window) if _nd.has_own_mask(ds) else None
+    return _comp.write_gtiff(
+        profile, ds.read(window=window), alpha_like=ds.colorinterp, mask=mask
+    )
 
 
 def _window_tiles(ds, tile_width, tile_height, step_x, step_y) -> list:
@@ -295,7 +305,9 @@ def make_tiles_size(ds, size_in_mb, size_bytes=None):
     if size_in_mb <= 0:
         return ds.width, ds.height
     if size_bytes is None:
-        size_bytes = _encoded_size_bytes(ds)
+        # a virtual tile read window by window estimates its own size (see ``open_tile._SizeEstimate``)
+        estimate = getattr(type(ds), "encoded_size_estimate", None)
+        size_bytes = ds.encoded_size_estimate() if estimate else _encoded_size_bytes(ds)
     return _get_tile_size(ds.width, ds.height, size_bytes, size_in_mb)
 
 

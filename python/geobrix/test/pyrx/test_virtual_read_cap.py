@@ -213,8 +213,9 @@ def test_retile_of_a_virtual_tile_with_a_file_ref_cuts_windows_too(tmp_path):
     assert len(rows) == 4 and not any(r["metadata"].get("last_error") for r in rows)
 
 
-def test_retile_of_a_virtual_tile_that_must_be_decoded_whole_is_refused(tmp_path):
-    """A clipped tile has to be decoded to be clipped: it takes the gated open, and the error tile carries the Fix."""
+def test_retile_of_a_clipped_virtual_tile_cuts_windows_too(tmp_path):
+    """A clipped tile is no longer decoded whole to be clipped: each piece is clipped as it is cut (the cases that
+    differ are in test_virtual_windowed_cuts)."""
     path = _write(tmp_path / "a.tif")
     polygon = b"\x01\x03\x00\x00\x00\x01\x00\x00\x00\x05\x00\x00\x00" + b"".join(
         np.array(xy, dtype="<f8").tobytes()
@@ -223,8 +224,8 @@ def test_retile_of_a_virtual_tile_that_must_be_decoded_whole_is_refused(tmp_path
     tile = _tile(path, clip_polygon=polygon, clip_crs="EPSG:32633")
     with _gdal_policy.carried(None, 3000):
         rows = _retile(tile, 16, 16)
-    assert len(rows) == 1
-    assert "gbx_rst_retile" in rows[0]["metadata"]["last_error"]
+    assert len(rows) == 16
+    assert not any(r["metadata"].get("last_error") for r in rows)
 
 
 def test_tooverlappingtiles_of_a_virtual_tile_over_the_cap_cuts_windows_too(tmp_path):

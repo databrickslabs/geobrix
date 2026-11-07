@@ -17,15 +17,20 @@ a nested ``with`` that has already closed.
 """
 
 import atexit
+import math
 import os
 import shutil
 import uuid
+import warnings
 from contextlib import ExitStack, contextmanager
 from typing import Iterator, Optional, Tuple
 
 import numpy as np
 import rasterio
+import rasterio.features
+import rasterio.warp
 import rasterio.windows
+from affine import Affine
 from rasterio.coords import BoundingBox
 from rasterio.io import DatasetReader, MemoryFile
 from rasterio.transform import TransformMethodsMixin
@@ -43,8 +48,14 @@ from databricks.labs.gbx.pyrx._env import (
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core import edit as _edit
+from databricks.labs.gbx.pyrx.core import tiling as _tiling
 from databricks.labs.gbx.pyrx.core import warp as _warp
-from databricks.labs.gbx.pyrx.core.budget import refuse_window_over_cap
+from databricks.labs.gbx.pyrx.core.budget import (
+    grid_bytes,
+    refuse_window_over_cap,
+    tile_read_cap,
+)
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -998,7 +1009,31 @@ _TASK_SOURCES = _TaskSources()
 atexit.register(_TASK_SOURCES.reset)
 
 
-class _WindowPointView(TransformMethodsMixin, _WindowHeaderView):
+class _SizeEstimate:
+    """The size ``rst_maketiles`` splits a virtual tile by, for a dataset that reads the tile window by window.
+
+    The split keys on the encoded size of the tile's raster. Where the tile's window and its raster fit the read cap that is
+    measured as it always was: the window (and its reprojection) is materialized (``_whole_bytes``) and encoded. Over the cap nothing of the
+    kind can happen, so the header bounds it: the decoded size of the raster is no less than its encoded one, so each
+    piece of the split stays under the limit (a compressible raster may split into more pieces than its encoded size
+    asks for). ``_source_decoded`` is the decoded size of the window as it is read out of its file.
+    """
+
+    _whole_bytes = None
+    _source_decoded = 0
+
+    def encoded_size_estimate(self) -> int:
+        decoded = grid_bytes(self.width, self.height, self.dtypes)
+        if (
+            self._whole_bytes is None
+            or max(self._source_decoded, decoded) > tile_read_cap()
+        ):
+            return decoded
+        with MemoryFile(self._whole_bytes()) as mf, open_bytes(mf) as ds:
+            return _tiling._encoded_size_bytes(ds)
+
+
+class _WindowPointView(_SizeEstimate, TransformMethodsMixin, _WindowHeaderView):
     """The dataset ``open_tile`` yields for a virtual tile, for reads of a few pixels.
 
     The header is the window's (``_WindowHeaderView``: dims, transform, and the pending
@@ -1130,29 +1165,260 @@ def _open_window_source(vt: VirtualTile, file_ref, stack: ExitStack):
     )
 
 
+class _PieceView(_SizeEstimate):
+    """The dataset ``open_tile_windows`` yields for a virtual tile whose raster is made by a pipeline over its window:
+    clipped, reprojected, or read from a file with its own mask band.
+
+    It has the tile's final grid (``width`` / ``height``) and makes each window the retile family asks for by running
+    the pipeline on that window alone (``piece``: ``Window`` -> GTiff bytes), so no step holds the tile's window whole.
+    ``cut_window`` is what ``tiling.cut_window`` calls for it.
+    """
+
+    def __init__(self, width: int, height: int, dtypes, piece):
+        self.width = int(width)
+        self.height = int(height)
+        self.dtypes = tuple(dtypes)
+        self._piece = piece
+
+    def cut_window(self, win) -> bytes:
+        col, row, w, h = (int(v) for v in win)
+        with (
+            MemoryFile(self._piece(Window(col, row, w, h))) as mf,
+            open_bytes(mf) as ds,
+        ):
+            return _tiling.cut_window(ds, (0, 0, ds.width, ds.height))
+
+
+def _warp_to_grid(win_bytes: bytes, want_crs, transform, width: int, height: int):
+    """``_warp_bytes`` onto a given grid: GTiff bytes of the window bytes reprojected to *want_crs*, laid out as
+    *transform*, *width* and *height* say (a piece of the output grid the whole window would be warped onto).
+    """
+    with MemoryFile(win_bytes) as mf, open_bytes(mf) as wds:
+        mask_band = _nd.has_own_mask(wds) and wds.nodata is None
+        with WarpedVRT(
+            wds, crs=want_crs, transform=transform, width=width, height=height
+        ) as vrt:
+            prof = _comp.source_profile(vrt.profile)
+            prof.update(driver="GTiff")
+            data = vrt.read()
+            mask = _warped_mask(wds, vrt) if mask_band else None
+            return _comp.write_gtiff(prof, data, alpha_like=wds.colorinterp, mask=mask)
+
+
+def _source_region(piece: Window, grid, dst_crs, src_crs, src_transform, size):
+    """The part of a window ``size`` = ``(width, height)`` that a warp onto *piece* of the output grid *grid* reads:
+    the piece's footprint in the source, a few pixels wider; a 1 x 1 window where it misses the source (the piece is
+    all fill). The whole window when the footprint cannot be worked out."""
+    width, height = size
+    try:
+        left, bottom, right, top = rasterio.warp.transform_bounds(
+            dst_crs,
+            src_crs,
+            *rasterio.windows.bounds(piece, grid),
+            densify_pts=21,
+        )
+        win = rasterio.windows.from_bounds(left, bottom, right, top, src_transform)
+        c0 = max(0, math.floor(win.col_off) - 2)
+        r0 = max(0, math.floor(win.row_off) - 2)
+        c1 = min(width, math.ceil(win.col_off + win.width) + 2)
+        r1 = min(height, math.ceil(win.row_off + win.height) + 2)
+    except (
+        Exception
+    ):  # noqa: BLE001 - a footprint that cannot be worked out is read whole (and judged)
+        return Window(0, 0, width, height)
+    if c1 <= c0 or r1 <= r0:
+        return Window(0, 0, 1, 1)
+    return Window(c0, r0, c1 - c0, r1 - r0)
+
+
+def _staged_view(vt: VirtualTile, src) -> Optional[_PieceView]:
+    """A :class:`_PieceView` of *vt* over the open *src*, or None when the tile cannot be made window by window.
+
+    The pipeline is the one :func:`open_tile` runs on the whole window, run on a window of its output: read the
+    tile's window (band-select, NoData, CRS relabel, own mask band), warp it to the tile's target ``crs``, clip it to
+    the tile's polygon. Each step reads a window that depends only on the piece asked for, so the piece costs its own
+    pixels (plus the margin a warp reads around them):
+
+    - a reprojection is the warp of the part of the source window the piece covers, onto the piece of the output
+      grid (``calculate_default_transform`` of the window, the grid the whole warp is laid out on);
+    - a clip is cropped as a whole (the window of the polygon in the grid it clips, from the header) and each piece
+      is masked by the polygon alone; a polygon that misses the raster gives the one NoData pixel ``open_tile`` gives.
+
+    None (the caller opens the tile whole, and the read cap judges it) for a tile the read cap lets be decoded whole
+    (its source window, and its reprojected grid, fit under it: the result is then the route's own, whatever is
+    pending), for a window that is not inside the source, or a reprojection of a source with no CRS, ground control
+    points or a rotated transform.
+    """
+    c, r, w, h = vt.window or (0, 0, src.width, src.height)
+    if min(c, r) < 0 or min(w, h) <= 0 or c + w > src.width or r + h > src.height:
+        return None
+    window = Window(c, r, w, h)
+    pending = _parse_pending(vt.metadata)
+    bands, _, srid, crs_str = pending
+    warp = _warp_pending(vt, src)
+    if warp and (
+        src.crs is None
+        or _warp.gcp_georef(src) is not None
+        or src.transform.b != 0
+        or src.transform.d != 0
+    ):
+        return None
+    dtypes = [src.dtypes[b - 1] for b in bands] if bands else list(src.dtypes)
+    cap = tile_read_cap()
+    over = grid_bytes(w, h, dtypes) > cap
+    if not (over or warp):
+        return None  # fits: decoded whole, as ever (a clip or an own mask band alone adds no memory)
+    what = f"the tile {vt.path}"
+
+    def read_window(part: Window, mark_masked: bool) -> bytes:
+        """GTiff bytes of *part* of the tile's window, its pending instructions applied."""
+        absolute = Window(c + part.col_off, r + part.row_off, part.width, part.height)
+        # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT: its refusal names the reason
+        with refusals_named(what):
+            return _window_dataset_bytes(
+                src, absolute, pending=pending, mark_masked=mark_masked
+            )
+
+    transform = src.window_transform(window)
+    out_w, out_h = w, h
+
+    def plain_piece(win: Window) -> bytes:
+        return read_window(win, False)
+
+    piece = plain_piece
+    if warp:
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        src_crs = (
+            resolve_crs(crs_str if crs_str is not None else srid)
+            if (crs_str is not None or srid is not None)
+            else src.crs
+        )
+        epsg = _epsg_of(vt.crs)
+        want = f"EPSG:{epsg}" if epsg is not None else resolve_crs(vt.crs)
+        grid, out_w, out_h = _warp._cached_default_transform(
+            src_crs, want, w, h, rasterio.windows.bounds(window, src.transform)
+        )
+
+        def warp_piece(win, grid=grid, want=want, src_crs=src_crs, window_t=transform):
+            region = _source_region(win, grid, want, src_crs, window_t, (w, h))
+            return _warp_to_grid(
+                read_window(region, True),
+                want,
+                grid * Affine.translation(win.col_off, win.row_off),
+                int(win.width),
+                int(win.height),
+            )
+
+        piece, transform = warp_piece, grid
+        if not (over or grid_bytes(out_w, out_h, dtypes) > cap):
+            return None  # the source window and its warped grid both fit: warped whole, as ever
+    if vt.clip_polygon is not None:
+        geom = _clip.clip_geom(vt.clip_polygon, vt.clip_crs)
+        crop = shape = None
+        # one pixel of the stage the polygon clips: its CRS puts the polygon on the grid, and it is the reference of
+        # the NoData pixel a polygon that misses the raster gives
+        with MemoryFile(piece(Window(0, 0, 1, 1))) as mf, open_bytes(mf) as ref:
+            if geom is not None:
+                shape = _edit.clip_shape(ref.crs, geom)
+                try:
+                    crop = rasterio.features.geometry_window(
+                        _GridHeader(transform, out_w, out_h), [shape]
+                    )
+                except rasterio.windows.WindowError:
+                    crop = None  # the polygon misses the raster
+                if crop is not None and (crop.width <= 0 or crop.height <= 0):
+                    crop = None
+            empty = _empty_dataset_bytes(ref) if crop is None else None
+        if crop is None:
+            return _PieceView(1, 1, dtypes, lambda win: empty)
+        crop = Window(
+            int(crop.col_off), int(crop.row_off), int(crop.width), int(crop.height)
+        )
+        inner, out_w, out_h = piece, crop.width, crop.height
+        # the transform of the clipped raster, as `window_transform(crop)` gives it: a piece is placed from it
+        crop_transform = transform * Affine.translation(crop.col_off, crop.row_off)
+
+        def clip_piece(win, inner=inner, crop=crop, shape=shape, origin=crop_transform):
+            data = inner(
+                Window(
+                    crop.col_off + win.col_off,
+                    crop.row_off + win.row_off,
+                    win.width,
+                    win.height,
+                )
+            )
+            with MemoryFile(data) as mf, open_bytes(mf) as ds:
+                with warnings.catch_warnings():
+                    # a piece the polygon does not reach is filled whole (rasterio says so in a warning)
+                    warnings.simplefilter("ignore")
+                    return _edit.clip_masked(
+                        ds,
+                        shape,
+                        crop=False,
+                        transform=origin * Affine.translation(win.col_off, win.row_off),
+                    )
+
+        piece = clip_piece
+
+    return _PieceView(out_w, out_h, dtypes, piece)
+
+
+class _GridHeader:
+    """The header of a grid (transform, width, height): all ``rasterio.features.geometry_window`` asks of a dataset."""
+
+    def __init__(self, transform, width: int, height: int):
+        self.transform, self.width, self.height = transform, int(width), int(height)
+
+
+def _sized_by_window(view, vt: VirtualTile, src, window: Window, pending, dtypes):
+    """*view*, with what :class:`_SizeEstimate` needs to size the tile: the window as ``open_tile`` materializes it."""
+
+    def whole() -> bytes:
+        with refusals_named(f"the tile {vt.path}"):
+            data = _tile_window_bytes(vt, src, window, pending)
+        return data if vt.clip_polygon is None else _clip_bytes(data, vt)
+
+    view._whole_bytes = whole
+    view._source_decoded = grid_bytes(window.width, window.height, dtypes)
+    return view
+
+
 @contextmanager
 def open_tile_windows(tile, file_ref=None) -> Iterator:
     """``open_tile`` for an op that cuts a tile into windows and reads each as it goes (``rst_retile``,
-    ``rst_tooverlappingtiles``).
+    ``rst_tooverlappingtiles``, ``rst_maketiles``).
 
-    Yields what ``open_tile`` would, with the same pixels in every window: for a virtual tile of a file (no clip; no
-    pending reprojection; no mask band of the file's own), a :class:`_WindowPointView` of the tile's window of the open
-    source, so a piece costs the read of its own blocks and the window is never decoded whole; for any other tile
-    (materialized, Zarr-backed, clipped, reprojected), ``open_tile`` itself: a materialized tile is not gated here (the
-    op never decodes it whole), a virtual window that has to be decoded is (see :func:`_window_dataset_bytes`).
+    Yields what ``open_tile`` would, with the same pixels in every window, and the tile's window is never decoded whole.
+    A virtual tile of a file yields a view of the open source: a :class:`_WindowPointView` when it is nothing but a
+    window with band-select / NoData / SRID instructions (a piece costs the read of its own blocks), a
+    :class:`_PieceView` when it is also clipped, reprojected, or the file has its own mask band (a piece runs the
+    pipeline on its own part of the window; see :func:`_staged_view`). Any other tile (materialized: not gated here, the op never decodes it whole; Zarr-backed;
+    a reprojection of a source with no CRS or a rotated one) is ``open_tile`` itself, and a virtual window it has to
+    decode is gated (see :func:`_window_dataset_bytes`).
     """
     vt = _to_virtual_tile(tile)
     if not vt.is_virtual():
         with open_tile(vt, file_ref=file_ref, gate=False) as ds:
             yield ds
         return
-    if not (_zarr_tiles.is_zarr_tile(vt) or vt.clip_polygon is not None):
+    if not _zarr_tiles.is_zarr_tile(vt):
         with ExitStack() as stack:
             src = _open_window_source(vt, file_ref, stack)
-            view = _point_view(vt, src)
+            view = _point_view(vt, src) if vt.clip_polygon is None else None
             if view is not None:
                 view._refusal_what = f"the tile {vt.path}"
-                yield view
+                window, dtypes = view._window, view.dtypes
+            else:
+                view = _staged_view(vt, src)
+                c, r, w, h = vt.window or (0, 0, src.width, src.height)
+                window = Window(c, r, w, h)
+                bands = _parse_pending(vt.metadata)[0]
+                dtypes = [src.dtypes[b - 1] for b in bands] if bands else src.dtypes
+            if view is not None:
+                yield _sized_by_window(
+                    view, vt, src, window, _parse_pending(vt.metadata), dtypes
+                )
                 return
     with open_tile(vt, file_ref=file_ref) as ds:
         yield ds

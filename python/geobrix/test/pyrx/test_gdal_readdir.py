@@ -1548,6 +1548,172 @@ def test_a_batch_task_of_a_plain_read_notes_the_stamps(
     assert set(_env._SIDECAR_FREE) == {os.path.abspath(p) for p in paths}
 
 
+# --- a merge by reference: the VRT pass and the member headers take the same per-file choice -----------------------
+
+
+def _merge_refs(tmp_path, names, stamped):
+    """References to `names` (one-pixel-row tiles side by side), stamped as the reader stamps them or not."""
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    refs = []
+    for i, name in enumerate(names):
+        path = tmp_path / name
+        with rasterio.Env(GDAL_PAM_ENABLED="NO"):
+            with rasterio.open(
+                path, "w", driver="GTiff", width=8, height=8, count=1, dtype="uint8",
+                crs="EPSG:32633", transform=from_origin(500000.0 + 80 * i, 5000000.0, 10.0, 10.0),
+            ) as dst:  # fmt: skip
+                dst.write(np.full((1, 8, 8), i + 1, "uint8"))
+        meta = {_env.SIDECAR_FREE_KEY: "1"} if stamped else {}
+        refs.append(agg_core.Ref(VirtualTile(cellid=0, path=str(path), metadata=meta)))
+    return refs
+
+
+@pytest.fixture
+def streamed_merge(monkeypatch):
+    """Force the streamed merge, and record the thread's GDAL_DISABLE_READDIR_ON_OPEN while the COG pass reads the VRT
+    (GDAL opens the VRT's sources itself in that pass, with the thread's setting)."""
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    monkeypatch.setattr(agg_core, "_merge_route", lambda *a, **k: "driver")
+    seen = []
+    real = agg_core.cog_convert_file
+
+    def cog_convert_file(*a, **k):
+        tc = _env._thread_config()
+        raw = tc[1](KEY.encode(), None) if tc else None
+        seen.append(raw.decode() if isinstance(raw, bytes) else raw)
+        return real(*a, **k)
+
+    monkeypatch.setattr(agg_core, "cog_convert_file", cog_convert_file)
+    return seen
+
+
+def test_a_merge_by_reference_checks_no_sidecar_of_a_stamped_member(
+    tmp_path, readdir, opens_seen, scans, no_stamps, streamed_merge
+):
+    """The members are stamped path_sidecar_free (the reader says nothing sits beside them): their headers are read for
+    the VRT, and the COG pass reads them through it, with EMPTY_DIR, and the folder is not listed. Each of those opens
+    kept the process value (a name check of every sidecar, a dozen look-ups an open on a Volume) before.
+    """
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    readdir(None)
+    _env._LISTINGS.clear()
+    names = ["m0.tif", "m1.tif", "m2.tif"]
+    refs = _merge_refs(tmp_path, names, stamped=True)
+    out = agg_core.merge_members(refs)
+    assert out and scans == []
+    assert streamed_merge == ["EMPTY_DIR"]
+    # every open of a member, by the front door or the VRT's header read, took EMPTY_DIR
+    assert {m for n, m in opens_seen if n in names} == {"EMPTY_DIR"}
+
+
+def test_a_merge_by_reference_of_unstamped_members_lists_their_folder_once(
+    tmp_path, readdir, opens_seen, scans, no_stamps, streamed_merge
+):
+    """The control: with no stamp the worker lists the folder, sees no sidecar, and takes EMPTY_DIR the same way."""
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    readdir(None)
+    _env._LISTINGS.clear()
+    names = ["m0.tif", "m1.tif"]
+    out = agg_core.merge_members(_merge_refs(tmp_path, names, stamped=False))
+    assert out and len(scans) == 1
+    assert streamed_merge == ["EMPTY_DIR"]
+    assert {m for n, m in opens_seen if n in names} == {"EMPTY_DIR"}
+
+
+def test_the_vrt_pass_keeps_the_sidecar_lookup_when_a_member_has_a_sidecar(
+    tmp_path, readdir, no_stamps, streamed_merge
+):
+    """One member has an .aux.xml beside it: GDAL must find it when it opens the VRT's source, so the pass does not run
+    under EMPTY_DIR."""
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    readdir(None)
+    _env._LISTINGS.clear()
+    names = ["m0.tif", "m1.tif"]
+    refs = _merge_refs(tmp_path, names, stamped=False)
+    (tmp_path / "m1.tif.aux.xml").write_text("<PAMDataset/>")
+    assert agg_core.merge_members(refs)
+    assert streamed_merge != ["EMPTY_DIR"]
+
+
+def test_the_vrt_pass_keeps_the_sidecar_lookup_when_the_group_has_a_bytes_member(
+    tmp_path, readdir, no_stamps, streamed_merge
+):
+    """A bytes member is a file of the merge's own scratch (rewritten ones may carry a mask): a group of references and
+    one bytes member does not run the pass under EMPTY_DIR."""
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    readdir(None)
+    _env._LISTINGS.clear()
+    refs = _merge_refs(tmp_path, ["m0.tif", "m1.tif"], stamped=True)
+    member = _merge_refs(tmp_path, ["m2.tif"], stamped=False)[0]
+    data = open(member.tile.path, "rb").read()
+    assert agg_core.merge_members([*refs, data])
+    assert streamed_merge != ["EMPTY_DIR"]
+
+
+def test_sources_readdir_mode_is_empty_dir_only_for_plain_references_with_nothing_beside_them(
+    tmp_path, readdir, no_stamps
+):
+    """The rule itself: every member a reference, and every one of them with nothing beside it (the reader's stamp or the
+    worker's listing). A sidecar beside one, a bytes member, an unlisted file or no member each keep the setting.
+    """
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+
+    readdir(None)
+    _env._LISTINGS.clear()
+    refs = _merge_refs(tmp_path, ["m0.tif", "m1.tif"], stamped=True)
+    spool = agg_core._MemberSpool()
+    for r in refs:
+        spool.add(r)
+    assert agg_core._sources_readdir_mode(spool.entries) == "EMPTY_DIR"
+    assert agg_core._sources_readdir_mode([]) is None
+    spool.add(open(refs[0].tile.path, "rb").read())  # a bytes member
+    assert agg_core._sources_readdir_mode(spool.entries) is None
+    spool.close()
+    # a sidecar beside one member: the listing of its folder says so, the stamp does not cover it
+    _env._SIDECAR_FREE.clear()
+    _env._LISTINGS.clear()
+    (tmp_path / "m1.tif.msk").write_bytes(b"")
+    spool = agg_core._MemberSpool()
+    for r in _merge_refs(tmp_path, ["m0.tif", "m1.tif"], stamped=False):
+        spool.add(r)
+    assert agg_core._sources_readdir_mode(spool.entries) is None
+    spool.close()
+
+
+def test_a_reference_over_the_read_cap_is_a_refusal_never_a_dropped_member(tmp_path):
+    """`_MemberSpool.add(drop_refs=True)` drops a file that does not open, as the session does, but a reference that has
+    to be decoded whole (it carries an instruction) over the read cap raises ReadCapRefused with its Fix: a group is never
+    merged from the members that happened to fit."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    ref = _merge_refs(tmp_path, ["big.tif"], stamped=False)[0]
+    over = agg_core.Ref(VirtualTile(cellid=0, path=ref.tile.path, crs="EPSG:4326"))
+    spool = agg_core._MemberSpool()
+    try:
+        with _gdal_policy.carried(
+            None, 16
+        ):  # a read cap smaller than the 64 decoded bytes of the tile
+            with pytest.raises(agg_core.ReadCapRefused, match="Fix"):
+                spool.add(over, drop_refs=True)
+        missing = agg_core.Ref(VirtualTile(cellid=0, path=str(tmp_path / "gone.tif")))
+        assert (
+            spool.add(missing, drop_refs=True) is False
+        )  # a file that does not open is dropped
+        with pytest.raises(Exception):
+            spool.add(missing)  # and without drop_refs it stops the query
+    finally:
+        spool.close()
+
+
 def test_a_stamp_expires_and_a_new_note_renews_it(
     tmp_path, readdir, no_stamps, monkeypatch
 ):

@@ -38,7 +38,12 @@ from databricks.labs.gbx._gdal_policy import (
     open_bytes,
     open_data,
 )
-from databricks.labs.gbx.pyrx._env import capped_block_cache
+from databricks.labs.gbx.pyrx._env import (
+    capped_block_cache,
+    note_tile_hints,
+    readdir_mode,
+    readdir_option,
+)
 from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
@@ -611,6 +616,23 @@ def _open_member(e: _Entry):
             ds.close()
 
 
+def _sources_readdir_mode(entries: List[_Entry]) -> Optional[str]:
+    """``EMPTY_DIR`` when every member is a reference to a file with nothing beside it (the reader's stamp, or the
+    worker's listing of its folder, says so: :func:`pyrx._env.readdir_mode`), else None (the open keeps its setting).
+
+    GDAL opens a VRT's sources itself, when the COG pass reads them, with the process setting (a by-name check of every
+    sidecar, a dozen look-ups an open): on a Volume's FUSE that is most of the time of a merge by reference. The option
+    is read at each open and is per thread, so the pass runs under it. A group with a bytes member keeps the setting:
+    its scratch files are the merge's own, and a rewritten one may have a sidecar.
+    """
+    if not entries or any(e.kind != "r" for e in entries):
+        return None
+    for e in entries:
+        note_tile_hints(e.path, e.vt.metadata)  # a stamp lapses (it lapses after a time): a long merge renews it here
+    modes = {readdir_mode(e.path) for e in entries}
+    return "EMPTY_DIR" if modes == {"EMPTY_DIR"} else None
+
+
 def _stream_entries(
     entries: List[_Entry],
     scratch: str,
@@ -752,7 +774,8 @@ def _stream_entries(
     # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
     # the full mosaic into a numpy array).
     cog_path = os.path.join(scratch, "mosaic.tif")
-    cog_convert_file(vrt_path, cog_path)
+    with readdir_option(_sources_readdir_mode(entries)):
+        cog_convert_file(vrt_path, cog_path)
 
     if to_dir is not None:
         return _publish_cog(cog_path, to_dir, prefix)
@@ -935,8 +958,12 @@ def _plain_ref(vt):
     from databricks.labs.gbx.core._retry import _retry_transient
     from databricks.labs.gbx.ds._listing import to_local_path
     from databricks.labs.gbx.ds.file_gbx import _is_fuse_path, _probe_direct_open
+    from databricks.labs.gbx.pyrx import _env
     from databricks.labs.gbx.pyrx.core import open_tile as ot
 
+    # the reader's word about this file's folder (no sidecar beside it; how many files it holds), as every other open
+    # of a tile takes it: without it the first opens of a worker list a folder of tens of thousands of names
+    _env.note_tile_hints(vt.path, vt.metadata)
     if (
         vt.raster is not None
         or not vt.path

@@ -78,6 +78,7 @@ from databricks.labs.gbx.ds.file_gbx import (
     _connect_aware_lru_sizing,
     materialize_decision,
 )
+from databricks.labs.gbx.pyrx._env import open_raster
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.virtual_tile import BAND_METADATA_KEY
 from databricks.labs.gbx.zarr._tiles import is_zarr_tile  # stdlib + numpy only
@@ -490,7 +491,9 @@ def _build_mosaic_vrt(
     # ── Step 1: collect tile metadata ─────────────────────────────────────
     metas = []
     for path in tile_paths:
-        with open_data(path) as ds:
+        with open_raster(
+            path
+        ) as ds:  # the folder's sidecar look-up chosen per file (pyrx._env.readdir_mode)
             metas.append(
                 {
                     "path": path,

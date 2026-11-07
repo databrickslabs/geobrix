@@ -331,3 +331,305 @@ def test_the_udtf_partition_probe_runs_on_a_real_session(spark):
     for use_arrow in (None, False):
         ok, detail = caps._udtf_partition_probe(use_arrow)(spark)
         assert ok, detail
+
+
+class SqlSpark(FakeSpark):
+    """A session that records its SQL, and fails the statements a test names."""
+
+    def __init__(self, fail_on=(), **kw):
+        super().__init__(**kw)
+        self.statements, self.fail_on = [], fail_on
+
+    def sql(self, text):
+        self.statements.append(text)
+        if any(f in text for f in self.fail_on):
+            raise RuntimeError(
+                f'[UNSUPPORTED_DATATYPE] Unsupported data type "FILE" ({text[:30]})'
+            )
+
+        class _Rows:
+            def collect(_self):
+                return []
+
+        return _Rows()
+
+
+def test_the_file_type_probe_creates_lists_and_drops_a_function_that_mints_a_file():
+    ok = SqlSpark()
+    assert caps._sql_file_type_probe(ok)[0] is True
+    create, show, drop = ok.statements
+    assert "try_to_file(p)" in create and show.startswith("SHOW USER FUNCTIONS LIKE")
+    assert drop.startswith("DROP TEMPORARY FUNCTION IF EXISTS")
+
+
+def test_a_runtime_that_cannot_list_a_function_with_a_file_in_it_has_no_sql_file_type(
+    monkeypatch,
+):
+    """DBR 17.3: the function is created, then `SHOW USER FUNCTIONS` raises UNSUPPORTED_DATATYPE "FILE"."""
+    monkeypatch.setitem(
+        caps.REGISTRY,
+        "sql_file_type",
+        dataclasses.replace(
+            caps.REGISTRY["sql_file_type"], probe=caps._sql_file_type_probe
+        ),
+    )
+    broken = SqlSpark(fail_on=("SHOW USER FUNCTIONS",))
+    r = caps.resolve(broken, "sql_file_type")
+    assert (r.value, r.available, r.source) == (False, False, "probe")
+    assert "UNSUPPORTED_DATATYPE" in r.detail
+    assert any(
+        s.startswith("DROP TEMPORARY FUNCTION") for s in broken.statements
+    )  # cleaned up either way
+    assert (
+        caps.has(SqlSpark(), "sql_file_type") is True
+    )  # a runtime that lists it keeps the FILE wrappers
+
+
+@pytest.mark.parametrize(
+    "probe_ok,override,expect_file",
+    [(True, None, True), (False, None, False), (True, "0", False), (True, "1", True)],
+)
+def test_the_sql_tile_functions_mint_a_file_only_where_the_session_can_list_it(
+    monkeypatch, probe_ok, override, expect_file
+):
+    """The 34 SQL tile functions with a FILE fast path (`file_ref` rows): the wrapper's FILE argument is `try_to_file(...)`
+    where the capability holds, else NULL and the UDF reads the path."""
+    from databricks.labs.gbx.ds import file_gbx
+
+    swap(monkeypatch, "sql_file_type", probe=lambda spark: (probe_ok, "fake"))
+    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: True)
+    monkeypatch.setattr(file_gbx, "_fuse_direct_disabled", lambda: True)
+    if override is not None:
+        monkeypatch.setenv("GBX_CAP_SQL_FILE_TYPE", override)
+    got = file_gbx.file_ref_sql("tile", FakeSpark("4.0.0"))
+    assert (got == "try_to_file(tile.path)") is expect_file
+    assert expect_file or got == "NULL"
+
+
+def test_without_file_support_the_wrapper_never_asks_the_capability(monkeypatch):
+    from databricks.labs.gbx.ds import file_gbx
+
+    monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
+    monkeypatch.setattr(caps, "resolve", lambda *a, **k: pytest.fail("asked"))
+    assert file_gbx.file_ref_sql("tile", FakeSpark()) == "NULL"
+
+
+# --- review fixes -----------------------------------------------------------------------------------------------------
+
+
+def test_the_udtf_probe_leaves_no_function_or_view_behind(spark):
+    """The probe registers a UDTF and a view; both are gone afterwards, whether the probe passes or not."""
+    caps._udtf_partition_probe(False)(spark)
+    left = [
+        r[0]
+        for r in spark.sql("SHOW USER FUNCTIONS").collect()
+        if "gbx__probe_udtf" in r[0]
+    ]
+    assert left == []
+    assert [
+        t.name for t in spark.catalog.listTables() if "gbx__probe_view" in t.name
+    ] == []
+
+
+class TaggedSpark(FakeSpark):
+    """A Connect-like session: tags are thread-local and an interrupt names one."""
+
+    def __init__(self):
+        super().__init__("4.2.0")
+        self.added, self.removed, self.interrupted = [], [], []
+
+    def addTag(self, tag):
+        self.added.append(tag)
+
+    def removeTag(self, tag):
+        self.removed.append(tag)
+
+    def interruptTag(self, tag):
+        self.interrupted.append(tag)
+
+
+def test_a_probe_that_times_out_is_interrupted_by_its_tag_on_connect(monkeypatch):
+    gate = __import__("threading").Event()
+    swap(
+        monkeypatch,
+        "udtf_table_partition_ok",
+        probe=lambda spark: (gate.wait(5), "late"),
+    )
+    monkeypatch.setattr(caps, "PROBE_TIMEOUT_S", 0.05)
+    session = TaggedSpark()
+    try:
+        r = caps.resolve(session, "udtf_table_partition_ok")
+        assert r.available is False and "did not finish" in r.detail
+        assert session.interrupted == session.added and len(session.added) == 1
+    finally:
+        gate.set()  # let the abandoned thread end
+    # a probe that finishes is not interrupted, and its tag is removed
+    swap(
+        monkeypatch, "udtf_table_partition_noarrow_ok", probe=lambda spark: (True, "ok")
+    )
+    monkeypatch.setattr(caps, "PROBE_TIMEOUT_S", 30.0)
+    done = TaggedSpark()
+    assert caps.available(done, "udtf_table_partition_noarrow_ok")
+    assert done.interrupted == [] and done.removed == done.added
+
+
+class CountingConf(FakeConf):
+    def __init__(self):
+        super().__init__({})
+        self.reads = []
+
+    def get(self, key, default=None):
+        self.reads.append(key)
+        return super().get(key, default)
+
+
+def test_serverless_reads_no_conf_at_all(monkeypatch):
+    """Serverless allows no conf of ours: not the override key, not a feature's conf, not the runtime tag."""
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.4")
+    session = FakeSpark("4.2.0")
+    session.conf = CountingConf()
+    report = caps.report(session)
+    caps.runtime_info(session)
+    assert session.conf.reads == []
+    assert (
+        report["python_udf_max_bytes_per_batch"]["available"] is False
+    )  # 4.2: no backport check without a conf read
+    assert report["arrow_max_bytes_per_batch"]["available"] is True
+    # elsewhere the same session does read them
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "19.1")
+    caps.forget(session)
+    caps.report(session)
+    assert "spark.geobrix.cap.arrow_grouped_agg" in session.conf.reads
+
+
+def test_a_report_runs_no_probe_even_for_a_capability_forced_on(monkeypatch):
+    runs = []
+    swap(
+        monkeypatch,
+        "udtf_table_partition_ok",
+        probe=lambda spark: runs.append(1) or (True, "ok"),
+    )
+    monkeypatch.setenv("GBX_CAP_UDTF_TABLE_PARTITION_OK", "1")
+    server = FakeSpark("4.2.0")
+    shown = caps.report(server)["udtf_table_partition_ok"]
+    assert runs == [] and shown["source"] == "unprobed"
+    assert (
+        caps.has(server, "udtf_table_partition_ok") is True
+    )  # a use probes, and the override then holds
+    assert runs == [1]
+
+
+def test_a_slow_probe_holds_up_no_other_capability_and_runs_once(monkeypatch):
+    import threading
+
+    started, gate, runs = threading.Event(), threading.Event(), []
+
+    def slow(spark):
+        runs.append(1)
+        started.set()
+        gate.wait(10)
+        return True, "late"
+
+    swap(monkeypatch, "udtf_table_partition_ok", probe=slow)
+    server = FakeSpark("4.2.0")
+    answers = []
+    first = threading.Thread(
+        target=lambda: answers.append(caps.available(server, "udtf_table_partition_ok"))
+    )
+    second = threading.Thread(
+        target=lambda: answers.append(caps.available(server, "udtf_table_partition_ok"))
+    )
+    first.start()
+    assert started.wait(10)
+    second.start()  # the same name: waits for the first's answer
+    # another capability, and the version of the session, are answered while the probe is still running
+    other = threading.Thread(
+        target=lambda: answers.append(
+            ("other", caps.available(server, "arrow_grouped_agg"))
+        )
+    )
+    other.start()
+    other.join(5)
+    assert not other.is_alive() and answers == [("other", True)]
+    gate.set()
+    first.join(10)
+    second.join(10)
+    assert answers[1:] == [True, True] and runs == [1]
+
+
+def test_register_l3_hands_the_registrar_the_form_the_session_chose(monkeypatch):
+    """`gbx_rst_merge_agg` registered through the manager: the UDF registered is the session's form (the default
+    branch of `register_l3` asks `for_session`), pandas unless the registry says otherwise.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.manager import l3
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    monkeypatch.setattr(caps, "_has_arrow_eval", lambda name: True)
+    handed = []
+
+    class Reg:
+        def register(self, name, f, *a, **k):
+            handed.append((name, f))
+
+    class Session(FakeSpark):
+        udf = Reg()
+
+    asked = []
+    agg = getattr(fx._merge_agg_udf, "_f", fx._merge_agg_udf)
+    monkeypatch.setattr(
+        agg, "form", lambda label: asked.append(label) or f"form:{label}"
+    )
+    fn = manifest.load().functions["gbx_rst_merge_agg"]
+    server = Session("4.2.0")
+    l3.register_l3(server, fn, "c0")
+    assert asked == ["pandas"] and handed[-1] == ("gbx_rst_merge_agg", "form:pandas")
+    monkeypatch.setenv("GBX_CAP_ARROW_GROUPED_AGG_ITER", "1")
+    caps.forget(server)
+    l3.register_l3(server, fn, "c0")
+    assert asked[-1] == "arrow_iter" and handed[-1][1] == "form:arrow_iter"
+
+
+def test_a_column_api_call_runs_the_form_the_session_chose(monkeypatch):
+    """`CapCarryingCall.__call__` on a UDF whose form the session chooses: the chosen form is called (or re-made with
+    the read cap when the session has one), not the default the object shows."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.ds import file_gbx
+
+    calls = []
+
+    class Chosen:
+        def __call__(self, *cols):
+            calls.append(("chosen", cols))
+            return "column"
+
+    class Choosing:
+        def __call__(self, *cols):
+            calls.append(("default", cols))
+
+        def for_session(self, spark):
+            calls.append(("for_session", spark))
+            return Chosen()
+
+    session = object()
+    monkeypatch.setattr(file_gbx, "_resolve_session_for_cap", lambda: session)
+    monkeypatch.setattr(_gdal_policy, "_session_read_cap_now", lambda: None)
+    assert _gdal_policy.CapCarryingCall(Choosing())("a", "b") == "column"
+    assert calls == [("for_session", session), ("chosen", ("a", "b"))]
+    # with a read cap to carry, the chosen form is the one re-made
+    remade = []
+    monkeypatch.setattr(_gdal_policy, "_session_read_cap_now", lambda: 123)
+    monkeypatch.setattr(
+        _gdal_policy,
+        "_with_cap",
+        lambda f, cap: remade.append((type(f).__name__, cap)) or f,
+    )
+    calls.clear()
+    _gdal_policy.CapCarryingCall(Choosing())("x")
+    assert remade == [("Chosen", 123)]
+    # no session (a worker): the object as it is
+    monkeypatch.setattr(file_gbx, "_resolve_session_for_cap", lambda: None)
+    monkeypatch.setattr(_gdal_policy, "_session_read_cap_now", lambda: None)
+    calls.clear()
+    _gdal_policy.CapCarryingCall(Choosing())("y")
+    assert calls == [("default", ("y",))]

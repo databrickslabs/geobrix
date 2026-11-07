@@ -563,7 +563,10 @@ def test_file_ref_sql_follows_the_rule_of_file_ref_arg(monkeypatch):
     mint with the same size-gated FUSE-direct rule and connect-aware cap as ``file_ref_arg``.
     """
     from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.manager import capabilities
 
+    # the session lists a function that carries FILE (the `sql_file_type` capability has its own tests)
+    monkeypatch.setattr(capabilities, "has", lambda *a, **k: True)
     monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
     assert file_gbx.file_ref_sql("t") == "NULL"
     monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: True)

@@ -234,6 +234,7 @@ def forget(spark) -> None:
         real = _real(spark)
         _RESOLVED.pop(real, None)
         _SERVER.pop(real, None)
+        _NAME_LOCKS.pop(real, None)
     except TypeError:
         pass
 
@@ -418,7 +419,11 @@ def _has_function(name: str) -> bool:
 
 
 def _conf_value(real, key: str) -> Optional[str]:
-    """The value of a Spark conf as the session reports it, None when unset or unreadable. Never sets anything."""
+    """The value of a Spark conf as the session reports it, None when unset or unreadable. Never sets anything, and
+    never asks on Serverless (it allows no conf of ours: the environment variable is the only override there).
+    """
+    if is_serverless():
+        return None
     try:
         v = real.conf.get(
             key
@@ -459,12 +464,39 @@ def _udtf_partition_probe(
             ).first()["n"]
             return n == 2, f"{n} of 2 rows"
         finally:
-            try:
-                spark.catalog.dropTempView(view)
-            except Exception:  # noqa: BLE001
-                pass
+            for statement in (
+                f"DROP VIEW IF EXISTS {view}",
+                f"DROP TEMPORARY FUNCTION IF EXISTS {name}",  # the registered probe UDTF
+            ):
+                try:
+                    spark.sql(statement)
+                except Exception:  # noqa: BLE001
+                    pass
 
     return probe
+
+
+def _sql_file_type_probe(spark) -> Tuple[bool, str]:
+    """Whether a SQL function whose body mints a FILE value (`try_to_file`) can be created AND listed. A runtime that
+    parses the FILE type in an expression can still refuse it when it lists the session's functions (DBR 17.3:
+    `SHOW USER FUNCTIONS` fails with UNSUPPORTED_DATATYPE "FILE" once a function with such a body exists), and one
+    such function breaks the listing of all of them. The probe function is dropped again.
+    """
+    import uuid
+
+    name = f"gbx__probe_filetype_{uuid.uuid4().hex[:8]}"
+    try:
+        spark.sql(
+            f"CREATE OR REPLACE TEMPORARY FUNCTION {name}(p STRING) RETURNS BOOLEAN "
+            "RETURN try_to_file(p) IS NULL"
+        )
+        spark.sql(f"SHOW USER FUNCTIONS LIKE '{name}'").collect()
+        return True, "created and listed"
+    finally:
+        try:
+            spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {name}")
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _caps(*items: Capability) -> Dict[str, Capability]:
@@ -517,6 +549,13 @@ REGISTRY: Dict[str, Capability] = _caps(
         default_when_present=False,
     ),
     Capability(
+        "sql_file_type",
+        "a SQL function body can carry the FILE type and the session still lists its functions; the SQL tile "
+        "functions pass NULL for the FILE argument (a path read) where it cannot",
+        probe=_sql_file_type_probe,
+        default_when_present=True,  # as before: FILE wrappers wherever FILE works
+    ),
+    Capability(
         "arrow_max_bytes_per_batch",
         "the Arrow batch byte cap conf exists (report only: pyrx never sets conf)",
         min_server=(4, 0),
@@ -550,25 +589,47 @@ def _override(real, cap: Capability) -> Tuple[Optional[bool], str]:
         if want is not None:
             return want, var
     key = CAP_CONF_PREFIX + cap.name
-    # Serverless allows no conf of ours: do not ask (a refused read is a failed round trip for nothing)
-    raw = None if is_serverless() else _conf_value(real, key)
+    raw = _conf_value(real, key)
     want = _truthy(raw) if raw is not None else None
     return (want, key) if want is not None else (None, "")
 
 
 def _run_probe(real, cap: Capability) -> Tuple[bool, str]:
-    """The capability's probe under a time limit; any error or a timeout is "absent"."""
+    """The capability's probe under a time limit; any error or a timeout is "absent".
+
+    A Python thread cannot be killed. The probe runs on a daemon thread, and on a Spark Connect session its work is
+    tagged, so a timeout interrupts it (``interruptTag``); a probe cleans up what it registered in its own ``finally``,
+    which runs when its Spark call returns or is interrupted."""
+    import uuid
+
     out: Dict[str, Tuple[bool, str]] = {}
+    tag = f"gbx-cap-probe-{cap.name}-{uuid.uuid4().hex[:8]}"
+    tagged = hasattr(real, "addTag") and hasattr(real, "interruptTag")
 
     def work() -> None:
         try:
+            if tagged:
+                real.addTag(
+                    tag
+                )  # a thread-local tag: only this probe's operations carry it
             out["r"] = cap.probe(real)
         except Exception as exc:  # noqa: BLE001
             out["r"] = (False, f"{type(exc).__name__}: {str(exc)[:160]}")
+        finally:
+            if tagged:
+                try:
+                    real.removeTag(tag)
+                except Exception:  # noqa: BLE001
+                    pass
 
     t = threading.Thread(target=work, name=f"gbx-cap-probe-{cap.name}", daemon=True)
     t.start()
     t.join(PROBE_TIMEOUT_S)
+    if t.is_alive() and tagged:
+        try:
+            real.interruptTag(tag)
+        except Exception:  # noqa: BLE001
+            pass
     return out.get("r", (False, f"probe did not finish in {PROBE_TIMEOUT_S:.0f}s"))
 
 
@@ -629,7 +690,7 @@ def _decide(real, cap: Capability, probe: bool) -> Resolved:
             f"{via} turns it off; {detail}".rstrip("; "),
             verified,
         )
-    avail, layer, detail = _availability(real, cap, allow_probe=probe or want is True)
+    avail, layer, detail = _availability(real, cap, allow_probe=probe)
     if avail is None:
         return Resolved(cap.name, False, None, "unprobed", detail, verified)
     if not avail:
@@ -660,6 +721,15 @@ def _decide(real, cap: Capability, probe: bool) -> Resolved:
     )
 
 
+# session -> {name: Lock}: the single-flight guard of one decision
+_NAME_LOCKS: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+
+
+def _name_lock(real, name: str) -> "threading.Lock":
+    with _CAP_LOCK:  # held only to find or make the lock, never while a decision runs
+        return _NAME_LOCKS.setdefault(real, {}).setdefault(name, threading.Lock())
+
+
 def resolve(spark, name: str, *, probe: bool = True) -> Resolved:
     """The decision of ``spark`` for capability *name*, made once per session and kept (`forget` drops it).
     *probe*: run the capability's functional probe if it has one and a version cannot decide (False: report it as
@@ -675,7 +745,12 @@ def resolve(spark, name: str, *, probe: bool = True) -> Resolved:
         seen = _RESOLVED.setdefault(real, {})
     except TypeError:  # a session that cannot be weakly referenced is judged every time
         return _decide(real, cap, probe)
-    with _CAP_LOCK:
+    got = seen.get(name)
+    if got is not None:
+        return got
+    # One decision per (session, name) at a time: a second caller of the same name waits for the first's answer (a
+    # probe runs once); a lookup of another name, or of one already decided, is never held up by a slow probe.
+    with _name_lock(real, name):
         got = seen.get(name)
         if got is None:
             got = _decide(real, cap, probe)

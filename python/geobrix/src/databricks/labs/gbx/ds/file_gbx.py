@@ -1076,11 +1076,18 @@ def file_ref_sql(tile_sql: str, spark: Optional["SparkSession"] = None) -> str:
     """
     if not file_supported(spark):
         return "NULL"
+    sess = spark if spark is not None else _resolve_session_for_cap()
+    if sess is not None:
+        from databricks.labs.gbx.manager import capabilities
+
+        # FILE works in a query here, but a SQL function that carries it can break the listing of the session's
+        # functions (DBR 17.3): there the wrapper passes NULL and the UDF reads the path
+        if not capabilities.has(sess, "sql_file_type"):
+            return "NULL"
     path = f"{tile_sql}.path"
     mint = f"try_to_file({path})"
     if _fuse_direct_disabled():
         return mint
-    sess = spark if spark is not None else _resolve_session_for_cap()
     cap = int(_connect_aware_lru_sizing(sess)[0])
     return (
         f"CASE WHEN {tile_sql}.window IS NULL AND (startswith({path}, '/Volumes') OR startswith({path}, '/dbfs')) "

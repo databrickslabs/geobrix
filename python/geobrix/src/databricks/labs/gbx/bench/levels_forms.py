@@ -1123,7 +1123,6 @@ FORMS: Dict[str, List[Form]] = {
             computes=("dedicated",),
             vsql=_TCRS_V,
         ),
-        _f("L2", "-", T, "tiles_mat", _TCRS, computes=("dedicated",), vsql=_TCRS_V),
         _f("L3", "-", T, "tiles_mat", _TCRS, vsql=_TCRS_V),
         _f("L3", "virtual", T, "tiles_virt", _TCRS, vsql=_TCRS_V),
         _f("L3", "-", M, "invalid_polys", _MV),

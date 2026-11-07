@@ -44,10 +44,13 @@ def test_jvm_forms_without_the_jar_are_na_by_design(spark_session_local, tmp_pat
     if capabilities.detect(spark, need_jvm=True).jar is not None:
         pytest.skip("this session carries the geobrix JAR")
     rows = run_s(spark, tmp_path, scales=(1,), base_rows=100, only_levels=("L1", "L2"))
-    bng = [r for r in rows if r.fn == B]
-    assert {r.level for r in bng} == {"L1", "L2"}
-    assert {r.status for r in bng} == {"na_by_design"}
-    assert all("no geobrix JAR" in r.note for r in bng)
+    # the BNG scalar has no JVM form left (its L1 and L2 measured slower than light): nothing of it is asked for
+    assert [r for r in rows if r.fn == B] == []
+    # transformcrs keeps its L1 (the GDAL engine); it has no L2
+    rst = [r for r in rows if r.fn == RST]
+    assert rst and {r.level for r in rst} == {"L1"}
+    assert {r.status for r in rst} == {"na_by_design"}
+    assert all("no geobrix JAR" in r.note for r in rst)
 
 
 def test_levels_leg_times_the_towers_at_l3(spark_session_local, tmp_path, monkeypatch):

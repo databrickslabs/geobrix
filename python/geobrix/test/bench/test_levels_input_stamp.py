@@ -1,6 +1,9 @@
 """An input table's name holds a stamp of its recipe, builder and corpus: a changed generator or corpus is another table."""
 
+import importlib.util
 import types
+
+import pytest
 
 from databricks.labs.gbx.bench import levels_forms as lf
 
@@ -31,6 +34,10 @@ class FakeSpark:
         return types.SimpleNamespace(write=self.Writer(None))
 
 
+_BUILDERS = """\
+from databricks.labs.gbx.bench import levels_forms as lf
+
+
 def builder_a(spark, n, corpus, schema):
     return lf._table(
         spark, schema, f"mvp_in_a_v{lf.RECIPE_VERSION}_{n}", lambda: spark.df()
@@ -49,9 +56,28 @@ def builder_rows(spark, n, corpus, schema):
     return lf._table(
         spark, schema, f"mvp_in_r_v{lf.RECIPE_VERSION}_{n}", lambda: spark.df()
     )
+"""
 
 
-def test_the_same_builder_and_corpus_share_one_table_and_a_second_form_builds_nothing():
+@pytest.fixture(scope="module")
+def builders(tmp_path_factory):
+    """The builders, as a module loaded from a file written here. A stamp is made from the source of the builder's code
+    (inspect.getsource), found by the path the code carries. A builder defined in this test module carries the path the
+    module was compiled from, and pytest's rewritten copy of it (in __pycache__) keeps the path of whoever compiled it
+    first: the host's /Users/... in the dev container, where no such file is, so the stamps were all of ``""``.
+    """
+    path = tmp_path_factory.mktemp("builders") / "stamp_builders.py"
+    path.write_text(_BUILDERS)
+    spec = importlib.util.spec_from_file_location("stamp_builders", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_the_same_builder_and_corpus_share_one_table_and_a_second_form_builds_nothing(
+    builders,
+):
+    builder_a = builders.builder_a
     spark = FakeSpark()
     first = builder_a(spark, 10, "/c", "c.s")
     again = builder_a(spark, 10, "/c", "c.s")
@@ -63,8 +89,9 @@ def test_the_same_builder_and_corpus_share_one_table_and_a_second_form_builds_no
 
 
 def test_a_changed_builder_or_recipe_version_is_another_table_and_the_old_one_is_left_alone(
-    monkeypatch,
+    monkeypatch, builders
 ):
+    builder_a, builder_b = builders.builder_a, builders.builder_b
     spark = FakeSpark()
     a, b = builder_a(spark, 10, "/c", "c.s"), builder_b(spark, 10, "/c", "c.s")
     assert (
@@ -79,8 +106,9 @@ def test_a_changed_builder_or_recipe_version_is_another_table_and_the_old_one_is
 
 
 def test_a_builder_that_reads_the_corpus_follows_its_tiles_and_one_that_does_not_ignores_them(
-    monkeypatch,
+    monkeypatch, builders
 ):
+    builder_a, builder_rows = builders.builder_a, builders.builder_rows
     monkeypatch.setattr(
         lf, "_corpus_rows", lambda corpus: ["/c/rows/1.tif", "/c/rows/2.tif"]
     )

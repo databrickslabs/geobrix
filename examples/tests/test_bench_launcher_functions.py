@@ -221,7 +221,7 @@ def test_a_time_limit_that_is_not_a_positive_whole_number_of_minutes_is_refused_
 def test_the_default_se_ladder_is_refused_up_front_with_the_scales_that_fit(monkeypatch, capsys):
     """SE builds 4 MiB DEM tiles on the client: only 1x fits under the 64 MiB cap, so 1,4,16 can never pass."""
     pytest.importorskip("pyspark")  # the check reads the form table (levels_forms), which imports pyspark
-    base = ["push_and_run_bench_on_cluster.py", "--levels", "SE"]
+    base = ["push_and_run_bench_on_cluster.py", "--purpose", "argument check", "--levels", "SE"]
     monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
     monkeypatch.setattr(launcher.sys, "argv", base)
     assert launcher.main() == 2
@@ -241,8 +241,20 @@ def test_a_set_with_its_own_ladder_gets_it_when_levels_scales_is_not_given():
 
 
 def _no_work(monkeypatch, *argv):
+    """argv for a launch that must stop at an argument check before any work; it carries the --purpose a launch on
+    compute requires, so the check under test is the one that answers."""
     monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
-    monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", *argv])
+    monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", "--purpose", "argument check", *argv])
+
+
+def test_a_launch_on_compute_without_a_purpose_is_refused_before_any_work(monkeypatch, capsys):
+    """Every launch on compute says what it is for (it heads the notebook and names the job run); only a dry run may not."""
+    monkeypatch.setattr(launcher, "WorkspaceClient", lambda *a, **k: pytest.fail("work started before the check"), raising=False)
+    for argv in (["--levels", "S"], ["--levels", "S", "--purpose", "  "]):
+        monkeypatch.setattr(launcher.sys, "argv", ["push_and_run_bench_on_cluster.py", *argv])
+        assert launcher.main() == 2
+        err = capsys.readouterr().err
+        assert "--purpose" in err and "required" in err
 
 
 def test_a_set_without_a_form_table_is_not_a_scales_problem():
@@ -371,7 +383,7 @@ def test_a_run_with_no_exported_view_saves_nothing_and_says_so(tmp_path, capsys)
 def test_the_launch_exports_the_notebook_before_it_removes_it():
     import inspect
 
-    src = inspect.getsource(launcher.main)
+    src = inspect.getsource(launcher._main)  # main() only leases and gives back; _main is the launch
     assert src.index("_save_run_output(") < src.index("_remove_notebook(")
 
 

@@ -331,19 +331,24 @@ def test_a_form_sinks_its_rows_before_the_next_form_starts_and_reports_its_tasks
     assert all(r.input_partitions >= 1 and "tasks=" in r.note for r in rows)
 
 
-@pytest.mark.parametrize("rest", [True, False])
+@pytest.mark.parametrize("rest", ["given", "absent", "live"])
 def test_a_real_run_row_carries_its_task_counts_or_null_never_zero(
     spark_session_local, tmp_path, monkeypatch, rest
 ):
-    """The real run has no report_tasks (only the smoke does): the counts come from the timed execution's plan. A session
-    that cannot report them (no REST API) writes NULL, not 0."""
+    """The real run has no report_tasks (only the smoke does): the counts come from the timed execution's plan. A count
+    the session reports is the count; one it cannot report (no REST API) is NULL, not 0. A local classic session does
+    have the REST API, so "absent" removes what the plan read, as Connect's plan would not give it.
+    """
     tiny_forms(monkeypatch, 1)
     real = levels.attribution.from_plan
 
     def plan(df, t0):
         out = real(df, t0)
-        if rest:
+        if rest == "given":
             out.update(launched_tasks=9, input_tasks=4)
+        elif rest == "absent":
+            out.pop("launched_tasks", None)
+            out.pop("input_tasks", None)
         return out
 
     monkeypatch.setattr(levels.attribution, "from_plan", plan)
@@ -352,11 +357,15 @@ def test_a_real_run_row_carries_its_task_counts_or_null_never_zero(
         base_rows=200, only_levels=("L3",), heartbeat=None,
     )  # fmt: skip
     assert row.status == "ok"
-    if rest:
+    if rest == "given":
         assert (row.input_partitions, row.launched_tasks) == (4, 9)
-    else:
+    elif rest == "absent":
         assert row.input_partitions is None and row.launched_tasks is None
         assert "tasks unknown" in row.note
+    else:  # whatever this session's own REST API said: a real count (at least one task ran) or NULL, never 0
+        assert row.launched_tasks is None or row.launched_tasks > 0
+        assert row.input_partitions is None or row.input_partitions > 0
+        assert (row.launched_tasks is None) == ("tasks unknown" in row.note)
 
 
 def test_a_scale_that_never_finishes_loses_no_row_of_the_scales_before_it(

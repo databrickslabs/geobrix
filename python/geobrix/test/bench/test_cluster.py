@@ -446,8 +446,8 @@ def test_notebook_threads_input_tile():
     assert "'virtual'" in src or '"virtual"' in src
 
 
-def _bng_cell_legs(functions):
-    """Run the BNG grid cell's leg table with stub legs; return the leg names it calls."""
+def _bng_cell_legs(functions, api="heavyweight"):
+    """Run the BNG grid cell's leg table with stub legs for one tier; return the leg names it calls."""
     src = cl._CELL_GRID_BNG.split("\nif LIGHTWEIGHT:")[0]
     from databricks.labs.gbx.bench import spec
 
@@ -469,7 +469,7 @@ def _bng_cell_legs(functions):
             return _leg
 
     ns["_rd"] = _StubReaders()
-    return [name for name, api in ns["_bng_legs"]("heavyweight")]
+    return [name for name, _api in ns["_bng_legs"](api)]
 
 
 def test_bng_grid_cell_runs_only_the_bng_legs_named_in_functions():
@@ -479,9 +479,15 @@ def test_bng_grid_cell_runs_only_the_bng_legs_named_in_functions():
 
 
 def test_bng_grid_cell_runs_every_leg_without_bng_functions():
-    legs = _bng_cell_legs("rst_slope,rst_ndvi")
-    assert len(legs) == 23 and len(set(legs)) == 23
-    assert legs[0] == "run_bng_pointascell" and legs[-1] == "run_bng_tessellateexplode"
+    """Light runs all 23 legs; heavy runs 22: eastnorthasbng has no JVM form (it measured slower than light)."""
+    light = _bng_cell_legs("rst_slope,rst_ndvi", api="lightweight")
+    assert len(light) == 23 and len(set(light)) == 23
+    assert (
+        light[0] == "run_bng_pointascell" and light[-1] == "run_bng_tessellateexplode"
+    )
+    heavy = _bng_cell_legs("rst_slope,rst_ndvi")
+    assert heavy == [leg for leg in light if leg != "run_bng_eastnorthasbng"]
+    assert len(heavy) == 22
 
 
 def test_bng_grid_cell_rejects_an_unknown_bng_name():
@@ -491,8 +497,9 @@ def test_bng_grid_cell_rejects_an_unknown_bng_name():
 
 
 def test_bng_grid_cell_ignores_bng_functions_of_the_function_benchmark():
-    """bng_cellfill is a registered bench function, not a BNG leg: all legs run."""
-    assert len(_bng_cell_legs("bng_cellfill")) == 23
+    """bng_cellfill is a registered bench function, not a BNG leg: all legs of the tier run."""
+    assert len(_bng_cell_legs("bng_cellfill", api="lightweight")) == 23
+    assert len(_bng_cell_legs("bng_cellfill")) == 22
 
 
 @pytest.mark.parametrize(

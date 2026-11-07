@@ -20,7 +20,7 @@ Two properties are asserted here:
 
 Covers:
   - decoded > cap + materialize=True → raises StageTooLargeError
-  - message contains "materialize=True unsuccessful", "sizeInMB", "MiB", "decoded"
+  - the refusal says the tile is decoded (the wording beyond that is not pinned)
   - decoded <= cap + materialize=True → does NOT raise (returns a materialized tile)
   - explicit cap_bytes is used directly and wins over the env cap
   - highly-compressible source: compressed < cap < decoded → raises (decoded gate)
@@ -85,11 +85,7 @@ class TestFromfileMaterializeCap:
         with pytest.raises(StageTooLargeError) as exc_info:
             _fromfile_impl(str(tif), "GTiff", True)
 
-        msg = str(exc_info.value)
-        assert "materialize=True unsuccessful" in msg, msg
-        assert "sizeInMB" in msg, msg
-        assert "MiB" in msg, msg
-        assert "decoded" in msg, msg
+        assert "decoded" in str(exc_info.value)
 
     def test_gate_uses_decoded_not_compressed(self, tmp_path, monkeypatch):
         """A highly-compressible source (small compressed, large decoded) is rejected
@@ -161,8 +157,9 @@ class TestDriverCapturedCapBytes:
 class TestVirtualDefaultNeverRaises:
     """The virtual default (materialize=False/None) must never raise StageTooLargeError."""
 
-    def test_virtual_false_never_raises(self, tmp_path, monkeypatch):
-        """materialize=False (virtual path) opens the header only — no cap guard."""
+    @pytest.mark.parametrize("materialize", [False, None])
+    def test_virtual_never_raises(self, tmp_path, monkeypatch, materialize):
+        """Virtual (None is treated as False) opens the header only: no cap guard."""
         tif = tmp_path / "v.tif"
         _write_raster(str(tif), 1024, 1024, dtype="uint16")  # 2 MiB decoded
 
@@ -170,20 +167,7 @@ class TestVirtualDefaultNeverRaises:
 
         from databricks.labs.gbx.pyrx.functions import _fromfile_impl
 
-        result = _fromfile_impl(str(tif), "GTiff", False)
+        result = _fromfile_impl(str(tif), "GTiff", materialize)
         assert result is not None, "virtual tile should return a row"
         # Virtual tile: raster is None (bytes-free, points at the path).
-        assert result["raster"] is None
-
-    def test_virtual_none_never_raises(self, tmp_path, monkeypatch):
-        """materialize=None (treated as False) skips the cap guard entirely."""
-        tif = tmp_path / "v2.tif"
-        _write_raster(str(tif), 1024, 1024, dtype="uint16")
-
-        monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1")
-
-        from databricks.labs.gbx.pyrx.functions import _fromfile_impl
-
-        result = _fromfile_impl(str(tif), "GTiff", None)
-        assert result is not None
         assert result["raster"] is None

@@ -186,3 +186,48 @@ def test_max_tiles_cap_sets_degraded():
     plan = budget.plan_layout(100000, 100000, 1, 4, False, None, None, 1024)
     assert len(plan.tiles) <= 512
     assert plan.degraded is True
+
+
+# ---------------------------------------------------------------------------
+# the read cap: decoded size from a header, the cap a call carries, the refusal
+# ---------------------------------------------------------------------------
+
+
+def test_grid_bytes_is_the_pixels_times_each_bands_type_size():
+    assert budget.grid_bytes(10, 20, ["uint8", "float32", "int16"]) == 200 * (1 + 4 + 2)
+    # numpy has no dtype for GDAL's complex integers; the table gives their sizes
+    assert budget.grid_bytes(4, 4, ["complex_int16", "complex_int32"]) == 16 * (4 + 8)
+    assert budget.grid_bytes(7, 3, []) == 0
+    assert budget.grid_bytes("5", "4", ["uint8"]) == 20
+
+
+def test_the_tile_read_cap_is_the_carried_cap_else_the_process_budget(monkeypatch):
+    from databricks.labs.gbx import _gdal_policy
+
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 123)
+    monkeypatch.setattr(budget, "process_read_cap", lambda: 456)
+    assert budget.tile_read_cap() == 123
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: None)
+    assert budget.tile_read_cap() == 456
+    # a carried cap of 0 is a cap, not "none carried"
+    monkeypatch.setattr(_gdal_policy, "carried_read_cap", lambda: 0)
+    assert budget.tile_read_cap() == 0
+
+
+def test_a_window_over_the_read_cap_is_refused_from_its_header(monkeypatch):
+    monkeypatch.setattr(budget, "tile_read_cap", lambda: 1000)
+    budget.refuse_window_over_cap(100, 10, ["uint8"])  # exactly the cap: allowed
+    budget.refuse_window_over_cap(10, 10, ["uint8", "uint8"])
+    with pytest.raises(budget.WindowOverReadCap) as e:
+        budget.refuse_window_over_cap(40, 30, ["uint8"])
+    assert str(e.value) == budget.read_cap_refusal(1200, 1000)
+    with pytest.raises(budget.WindowOverReadCap):
+        budget.refuse_window_over_cap(100, 10, ["uint8", "uint8"])
+    assert issubclass(budget.WindowOverReadCap, ValueError)
+
+
+def test_the_refusal_names_the_decoded_size_and_the_cap_in_whole_units():
+    text = budget.read_cap_refusal(5 * _MIB + 17, 2 * _MIB)
+    assert "5 MiB decoded" in text and "(2 MiB)" in text and "Fix: retile" in text
+    assert budget.size_text(3 * 1024) == "3 KiB"
+    assert budget.size_text(_MIB) == "1 MiB"

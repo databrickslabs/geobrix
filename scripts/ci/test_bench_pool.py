@@ -745,3 +745,65 @@ def test_a_launch_whose_lease_was_taken_stops_before_it_reinstalls_jars_on_the_c
         with pytest.raises(pool.LeaseLost):
             ls.sync_jars([f"{VOL}/x.jar"], sleep=lambda s: None)
         assert not any(c[0] in ("edit", "install", "uninstall") for c in w.calls)
+
+
+def test_on_leased_runs_once_with_the_leased_cluster_after_the_lease_is_ours_and_before_the_start(pool):
+    """The holder starts refreshing the lease from the callback, so it must run once the lease exists but before the (long) start."""
+    w = FakeW()
+    w.add("a", state="TERMINATED")
+    path = pool.Leases(w, VOL, "p").path("a")
+    events = []
+    w.clusters.ensure_cluster_is_running = lambda cid: events.append(("start", cid))
+    got = lease(pool, w, on_leased=lambda cid: events.append(("leased", cid, path in w.fs)))
+    assert got == "a"
+    assert events == [("leased", "a", True), ("start", "a")]
+    # no cluster free: nothing was leased, so nothing is called back
+    w2 = FakeW()
+    w2.add("a")
+    other = pool.Leases(w2, VOL, "p", lambda: w2.now)
+    assert other.acquire("a", dict(INFO, touched_at=w2.now))
+    called = []
+    with pytest.raises(pool.PoolError):
+        lease(pool, w2, wait_s=20, on_leased=called.append)
+    assert called == []
+
+
+def test_mine_returns_the_lease_only_for_the_holder_that_wrote_it(pool):
+    w = FakeW()
+    w.add("a")
+    a = pool.Leases(w, VOL, "p", lambda: w.now)
+    with pytest.raises(pool.LeaseLost):  # no lease yet
+        a._mine("a")
+    assert a.acquire("a", dict(INFO))
+    assert a._mine("a")["run_id"] == "r1"
+    # another holder object has no token for it:
+    with pytest.raises(pool.LeaseLost):
+        pool.Leases(w, VOL, "p", lambda: w.now)._mine("a")
+    w.fs[a.path("a")] = json.dumps({"run_id": "x", "token": "theirs"}).encode()  # replaced by another launch
+    with pytest.raises(pool.LeaseLost):
+        a._mine("a")
+
+
+def test_the_refresh_thread_ends_with_the_block_and_when_its_lease_is_lost(pool):
+    import threading
+    import time
+
+    def alive():
+        return [t for t in threading.enumerate() if t.name == "gbx-lease-touch" and t.is_alive()]
+
+    w = FakeW()
+    w.add("a")
+    with pool.leased_cluster(w, "p", VOL, INFO, say=lambda s: None, touch_every_s=0.01, settle_s=0):
+        assert alive()
+    assert not alive()  # a finished block leaves no refresh thread behind
+
+    w = FakeW()
+    w.add("a")
+    said = []
+    with pool.leased_cluster(w, "p", VOL, INFO, say=said.append, touch_every_s=0.01, settle_s=0):
+        w.fs.pop(pool.Leases(w, VOL, "p").path("a"))  # reclaimed by another launch
+        end = time.time() + 3
+        while alive() and time.time() < end:
+            time.sleep(0.01)
+        assert not alive(), "the refresh went on after its lease was lost"
+    assert sum("the lease of a was lost" in s for s in said) == 1

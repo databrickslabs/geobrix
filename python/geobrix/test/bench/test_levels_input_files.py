@@ -58,6 +58,7 @@ def test_the_files_of_a_range_input_follow_the_rows_at_every_scale():
         (lf._bng_polys, ()),
         (lf._bng_cells(False), ()),
         (fam._points_arrays, ()),
+        (fam._points_wkt, ()),
         (fam._mvt_rows, ()),
         (fam._tin_points, ()),
     ],

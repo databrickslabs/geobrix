@@ -80,6 +80,9 @@ class SetSpec:
     fn: Optional[str] = (
         None  # time only this function's forms (a set whose forms hold more than one function)
     )
+    corpus_n: int = (
+        0  # tiles the corpus copy holds when the forms read more files than n (BNG tiles are a quarter); 0: the largest n
+    )
     noise_ms: float = (
         0.0  # a cost per tile under this is compared as this much (a scan-bound set's noise); 0: MIN_BASELINE_MS
     )
@@ -185,6 +188,28 @@ def _family_sets() -> Dict[str, SetSpec]:
             ns=n_tiles,
             fn="gbx_rst_retile",
             **tiles,
+        ),
+        # a second function of a family, under `<family>-<function>`: its forms share variant names with the family's
+        # first set (`l1@n`), so `fn` picks them, and the baseline file is the set's own
+        "raster-generator-tess": SetSpec(
+            mvp="raster-generator",
+            forms=("h_tess_l1", "h_tess_udtf", "floor"),
+            reference="h_tess_udtf",
+            ns=(
+                2,
+                8,
+                32,
+            ),  # BNG tiles; the input looks at 4n + 64 corpus files for them
+            fn="gbx_rst_bng_tessellate",
+            corpus_n=4 * 32 + 64,
+            **tiles,
+        ),
+        "raster-vectorize-contour": tile_fn("raster-vectorize", "gbx_rst_contour"),
+        "raster-rasterize-gridfrompoints": gen_fn(
+            "raster-rasterize",
+            "gbx_rst_gridfrompoints",
+            "wktpts",
+            (200, 800, 3200),
         ),
         "raster-array-op": SetSpec(
             mvp="raster-array-op",
@@ -982,12 +1007,10 @@ def _run_zl(a) -> int:
 
 
 def _run(a, spec: SetSpec) -> int:
-    path = a.baseline or default_baseline_path(spec.mvp)
+    path = a.baseline or default_baseline_path(a.set)
     stored = None
     if a.baseline is not None and not a.baseline_write:
-        stored = read_baseline(
-            path, spec.mvp, spec.ns
-        )  # before the minutes of the pass
+        stored = read_baseline(path, a.set, spec.ns)  # before the minutes of the pass
     in_place = (
         spec.corpus_src is not None
         and bool(a.corpus_dir)
@@ -1020,19 +1043,21 @@ def _run(a, spec: SetSpec) -> int:
     else:
         corpus = a.corpus_dir or spec.corpus_dir
         rows = os.path.join(corpus, "rows")
-        held = ensure_corpus(a.corpus_src or spec.corpus_src, rows, spec.ns[-1])
+        held = ensure_corpus(
+            a.corpus_src or spec.corpus_src, rows, max(spec.ns[-1], spec.corpus_n)
+        )
     where = (
         "no corpus (generated input)"
         if spec.corpus_src is None
         else f"corpus {rows}: {held} tiles{' (read in place)' if in_place else ''}"
     )
     print(
-        f"[local-timing {spec.mvp}] {where}; "
+        f"[local-timing {a.set}] {where}; "
         f"forms {', '.join(spec.forms)}; n {spec.ns}; K={a.k:g}",
         flush=True,
     )
     if in_place:
-        print(f"[local-timing {spec.mvp}] {probe_readdir(rows)}", flush=True)
+        print(f"[local-timing {a.set}] {probe_readdir(rows)}", flush=True)
     runs = measure_runs(spec, corpus, a.repeats)
     res = median_res(runs)
     print(
@@ -1069,7 +1094,7 @@ def _run(a, spec: SetSpec) -> int:
         if found:
             print(f"baseline not written: the pass flagged a form ({path} unchanged)")
         else:
-            write_baseline(path, spec.mvp, spec.ns, per_tile, env, a.repeats)
+            write_baseline(path, a.set, spec.ns, per_tile, env, a.repeats)
             print(
                 f"baseline written: {path} ({len(per_tile)} forms, median of {a.repeats} runs per n, {env})"
             )

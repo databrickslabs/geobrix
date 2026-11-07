@@ -1141,6 +1141,11 @@ _TESS_UDTF = _TILE_FP.format(
     down="gbx_rst_transformcrs(struct(t.*), 'EPSG:3857')",
     udtf="gbx_rst_bng_tessellate(tile, 3)",
 )
+# The JVM generator answers one `tile` column where the light UDTF answers the tile's fields.
+_TESS_UDTF_L1 = _TILE_FP.format(
+    down="gbx_rst_transformcrs(t.tile, 'EPSG:3857')",
+    udtf="gbx_rst_bng_tessellate(tile, 3)",
+)
 # The aggregate returns the mosaic as BINARY.
 _MERGE_L3 = (
     "SELECT count(*) AS n, sum(length(x)) AS fp, count(x) AS n_out FROM "
@@ -1170,6 +1175,29 @@ def register_h_retile_udtf(spark):
 
 def register_h_tess_udtf(spark):
     _register_light(spark, "gbx_rst_transformcrs", "gbx_rst_bng_tessellate")
+
+
+# What each tessellate setup leaves installed, so the run re-installs it when the other level's form put its own there.
+register_h_tess_udtf.installs = {
+    "gbx_rst_bng_tessellate": ("L3", "-"),
+    "gbx_rst_transformcrs": ("L3", "-"),
+}
+
+
+def register_h_tess_l1(spark):
+    """The JVM tessellate beside the light downstream op: only the generator differs from `h_tess_udtf`'s query."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_family(
+        spark, ("gbx_rst_",), only=["gbx_rst_bng_tessellate"], level="L1"
+    )
+    _register_light(spark, "gbx_rst_transformcrs")
+
+
+register_h_tess_l1.installs = {
+    "gbx_rst_bng_tessellate": ("L1", "-"),
+    "gbx_rst_transformcrs": ("L3", "-"),
+}
 
 
 def register_h_merge_l3(spark):
@@ -1423,6 +1451,16 @@ FORMS["H"] = [
         "tiles_aligned_mat",
         sql=_COMBINE_SQL,
         setup="register_h_heavy",
+        computes=("dedicated",),
+    ),
+    # The raster tessellate at L1, over the input and the downstream op of `h_tess_udtf`: only the generator differs.
+    _h(
+        "gbx_rst_bng_tessellate",
+        "L1",
+        "h_tess_l1",
+        "tiles_gb_mat",
+        sql=_TESS_UDTF_L1,
+        setup="register_h_tess_l1",
         computes=("dedicated",),
     ),
 ]

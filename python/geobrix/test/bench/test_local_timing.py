@@ -120,7 +120,12 @@ def test_every_form_of_the_se_set_exists_for_its_function():
 def test_only_the_known_sets_are_implemented(capsys):
     # the letter sets, and one set per multi-level function family of the manifest
     assert {"IO", "S", "SE"} <= set(lt.SETS)
-    assert set(lt.SETS) - {"IO", "S", "SE"} == {
+    # a second function of a family has a set of its own, named `<family>-<function>`
+    assert set(lt.SETS) - {"IO", "S", "SE"} - {
+        "raster-generator-tess",
+        "raster-vectorize-contour",
+        "raster-rasterize-gridfrompoints",
+    } == {
         f.family
         for f in __import__("databricks.labs.gbx.manifest", fromlist=["x"])
         .load()

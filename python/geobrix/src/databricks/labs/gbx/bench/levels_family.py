@@ -84,6 +84,7 @@ _TILE_V = (
 _VFP_ORDER = {
     "tiles_n": "tile.path, xxhash64(tile.raster)",
     "points_arrays": "xxhash64(x, y, z)",
+    "points_wkt": "xxhash64(points, vals)",
     "file_bytes": "xxhash64(content)",
 }
 _AGG_V = (
@@ -193,6 +194,15 @@ REPS: List[Rep] = [
         "{fn}(tile, array(0D, 50D, 100D, 1000D))",
         floor_sql=_TILE_SCAN,
     ),
+    # contour lines at three levels inside the corpus' 0..1 value range (the isoband breaks above hold every pixel)
+    Rep(
+        "raster-vectorize",
+        "gbx_rst_contour",
+        _BNG_TILE,
+        _SCALAR,
+        "{fn}(tile, array(0.25D, 0.5D, 0.75D))",
+        floor_sql=_TILE_SCAN,
+    ),
     # a tile for the world's zoom 0: the whole corpus tile falls inside it
     # arrays of points to a grid
     Rep(
@@ -202,6 +212,20 @@ REPS: List[Rep] = [
         _TILE,
         "{fn}(x, y, z, 0D, 0D, 100D, 100D, 64, 64, 4326, 'mean')",
         floor_sql="SELECT count(*) AS n, sum(size(x)) AS fp, count(x) AS n_out FROM {src}",
+        vfp="raster",
+    ),
+    # inverse-distance weighting of a row's WKT points onto a grid: the power and neighbour count the JVM defaults to,
+    # given outright so both levels run the same k-nearest search (a NULL power reaches the JVM as no power). `points` goes
+    # through `slice`, at both levels: the JVM level returns NULL for a point array read straight from a table column
+    # (it takes the elements with `ArrayData.get(i, null)`, which an UnsafeArrayData cannot answer), and a computed array
+    # is the shape it handles.
+    Rep(
+        "raster-rasterize",
+        "gbx_rst_gridfrompoints",
+        "points_wkt",
+        _TILE,
+        "{fn}(slice(points, 1, size(points)), vals, 0D, 0D, 100D, 100D, 64, 64, 4326, 2.0D, 12)",
+        floor_sql="SELECT count(*) AS n, sum(size(points)) AS fp, count(points) AS n_out FROM {src}",
         vfp="raster",
     ),
     # file bytes to a tile
@@ -387,6 +411,32 @@ def _points_arrays(spark, n, corpus, schema):
     )
 
 
+_WKT_POINTS = 200  # points of one row of the IDW input
+
+
+def _points_wkt(spark, n, corpus, schema):
+    """`n` rows of 200 random WKT points (x, y in 0..100) and a value for each (0..10), as `points` and `vals`."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    return lf._table(
+        spark,
+        schema,
+        f"mvp_in_points_wkt_v{lf.RECIPE_VERSION}_{n}",
+        lambda: spark.range(n).select(
+            F.expr(
+                f"transform(sequence(1, {_WKT_POINTS}), i -> concat('POINT(', cast(rand(51) * 100 as string), ' ',"
+                " cast(rand(52) * 100 as string), ')'))"
+            ).alias("points"),
+            F.expr(f"transform(sequence(1, {_WKT_POINTS}), i -> rand(53) * 10)").alias(
+                "vals"
+            ),
+        ),
+        rows=n,
+    )
+
+
 def _file_bytes(spark, n, corpus, schema):
     """The bytes of the corpus' first `n` tiles (`content`), `n` rows over `family_partitions` partitions."""
     from pyspark.sql import functions as F
@@ -515,6 +565,7 @@ def _label(inp: str) -> str:
     return {
         "tiles_n": "n",
         "points_arrays": "pts",
+        "points_wkt": "wktpts",
         "file_bytes": "bytes",
         "bng_cells": "cells",
         "invalid_polys": "polys",
@@ -653,6 +704,7 @@ def install(lf) -> None:
             "tiles_n": _tiles_n,
             "tiles_grouped_family": lf._grouped_tiles(False, "_family"),
             "points_arrays": _points_arrays,
+            "points_wkt": _points_wkt,
             "file_bytes": _file_bytes,
             "mvt_rows": _mvt_rows,
             "tin_points": _tin_points,
@@ -662,6 +714,7 @@ def install(lf) -> None:
         {
             "tiles_n": 250,
             "points_arrays": 2000,
+            "points_wkt": 2000,
             "file_bytes": 250,
             "mvt_rows": 100_000,
             "tin_points": 2000,

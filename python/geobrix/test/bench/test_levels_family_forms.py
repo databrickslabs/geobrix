@@ -723,3 +723,77 @@ def test_a_virtual_tile_table_is_written_in_files_of_two_rows(tmp_path, monkeypa
     spark = mock.MagicMock()
     lf._write_input(spark, df, "s.t", rows=1000, per_file=2)
     df.write.format.return_value.option.assert_called_once_with("maxRecordsPerFile", 2)
+
+
+# ---- the second-function sets: raster bng_tessellate, contour and gridfrompoints beside their family's first set
+
+SECOND_SETS = {
+    "raster-generator-tess": ("raster-generator", "gbx_rst_bng_tessellate"),
+    "raster-vectorize-contour": ("raster-vectorize", "gbx_rst_contour"),
+    "raster-rasterize-gridfrompoints": ("raster-rasterize", "gbx_rst_gridfrompoints"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(SECOND_SETS))
+def test_a_second_function_set_picks_its_own_forms_by_function_and_ends_on_one_floor(
+    name,
+):
+    """The set shares variant names with its family's first set (`l1@n`, `floor@n`): `fn` picks its forms, each name
+    exists once for that function, there is an L1 and an L3 form to judge, and one floor is the last entry.
+    """
+    family, fn = SECOND_SETS[name]
+    spec = lt.SETS[name]
+    assert (spec.mvp, spec.fn) == (family, fn)
+    got = _chosen(spec)
+    assert [f.variant for f in got] == list(spec.forms)
+    assert {f.level for f in got} == {"L1", "L3"}
+    assert (
+        got[-1].variant.split("@")[0] == "floor"
+        and sum(f.variant.split("@")[0] == "floor" for f in got) == 1
+    )
+    assert len({f.input for f in got}) == 1, [(f.variant, f.input) for f in got]
+    assert spec.reference in spec.forms and list(spec.ns) == sorted(spec.ns)
+    # the baseline is the set's own: the family's first set holds forms of the same names
+    assert lt.default_baseline_path(name) != lt.default_baseline_path(family)
+
+
+def test_the_tessellate_set_copies_the_corpus_files_the_bng_input_looks_at():
+    """`tiles_gb_mat` looks at 4n + 64 files for n EPSG:27700 tiles; a copy of n files would hold too few of them."""
+    spec = lt.SETS["raster-generator-tess"]
+    assert spec.corpus_n >= 4 * spec.ns[-1] + 64
+
+
+def test_the_new_forms_are_selectable_by_the_cluster_ids():
+    """`--levels <family> --levels-forms <ids>`: the qualified ids pick exactly the function's L1, L3 and floor."""
+    for name, (family, fn) in SECOND_SETS.items():
+        spec = lt.SETS[name]
+        ids = [f"{fn}:{v}" for v in spec.forms]
+        got = lf.select_forms(family, ids)
+        assert {(f.fn, f.variant) for f in got} == {(fn, v) for v in spec.forms}, name
+        assert len(got) == len(spec.forms), name
+
+
+@pytest.mark.parametrize("name", sorted(SECOND_SETS))
+def test_a_second_function_set_reads_n_rows_in_a_cap_per_partition(
+    name, spark_session_local, tmp_path
+):
+    """Plan shape: every form of the set reads one input of exactly n rows; a tile input spreads them over partitions of
+    at most `FAMILY_ROWS_PER_PARTITION` tiles (a task holds a few tiles, not a quarter of the input).
+    """
+    from pyspark.sql import functions as F
+
+    spec = lt.SETS[name]
+    inp = _chosen(spec)[0].input
+    n = 8
+    corpus = _systems_corpus(tmp_path, 4 * n + 64)
+    src = lf.INPUTS[inp](spark_session_local, n, corpus, None)
+    df = spark_session_local.table(src)
+    sizes = [
+        r[0]
+        for r in df.groupBy(F.spark_partition_id()).count().select("count").collect()
+    ]
+    assert sum(sizes) == n, sizes
+    if inp.startswith("tiles"):
+        assert max(sizes) <= fam.FAMILY_ROWS_PER_PARTITION, sizes
+    else:
+        assert df.where("size(points) != size(vals) OR size(points) < 1").count() == 0

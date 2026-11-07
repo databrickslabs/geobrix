@@ -18,7 +18,12 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from databricks.labs.gbx.bench import attribution
 from databricks.labs.gbx.bench.results import ResultRow
-from databricks.labs.gbx.bench.runner import capture_env, p90_index, time_iters
+from databricks.labs.gbx.bench.runner import (
+    capture_env,
+    p90_index,
+    spark_env,
+    time_iters,
+)
 
 _L3_VARIANTS = (
     "c0",
@@ -635,7 +640,7 @@ def run_mvp(
             cluster_id=cluster_id,
             part=part,
             path=_path_of(spark, form),
-            **env,
+            **{**env, "env_caps": _caps_now(spark, env)},
         )
         rows, prev = by_form[i], hist.get(i)
         was_dead = i in dead
@@ -673,6 +678,9 @@ def run_mvp(
             bar,
             keep_input=fail_fast,
         )
+        if row.status != SKIPPED:
+            # a capability the form's own run decided (a probe, a first use) is on its row, not the one read before it
+            row = replace(row, env_caps=_caps_now(spark, env))
         if alive_before and row.status != SKIPPED:
             # an abandoned rung's work is still on the cluster: this timing was taken beside it
             row = replace(
@@ -1365,6 +1373,10 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     if gone:
         note.append("unavailable: " + ",".join(gone))
     note += _tasks_note(scan_tasks)
+    fp = str(fp)
+    if form.vsql:
+        fp, vnote = _value_fingerprint(ctx, form, src, n, n_out, fp)
+        note += vnote
     return _row(
         {**base, "rows": min(int(n), requested)},
         note="; ".join(note),
@@ -1377,29 +1389,12 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     )
 
 
-def _first_iteration_stop(rung: "_Rung", measured: int) -> Callable[[float], bool]:
-    """The measured loop's early exit: after the first measured iteration if it alone took more than its share of the
-    rung's budget (budget / measured iterations), and after any iteration if the rung has gone past its deadline.
-    """
-    budget = rung.exec_budget_s if rung.exec_budget_s is not None else rung.deadline_s
-    share = budget / max(measured, 1)
-    seen = [0]
-    fp = str(fp)
-    if form.vsql:
-        fp, vnote = _value_fingerprint(ctx, form, src, n, n_out, fp)
-        note += vnote
+def _caps_now(spark, env: Dict) -> str:
+    """What each Spark capability resolved to NOW (``env_caps``): the run's start-up read goes stale once a probe or a first
+    use decides one. The start-up value stands when the session cannot say."""
+    return spark_env(spark).get("env_caps") or env.get("env_caps", "")
 
-    def stop(secs: float) -> bool:
-        secs = rung.meas[-1] if rung.meas else secs  # on the run's clock
-        seen[0] += 1
-        if rung.cancelled:
-            rung.early_why = (
-                f"the rung went past its {rung.limit_text()} during an iteration"
-            )
-            return True
-        if seen[0] == 1 and measured > 1 and secs > share:
-            rung.early_why = f"the first took {secs:.1f}s > its share {share:.1f}s of the {budget:.0f}s budget"
-            return True
+
 def _value_fingerprint(
     ctx: "_Ctx", form: Form, src: str, n: int, n_out: int, length_fp: str
 ) -> Tuple[str, List[str]]:
@@ -1422,6 +1417,25 @@ def _value_fingerprint(
         return length_fp, [f"value_fp failed: {type(exc).__name__}: {str(exc)[:120]}"]
 
 
+def _first_iteration_stop(rung: "_Rung", measured: int) -> Callable[[float], bool]:
+    """The measured loop's early exit: after the first measured iteration if it alone took more than its share of the
+    rung's budget (budget / measured iterations), and after any iteration if the rung has gone past its deadline.
+    """
+    budget = rung.exec_budget_s if rung.exec_budget_s is not None else rung.deadline_s
+    share = budget / max(measured, 1)
+    seen = [0]
+
+    def stop(secs: float) -> bool:
+        secs = rung.meas[-1] if rung.meas else secs  # on the run's clock
+        seen[0] += 1
+        if rung.cancelled:
+            rung.early_why = (
+                f"the rung went past its {rung.limit_text()} during an iteration"
+            )
+            return True
+        if seen[0] == 1 and measured > 1 and secs > share:
+            rung.early_why = f"the first took {secs:.1f}s > its share {share:.1f}s of the {budget:.0f}s budget"
+            return True
         return False
 
     return stop

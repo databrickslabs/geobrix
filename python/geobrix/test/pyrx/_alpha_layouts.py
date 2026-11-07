@@ -27,6 +27,9 @@ LAYOUTS = {
 }
 LAST_ALPHA = [k for k, (_, last) in LAYOUTS.items() if last]
 NOT_ALPHA = [k for k, (_, last) in LAYOUTS.items() if not last]
+# What a consumer needs to show it applies the rule (``test_core_nodata`` runs every layout): the alpha
+# band GDAL itself derives a mask from (4 bands), one it does not (3 bands), and a fourth band that is data.
+WIRING = ["rgba", "gray_x_alpha", "rgb_nir"]
 
 
 def pattern(count, dtype="uint8"):

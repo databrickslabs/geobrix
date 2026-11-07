@@ -80,7 +80,7 @@ def test_encode_tile_keeps_the_mask(tile_format, window):
 
 
 @pytest.mark.parametrize("tile_format", ["gtiff", "cog"])
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_encode_tile_labels_alpha_where_its_source_does(tile_format, name):
     with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ds:
         _, out, _ = _encode.encode_tile(

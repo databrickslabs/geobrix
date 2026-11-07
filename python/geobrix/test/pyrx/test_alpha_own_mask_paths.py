@@ -266,7 +266,7 @@ _GRIDS = {
 
 @pytest.mark.parametrize("assignment", ["centroid", "covering"])
 @pytest.mark.parametrize("grid", list(_GRIDS))
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_raster_to_grid_counts_only_the_pixels_valid_for_each_band(
     grid, name, assignment
 ):
@@ -288,7 +288,7 @@ def test_raster_to_grid_counts_only_the_pixels_valid_for_each_band(
     ), f"{grid} {assignment} {name}"
 
 
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_accessor_statistics_cover_only_the_opaque_pixels(name):
     """Rows 1 and 3 of the pattern are opaque (band 1 holds 0 there and 7), so every band's
     statistics are over those pixels."""
@@ -1071,7 +1071,7 @@ def _expected_labels(name):
 )
 @pytest.mark.parametrize("case", ["h3", "bng_native"])
 @pytest.mark.parametrize("dtype", ["uint8", "uint16"])
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_tessellate_chips_copy_the_colour_interpretation_of_every_band(
     name, dtype, case, assignment, coverage
 ):
@@ -1088,7 +1088,7 @@ def test_tessellate_chips_copy_the_colour_interpretation_of_every_band(
             ), f"{name} {dtype} {case} {assignment}"
 
 
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_the_empty_chip_of_a_covered_cell_copies_the_colour_interpretation(name):
     """The 1x1 chip of a covered-but-empty cell (centroid + complete) is labelled as the
     source is, like the chips with pixels."""

@@ -321,3 +321,92 @@ def test_valid_mask_of_a_raster_that_is_only_an_alpha_band():
     with MemoryFile(raw) as mf, mf.open() as ds:
         assert nd.has_alpha(ds)
         assert nd.valid_mask(ds).tolist() == [[False, True], [True, False]]
+
+
+_CI = ColorInterp
+
+
+@pytest.mark.parametrize(
+    "name,indexes,want",
+    [
+        ("rgba", [1, 2, 3, 4], [_CI.red, _CI.green, _CI.blue, _CI.alpha]),
+        ("rgba", [1, 4], [_CI.red, _CI.alpha]),
+        ("rgba", [3, 2], [_CI.blue, _CI.green]),
+        ("rgba", [4], [_CI.undefined]),  # a lone alpha band is selected for its values
+        ("rgba", [4, 1], [_CI.undefined, _CI.red]),  # alpha must be selected LAST
+        ("rgba", [4, 4], [_CI.undefined, _CI.undefined]),
+        ("rgba_x", [1, 2, 3, 4], [_CI.red, _CI.green, _CI.blue, _CI.undefined]),
+        ("rgba_x", [4, 5], [_CI.undefined, _CI.undefined]),  # not the last band: data
+        ("gray_x_alpha", [1, 3], [_CI.gray, _CI.alpha]),
+        ("gray_x_alpha", [2, 3], [_CI.undefined, _CI.alpha]),
+        ("gray_x_alpha", [3, 1], [_CI.undefined, _CI.gray]),
+        ("gray_alpha", [2, 1], [_CI.undefined, _CI.gray]),
+        ("rgb_nir", [4, 1], [_CI.undefined, _CI.red]),
+    ],
+)
+def test_a_band_subset_keeps_the_alpha_label_only_last_and_beside_a_data_band(
+    name, indexes, want
+):
+    labels = al.LAYOUTS[name][0]
+    assert nd.subset_colorinterp(labels, indexes) == want
+    assert nd.subset_colorinterp(list(labels), tuple(indexes)) == want  # any sequence
+
+
+@pytest.mark.parametrize(
+    "value,dtype,fits",
+    [
+        (0, "uint8", True),
+        (255, "uint8", True),
+        (256, "uint8", False),
+        (-1, "uint8", False),
+        (-128, "int8", True),
+        (-129, "int8", False),
+        (127, "int8", True),
+        (128, "int8", False),
+        (32767, "int16", True),
+        (32768, "int16", False),
+        (-32768, "int16", True),
+        (-32769, "int16", False),
+        (4294967295, "uint32", True),
+        (4294967296, "uint32", False),
+        (-999999.0, "float32", True),  # a float band takes any value
+        (1e300, "float64", True),
+        (float("nan"), "float32", True),
+        (-1, "no-such-dtype", True),  # an unknown dtype blocks nothing
+    ],
+)
+def test_nodata_fits_dtype_checks_the_integer_range_only(value, dtype, fits):
+    assert nd.nodata_fits_dtype(value, dtype) is fits
+
+
+@pytest.mark.parametrize("nodata", [None, 0])
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_a_band_is_valid_by_its_own_mask_and_the_alpha_band_beside_it(name, nodata):
+    """``band_valid_mask`` and ``opaque_mask`` on the layout pattern (row 0: data 7, alpha 0;
+    row 1: data 0, alpha 255; row 2: all 0; row 3: data 7, alpha 255): a data band is also
+    judged by the alpha band; the alpha band by its own mask only."""
+    alpha_last = al.LAYOUTS[name][1]
+    window = Window(1, 1, 3, 3)
+    with MemoryFile(al.layout_bytes(name, nodata=nodata)) as mf, mf.open() as ds:
+        count = ds.count
+        opaque = nd.opaque_mask(ds)
+        opaque_w = nd.opaque_mask(ds, window=window)
+        data = nd.band_valid_mask(ds, 1)
+        data_w = nd.band_valid_mask(ds, 1, window=window)
+        last = nd.band_valid_mask(ds, count)
+        last_w = nd.band_valid_mask(ds, count, window=window)
+    rows = lambda m: [bool(r.all()) for r in m]  # noqa: E731
+    if alpha_last:
+        assert opaque.dtype == bool and rows(opaque) == [False, True, False, True]
+        assert (opaque_w == opaque[1:, 1:]).all()
+        assert rows(data) == (
+            [False, False, False, True] if nodata == 0 else rows(opaque)
+        )
+        # the alpha band: its own mask (NoData 0 hides its zeros), not the alpha rule
+        assert rows(last) == ([False, True, False, True] if nodata == 0 else [True] * 4)
+    else:
+        assert opaque is None and opaque_w is None
+        assert rows(data) == ([True, False, False, True] if nodata == 0 else [True] * 4)
+        assert rows(last) == ([False, True, False, True] if nodata == 0 else [True] * 4)
+    assert data.shape == (4, 4) and data_w.shape == (3, 3) and last_w.shape == (3, 3)
+    assert (data_w == data[1:, 1:]).all() and (last_w == last[1:, 1:]).all()

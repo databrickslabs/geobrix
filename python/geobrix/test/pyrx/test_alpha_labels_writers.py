@@ -5,7 +5,7 @@ alpha label of a 16-bit RGBA or a gray+alpha raster, so a writer that copies ``d
 mislabels RGB+NIR (band 4 reads as a transparency mask, and a NoData declared on the raster
 shadows it) and loses the alpha band of other rasters. Each writer below goes through
 ``compression.write_gtiff(alpha_like=)`` / ``match_alpha`` (the central matrix is in
-``test_compression_sites.py``); the alpha band is the last band, when it is labelled alpha
+``test_compression.py``); the alpha band is the last band, when it is labelled alpha
 (``_nodata.alpha_index``).
 
 One wiring test per writer: a source whose band 4 is data (RGB+NIR) keeps it data, a source
@@ -91,7 +91,7 @@ def _retile(raw):
 
 
 @pytest.mark.parametrize("writer", list(GROUP_WRITERS))
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_a_group_writer_labels_alpha_where_its_source_does(writer, name):
     out = GROUP_WRITERS[writer](al.layout_bytes(name))
     want = [len(al.LAYOUTS[name][0]) - 1] if al.LAYOUTS[name][1] else []
@@ -99,7 +99,7 @@ def test_a_group_writer_labels_alpha_where_its_source_does(writer, name):
 
 
 @pytest.mark.parametrize("writer", list(WRITERS))
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_a_writer_labels_alpha_where_its_source_does(writer, name):
     raw = al.layout_bytes(name, nodata=None)
     with MemoryFile(raw) as mf, mf.open() as ds:
@@ -115,7 +115,7 @@ def _write_file(tmp_path, name):
     return path
 
 
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_eager_fromfile_labels_alpha_where_its_source_does(tmp_path, name):
     """``rst_fromfile`` with ``materialize`` re-encodes the file into the tile: RGB+NIR keeps
     band 4 as data and an RGBA file keeps its alpha band."""
@@ -129,7 +129,7 @@ def test_eager_fromfile_labels_alpha_where_its_source_does(tmp_path, name):
     assert _alpha_bands(bytes(raster)) == want
 
 
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_virtual_tile_reads_label_alpha_where_their_source_does(tmp_path, name):
     """The window of a virtual tile (every read path of ``open_tile`` and the materializers)
     labels alpha exactly where the source file does."""
@@ -146,7 +146,7 @@ def test_virtual_tile_reads_label_alpha_where_their_source_does(tmp_path, name):
 
 
 @pytest.mark.parametrize("target", ["EPSG:3857", "ESRI:54008"])
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_a_virtual_tile_with_a_target_crs_labels_alpha_where_its_source_does(
     tmp_path, name, target
 ):
@@ -160,7 +160,7 @@ def test_a_virtual_tile_with_a_target_crs_labels_alpha_where_its_source_does(
     assert _alpha_bands(ot.materialize_to_bytes(tile).raster) == want
 
 
-@pytest.mark.parametrize("name", list(al.LAYOUTS))
+@pytest.mark.parametrize("name", al.WIRING)
 def test_the_empty_tile_of_a_disjoint_clip_declares_no_nodata_over_an_alpha_band(name):
     """The 1x1 tile standing for a clip that misses the raster is 0 in every band: for a
     source with an alpha band that is alpha 0 with no NoData declared (a NoData would shadow

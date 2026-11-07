@@ -1076,8 +1076,10 @@ def _partial_metrics(rung: _Rung, form: Form) -> Optional[Dict]:
 _EXC_LINE = re.compile(r"^\s*[A-Za-z_][\w.]*(Error|Exception|Exit|Interrupt)\b")
 # Spark's "Job aborted ... Lost task 3.3 in stage 7.0 (TID 9) (10.0.0.1 executor 4): java.lang.X: reason" is one line
 # far longer than the head the row keeps; the executor's exception class and reason come after its last "): "
+# An executor lost to memory pressure has no exception class: "ExecutorLostFailure (...) Reason: Command exited
+# with code 52, oom", and its reason is the finding.
 _EXECUTOR_CAUSE = re.compile(
-    r"\)\s*:\s+((?:[\w$]+\.)+[\w$]*(?:Error|Exception)\b[^\n]*)"
+    r"\)\s*:\s+((?:(?:[\w$]+\.)+[\w$]*(?:Error|Exception)|ExecutorLostFailure)\b[^\n]*)"
 )
 
 

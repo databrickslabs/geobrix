@@ -1712,6 +1712,24 @@ def test_a_failed_form_keeps_the_executors_exception_class_and_reason():
     )
 
 
+def test_a_failed_form_keeps_the_whole_executor_loss_reason():
+    """An executor lost to memory pressure has no exception class: its reason sits far into one long "Lost task"
+    line, past the 200-character head, and was cut to "...Reason: Command ex"."""
+    from databricks.labs.gbx.bench.levels import failure_text
+
+    text = (
+        "An error occurred while calling o21387.collectToPython.\n"
+        ": org.apache.spark.SparkException: Job aborted due to stage failure: Task 3 in stage 761.0 failed 4 times, "
+        "most recent failure: Lost task 3.3 in stage 761.0 (TID 11675) (10.0.0.1 executor 4): "
+        "ExecutorLostFailure (executor 4 exited caused by one of the running tasks) "
+        "Reason: Command exited with code 52, oom\n"
+        "Driver stacktrace:\n"
+    )
+    assert text.index("Command exited") > 200
+    got = failure_text(RuntimeError(text))
+    assert "Reason: Command exited with code 52, oom" in got
+
+
 def test_a_multiline_pip_failure_keeps_its_first_lines_not_just_the_first():
     """A UC function environment that cannot install the wheel fails with pip output, no exception-class line:
     the first actionable pip lines are the finding."""

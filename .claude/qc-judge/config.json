@@ -3,7 +3,10 @@
   "internals_extra_patterns": [
     "wave\\s*\\d+",
     "\\b(?!labs@)[A-Za-z0-9._%+-]+@databricks\\.com",
-    "GBX-\\d+"
+    "GBX-\\d+",
+    "\\b(AP-\\d+|OD-\\d+|MVP-[A-Z]+)\\b",
+    "\\bD-(S|G|A|H|IO|P)\\d+\\b",
+    "\\bFB\\d[a-d]?\\b"
   ],
   "checks": {
     "release-notes-current": {
@@ -28,7 +31,7 @@
       "timeout_seconds": 30
     },
     "docs-match-code": {
-      "prompt": "You are checking whether new public symbols in the GeoBrix codebase have documentation.\n\n# Full diff\n{input_0}\n\n# All current docs files\n{input_1}\n\n# Task\n1. From the diff, identify new public symbols. Project conventions:\n   - Scala: `def`/`object`/`class` in `src/main/scala/.../{rasterx,gridx,vectorx}/`\n   - Python: top-level `def`/`class` in `python/geobrix/src/databricks/labs/gbx/` — but EXCLUDE the `bench/` subpackage (`python/geobrix/src/databricks/labs/gbx/bench/`): the benchmark harness is INTERNAL tooling (a dev/CI test instrument), NOT user-facing API, so its functions, dataclass fields (e.g. ResultRow columns), and helpers never appear in user `docs/` and must NOT be flagged as undocumented.\n   - SQL: new `gbx_rst_*`, `gbx_bng_*`, `gbx_st_*` UDFs visible in registration files\n2. For each new symbol, check whether `docs/` references it (case-sensitive substring or close match).\n3. Flag symbols with no apparent doc entry.\n\nReply with exactly one line (tab-separated):\nPASS|FAIL|REVIEW\thigh|low\tone-line reason — if FAIL, list up to 3 undocumented symbols"
+      "prompt": "You are checking whether new public symbols in the GeoBrix codebase have documentation.\n\n# Full diff\n{input_0}\n\n# All current docs files\n{input_1}\n\n# Task\n1. From the diff, identify new public symbols. Project conventions:\n   - Scala: `def`/`object`/`class` in `src/main/scala/.../{rasterx,gridx,vectorx}/`\n   - Python: top-level `def`/`class` in `python/geobrix/src/databricks/labs/gbx/` — but EXCLUDE the `bench/` subpackage (`python/geobrix/src/databricks/labs/gbx/bench/`): the benchmark harness is INTERNAL tooling (a dev/CI test instrument), NOT user-facing API, so its functions, dataclass fields (e.g. ResultRow columns), and helpers never appear in user `docs/` and must NOT be flagged as undocumented.\n   - SQL: new `gbx_*` functions = new rows in `python/geobrix/src/databricks/labs/gbx/manifest/functions.json` (the manifest is the only registrar)\n   - A generated docs block (written by the manifest generator, `gbx:manifest:gen`) counts as documentation; do not flag a symbol whose only docs are a generated region, and do not flag the generated region itself\n2. For each new symbol, check whether `docs/` references it (case-sensitive substring or close match).\n3. Flag symbols with no apparent doc entry.\n\nReply with exactly one line (tab-separated):\nPASS|FAIL|REVIEW\thigh|low\tone-line reason — if FAIL, list up to 3 undocumented symbols"
     },
     "uc-integration-evidence": {
       "name": "A main-bound change has a passing, current UC integration run on Databricks",
@@ -36,15 +39,6 @@
       "severity": "fail",
       "enabled": true,
       "cmd": "python3 scripts/ci/check_uc_integration_evidence.py",
-      "expect_exit": 0,
-      "timeout_seconds": 30
-    },
-    "binding-parity": {
-      "name": "Every registered function exists in all bindings",
-      "type": "command",
-      "severity": "fail",
-      "enabled": true,
-      "cmd": "[ -f docs/scripts/check-binding-parity.py ] || { echo 'parity script absent; skip'; exit 0; }; python3 docs/scripts/check-binding-parity.py",
       "expect_exit": 0,
       "timeout_seconds": 30
     },
@@ -56,15 +50,6 @@
       "cmd": "[ -f scripts/commands/gbx-manifest-gen.sh ] || { echo 'absent; skip'; exit 0; }; bash scripts/commands/gbx-manifest-gen.sh --check",
       "expect_exit": 0,
       "timeout_seconds": 120
-    },
-    "param-name-parity": {
-      "name": "Parameter name consistency and arity parity across tiers",
-      "type": "command",
-      "severity": "warn",
-      "enabled": true,
-      "cmd": "[ -f docs/scripts/check-param-names.py ] || { echo 'param-names script absent; skip'; exit 0; }; python3 docs/scripts/check-param-names.py",
-      "expect_exit": 0,
-      "timeout_seconds": 30
     },
     "docs-examples": {
       "name": "Docs example output tables well-formed + all declared tabs complete",
@@ -128,6 +113,15 @@
       "cmd": "[ -f docs/scripts/check-centralized-primitives.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-centralized-primitives.py",
       "expect_exit": 0,
       "timeout_seconds": 30
+    },
+    "no-scala-sql-registration": {
+      "name": "The JAR registers no SQL functions; the Python manager is the only registrar",
+      "type": "command",
+      "severity": "fail",
+      "enabled": true,
+      "cmd": "bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/manager/test_s6_no_scala_registration.py",
+      "expect_exit": 0,
+      "timeout_seconds": 120
     }
   }
 }

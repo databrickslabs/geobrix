@@ -144,7 +144,9 @@ def stamped_name(schema: Optional[str], name: str) -> str:
     return name if schema is None else f"{name}_{_stamp_of(sys._getframe(1))}"
 
 
-def _write_input(spark, df, full: str, rows: Optional[int]) -> None:
+def _write_input(
+    spark, df, full: str, rows: Optional[int], per_file: Optional[int] = None
+) -> None:
     """Write `df` as the Delta table `full`, in at least as many files as the compute has slots when `rows` is given.
 
     A scan task reads whole files (a Parquet row group does not split), so the files an input is written in cap the
@@ -152,9 +154,16 @@ def _write_input(spark, df, full: str, rows: Optional[int]) -> None:
     4M-row `bng_points` input had one file and the 16M-row one four, so the BNG scalar's 4x rung ran on one task and the
     16x on four, and its time came out flat from 4x to 16x (the floor too). `maxRecordsPerFile` splits the packed file
     again, so the scan of an input has the compute's slots in tasks at every scale and the time follows the rows.
+
+    `per_file` caps the rows of a file instead: an input of tiles that a pixel-producing UDF reads (a task holds all its
+    tiles' outputs in one Arrow batch) is written in files of a few rows, because optimized write packed 1000 virtual
+    tiles (13 KB) into ONE file and 250 into files of up to 63 rows: one scan task then held 12 GB of outputs on a
+    Serverless 1 GB limit.
     """
     w = df.write.format("delta")
-    if rows:
+    if per_file:
+        w = w.option("maxRecordsPerFile", max(1, int(per_file)))
+    elif rows:
         from databricks.labs.gbx.bench.runner import _bench_parallelism
 
         w = w.option(
@@ -170,11 +179,13 @@ def _table(
     build,
     exact: bool = False,
     rows: Optional[int] = None,
+    per_file: Optional[int] = None,
 ) -> str:
     """The input as a table of `schema` (or a temp view): built once under a name that holds its stamp, so every form and
     every run that asks for the same input at the same scale shares it. `exact` names the table as given (a companion
     table of an input that already carries its stamp). `rows` is the row count of an input of narrow rows (a range,
-    not a tile per row): it is written in a file per compute slot (`_write_input`)."""
+    not a tile per row): it is written in a file per compute slot (`_write_input`); `per_file` writes at most that many rows
+    in a file (virtual tiles)."""
     if schema is None:
         build().createOrReplaceTempView(name)
         return name
@@ -184,7 +195,7 @@ def _table(
     if not spark.catalog.tableExists(full):
         t0 = time.perf_counter()
         try:
-            _write_input(spark, build(), full, rows)
+            _write_input(spark, build(), full, rows, per_file)
             # a tile input of thousands of files takes minutes: say so, so a form cap hit while building is seen as that
             print(
                 f"[LEVELS input] {full} built in {time.perf_counter() - t0:.1f} s",
@@ -369,6 +380,15 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
 
             return df.repartition(family_partitions(spark, n))
 
+        # the files are written that spread too: optimized write packs the repartitioned paths back into a few files
+        per_file = None
+        if virtual:
+            from databricks.labs.gbx.bench.levels_family import (
+                FAMILY_ROWS_PER_PARTITION,
+            )
+
+            per_file = FAMILY_ROWS_PER_PARTITION
+
         first = (
             _corpus_rows(corpus) if subdir == "rows" and n <= SMALL_INPUT_ROWS else None
         )
@@ -381,6 +401,7 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
                 schema,
                 label,
                 lambda: spread(_tile_column(spark, pairs, virtual, keyed=False)),
+                per_file=per_file,
             )
         # The scan is given the first n files themselves (the `filterRegex` IO's reads use), so it plans n files: a bare
         # `limit(n)` leaves a task per file of the folder (10,000 for the big corpus) when the table is built or read.
@@ -397,6 +418,7 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
                 .select("tile")
                 .limit(n)
             ),
+            per_file=per_file,
         )
 
     return build

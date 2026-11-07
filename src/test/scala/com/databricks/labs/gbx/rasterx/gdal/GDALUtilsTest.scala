@@ -284,6 +284,13 @@ class GDALUtilsTest extends AnyFunSuite {
         y shouldBe 20
     }
 
+    test("GDAL fromWorldCoord should floor a point just outside the origin edge") {
+        val gt = Array(0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+        val (x, y) = GDAL.fromWorldCoord(gt, -0.5, -0.5)
+        x shouldBe -1
+        y shouldBe -1
+    }
+
     test("GDAL fromWorldCoord should invert toWorldCoord") {
         val gt = Array(50.0, 0.5, 0.0, 100.0, 0.0, 0.5)
         val (xGeo, yGeo) = GDAL.toWorldCoord(gt, 15, 25)

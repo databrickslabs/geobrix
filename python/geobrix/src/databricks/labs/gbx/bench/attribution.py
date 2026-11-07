@@ -220,10 +220,14 @@ def _from_rest(df, t0: float, out: Dict) -> bool:
         out["stage_tasks"] = max(a.get("numTasks", 0) for a in attempts)
         # every task of the completed stages of the execution, and those of the stages that read input (the scan)
         out["launched_tasks"] = sum(a.get("numTasks", 0) for a in attempts)
-        out["input_tasks"] = sum(
-            a.get("numTasks", 0)
-            for a in attempts
-            if a.get("inputBytes", 0) or a.get("inputRecords", 0)
+        # None, never 0, when no stage reports input: an unknown count is not a zero count
+        out["input_tasks"] = (
+            sum(
+                a.get("numTasks", 0)
+                for a in attempts
+                if a.get("inputBytes", 0) or a.get("inputRecords", 0)
+            )
+            or None
         )
         task_s = sum(a.get("executorRunTime", 0) for a in attempts) / 1000.0
         out["py_eval_frac"] = _fraction(out["py_eval_s"], task_s)

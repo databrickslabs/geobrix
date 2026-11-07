@@ -491,6 +491,11 @@ def test_the_rest_plan_counts_the_tasks_launched_and_the_tasks_that_read_input(
     out = {k: None for k in attribution.METRICS}
     assert attribution._from_rest(df, 0.0, out)
     assert (out["launched_tasks"], out["input_tasks"]) == (71, 4)
+    del answers["/stages/11"]
+    answers["/stages/11"] = [{"status": "COMPLETE", "numTasks": 4, "inputBytes": 0, "executorRunTime": 10, "jvmGcTime": 0}]  # fmt: skip
+    out = {k: None for k in attribution.METRICS}
+    assert attribution._from_rest(df, 0.0, out)
+    assert out["input_tasks"] is None  # no stage read input: unknown, never 0
     out = attribution.from_plan(
         _connect_df(0, {0: _Node("AdaptiveSparkPlan", {}, [])}), 0.0
     )

@@ -236,7 +236,8 @@ object GDAL {
         val dy = yGeo - gt(3)
         val x = ( dx * gt(5) - dy * gt(2)) / det
         val y = (-dx * gt(4) + dy * gt(1)) / det
-        (x.toInt, y.toInt)
+        // floor, not truncation: a point just west or north of the raster is pixel -1, as the light level answers
+        (math.floor(x).toInt, math.floor(y).toInt)
     }
 
 }

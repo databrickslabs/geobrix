@@ -1,5 +1,4 @@
-"""Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the combine family
-and rst_align_to.
+"""Cross-tier (light pyrx vs heavy Scala/GDAL) parity for the combine family.
 
 Capstone parity check.  Both tiers run on the SAME in-memory
 raster stack and their outputs compared pixel-by-pixel.
@@ -29,9 +28,6 @@ Two-phase pattern: register LIGHT first (prx.register → collect via SQL
 `gbx_rst_combine{stat}(tiles)`), then register HEAVY (hx.register which
 OVERWRITES the same SQL names) and collect again on the same temp view.
 Sequential collection materialises before re-registration.
-
-rst_align_to: warp a 4326 source tile to a 27700 reference grid; assert the
-light and heavy warped outputs match grid dims + geotransform + pixel values.
 
 Sanity-check (run during development, confirmed before finalising):
   Replacing the heavy comparison with ``heavy_arr + 1.0`` made the assertion
@@ -158,12 +154,6 @@ def _canonical_tiles():
     ]
 
 
-def _tile_struct(b: bytes) -> dict:
-    """A minimal 3-field tile struct. Only a scalar column takes it (`rst_align_to` below); an array of tiles is
-    built by `_tile_structs`, because the arrays' tile type has all nine fields."""
-    return {"cellid": 0, "raster": bytearray(b), "metadata": {}}
-
-
 # ---------------------------------------------------------------------------
 # DataFrame helpers
 # ---------------------------------------------------------------------------
@@ -186,36 +176,6 @@ def _combine_df(spark, tiles):
     return spark.createDataFrame(
         [{"tiles": structs}],
         schema=StructType([StructField("tiles", ArrayType(tile_type), True)]),
-    )
-
-
-def _align_df(spark, src_bytes: bytes, ref_bytes: bytes):
-    """One-row DataFrame with `tile` and `ref` columns (v1 schema)."""
-    from pyspark.sql.types import (
-        BinaryType,
-        LongType,
-        MapType,
-        StringType,
-        StructField,
-        StructType,
-    )
-
-    tile_schema = StructType(
-        [
-            StructField("cellid", LongType(), False),
-            StructField("raster", BinaryType(), True),
-            StructField("metadata", MapType(StringType(), StringType()), True),
-        ]
-    )
-    rows = [{"tile": _tile_struct(src_bytes), "ref": _tile_struct(ref_bytes)}]
-    return spark.createDataFrame(
-        rows,
-        schema=StructType(
-            [
-                StructField("tile", tile_schema, True),
-                StructField("ref", tile_schema, True),
-            ]
-        ),
     )
 
 
@@ -246,31 +206,6 @@ def _collect_combine_heavy(spark, stat: str) -> bytes:
         f"SELECT gbx_rst_combine{stat}(tiles) AS result FROM _combine_parity_tbl"
     ).collect()
     assert rows and rows[0]["result"] is not None, f"heavy {stat} returned no row"
-    return bytes(rows[0]["result"]["raster"])
-
-
-def _collect_align_light(spark, src_bytes: bytes, ref_bytes: bytes) -> bytes:
-    """Phase 1: register pyrx, run SQL rst_align_to, collect tile bytes."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df = _align_df(spark, src_bytes, ref_bytes)
-    df.createOrReplaceTempView("_align_parity_tbl")
-    rows = spark.sql(
-        "SELECT gbx_rst_align_to(tile, ref) AS result FROM _align_parity_tbl"
-    ).collect()
-    assert rows and rows[0]["result"] is not None, "light rst_align_to returned no row"
-    return bytes(rows[0]["result"]["raster"])
-
-
-def _collect_align_heavy(spark) -> bytes:
-    """Phase 2: register rasterx (heavy), run same SQL rst_align_to."""
-
-    heavy_register(spark, ("gbx_rst_",))
-    rows = spark.sql(
-        "SELECT gbx_rst_align_to(tile, ref) AS result FROM _align_parity_tbl"
-    ).collect()
-    assert rows and rows[0]["result"] is not None, "heavy rst_align_to returned no row"
     return bytes(rows[0]["result"]["raster"])
 
 
@@ -403,8 +338,3 @@ def test_combine_stat_parity(spark_with_jar, stat):
         assert abs(float(heavy_arr[idx]) - exp) <= 1e-9 * max(
             1.0, abs(exp)
         ), f"combine_{stat} heavy pixel[{idx}] expected={exp} got={heavy_arr[idx]:.15g}"
-
-
-# ---------------------------------------------------------------------------
-# rst_align_to parity test
-# ---------------------------------------------------------------------------

@@ -177,7 +177,7 @@ object RST_Chm extends WithExpressionInfo {
 
     /** Resolve the DEM CRS into a -t_srs token.  Prefers an AUTHORITY:CODE (e.g. EPSG:32630)
       * — a single space-free token safe for the command parser. Falls back to a temp .wkt file
-      * for authority-less CRS. Returns (token, tempFileToDelete). Mirrors RST_AlignTo. */
+      * for authority-less CRS. Returns (token, tempFileToDelete). */
     private def targetSrsToken(refDs: Dataset): (Option[String], Option[Path]) = {
         val wkt = refDs.GetProjection()
         if (wkt == null || wkt.isEmpty) (None, None)

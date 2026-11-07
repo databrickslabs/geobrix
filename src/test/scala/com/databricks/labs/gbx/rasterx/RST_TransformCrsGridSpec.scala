@@ -3,8 +3,8 @@ package com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.bench.RequiresProjIsolation
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.operations.{ProjGridRegistry, SpatialRefOps}
-import com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.rasterx.operations.RasterProject
 import com.databricks.labs.gbx.vectorx.expressions.ST_TransformCrs
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.SparkSession
@@ -28,7 +28,7 @@ import scala.util.control.NonFatal
   *   ProjGridRegistry.set(dirs)  →  ExpressionConfig.apply(spark) folds them under
   *   `spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS`  →  GDALManager.configureGDAL
   *   PREPENDS them to PROJ_DATA/PROJ_LIB via in-JVM gdal.SetConfigOption  →  the
-  *   in-JVM gdal.Warp (heavy raster RST_TransformCrs) and OGR CoordinateTransformation
+  *   in-JVM gdal.Warp (the heavy raster warp, RasterProject) and OGR CoordinateTransformation
   *   (heavy vector ST_TransformCrs) find the grid on that path.
   *
   * Heavy vector `ST_TransformCrs` is GDAL/OGR-backed (`org.gdal.osr.SpatialReference`
@@ -163,8 +163,8 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         ds
     }
 
-    /** Reproject the synthetic source raster `srcCrs` -> EPSG:4326 through the real heavy
-      * expression path (RST_TransformCrs.execute -> RasterProject -> gdal.Warp). Returns the
+    /** Reproject the synthetic source raster `srcCrs` -> EPSG:4326 through the heavy warp
+      * path (RasterProject.project -> gdal.Warp). Returns the
       * north-edge latitude of the warped output, or None if the warp failed / raised (e.g.
       * the grid was required but not on the search path). */
     private def warpNorthEdgeLat(srcCrs: String): Option[Double] = {
@@ -172,7 +172,7 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         try {
             val ds = makeSourceRaster(srcPath, srcCrs)
             try {
-                val (resultDs, _) = RST_TransformCrs.execute(ds, Map.empty[String, String], "EPSG:4326")
+                val (resultDs, _) = RasterProject.project(ds, Map.empty[String, String], SpatialRefOps.resolveCrs("EPSG:4326"))
                 if (resultDs == null) None
                 else {
                     val northLat = resultDs.GetGeoTransform()(3)
@@ -238,7 +238,7 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
         out.getCoordinate.getY shouldBe (EXPECT_LAT +- 1e-6)
     }
 
-    test("heavy raster RST_TransformCrs consults the registered grid (RED unfindable, GREEN registered)", RequiresProjIsolation) {
+    test("heavy raster warp (RasterProject) consults the registered grid (RED unfindable, GREEN registered)", RequiresProjIsolation) {
         // RED: a CRS naming a grid NOT on the registered path cannot be resolved -> no output,
         // so no shift is fabricated.
         warpNorthEdgeLat(UNREG_CRS) shouldBe None

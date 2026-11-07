@@ -8,8 +8,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.1"
     },
@@ -80,8 +79,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.2"
     },
@@ -314,8 +312,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },
@@ -1745,8 +1742,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.5.0"
     },
@@ -2485,8 +2481,7 @@
       "description": "Encode a group of features into one Mapbox Vector Tile layer.",
       "surfaces": [
         "session",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.4.0"
     },

@@ -1049,7 +1049,7 @@ def _main(_stack) -> int:
     benchmark_vector = "--benchmark-vector" in sys.argv
     vector_only = "--vector-only" in sys.argv
     vector_scale = "--vector-scale" in sys.argv
-    # --benchmark-mvt: also run the st_asmvt benchmark (light pyvx vs heavy vectorx).
+    # --benchmark-mvt: also run the st_asmvt benchmark (light pyvx; there is no heavy level).
     # --mvt-only: ONLY run the MVT benchmark, skip all fn benchmarks.
     benchmark_mvt = "--benchmark-mvt" in sys.argv
     mvt_only = "--mvt-only" in sys.argv
@@ -1591,7 +1591,7 @@ def _main(_stack) -> int:
         vector_legs=vector_legs,
         #  --vector-formats csv: restrict scaled vector run to these light formats (default all).
         vector_formats=vector_formats,
-        #  --benchmark-mvt: also run st_asmvt benchmark (light pyvx vs heavy vectorx).
+        #  --benchmark-mvt: also run st_asmvt benchmark (light pyvx; there is no heavy level).
         benchmark_mvt=benchmark_mvt,
         #  --mvt-only: ONLY run the MVT benchmark, skip fn benchmarks.
         mvt_only=mvt_only,

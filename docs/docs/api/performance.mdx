@@ -47,7 +47,7 @@ The light level runs every function on every compute. It is the default for all 
 | Terrain (slope, aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
 | Edits on virtual tiles | Header only, no pixel read | 1.1x to 12.5x faster than on a materialized tile |
 | Grouped raster aggregates | Grouped-aggregate UDF | 1.2x to 1.7x faster than the JVM aggregate for merge, combine, frombands and derivedband |
-| Vector tiles (`gbx_st_asmvt`) | mapbox-vector-tile | About 6 percent behind the JVM aggregate |
+| Vector tiles (`gbx_st_asmvt`) | mapbox-vector-tile | 1.7x to 2.9x faster than the former JVM aggregate, which is no longer shipped |
 | PMTiles archive aggregate | Grouped-aggregate UDF | About 1.07x the JVM time, inside run-to-run noise |
 | Quadbin and custom grid | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
 | Other families | Per-function UDF | Not yet measured: highest available level |
@@ -64,7 +64,6 @@ The JAR makes these families faster on a dedicated cluster. Times are per tile f
 |---|---|---|---|
 | `gbx_rst_merge` | 2.30 | 8.42 | 3.7x |
 | `gbx_rst_frombands` | 2.31 | 4.94 | 2.1x |
-| `gbx_rst_cog_convert` | 4.23 | 11.13 | 2.6x |
 | `gbx_rst_fromcontent` | 4.03 | 5.90 | 1.5x |
 
 The same JAR speeds up these grid and vector functions, by the time the JVM form takes as a fraction of the light form:

@@ -9,7 +9,7 @@ import java.util.zip.ZipEntry
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.df.BngTessellateJob
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEastNorthAsBngUdf, BuildInfoConnectUdf, GdalProbeConnectUdf, RstTransformCrsBytesUdf}
+import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEastNorthAsBngUdf, BuildInfoConnectUdf, GdalProbeConnectUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes, TileBytesRefused}
@@ -109,17 +109,6 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(intercept[Exception](shell.call(530000.0, 180000.0, "3km")).getMessage.contains("3km"))
         assert(new BuildInfoConnectUdf().call() == BuildInfo.identity())
         assert(new GdalProbeConnectUdf().call() == KernelGdal.probe())
-    }
-
-    test("RstTransformCrsBytesUdf warps bytes and releases its datasets") {
-        val input = tinyGTiff()
-        val before = vsimemEntries()
-        val out = new RstTransformCrsBytesUdf().call(input, "EPSG:3857")
-        assert(new RstTransformCrsBytesUdf().call(Array[Byte](1, 2, 3), "EPSG:3857") == null)
-        assert(new RstTransformCrsBytesUdf().call(input, "EPSG:not-a-crs") == null)
-        assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
-        val ds = RasterDriver.readFromBytes(out, Map("driver" -> "GTiff"))
-        try assert(ds.GetProjection().contains("Pseudo-Mercator")) finally RasterDriver.releaseDataset(ds)
     }
 
     test("TileBytes.checkDecoded gives the decoded-size refusal; the ungated read opens a tile the gate refuses") {

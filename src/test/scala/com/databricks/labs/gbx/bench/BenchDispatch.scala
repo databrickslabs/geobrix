@@ -7,7 +7,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
-import com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
@@ -26,19 +25,16 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_CombineMedian
 import com.databricks.labs.gbx.rasterx.expressions.RST_CombineSum
 import com.databricks.labs.gbx.rasterx.expressions.RST_CombineStddev
 import com.databricks.labs.gbx.rasterx.expressions.RST_CombineCount
-import com.databricks.labs.gbx.rasterx.expressions.RST_AlignTo
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_BuildOverviews
-import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_CogConvert
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Contour
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize
 import com.databricks.labs.gbx.rasterx.expressions.grid.RST_GridFromPoints
-import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
-import com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsAgg
+import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
 import com.databricks.labs.gbx.rasterx.expressions.RST_Chm
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
@@ -140,7 +136,7 @@ object BenchDispatch {
     "rst_slope" -> TER, "rst_aspect" -> TER, "rst_hillshade" -> TER,
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
     "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
-    "rst_transform" -> WARP, "rst_transformcrs" -> WARP, "rst_to_webmercator" -> WARP,
+    "rst_transform" -> WARP, "rst_to_webmercator" -> WARP,
     // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
@@ -160,7 +156,7 @@ object BenchDispatch {
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
     "rst_percentile_stretch" -> EDIT,
     "rst_filter" -> FOCAL, "rst_convolve" -> FOCAL,
-    "rst_asformat" -> FMT, "rst_cog_convert" -> FMT,
+    "rst_asformat" -> FMT,
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
     "rst_evi" -> BM, "rst_savi" -> BM, "rst_index" -> BM,
@@ -178,9 +174,6 @@ object BenchDispatch {
     // Stage-3 combine family: 6 pixel-stat reduces over aligned tile arrays.
     "rst_combinemin" -> FMT, "rst_combinemax" -> FMT, "rst_combinemedian" -> FMT,
     "rst_combinesum" -> FMT, "rst_combinestddev" -> FMT, "rst_combinecount" -> FMT,
-    // rst_align_to: warp one tile onto another tile's grid (CRS + extent + pixel size).
-    // timing-only (fingerprint=False): uses same tile as source + reference in bench.
-    "rst_align_to" -> FMT,
     // bucket C, group C4: tiling fns -> a COLLECTION of tiles -> format.
     "rst_maketiles" -> FMT, "rst_tooverlappingtiles" -> FMT,
     "rst_separatebands" -> FMT, "rst_xyzpyramid" -> FMT,
@@ -203,8 +196,8 @@ object BenchDispatch {
     "rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS,
     // bucket B, group B-vec: vector-out fns (contour LINES, polygonize POLYGONS)
     "rst_contour" -> VECTOR, "rst_polygonize" -> VECTOR,
-    // LiDAR functions: binpoints/isoband are geometry/vector; chm is tile-array format.
-    "rst_binpoints" -> VECTOR, "rst_isoband" -> VECTOR,
+    // LiDAR functions: isoband is geometry/vector; chm is tile-array format.
+    "rst_isoband" -> VECTOR,
     "rst_chm" -> FMT,
     // bucket D: geometry-in constructors (burn/interpolate a geometry set into a
     // new raster). Categorized vector (they bridge vector geometry -> raster).
@@ -248,7 +241,7 @@ object BenchDispatch {
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
   private val geometryInput: Set[String] =
-    Set("rst_gridfrompoints", "rst_binpoints")
+    Set("rst_gridfrompoints")
   // bucket A: the 7 *_agg aggregators reduce a GROUP of rows to ONE tile via a real
   // df.groupBy(key).agg(...). The 4 tile aggregators build their fixed consistency
   // group from synthesized tiles (write-once-read-both); the 3 geometry aggregators
@@ -470,9 +463,6 @@ object BenchDispatch {
     case "rst_ndwi"       => fpDerived(RST_NDWI.execute(ds, argI(a, "green_idx", 1), argI(a, "nir_idx", 2)))
     case "rst_nbr"        => fpDerived(RST_NBR.execute(ds, argI(a, "nir_idx", 1), argI(a, "swir_idx", 2)))
     case "rst_transform"  => fpDerived(RST_Transform.execute(ds, Map.empty, argI(a, "target_srid", 3857)))
-    // rst_transformcrs: string-CRS warp (int-cast rule). Default target "3857"
-    // mirrors rst_transform's 3857 so the reprojected grid is directly comparable.
-    case "rst_transformcrs" => fpDerived(RST_TransformCrs.execute(ds, Map.empty, argS(a, "target_crs", "3857")))
     case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
     // scalar accessors
     case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
@@ -548,9 +538,6 @@ object BenchDispatch {
     // dataset (identity != input ds). The GTiff round-trip still times correctly
     // when newFormat differs; the no-op case times the cheap identity return.
     case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
-    case "rst_cog_convert" =>
-      fpDerived(RST_CogConvert.execute(ds, Map.empty, argS(a, "compression", "ZSTD"),
-        argI(a, "blocksize", 512), argS(a, "overview_resampling", "AVERAGE")))
     case "rst_resample" =>
       fpDerived(RST_Resample.execute(ds, Map.empty, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear")))
     case "rst_resample_to_size" =>
@@ -590,14 +577,6 @@ object BenchDispatch {
       val res = RST_Clip.execute(ds, Map.empty, JTS.fromWKT(shrunkBoundsBoxWkt(ds)),
         argB(a, "cutline_all_touched", false))
       RasterDriver.releaseDataset(res._1)
-      BenchFingerprint.empty
-    // timing-only: align_to warps a tile onto its OWN grid (same ds as source+reference).
-    // A self-warp is a no-op geometrically but exercises the full gdalwarp path; fingerprint
-    // suppressed (fingerprint=False on both tiers, per Python FnSpec). Release the output ds
-    // since HeavyRunner reuses the input ds across warmup+measured iterations.
-    case "rst_align_to" =>
-      val (resDs, _) = RST_AlignTo.execute(ds, ds, Map.empty)
-      RasterDriver.releaseDataset(resDs)
       BenchFingerprint.empty
     // timing-only: color-relief reads a color table (synthetic) and the GDAL
     // DEMProcessing interpolation diverges from the pyrx np.interp path.
@@ -940,22 +919,6 @@ object BenchDispatch {
       case "rst_gridfrompoints" =>
         RST_GridFromPoints.execute(geom.pointPairs, xmin, ymin, xmax, ymax, w, h, srid,
           argD(a, "power", 2.0), argI(a, "max_pts", 1000000))
-      // ARRAY of 3D points: bin (x,y,z) into a DSM tile by statistic (max/min/mean/median/count).
-      case "rst_binpoints" =>
-        if (geom.zpointWkbs.isEmpty) null
-        else {
-          val xyz = geom.zpointWkbs.map { wkb =>
-            val geomPt = JTS.fromWKB(wkb)
-            val coord = geomPt.getCoordinate
-            (coord.x, coord.y, coord.getZ)
-          }
-          val x = xyz.map(_._1).toArray
-          val y = xyz.map(_._2).toArray
-          val z = xyz.map(_._3).toArray
-          val bytes = RST_BinPoints.execute(x, y, z, xmin, ymin, xmax, ymax, w, h, srid,
-            argS(a, "statistic", RST_BinPoints.DefaultStatistic))
-          if (bytes == null) null else RST_BinPoints.tileRow(bytes)
-        }
       // ARRAY of 3D points: Delaunay DTM over all corpus zpoints; breaklines empty,
       // tolerances 0.0 (no scipy analogue on the light side either).
       case other => throw new IllegalArgumentException(s"unknown bench geometry fn: $other")
@@ -1033,7 +996,6 @@ object BenchDispatch {
       case "rst_ndwi"       => ColumnAdapter(RST_NDWI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "green_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2))))
       case "rst_nbr"        => ColumnAdapter(RST_NBR.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "swir_idx", 2))))
       case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
-      case "rst_transformcrs" => rst_transformcrs(tile, argS(a, "target_crs", "3857"))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
       // scalar accessors
       case "rst_srid"        => rst_srid(tile)
@@ -1085,9 +1047,6 @@ object BenchDispatch {
         val kernelCol = array(convolveKernel.map(row => array(row.map(lit): _*)): _*)
         rst_convolve(tile, kernelCol)
       case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
-      case "rst_cog_convert" =>
-        rst_cog_convert(tile, argS(a, "compression", "ZSTD"),
-          argI(a, "blocksize", 512), argS(a, "overview_resampling", "AVERAGE"))
       case "rst_resample" =>
         rst_resample(tile, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear"))
       case "rst_resample_to_size" =>
@@ -1164,10 +1123,6 @@ object BenchDispatch {
         val dsmTile = element_at(tile, 1)
         val demTile = when(size(tile) > 1, element_at(tile, 2)).otherwise(dsmTile)
         ColumnAdapter(RST_Chm.name, Seq(dsmTile, demTile))
-      // rst_align_to: two-tile fn; bench passes same tile as both source + reference.
-      // Python spec modes=("pure-core",) so spark-path is timing-only; column form
-      // here keeps the match exhaustive (spark-path runner still invokes it when --modes=both).
-      case "rst_align_to"     => rst_align_to(tile, tile)
       // bucket C, group C4: tiling fns -> ARRAY column (spark-path is timing-only,
       // not fingerprint-compared, so the args only need to be valid). maketiles takes
       // an MB budget, matching the sizeInMB BalancedSubdivision the pure-core path uses.
@@ -1205,7 +1160,7 @@ object BenchDispatch {
       // geometry adapter, not the column path). The spark-path runner filters by
       // modes, so column() is never invoked for them; guard explicitly rather than
       // synthesize a meaningless geometry Column.
-      case "rst_gridfrompoints" | "rst_binpoints" =>
+      case "rst_gridfrompoints" =>
         throw new IllegalArgumentException(
           s"$fn is geometry-in / pure-core-only; no spark-path column form")
       // bucket A aggregators have no scalar column form; they are aggregate

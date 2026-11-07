@@ -9,7 +9,7 @@ written by ``gbx:manifest:gen``); the legacy list
 list without a manifest row is caught as stale. Every stable name must also appear as:
 
   * a Scala expression companion  -> ``override def name: String = "gbx_..."``, required
-                                     when the manifest row has an L1 (JVM) level
+                                     when the manifest row's L1 (JVM) level names a companion
   * a Python binding              -> a ``"gbx_..."`` string literal in a
                                      ``python/geobrix/src/.../functions.py``
   * the heavy Python module       -> for an L1 row, a literal in the ``functions.py`` of
@@ -117,6 +117,12 @@ def has_scala_level(row: dict) -> bool:
     return "L1" in row.get("levels", {})
 
 
+def has_scala_companion(row: dict) -> bool:
+    """An L1 block that names a Catalyst companion. An L1 that is only the GDAL spec engine (`engine`, no
+    `companion`) runs through the one generic engine expression, so it has no per-name Scala class."""
+    return "companion" in row.get("levels", {}).get("L1", {})
+
+
 def check_heavy_module_coverage(rows: dict[str, dict], root: Path = PYTHON_ROOT) -> dict[Path, list[str]]:
     """Check that each row with a JVM level (L1) is wrapped in ITS package's heavy module.
 
@@ -160,7 +166,7 @@ def main() -> int:
         "Python (functions.py)": python_names(),
         "function-info.json": function_info_keys(),
     }
-    scala_required = {n for n in sql if n not in rows or has_scala_level(rows[n])}
+    scala_required = {n for n in sql if n not in rows or has_scala_companion(rows[n])}
 
     print(f"Canonical registered functions (manifest, stable): {len(sql)}")
     print(f"  of which with a Scala (L1) level: {len(scala_required)}")

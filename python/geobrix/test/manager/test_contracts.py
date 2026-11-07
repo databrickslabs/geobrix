@@ -408,10 +408,9 @@ def test_l1_engine_needs_the_light_engine_for_its_virtual_tiles(monkeypatch):
     assert levels.select(fn, dedicated).variant != levels.ENGINE
 
 
-def test_l2_is_refused_while_proj_grids_are_registered(tmp_path, monkeypatch):
-    """A Java UDF has no channel for PROJ grid directories: a warp through it would ignore them. The JVM engine
-    keeps L1: every GDALManager.init adds a configuration's grid directories to PROJ's search path, also after
-    an earlier init without them (GDALManagerProjGridsSpec holds that).
+def test_the_l1_engine_keeps_l1_while_proj_grids_are_registered(tmp_path, monkeypatch):
+    """The JVM engine reads registered PROJ grids: every GDALManager.init adds a configuration's grid directories to
+    PROJ's search path, also after an earlier init without them (GDALManagerProjGridsSpec holds that).
     """
     from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.engine import run
@@ -420,26 +419,7 @@ def test_l2_is_refused_while_proj_grids_are_registered(tmp_path, monkeypatch):
         run, "unavailable_reason", lambda: None
     )  # the L1 engine's virtual-tile side runs here
     fn = MAN.functions["gbx_rst_transformcrs"]
-    # L2 for a raster function exists on classic only (standard has no Java handler for it): judge the rule there
-    classic = _caps(jar=OK_JAR, jar_reason="")
-    assert levels.available(fn, "L2", classic) is None
     saved = proj_grids.get_registered_dirs()
-    proj_grids.set_registered_dirs(str(tmp_path), replace=True)
-    try:
-        why = levels.available(fn, "L2", classic)
-    finally:
-        proj_grids.set_registered_dirs(saved, replace=True)
-    assert why and "PROJ grids" in why
-    # The table's order for transformcrs is L3 only; ask for L2 first, as a forced level would: with grids
-    # registered it is refused and the selection falls back to L3, with the grids in the reason.
-    proj_grids.set_registered_dirs(str(tmp_path), replace=True)
-    try:
-        refused = levels.select(fn, classic, prefer="L2")
-    finally:
-        proj_grids.set_registered_dirs(saved, replace=True)
-    assert refused.level == "L3"
-    assert any("PROJ grids" in r for r in refused.reasons), refused.reasons
-    # The JVM engine reads them: with grids registered, L1 (asked for first) still runs the engine.
     dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
     assert levels.select(fn, dedicated, prefer="L1").variant == levels.ENGINE
     proj_grids.set_registered_dirs(str(tmp_path), replace=True)
@@ -1560,8 +1540,7 @@ def test_l2_with_arg_types_needs_sql_functions_and_falls_back_without_them():
     "fn, connect",
     [
         (BNG, True),  # an `arg_types` row (standard access mode)
-        (next(f for f in FNS if "bytes_param" in f.levels.get("L2", {})), False),
-    ],  # a `bytes_param` row has no Java handler for standard access mode: classic
+    ],
     ids=lambda p: p.sql_name if hasattr(p, "sql_name") else str(p),
 )
 def test_forced_l2_without_sql_functions_refuses_before_touching_the_session(
@@ -1847,7 +1826,7 @@ def test_collision_gate_fires_on_a_private_name_equal_to_a_public_one_and_a_dupl
 
 def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkeypatch):
     gates = _gates()
-    fn = MAN.functions["gbx_rst_transformcrs"]
+    fn = MAN.functions["gbx_rst_getsubdataset"]
     renamed = dataclasses.replace(
         fn, params=(fn.params[0], dataclasses.replace(fn.params[1], name="to_crs"))
     )
@@ -1864,13 +1843,13 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
     monkeypatch.setattr(
         gates,
         "_scala_wrappers",
-        lambda: {"rst_transformcrs": {own: [["a", "b", "c", "d"]]}},
+        lambda: {"rst_getsubdataset": {own: [["a", "b", "c", "d"]]}},
     )
     assert any(
         "Scala wrapper arities [4] above" in f for f in gates.name_findings([fn])
     )
     bare = _row(
-        "gbx_rst_transformcrs",
+        "gbx_rst_getsubdataset",
         levels={k: v for k, v in fn.levels.items() if k != "L1"},
         gdal=None,
     )
@@ -1881,7 +1860,7 @@ def test_param_name_gate_covers_usage_arity_orphan_wrapper_and_snake_case(monkey
         gates,
         "_scala_wrappers",
         lambda: {
-            "rst_transformcrs": {"src/other/functions.scala": [["a", "b", "c", "d"]]}
+            "rst_getsubdataset": {"src/other/functions.scala": [["a", "b", "c", "d"]]}
         },
     )
     assert not any("Scala wrapper" in f for f in gates.name_findings([bare]))

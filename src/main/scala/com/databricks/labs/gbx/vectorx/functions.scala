@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx
 
-import com.databricks.labs.gbx.vectorx.expressions.{ST_AsMvt, ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
+import com.databricks.labs.gbx.vectorx.expressions.{ST_Crs, ST_InterpolateElevationBBox, ST_InterpolateElevationGeom, ST_SetCrs, ST_TransformCrs, ST_Triangulate}
 import com.databricks.labs.gbx.vectorx.jts.legacy.expressions.ST_LegacyAsWKB
 import com.databricks.labs.gbx.vectorx.mvt.MvtWriter
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -13,26 +13,12 @@ import org.apache.spark.sql.Column
   * Registration belongs to the Python manager (`databricks.labs.gbx.register(spark)`); this object registers nothing.
   * (The JAR registers no data source: the readers and writers are the lightweight `*_gbx` Python data sources.)
   *
-  * This package exposes the `gbx_st_asmvt` MVT aggregator (see [[ST_AsMvt]]), the `gbx_st_triangulate`
+  * This package exposes the `gbx_st_triangulate`
   * constrained-Delaunay TIN generator (see [[ST_Triangulate]]), and the
   * `gbx_st_interpolateelevationbbox`/`gbx_st_interpolateelevationgeom` elevation
   * generators (see [[ST_InterpolateElevationBBox]], [[ST_InterpolateElevationGeom]]).
   */
 object functions extends Serializable {
-
-    /**
-      * Aggregator: encode a group of features into a Mapbox Vector Tile (MVT) protobuf blob.
-      *
-      * @param geom      per-row geometry in WKB (BINARY) in tile-local coordinates
-      * @param attrs     per-row attribute struct (all fields stringified in v0.4.0)
-      * @param layerName constant Column holding the MVT layer name
-      */
-    def st_asmvt(geom: Column, attrs: Column, layerName: Column): Column =
-        ColumnAdapter(ST_AsMvt.name, Seq(geom, attrs, layerName))
-
-    /** Convenience overload - pass a plain string as the layer name. */
-    def st_asmvt(geom: Column, attrs: Column, layerName: String): Column =
-        st_asmvt(geom, attrs, lit(layerName))
 
     /** TIN generator: one constrained Delaunay triangle (`triangle`, 2D WKB) per row. `mode` defaults to `constrained`. */
     def st_triangulate(

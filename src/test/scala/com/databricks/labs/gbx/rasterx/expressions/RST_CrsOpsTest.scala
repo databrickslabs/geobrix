@@ -4,7 +4,7 @@ import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Crs
 import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_SRID
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
+import com.databricks.labs.gbx.rasterx.operations.{RasterProject, SpatialRefOps}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.osr.SpatialReference
 import org.scalatest.BeforeAndAfterAll
@@ -12,7 +12,7 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 /**
-  * Direct-execute tests for the CRS-string ops (RST_Crs / RST_SetCrs / RST_TransformCrs)
+  * Direct-execute tests for the CRS-string ops (RST_Crs / RST_SetCrs, and the RasterProject warp behind the CRS-string reprojection)
   * plus the SpatialRefOps.resolveCrs / crsToCanonical helpers. The MODIS fixture is a
   * NON-EPSG raster (World Sinusoidal — the case that surfaced the need for CRS strings),
   * so it exercises the authority-else-WKT + non-EPSG warp paths that rst_srid (int/0)
@@ -154,10 +154,10 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally out.delete()
     }
 
-    // --- RST_TransformCrs warp (accepts non-EPSG; RasterProject WKT fallback) ---
+    // --- RasterProject warp to a CRS string (accepts non-EPSG; WKT fallback) ---
 
-    test("RST_TransformCrs to EPSG:4326 reprojects (band count preserved, srid changes)") {
-        val (out, _) = RST_TransformCrs.execute(ds, Map.empty, "EPSG:4326")
+    test("RasterProject to EPSG:4326 reprojects (band count preserved, srid changes)") {
+        val (out, _) = RasterProject.project(ds, Map.empty, SpatialRefOps.resolveCrs("EPSG:4326"))
         try {
             out should not be null
             out.GetRasterCount shouldBe ds.GetRasterCount
@@ -165,11 +165,11 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally out.delete()
     }
 
-    test("RST_TransformCrs to a non-EPSG (ESRI) target warps via the WKT fallback") {
+    test("RasterProject to a non-EPSG (ESRI) target warps via the WKT fallback") {
         // ESRI:54009 (World Mollweide) has no EPSG code -> RasterProject's WKT fallback
         // must kick in (authName:authCode would be broken). A bare int-EPSG path would
         // have thrown; this must produce a valid reprojected raster.
-        val (out, _) = RST_TransformCrs.execute(ds, Map.empty, "ESRI:54009")
+        val (out, _) = RasterProject.project(ds, Map.empty, SpatialRefOps.resolveCrs("ESRI:54009"))
         try {
             out should not be null
             out.GetRasterCount shouldBe ds.GetRasterCount
@@ -202,7 +202,7 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("VectorRasterBridge.buildEmptyRaster stamps an ESRI srid as ESRI (resolveCrs)") {
-        import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
+        import com.databricks.labs.gbx.rasterx.operations.{RasterProject, SpatialRefOps}
         import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
         // 54008 is an ESRI code — ImportFromEPSG auto-recovers it, and the bridge now
         // routes through resolveCrs, so the output raster carries ESRI:54008.

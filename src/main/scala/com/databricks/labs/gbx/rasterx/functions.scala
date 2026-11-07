@@ -262,8 +262,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_combinesum(tiles: Column): Column = ColumnAdapter(RST_CombineSum.name, Seq(tiles))
     def rst_combinestddev(tiles: Column): Column = ColumnAdapter(RST_CombineStddev.name, Seq(tiles))
     def rst_combinecount(tiles: Column): Column = ColumnAdapter(RST_CombineCount.name, Seq(tiles))
-    def rst_align_to(tile: Column, referenceTile: Column): Column =
-        ColumnAdapter(RST_AlignTo.name, Seq(tile, referenceTile))
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
     def rst_derivedband(tile: Column, pythonFunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
@@ -280,8 +278,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordY.name, Seq(tile, x, y))
     def rst_transform(tile: Column, srid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, srid))
-    def rst_transformcrs(tile: Column, targetCrs: Column): Column = ColumnAdapter(RST_TransformCrs.name, Seq(tile, targetCrs))
-    def rst_transformcrs(tile: Column, targetCrs: String): Column = rst_transformcrs(tile, lit(targetCrs))
     def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
     def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
     def rst_worldtorastercoord(tile: Column, x: Column, y: Column): Column =
@@ -472,21 +468,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             pointsArray, valuesArray, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
         ))
 
-    // Bin parallel x/y/z arrays into a Float32 raster — non-aggregator form
-    def rst_binpoints(
-        xArray: Column, yArray: Column, zArray: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column
-    ): Column =
-        ColumnAdapter(RST_BinPoints.name, Seq(xArray, yArray, zArray, xmin, ymin, xmax, ymax, widthPx, heightPx, srid))
-    def rst_binpoints(
-        xArray: Column, yArray: Column, zArray: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, srid: Column,
-        statistic: Column
-    ): Column =
-        ColumnAdapter(RST_BinPoints.name, Seq(xArray, yArray, zArray, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, statistic))
-
     // Bin one (x,y,z) point per row — aggregator form
     def rst_binpoints_agg(
         x: Column, y: Column, z: Column,
@@ -546,24 +527,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_band(tile: Column, bandIndex: Int): Column =
         rst_band(tile, lit(bandIndex))
 
-    // Analysis (COG / proximity / contour / viewshed) — Column form + scalar overloads
-    def rst_cog_convert(tile: Column): Column =
-        ColumnAdapter(RST_CogConvert.name, Seq(tile, lit(RST_CogConvert.CogDefaultCompression), lit(512), lit("AVERAGE")))
-    def rst_cog_convert(tile: Column, compression: Column): Column =
-        ColumnAdapter(RST_CogConvert.name, Seq(tile, compression, lit(512), lit("AVERAGE")))
-    def rst_cog_convert(tile: Column, compression: Column, blocksize: Column): Column =
-        ColumnAdapter(RST_CogConvert.name, Seq(tile, compression, blocksize, lit("AVERAGE")))
-    def rst_cog_convert(
-        tile: Column, compression: Column, blocksize: Column, overviewResampling: Column
-    ): Column = ColumnAdapter(RST_CogConvert.name, Seq(tile, compression, blocksize, overviewResampling))
-    def rst_cog_convert(tile: Column, compression: String): Column =
-        rst_cog_convert(tile, lit(compression))
-    def rst_cog_convert(tile: Column, compression: String, blocksize: Int): Column =
-        rst_cog_convert(tile, lit(compression), lit(blocksize))
-    def rst_cog_convert(
-        tile: Column, compression: String, blocksize: Int, overviewResampling: String
-    ): Column = rst_cog_convert(tile, lit(compression), lit(blocksize), lit(overviewResampling))
-
+    // Analysis (proximity / contour / viewshed) — Column form + scalar overloads
     // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
     // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
     // runs (this silently broke rst_proximity(tile)). eval maps NaN -> None. target_values stays a

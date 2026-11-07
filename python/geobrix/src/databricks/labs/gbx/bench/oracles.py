@@ -128,10 +128,6 @@ def uc_view(
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
 # The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
 # pass must be dropped from here.
-_L2_NO_REASON = (
-    "the raster Java UDF returns NULL bytes for a refused tile, so its error tile carries no reason; "
-    "raster functions lose this level"
-)
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
@@ -213,20 +209,12 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     "summary": {"L1": _SUMMARY_L1},
     "summary_float32_precision": {"L1": _SUMMARY_L1},
     "filter_fractional_size": {"L1": _FRACTIONAL_L1},
-    "bytes_class_refused_driver": {"L2": _L2_NO_REASON},
-    "bytes_class_vrt_refused": {"L2": _L2_NO_REASON},
-    "decoded_over_cap_error_tile": {
-        "L2": "a Java UDF has no session configuration, so it reads at the default read cap"
-    },
 }
 
 # The aggregates of the Task 18 batch whose JVM companion differs from the contract, and is not selected for it.
 # A NULL cell id next to ids past 2**53 reaches the lightweight aggregate as float64, which rounds the ids to other cells,
 # so it refuses; the JVM reads exact longs and answers, rightly.
 _EXACT_IDS_L1 = "the JVM aggregate reads exact long ids, so a NULL cell id beside ids past 2**53 is no hazard there: it answers where the lightweight level refuses"
-# The JVM st_asmvt writes no layer for a group with no feature; the contract is the lightweight encoder's (an empty
-# layer). It is not the default level and the sweep may delete it.
-_ASMVT_L1 = "the JVM st_asmvt writes no layer for a group with no feature"
 HEAVY_PENDING.update(
     {
         **{
@@ -240,7 +228,6 @@ HEAVY_PENDING.update(
             )
         },
         "ca_agg_virtual": {"L1": _L1_NO_VIRTUAL},
-        "asmvt_no_feature": {"L1": _ASMVT_L1},
     }
 )
 

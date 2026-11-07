@@ -1273,31 +1273,23 @@ def run_mvt_agg(
     DataFrame, then times a ``groupBy("z","x","y").agg(st_asmvt(...))`` job to
     completion. Returns a single ResultRow (mode="spark-path", category="mvt").
 
-    ``api`` controls which tier is registered and timed:
-        "lightweight"  → ``databricks.labs.gbx.pyvx.functions``
-        "heavyweight"  → ``databricks.labs.gbx.vectorx.functions``
+    ``api`` must be "lightweight" (``databricks.labs.gbx.pyvx.functions``): ``st_asmvt`` has no heavyweight
+    implementation, so any other value raises.
     """
     from databricks.labs.gbx import manager as gbx_manager
 
+    if api != "lightweight":
+        raise ValueError(
+            f"st_asmvt has no heavyweight implementation (api={api!r}); time api='lightweight'."
+        )
     env = capture_env(where)
 
     # Register the tier.
     try:
-        if api == "lightweight":
-            from databricks.labs.gbx.pyvx import functions as vx
+        from databricks.labs.gbx.pyvx import functions as vx
 
-            gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
-            asmvt_fn = vx._light_st_asmvt
-        else:
-            from databricks.labs.gbx.vectorx import functions as hx
-
-            gbx_manager.register_family(
-                spark,
-                ("gbx_st_",),
-                only=gbx_manager.names_at_level(("gbx_st_",), "L1"),
-                level="L1",
-            )
-            asmvt_fn = hx.st_asmvt
+        gbx_manager.register_family(spark, ("gbx_st_",), level="L3")
+        asmvt_fn = vx._light_st_asmvt
     except Exception as e:  # noqa: BLE001
         return ResultRow(
             run_id=run_id,

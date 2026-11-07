@@ -49,7 +49,7 @@ Every function runs on every compute through its Python level. GeoBrix picks the
 
 | Function | Levels | Notes |
 |---|---|---|
-| `st_asmvt` | Python, JVM | Python level by default |
+| `st_asmvt` | Python | |
 | `st_asmvt_pyramid` | Python | |
 | `st_triangulate` | Python, JVM | JVM level by default on a dedicated cluster; `conforming` mode runs on the JVM level only |
 | `st_interpolateelevationbbox` | Python, JVM | JVM level by default on a dedicated cluster; `conforming` mode runs on the JVM level only |
@@ -184,7 +184,7 @@ register(spark)
 
 ### Compute compatibility
 
-The Python level of both functions runs on every compute: Serverless, standard, dedicated (x86 and Graviton) and Lakeflow declarative pipelines. It needs only the env wheel ([install](../installation#whl-only)), with no JVM access. `st_asmvt` also has a JVM level that needs the JAR on a dedicated cluster ([install paths](../installation#choose-an-install-path)). GeoBrix uses the Python level by default.
+The Python level of both functions runs on every compute: Serverless, standard, dedicated (x86 and Graviton) and Lakeflow declarative pipelines. It needs only the env wheel ([install](../installation#whl-only)), with no JVM access.
 
 ### Native attribute typing
 
@@ -202,7 +202,7 @@ This means downstream clients (MapLibre GL JS, Mapbox GL JS, deck.gl) receive nu
 ### st_asmvt
 
 {/* BEGIN GENERATED gbx_st_asmvt: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session python scala />
+<Surfaces session python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -240,7 +240,6 @@ multiple `(z, x, y)` tiles into a single PMTiles file.
   name="st_asmvt"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   python={vectorxLightCode}     pythonSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 

@@ -3,18 +3,14 @@ package com.databricks.labs.gbx.rasterx.operator
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
-import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_CogConvert, RST_Proximity, RST_Viewshed}
+import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_Proximity, RST_Viewshed}
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
-import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.{Convolve, RasterTessellate, WindowedExtract}
 import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.sql.Row
-import org.apache.spark.sql.catalyst.expressions.Literal
-import org.apache.spark.sql.functions.col
-import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
@@ -26,8 +22,7 @@ import java.util.UUID
 /**
   * Derived heavy tiles (retile / tessellate / warp / translate / VRT / convolve / proximity / viewshed /
   * band / DEM) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
-  * the Databricks image preview) when the caller passes no `compression` option; `rst_cog_convert` alone
-  * keeps its own documented ZSTD default. The default is decided in two places that have to agree: the
+  * the Databricks image preview) when the caller passes no `compression` option. The default is decided in two places that have to agree: the
   * metadata each operation stamps on its tile (which `RasterDriver.writeToBytes` feeds straight back
   * into `OperatorOptions.appendOptions`) and the `appendOptions` fallback itself. Each test therefore
   * asserts BOTH the stamped `compression` metadata and the codec GDAL actually recorded in the
@@ -251,18 +246,6 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             try assertCodec(lzw, lzwMeta, "LZW")
             finally RasterDriver.releaseDataset(lzw)
         }
-    }
-
-    test("rst_cog_convert keeps its documented ZSTD default (wrapper and SQL builder)") {
-        // functions.rst_cog_convert(tile: Column): Column -- builds gbx_rst_cog_convert(tile, <default>, 512, 'AVERAGE')
-        val rendered = functions.rst_cog_convert(col("tile")).toString
-        assert(rendered.contains("gbx_rst_cog_convert"), rendered)
-        assert(rendered.contains("'ZSTD'"), rendered)
-        assert(!rendered.contains("DEFLATE"), rendered)
-
-        // RST_CogConvert.builder(): FunctionBuilder -- the one-argument SQL form injects the default compression.
-        val built = RST_CogConvert.builder()(Seq(Literal.create("", StringType))).asInstanceOf[RST_CogConvert]
-        assert(built.compressionExpr.eval(null).toString == "ZSTD")
     }
 
     test("one shared constant decides the default codec for appendOptions and the stamped metadata") {

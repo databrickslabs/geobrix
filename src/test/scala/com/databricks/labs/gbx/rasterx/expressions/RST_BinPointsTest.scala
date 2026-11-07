@@ -12,7 +12,7 @@ import java.nio.file.Files
 import java.util.UUID
 
 /**
-  * Direct-execute unit tests for [[RST_BinPoints]].
+  * Direct-execute unit tests for the bin-and-reduce kernel [[RST_BinPoints]] (behind `gbx_rst_binpoints_agg`).
   *
   * All tests call `RST_BinPoints.execute(...)` directly with `Array[Double]` inputs —
   * no Spark session or JAR required. GDAL is initialised once in [[beforeAll]].

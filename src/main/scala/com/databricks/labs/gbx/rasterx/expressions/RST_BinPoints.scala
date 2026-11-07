@@ -1,14 +1,8 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Expression, If, IsNull, Literal, Or}
-import org.apache.spark.sql.catalyst.util.ArrayData
-import org.apache.spark.sql.types._
-import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.SpatialReference
@@ -16,14 +10,14 @@ import org.gdal.osr.SpatialReference
 import scala.collection.mutable
 
 /**
-  * Bin parallel x/y/z ARRAY&lt;DOUBLE&gt; columns into a single-band Float32 raster tile,
-  * reducing z values per pixel cell by a statistic.
+  * The bin-and-reduce kernel behind `gbx_rst_binpoints_agg` ([[RST_BinPointsAgg]]): bin parallel x/y/z points into a
+  * single-band Float32 raster tile, reducing the z values of each pixel cell by a statistic.
   *
-  * This is the non-aggregator (scalar) form — all three arrays live in a single row.
-  * For the grouped-agg form (one point per row) use [[RST_BinPointsAgg]].
+  * The scalar `gbx_rst_binpoints` has no heavyweight expression: it runs on the lightweight level, which measured
+  * faster. This object holds only the shared compute path.
   *
-  * Output: single-band Float32 GTiff tile of shape `width_px × height_px` covering
-  * `(xmin, ymin) → (xmax, ymax)` in the given SRID (EPSG code).
+  * Output: single-band Float32 GTiff tile of shape `width_px x height_px` covering
+  * `(xmin, ymin) -> (xmax, ymax)` in the given SRID (EPSG code).
   * NoData = -9999.0. Empty cells (no points fall inside them) are filled with NoData.
   *
   * Cell assignment uses a strict half-open interval: a point at exactly `xmax` (or
@@ -31,154 +25,12 @@ import scala.collection.mutable
   * than clamped into the last cell. This prevents cross-tile double-counting when
   * data are tiled on shared boundaries.
   *
-  * @param statisticExpr one of: `"max"` (default), `"min"`, `"mean"`, `"median"`,
-  *                      `"count"`, or `"percentile:&lt;p&gt;"` (e.g. `"percentile:90"`).
+  * The statistic is one of: `"max"` (default), `"min"`, `"mean"`, `"median"`, `"count"`, or `"percentile:<p>"`
+  * (e.g. `"percentile:90"`).
   */
-case class RST_BinPoints(
-    xArrayExpr: Expression,
-    yArrayExpr: Expression,
-    zArrayExpr: Expression,
-    xminExpr: Expression,
-    yminExpr: Expression,
-    xmaxExpr: Expression,
-    ymaxExpr: Expression,
-    widthPxExpr: Expression,
-    heightPxExpr: Expression,
-    sridExpr: Expression,
-    statisticExpr: Expression
-) extends InvokedExpression {
-
-    override def children: Seq[Expression] = Seq(
-        xArrayExpr, yArrayExpr, zArrayExpr,
-        xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr,
-        statisticExpr,
-        ExpressionConfigExpr()
-    )
-
-    // Pin all inputs to canonical types so Catalyst coerces SQL literals.
-    // ARRAY<DECIMAL> → ARRAY<DOUBLE>; INT/DECIMAL scalars → DOUBLE/INT.
-    // Without this, inline SQL DECIMAL arrays + integer scalars return null silently
-    // (same bug we already hit on gbx_rst_isoband). MANDATORY.
-    override def inputTypes: Seq[DataType] = Seq(
-        ArrayType(DoubleType), ArrayType(DoubleType), ArrayType(DoubleType),
-        DoubleType, DoubleType, DoubleType, DoubleType,
-        IntegerType, IntegerType, IntegerType,
-        StringType,
-        StringType  // ExpressionConfigExpr
-    )
-
-    override def dataType: DataType   = RST_ExpressionUtil.tileDataType(BinaryType)
-    override def nullable: Boolean    = true
-    override def prettyName: String   = RST_BinPoints.name
-    // a NULL statistic means unset (max): it must reach eval, which guards the arrays. A NULL required scalar (extent,
-    // size, srid) is NULL: propagateNull = false would hand a primitive parameter 0 instead, so it is tested here.
-    override def replacement: Expression = {
-        val required = Seq(xminExpr, yminExpr, xmaxExpr, ymaxExpr, widthPxExpr, heightPxExpr, sridExpr)
-        If(required.map(IsNull(_): Expression).reduce(Or(_, _)), Literal.create(null, dataType),
-           invoke(RST_BinPoints, propagateNull = false))
-    }
-
-    override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10))
-
-}
-
-/** Companion: SQL name, eval entry points, pure compute path, builder. */
-object RST_BinPoints extends WithExpressionInfo {
+object RST_BinPoints {
 
     val DefaultStatistic: String = "max"
-
-    // -------------------------------------------------------------------------
-    // Catalyst / PySpark eval entry points
-    // -------------------------------------------------------------------------
-
-    /** Int-args entry point — used by Catalyst for non-PySpark (SQL) callers. */
-    def eval(
-        xData: ArrayData, yData: ArrayData, zData: ArrayData,
-        xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
-        statistic: UTF8String,
-        conf: UTF8String
-    ): InternalRow = doInvoke(
-        xData, yData, zData, xmin, ymin, xmax, ymax,
-        widthPx, heightPx, srid, statistic, conf
-    )
-
-    /** Long-args entry point — used by PySpark (Python ints arrive as Long). */
-    def eval(
-        xData: ArrayData, yData: ArrayData, zData: ArrayData,
-        xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Long, heightPx: Long, srid: Long,
-        statistic: UTF8String,
-        conf: UTF8String
-    ): InternalRow = doInvoke(
-        xData, yData, zData, xmin, ymin, xmax, ymax,
-        widthPx.toInt, heightPx.toInt, srid.toInt, statistic, conf
-    )
-
-    /** The statistic words: `max`, `min`, `mean`, `median`, `count` and `percentile:<p>`, in any case. */
-    private def requireStatistic(statistic: String): Unit = {
-        val s = statistic.toLowerCase
-        val ok = Set("max", "min", "mean", "median", "count").contains(s) ||
-            (s.startsWith("percentile:") && scala.util.Try(s.substring("percentile:".length).toDouble).isSuccess)
-        if (!ok) {
-            throw new IllegalArgumentException(
-                s"gbx_rst_binpoints: unknown statistic '$statistic'; " +
-                "expected one of: max, min, mean, median, count, percentile:<p>")
-        }
-    }
-
-    /** The arguments that need no raster, checked before `safeEval` so that a wrong one fails the call, naming it. */
-    private def requireArguments(
-        xLen: Int, yLen: Int, zLen: Int,
-        xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, statistic: String
-    ): Unit = {
-        if (widthPx <= 0 || heightPx <= 0) {
-            throw new IllegalArgumentException(
-                s"gbx_rst_binpoints: width_px and height_px must be above 0 (got $widthPx x $heightPx)")
-        }
-        if (!(xmax > xmin) || !(ymax > ymin)) {
-            throw new IllegalArgumentException(
-                s"gbx_rst_binpoints: the extent must have xmax above xmin and ymax above ymin (got x $xmin..$xmax, y $ymin..$ymax)")
-        }
-        if (xLen != yLen || xLen != zLen) {
-            throw new IllegalArgumentException(
-                s"gbx_rst_binpoints: x_array, y_array and z_array must have the same length (got $xLen, $yLen, $zLen)")
-        }
-        requireStatistic(statistic)
-    }
-
-    private def doInvoke(
-        xData: ArrayData, yData: ArrayData, zData: ArrayData,
-        xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
-        statistic: UTF8String,
-        conf: UTF8String
-    ): InternalRow =
-        // A NULL or empty array is NULL, quietly (bypassing safeEval: no NonLocalReturnControl, no spurious WARN).
-        if (xData == null || yData == null || zData == null || xData.numElements() == 0) null
-        else {
-            val stat = if (statistic == null) DefaultStatistic else statistic.toString
-            requireArguments(xData.numElements(), yData.numElements(), zData.numElements(),
-                xmin, ymin, xmax, ymax, widthPx, heightPx, stat)
-            Option(
-                RST_ErrorHandler.safeEval(
-                    () => {
-                        val exprConf = ExpressionConfig.fromB64(conf.toString)
-                        RST_ExpressionUtil.init(exprConf)
-                        val bytes = execute(xData.toDoubleArray(), yData.toDoubleArray(), zData.toDoubleArray(),
-                            xmin, ymin, xmax, ymax, widthPx, heightPx, srid, stat)
-                        // bytes is null only when x.isEmpty, already guarded above; return tileRow.
-                        if (bytes == null) null else tileRow(bytes)
-                    },
-                    null,
-                    BinaryType,
-                    conf
-                )
-            ).map(_.asInstanceOf[InternalRow]).orNull
-        }
 
     // -------------------------------------------------------------------------
     // Pure compute path — Spark-free, direct-execute-friendly
@@ -402,24 +254,4 @@ object RST_BinPoints extends WithExpressionInfo {
         V2Tile.row(cellid = 0L, raster = bytes, metadata = SerializationUtil.toMapData[String, String](mtd))
     }
 
-    // -------------------------------------------------------------------------
-    // Registration
-    // -------------------------------------------------------------------------
-
-    override def name: String = "gbx_rst_binpoints"
-
-    override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 10 => RST_BinPoints(
-            c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9),
-            Literal(DefaultStatistic)
-        )
-        case 11 => RST_BinPoints(
-            c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10)
-        )
-        case n  => throw new IllegalArgumentException(
-            s"gbx_rst_binpoints takes 10 or 11 arguments " +
-            "(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]); " +
-            s"got $n"
-        )
-    }
 }

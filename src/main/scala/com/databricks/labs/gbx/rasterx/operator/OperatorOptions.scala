@@ -12,8 +12,8 @@ object OperatorOptions {
       * metadata a derived tile carries can never disagree with the codec GDAL actually writes.
       *
       * DEFLATE (with the dtype-matched predictor) is baseline TIFF: Java ImageIO and the Databricks image
-      * preview can decode it, which ZSTD output is not. `rst_cog_convert` keeps its own documented ZSTD
-      * default ([[com.databricks.labs.gbx.rasterx.expressions.analysis.RST_CogConvert.CogDefaultCompression]]).
+      * preview can decode it, which ZSTD output is not. `rst_cog_convert` (lightweight level) keeps its own
+      * documented ZSTD default.
       */
     val DefaultCompression: String = "DEFLATE"
 

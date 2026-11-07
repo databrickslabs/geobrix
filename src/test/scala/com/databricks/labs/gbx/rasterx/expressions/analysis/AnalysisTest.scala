@@ -91,39 +91,6 @@ class AnalysisTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ------------------------------------------------------------------
-    // RST_CogConvert
-    // ------------------------------------------------------------------
-
-    test("RST_CogConvert produces a COG-layout GTiff with ZSTD+predictor (header LAYOUT=COG, tile width matches blocksize)") {
-        // 256x256 raster — large enough that COG actually tiles internally.
-        val src = buildRaster(256, 256, (c, r) => (c + r).toDouble)
-        try {
-            // Now defaults to ZSTD+predictor via OperatorOptions (compression param still works for backwards compat).
-            val (out, mtd) = track(RST_CogConvert.execute(src, Map.empty, "ZSTD", 128, "AVERAGE"))
-            out should not be null
-            // Driver metadata reports GTiff (COG is a GTiff variant on disk).
-            mtd("driver") shouldBe "GTiff"
-            mtd("layout") shouldBe "COG"
-            // GDAL stores COG layout markers in Image Structure Metadata.
-            val imgMeta = out.GetMetadata_Dict("IMAGE_STRUCTURE")
-            // GDAL 3.6+: COG sets LAYOUT=COG on the output dataset's metadata.
-            // (Defensive: accept either the dict marker or the band-tile size matching blocksize.)
-            val band = out.GetRasterBand(1)
-            val blockW = new Array[Int](1)
-            val blockH = new Array[Int](1)
-            band.GetBlockSize(blockW, blockH)
-            val cogTiledOk = blockW(0) == 128 && blockH(0) == 128
-            val cogMarkerOk = imgMeta != null && (
-                Option(imgMeta.get("LAYOUT")).map(_.toString.toUpperCase).contains("COG") ||
-                Option(imgMeta.get("layout")).map(_.toString.toUpperCase).contains("COG")
-            )
-            (cogTiledOk || cogMarkerOk) shouldBe true
-        } finally {
-            src.delete()
-        }
-    }
-
-    // ------------------------------------------------------------------
     // RST_Proximity
     // ------------------------------------------------------------------
 

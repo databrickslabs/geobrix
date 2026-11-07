@@ -2148,7 +2148,7 @@ Four functions for building raster products from LiDAR point clouds. Available o
 ### rst_binpoints
 
 {/* BEGIN GENERATED gbx_rst_binpoints: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2188,7 +2188,6 @@ points into other surfaces.
   name="rst_binpoints"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -4064,7 +4063,7 @@ Transform and analyze rasters (20 total).
 ### rst_align_to
 
 {/* BEGIN GENERATED gbx_rst_align_to: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -4088,7 +4087,6 @@ Warp a tile to match the grid of a reference tile exactly — same CRS, extent, 
   name="rst_align_to"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -5011,7 +5009,7 @@ Reproject to a target SRID: a positive EPSG or ESRI code. A code that names no C
 ### rst_transformcrs
 
 {/* BEGIN GENERATED gbx_rst_transformcrs: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -5026,7 +5024,7 @@ Reproject to a target SRID: a positive EPSG or ESRI code. A code that names no C
 {/* END GENERATED gbx_rst_transformcrs */}
 
 :::note Implementation
-Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GDAL build bundled with rasterio, whose projection database and driver set may be narrower than the JVM level.
+Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GDAL build bundled with rasterio.
 :::
 
 Reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems).
@@ -5037,7 +5035,6 @@ Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts an
   name="rst_transformcrs"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
@@ -6223,7 +6220,7 @@ Higher-level analytical transforms wrapping single GDAL primitives — COG layou
 ### rst_cog_convert
 
 {/* BEGIN GENERATED gbx_rst_cog_convert: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -6247,7 +6244,7 @@ Re-encodes the tile as a Cloud Optimized GeoTIFF (it passes GDAL's COG validator
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. Every level use a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec at either level (`ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP`) and `AUTO`, its default. `AUTO` is a size-adaptive ZSTD level with the dtype predictor on the Python level and ZSTD on the JVM level. `blocksize` is the internal tile size in pixels (square), any multiple of 16 down to 16, at every level. `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
+Re-layout a raster tile as a Cloud Optimized GeoTIFF via `gdal.Translate -of COG`. It uses a **ZSTD + dtype-predictor** baseline. `compression` accepts an explicit codec (`ZSTD`, `DEFLATE`, `LZW`, `NONE`, `LERC`, `JPEG`, `WEBP`) and `AUTO`, its default. `AUTO` is a size-adaptive ZSTD level with the dtype predictor. `blocksize` is the internal tile size in pixels (square), any multiple of 16 down to 16. `overviewResampling` is the algorithm for the auto-generated overview pyramid. Output is a GTiff-on-disk variant suitable for HTTP range serving. See [Materialized Compression](./materialized-compression) for the codec/level details and when to override.
 
 On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it to `/tmp` while GDAL builds the layout. A virtual tile is refused with a Fix, a tile that cannot be read gives NULL, and an error tile comes out as itself. A result of more than 64 MiB plus a third is refused with a Fix that names the session function.
 
@@ -6255,7 +6252,6 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
   name="rst_cog_convert"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTileopsLightCode}  pythonSource="docs/tests/python/api/rasterx_tileops_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 

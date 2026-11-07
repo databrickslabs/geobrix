@@ -432,7 +432,7 @@ PMTILES_ONLY = {pmtiles_only!r}
 # --vector-only: ONLY run the vector reader benchmark, skip all fn benchmarks.
 BENCHMARK_VECTOR = {benchmark_vector!r}
 VECTOR_ONLY = {vector_only!r}
-# --benchmark-mvt: also run the st_asmvt benchmark (light pyvx vs heavy vectorx).
+# --benchmark-mvt: also run the st_asmvt benchmark (light pyvx; there is no heavy level).
 # --mvt-only: ONLY run the MVT benchmark, skip all fn benchmarks.
 BENCHMARK_MVT = {benchmark_mvt!r}
 MVT_ONLY = {mvt_only!r}
@@ -1440,12 +1440,10 @@ if _pmtiles_rows:
     _show_md(f"pmtiles benchmark -- {RUN_ID}", _md)
 """
 
-_CELL_MVT = """# MVT benchmark: light pyvx st_asmvt vs heavy vectorx st_asmvt (+ decoded-feature parity)
+_CELL_MVT = """# MVT benchmark: light pyvx st_asmvt (it has no heavyweight level)
 from databricks.labs.gbx.bench import readers as _rd
-import mapbox_vector_tile as _mvt_lib
 _mvt_rows = []
 _mvt_light_blobs = None  # {(z,x,y): bytes} decoded from light run
-_mvt_heavy_blobs = None  # {(z,x,y): bytes} decoded from heavy run
 _N_FEATURES = 500
 _N_TILES = 10
 if LIGHTWEIGHT:
@@ -1492,91 +1490,6 @@ if LIGHTWEIGHT:
             _mvt_light_blobs = {(r["z"], r["x"], r["y"]): bytes(r["mvt"]) for r in _lrows if r["mvt"]}
         except Exception as _pe:
             print(f"MVT light parity capture error: {type(_pe).__name__}: {_pe}")
-if HEAVYWEIGHT:
-    _r = _rd.run_mvt_agg(spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                         api="heavyweight", n_features=_N_FEATURES, n_tiles=_N_TILES,
-                         where="cluster")
-    _sink([_r]); hw.append(_r); _mvt_rows.append(_r)
-    # Capture decoded blobs for parity.
-    if _r.status == "ok":
-        try:
-            import pyspark.sql.functions as _F_mvth
-            from shapely.geometry import box as _bh
-            from shapely import to_wkb as _wkbh
-            from pyspark.sql.types import (StructType, StructField, IntegerType,
-                                           BinaryType, DoubleType, StringType)
-            _z3h = 3
-            _addrsh = [(_z3h, i % 8, (i // 8) % 8) for i in range(_N_TILES)]
-            _rdh = []
-            for _i in range(_N_FEATURES):
-                _tz, _tx, _ty = _addrsh[_i % _N_TILES]
-                # Mirror run_mvt_agg's coordinate spread: squares on a 16x16 grid over
-                # the full [0,4096] extent so they survive the heavy MVT driver's
-                # quantization (a packed band collapses to sub-pixel -> empty heavy tile).
-                _slot = (_i // _N_TILES) % 256
-                _cx = 128 + (_slot % 16) * 256; _cy = 128 + (_slot // 16) * 256
-                _g = bytes(_wkbh(_bh(_cx-32, _cy-32, _cx+32, _cy+32)))
-                _rdh.append((_tz, _tx, _ty, _g, _i, float(_i)*0.1, f"feat_{_i}"))
-            _schh = StructType([
-                StructField("z", IntegerType(), False), StructField("x", IntegerType(), False),
-                StructField("y", IntegerType(), False), StructField("geom", BinaryType(), True),
-                StructField("id", IntegerType(), True), StructField("score", DoubleType(), True),
-                StructField("label", StringType(), True),
-            ])
-            _dfh = spark.createDataFrame(_rdh, schema=_schh).select(
-                "z","x","y","geom",
-                _F_mvth.struct(_F_mvth.col("id"), _F_mvth.col("score"), _F_mvth.col("label")).alias("attrs"),
-            ).cache(); _dfh.count()
-            from databricks.labs.gbx.vectorx import functions as _hx
-            from databricks.labs.gbx import manager as _gbx_mgr
-            _gbx_mgr.register_family(spark, ('gbx_st_',), only=_gbx_mgr.names_at_level(('gbx_st_',), "L1"), level="L1")
-            _hrows = (_dfh.groupBy("z","x","y")
-                .agg(_hx.st_asmvt(_F_mvth.col("geom"), _F_mvth.col("attrs"), _F_mvth.lit("layer")).alias("mvt"))
-                .collect())
-            _mvt_heavy_blobs = {(r["z"], r["x"], r["y"]): bytes(r["mvt"]) for r in _hrows if r["mvt"]}
-        except Exception as _pe:
-            print(f"MVT heavy parity capture error: {type(_pe).__name__}: {_pe}")
-# Parity check: decode both tiers' MVT output and compare geometry+property counts.
-if LIGHTWEIGHT and HEAVYWEIGHT and _mvt_light_blobs is not None and _mvt_heavy_blobs is not None:
-    try:
-        _lk = set(_mvt_light_blobs.keys())
-        _hk = set(_mvt_heavy_blobs.keys())
-        _parity_ok = True
-        _parity_msg = []
-        if _lk != _hk:
-            _parity_ok = False
-            _parity_msg.append(
-                f"tile-key mismatch: light-only={sorted(_lk-_hk)[:3]} "
-                f"heavy-only={sorted(_hk-_lk)[:3]} (light={len(_lk)}, heavy={len(_hk)})"
-            )
-        else:
-            _feat_mismatches = []
-            for _k in sorted(_lk):
-                _ld = _mvt_lib.decode(_mvt_light_blobs[_k])
-                _hd = _mvt_lib.decode(_mvt_heavy_blobs[_k])
-                _ll = _ld.get("layer", {}).get("features", [])
-                _hl = _hd.get("layer", {}).get("features", [])
-                if len(_ll) != len(_hl):
-                    _feat_mismatches.append(f"{_k}: light={len(_ll)} heavy={len(_hl)}")
-                else:
-                    # Order-independent: the two encoders may emit features in a different
-                    # order, so compare the SET of feature ids per tile, not positionally.
-                    _lids = {_f.get("properties", {}).get("id") for _f in _ll}
-                    _hids = {_f.get("properties", {}).get("id") for _f in _hl}
-                    if _lids != _hids:
-                        _diff = sorted((_lids ^ _hids), key=lambda v: (v is None, v))[:5]
-                        _feat_mismatches.append(f"{_k}: id-set differs (sym-diff {_diff})")
-            if _feat_mismatches:
-                _parity_ok = False
-                _parity_msg.append("feature mismatches: " + "; ".join(_feat_mismatches[:5]))
-        if _parity_ok:
-            _verdict = f"MVT PARITY: PASS ({len(_lk)} tiles, feature counts + ids match)"
-        else:
-            _verdict = "MVT PARITY: FAIL -- " + "; ".join(_parity_msg)
-    except Exception as _pe:
-        _verdict = f"MVT PARITY: ERROR -- {type(_pe).__name__}: {_pe}"
-    print(_verdict)
-    assert _verdict.startswith("MVT PARITY: PASS"), _verdict
 if _mvt_rows:
     _df_mvt = spark.sql(
         f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'mvt'"

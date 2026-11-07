@@ -1,21 +1,18 @@
-"""Cross-tier (lightweight vs heavyweight JVM) value parity for ``gbx_rst_proximity`` and ``gbx_rst_cog_convert``.
+"""Cross-tier (lightweight vs heavyweight JVM) value parity for ``gbx_rst_proximity``.
 
-* ``rst_proximity``: the heavyweight function is the exact Euclidean distance, as the lightweight one is
-  (``scipy.ndimage.distance_transform_edt``); GDAL's ``ComputeProximity`` was up to ~6% off.
-* ``rst_cog_convert``: both tiers write a valid COG (GDAL's validator, no warnings) with the same number of
-  overviews and the same pixels.
+The heavyweight function is the exact Euclidean distance, as the lightweight one is
+(``scipy.ndimage.distance_transform_edt``); GDAL's ``ComputeProximity`` was up to ~6% off.
 
 The light leg is collected before the heavy registration overwrites the SQL name (load-bearing order).
 
 Run in geobrix-dev Docker:
     bash scripts/commands/gbx-test-pyrx.sh --docker --with-integration \\
-        --path python/geobrix/test/pyrx/test_proximity_cog_cross_tier.py
+        --path python/geobrix/test/pyrx/test_proximity_cross_tier.py
 """
 
 import logging
 from pathlib import Path
 from test._heavy import heavy_register  # noqa: E402
-from test.pyrx.conftest import cog_errors  # noqa: E402
 
 import pytest
 
@@ -122,23 +119,3 @@ def test_proximity_value_parity(spark_with_jar, args, label):
         label,
         float(np.abs(la - ha).max()),
     )
-
-
-def test_cog_convert_valid_cog_and_same_overviews(spark_with_jar):
-    rng = np.random.default_rng(5)
-    arr = (rng.random((512, 512)) * 200).astype("float32")
-    light, heavy = _run(
-        spark_with_jar,
-        _gtiff(arr, px=1.0, py=1.0),
-        "gbx_rst_cog_convert(tile, 'DEFLATE', 128, 'AVERAGE')",
-    )
-    la, _, lovr, ltiled = _decode(light)
-    ha, _, hovr, htiled = _decode(heavy)
-    assert hovr >= 1, "the heavyweight COG has no overview pyramid"
-    assert hovr == lovr
-    assert ltiled and htiled
-    assert np.array_equal(la, ha) and np.array_equal(ha, arr), "pixels changed"
-    assert (
-        cog_errors(heavy) == []
-    ), "the heavyweight COG is not valid (errors or warnings)"
-    assert cog_errors(light) == []

@@ -1441,7 +1441,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: warp.reproject_to_crs(ds, a["target_crs"]),
         # F.lit the STRING crs arg (bare str would resolve as a column name).
         col_fn=lambda t, a: prx._light_rst_transformcrs(t, F.lit(a["target_crs"])),
-        sources=_WARP_LIGHT + (_HEAVY + "RST_TransformCrs.scala",),
+        sources=_WARP_LIGHT,
+        heavy=False,
     ),
     "rst_updatetype": FnSpec(
         "rst_updatetype",
@@ -1547,8 +1548,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_cog_convert(
             t, a["compression"], a["blocksize"], a["overview_resampling"]
         ),
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_CogConvert.scala",),
+        sources=_ANALYSIS_LIGHT,
         core=False,
+        heavy=False,
     ),
     # --- resample (resample.py) ---
     "rst_resample": FnSpec(
@@ -2118,13 +2120,10 @@ REGISTRY: Dict[str, FnSpec] = {
             _ds_to_gtiff_bytes(ds), _ds_to_gtiff_bytes(ds)
         ),
         col_fn=lambda t, a: rx.rst_align_to(t, t),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_AlignTo.scala",
-            _OPS + "RasterAlignment.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
         fingerprint=False,
+        heavy=False,
     ),
     "rst_merge": FnSpec(
         "rst_merge",
@@ -3679,7 +3678,8 @@ REGISTRY: Dict[str, FnSpec] = {
         fingerprint=False,
         input_kind="geometry_aggregate",
         geometry_set="srid_4326",
-        sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvt.scala",),
+        sources=_PYVX_MVT_LIGHT,
+        heavy=False,
     ),
     "st_legacyaswkb": FnSpec(
         "st_legacyaswkb",
@@ -4031,9 +4031,10 @@ REGISTRY: Dict[str, FnSpec] = {
             a["statistic"],
         ),
         input_kind="geometry",
-        sources=_BINNING_LIGHT + (_HEAVY + "RST_BinPoints.scala",),
+        sources=_BINNING_LIGHT,
         core=False,
         geometry_set="srid_4326",
+        heavy=False,
     ),
     "rst_binpoints_agg": FnSpec(
         "rst_binpoints_agg",

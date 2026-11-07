@@ -23,7 +23,7 @@ Both implementations pair their default codec with a **dtype-matched predictor**
 | Lightweight | **ZSTD** (`auto`, size-adaptive level) through the canonical `creation_opts` | Best ratio and write throughput for materialized tiles; see the level ladder below |
 | Heavyweight | **DEFLATE** (level 6) | Baseline TIFF: every reader decodes it, including Java ImageIO and the Databricks image preview, which cannot decode ZSTD output |
 
-On the heavyweight implementation, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` keeps ZSTD as its default on both implementations (the size-adaptive `auto` level on the lightweight one).
+On the heavyweight implementation, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` runs on the lightweight implementation only and keeps ZSTD as its default (the size-adaptive `auto` level).
 
 The predictor rules are the same in both implementations:
 

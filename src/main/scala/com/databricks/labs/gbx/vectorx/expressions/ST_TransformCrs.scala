@@ -27,7 +27,7 @@ import scala.util.control.NonFatal
   *
   * GDAL/PROJ config child — [[ExpressionConfigExpr]] is injected as a trailing, non-user
   * child (mirroring the raster expressions, e.g.
-  * [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]). Its base64-serialized
+  * [[com.databricks.labs.gbx.rasterx.expressions.RST_Transform]]). Its base64-serialized
   * [[ExpressionConfig]] carries the driver-registered custom PROJ grid dirs
   * (`spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS`, folded by [[ExpressionConfig.apply]] from
   * `ProjGridRegistry`) to executors. `evalSqlWithConf` runs `GDALManager.init` with it so the
@@ -115,8 +115,8 @@ object ST_TransformCrs extends WithExpressionInfo {
       * then delegates to the 2-arg [[evalSql]]. `GDALManager.init` is idempotent per JVM and
       * `configureGDAL` prepends any registered custom PROJ grid dirs to the in-JVM PROJ search
       * path, so a grid-requiring CRS resolves even when nothing else in the session initialized
-      * GDAL. Mirrors [[com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs]]'s
-      * `eval(row, crs, conf)`. `conf` is the base64 config literal — never user-supplied, never
+      * GDAL. Mirrors [[com.databricks.labs.gbx.rasterx.expressions.RST_Transform]]'s
+      * `eval(row, srid, conf)`. `conf` is the base64 config literal — never user-supplied, never
       * null (propagateNull short-circuits before this runs). This runs once per ROW, so the config is decoded
       * once per JVM ([[ExpressionConfig.fromUtf8]]), not per row: the decode was ~1 ms against a ~10 us transform. */
     def evalSqlWithConf(geom: Any, targetCrs: UTF8String, conf: UTF8String): Array[Byte] = {

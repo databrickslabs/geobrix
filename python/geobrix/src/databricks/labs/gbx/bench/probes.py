@@ -142,17 +142,6 @@ def run_ek1(spark, n: int = 1_000_000) -> dict:
             )
         except Exception as exc:  # noqa: BLE001 - a refusal is a measured outcome
             out[f"{lv[0]}_error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
-    try:
-        register(
-            spark,
-            only=["gbx_rst_transformcrs"],
-            _levels={"gbx_rst_transformcrs": ("L2", "-")},
-        )
-        out["L2_raster"] = "registered"
-    except (
-        Exception
-    ) as exc:  # noqa: BLE001 - expected on plain standard (no GDAL in the sandbox)
-        out["L2_raster_error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
     return out
 
 

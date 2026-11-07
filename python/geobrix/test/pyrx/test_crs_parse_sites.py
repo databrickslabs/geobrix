@@ -60,11 +60,6 @@ SCALA_FILE_ALLOW = {
     "operations/SpatialRefOps.scala": "the canonical resolver: every CRS text is parsed here, classified first",
 }
 SCALA_SITES = {
-    (
-        "rasterx/expressions/RST_AlignTo.scala",
-        'val tSrs = srsToken.map(t => s"-t_srs $t ").getOrElse("")',
-    ): DATASET_WKT,
-    ("rasterx/expressions/RST_AlignTo.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
     ("rasterx/expressions/RST_BinPoints.scala", "sr.ImportFromEPSG(srid)"): INT_EPSG,
     (
         "rasterx/expressions/RST_Chm.scala",

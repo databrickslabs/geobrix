@@ -358,8 +358,9 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         val good = Seq(tinyGTiffBytes(42)).toDF("content")
             .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
         // two error tiles with different reasons, computed once so both aggregates see the same rows
-        def failed(crs: String) = good.select(rst_transformcrs(col("tile"), lit(crs)).as("tile")).cache()
-        val (bad1, bad2) = (failed("EPSG:not-a-crs"), failed("EPSG:also-not-one"))
+        // srid 0 is refused by name ("requires a positive EPSG or ESRI code"), 999991 by GDAL: two different reasons
+        def failed(srid: Int) = good.select(rst_transform(col("tile"), srid).as("tile")).cache()
+        val (bad1, bad2) = (failed(0), failed(999991))
         def metadata(df: org.apache.spark.sql.DataFrame) =
             df.select(col("tile.metadata").as("md")).head().getAs[Map[String, String]]("md")
         val (md1, md2) = (metadata(bad1), metadata(bad2))

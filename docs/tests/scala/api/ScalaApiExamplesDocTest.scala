@@ -97,13 +97,11 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_combinesum_scala_example_output.nonEmpty)
   }
 
-  test("ScalaApiExamples rst_align_to rst_isoband snippet vals are non-empty") {
-    assert(ScalaApiExamples.rst_align_to_scala_example.nonEmpty)
+  test("ScalaApiExamples rst_isoband snippet vals are non-empty") {
     assert(ScalaApiExamples.rst_isoband_scala_example.nonEmpty)
   }
 
-  test("ScalaApiExamples rst_align_to rst_isoband output vals are non-empty") {
-    assert(ScalaApiExamples.rst_align_to_scala_example_output.nonEmpty)
+  test("ScalaApiExamples rst_isoband output vals are non-empty") {
     assert(ScalaApiExamples.rst_isoband_scala_example_output.nonEmpty)
   }
 
@@ -197,8 +195,7 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     succeed
   }
 
-  test("RasterX rst_align_to rst_isoband signatures compile") {
-    val _: Column = rx.rst_align_to(col("tile"), col("reference_tile"))
+  test("RasterX rst_isoband signatures compile") {
     val _: Column = rx.rst_isoband(col("tile"), col("breaks"))
     succeed
   }

@@ -901,59 +901,6 @@ result.show()
 (tile with internal overviews at levels [2, 4] embedded)
 """.trim
 
-  val rst_binpoints_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Inline 3-point BNG (EPSG:27700) set — no external raster file needed.
-val points = spark.range(1).select(
-  array(lit(550100.0), lit(550200.0), lit(550300.0)).alias("x"),
-  array(lit(180100.0), lit(180200.0), lit(180500.0)).alias("y"),
-  array(lit(42.5), lit(45.1), lit(38.7)).alias("z")
-)
-val result = points.select(
-  rx.rst_binpoints(
-    col("x"), col("y"), col("z"),
-    lit(550000.0), lit(180000.0),
-    lit(551000.0), lit(181000.0),
-    lit(10), lit(10),
-    lit(27700)
-  ).alias("tile")
-)
-result.show()
-""".trim
-
-  val rst_binpoints_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
-""".trim
-
-  val rst_cog_convert_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_cog_convert(col("tile")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_cog_convert_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(COG tile; a COG is a valid GeoTIFF with tiled internal layout)
-""".trim
-
   val rst_convolve_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -1230,26 +1177,6 @@ result.show()
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
 (reprojected tile; source EPSG:32618 (UTM Zone 18N) to EPSG:4326)
-""".trim
-
-  val rst_transformcrs_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_crs(rx.rst_transformcrs(col("tile"), lit("EPSG:3857"))).alias("crs"))
-result.show()
-""".trim
-
-  val rst_transformcrs_scala_example_output: String =
-    """
-+----------+
-|crs       |
-+----------+
-|EPSG:3857 |
-+----------+
-(CRS string of the reprojected tile; accepts authority codes, WKT, or PROJ4)
 """.trim
 
   val rst_updatetype_scala_example: String =
@@ -1682,28 +1609,6 @@ result.show(truncate = false)
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
 (per-pixel sum raster from 3 input tiles)
-""".trim
-
-  val rst_align_to_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Warp each tile to match its paired reference tile's grid (same CRS, extent, pixel size).
-// Aligning tiles to a common reference satisfies the precondition for rst_combine*.
-val paired = spark.table("paired_rasters")
-val result = paired.select(rx.rst_align_to(col("tile"), col("reference_tile")).alias("aligned"))
-result.show(truncate = false)
-""".trim
-
-  val rst_align_to_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|aligned                                                    |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile warped to reference grid; output has reference tile's CRS, extent, width, height)
 """.trim
 
   val rst_isoband_scala_example: String =
@@ -2393,34 +2298,6 @@ result.show(truncate = false)
   val rst_custom_tessellate_scala_example_output: String =
     """[Row(cellid=<bigint>, raster=Row(...)), ...]
 (one v2-Tile Row per custom-grid cell; cellid is BIGINT encoding the custom cell)"""
-
-  // =========================================================================
-  // VectorX vector-tile family — st_asmvt
-  //
-  // st_asmvt: Fixture ``mvt_features`` view — 2 tile-local WKB POINTs in (z=0,x=0,y=0)
-  // =========================================================================
-
-  val st_asmvt_scala_example: String =
-    """
-import com.databricks.labs.gbx.vectorx.{functions => vx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-val df = spark.table("mvt_features")
-val result = df.groupBy("z", "x", "y").agg(
-  vx.st_asmvt(col("geom_wkb"), col("attrs"), lit("layer")).alias("mvt")
-)
-result.first().getAs[Array[Byte]]("mvt")
-""".trim
-
-  val st_asmvt_scala_example_output: String =
-    """
-+---+---+---+---------+
-|  z|  x|  y|      mvt|
-+---+---+---+---------+
-|  0|  0|  0|[binary] |
-+---+---+---+---------+
-... (MVT binary)""".trim
 
   // =========================================================================
   // VectorX TIN family — st_triangulate, st_interpolateelevationbbox,

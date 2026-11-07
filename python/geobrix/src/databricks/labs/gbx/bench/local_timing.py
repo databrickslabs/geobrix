@@ -135,10 +135,12 @@ def _family_sets() -> Dict[str, SetSpec]:
     )
     n_tiles = (4, 16, 64)
 
-    def tile_fn(family: str, fn: str, tag: str = "n", ns=n_tiles, **kw) -> SetSpec:
+    def tile_fn(
+        family: str, fn: str, tag: str = "n", ns=n_tiles, l1: bool = True, **kw
+    ) -> SetSpec:
         return SetSpec(
             mvp=family,
-            forms=(f"l1@{tag}", f"c0@{tag}", f"floor@{tag}"),
+            forms=((f"l1@{tag}",) if l1 else ()) + (f"c0@{tag}", f"floor@{tag}"),
             reference=f"c0@{tag}",
             ns=ns,
             fn=fn,
@@ -147,11 +149,17 @@ def _family_sets() -> Dict[str, SetSpec]:
         )
 
     def gen_fn(
-        family: str, fn: str, tag: str, ns, variant: str = "c0", exempt=()
+        family: str,
+        fn: str,
+        tag: str,
+        ns,
+        variant: str = "c0",
+        exempt=(),
+        l1: bool = True,
     ) -> SetSpec:
         return SetSpec(
             mvp=family,
-            forms=(f"l1@{tag}", f"{variant}@{tag}", f"floor@{tag}"),
+            forms=((f"l1@{tag}",) if l1 else ()) + (f"{variant}@{tag}", f"floor@{tag}"),
             reference=f"{variant}@{tag}",
             ns=ns,
             fn=fn,
@@ -166,8 +174,9 @@ def _family_sets() -> Dict[str, SetSpec]:
             peer_exempt=("c0@n",),
         ),
         "raster-stat": tile_fn("raster-stat", "gbx_rst_avg"),
-        "raster-tile-op": tile_fn("raster-tile-op", "gbx_rst_align_to"),
-        "raster-file-op": tile_fn("raster-file-op", "gbx_rst_cog_convert"),
+        # align_to, cog_convert, binpoints and asmvt have no JVM level (it measured slower than light): light and floor only
+        "raster-tile-op": tile_fn("raster-tile-op", "gbx_rst_align_to", l1=False),
+        "raster-file-op": tile_fn("raster-file-op", "gbx_rst_cog_convert", l1=False),
         "raster-vectorize": tile_fn("raster-vectorize", "gbx_rst_isoband"),
         "raster-constructor": tile_fn(
             "raster-constructor", "gbx_rst_fromcontent", "bytes"
@@ -177,9 +186,7 @@ def _family_sets() -> Dict[str, SetSpec]:
             "gbx_rst_binpoints",
             "pts",
             (200, 800, 3200),
-            exempt=(
-                "l1",
-            ),  # the JVM binning is ~5x the light one per row: a finding, not a scaling defect
+            l1=False,
         ),
         "raster-generator": SetSpec(
             mvp="raster-generator",
@@ -247,15 +254,6 @@ def _family_sets() -> Dict[str, SetSpec]:
             (
                 "l1",
             ),  # the JVM transform is ~25x the light one per row: a finding, not a scaling defect
-        ),
-        "vector-aggregate": gen_fn(
-            "vector-aggregate",
-            "gbx_st_asmvt",
-            "mvt",
-            (20_000, 80_000, 320_000),
-            exempt=(
-                "l1",
-            ),  # the JVM encoder is ~4x the light one per row: a finding, not a scaling defect
         ),
         "vector-generator": gen_fn(
             "vector-generator", "gbx_st_triangulate", "tin", (800, 3_200, 12_800), "l3"

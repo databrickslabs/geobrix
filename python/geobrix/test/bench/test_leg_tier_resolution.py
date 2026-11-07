@@ -86,7 +86,6 @@ _LEGS = (
         ("run_interp_bbox", dict(n_rows=2)),
         ("run_interp_geom", dict(n_rows=2)),
         ("run_legacy_aswkb", _GRID),
-        ("run_mvt_agg", dict(n_features=40, n_tiles=3)),
         ("run_pmtiles_agg", dict(n_tiles=20, n_groups=2)),
     ]
 )

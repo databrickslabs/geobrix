@@ -691,9 +691,9 @@ def print_smoke(outcome) -> None:
         print(f"  {'fn':<34}{'level':<9}{'form':<22}{'status':<14}{'tasks':>6}{'median_s':>10}")
         for f in forms:
             print(
-                f"  {f['fn']:<34}{f['level']:<9}{f['form']:<22}{f['status']:<14}{f.get('tasks', 0):>6}{f.get('median_s', 0):>10}"
+                f"  {f['fn']:<34}{f['level']:<9}{f['form']:<22}{f['status']:<14}{(f.get('tasks') if f.get('tasks') is not None else '-'):>6}{f.get('median_s', 0):>10}"
             )
-        few = [f for f in forms if f["status"] == "ok" and 0 < f.get("tasks", 0) <= 2]
+        few = [f for f in forms if f["status"] == "ok" and 0 < (f.get("tasks") or 0) <= 2]
         if few:
             print(
                 f"  NOTE: {len(few)} form(s) run on 1-2 Spark tasks whatever the cluster size "

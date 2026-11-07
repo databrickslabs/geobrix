@@ -82,10 +82,12 @@ class ResultRow:
     # Parallelism / fanout. input_partitions: partitions carrying data
     # on the timed input (Connect-safe spark_partition_id distinct-count).
     # launched_tasks: tasks launched for the timed stage (== input_partitions for the
-    # single-stage read/write legs here; a precise multi-stage tally needs the Spark
-    # REST API and is out of scope). slots_available: cluster task slots.
-    input_partitions: int = 0
-    launched_tasks: int = 0
+    # single-stage read/write legs here). The levels leg reads both from the Spark REST API
+    # (tasks of the completed stages of the timed execution; tasks of the stages that read
+    # input). NULL (None) when the session cannot say (a Connect session has no REST API),
+    # never 0: 0 would read as a measurement. slots_available: cluster task slots.
+    input_partitions: Optional[int] = None
+    launched_tasks: Optional[int] = None
     slots_available: int = 0
     # Vector reader chunkSize option for the leg (0 = not applicable / not a vector leg).
     chunk_size: int = 0

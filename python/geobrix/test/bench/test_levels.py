@@ -467,6 +467,35 @@ def test_the_rest_plan_reports_the_widest_stage_so_a_coalesced_shuffle_shows(
     assert out["stage_tasks"] == 64
 
 
+def test_the_rest_plan_counts_the_tasks_launched_and_the_tasks_that_read_input(
+    monkeypatch,
+):
+    """launched_tasks is every task of the execution's completed stages; input_tasks those of the stages that read input
+    (the scan). Each is None when the REST API is not there: a Connect session has no stage to count.
+    """
+    answers = {
+        "/sql": [{"id": 3, "submissionTime": "2026-11-06T10:00:00.000GMT", "status": "COMPLETED", "successJobIds": [7], "nodes": []}],  # fmt: skip
+        "/jobs/7": {"stageIds": [11, 12, 13]},
+        "/stages/11": [{"status": "COMPLETE", "numTasks": 4, "inputBytes": 1000, "inputRecords": 9, "executorRunTime": 10, "jvmGcTime": 0}],  # fmt: skip
+        "/stages/12": [{"status": "COMPLETE", "numTasks": 64, "inputBytes": 0, "inputRecords": 0, "executorRunTime": 10, "jvmGcTime": 0}],  # fmt: skip
+        "/stages/13": [{"status": "FAILED", "numTasks": 99, "inputBytes": 5, "executorRunTime": 10, "jvmGcTime": 0}, {"status": "COMPLETE", "numTasks": 3, "executorRunTime": 10, "jvmGcTime": 0}],  # fmt: skip
+    }
+    monkeypatch.setattr(
+        attribution, "_get", lambda url: next(v for k, v in answers.items() if k in url)
+    )
+    sc = type("SC", (), {"uiWebUrl": "http://ui", "applicationId": "app"})()
+    df = type("DF", (), {"sparkSession": type("S", (), {"sparkContext": sc})()})()
+    out = {k: None for k in attribution.METRICS}
+    assert attribution._from_rest(df, 0.0, out)
+    assert (out["launched_tasks"], out["input_tasks"]) == (71, 4)
+    out = attribution.from_plan(
+        _connect_df(0, {0: _Node("AdaptiveSparkPlan", {}, [])}), 0.0
+    )
+    assert (
+        out.get("launched_tasks") is None and out.get("input_tasks") is None
+    )  # unknown: NULL, never 0
+
+
 @contextlib.contextmanager
 def _own_worker_pool(spark):
     """Python UDFs built inside run in workers of their own: Spark keeps a pool per worker

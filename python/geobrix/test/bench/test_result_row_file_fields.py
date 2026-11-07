@@ -17,7 +17,7 @@ def test_resultrow_has_file_matrix_fields():
     } <= names
 
 
-def test_resultrow_file_fields_default_to_na_and_zero():
+def test_resultrow_file_fields_default_to_na_and_unknown_task_counts_are_null():
     from databricks.labs.gbx.bench.results import ResultRow
 
     r = ResultRow(
@@ -52,12 +52,9 @@ def test_resultrow_file_fields_default_to_na_and_zero():
         env_where="cluster",
     )
     assert (r.file_mode, r.layout) == ("na", "na")
-    assert (r.input_partitions, r.launched_tasks, r.slots_available, r.chunk_size) == (
-        0,
-        0,
-        0,
-        0,
-    )
+    # a task count nobody measured is NULL, never 0 (0 reads as a measurement)
+    assert (r.input_partitions, r.launched_tasks) == (None, None)
+    assert (r.slots_available, r.chunk_size) == (0, 0)
 
 
 def test_cluster_order_matches_resultrow_fields():

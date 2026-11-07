@@ -331,6 +331,34 @@ def test_a_form_sinks_its_rows_before_the_next_form_starts_and_reports_its_tasks
     assert all(r.input_partitions >= 1 and "tasks=" in r.note for r in rows)
 
 
+@pytest.mark.parametrize("rest", [True, False])
+def test_a_real_run_row_carries_its_task_counts_or_null_never_zero(
+    spark_session_local, tmp_path, monkeypatch, rest
+):
+    """The real run has no report_tasks (only the smoke does): the counts come from the timed execution's plan. A session
+    that cannot report them (no REST API) writes NULL, not 0."""
+    tiny_forms(monkeypatch, 1)
+    real = levels.attribution.from_plan
+
+    def plan(df, t0):
+        out = real(df, t0)
+        if rest:
+            out.update(launched_tasks=9, input_tasks=4)
+        return out
+
+    monkeypatch.setattr(levels.attribution, "from_plan", plan)
+    (row,) = levels.run_mvp(
+        spark_session_local, "S", "t", 0, 1, corpus=str(tmp_path), schema=None, scales=(1,), where="venv",
+        base_rows=200, only_levels=("L3",), heartbeat=None,
+    )  # fmt: skip
+    assert row.status == "ok"
+    if rest:
+        assert (row.input_partitions, row.launched_tasks) == (4, 9)
+    else:
+        assert row.input_partitions is None and row.launched_tasks is None
+        assert "tasks unknown" in row.note
+
+
 def test_a_scale_that_never_finishes_loses_no_row_of_the_scales_before_it(
     spark_session_local, tmp_path, monkeypatch
 ):

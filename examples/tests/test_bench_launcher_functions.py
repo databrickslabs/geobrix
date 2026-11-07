@@ -394,3 +394,12 @@ def test_a_family_with_no_forms_is_not_an_accepted_levels_set(monkeypatch, capsy
     _no_work(monkeypatch, "--levels", "web-tiles", "--levels-scales", "1")
     assert launcher.main() == 2
     assert "--levels must be one of" in capsys.readouterr().err
+
+
+def test_a_smoke_form_with_no_task_count_prints_a_dash_not_a_crash_or_a_zero(capsys):
+    payload = {**CLEAN, "forms": [{**CLEAN["forms"][0], "tasks": None}]}
+    rc, submitted, out, _ = smoke_stage(payload, capsys)
+    assert rc is None
+    row = next(ln for ln in out.splitlines() if ln.split()[:1] == ["f"])
+    assert row.split()[3:5] == ["ok", "-"], row  # status, then the task count: unknown
+    assert "run on 1-2 Spark tasks" not in out

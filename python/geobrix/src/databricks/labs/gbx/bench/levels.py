@@ -1344,6 +1344,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     note = [f"attr={plan['source']}"]
     if plan.get("stage_tasks"):
         note.append(f"stage_tasks={plan['stage_tasks']}")
+    in_tasks, launched = _task_counts(scan_tasks, plan, note)
     parts = attribution.shuffle_partitions(holder.get("df"))
     if parts:
         note.append(f"shuffle_parts={parts}")
@@ -1384,7 +1385,8 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         timing=timing,
         fp=fp,
         m=m,
-        input_partitions=scan_tasks or 0,
+        input_partitions=in_tasks,
+        launched_tasks=launched,
         setup_s=holder["first"] - t_start,
     )
 
@@ -1459,6 +1461,18 @@ def _scan_tasks(ctx: "_Ctx", src: str) -> Optional[int]:
         return None
 
 
+def _task_counts(
+    scan_tasks: Optional[int], plan: Dict, note: List[str]
+) -> Tuple[Optional[int], Optional[int]]:
+    """(input_partitions, launched_tasks) of a row: the scan count when the run took it (the smoke), else the timed
+    execution's own (Spark REST API). None, never 0, when the session cannot say; the note says so.
+    """
+    launched = plan.get("launched_tasks")
+    if launched is None:
+        note.append("tasks unknown: the session reported none (no Spark REST API)")
+    return (scan_tasks if scan_tasks is not None else plan.get("input_tasks")), launched
+
+
 def _tasks_note(tasks: Optional[int]) -> List[str]:
     return [] if tasks is None else [f"tasks={tasks}"]
 
@@ -1505,7 +1519,8 @@ def _row(
     fp: str = "",
     m: Optional[Dict] = None,
     failure: str = "",
-    input_partitions: int = 0,
+    input_partitions: Optional[int] = None,
+    launched_tasks: Optional[int] = None,
     setup_s: float = 0.0,
 ) -> ResultRow:
     t, m = timing or {}, m or {}
@@ -1545,6 +1560,7 @@ def _row(
         py_worker_rss_mb=_opt(m.get("py_worker_rss_mb"), float),
         failure_mode=failure,
         input_partitions=input_partitions,
+        launched_tasks=launched_tasks,
         setup_s=max(setup_s, 0.0),
         warmup_s=t.get("warmup_s", 0.0),
     )

@@ -93,48 +93,6 @@ def default_wrapper(fn, private: str) -> str:
     )
 
 
-def cast_call(fn, java_name: str, types) -> str:
-    """CREATE FUNCTION text that calls the Java UDF ``java_name`` with each argument cast to the type its class
-    declares (``types``, one SQL type per parameter, in order).
-
-    A Java UDF class names concrete parameter types, and the JVM casts each value to them before ``call``
-    runs. Only a session that converts the inputs first (standard access mode) hands it those types; one that
-    passes each value as SQL bound it fails on an INT where the class declares STRING. The casts make every
-    session hand over the declared types. ``types`` must name every parameter: a short or long list would
-    build a wrapper that drops (or invents) an argument, so it is an error.
-    """
-    if len(types) != len(fn.params):
-        raise ValueError(
-            f"{fn.sql_name}: {len(types)} arg_types for {len(fn.params)} parameters"
-        )
-    params = ", ".join(f"{p.name} {t}" for p, t in zip(fn.params, types))
-    args = ", ".join(f"CAST({p.name} AS {t})" for p, t in zip(fn.params, types))
-    return (
-        f"CREATE OR REPLACE TEMPORARY FUNCTION {fn.sql_name}({params}) "
-        f"RETURNS {sql_type(fn.returns_session)} RETURN {java_name}({args})"
-    )
-
-
-def tile_from_raster(raster_expr: str, tile: str) -> str:
-    """A v2 tile around the bytes a Java UDF returned.
-
-    NULL bytes mean the kernel failed on this tile: an error tile (no raster, no path) with the
-    reason under ``last_error``, as on every other level. The bytes are computed once (the array
-    lambda), not once per field.
-    """
-    reason = "the heavy kernel could not process this tile (see the executor log)"
-    return (
-        "transform(array({r}), gbx_r -> named_struct('cellid', {t}.cellid, 'raster', gbx_r, "
-        "'path', CAST(NULL AS STRING), 'path_mode', CAST(NULL AS STRING), "
-        "'window', CAST(NULL AS "
-        + _WINDOW
-        + "), 'clip_polygon', CAST(NULL AS BINARY), "
-        "'clip_crs', CAST(NULL AS STRING), 'crs', CAST(NULL AS STRING), "
-        "'metadata', IF(gbx_r IS NULL, map('last_error', '" + reason + "'), "
-        "CAST(map() AS map<string,string>))))[0]"
-    ).format(t=tile, r=raster_expr)
-
-
 def tile_from_result(result_expr: str, tile: str) -> str:
     """A v2 tile around the engine's batch result (``struct<raster, error, command>``).
 

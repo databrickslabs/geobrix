@@ -1,4 +1,4 @@
-"""L1 (Catalyst companions over py4j; classic only) and L2 (registerJavaFunction) installers.
+"""The L1 installers (Catalyst companions over py4j; classic only).
 
 Each returns None on success, else a one-line reason, and never raises, so the registrar can
 fall back. Called only after `capabilities.detect` found a matching JAR.
@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import Optional
 
-from databricks.labs.gbx.manager import capabilities, l3, levels, sqlwrap
+from databricks.labs.gbx.manager import l3, sqlwrap
 
 
 def _priv(fn, level: str) -> str:
@@ -131,49 +131,6 @@ def install_l1_engine(spark, fn, caps) -> Optional[str]:
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
         return f"{fn.sql_name}: heavy engine install failed ({type(exc).__name__}: {str(exc)[:160]})"
-
-
-def _register_java(spark, name: str, spec) -> None:
-    """Register `spec`'s Java UDF as `name`: its Scala class on a classic session, its Java `connect_class` (with
-    the JAR added to the session first) on Spark Connect."""
-    if capabilities.is_connect(spark):
-        capabilities.register_java(spark, name, spec["connect_class"], spec["returns"])
-    else:
-        spark.udf.registerJavaFunction(name, spec["class"], spec["returns"])
-
-
-def install_l2(spark, fn, caps) -> Optional[str]:
-    try:
-        spec = fn.levels["L2"]
-        if (
-            caps.connect and "connect_class" not in spec
-        ):  # a forced L2 skips `levels.available`
-            return levels.no_connect_handler(fn)
-        if ("bytes_param" in spec or "arg_types" in spec) and not caps.sql_functions:
-            # A forced L2 skips `levels.available`. Refuse before anything is registered: the wrapper step
-            # drops whatever holds the SQL name (an L3 registration) and would then fail its CREATE.
-            return levels.no_sql_functions(fn)
-        if "bytes_param" in spec:
-            k = _priv(fn, "L2")
-            _register_java(spark, k, spec)
-            light = _install_light_side(spark, fn)
-            tile = fn.params[0].name
-            jvm = sqlwrap.tile_from_raster(k + "({tile}.raster{rest})", tile)
-            _create_wrapper(spark, fn, sqlwrap.tile_dispatch(fn, jvm, light))
-            return None
-        if fn.min_args != fn.max_args:
-            return f"{fn.sql_name}: optional arguments at L2 need a SQL wrapper this row does not declare"
-        if "arg_types" in spec:
-            # The Java UDF under its private name, and a SQL wrapper under the SQL name that casts each
-            # argument to the type the Java class declares (an INT resolution to STRING).
-            k = _priv(fn, "L2")
-            _register_java(spark, k, spec)
-            _create_wrapper(spark, fn, sqlwrap.cast_call(fn, k, spec["arg_types"]))
-            return None
-        _register_java(spark, fn.sql_name, spec)
-        return None
-    except Exception as exc:  # noqa: BLE001
-        return f"{fn.sql_name}: Java UDF registration failed ({type(exc).__name__}: {str(exc)[:160]})"
 
 
 def install_companion(spark, fqn: str, name: str) -> Optional[str]:

@@ -20,8 +20,8 @@ LEVEL_TABLE_VERSION = manifest.load().level_table_version  # one source: the man
 PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # The SQL kernel (L0) runs in the JVM with no Python and needs no JAR: over 1M rows on a local[4] session it takes
     # 0.28 s against 2.43 s for light (L3). That is the only measurement of L0 against light (local, not on a cluster).
-    # The Catalyst level (L1) and the Java UDF (L2) are gone: on dedicated compute L1 measured 1.17x and 1.35x slower than
-    # the light batch form at 4M and 16M rows, and on standard L2 was slower than it too (3.24 s against 1.70 s at 4M).
+    # The Catalyst level (L1) of this function is gone: on dedicated compute it measured 1.17x and 1.35x slower than
+    # the light batch form at 4M and 16M rows. There is no Java UDF level (L2) any more.
     "gbx_bng_eastnorthasbng": ("L0", "L3"),
     # cellarea: L0 0.19 s, L1 0.19 s, light 0.76 s over 1M rows locally (same session).
     "gbx_bng_cellarea": ("L1", "L0", "L3"),
@@ -170,7 +170,6 @@ L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
 NAMES = {
     "L0": "SQL",
     "L1": "heavy (Catalyst)",
-    "L2": "heavy (Java UDF)",
     "L3": "light",
 }
 # The variant of a level that runs the row's `gdal` block on the GDAL spec engine. A forced L3 may name the
@@ -244,11 +243,6 @@ def _jvm_unavailable(fn, level: str, spec, caps: Capabilities) -> Optional[str]:
     return None
 
 
-def no_connect_handler(fn) -> str:
-    """The refusal for an L2 row with no Java handler (`connect_class`) on a standard-access-mode session."""
-    return f"{fn.sql_name} has no Java handler for standard access mode"
-
-
 def no_sql_functions(fn) -> str:
     """The refusal for a row whose level is a SQL wrapper on a session that cannot create SQL functions."""
     return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
@@ -263,35 +257,17 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
         return None
     if level == "L1" and "companion" not in spec:  # the engine form is the only one
         return engine_unavailable(fn, level, caps)
-    if level in ("L1", "L2"):
+    if level == "L1":
         why = _jvm_unavailable(fn, level, spec, caps)
         if why:
             return why
         l1_returns = spec.get("session_returns", fn.returns_session)
-        if level == "L1" and l1_returns != fn.returns_session:
+        if l1_returns != fn.returns_session:
             return f"{fn.sql_name}: heavy returns {l1_returns}, the session signature returns {fn.returns_session}"
-        if level == "L2" and caps.connect and "connect_class" not in spec:
-            return no_connect_handler(fn)
-        if level == "L2" and fn.kind != "scalar":
-            return f"standard access mode serves scalars only ({fn.sql_name} is a {fn.kind})"
-        if level == "L2" and fn.min_args != fn.max_args and "wrapper" not in spec:
-            return f"{fn.sql_name}: optional arguments need a SQL wrapper, and this L2 row declares none"
-        if (
-            level == "L2"
-            and fn.levels.get("L3", {}).get("factory_args") == "proj_grid_dirs"
-        ):
-            from databricks.labs.gbx.core import proj_grids
-
-            if proj_grids.get_registered_dirs():  # a Java UDF has no channel for them
-                return f"{fn.sql_name}: PROJ grids are registered and a Java UDF cannot read them"
-        wrapper = fn.accepts_virtual_tile or (
-            level == "L2" and ("bytes_param" in spec or "arg_types" in spec)
-        )
-        # A row with `arg_types` (or `bytes_param`) reaches its Java UDF only through a SQL wrapper that casts (or
-        # unwraps) the arguments. Where SQL functions cannot be created there is no wrapper, and the bare Java UDF
-        # fails its argument casts on some sessions: L2 is unavailable and `select` falls back to the next level,
-        # naming this reason in the manager's one-line message. `jvm.install_l2` refuses the same way for a forced L2.
-        if wrapper and not caps.sql_functions:
+        # A tile function reaches its Catalyst companion only through a SQL dispatch wrapper. Where SQL functions
+        # cannot be created there is no wrapper: L1 is unavailable and `select` falls back to the next level,
+        # naming this reason in the manager's one-line message.
+        if fn.accepts_virtual_tile and not caps.sql_functions:
             return no_sql_functions(fn)
         return None
     if level == "L0":  # a temporary SQL function: nothing to import, no JVM
@@ -311,7 +287,7 @@ def order(fn) -> Tuple[str, ...]:
     return (
         PREFERENCE.get(fn.sql_name)
         or FAMILY_PREFERENCE.get(fn.family)
-        or tuple(lv for lv in ("L1", "L2", "L3") if lv in fn.levels)
+        or tuple(lv for lv in ("L1", "L3") if lv in fn.levels)
     )
 
 
@@ -333,7 +309,7 @@ def select(
         order_ = (
             ("L3",)
             if "L3" in fn.levels
-            else tuple(lv for lv in ("L0", "L1", "L2") if lv in fn.levels)
+            else tuple(lv for lv in ("L0", "L1") if lv in fn.levels)
         )
     reasons = []
     for level in order_:

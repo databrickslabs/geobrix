@@ -28,17 +28,6 @@ SCHEMA_VERSION = 2
 LEVEL_KEYS = {
     "L0": frozenset({"sql", "sql_helpers"}),
     "L1": frozenset({"companion", "needs_gdal", "session_returns", "engine"}),
-    "L2": frozenset(
-        {
-            "class",
-            "connect_class",
-            "returns",
-            "bytes_param",
-            "needs_gdal",
-            "wrapper",
-            "arg_types",
-        }
-    ),
     "L3": frozenset(
         {
             "register",
@@ -83,15 +72,9 @@ LEVEL_KEYS = {
 # the session (which inlines its helpers). A helper is {"name": "gbx__<x>", "params": [[name, type], ...], "returns": type,
 # "sql": body, "summary": text (optional)}. `stub` (an L4 spec with no other key) is the Fix text of a function that has no
 # UC form: `gbx.uc.install(..., stubs=True)` makes it a SQL function that raises, and the row has no UC level otherwise.
-# `connect_class` is the Java handler a standard access mode (Spark Connect) session registers instead of `class`: its
-# sandbox loads only Java classes of a JAR added to the session, with concrete parameter types. A row without one has
-# no L2 there. `arg_types` (one SQL type per parameter) are the types the Java classes declare: the manager puts the
-# Java UDF under a private name and a SQL wrapper that casts each argument to them under the SQL name, so a session
-# that hands a Java UDF the values as SQL bound them (an INT where the class declares STRING) cannot fail its cast.
 # Keys every spec of that level must carry.
 LEVEL_REQUIRED = {
     "L0": frozenset({"sql"}),
-    "L2": frozenset({"class", "returns"}),
     "L3": frozenset({"register"}),
 }
 # Levels whose spec must carry at least one of these keys.

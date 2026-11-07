@@ -70,15 +70,6 @@ def _rows():
                 marks=pytest.mark.integration,
                 id=f"{fn.sql_name}-L1{variant}-sql",
             )
-        if "L2" in fn.levels:
-            yield pytest.param(
-                fn.sql_name,
-                "L2",
-                "-",
-                "sql",
-                marks=pytest.mark.integration,
-                id=f"{fn.sql_name}-L2-sql",
-            )
         if (
             "companion" in l1
             and fn.accepts_virtual_tile
@@ -141,7 +132,7 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
         if level == "L3" and run.unavailable_reason():
             pytest.skip(run.unavailable_reason())
     fn = manifest.load().functions[sql_name]
-    jvm = level in ("L1", "L2") or variant.startswith("engine")
+    jvm = level == "L1" or variant.startswith("engine")
     spark = request.getfixturevalue("jvm_spark" if jvm else "spark")
     if level == "L0" and sql_name in product_stand_ins.WORKSPACE_ONLY:
         pytest.skip(

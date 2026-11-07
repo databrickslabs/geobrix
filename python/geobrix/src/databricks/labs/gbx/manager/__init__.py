@@ -86,7 +86,7 @@ def register(
         # a forced level, or a full registration, may follow a JAR staged since the last call; the per-name first-use
         # registrations of the Python API (`only=[name]`) keep the session's probes
         capabilities.forget(spark)
-    need_jvm = any(lv in man.functions[n].levels for n in names for lv in ("L1", "L2"))
+    need_jvm = any("L1" in man.functions[n].levels for n in names)
     caps = capabilities.detect(spark, need_jvm)
     out: Dict[str, Choice] = {}
     lines: List[Tuple[str, str]] = []
@@ -335,7 +335,7 @@ def register_family(
     level: Optional[str] = None,
 ) -> Dict[str, Choice]:
     """Register the names under ``prefixes`` (``('gbx_rst_',)``, ``('gbx_bng_', 'gbx_h3_')``), or ``only``, and
-    nothing else: the part of a session a test, a bench leg or a self-check needs. ``level`` ('L1', 'L2' or 'L3')
+    nothing else: the part of a session a test, a bench leg or a self-check needs. ``level`` ('L1' or 'L3')
     forces that level for them, so a test can compare two levels; without it the manager chooses, as in
     ``register(spark)``. With ``level``, a name that has no row at that level raises ``ValueError`` naming the names
     (with ``only`` or without), so a leg pinned to a level can never fall back to another one without saying so.
@@ -434,13 +434,11 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
             )
         reasons.append(f"geobrix: {levels.NAMES[level]} unavailable: {why}")
         level = "L3"
-    if level in ("L1", "L2"):
+    if level == "L1":
         from databricks.labs.gbx.manager import jvm
 
-        install = jvm.install_l1 if level == "L1" else jvm.install_l2
-        if level == "L1" and (
-            choice.variant == levels.ENGINE or "companion" not in spec
-        ):
+        install = jvm.install_l1
+        if choice.variant == levels.ENGINE or "companion" not in spec:
             install = jvm.install_l1_engine
         why = install(spark, fn, caps)
         if why is None:

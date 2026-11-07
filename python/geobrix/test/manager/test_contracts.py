@@ -258,14 +258,7 @@ def test_level_selection_contract(fn, case, monkeypatch):
     if name in ("serverless", "no-jar", "stale-jar"):
         assert choice.level == no_jvm
     if name == "standard":
-        assert choice.level != "L1"  # Catalyst is never chosen on Connect
-        l2 = fn.levels.get("L2", {})
-        if (
-            not l2
-            or fn.kind != "scalar"
-            or (fn.min_args != fn.max_args and "wrapper" not in l2)
-        ):
-            assert choice.level == no_jvm
+        assert choice.level == no_jvm  # no JVM level is chosen on Connect
     if name == "dedicated" and pref[0] == "L1":
         assert (choice.level == "L1") == _l1_shape_ok(fn)
     if name == "no-gdal" and fn.levels.get("L1", {}).get("needs_gdal"):
@@ -319,7 +312,7 @@ def test_a_measured_jvm_win_is_first_with_the_jar(name):
 
 def test_a_measured_jvm_loss_has_no_jvm_level():
     enab = MAN.functions["gbx_bng_eastnorthasbng"]
-    assert not {"L1", "L2"} & set(enab.levels)
+    assert "L1" not in enab.levels
     assert levels.order(enab) == ("L0", "L3")
     gfp = MAN.functions["gbx_rst_gridfrompoints"]
     assert "L1" not in gfp.levels and levels.order(gfp) == ("L3",)
@@ -335,7 +328,7 @@ def test_a_measured_jvm_loss_has_no_jvm_level():
 )
 def test_the_combine_functions_and_the_raster_bng_tessellate_have_no_jvm_level(name):
     fn = MAN.functions[name]
-    assert not {"L1", "L2"} & set(fn.levels)
+    assert "L1" not in fn.levels
     assert levels.order(fn) == ("L3",)
     # the JAR does not change it
     assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
@@ -399,7 +392,7 @@ def test_an_accessor_or_statistic_that_returns_an_array_map_or_struct_has_no_jvm
     """
     fn = MAN.functions[name]
     assert fn.returns_session not in _ONE_VALUE
-    assert not {"L1", "L2"} & set(fn.levels)
+    assert "L1" not in fn.levels
     assert levels.order(fn) == ("L3",)
     assert (
         levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
@@ -417,12 +410,11 @@ def test_no_array_map_or_struct_function_of_the_accessors_and_statistics_is_jvm_
 
 
 @pytest.mark.parametrize(
-    "fn", [f for f in FNS if {"L1", "L2"} & set(f.levels)], ids=lambda f: f.sql_name
+    "fn", [f for f in FNS if "L1" in f.levels], ids=lambda f: f.sql_name
 )
 def test_override_is_honoured(fn):
-    forced = "L1" if "L1" in fn.levels else "L2"
-    assert levels.select(fn, _caps()).level != forced  # no JAR: the default is light
-    assert levels.select(fn, _caps(), override=(forced, "-")).level == forced
+    assert levels.select(fn, _caps()).level != "L1"  # no JAR: the default is light
+    assert levels.select(fn, _caps(), override=("L1", "-")).level == "L1"
 
 
 def test_a_preferred_level_is_tried_first_and_falls_back_when_unavailable():
@@ -434,7 +426,9 @@ def test_a_preferred_level_is_tried_first_and_falls_back_when_unavailable():
     )
     choice = levels.select(fn, _caps(), prefer="L1")
     assert choice.level == "L3" and any("unavailable" in r for r in choice.reasons)
-    assert levels.select(fn, _caps(), prefer="L2").level == "L3"
+    assert (
+        levels.select(fn, _caps(), prefer="L2").level == "L3"
+    )  # a level the row lacks is ignored
 
 
 class _Session:
@@ -587,9 +581,7 @@ def test_pending_heavy_rows_name_real_oracle_rows():
 
     rows = {c.cid for table in oracles.TABLES.values() for c in table}
     assert set(oracles.HEAVY_PENDING) <= rows
-    assert all(
-        set(levels_) <= {"L1", "L2"} for levels_ in oracles.HEAVY_PENDING.values()
-    )
+    assert all(set(levels_) <= {"L1"} for levels_ in oracles.HEAVY_PENDING.values())
 
 
 def _declares(fqn, kind):
@@ -603,8 +595,7 @@ def _declares(fqn, kind):
 
 @pytest.mark.parametrize(
     "fqn",
-    [f.levels["L2"]["class"] for f in FNS if "L2" in f.levels]
-    + [caps_mod.BUILDINFO_UDF, caps_mod.GDALPROBE_UDF],
+    [caps_mod.BUILDINFO_UDF, caps_mod.GDALPROBE_UDF],
     ids=lambda fqn: fqn.rpartition(".")[2],
 )
 def test_java_udf_classes_exist_in_source(fqn):
@@ -2844,20 +2835,9 @@ def test_session_read_cap_falls_back_to_the_classic_budget_for_a_bad_value():
     assert session_read_cap(named) == 4096
 
 
-def test_every_level_a_row_declares_is_in_its_order():
-    """`select` only tries the levels in `order(fn)`: a row that declares L2 and whose family order omits it would
-    never reach its Java UDF. Only `gbx_rst_transformcrs` omits it on purpose (light measured faster than both
-    JVM levels), so this lists none.
-    """
-    omitted = {
-        f.sql_name: sorted(set(f.levels) & {"L1", "L2", "L3"} - set(levels.order(f)))
-        for f in FNS
-        if "L2" in f.levels
-        and "L2" not in levels.order(f)
-        and f.sql_name not in {"gbx_rst_transformcrs"}
-    }
-    assert omitted == {}
-    # that one omission is pinned: L3 only, and a dedicated cluster with the JVM available still selects L3
+def test_transformcrs_is_light_on_a_dedicated_cluster_with_the_jvm_available():
+    """Light measured faster than the JVM level of `gbx_rst_transformcrs`, so its order omits L1 on purpose: a
+    dedicated cluster with the JVM available still selects L3."""
     fn = MAN.functions["gbx_rst_transformcrs"]
     assert levels.PREFERENCE["gbx_rst_transformcrs"] == ("L3",)
     dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)

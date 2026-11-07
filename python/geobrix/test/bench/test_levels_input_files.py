@@ -75,3 +75,35 @@ def test_every_range_input_passes_its_row_count_to_the_table(
     with mock.patch.object(lf, "_table", table):
         builder(spark_session_local, 1234, "", "s")
     assert seen.get("rows") == 1234
+
+
+def test_a_virtual_input_compacted_to_one_file_is_read_spread():
+    """Table maintenance can rewrite the 13 KB table of 1000 virtual tiles as ONE file: its scan is then one task and the
+    op runs serially (1019 s for a warmup at 4x). A per-file input with fewer files than partitions is read through a
+    repartitioned view, at the partitions its builder used."""
+    spark = _spark()
+    spark.catalog.tableExists.return_value = True
+    spark.table.return_value.count.return_value = 1000
+    spark.sql.return_value.collect.return_value = [{"numFiles": 1}]
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_virt", lambda: None, per_file=2)
+    assert out != "s.mvp_in_virt" and "." not in out  # a session view
+    spark.table.return_value.repartition.assert_called_once_with(500)
+    spark.table.return_value.repartition.return_value.createOrReplaceTempView.assert_called_once_with(
+        out
+    )
+
+
+def test_a_virtual_input_already_spread_is_read_as_is():
+    spark = _spark()
+    spark.catalog.tableExists.return_value = True
+    spark.table.return_value.count.return_value = 1000
+    spark.sql.return_value.collect.return_value = [{"numFiles": 500}]
+    with mock.patch(
+        "databricks.labs.gbx.bench.runner._bench_parallelism", return_value=32
+    ):
+        out = lf._table(spark, "s", "mvp_in_virt", lambda: None, per_file=2)
+    assert out.startswith("s.mvp_in_virt")
+    spark.table.return_value.repartition.assert_not_called()

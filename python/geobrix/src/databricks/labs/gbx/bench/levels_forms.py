@@ -207,7 +207,31 @@ def _table(
             if "ALREADY_EXISTS" not in str(exc) or not spark.catalog.tableExists(full):
                 _drop_partial(spark, full)
                 raise
+    if per_file:
+        return _spread_if_compacted(spark, full)
     return full
+
+
+def _spread_if_compacted(spark, full: str) -> str:
+    """`full`, or a session view of it spread over the partitions of a tile family. Table maintenance rewrites the 13 KB
+    table of virtual tiles as ONE file after it was written in files of a few rows, and a one-file scan is one task: the
+    op then runs serially (a warmup of 1019 s at 4x, where the spread table took 61 s). A table with fewer files than
+    partitions is read through the same repartition its builder used."""
+    from databricks.labs.gbx.bench.levels_family import family_partitions
+
+    want = family_partitions(spark, spark.table(full).count())
+    if (
+        want <= 1
+        or spark.sql(f"DESCRIBE DETAIL {full}").collect()[0]["numFiles"] >= want
+    ):
+        return full
+    view = full.split(".")[-1] + "_spread"
+    spark.table(full).repartition(want).createOrReplaceTempView(view)
+    print(
+        f"[LEVELS input] {full} has fewer files than {want} partitions: read spread as {view}",
+        flush=True,
+    )
+    return view
 
 
 _INPUT_NAME = re.compile(r"^(mvp_in_.+?)_([0-9a-f]{8})(_tiles)?$")

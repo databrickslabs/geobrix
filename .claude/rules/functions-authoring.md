@@ -92,7 +92,7 @@ Test function:    test_<component>_<op>       (e.g. test_bng_eastnorthasbng)
 - Use `_geom` not `_geometry` (e.g. `bng_geomkring`, not `bng_geometrykring`).
 - Keep `_agg` suffix for aggregators (aligns with Databricks geospatial docs).
 - Quick check: `grep -r "def bng_" python/geobrix/src/` should match `grep -r "gbx_bng_" src/main/scala/.../register`.
-- **Binding parity is enforced.** `gbx:test:bindings` (→ `docs/scripts/check-binding-parity.py`) asserts every name in `registered_functions.txt` exists as a Scala `override def name` literal, a Python `functions.py` binding, and a `function-info.json` key — a function missing from any binding fails (it would surface at runtime as `UNRESOLVED_ROUTINE`). The QC judge runs this on every push via the `binding-parity` command check in `.claude/qc-judge/config.json`. When adding a function, add all three bindings, not just the canonical list.
+- **Binding parity is enforced.** `gbx:test:bindings` (→ `docs/scripts/check-binding-parity.py`) asserts every stable row of the function manifest (`manifest/functions.json`; a name left in `registered_functions.txt` without a row also fails) exists as a Python `functions.py` binding and a `function-info.json` key, and, when the row has an L1 level, as a Scala `override def name` literal and in its own package's heavy module — a function missing from any binding fails, and finding 0 canonical functions fails too (it would surface at runtime as `UNRESOLVED_ROUTINE`). The QC judge runs this on every push via the `binding-parity` command check in `.claude/qc-judge/config.json`. When adding a function, add all three bindings, not just the canonical list.
 
 ## A signature change moves seven surfaces together (they fail SILENTLY)
 

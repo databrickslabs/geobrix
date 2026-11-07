@@ -9,9 +9,14 @@ _JSON = ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
 _LEGACY = ROOT / "docs/tests-function-info/registered_functions.txt"
 
 
-def stable_names() -> set:
+def stable_rows() -> dict:
+    """The raw manifest row of every stable function, by SQL name."""
     raw = json.loads(_JSON.read_text())
-    return {r["sql_name"] for r in raw["functions"] if r.get("status", "stable") == "stable"}
+    return {r["sql_name"]: r for r in raw["functions"] if r.get("status", "stable") == "stable"}
+
+
+def stable_names() -> set:
+    return set(stable_rows())
 
 
 def all_names() -> set:

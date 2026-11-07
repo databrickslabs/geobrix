@@ -136,24 +136,6 @@ def test_the_range_ends_are_parsed_and_a_three_dot_range_starts_at_the_merge_bas
     assert mod.range_ends("HEAD...HEAD") == (sha, "HEAD")
 
 
-# --- check-binding-parity.py ----------------------------------------------------------------------------
-
-
-def test_binding_parity_skips_a_stable_manifest_name_but_fails_a_legacy_name(
-    monkeypatch, capsys
-):
-    mod = _load("check-binding-parity")
-    monkeypatch.setattr(
-        mod, "canonical_sql", lambda: {"gbx_bng_eastnorthasbng", "gbx_rst_fake"}
-    )
-    monkeypatch.setattr(mod, "scala_names", lambda: set())
-    monkeypatch.setattr(mod, "python_names", lambda: set())
-    monkeypatch.setattr(mod, "function_info_keys", lambda: set())
-    assert mod.main() == 1
-    out = capsys.readouterr().out
-    assert "gbx_rst_fake" in out and "gbx_bng_eastnorthasbng" not in out
-
-
 # --- check-since.py -------------------------------------------------------------------------------------
 
 

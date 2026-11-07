@@ -3095,6 +3095,32 @@ def test_a_notebook_on_a_new_cluster_gets_the_wheel_as_a_cluster_library(
     ]
 
 
+def test_no_wheel_installs_only_the_extra_deps_and_no_cluster_library(
+    runner, monkeypatch, tmp_path
+):
+    """A plain-pyspark probe needs no geobrix wheel: --no-wheel leaves it out of the environment and the cluster."""
+    code, seen = _launch(
+        runner, monkeypatch, tmp_path, "--no-wheel", "--extra-deps", "rich", "--new-cluster", "19.x-scala2.13"
+    )
+    assert code == 0 and len(seen) == 1
+    assert seen[0]["deps"] == ["rich"]  # no wheel, and none of the default extras
+    assert seen[0]["job_cluster"].wheel is None
+    assert runner._cluster_libraries(seen[0]["job_cluster"]) == []
+
+    code, seen = _launch(runner, monkeypatch, tmp_path, "--no-wheel")  # Serverless: an empty environment
+    assert code == 0 and seen[0]["deps"] == []
+
+    code, seen = _launch(runner, monkeypatch, tmp_path)  # unchanged: the default wheel
+    assert seen[0]["deps"][0] == runner.DEFAULT_WHEEL
+
+
+def test_no_wheel_and_wheel_are_exclusive(runner, monkeypatch, tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc:
+        _launch(runner, monkeypatch, tmp_path, "--no-wheel", "--wheel", ENV6)
+    assert exc.value.code == 2
+    assert "--no-wheel and --wheel are exclusive" in capsys.readouterr().err
+
+
 def test_a_serverless_notebook_run_installs_no_cluster_library(
     runner, monkeypatch, tmp_path
 ):

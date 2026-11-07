@@ -22,6 +22,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--wheel VOLPATH` – Volume path to the geobrix wheel (default: the env6 wheel, `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl`; stage it with `gbx:data:stage-wheel --env 6`). An env wheel must match `--env-version` (the env5 wheel with `--env-version 5`): the other environment's wheel refuses to import, so the runner stops before submitting.
 - On `--new-cluster`, `--wheel` is also installed as a library of the cluster, and its environment must match the runtime (DBR 17.3 and 18: env5, DBR 19: env6).
 - With `--hardware-accelerator`, pass the env6 wheel and `--env-version 6`: the UDF workers of Serverless GPU run environment 6. An env5 wheel prints a warning.
+- `--no-wheel` – Install no geobrix wheel and no `--extras`; only `--extra-deps` are installed. Use it for a probe notebook that runs on plain pyspark. Exclusive with `--wheel`. On `--new-cluster` the cluster gets no wheel library.
 - `--env-version VER` – Serverless environment version (default: `6`).
 - `--existing-cluster-id ID` – Run on an existing (warm) classic cluster instead of Serverless; the notebook's `%pip` cells are kept and install its deps (`--extras`/`--wheel`/`--env-version` do not apply).
 - `--pool NAME`, `--pool-volume VOLROOT` – Run on an idle cluster leased from the pool NAME (`gbx:bench:pool up --name NAME`) instead of Serverless. There is no cluster start, only one run per cluster at a time. An ended cluster is started, and `--jar` (or none) is made the cluster's jar. `%pip` cells are kept. Exclusive with `--new-cluster`, `--existing-cluster-id` and `--hardware-accelerator`. See `gbx-bench-pool.md`.
@@ -75,6 +76,10 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh \
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
   --notebook examples/notebooks/h3-rasterize/h3_rasterize_isobands.ipynb \
   --new-cluster 19.x-scala2.13
+
+# A plain-pyspark probe: no geobrix wheel is installed
+bash scripts/commands/gbx-test-notebooks-serverless.sh \
+  --notebook examples/tests/probe_arrow_empty_chunks.ipynb --no-wheel
 
 # Run a probe notebook on a DBR 19 standard-access job cluster (terminated with its run)
 bash scripts/commands/gbx-test-notebooks-serverless.sh \

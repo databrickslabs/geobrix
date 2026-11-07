@@ -770,10 +770,10 @@ def runtime_env(spark_version: str) -> Optional[int]:
     return 5 if major in (17, 18) else 6 if major >= 19 else None
 
 
-def gpu_wheel_warning(wheel: str, hardware_accelerator: Optional[str]) -> Optional[str]:
+def gpu_wheel_warning(wheel: Optional[str], hardware_accelerator: Optional[str]) -> Optional[str]:
     """A note when an env5 wheel goes to Serverless GPU: the UDF workers there run environment 6 whatever the
     driver's environment, so the wheel's import guard refuses in any UDF. (A driver-only GPU step is fine.)"""
-    if hardware_accelerator and wheel_env(wheel) == 5:
+    if wheel and hardware_accelerator and wheel_env(wheel) == 5:
         return (
             f"--wheel {wheel} is the env5 wheel and the run asks for Serverless GPU ({hardware_accelerator}). The UDF "
             "workers of Serverless GPU run environment 6 even when the driver runs environment 5, so a notebook that "
@@ -783,12 +783,12 @@ def gpu_wheel_warning(wheel: str, hardware_accelerator: Optional[str]) -> Option
     return None
 
 
-def _check_wheel_env(wheel: str, env_version: Optional[str], runtime: Optional[str] = None) -> None:
+def _check_wheel_env(wheel: Optional[str], env_version: Optional[str], runtime: Optional[str] = None) -> None:
     """Refuse an env wheel built for another environment than the run's: it refuses to import there.
 
     ``runtime`` names the classic cluster runtime that fixed ``env_version`` (--python-task); without it the
     environment is the --env-version of a Serverless run."""
-    env = wheel_env(wheel)
+    env = wheel_env(wheel) if wheel else None
     if env is None or env_version is None or str(env_version) == str(env):
         return
     if runtime:
@@ -804,11 +804,13 @@ def _check_wheel_env(wheel: str, env_version: Optional[str], runtime: Optional[s
 
 
 def _build_dep_list(
-    wheel: str,
+    wheel: Optional[str],
     extras: list[str],
     extra_deps: list[str],
     env_version: Optional[str] = None,
 ) -> list[str]:
+    if wheel is None:  # --no-wheel: a plain-pyspark probe installs only what --extra-deps names
+        return list(extra_deps)
     env = wheel_env(wheel)
     _check_wheel_env(wheel, env_version)
     deps: list[str] = [wheel]
@@ -890,10 +892,18 @@ def main() -> int:
     parser.add_argument(
         "--wheel",
         metavar="VOLPATH",
-        default=DEFAULT_WHEEL,
+        default=None,
         help=(
             f"Volume path to the geobrix wheel (default: {DEFAULT_WHEEL!r}). An env wheel "
             "(+env5 / +env6) must match --env-version."
+        ),
+    )
+    parser.add_argument(
+        "--no-wheel",
+        action="store_true",
+        help=(
+            "Install no geobrix wheel (and no --extras): for a probe notebook that uses plain pyspark. "
+            "Only --extra-deps are installed. Exclusive with --wheel."
         ),
     )
     parser.add_argument(
@@ -1095,6 +1105,11 @@ def main() -> int:
 
     args = parser.parse_args()
 
+    if args.no_wheel and args.wheel:
+        parser.error("--no-wheel and --wheel are exclusive: --no-wheel installs no geobrix wheel")
+    if not args.no_wheel and args.wheel is None:
+        args.wheel = DEFAULT_WHEEL
+
     # Validate --set-var forms early (NAME=VALUE, NAME a valid identifier).
     for sv in args.set_vars or []:
         name, sep, _ = sv.partition("=")
@@ -1195,7 +1210,7 @@ def main() -> int:
     notebooks = [snap.get(nb, nb) for nb in notebooks]
     args.dep_notebooks = [str(snap.get(d, d)) for d in dep_nbs]
 
-    extras = [e.strip() for e in args.extras.split(",") if e.strip()]
+    extras = [e.strip() for e in args.extras.split(",") if e.strip()] if args.wheel else []
     extra_deps = _split_deps(args.extra_deps)
     # A new cluster's runtime fixes the wheel environment (--env-version is the Serverless one).
     new_runtime = args.new_cluster if isinstance(args.new_cluster, str) else args.spark_version
@@ -1266,7 +1281,10 @@ def main() -> int:
     print(f"Profile  : {args.profile}", flush=True)
     print(f"Workspace: {ws_dir}", flush=True)
     print(f"Extras   : {', '.join(extras)}", flush=True)
-    print(f"Deps     : {len(deps)} entries (wheel + {len(deps) - 1} packages)", flush=True)
+    if args.wheel:
+        print(f"Deps     : {len(deps)} entries (wheel + {len(deps) - 1} packages)", flush=True)
+    else:
+        print(f"Deps     : {len(deps)} entries (no geobrix wheel: --no-wheel)", flush=True)
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
     if args.hardware_accelerator:

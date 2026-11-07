@@ -43,6 +43,8 @@ show_help() {
     echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel (default: the env6 wheel,"
     echo -e "                        /Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0+env6-py3-none-any.whl)."
     echo -e "                        An env wheel (+env5 / +env6) must match --env-version."
+    echo -e "  ${GREEN}--no-wheel${NC}            Install no geobrix wheel and no --extras, only --extra-deps: for a probe"
+    echo -e "                        notebook that uses plain pyspark. Exclusive with --wheel."
     echo -e "  ${GREEN}--env-version VER${NC}     Serverless environment version (default: 6)."
     echo -e "  ${GREEN}--hardware-accelerator VALUE${NC} Serverless GPU AI Runtime accelerator"
     echo -e "                        (e.g. GPU_1xA10, GPU_1xH100). Omit for CPU Serverless"

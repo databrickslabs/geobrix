@@ -17,6 +17,8 @@ import pytest
 
 rasterio = pytest.importorskip("rasterio")
 
+import rasterio.errors  # noqa: E402
+import rasterio.shutil  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402
 from rasterio.transform import from_origin  # noqa: E402
 
@@ -174,6 +176,49 @@ def test_the_formats_kept_readable_still_open_from_bytes(driver, tmp_path):
     with _gdal_policy.open_bytes(raw) as ds:
         assert ds.driver == driver
         assert ds.read().shape[-2:] == (4, 4)
+
+
+def _netcdf4_bytes(tmp_path) -> bytes:
+    """A georeferenced NetCDF-4 file (HDF5 container) written by GDAL's netCDF driver, as bytes."""
+    src = tmp_path / "src.tif"
+    with rasterio.open(
+        src,
+        "w",
+        driver="GTiff",
+        width=5,
+        height=4,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(10, 50, 0.5, 0.5),
+    ) as w:
+        w.write(np.arange(20, dtype="float32").reshape(1, 4, 5))
+    out = tmp_path / "out.nc"
+    try:
+        rasterio.shutil.copy(src, out, driver="netCDF", FORMAT="NC4")
+    except Exception as exc:  # noqa: BLE001 - this GDAL cannot write netCDF-4
+        pytest.skip(f"this GDAL cannot write netCDF-4 here: {str(exc)[:80]}")
+    return out.read_bytes()
+
+
+def test_netcdf4_bytes_open_as_netcdf_with_their_georeference(tmp_path):
+    """NetCDF-4 is an HDF5 file. Opened from memory with no driver named, GDAL's HDF5Image driver can claim it
+    and read it with an identity geotransform; the bytes must open as netCDF, as the same file opened by path
+    does, whatever else the process has done with netCDF."""
+    raw = _netcdf4_bytes(tmp_path)
+    assert raw.startswith(b"\x89HDF"), "the fixture must be a netCDF-4 (HDF5) file"
+    with _gdal_policy.open_bytes(raw) as ds:
+        assert ds.driver == "netCDF"
+        assert tuple(ds.transform.to_gdal()) == (10.0, 0.5, 0.0, 50.0, 0.0, -0.5)
+        assert ds.read().shape == (1, 4, 5)
+
+
+def test_hdf5_bytes_netcdf_cannot_read_keep_the_bindings_own_error():
+    """The netCDF attempt for HDF5-signature bytes falls back to the allowed list: bytes that are no raster
+    in either way raise the binding's error, not a policy error."""
+    raw = b"\x89HDF\r\n\x1a\n" + bytes(64)
+    with pytest.raises(rasterio.errors.RasterioIOError):
+        _gdal_policy.open_bytes(raw).close()
 
 
 def test_a_geotiff_opens_and_a_png_opens():

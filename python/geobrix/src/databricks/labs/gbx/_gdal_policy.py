@@ -1175,6 +1175,10 @@ def _bytes_drivers(memfile, explicit, mode: str):
     return [name for name in allowed_names() if name not in refused]
 
 
+# How an HDF5 file (so a NetCDF-4 file) starts.
+_HDF5_SIGNATURE = b"\x89HDF\r\n\x1a\n"
+
+
 def open_bytes(data, **kwargs):
     """A read of raster bytes under the driver policy: ``data`` is bytes (a tile's raster, an intermediate GeoBrix
     wrote) or a ``MemoryFile``. The open uses the allowed drivers as GDAL's driver list and checks the driver it
@@ -1191,6 +1195,20 @@ def open_bytes(data, **kwargs):
     owned = not isinstance(data, rio_io.MemoryFile)
     memfile = rio_io.MemoryFile(data) if owned else data
     try:
+        if "driver" not in kwargs and _head(memfile, None).startswith(_HDF5_SIGNATURE):
+            # NetCDF-4 is an HDF5 file, and from memory (no file name to tell them apart) GDAL can hand it to the
+            # HDF5Image driver, which reads it with an identity geotransform. Try netCDF first, as the same file
+            # opened by path is; bytes it declines (plain HDF5, not a raster) go the way any other bytes go.
+            try:
+                ds = open_bytes(memfile, driver="netCDF", **kwargs)
+            except (
+                Exception
+            ):  # noqa: BLE001 - not a netCDF-4 raster: the allowed list decides below
+                ds = None
+            if ds is not None:
+                if owned:
+                    ds._env.enter_context(memfile)
+                return ds
         mode = activate()["mode"]
         if mode == "off":
             # GDAL as GDAL has it, through the MemoryFile's own open (rasterio 1.3's open would take the file-like path)

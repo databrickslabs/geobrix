@@ -11,7 +11,7 @@ Run the Unity Catalog tests on Databricks: the UC oracle slice and the example f
   - `core` runs the grid and vector oracle tables and all example files.
   - `full` adds the raster tables to `core`.
 - `--against SCHEMA` - run the scope against the existing install in `SCHEMA`. No build, stage, install or cleanup. It writes `evidence-adhoc.json`, never `evidence.json`.
-- `--warehouse-id ID` - SQL warehouse. Default `GBX_UC_WAREHOUSE_ID` in `examples/tests/databricks_cluster_config.env`.
+- `--warehouse-id ID` - SQL warehouse. Default `GBX_UC_GATE_WAREHOUSE_ID` (a warehouse sized for the gate), else `GBX_UC_WAREHOUSE_ID`, in `examples/tests/databricks_cluster_config.env`.
 - `--catalog C` - catalog of the schema. Default `geospatial_docs`.
 - `--volroot DIR` - Volume folder that holds `uc-it/<sha12>/`. Default `/Volumes/geospatial_docs/geobrix/sample-data`.
 - `--batch N` - value cases per warehouse statement. Default `25`; `1` runs every case alone. The warehouse pays about 10 s per statement that calls a UC Python function, whatever it computes. So the cases of a batch share one statement (one row, one column per case). A case that must be refused (an expected error aborts a statement) and a recipe always run alone. A batch that fails as a whole is rerun case by case, so a failure still names its case. Every case is judged on its own, as without batching.

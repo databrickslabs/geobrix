@@ -181,8 +181,12 @@ def jar_stale(jar: Path, root: Path = REPO_ROOT) -> bool:
 def warehouse_from_config(config: Path = CONFIG) -> Optional[str]:
     if not config.is_file():
         return None
-    ids = re.findall(r"^GBX_UC_WAREHOUSE_ID=(.*)$", config.read_text(), flags=re.M)
-    return ids[-1].strip().strip("\"'") if ids else None
+    text = config.read_text()
+    for key in ("GBX_UC_GATE_WAREHOUSE_ID", "GBX_UC_WAREHOUSE_ID"):  # the gate's own warehouse wins
+        ids = re.findall(rf"^{key}=(.*)$", text, flags=re.M)
+        if ids and ids[-1].strip().strip("\"'"):
+            return ids[-1].strip().strip("\"'")
+    return None
 
 
 def install_notebook(catalog: str, schema: str, folder: str) -> dict:
@@ -608,7 +612,7 @@ def main(argv=None) -> int:
     elif EVIDENCE.exists():
         EVIDENCE.unlink()  # a run that stops early must not leave the last run's pass behind
     if not g.warehouse:
-        print("--warehouse-id required (or GBX_UC_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env)", file=sys.stderr)
+        print("--warehouse-id required (or GBX_UC_GATE_WAREHOUSE_ID / GBX_UC_WAREHOUSE_ID in examples/tests/databricks_cluster_config.env)", file=sys.stderr)
         return 2
     sl = ex = None
     try:

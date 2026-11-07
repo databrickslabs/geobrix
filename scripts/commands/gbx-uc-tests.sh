@@ -28,7 +28,7 @@ Options:
   --against SCHEMA        Run the scope against the existing install in SCHEMA. No build, stage, install or
                           cleanup. Writes evidence-adhoc.json, never evidence.json: the installed code may
                           not match HEAD, so the run is not evidence for a pull request.
-  --warehouse-id ID       SQL warehouse (default: GBX_UC_WAREHOUSE_ID in
+  --warehouse-id ID       SQL warehouse (default: GBX_UC_GATE_WAREHOUSE_ID, else GBX_UC_WAREHOUSE_ID, in
                           examples/tests/databricks_cluster_config.env)
   --catalog C             Catalog of the schema (default geospatial_docs)
   --volroot DIR           Volume folder that holds uc-it/<sha12>/ (default
@@ -86,9 +86,14 @@ cd "$PROJECT_ROOT" || exit 1
 show_banner "GeoBrix: Unity Catalog tests"
 setup_log_file "$LOG_PATH"
 
-# The warehouse id may live in the (untracked) cluster config; read that one key, never source the file.
+# The warehouse id may live in the (untracked) cluster config; read those keys, never source the file.
+# GBX_UC_GATE_WAREHOUSE_ID (a warehouse sized for the gate) wins over the shared GBX_UC_WAREHOUSE_ID.
 if [[ "$HAVE_WAREHOUSE" == false && -f "$CONFIG" ]]; then
-    WAREHOUSE_ID="$(grep -E '^GBX_UC_WAREHOUSE_ID=' "$CONFIG" | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'")"
+    WAREHOUSE_ID=""
+    for KEY in GBX_UC_GATE_WAREHOUSE_ID GBX_UC_WAREHOUSE_ID; do
+        WAREHOUSE_ID="$(grep -E "^${KEY}=" "$CONFIG" | tail -1 | cut -d= -f2- | tr -d '[:space:]"'"'")"
+        [[ -n "$WAREHOUSE_ID" ]] && break
+    done
     [[ -n "$WAREHOUSE_ID" ]] && ARGS+=(--warehouse-id "$WAREHOUSE_ID")
 fi
 

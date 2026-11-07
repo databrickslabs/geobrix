@@ -139,6 +139,8 @@ object RST_Proximity extends WithExpressionInfo {
         require(ds != null, "RST_Proximity.execute: source Dataset is null")
         requireUnits(distUnits)
         requireMaxDistance(maxDistance)
+        // parsed before the output dataset exists: a bad value fails the call without leaving that dataset behind
+        val targets: Option[Set[Long]] = targetValues.filter(_.trim.nonEmpty).map(parseTargets)
 
         // Build an output GTiff Dataset matching the source's georeferencing.
         val w = ds.GetRasterXSize
@@ -159,7 +161,6 @@ object RST_Proximity extends WithExpressionInfo {
         // ~6% off). GDAL compares targets in the integer domain (a pixel is rounded half away from zero to a
         // 32-bit integer first), so the same rounding picks the source pixels here.
         val srcBand = ds.GetRasterBand(1)
-        val targets: Option[Set[Long]] = targetValues.filter(_.trim.nonEmpty).map(parseTargets)
         val rowBuf = new Array[Double](w)
         val (xSpacing, ySpacing) =
             if (distUnits == "GEO" && gt != null && gt(1) != 0.0 && gt(5) != 0.0) (math.abs(gt(1)), math.abs(gt(5)))

@@ -21,13 +21,19 @@ object L1Installer {
       * is `system.session.<name>` there (what `createOrReplaceTempFunction` builds). Spark 4.0 to 4.2 key a session
       * function by its bare name, and a `session` database would make it a different key. The one JAR runs on both,
       * so the identifier is chosen at run time: `lookupFunctionEntry` exists on a registry from 4.3 on. */
-    private val qualifiedRegistryIds: Boolean =
-        classOf[org.apache.spark.sql.catalyst.analysis.FunctionRegistryBase[_]].getMethods.exists(_.getName == "lookupFunctionEntry")
+    private val qualifiedRegistryIds: Boolean = registryIsQualified(classOf[org.apache.spark.sql.catalyst.analysis.FunctionRegistryBase[_]])
+
+    /** True when a registry class keys its functions by the 3-part identifier (it has `lookupFunctionEntry`). */
+    private[kernels] def registryIsQualified(registryClass: Class[_]): Boolean =
+        registryClass.getMethods.exists(_.getName == "lookupFunctionEntry")
+
+    /** The identifier of a session function `name` for a registry that is `qualified` or not. */
+    private[kernels] def sessionFunctionId(name: String, qualified: Boolean): FunctionIdentifier =
+        if (qualified) new FunctionIdentifier(name, Some("session"), Some("system"))
+        else FunctionIdentifier(name)
 
     /** The identifier a session function `name` is registered and looked up under, on the running Spark. */
-    def sessionFunctionId(name: String): FunctionIdentifier =
-        if (qualifiedRegistryIds) new FunctionIdentifier(name, Some("session"), Some("system"))
-        else FunctionIdentifier(name)
+    def sessionFunctionId(name: String): FunctionIdentifier = sessionFunctionId(name, qualifiedRegistryIds)
 
     private def companion(fqn: String): WithExpressionInfo = {
         // scalastyle:off classforname

@@ -91,4 +91,14 @@ class ProximityExactTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(got.forall(_ == -1.0))
     }
 
+    test("rst_proximity refuses a target_values entry that is not a number, naming the argument and the value") {
+        val src = raster(4, 4, 1.0, 1.0, Array.fill(16)(1.0))
+        try {
+            val e = intercept[IllegalArgumentException] {
+                RST_Proximity.execute(src, Map.empty, Some("1, x ,3"), "PIXEL", None)
+            }
+            assert(e.getMessage.contains("target_values") && e.getMessage.contains("'1, x ,3'"), e.getMessage)
+        } finally src.delete()
+    }
+
 }

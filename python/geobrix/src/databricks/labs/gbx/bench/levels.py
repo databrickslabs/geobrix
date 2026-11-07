@@ -71,6 +71,10 @@ class Form:
     # A form that runs only when `--levels-forms` names it (the one-worker readdir probes): the default run of a set
     # skips it, the local preflight judges it only when it is selected.
     opt_in: bool = False
+    # A one-row SELECT over {src} answering (n, fp, n_out) like `sql`, but with `fp` a hash of the decoded VALUES of the
+    # output (`value_fp`), not of its encoding. It runs once, after the timed iterations and outside them, and its
+    # fingerprint replaces the length one in the row (`v1:<n>`; the length one moves to the note as `len_fp`).
+    vsql: str = ""
 
 
 def detect_compute(spark) -> str:
@@ -1347,7 +1351,7 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
         note="; ".join(note),
         status="ok",
         timing=timing,
-        fp=str(fp),
+        fp=fp,
         m=m,
         input_partitions=scan_tasks or 0,
         setup_s=holder["first"] - t_start,
@@ -1361,6 +1365,10 @@ def _first_iteration_stop(rung: "_Rung", measured: int) -> Callable[[float], boo
     budget = rung.exec_budget_s if rung.exec_budget_s is not None else rung.deadline_s
     share = budget / max(measured, 1)
     seen = [0]
+    fp = str(fp)
+    if form.vsql:
+        fp, vnote = _value_fingerprint(ctx, form, src, n, n_out, fp)
+        note += vnote
 
     def stop(secs: float) -> bool:
         secs = rung.meas[-1] if rung.meas else secs  # on the run's clock
@@ -1373,6 +1381,28 @@ def _first_iteration_stop(rung: "_Rung", measured: int) -> Callable[[float], boo
         if seen[0] == 1 and measured > 1 and secs > share:
             rung.early_why = f"the first took {secs:.1f}s > its share {share:.1f}s of the {budget:.0f}s budget"
             return True
+def _value_fingerprint(
+    ctx: "_Ctx", form: Form, src: str, n: int, n_out: int, length_fp: str
+) -> Tuple[str, List[str]]:
+    """The form's value-level fingerprint (``v1:<n>``), from its ``vsql`` run once outside the timed iterations, and the
+    notes for the row. A failure of this pass is a note, not a failure of the form: the length fingerprint stays.
+    """
+    from databricks.labs.gbx.bench import value_fp
+
+    try:
+        if "value_fp" not in ctx.setups:
+            value_fp.register(ctx.spark)
+            ctx.setups.add("value_fp")
+        r = ctx.spark.sql(form.vsql.format(src=src, uc=ctx.uc or "")).collect()[0]
+        if r[2] != r[0] and not form.allows_null:
+            return length_fp, [f"value_fp: {r[0] - r[2]} of {r[0]} outputs NULL"]
+        if r[1] is None:
+            return length_fp, ["value_fp: no value"]
+        return f"{value_fp.VERSION}:{r[1]}", [f"len_fp={length_fp}"]
+    except Exception as exc:  # noqa: BLE001 - the timed row stands
+        return length_fp, [f"value_fp failed: {type(exc).__name__}: {str(exc)[:120]}"]
+
+
         return False
 
     return stop

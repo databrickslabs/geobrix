@@ -1566,6 +1566,14 @@ def _row(
     )
 
 
+_FLOORS = ("floor", "floor@virt")
+
+
+def _floor_of(form: str) -> str:
+    """The floor a form is compared with: the one over the input it reads (a virtual-tile form has its own)."""
+    return "floor@virt" if "virtual" in form or "-virt" in form else "floor"
+
+
 def summarize(rows: List[ResultRow]) -> str:
     """A markdown table of a levels run: one line per form and scale, the attribution split beside the timing.
 
@@ -1574,9 +1582,9 @@ def summarize(rows: List[ResultRow]) -> str:
     variant: the share of a variant's time that a faster kernel cannot win back.
     """
     floor = {
-        (r.fn, r.level, r.rows): r.iter_median_s
+        (r.fn, r.level, r.rows, r.form): r.iter_median_s
         for r in rows
-        if r.form == "floor" and r.status == "ok"
+        if r.form in _FLOORS and r.status == "ok"
     }
 
     def f(v, fmt):
@@ -1621,8 +1629,11 @@ def summarize(rows: List[ResultRow]) -> str:
             str(r.rows),
             f"{r.iter_median_s:.3f}",
             (
-                f(floor.get((r.fn, r.level, r.rows)), lambda x: f"{x:.3f}")
-                if r.form != "floor"
+                f(
+                    floor.get((r.fn, r.level, r.rows, _floor_of(r.form))),
+                    lambda x: f"{x:.3f}",
+                )
+                if r.form not in _FLOORS
                 else "-"
             ),
             f"{r.throughput_rows_s:.0f}",

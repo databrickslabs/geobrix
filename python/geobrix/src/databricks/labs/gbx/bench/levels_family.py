@@ -663,6 +663,20 @@ _FAMILY_INPUT = {
 }
 
 
+def _virtual_inputs(forms: List[Form], fn: str, floored: str) -> List[str]:
+    """The virtual-tile inputs `fn`'s forms read (the plain one, not a skew variant of it) that its floor does not."""
+    return sorted(
+        {
+            f.input
+            for f in forms
+            if f.fn == fn
+            and "virt" in f.input
+            and "skew" not in f.input
+            and f.input != floored
+        }
+    )
+
+
 def reused_forms(lf) -> Dict[str, List[Form]]:
     out: Dict[str, List[Form]] = {}
     for fam, forms in _reused(lf).items():
@@ -693,6 +707,21 @@ def reused_forms(lf) -> Dict[str, List[Form]]:
                     register=False,
                 )
             )
+            # A floor reads the input of the forms it is the floor of. The forms on virtual tiles (paths, no bytes) read
+            # their own input, not the materialized one: a floor over the materialized input builds n whole tiles
+            # (past 900 s at 16x) for a run that times only the virtual forms. They get a scan floor of their own.
+            for virt in _virtual_inputs(keep, fn, inp):
+                keep.append(
+                    Form(
+                        mvp=fam,
+                        fn=fn,
+                        level="L3",
+                        variant="floor@virt",
+                        input=virt,
+                        sql=sql,
+                        register=False,
+                    )
+                )
         out[fam] = keep
     return out
 

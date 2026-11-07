@@ -797,3 +797,68 @@ def test_a_second_function_set_reads_n_rows_in_a_cap_per_partition(
         assert max(sizes) <= fam.FAMILY_ROWS_PER_PARTITION, sizes
     else:
         assert df.where("size(points) != size(vals) OR size(points) < 1").count() == 0
+
+
+# ---- a floor reads the input of the forms it is the floor of
+
+
+def _reused_with_floors():
+    return [
+        (family, fn)
+        for family, floors in fam._REUSED_FLOORS.items()
+        for fn, _, _ in floors
+    ]
+
+
+@pytest.mark.parametrize("family,fn", _reused_with_floors())
+def test_every_virtual_input_of_a_function_has_a_floor_over_that_same_input(family, fn):
+    """Plan shape: a floor never builds an input the forms it is the floor of do not read. A run of the virtual forms alone
+    (`--levels-forms virtual,floor@virt`) needs the virtual input and no materialized tile.
+    """
+    forms = [f for f in lf.FORMS[family] if f.fn == fn]
+    floors = {f.input for f in forms if f.variant.startswith("floor")}
+    virtual = {
+        f.input
+        for f in forms
+        if "virt" in f.input and "skew" not in f.input and not f.variant.startswith("floor")
+    }  # fmt: skip
+    assert virtual <= floors, (family, fn, virtual - floors)
+    # a floor is a scan of the input it names, and one floor per input
+    names = [f.variant for f in forms if f.variant.startswith("floor")]
+    assert len(names) == len(set(names)) == len(floors), names
+
+
+def test_the_virtual_tile_op_forms_and_their_floor_read_one_input_and_the_mat_floor_stays():
+    forms = {f.variant: f for f in lf.FORMS["raster-tile-op"]}
+    virt = [f for f in forms.values() if "virtual" in f.variant]
+    assert virt and {f.input for f in virt} == {"tiles_virt"}
+    assert forms["floor@virt"].input == "tiles_virt"
+    assert forms["floor"].input == "tiles_n"  # the floor of the materialized forms
+    picked = lf.select_forms("raster-tile-op", ["virtual", "floor@virt"])
+    assert {f.input for f in picked} == {
+        "tiles_virt"
+    }  # nothing else is built for this part
+
+
+def test_a_virtual_form_is_compared_with_the_floor_over_its_own_input():
+    def row(form, med):
+        return levels._row(
+            dict(
+                run_id="r", api="lightweight", fn="gbx_rst_transformcrs", category="levels", mode="spark-path",
+                rows=4, level="L3", form=form, compute="dedicated", env_arch="", env_cpu_model="", env_cpu_count=0,
+                env_os="", env_gbx_version="", env_gdal_version="", env_runtime_version="", env_where="t",
+            ),
+            status="ok",
+            timing={"iter_median_ms": med * 1000.0},
+        )  # fmt: skip
+
+    table = levels.summarize(
+        [row("-", 10.0), row("virtual", 3.0), row("floor", 1.0), row("floor@virt", 0.5)]
+    )
+    cells = {
+        ln.split("|")[3].strip(): [c.strip() for c in ln.split("|")]
+        for ln in table.splitlines()
+        if "| L3 |" in ln
+    }
+    assert cells["-"][7] == "1.000" and cells["virtual"][7] == "0.500"
+    assert cells["floor"][7] == cells["floor@virt"][7] == "-"

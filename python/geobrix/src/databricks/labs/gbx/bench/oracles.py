@@ -5027,6 +5027,36 @@ def run_groups(
     return out
 
 
+@functools.lru_cache(maxsize=1)
+def _l3_opt_ins():
+    """The scalars whose session rows also run on the plain Python function, as their table modules declare it:
+    ``L3_CALLABLE = True`` opts in every scalar whose oracle table the module defines, and
+    ``L3_CALLABLE_FNS = ("gbx_...",)`` adds scalars whose rows sit in a shared table (``MVP_S``). Returns
+    (table names, function names)."""
+    import importlib
+    import pkgutil
+
+    from databricks.labs.gbx.bench import oracle_tables
+
+    tables, fns = set(), set()
+    for m in pkgutil.iter_modules(oracle_tables.__path__):
+        mod = importlib.import_module(f"{oracle_tables.__name__}.{m.name}")
+        if getattr(mod, "L3_CALLABLE", False):
+            tables |= {
+                k
+                for k, v in vars(mod).items()
+                if k.isupper() and isinstance(v, tuple) and v and isinstance(v[0], Case)
+            }
+        fns |= set(getattr(mod, "L3_CALLABLE_FNS", ()))
+    return tables, fns
+
+
+def l3_opted_in(fn) -> bool:
+    """True when the function's table module opts its session rows into the plain-Python-function leg."""
+    tables, fns = _l3_opt_ins()
+    return fn.oracle in tables or fn.sql_name in fns
+
+
 def l3_callable(fn):
     """The plain Python function behind a scalar's session form, or None when it has none (a UDTF, a grouped
     aggregate). A ``callable`` form is the function itself; a ``udf`` form built by a factory has a plain

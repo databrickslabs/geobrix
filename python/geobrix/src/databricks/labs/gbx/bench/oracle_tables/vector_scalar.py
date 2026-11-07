@@ -13,6 +13,11 @@ from dataclasses import replace
 
 from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
 
+# The session rows of these scalars also run on the plain Python function (test_family_oracle_l3_callables): every
+# scalar of this module's table, and `gbx_st_makevalid`, whose rows sit in the shared MVP_S table.
+L3_CALLABLE = True
+L3_CALLABLE_FNS = ("gbx_st_makevalid",)
+
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
 BOWTIE = "POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))"
 SHAPES = {

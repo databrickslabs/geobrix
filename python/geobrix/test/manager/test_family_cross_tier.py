@@ -204,15 +204,12 @@ def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, 
     assert pending <= set(red), f"{level} now passes {sorted(pending - set(red))}"
 
 
-# Families whose scalar rows also run on the plain Python function (a family opts in once its rows pass there).
-_L3_CALLABLE_FAMILIES = ("vector-scalar",)
-
-
+# A table module opts its scalars in with `L3_CALLABLE = True` (see oracles.l3_opted_in), once its rows pass there.
 def _callable_scalars():
     return [
         pytest.param(fn.oracle, fn.sql_name, id=f"{fn.sql_name}-L3-callable")
         for fn in sorted(manifest.load().functions.values(), key=lambda f: f.sql_name)
-        if fn.family in _L3_CALLABLE_FAMILIES
+        if oracles.l3_opted_in(fn)
         and fn.kind == "scalar"
         and fn.status == "stable"
         and (not _ONLY or fn.oracle in _ONLY)

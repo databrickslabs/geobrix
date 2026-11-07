@@ -303,6 +303,33 @@ def test_preferred_levels_share_one_return_type():
     assert not mixed, f"preferred levels return different types: {mixed}"
 
 
+# The orders the 0.6.0 measurements set (dedicated, 1 + 4 x m5d.2xlarge, DBR 19): a JVM level is kept, and first, only where it is
+# at least 1.2x faster than the best light form at 4x or 16x rows. One pin each; the contract tests above hold the invariants.
+@pytest.mark.parametrize(
+    "name",
+    [
+        "gbx_bng_cellfill",
+        "gbx_bng_kring",
+        "gbx_bng_tessellate",
+        "gbx_bng_tessellateexplode",
+        "gbx_rst_bng_rasterize_agg",
+    ],
+)
+def test_a_measured_jvm_win_is_first_with_the_jar(name):
+    fn = MAN.functions[name]
+    assert levels.order(fn) == ("L1", "L3")
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L1"
+    assert levels.select(fn, _caps()).level == "L3"  # no JAR: light
+
+
+def test_a_measured_jvm_loss_has_no_jvm_level():
+    enab = MAN.functions["gbx_bng_eastnorthasbng"]
+    assert not {"L1", "L2"} & set(enab.levels)
+    assert levels.order(enab) == ("L0", "L3")
+    gfp = MAN.functions["gbx_rst_gridfrompoints"]
+    assert "L1" not in gfp.levels and levels.order(gfp) == ("L3",)
+
+
 @pytest.mark.parametrize(
     "fn", [f for f in FNS if {"L1", "L2"} & set(f.levels)], ids=lambda f: f.sql_name
 )

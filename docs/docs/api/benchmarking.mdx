@@ -161,9 +161,34 @@ A pure-core summary uses `hw_ms`, `lw_ms` and megapixels per second instead. Eac
 
 ## Results {#results}
 
-{/* refresh: Task 29 */}
+### Levels by function {#levels-by-function}
 
-The per-family matrix comes from the benchmark redo. Its rows are functions or families. Its columns are the levels each compute offers. Each cell holds a measured time or a ratio to a peer form. Until the redo lands, the sections below show the figures of the last full run. A function not listed is not yet measured.
+Each row compares the JVM (heavy) form with the best lightweight form of the same function. The cluster is dedicated: one driver and four `m5d.2xlarge` workers on DBR 19. The ratio is heavy time divided by light time, at 4x and 16x the base row count. A value below 1 means the JVM form is faster. A JVM form stays, and becomes the default, when it is at least 1.2x faster at 4x or 16x and gives the same decoded output. Rows marked with three iterations are medians of three. The others are single samples.
+
+| Function | 4x | 16x | Outcome |
+|---|---|---|---|
+| `gbx_st_transformcrs` | 0.17 | 0.16 | Heavy default |
+| `gbx_rst_fromcontent` | 0.13 | 0.28 | Heavy default |
+| `gbx_st_triangulate` | 0.32 | 0.21 | Heavy default |
+| `gbx_bng_tessellateexplode` | 0.42 | 0.45 | Heavy default |
+| `gbx_bng_tessellate` | 0.47 | 0.46 | Heavy default |
+| `gbx_bng_cellfill` (three iterations) | 0.71 | 0.73 | Heavy default |
+| `gbx_bng_kring` (three iterations) | 0.82 | 0.79 | Heavy default |
+| `gbx_rst_bng_rasterize_agg`, cell input | not run | 0.40 | Heavy default |
+| `gbx_rst_bng_rasterize_agg`, group input | not run | 0.50 | Heavy default |
+| `gbx_bng_eastnorthasbng` (three iterations) | 1.17 | 1.35 | Heavy form removed |
+| `gbx_rst_gridfrompoints` (three iterations) | 1.78 | 1.91 | Heavy form removed |
+| `gbx_st_asmvt` | 1.67 | 2.94 | Heavy form removed |
+| `gbx_rst_binpoints` | 1.85 | 1.68 | Heavy form removed |
+| `gbx_rst_cog_convert` | 1.25 | 1.46 | Heavy form removed |
+| `gbx_rst_align_to` | 1.61 | not run | Heavy form removed |
+| `gbx_rst_transformcrs` | 1.08 | 1.58 | Heavy form removed |
+
+On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower. It took 1.9x the time of the light batch form at 4 million rows (3.24 s against 1.70 s). At 16 million rows it took 1.3x (5.42 s against 4.27 s). The function now has a SQL form that needs no JAR, with the Python batch form as the fallback.
+
+The JVM form is also faster for five more functions. The ratios are `gbx_rst_boundingbox` 0.26 and 0.24, `gbx_rst_width` 0.18 and 0.24, `gbx_rst_avg` 0.59 and 0.65, `gbx_rst_isoband` 0.39 and 0.42, and `gbx_rst_contour` 0.10 at 4x. It cannot read a virtual tile, which is the readers' default output, so the lightweight form stays the default for these functions.
+
+On Serverless the table reports shape, not speed. These functions grow in step with the row count (3.7 to 3.9 per 4x rows): the BNG tessellates, `gbx_st_transformcrs`, `gbx_st_makevalid` and `gbx_st_triangulate`. At 16x they take 37 to 622 times their scan floor. Accessors, statistics, `gbx_rst_fromcontent`, `gbx_rst_cog_convert` and `gbx_rst_proximity` grow less than the row count, because Serverless adds workers. The grouped merge of tiles with bytes fails at every size tried, and the by-reference form runs.
 
 ### Raster read
 

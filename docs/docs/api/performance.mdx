@@ -15,8 +15,8 @@ For the method behind the numbers, see [Benchmarking](./benchmarking). For where
 Each item below has the measurement behind it. The [release notes](../release-notes-0-6) list the breaking changes.
 
 - **Readers and writers.** Python everywhere. The Scala readers and writers are retired because the bytes-free Python path was faster.
-- **Raster tile functions.** The Python implementation is the default. A JVM companion stays only where it measured faster.
-- **Grid functions.** The JVM (Catalyst) form stays for the BNG scalars, where it measured faster. The other grids use the Python form.
+- **Raster tile functions.** The Python implementation is the default. A JVM companion stays only where it measured at least 1.2x faster on a dedicated cluster. `gbx_rst_gridfrompoints` lost its JVM form, because it measured slower.
+- **Grid functions.** The JVM (Catalyst) form stays for BNG tessellate, the BNG explodes, `gbx_bng_kring` and `gbx_bng_cellfill`, where it measured at least 1.2x faster. `gbx_bng_eastnorthasbng` lost its JVM form, because the Python batch form is faster. The other grids use the Python form.
 - **Aggregates and generators.** Each compute has its own route. [Aggregates by compute](#aggregates-by-compute) lists them.
 - **Rust.** A compute kernel is used only where it clears a 2x bar over the Python form. Today that is one function, `gbx_bng_eastnorthasbng`.
 - **SQL registration.** One registrar, written in Python. `register(spark)` installs every function, and the compute chooses the level.
@@ -31,57 +31,57 @@ GeoBrix has three levels, named by what you install.
 | Heavy | The env wheel and the GeoBrix JAR | Dedicated clusters. Standard access mode only where a Java handler exists. |
 | UC functions | `gbx.uc.install` | SQL warehouses and any compute that reads Unity Catalog |
 
-GeoBrix uses the heavy level when the JAR is installed and the function measured faster there. It also uses it where nothing is measured yet and a conforming JVM form exists. Every other function runs at the light level. Compare times within one compute only. A Serverless time describes per-task behavior, not speed against a fixed cluster.
+GeoBrix keeps a heavy level only where it is at least 1.2x faster than the best light form. The test runs on a dedicated cluster at 4x or 16x the base row count, and the output must decode the same. The JAR then makes the heavy level the default. A heavy level that is not that much faster is removed from the JAR. Every other function runs at the light level. Compare times within one compute only. A Serverless time describes per-task behavior, not speed against a fixed cluster.
 
 ### Light level (no JAR)
 
-The light level runs every function on every compute. It is the default for all raster tile functions and for the generators, aggregates and vector functions.
-
-{/* refresh: Task 29 */}
+The light level runs every function on every compute. It is the default for the raster tile functions, the vector scalars and aggregates, and every grid function that has no JVM form.
 
 | Function family | What runs | Measured result |
 |---|---|---|
-| Metadata accessors and statistics | Arrow scalar UDF | 2.4 to 5.1 ms per tile, 1.5x to 1.7x faster than the JVM form |
+| Metadata accessors and statistics | Arrow scalar UDF | The default. The JVM form is faster on a dedicated cluster (1.5x to 5.6x for `gbx_rst_width`, `gbx_rst_boundingbox` and `gbx_rst_avg` at 4x and 16x), but it cannot read a virtual tile, so it is not the default. |
 | Band math and spectral indices | NumPy in the worker | 3.1x to 3.9x faster than the JVM form |
 | Warps and resampling | rasterio | 2.1x to 4.7x faster than the JVM form |
 | Terrain (slope, aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
 | Edits on virtual tiles | Header only, no pixel read | 1.1x to 12.5x faster than on a materialized tile |
-| Grouped raster aggregates | Grouped-aggregate UDF | 1.2x to 1.7x faster than the JVM aggregate for merge, combine, frombands and derivedband |
+| Grouped raster aggregates | Grouped-aggregate UDF | See [Aggregates by compute](#aggregates-by-compute) |
 | Vector tiles (`gbx_st_asmvt`) | mapbox-vector-tile | 1.7x to 2.9x faster than the former JVM aggregate, which is no longer shipped |
 | PMTiles archive aggregate | Grouped-aggregate UDF | About 1.07x the JVM time, inside run-to-run noise |
 | Quadbin and custom grid | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
+| `gbx_rst_binpoints`, `gbx_rst_cog_convert`, `gbx_rst_align_to`, `gbx_rst_transformcrs` | Python | The JVM form took 1.1x to 1.9x the time at 4x and 16x rows, and is no longer shipped |
+| `gbx_rst_gridfrompoints` | Python | The JVM form took 1.8x and 1.9x the time at 4x and 16x rows, and is no longer shipped |
+| `gbx_bng_eastnorthasbng` | SQL function, then a Python batch form | The JVM form took 1.17x and 1.35x the time of the Python batch form at 4 and 16 million rows, and is no longer shipped |
 | Other families | Per-function UDF | Not yet measured: highest available level |
 
-Source: a dedicated cluster, DBR 17.3 LTS, 1,000 tiles of 1024 by 1024 per iteration. The JVM form is the heavy level.
+Source: a dedicated cluster (one driver and four `m5d.2xlarge` workers, DBR 19). Rows are multiples of each function's base row count. The accessor row comes from two functions and the statistic row from one.
 
 ### Heavy level (with the JAR)
 
-The JAR makes these families faster on a dedicated cluster. Times are per tile for 1,000 tiles of 1024 by 1024 on DBR 17.3 LTS. Lower is faster.
+The JAR is the default for these functions on a dedicated cluster. Each is at least 1.2x faster than the best light form at 4x or 16x rows, with the same decoded output. Times are seconds per run. Lower is faster.
 
-{/* refresh: Task 29 */}
-
-| Function | Heavy (ms per tile) | Light (ms per tile) | Heavy is faster by |
+| Function | Heavy 4x / 16x (s) | Best light 4x / 16x (s) | Heavy is faster by |
 |---|---|---|---|
-| `gbx_rst_merge` | 2.30 | 8.42 | 3.7x |
-| `gbx_rst_frombands` | 2.31 | 4.94 | 2.1x |
-| `gbx_rst_fromcontent` | 4.03 | 5.90 | 1.5x |
+| `gbx_st_transformcrs` | 5.78 / 20.25 | 33.17 / 128.79 | 5.7x / 6.4x |
+| `gbx_rst_fromcontent` | 4.5 / 31.1 | 33.3 / 111.9 | 7.4x / 3.6x |
+| `gbx_st_triangulate` | 1.32 / 2.65 | 4.14 / 12.57 | 3.1x / 4.7x |
+| `gbx_bng_tessellateexplode` | 13.47 / 54.69 | 32.23 / 120.81 | 2.4x / 2.2x |
+| `gbx_bng_tessellate` | 14.31 / 57.58 | 30.51 / 126.40 | 2.1x / 2.2x |
+| `gbx_bng_cellfill` | 2.21 / 5.95 | 3.11 / 8.13 | 1.4x / 1.4x |
+| `gbx_bng_kring` | 10.62 / 78.13 | 12.90 / 99.15 | 1.21x / 1.27x |
+| `gbx_rst_bng_rasterize_agg`, cell input | not run / 5.96 | not run / 14.77 | 2.5x at 16x |
+| `gbx_rst_bng_rasterize_agg`, group input | not run / 8.42 | not run / 16.98 | 2.0x at 16x |
 
-The same JAR speeds up these grid and vector functions, by the time the JVM form takes as a fraction of the light form:
+A later run re-measured `gbx_bng_cellfill`, `gbx_bng_kring` and the rasterize aggregate. Its figures replace the single-sample figures of an earlier run.
+
+The same JAR also serves these functions, measured on earlier runs by the time the JVM form takes as a fraction of the light form:
 
 | Function | JVM time as a fraction of light | Compute |
 |---|---|---|
-| `gbx_bng_eastnorthasbng` | 0.30 to 0.32 at 4 million and 16 million rows | Dedicated |
-| The `gbx_rst_combine*` family | 0.08 to 0.12 | Dedicated, DBR 18.x, 20 workers |
-| `gbx_rst_gridfrompoints` | 0.36 (one tile, no Spark) | Local |
-| `gbx_bng_tessellate`, `gbx_bng_tessellateexplode` | 0.09 | Dedicated |
 | The five BNG `*explode` generators | 0.37 to 0.67 | Dedicated |
-| `gbx_st_triangulate` | 0.60 | Dedicated |
 | `gbx_st_interpolateelevationbbox` | 0.75 | Dedicated |
 | `gbx_h3_cellfill` | 0.57 | Dedicated |
 
-{/* refresh: Task 29 */}
-
-Standard access mode runs Spark Connect, which cannot load a Catalyst expression. One function has a JVM level there. `gbx_bng_eastnorthasbng` runs as a Java UDF, 2.0x faster than the light level (16.1 s against 32.4 s at 4 million rows).
+Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 
 Functions not listed above are not yet measured at the heavy level. GeoBrix uses the highest available level for them where a conforming JVM form exists, and the light level otherwise.
 
@@ -152,30 +152,30 @@ These times were measured before the light aggregates streamed their groups, and
 
 ### Aggregates by compute
 
-The default is the same on every compute: the grouped aggregate. For large groups, a different route worked best on each compute. The times are ratios to the grouped aggregate on the same compute.
+The default is the same on every compute: the grouped aggregate. On a dedicated cluster with the JAR, `gbx_rst_bng_rasterize_agg` runs its JVM form, which is the fastest route measured. For large groups, a different route worked best on each compute. The measured columns are ratios to the light grouped aggregate on the same compute. Lower is faster. Do not compare a ratio from one compute with another.
 
-{/* refresh: Task 29 */}
+**Dedicated** (one driver and four `m5d.2xlarge` workers, DBR 19)
 
-**Dedicated**
-
-| Aggregate | Route |
-|---|---|
-| Merge | Grouped aggregate. The finalize route is 1.6x slower. |
-| Rasterize canvases | Grouped aggregate. The twin matches it (0.98x). |
+| Aggregate | Route | Measured |
+|---|---|---|
+| Merge, tiles with bytes | Grouped aggregate. | The finalize route took 3.2x the time at 250 tiles and 0.60x at 1,000 tiles (single sample). At 4,000 tiles only the finalize route finished (310.5 s). A group with one hot key of about 2.9 GB fails on the grouped aggregate and the finalize route, at the 2 GiB Arrow buffer. |
+| Merge, tiles by reference | Grouped aggregate. | At 250 and 1,000 tiles the finalize route took 1.03x and 0.88x the time. The table function took 0.63x and 1.24x. |
+| Rasterize canvases, 16 million cells | Grouped aggregate (JVM form on the JAR). | JVM form 0.46x. Finalize route 0.92x. Tree of partial merges 1.23x. Table function 2.71x. With the cells as input, the JVM form took 0.40x. |
 
 **Standard**
 
-| Aggregate | Route |
-|---|---|
-| Merge | Grouped aggregate. The finalize route is 1.7x slower. |
-| Rasterize canvases | Grouped aggregate. The twin matches it (0.96x). |
+| Aggregate | Route | Measured |
+|---|---|---|
+| Merge | Grouped aggregate. The finalize route is 1.7x slower. | Not re-measured. |
+| Rasterize canvases | Grouped aggregate. The twin matches it (0.96x). | Not re-measured. |
 
-**Serverless**
+**Serverless** (per-task behavior; no seconds beside the other computes)
 
-| Aggregate | Route |
-|---|---|
-| Merge | Finalize route (0.98x of grouped). It collects the group, then merges once. |
-| Rasterize canvases | Tree of partial merges for large groups. The finalize route runs out of memory at 16x. The twin (1.08x) serves the rest. |
+| Aggregate | Route | Measured |
+|---|---|---|
+| Merge, tiles with bytes | Finalize route (0.98x of grouped). It collects the group, then merges once. | Fails at every size tried: the group passes the 1 GiB task limit, or the Python worker exits. |
+| Merge, tiles by reference | Finalize route. | The grouped aggregate and the finalize route ran within 2% of each other at 250 tiles. Larger sizes were not run. |
+| Rasterize canvases | Tree of partial merges for large groups. The finalize route runs out of memory at 16x. The twin (1.08x) serves the rest. | At 16 million cells the tree took 1.6x and the finalize route 6.9x the grouped aggregate's time. |
 
 The scalar twins serve the finalize route for rasterize on every compute. A twin takes the whole group as one array, `ARRAY<STRUCT<cellid, value>>`, for example `collect_list(struct(cellid, value))`. It returns the same GeoTIFF bytes as the aggregate. A repeated cell burns its largest value. A NULL value in a typed column never wins against a number. A NULL cell id is skipped.
 

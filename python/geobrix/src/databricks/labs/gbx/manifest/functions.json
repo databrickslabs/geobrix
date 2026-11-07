@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "level_table_version": "2026-11-07.heavy-drop",
+  "level_table_version": "2026-11-07.level-table",
   "uc_dependencies": {
     "h3": "4.5.0",
     "shapely": "2.1.2",

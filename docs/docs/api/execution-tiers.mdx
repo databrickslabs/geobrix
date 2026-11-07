@@ -65,12 +65,12 @@ The wheel ships a table that lists, for each function, the levels to try and in 
 
 For each function, `register` takes the first level that works on this compute. It skips a level when the JAR is missing, when the session is Spark Connect, or when a library is absent.
 
-Most functions run on L3. Raster tile operations default to L3, because the Python implementation measured as fast or faster. On a dedicated cluster with the JAR, GeoBrix picks L1 for these families:
+Most functions run on L3. Raster tile operations default to L3, because the Python implementation measured as fast or faster, or because the JVM form cannot read a virtual tile. On a dedicated cluster with the JAR, GeoBrix picks L1 for these families:
 
-- the BNG, custom-grid and H3 cell functions that have a JVM form, and the BNG explode and tessellate functions;
-- the raster combine family, `gbx_rst_merge` and `gbx_rst_frombands`;
-- `gbx_rst_fromcontent` and `gbx_rst_gridfrompoints`;
-- `gbx_rst_slope`, `gbx_st_triangulate` and `gbx_st_interpolateelevationbbox`.
+- the BNG, custom-grid and H3 cell functions that have a JVM form, and the BNG explode, tessellate, `gbx_bng_kring` and `gbx_bng_cellfill` functions;
+- the raster combine family and `gbx_rst_frombands`;
+- `gbx_rst_fromcontent` and `gbx_rst_bng_rasterize_agg`;
+- `gbx_rst_slope`, `gbx_st_triangulate`, `gbx_st_transformcrs` and `gbx_st_interpolateelevationbbox`.
 
 ### GeoBrix says why
 

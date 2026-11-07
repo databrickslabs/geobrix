@@ -34,8 +34,14 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_st_crs": ("L1", "L3"),
     "gbx_st_setcrs": ("L1", "L3"),
     "gbx_st_transformcrs": ("L1", "L3"),
+    # tessellate and its explode: the JVM form takes 0.47x and 0.42x of the best light form at 4x rows and 0.46x and 0.45x
+    # at 16x (dedicated, 1 + 4 x m5d.2xlarge, DBR 19). kring: 0.82x at 4x and 0.79x at 16x (3 iterations), that is 1.21x
+    # and 1.27x faster, past the 1.2x line at both scales. cellfill: 0.71x and 0.73x (3 iterations). The other grid arrays and
+    # the cell aggregates stay light by family.
     "gbx_bng_tessellate": ("L1", "L3"),
     "gbx_bng_tessellateexplode": ("L1", "L3"),
+    "gbx_bng_kring": ("L1", "L3"),
+    "gbx_bng_cellfill": ("L1", "L3"),
     # The five BNG explodes are 1.5x to 2.7x faster on the JVM on a cluster (0.37x to 0.67x). The other explodes
     # (quadbin, custom, H3) are light by family: unmeasured, and the quadbin companions are not conformed.
     "gbx_bng_kringexplode": ("L1", "L3"),
@@ -61,6 +67,9 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # The cell-fill aggregates are light by family, except H3's: 0.57x on a cluster (inside the 0.8 rule), and its
     # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does.
     "gbx_h3_cellfill": ("L1", "L3"),
+    # The BNG rasterize aggregate: the JVM form took 0.40x of the light grouped aggregate with the cells as input and 0.50x
+    # with the groups as input at 16M rows (dedicated). The raster aggregates stay light by family: merge has no JVM level.
+    "gbx_rst_bng_rasterize_agg": ("L1", "L3"),
     # The rasterize family is light: gridfrompoints measured 1.78x and 1.91x slower on the JVM than on light at 4x and 16x
     # rows (3 iterations, equal output), and binpoints 1.85x and 1.68x slower, so neither keeps a Catalyst expression.
     # The terrain model is 18x faster on light, and rasterize is 15x faster in the pure-core timing (no cluster number;
@@ -78,9 +87,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (2.2x light
     # faster) take the family order, light.
     "gbx_rst_color_relief": ("L1", "L3"),
-    # contour (0.11x) and isoband (10x in the pure-core timing) are faster on the JVM, but a virtual tile at L1 raises
-    # VirtualTileException (the conformed L1 block has no dispatch wrapper), and a virtual tile is the light default input.
-    # Light first until a wrapper-free virtual dispatch exists; the L1 blocks stay for a forced L1.
+    # contour (0.10x at 4x rows) and isoband (0.39x and 0.42x at 4x and 16x rows) are faster on the JVM, and they pass the
+    # 1.2x line, but a virtual tile at L1 raises VirtualTileException, and a virtual tile is the light default input. A SQL
+    # wrapper that would send it to light cannot sit under explode (UNSUPPORTED_SQL_UDF_USAGE in Generate). Light first until
+    # the JVM level reads a virtual tile; the L1 blocks stay for a forced L1.
     "gbx_rst_contour": ("L3",),
     "gbx_rst_isoband": ("L3",),
     # The array merge: the JVM level refuses a group over the memory budget with an error tile (its merge holds the group),

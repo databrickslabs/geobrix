@@ -342,6 +342,8 @@ def _reused(lf) -> Dict[str, List[Form]]:
 _WKT_SCAN = (
     "SELECT count(*) AS n, sum(length(wkt)) AS fp, count(wkt) AS n_out FROM {src}"
 )
+# the scan of a virtual-tile input: a virtual tile holds no bytes (`raster` is NULL), only the path it points at
+_VIRT_SCAN = "SELECT count(*) AS n, sum(length(tile.path)) AS fp, count(tile) AS n_out FROM {src}"
 _REUSED_FLOORS = {
     "grid-generator": [("gbx_bng_tessellateexplode", "bng_polys", _WKT_SCAN)],
     "grid-array": [("gbx_bng_tessellate", "bng_polys", _WKT_SCAN)],
@@ -718,7 +720,7 @@ def reused_forms(lf) -> Dict[str, List[Form]]:
                         level="L3",
                         variant="floor@virt",
                         input=virt,
-                        sql=sql,
+                        sql=_VIRT_SCAN,
                         register=False,
                     )
                 )

@@ -862,3 +862,11 @@ def test_a_virtual_form_is_compared_with_the_floor_over_its_own_input():
     }
     assert cells["-"][7] == "1.000" and cells["virtual"][7] == "0.500"
     assert cells["floor"][7] == cells["floor@virt"][7] == "-"
+
+
+@pytest.mark.parametrize("family,fn", _reused_with_floors())
+def test_a_floor_over_virtual_tiles_scans_their_paths_not_their_bytes(family, fn):
+    """A virtual tile holds no bytes (`raster` is NULL, `path` is set): a scan that sums `length(tile.raster)` has a NULL
+    fingerprint there and the form fails with "the form produced no output"."""
+    for f in (f for f in lf.FORMS[family] if f.fn == fn and f.variant == "floor@virt"):
+        assert "tile.path" in f.sql and "tile.raster" not in f.sql, f.sql

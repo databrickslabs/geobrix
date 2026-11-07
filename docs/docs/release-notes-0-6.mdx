@@ -700,6 +700,7 @@ Both tiers apply one rule for which pixels are valid.
 - **Grouped functions apply a virtual tile's clip.** On runtimes with the FILE type, the lightweight `*_grouped` functions skipped the `clipPolygons` polygon of a `raster_gbx` or `cog_gbx` virtual tile. These include `rst_clip_grouped`, `rst_memsize_grouped` and `rst_resample_grouped`.
   - They now read the tile clipped, and reproject a tile whose `crs` differs from its source's.
   - A tile written with `virtualize_dir` from a clipped or reprojected tile no longer applies that clip and CRS twice when read.
+- **A file written with `virtualize_dir` ends in a random id.** The name held only the cell and the size. Two results of one size in one directory wrote the same file, the second over the first. This held for a mosaic, `rst_combineavg`, `rst_frombands` and tiles of one cell.
 - **Grouped functions apply `rst_initnodata`, `rst_band`, `rst_setsrid` and `rst_setcrs` to a whole-file virtual tile.** After one of those functions, a `*_grouped` function that reads pixels returned NULL without an error on a cluster without the FILE type. Examples are `rst_resample_grouped` and `rst_slope_grouped`. On a cluster with the FILE type, it ignored the instruction.
 - **Raster output encoding.**
   - Lightweight raster functions write ZSTD with the predictor that suits the data type, instead of the source file's codec. JPEG (YCbCr) sources no longer make writes fail.
@@ -761,6 +762,11 @@ Every raster function follows the same order of checks on both implementations.
 - **A tile held in a column is refused when its decoded size passes the cap.** The cap is 64 MiB on Serverless and 1536 MiB on classic and dedicated compute. The lightweight functions used to process such a tile on Serverless. The refusal text is the same on both implementations.
   - Reading a file over the cap fails the call with a retile `Fix:`. The same holds for `gbx_rst_fromfile`, `rst_fromfile(materialize=True)` and `raster_gbx` with `virtualTiles=false`.
   - `rst_align_to` reads only the header of the reference tile, so a large reference no longer turns every aligned tile into an error tile.
+- **A virtual tile is refused when the window it reads passes the cap.** Before, only a tile that carried bytes was judged, so a large window could run a Serverless task out of memory. The refusal text and `Fix:` are the same as for a tile with bytes.
+  - The size is the window's width and height, times the bands it reads, times the size of the type. A small window of a large file is read.
+  - `rst_retile` and `rst_tooverlappingtiles` cut a virtual tile window by window from its file. They need the memory of one piece, whatever the size of the tile.
+  - A window that is clipped, reprojected or read from a file with its own mask band is decoded whole, so it is judged.
+  - Reads that decode no window are not judged: the plain-window warp, a merge by reference and the block-streaming write.
 - **Heavyweight and lightweight functions take the same tile drivers and refuse the same oversized tiles.** The JVM reads tile bytes of netCDF, HDF, HFA, JP2 and GPKG as a GeoTIFF. Subdatasets and extra metadata domains are not kept. These reads failed before 0.6.0.
   - `gbx_rst_subdatasets` and `gbx_rst_getsubdataset` read a netCDF or HDF tile as its own dataset, so they keep working.
   - A netCDF or HDF container with several variables and no band answers `rst_width`, `rst_height`, `rst_numbands`, `rst_subdatasets` and `rst_metadata`. It was an error tile. `rst_metadata` includes the file's own metadata domains.
@@ -773,7 +779,7 @@ Every raster function follows the same order of checks on both implementations.
   - A virtual tile is merged as a file, with its window as the source rectangle. No member is read into memory first, so a group of virtual tiles merges in the same memory at any size. This covers `gbx_rst_merge_agg`, its Python form with a directory, `gbx_rst_merge`, `gbx_rst_merge_tvf` and `merge_by_key`.
   - Where tiles overlap, the order is now defined: tiles with bytes first, sorted by their bytes, then virtual tiles, sorted by path and window. A group of virtual tiles used to be ordered by their re-encoded bytes.
   - `merge_by_key` keeps no group in memory. It takes windows of files and mixed CRS, and its group has no size cap. Its shuffle has a fixed width (`num_partitions`, else the session's task slots, at least 64).
-  - A mosaic written with `virtualize_dir` is copied from scratch to the directory and not read back. Its file name ends in a random id. Two groups with a mosaic of one size used to write the same file, the second over the first.
+  - A mosaic written with `virtualize_dir` is copied from scratch to the directory and not read back.
   - A stack too wide for one row names retiling first, then `combine_by_key`. The row is then one raster per sub-tile.
   - `gbx_rst_combineavg_agg`, `gbx_rst_frombands_agg` and `gbx_rst_derivedband_agg` raise a `Fix:` in SQL for a group they cannot fold or a member over the read cap. The Python tile form keeps the group's error tile.
   - See [Performance](./api/performance) and [Error handling](./api/error-handling).

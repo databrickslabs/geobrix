@@ -32,7 +32,7 @@ from rasterio.transform import TransformMethodsMixin
 from rasterio.vrt import WarpedVRT
 from rasterio.windows import Window
 
-from databricks.labs.gbx._gdal_policy import open_bytes, refusals_named
+from databricks.labs.gbx._gdal_policy import open_bytes, open_data, refusals_named
 from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx._env import (
@@ -44,6 +44,7 @@ from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import warp as _warp
+from databricks.labs.gbx.pyrx.core.budget import refuse_window_over_cap
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -203,6 +204,10 @@ def _window_dataset_bytes(
 ) -> bytes:
     """Read one window into standalone GTiff bytes, applying pending instructions.
 
+    The window is decoded whole into memory, so it is refused over the read cap
+    (``budget.WindowOverReadCap``, a ``ValueError`` with the reason and Fix every level gives)
+    before a pixel is read.
+
     pending = (bands|None, nodata|None, srid|None, crs_str|None); applied in
     fixed order: band-select -> nodata -> CRS relabel (crs_str supersedes srid).
 
@@ -228,6 +233,13 @@ def _window_dataset_bytes(
         bands, nodata, srid = pending
         crs_str = None
     indexes = bands if bands else None  # rasterio: 1-based band list or None=all
+    # The window is about to be decoded whole into memory: a virtual tile carries no bytes for the read cap's gate
+    # (``_serde.open_tile``) to judge, so it is judged here, from the header, for the bands that are read.
+    refuse_window_over_cap(
+        window.width,
+        window.height,
+        [src.dtypes[b - 1] for b in bands] if bands else src.dtypes,
+    )
     # src.read with indexes as a list always returns 3D (bands, h, w); the
     # 2D-collapse path is unreachable here and has been removed.
     data = src.read(window=window, indexes=indexes)
@@ -586,7 +598,9 @@ def _open(tile, file_ref=None, gate=True):
     to ``open_tile``.  Defaults to None (today's behaviour, unchanged).
 
     ``gate``: False lifts the decoded-size gate of a materialized tile's bytes (see ``_serde.open_tile``): for
-    the retile family, which never decodes the whole tile.
+    a caller that never decodes the whole tile. It does not lift the gate of a virtual tile, whose window is
+    decoded here whatever the caller does with it (see ``_window_dataset_bytes``); a caller that cuts windows
+    from a virtual tile opens it with :func:`open_tile_windows`.
     """
     with open_tile(_to_virtual_tile(tile), file_ref=file_ref, gate=gate) as ds:
         yield ds
@@ -1004,6 +1018,16 @@ class _WindowPointView(TransformMethodsMixin, _WindowHeaderView):
             pending_nodata=nodata,
         )
         self._bands = list(bands) if bands else list(src.indexes)
+        self._refusal_what: Optional[str] = None
+
+    @property
+    def colorinterp(self):
+        # the labels of the selected bands, as the window's own bytes would carry them
+        return tuple(_selected_labels(self._src, self._bands))
+
+    def window_transform(self, window):
+        """The transform of *window*, a window of THIS view (the source's would place it from the source's origin)."""
+        return rasterio.windows.transform(window, self.transform)
 
     @property
     def indexes(self):
@@ -1019,15 +1043,19 @@ class _WindowPointView(TransformMethodsMixin, _WindowHeaderView):
         one = isinstance(indexes, int)
         wanted = self.indexes if indexes is None else [indexes] if one else indexes
         win = window or Window(0, 0, self.width, self.height)
-        data = self._src.read(
-            [self._bands[i - 1] for i in wanted],
-            window=Window(
-                self._window.col_off + win.col_off,
-                self._window.row_off + win.row_off,
-                win.width,
-                win.height,
-            ),
-        )
+        with ExitStack() as stack:
+            if self._refusal_what is not None:
+                # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT
+                stack.enter_context(refusals_named(self._refusal_what))
+            data = self._src.read(
+                [self._bands[i - 1] for i in wanted],
+                window=Window(
+                    self._window.col_off + win.col_off,
+                    self._window.row_off + win.row_off,
+                    win.width,
+                    win.height,
+                ),
+            )
         return data[0] if one else data
 
     def sample(self, xy, indexes=None, masked=False):
@@ -1081,6 +1109,55 @@ def open_tile_points(tile) -> Iterator:
         yield ds
 
 
+def _open_window_source(vt: VirtualTile, file_ref, stack: ExitStack):
+    """The open source file of a virtual tile, for reads of its window as they are asked for.
+
+    With a ``file_ref`` the file is read through its stream, as :func:`open_tile`'s FILE branch does (no copy of it
+    is staged); a stream that cannot seek, or any failure to open it, takes the local path (``tile.path``, or the
+    reference's local file), as there.
+    """
+    if file_ref is not None:
+        try:
+            stream = file_ref.open()
+            if stream.seekable():
+                if hasattr(stream, "close"):
+                    stack.callback(stream.close)
+                return stack.enter_context(open_data(stream))
+        except Exception:  # noqa: BLE001 - the local path below is the degraded read
+            pass
+    return stack.enter_context(
+        open_raster(_resolve_local_or_windowed(vt, file_ref, stack))
+    )
+
+
+@contextmanager
+def open_tile_windows(tile, file_ref=None) -> Iterator:
+    """``open_tile`` for an op that cuts a tile into windows and reads each as it goes (``rst_retile``,
+    ``rst_tooverlappingtiles``).
+
+    Yields what ``open_tile`` would, with the same pixels in every window: for a virtual tile of a file (no clip; no
+    pending reprojection; no mask band of the file's own), a :class:`_WindowPointView` of the tile's window of the open
+    source, so a piece costs the read of its own blocks and the window is never decoded whole; for any other tile
+    (materialized, Zarr-backed, clipped, reprojected), ``open_tile`` itself: a materialized tile is not gated here (the
+    op never decodes it whole), a virtual window that has to be decoded is (see :func:`_window_dataset_bytes`).
+    """
+    vt = _to_virtual_tile(tile)
+    if not vt.is_virtual():
+        with open_tile(vt, file_ref=file_ref, gate=False) as ds:
+            yield ds
+        return
+    if not (_zarr_tiles.is_zarr_tile(vt) or vt.clip_polygon is not None):
+        with ExitStack() as stack:
+            src = _open_window_source(vt, file_ref, stack)
+            view = _point_view(vt, src)
+            if view is not None:
+                view._refusal_what = f"the tile {vt.path}"
+                yield view
+                return
+    with open_tile(vt, file_ref=file_ref) as ds:
+        yield ds
+
+
 def _dataset_gtiff_bytes(ds) -> bytes:
     """GTiff bytes of the whole of *ds*, through the compression authority (ZSTD + dtype predictor)."""
     data = ds.read()
@@ -1116,6 +1193,8 @@ def _whole_file_bytes(tile: VirtualTile) -> Optional[bytes]:
         with open_raster(local_path) as src:
             # a pixel read is where GDAL stops a raw band or a pipeline nested in the VRT: its refusal names the reason
             if not _warp_pending(tile, src):
+                # the whole source is decoded in one read: judged first, as a window is
+                refuse_window_over_cap(src.width, src.height, src.dtypes)
                 with refusals_named(f"the tile {tile.path}"):
                     return _dataset_gtiff_bytes(src)
             with refusals_named(f"the tile {tile.path}"):

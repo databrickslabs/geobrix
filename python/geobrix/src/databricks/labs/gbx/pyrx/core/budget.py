@@ -192,6 +192,21 @@ def read_cap_refusal(decoded: int, cap: int) -> str:
     )
 
 
+class WindowOverReadCap(ValueError):
+    """A window of a virtual tile would be decoded over the read cap (the reason and Fix every level gives)."""
+
+
+def refuse_window_over_cap(width: int, height: int, dtypes) -> None:
+    """Raise :class:`WindowOverReadCap` when a window of ``width`` x ``height`` pixels, one entry of ``dtypes`` per band,
+    is about to be decoded into memory over the read cap (:func:`tile_read_cap`). The gate of a virtual tile, which
+    carries no bytes for ``_serde.open_tile`` to judge: it is called where the window is read out of its file, from the
+    header alone, before a pixel is read.
+    """
+    decoded, cap = grid_bytes(width, height, dtypes), tile_read_cap()
+    if decoded > cap:
+        raise WindowOverReadCap(read_cap_refusal(decoded, cap))
+
+
 def over_read_cap(ds) -> Optional[str]:
     """The refusal (reason and Fix, the text every level gives) when ``ds`` is decoded over the read cap, else None."""
     decoded, cap = decoded_bytes(ds), tile_read_cap()

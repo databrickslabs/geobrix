@@ -39,6 +39,7 @@ from databricks.labs.gbx.ds._listing import (  # re-exported for backward compat
 )
 from databricks.labs.gbx.pyrx.core.budget import (  # noqa: F401  (re-exported)
     READ_CAP_KEY,
+    WindowOverReadCap,
     read_cap_refusal,
     session_read_cap,
     size_text,
@@ -1173,7 +1174,8 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
             from databricks.labs.gbx.pyrx.core.open_tile import _window_dataset_bytes
 
             tile_bytes = _window_dataset_bytes(src, rio_window, pending=pending)
-    except FileRefReadError:
+    except (FileRefReadError, WindowOverReadCap):
+        # a window over the read cap is refused here, not degraded to a local copy of the whole file
         raise
     except Exception as exc:
         raise FileRefReadError(f"FileRef windowed read failed: {exc}") from exc

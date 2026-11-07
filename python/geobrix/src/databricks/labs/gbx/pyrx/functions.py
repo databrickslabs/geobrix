@@ -3897,7 +3897,7 @@ class _RstRetileUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile, file_ref=file_ref, gate=False) as ds:
+            with ot.open_tile_windows(tile, file_ref=file_ref) as ds:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
@@ -3927,7 +3927,7 @@ class _RstToOverlappingTilesUDTF:
         _env.configure_gdal_env()
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
-            with ot._open(tile, file_ref=file_ref, gate=False) as ds:
+            with ot.open_tile_windows(tile, file_ref=file_ref) as ds:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps

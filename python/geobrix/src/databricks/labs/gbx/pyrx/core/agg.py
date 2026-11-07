@@ -45,7 +45,7 @@ from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
 from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core._util import snap_bounds
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
-from databricks.labs.gbx.pyrx.core.budget import block_cache_for
+from databricks.labs.gbx.pyrx.core.budget import WindowOverReadCap, block_cache_for
 from databricks.labs.gbx.pyrx.core.budget import decoded_bytes as _decoded_bytes
 from databricks.labs.gbx.pyrx.core.budget import (
     over_read_cap,
@@ -1032,6 +1032,8 @@ class _MemberSpool:
         if isinstance(member, Ref):
             try:
                 self._add_ref(member)
+            except ReadCapRefused:
+                raise  # a member over the cap is a refusal with its Fix, never a member dropped
             except Exception:  # noqa: BLE001
                 if drop_refs:
                     return False
@@ -1073,7 +1075,12 @@ class _MemberSpool:
             )
             return
         # the one front door: the window, the instructions and the clip are applied as for any tile
-        data = ot.materialize_to_bytes(vt).raster
+        try:
+            data = ot.materialize_to_bytes(vt).raster
+        except (
+            WindowOverReadCap
+        ) as exc:  # decoded whole to apply its instructions: the merge's Fix names its route
+            raise ReadCapRefused(f"{exc}, or {_vrt_fix(_VRT_ROUTE, False)}") from None
         e = _Entry("m", _bytes_header(data), order=_ref_order(vt))
         self._keep(e, data)
         self.entries.append(e)

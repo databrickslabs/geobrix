@@ -72,7 +72,7 @@ import scala.util.control.NonFatal
   *     (`__gbx_unregistered__.gsb`) cannot be resolved, so no shift is fabricated — the
   *     transform only applies a grid it actually finds on the registered path.
   */
-class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
+class RegisteredProjGridSpec extends AnyFunSuite with BeforeAndAfterAll {
 
     // Source CRS that references the registered grid BY FILENAME (same as light Task 5).
     private val SRC_CRS = "+proj=longlat +ellps=GRS80 +nadgrids=synthetic.gsb +no_defs"
@@ -120,7 +120,7 @@ class RST_TransformCrsGridSpec extends AnyFunSuite with BeforeAndAfterAll {
 
         spark = SparkSession.builder()
             .master("local[1]")
-            .appName("RST_TransformCrsGridSpec")
+            .appName("RegisteredProjGridSpec")
             .getOrCreate()
 
         // Register the grid and run the FEATURE fold+prepend EXACTLY ONCE, before any

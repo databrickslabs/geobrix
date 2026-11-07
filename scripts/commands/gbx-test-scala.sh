@@ -36,7 +36,7 @@ show_help() {
     echo -e "  ${YELLOW}gbx:test:scala --spark-version 4.3.0 --suites 'com.databricks.labs.gbx.gridx.*'${NC}"
     echo -e "  ${YELLOW}gbx:test:scala --spark-version 4.2.0 --compile-only${NC}"
     echo -e "  ${YELLOW}# Run RequiresProjIsolation tests in isolation:${NC}"
-    echo -e "  ${YELLOW}gbx:test:scala --suite 'com.databricks.labs.gbx.rasterx.RST_TransformCrsGridSpec' --tags-to-exclude com.databricks.labs.gbx.bench.NoOpExcludeSentinel${NC}"
+    echo -e "  ${YELLOW}gbx:test:scala --suite 'com.databricks.labs.gbx.rasterx.RegisteredProjGridSpec' --tags-to-exclude com.databricks.labs.gbx.bench.NoOpExcludeSentinel${NC}"
     echo ""
 }
 

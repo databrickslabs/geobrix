@@ -60,7 +60,7 @@
           rejects, so a non-empty no-op tag is used instead.
 
           `com.databricks.labs.gbx.bench.RequiresProjIsolation` tags the two
-          transform-layer tests in RST_TransformCrsGridSpec that need a fresh JVM:
+          transform-layer tests in RegisteredProjGridSpec that need a fresh JVM:
           PROJ freezes its grid-lookup cache process-globally on first use, so
           these tests only produce a meaningful result in an isolated JVM (via
           `-Dsuites=<single spec>` + the NoOpExcludeSentinel override).

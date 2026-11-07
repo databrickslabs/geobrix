@@ -155,7 +155,7 @@ class ST_CrsCatalystTest extends PlanTest with SilentSparkSession with BeforeAnd
     // ExpressionConfigExpr child so the executor runs GDALManager.init (which
     // prepends registered custom PROJ grid dirs) BEFORE the OGR/OSR transform.
     // A session using ONLY gbx_st_transformcrs otherwise never triggers GDAL
-    // init and a grid-requiring CRS silently fails (see RST_TransformCrsGridSpec).
+    // init and a grid-requiring CRS silently fails (see RegisteredProjGridSpec).
     // Structured at the wiring level (children + builder arity) because the PROJ
     // grid cache is process-global in a shared test JVM.
     // ------------------------------------------------------------------

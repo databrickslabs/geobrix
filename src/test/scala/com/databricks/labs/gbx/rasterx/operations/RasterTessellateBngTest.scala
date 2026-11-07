@@ -1,15 +1,14 @@
-package com.databricks.labs.gbx.rasterx.expressions.grid
+package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.RasterTessellate
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 
-class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
+class RasterTessellateBngTest extends AnyFunSuite with BeforeAndAfterAll {
 
     override def beforeAll(): Unit = {
         GDALManager.loadSharedObjects(Iterable.empty[String])

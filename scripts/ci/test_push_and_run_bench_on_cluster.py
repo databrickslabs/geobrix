@@ -96,6 +96,9 @@ def sdk(monkeypatch):
         SINGLE_USER="SINGLE_USER", USER_ISOLATION="USER_ISOLATION"
     )
     compute.AwsAttributes = _Rec
+    compute.EbsVolumeType = SimpleNamespace(
+        GENERAL_PURPOSE_SSD="GENERAL_PURPOSE_SSD", THROUGHPUT_OPTIMIZED_HDD="THROUGHPUT_OPTIMIZED_HDD"
+    )
     compute.AwsAvailability = SimpleNamespace(ON_DEMAND="ON_DEMAND")
     jobs = types.ModuleType("databricks.sdk.service.jobs")
     jobs.JobEnvironment = jobs.SubmitTask = jobs.NotebookTask = _Rec
@@ -234,6 +237,46 @@ def test_a_job_cluster_is_on_demand_when_asked(launch, sdk, on_demand):
         assert (aws.availability, aws.first_on_demand) == ("ON_DEMAND", 3)
     else:
         assert aws is None
+
+
+@pytest.mark.parametrize(
+    "node, ebs",
+    [
+        ("m6gd.xlarge", False),  # local NVMe: no EBS volume
+        ("m5.2xlarge", True),  # no local disk: the cluster needs EBS
+        ("i3.xlarge", False),  # storage-optimized, NVMe without a d in the name
+        ("Standard_DS3_v2", False),  # not an AWS node type: aws_attributes does not apply
+    ],
+)
+def test_a_node_type_without_local_disk_gets_an_ebs_volume(launch, sdk, node, ebs):
+    assert launch("--new-cluster", "--zarr-only", "--no-wait", "--node-type", node, "--run-id", "e1") == 0
+    aws = sdk.submits[0]["tasks"][0].new_cluster.aws_attributes
+    if ebs:
+        assert (aws.ebs_volume_type, aws.ebs_volume_count, aws.ebs_volume_size) == ("GENERAL_PURPOSE_SSD", 1, 100)
+    else:
+        assert aws is None
+
+
+def test_ebs_options_beat_the_defaults_and_ride_with_on_demand(launch, sdk):
+    assert launch("--new-cluster", "--zarr-only", "--no-wait", "--node-type", "m5.2xlarge", "--on-demand",
+                  "--ebs-volume-type", "THROUGHPUT_OPTIMIZED_HDD", "--ebs-volume-count", "2",
+                  "--ebs-volume-size", "500", "--run-id", "e2") == 0  # fmt: skip
+    aws = sdk.submits[0]["tasks"][0].new_cluster.aws_attributes
+    assert (aws.ebs_volume_type, aws.ebs_volume_count, aws.ebs_volume_size) == ("THROUGHPUT_OPTIMIZED_HDD", 2, 500)
+    assert (aws.availability, aws.first_on_demand) == ("ON_DEMAND", 2)
+
+
+def test_an_unsupported_node_family_is_refused_with_the_supported_ones_and_how_to_pick(launch, sdk, capsys):
+    assert launch("--new-cluster", "--zarr-only", "--no-wait", "--node-type", "m5ad.2xlarge", "--run-id", "e3") == 2
+    err = capsys.readouterr().err
+    assert "m5ad" in err and "m6gd" in err and "m5d" in err and "list-node-types" in err and "--node-type" in err
+    assert sdk.submits == []
+
+
+@pytest.mark.parametrize("opt, val", [("--ebs-volume-type", "GP3"), ("--ebs-volume-count", "0"), ("--ebs-volume-size", "x")])
+def test_a_bad_ebs_option_is_refused(launch, sdk, capsys, opt, val):
+    assert launch("--new-cluster", "--zarr-only", "--no-wait", opt, val, "--run-id", "e4") == 2
+    assert opt in capsys.readouterr().err and sdk.submits == []
 
 
 @pytest.mark.parametrize("other", [["--serverless"], ["--existing-cluster-id", "0101-x"]])
@@ -553,6 +596,31 @@ def test_a_levels_run_starts_with_a_short_header_that_says_what_why_how_long_and
     assert "/heartbeat.json" in head and "watchdog ceiling 60 min" in head and "jobs cancel-run <run id>" in head
     (submit,) = sdk.submits
     assert "does IO stay linear" in submit["run_name"] and submit["run_name"].startswith("geobrix-bench-h1 | ")
+
+
+LONG_PURPOSE = (
+    "16x ladder of grid-generator after the interrupt fix, on the pool rerun, with the new by-reference "
+    "merge and the shortened header so the Jobs list stays readable"
+)
+
+
+@pytest.mark.parametrize("target", [["--serverless"], ["--new-cluster"], ["--existing-cluster-id", "0101-x"]])
+def test_a_long_purpose_is_trimmed_in_the_run_name_and_whole_in_the_task_description(launch, sdk, target):
+    assert launch(*target, "--zarr-only", "--run-id", "n1", "--purpose", LONG_PURPOSE, "--no-wait") == 0
+    (submit,) = sdk.submits
+    name = submit["run_name"]
+    assert name.startswith("geobrix-bench-n1 | ") and len(name) <= 120
+    shown = name.split(" | ")[1]
+    assert shown.endswith("...") and LONG_PURPOSE.startswith(shown[:-3].rstrip()) and shown != LONG_PURPOSE
+    assert not shown[:-3].endswith(" ") and LONG_PURPOSE[len(shown[:-3].rstrip())] == " "  # cut at a word boundary
+    (task,) = submit["tasks"]
+    assert LONG_PURPOSE in task.description
+    assert LONG_PURPOSE in _header(sdk)  # the runner notebook's header carries it whole
+
+
+def test_a_short_purpose_stays_whole_in_the_run_name(launch, sdk):
+    assert launch("--serverless", "--zarr-only", "--run-id", "n2", "--purpose", "ladder read legs", "--no-wait") == 0
+    assert " | ladder read legs | " in sdk.submits[0]["run_name"]
 
 
 def test_a_zarr_ladder_run_starts_with_its_own_header(launch, sdk):

@@ -748,9 +748,66 @@ def prior_wall(w, table, levels_mvp, compute, expected_rows) -> str:
     return f"{walls[len(walls) // 2] / 60.0:.0f} min (median of {len(walls)} prior run{'s' if len(walls) > 1 else ''})"
 
 
+PURPOSE_NAME_MAX = 80  # characters of the purpose that ride on the run name; the whole purpose goes on the task
+
+
+def short_purpose(purpose: str, limit: int = PURPOSE_NAME_MAX) -> str:
+    """The purpose on one line, cut at a word boundary with an ellipsis when it is longer than ``limit``."""
+    text = " ".join(purpose.split())
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 3]
+    if text[limit - 3] != " ":  # the cut falls inside a word: drop that word's start
+        cut = cut.rsplit(" ", 1)[0] if " " in cut else cut
+    return cut.rstrip(" ,;:-") + "..."
+
+
 def named_run(name: str, purpose: str, sha: str) -> str:
-    """The job run's name: the purpose and the commit ride on it, so the Jobs list says what each run is."""
-    return f"{name} | {' '.join(purpose.split())[:80]} | {sha or 'nogit'}"
+    """The job run's name: the purpose (trimmed, see ``short_purpose``) and the commit ride on it, so the Jobs list
+    says what each run is. The whole purpose goes in the task description (``run_description``)."""
+    return f"{name} | {short_purpose(purpose)} | {sha or 'nogit'}"
+
+
+def run_description(purpose: str, sha: str) -> str:
+    """The task description: the whole purpose and the commit (the Jobs API has no run-level description)."""
+    return f"{' '.join(purpose.split())} (commit {sha or 'nogit'})"[:1000]
+
+
+# AWS node types with no local disk need an EBS volume on the cluster. Local NVMe comes with a "d" in the
+# family (m6gd, m5d, c6gd, r5dn, g4dn) and with the storage-optimized families (i3, i4i, im4gn, is4gen, d3).
+# Databricks does not support the m5ad family (AMD with local disk).
+_AWS_NODE = re.compile(r"^([a-z]+)(\d+)([a-z-]*)\.[a-z0-9]+$")
+_LOCAL_DISK_FAMILIES = frozenset({"i", "im", "is", "d"})
+UNSUPPORTED_NODE_FAMILIES = frozenset({"m5ad"})
+EBS_TYPES = ("GENERAL_PURPOSE_SSD", "THROUGHPUT_OPTIMIZED_HDD")
+EBS_DEFAULTS = ("GENERAL_PURPOSE_SSD", 1, 100)  # type, volumes per node, GB per volume
+
+
+def node_family(node_type: str) -> str:
+    """``m6gd`` for ``m6gd.xlarge``; "" when the name is not an AWS node type."""
+    m = _AWS_NODE.match(node_type)
+    return "".join(m.groups()[:3]) if m else ""
+
+
+def node_needs_ebs(node_type: str) -> bool:
+    """True for an AWS node type with no local disk (m5, m6g, m6i, r6g, c5): its cluster needs an EBS volume."""
+    m = _AWS_NODE.match(node_type)
+    if not m:
+        return False  # Azure, GCP or an unknown name: aws_attributes does not apply
+    letters, _gen, suffix = m.groups()
+    return not ("d" in suffix or letters in _LOCAL_DISK_FAMILIES)
+
+
+def unsupported_node_message(node_type: str) -> str:
+    """The error for a node family Databricks does not support, with the families to pick from and how to pick."""
+    return (
+        f"ERROR: --node-type {node_type} is not supported: Databricks does not take the "
+        f"{node_family(node_type)} family.\n"
+        "Supported families: those with local NVMe (m6gd, m5d, m6id, c6gd, r6gd, i3, i4i) and those without a local disk "
+        "(m5, m6g, m6i, r6g, c5), which get an EBS volume.\n"
+        "Fix: pass --node-type with one of them, for example m6gd.xlarge (the default). "
+        "List the types of the workspace with `databricks clusters list-node-types --profile <name>`."
+    )
 
 
 def levels_functions(levels_mvp, root, only=(), compute=None) -> dict:
@@ -1295,9 +1352,38 @@ def _main(_stack) -> int:
     node_type = _arg("--node-type", "m6gd.xlarge")
     num_workers = int(_arg("--num-workers", "1"))
     access_mode = _arg("--access-mode", "dedicated")
+    # --ebs-volume-type/-count/-size: the EBS volumes of a --new-cluster node type with no local disk (default
+    # GENERAL_PURPOSE_SSD, 1 volume of 100 GB). A node type with local NVMe gets none unless one of them is passed.
+    ebs_given = any(f"--ebs-volume-{k}" in sys.argv for k in ("type", "count", "size"))
+    ebs_type = _arg("--ebs-volume-type", EBS_DEFAULTS[0])
+    ebs_count_s = _arg("--ebs-volume-count", str(EBS_DEFAULTS[1]))
+    ebs_size_s = _arg("--ebs-volume-size", str(EBS_DEFAULTS[2]))
     # --with-jar: a --new-cluster job cluster carries the staged GeoBrix JAR as a cluster library, so the levels leg
     # can time the JVM levels (L1, L2). --jar-path: the JAR (default: the versioned bundle folder's fat JAR).
     with_jar = "--with-jar" in sys.argv
+    if node_family(node_type) in UNSUPPORTED_NODE_FAMILIES:
+        print(unsupported_node_message(node_type), file=sys.stderr)
+        return 2
+    bad_ebs = next(
+        (
+            opt
+            for opt, ok in (
+                ("--ebs-volume-type", ebs_type in EBS_TYPES),
+                ("--ebs-volume-count", ebs_count_s.isdigit() and int(ebs_count_s) >= 1),
+                ("--ebs-volume-size", ebs_size_s.isdigit() and int(ebs_size_s) >= 1),
+            )
+            if not ok
+        ),
+        None,
+    )
+    if bad_ebs:
+        print(
+            f"ERROR: {bad_ebs} is not valid. Fix: --ebs-volume-type {'|'.join(EBS_TYPES)}, "
+            "--ebs-volume-count and --ebs-volume-size (GB) are whole numbers of 1 or more.",
+            file=sys.stderr,
+        )
+        return 2
+    use_ebs = new_cluster and (ebs_given or node_needs_ebs(node_type))
     if access_mode not in ("dedicated", "standard"):
         print(
             f"ERROR: --access-mode must be 'dedicated' or 'standard' (got '{access_mode}')",
@@ -1743,6 +1829,7 @@ def _main(_stack) -> int:
         print(
             f"  new cluster: {spark_version} {node_type} x {num_workers} worker(s), "
             f"{access_mode} access{', on demand' if on_demand else ''}"
+            + (f", EBS {ebs_count_s} x {ebs_size_s} GB {ebs_type}" if use_ebs else "")
         )
     else:
         print("gbx:bench:cluster pre-flight")
@@ -2048,6 +2135,7 @@ def _main(_stack) -> int:
                 tasks=[
                     jobs.SubmitTask(
                         task_key="run_bench",
+                        description=run_description(purpose, run_sha),
                         environment_key="bench_env",
                         notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
                         max_retries=0,
@@ -2061,6 +2149,16 @@ def _main(_stack) -> int:
                 if access_mode == "dedicated"
                 else compute.DataSecurityMode.USER_ISOLATION
             )
+            aws_kwargs = {}
+            if on_demand:
+                aws_kwargs.update(availability=compute.AwsAvailability.ON_DEMAND, first_on_demand=num_workers + 1)
+            if use_ebs:
+                aws_kwargs.update(
+                    ebs_volume_type=getattr(compute.EbsVolumeType, ebs_type),
+                    ebs_volume_count=int(ebs_count_s),
+                    ebs_volume_size=int(ebs_size_s),
+                )
+            aws_attributes = compute.AwsAttributes(**aws_kwargs) if aws_kwargs else None
             waiter = submit_once(
                 w,
                 run_name=name,
@@ -2068,6 +2166,7 @@ def _main(_stack) -> int:
                 tasks=[
                     jobs.SubmitTask(
                         task_key="run_bench",
+                        description=run_description(purpose, run_sha),
                         new_cluster=compute.ClusterSpec(
                             spark_version=spark_version,
                             node_type_id=node_type,
@@ -2075,14 +2174,7 @@ def _main(_stack) -> int:
                             data_security_mode=mode,
                             single_user_name=(me.user_name if access_mode == "dedicated" else None),
                             custom_tags={"gbx_bench": run_id[:64]},
-                            aws_attributes=(
-                                compute.AwsAttributes(
-                                    availability=compute.AwsAvailability.ON_DEMAND,
-                                    first_on_demand=num_workers + 1,
-                                )
-                                if on_demand
-                                else None
-                            ),
+                            aws_attributes=aws_attributes,
                         ),
                         notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
                         libraries=libraries,
@@ -2099,6 +2191,7 @@ def _main(_stack) -> int:
                 tasks=[
                     jobs.SubmitTask(
                         task_key="run_bench",
+                        description=run_description(purpose, run_sha),
                         existing_cluster_id=cluster_id,
                         notebook_task=jobs.NotebookTask(notebook_path=path, source=jobs.Source.WORKSPACE),
                         libraries=libraries,

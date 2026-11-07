@@ -120,7 +120,10 @@ Options:
                         --spark-version (default 19.x-scala2.13), --node-type (default
                         m6gd.xlarge), --num-workers (default 1), --access-mode
                         dedicated|standard (default dedicated), --on-demand (AWS: every
-                        node on demand, none of them a spot node taken back mid-run)
+                        node on demand, none of them a spot node taken back mid-run).
+                        A node type with no local disk (m5, m6g, m6i) gets one 100 GB
+                        GENERAL_PURPOSE_SSD EBS volume; --ebs-volume-type|count|size override it.
+                        The m5ad family is not supported.
   --with-jar            With --new-cluster: install the staged GeoBrix JAR on the job cluster as a
                         library (the JVM levels L1/L2 of a --levels run need it). --jar-path <path>
                         names another JAR (default <volume>/geobrix/<version>/jar/geobrix-<version>-jar-with-dependencies.jar)

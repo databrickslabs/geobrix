@@ -726,8 +726,13 @@ def _enumerate_fuse(
     include_hidden: bool,
     glob_patterns: Optional[list[str]] = None,
     need_size: bool = True,
+    names_out: Optional[dict] = None,
 ) -> list[dict[str, Any]]:
     """Enumerate via os.scandir (FUSE-only fallback).
+
+    *names_out*, when given, receives ``{folder: [every entry name the scan found there]}``
+    for each folder scanned (the names the accepted files were picked from, sidecars
+    included), at no extra syscall.
 
     Returns a list of dicts with keys {path, size, file} where file is None.
 
@@ -784,6 +789,8 @@ def _enumerate_fuse(
                 scan_entries = _retry_transient(lambda p=dir_path: list(os.scandir(p)))
             except FileNotFoundError as exc:
                 raise FileNotFoundError(f"Path does not exist: {path!r}") from exc
+            if names_out is not None:
+                names_out[dir_path] = [e.name for e in scan_entries]
             for entry in scan_entries:
                 name = entry.name
                 if entry.is_dir(follow_symlinks=False):
@@ -822,8 +829,12 @@ def list_local_files(
     include_hidden: bool = False,
     extensions: Optional[tuple[str, ...]] = None,
     path_glob_filter: Optional[str] = None,
+    names_out: Optional[dict] = None,
 ) -> list[str]:
     """Session-free: return sorted local (FUSE) file paths under *path*.
+
+    *names_out*: see :func:`_enumerate_fuse` (the folders' entry names, for a caller that
+    reads the sidecars beside the files it lists).
 
     The single enumeration routine every DataSource reader consumes — no
     SparkSession, no FILE-tier SQL, safe inside a session-less DataSource on
@@ -840,6 +851,7 @@ def list_local_files(
         include_hidden=include_hidden,
         glob_patterns=glob_patterns,
         need_size=False,  # caller discards size; skip all per-file stat syscalls
+        names_out=names_out,
     )
     return [r["path"] for r in rows]
 

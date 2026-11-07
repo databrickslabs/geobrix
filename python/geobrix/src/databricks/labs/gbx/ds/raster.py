@@ -285,6 +285,9 @@ class _TilePartition(InputPartition):
         # Files the planner found in this file's folder (None when not planned from a
         # folder listing); stamped on virtual tiles as metadata["path_folder_files"].
         "folder_files",
+        # True when the planner's listing of this file's folder showed no sidecar beside it
+        # (stamped as metadata["path_sidecar_free"]; see pyrx._env.SIDECAR_FREE_KEY).
+        "sidecar_free",
     )
 
     def __init__(
@@ -322,6 +325,7 @@ class _TilePartition(InputPartition):
         self.tile_format = tile_format
         self.vrt_tags: Optional[dict] = None
         self.folder_files: Optional[int] = None
+        self.sidecar_free: bool = False
 
 
 # A folder of many files is read in groups: the planner opens no header (that is one serial open per file on the
@@ -350,9 +354,10 @@ class _BatchPartition(InputPartition):
         None  # a task of whole files: no part of one file (``_quarantine.part_label``)
     )
 
-    def __init__(self, file_paths, folder_files=None):
+    def __init__(self, file_paths, folder_files=None, sidecar_free=None):
         self.file_paths = list(file_paths)
         self.folder_files = list(folder_files or [None] * len(self.file_paths))
+        self.sidecar_free = list(sidecar_free or [False] * len(self.file_paths))
 
     @property
     def file_path(self) -> str:
@@ -1202,12 +1207,14 @@ class RasterGbxReader(DataSourceReader):
         """
         from databricks.labs.gbx.ds.file_gbx import list_local_files
 
+        names_by_folder: Dict[str, list] = {}
         files = list_local_files(
             self.path,
             recursive=self.recursive,
             include_hidden=self.include_hidden,
             extensions=self.extensions,
             path_glob_filter=self.path_glob_filter,
+            names_out=names_by_folder,
         )
         # Files per folder, from this listing (only files it accepted, so never more than
         # the folder holds), kept for the folders past the bound a worker lists up to
@@ -1221,6 +1228,7 @@ class RasterGbxReader(DataSourceReader):
             folder_files[d] = folder_files.get(d, 0) + 1
         bound = _env.listing_ceiling()
         self._folder_files = {d: n for d, n in folder_files.items() if n > bound}
+        self._sidecar_free = self._files_without_sidecars(files, names_by_folder)
         if self.filter_regex and self.filter_regex != ".*":
             import re as _re
 
@@ -1269,6 +1277,32 @@ class RasterGbxReader(DataSourceReader):
             and budget_bytes <= 0
         )
 
+    @staticmethod
+    def _files_without_sidecars(files: list, names_by_folder: dict) -> set:
+        """The files of the folders past GDAL's listing limit that have nothing beside them a GDAL open
+        could pick up (``readdir_mode_for`` gives ``EMPTY_DIR``), from the names the enumeration scanned.
+
+        A worker would list such a folder itself at its second open (the names of a 32,000-file folder
+        take 15 to 60 s on a Volume, once per Python worker) or check each sidecar name by name (1.4 s an
+        open); the planner has the names already, so it says so on the tile (``path_sidecar_free``) and
+        the open takes ``EMPTY_DIR`` with neither. A smaller folder is left to the worker's own listing,
+        which costs less than a second.
+        """
+        cap = _env.listing_cap()
+        from_names = 1000 if cap is None else cap
+        by_folder: Dict[str, list] = {}
+        for f in files:
+            d = os.path.dirname(f)
+            if len(names_by_folder.get(d, ())) > from_names:
+                by_folder.setdefault(d, []).append(f)
+        free: set = set()
+        for d, in_folder in by_folder.items():
+            index = _env._IndexedNames(names_by_folder[d])
+            for f in in_folder:
+                if _env.readdir_mode_for(os.path.basename(f), index) == "EMPTY_DIR":
+                    free.add(f)
+        return free
+
     def _plan_batches(self, files: list, folder_files: dict) -> list:
         """One :class:`_BatchPartition` per `files_per_task` consecutive files (listing order). No header is opened."""
         if self.skip_ordering:
@@ -1276,10 +1310,12 @@ class RasterGbxReader(DataSourceReader):
         else:
             order = sorted(files)
         per_task = files_per_task(len(order))
+        free = getattr(self, "_sidecar_free", None) or set()
         return [
             _BatchPartition(
                 order[i : i + per_task],
                 [folder_files.get(os.path.dirname(f)) for f in order[i : i + per_task]],
+                [f in free for f in order[i : i + per_task]],
             )
             for i in range(0, len(order), per_task)
         ]
@@ -1367,11 +1403,18 @@ class RasterGbxReader(DataSourceReader):
         files = self._list_source_files()
         folder_files = getattr(self, "_folder_files", {})
         if self._decodes_whole_files(resolved_budget):
-            return self._plan_batches(files, folder_files)
+            batches = self._plan_batches(files, folder_files)
+            self._sidecar_free = (
+                None  # planned: not shipped to the tasks with the reader
+            )
+            return batches
         result: list = []
+        free = getattr(self, "_sidecar_free", None) or set()
+        self._sidecar_free = None  # planned: not shipped to the tasks with the reader
         for f in files:
             n = folder_files.get(os.path.dirname(f))
             _env.note_folder_files(f, n)  # the planner's own header opens
+            _env.note_sidecar_free(f, f in free)
             parts = _plan_partitions_for_file(
                 file_path=f,
                 budget_bytes=resolved_budget,
@@ -1384,6 +1427,7 @@ class RasterGbxReader(DataSourceReader):
             )
             for p in parts:
                 p.folder_files = n
+                p.sidecar_free = f in free
             result.extend(parts)
         # None-safe: place None values at the end (deterministic ordering).
         # skipOrdering=True bypasses this sort (opt-out for pre-ordered input).
@@ -1416,6 +1460,8 @@ class RasterGbxReader(DataSourceReader):
         source = _listing.to_spark_uri(partition.file_path)
         folder_files = getattr(partition, "folder_files", None)
         _env.note_folder_files(partition.file_path, folder_files)
+        sidecar_free = bool(getattr(partition, "sidecar_free", False))
+        _env.note_sidecar_free(partition.file_path, sidecar_free)
 
         # ------------------------------------------------------------------
         # Virtual tile: bytes-free emission (path + whole-file window).
@@ -1455,6 +1501,8 @@ class RasterGbxReader(DataSourceReader):
                 }
                 if folder_files is not None:
                     meta[_env.FOLDER_FILES_KEY] = str(folder_files)
+                if sidecar_free:
+                    meta[_env.SIDECAR_FREE_KEY] = "1"
                 # Propagate VRT member tags (cellid, gridSystem) when present.
                 # Set by partitions() for quadbin mini-COG members; absent for
                 # native tiles and for partitions built outside the VRT branch.
@@ -1491,6 +1539,8 @@ class RasterGbxReader(DataSourceReader):
                     }
                     if folder_files is not None:
                         meta[_env.FOLDER_FILES_KEY] = str(folder_files)
+                    if sidecar_free:
+                        meta[_env.SIDECAR_FREE_KEY] = "1"
                     win = (
                         partition.window
                     )  # always set for non-whole-file virtual tiles
@@ -1660,8 +1710,14 @@ class RasterGbxReader(DataSourceReader):
 
         want = _arrow_schema(reader_schema_v2())
         one = pa.schema([pa.field("tile", want.field("tile").type)])
-        for path, n in zip(partition.file_paths, partition.folder_files):
+        for path, n, free in zip(
+            partition.file_paths,
+            partition.folder_files,
+            getattr(partition, "sidecar_free", None)
+            or [False] * len(partition.file_paths),
+        ):
             _env.note_folder_files(path, n)
+            _env.note_sidecar_free(path, free)
         batch = pa.RecordBatch.from_pylist(
             [
                 {"tile": VirtualTile(cellid=_encode.CELLID_FRESH, path=p).to_row()}

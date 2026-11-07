@@ -1389,3 +1389,160 @@ def test_gdal_counts_dot_and_dotdot_against_its_listing_limit(
     assert len(os.listdir(tmp_path)) == names
     readdir(None)
     assert _env.readdir_mode(a) == want
+
+
+# --- the reader's no-sidecar stamp: one folder listing on the driver, none on the workers ---
+
+
+def _stamped_tile(path, flag="1"):
+    tile = _tile(path)
+    tile["metadata"] = {_env.SIDECAR_FREE_KEY: flag}
+    return tile
+
+
+@pytest.fixture
+def no_stamps():
+    _env._SIDECAR_FREE.clear()
+    yield
+    _env._SIDECAR_FREE.clear()
+
+
+def test_a_tile_stamped_without_sidecars_opens_with_neither_a_listing_nor_name_checks(
+    tmp_path, readdir, opens_seen, scans, no_stamps
+):
+    """On a worker with nothing held, the open of a tile the reader stamped path_sidecar_free
+    takes EMPTY_DIR at once: the folder is not scanned (a Volume returns a 32,000-name folder
+    after 15 to 60 s, once per Python worker) and GDAL checks no sidecar name (1.4 s an open).
+    The same tile unstamped lists its folder, as before."""
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    _plain_tiff(tmp_path / "b.tif")
+    with ot._open(_tile(a)) as ds:  # control: no stamp, the folder is scanned
+        assert ds.width == 8
+    assert scans != []
+    _env._LISTINGS.clear()
+    scans.clear()
+    opens_seen.clear()
+    for open_ in (ot._open, ot.open_header):
+        with open_(_stamped_tile(a)) as ds:
+            assert ds.width == 8
+    assert scans == []
+    assert {m for n, m in opens_seen if n == "a.tif"} == {"EMPTY_DIR"}
+
+
+@pytest.mark.parametrize("flag", ["0", "yes", "", None, 2, "true", "1x"])
+def test_only_a_one_is_taken_as_the_no_sidecar_stamp(flag, no_stamps, tmp_path):
+    """Anything but "1" (or True) leaves the open to the listing."""
+    a = _plain_tiff(tmp_path / "a.tif")
+    _env.note_sidecar_free(a, flag)  # never raises
+    assert _env._SIDECAR_FREE == {}
+
+
+def test_a_stamp_gives_empty_dir_only_to_a_format_that_opens_no_other_file(
+    tmp_path, readdir, no_stamps
+):
+    """The allowlist (_EMPTY_DIR_EXTS) still decides: a stamped .vrt keeps its sources' sidecars."""
+    readdir(None)
+    v = tmp_path / "m.vrt"
+    v.write_text("<VRTDataset/>")
+    _env.note_sidecar_free(str(v), "1")
+    assert _env.readdir_mode(str(v)) != "EMPTY_DIR"
+    a = _plain_tiff(tmp_path / "a.tif")
+    _env.note_sidecar_free(a, "1")
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+
+
+def test_a_users_value_still_decides_over_a_stamp(
+    tmp_path, readdir, no_stamps, monkeypatch
+):
+    readdir("NO")
+    a = _plain_tiff(tmp_path / "a.tif")
+    _env.note_sidecar_free(a, "1")
+    assert _env.readdir_mode(a) is None
+
+
+def test_the_stamps_held_are_bounded(no_stamps, tmp_path, monkeypatch):
+    monkeypatch.setattr(_env, "_SIDECAR_FREE_MAX", 3)
+    paths = [_plain_tiff(tmp_path / f"{i}.tif") for i in range(5)]
+    for p in paths:
+        _env.note_sidecar_free(p, "1")
+    assert list(_env._SIDECAR_FREE) == [os.path.abspath(p) for p in paths[2:]]
+
+
+def _reader_tiles(path, **options):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    names = V2_TILE_SCHEMA.fieldNames()
+    reader = RasterGbxReader({"path": str(path), "virtualTiles": "true", **options})
+    return [
+        dict(zip(names, row[1])) for p in reader.partitions() for row in reader.read(p)
+    ]
+
+
+@pytest.mark.parametrize("options", [{}, {"tileSize": "4"}], ids=["whole", "windowed"])
+def test_the_reader_stamps_the_files_of_a_big_folder_that_have_no_sidecar(
+    tmp_path, monkeypatch, options, no_stamps
+):
+    """For a folder past GDAL's listing limit the planner has the folder's names (it scanned
+    them to enumerate), so it stamps path_sidecar_free on the tiles whose file has no sidecar
+    beside it, and only on those: t0 has an .aux.xml. A folder at or under the limit
+    is not stamped (a worker lists it in well under a second)."""
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "4")
+    big = tmp_path / "big"
+    small = tmp_path / "small"
+    big.mkdir()
+    small.mkdir()
+    for i in range(4):
+        _plain_tiff(big / f"t{i}.tif")
+    (big / "t0.tif.aux.xml").write_text(
+        "<PAMDataset/>"
+    )  # a sidecar of t0, a fifth name
+    for i in range(2):
+        _plain_tiff(small / f"s{i}.tif")
+    tiles = _reader_tiles(tmp_path, pathGlobFilter="*.tif", **options)
+    stamped = {
+        os.path.basename(t["path"]): t["metadata"].get(_env.SIDECAR_FREE_KEY)
+        for t in tiles
+    }
+    assert stamped == {
+        "t0.tif": None,
+        "t1.tif": "1",
+        "t2.tif": "1",
+        "t3.tif": "1",
+        "s0.tif": None,
+        "s1.tif": None,
+    }
+    assert getattr(_env, "SIDECAR_FREE_KEY") not in [
+        k for t in tiles if t["path"].endswith("t0.tif") for k in t["metadata"]
+    ]
+
+
+def test_the_reader_does_not_ship_the_sidecar_set_to_the_tasks(tmp_path, monkeypatch):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "1")
+    for i in range(3):
+        _plain_tiff(tmp_path / f"t{i}.tif")
+    reader = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "true"})
+    parts = reader.partitions()
+    assert [p.sidecar_free for p in parts] == [True, True, True]
+    assert reader._sidecar_free is None
+
+
+def test_a_batch_task_of_a_plain_read_notes_the_stamps(
+    tmp_path, monkeypatch, no_stamps
+):
+    """virtualTiles=false plans tasks of whole files (_BatchPartition): the stamp rides on
+    the partition and reaches the worker's hint before it opens the files."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    monkeypatch.setenv("GDAL_READDIR_LIMIT_ON_OPEN", "1")
+    paths = [_plain_tiff(tmp_path / f"t{i}.tif") for i in range(3)]
+    reader = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "false"})
+    parts = reader.partitions()
+    assert [f for p in parts for f in p.sidecar_free] == [True, True, True]
+    _env._SIDECAR_FREE.clear()
+    rows = [r for p in parts for r in reader.read(p)]
+    assert rows
+    assert set(_env._SIDECAR_FREE) == {os.path.abspath(p) for p in paths}

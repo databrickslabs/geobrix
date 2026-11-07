@@ -907,6 +907,56 @@ def note_folder_files(path, count) -> None:
     _LISTINGS.mark_too_large(os.path.dirname(os.path.abspath(p)))
 
 
+# The tile metadata key the raster_gbx reader stamps (as "1") on a virtual tile whose file has
+# nothing beside it in its folder that a GDAL open could pick up (no sidecar, no vendor
+# metadata file: readdir_mode_for gave EMPTY_DIR), for a folder past GDAL's listing limit. The
+# reader sees the folder's names once, on the driver, while it enumerates the files; without
+# the stamp every Python worker lists the same folder again at its second open (14.5 s for
+# 40,000 names alone, 30 to 60 s with a node's workers listing together) or, once the folder is
+# held as too large, checks each sidecar name by name (about 1.4 s an open on a Volume's FUSE).
+# A stamp is data like the folder count, but it can only make GDAL skip sidecars of that one
+# file, which a row that says so wrongly asks for itself.
+SIDECAR_FREE_KEY = "path_sidecar_free"
+_SIDECAR_FREE: dict = (
+    {}
+)  # path -> None, insertion-ordered: the least recently noted go first
+_SIDECAR_FREE_MAX = 4096
+_SIDECAR_FREE_LOCK = threading.Lock()
+
+
+def note_sidecar_free(path, flag) -> None:
+    """Take *flag*, a tile's ``path_sidecar_free``, as the reader's word that *path* has no
+    sidecar: its next open takes ``EMPTY_DIR`` (see readdir_mode) without listing its folder.
+    Anything but ``"1"`` (or ``True``) does nothing."""
+    if not (flag is True or (isinstance(flag, str) and flag.strip() == "1")):
+        return
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return
+    key = os.path.abspath(p)
+    with _SIDECAR_FREE_LOCK:
+        _SIDECAR_FREE.pop(key, None)
+        _SIDECAR_FREE[key] = None
+        while len(_SIDECAR_FREE) > _SIDECAR_FREE_MAX:
+            del _SIDECAR_FREE[next(iter(_SIDECAR_FREE))]
+
+
+def note_tile_hints(path, metadata) -> None:
+    """Take the reader's hints a tile carries about the folder of its *path*: the count of
+    files (note_folder_files) and the no-sidecar stamp (note_sidecar_free)."""
+    md = metadata or {}
+    note_folder_files(path, md.get(FOLDER_FILES_KEY))
+    note_sidecar_free(path, md.get(SIDECAR_FREE_KEY))
+
+
+def _sidecar_free(abs_path: str) -> bool:
+    with _SIDECAR_FREE_LOCK:
+        return abs_path in _SIDECAR_FREE
+
+
 def _is_plain_file_path(path: str) -> bool:
     """A local or Volume file path; not a GDAL /vsi path, URL or DRIVER:... string."""
     if path.startswith("/vsi") or "://" in path:
@@ -955,6 +1005,12 @@ def readdir_mode(path) -> Optional[str]:
     if _thread_config() is None:
         return None  # no per-open value can be set: do not list for nothing
     folder, name = os.path.split(os.path.abspath(p))
+    if os.path.splitext(name)[1].lower() in _EMPTY_DIR_EXTS and _sidecar_free(
+        os.path.join(folder, name)
+    ):
+        return (
+            "EMPTY_DIR"  # the reader listed the folder: no listing, no by-name checks
+        )
     names = _LISTINGS.names(folder, name)
     if names is None or names is _TOO_LARGE or name not in names:
         return None

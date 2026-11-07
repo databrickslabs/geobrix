@@ -40,11 +40,7 @@ from rasterio.windows import Window
 from databricks.labs.gbx._gdal_policy import open_bytes, open_data, refusals_named
 from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx._env import (
-    FOLDER_FILES_KEY,
-    note_folder_files,
-    open_raster,
-)
+from databricks.labs.gbx.pyrx._env import note_tile_hints, open_raster
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
@@ -560,7 +556,7 @@ def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) ->
     raw = None
     # the reader's count of files in the tile's folder: lets open_raster skip listing a
     # folder past GDAL's listing limit (a hint only; see _env.note_folder_files)
-    note_folder_files(tile.path, (tile.metadata or {}).get(FOLDER_FILES_KEY))
+    note_tile_hints(tile.path, tile.metadata)
     if file_ref is not None:
         try:
             raw = file_ref.as_local_file()
@@ -1134,7 +1130,7 @@ def open_tile_points(tile) -> Iterator:
         with open_tile(vt) as ds:
             yield ds
         return
-    note_folder_files(vt.path, (vt.metadata or {}).get(FOLDER_FILES_KEY))
+    note_tile_hints(vt.path, vt.metadata)
     with _TASK_SOURCES.source(vt.path) as src:
         view = _point_view(vt, src)
         if view is not None:

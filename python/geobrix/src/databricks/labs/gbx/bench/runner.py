@@ -99,7 +99,8 @@ def time_iters(
     }
 
 
-# session -> the Spark half of the env record: it answers the same for the whole session
+# session -> the Spark half of the env record that answers the same for the whole session (versions); the capabilities
+# are read again at every row: a probe or a use decides one after the first read, and the row must say what it ran on
 _SPARK_ENV: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
 _NO_SPARK_ENV = {
     "env_spark_version": "",
@@ -132,20 +133,22 @@ def spark_env(spark=None) -> Dict:
     try:
         if spark is None:
             spark = SparkSession.getActiveSession()
-        if spark is not None and spark in _SPARK_ENV:
-            return dict(_SPARK_ENV[spark])
         from databricks.labs.gbx.manager import capabilities as caps
 
-        info = caps.runtime_info(spark)
-        out = {
-            "env_spark_version": info["spark_version"],
-            "env_pyspark_version": info["pyspark_version"],
-            "env_dbr_version": info["dbr_version"],
-            "env_version": info["env_version"],
-            "env_caps": "" if spark is None else _caps_json(caps.report(spark)),
-        }
-        if spark is not None:
-            _SPARK_ENV[spark] = dict(out)
+        if spark is not None and spark in _SPARK_ENV:
+            out = dict(_SPARK_ENV[spark])
+        else:
+            info = caps.runtime_info(spark)
+            out = {
+                "env_spark_version": info["spark_version"],
+                "env_pyspark_version": info["pyspark_version"],
+                "env_dbr_version": info["dbr_version"],
+                "env_version": info["env_version"],
+            }
+            if spark is not None:
+                _SPARK_ENV[spark] = dict(out)
+        # at call time (the registry caches each decision, so this is cheap)
+        out["env_caps"] = "" if spark is None else _caps_json(caps.report(spark))
         return out
     except Exception:  # noqa: BLE001
         return dict(_NO_SPARK_ENV)

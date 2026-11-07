@@ -1,5 +1,7 @@
 """The value-level fingerprints of the levels leg: the same values in another encoding hash alike, other values do not."""
 
+import types
+
 import numpy as np
 import pytest
 
@@ -141,3 +143,141 @@ def test_every_decoded_representative_has_a_value_query_for_each_of_its_levels()
         if f.fn == "gbx_rst_transformcrs" and f.variant != "floor"
     ]
     assert t and all("gbx_bench_vfp_raster" in f.vsql for f in t)
+
+
+# ---- the few tiles a value fingerprint decodes are chosen by a key of the input, not by the scan ------------------------
+
+
+def _vfp_tile_rows(n, reverse):
+    """`n` tiles of a table, in the order a scan may meet them: `path` and `raster` differ per tile."""
+    rows = [(f"/v/t{i:03d}.tif", bytes([i % 251, (i * 7) % 251, 1])) for i in range(n)]
+    return rows[::-1] if reverse else rows
+
+
+def _tile_table(spark, name, reverse):
+    from pyspark.sql import functions as F
+
+    df = spark.createDataFrame(
+        _vfp_tile_rows(100, reverse), "path string, raster binary"
+    ).select(F.struct("path", "raster").alias("tile"))
+    df.repartition(1).createOrReplaceTempView(name)
+    return name
+
+
+def _stub_vfp_udfs(spark, fn):
+    """The decoder and the function under test as stand-ins that return the tile's bytes: the fingerprint then depends only
+    on WHICH tiles the query picked."""
+    import zlib
+
+    from pyspark.sql.types import BinaryType, LongType, StructField, StructType
+
+    spark.udf.register(
+        "gbx_bench_vfp_raster", lambda b: zlib.crc32(b) if b else 0, LongType()
+    )
+    out = StructType([StructField("raster", BinaryType())])
+    spark.udf.register(fn, lambda t, *a: (t["raster"],), out)
+
+
+def _fp(spark, sql, src):
+    r = spark.sql(sql.format(src=src, uc="")).collect()[0]
+    return r[0], r[1]
+
+
+def test_the_tile_value_query_picks_the_same_tiles_whatever_order_the_scan_meets_them(
+    spark_session_local,
+):
+    """An unordered LIMIT hashed whichever 64 tiles the scan met first: two levels (or two runs) differed in value while
+    every output was equal. The 64 are the first by a key of the tile, so the sample is the same for any scan order.
+    """
+    rep = next(r for r in fam.REPS if r.fn == "gbx_rst_proximity")
+    _stub_vfp_udfs(spark_session_local, rep.fn)
+    sql = fam._vsql(rep, rep.fn)
+    assert "ORDER BY" in sql and sql.index("ORDER BY") < sql.index("LIMIT")
+    fwd = _fp(
+        spark_session_local, sql, _tile_table(spark_session_local, "vfp_fwd", False)
+    )
+    rev = _fp(
+        spark_session_local, sql, _tile_table(spark_session_local, "vfp_rev", True)
+    )
+    assert fwd[0] == rev[0] == fam._VFP_TILE_ROWS
+    assert fwd == rev
+
+
+def test_the_transformcrs_value_query_picks_the_same_tiles_whatever_order_the_scan_meets_them(
+    spark_session_local,
+):
+    fn = "gbx_rst_transformcrs"
+    _stub_vfp_udfs(spark_session_local, fn)
+    sql = lf._TCRS_V.replace("{fn}", fn)
+    assert "ORDER BY" in sql and sql.index("ORDER BY") < sql.index("LIMIT")
+    fwd = _fp(
+        spark_session_local, sql, _tile_table(spark_session_local, "vfp_fwd2", False)
+    )
+    rev = _fp(
+        spark_session_local, sql, _tile_table(spark_session_local, "vfp_rev2", True)
+    )
+    assert fwd[0] == rev[0] == 64 and fwd == rev
+
+
+def test_every_tile_producing_representative_with_a_value_query_has_an_ordering_key_for_its_input():
+    for r in fam.REPS:
+        if r.vfp and r.shape is fam._TILE:
+            sql = fam._vsql(r, r.fn)
+            assert "ORDER BY" in sql and sql.index("ORDER BY") < sql.index(
+                "LIMIT"
+            ), r.fn
+            assert "{order}" not in sql, r.fn
+
+
+# ---- the fingerprint falls back to the length one, with a note, when the value pass cannot answer ------------------------
+
+
+class _Rows:
+    def __init__(self, row=None, error=None):
+        self.row, self.error = row, error
+
+    def sql(self, text):
+        if self.error:
+            raise self.error
+        return types.SimpleNamespace(collect=lambda: [self.row])
+
+
+def _vfp_ctx(spark):
+    from databricks.labs.gbx.bench import levels
+
+    ctx = levels._Ctx(spark, 0, 1, "", None, None, {})
+    ctx.setups.add("value_fp")  # the UDF registration is not under test
+    return ctx
+
+
+@pytest.mark.parametrize(
+    "spark, allows_null, want_fp, want_note",
+    [
+        (_Rows(row=(10, 777, 10)), False, "v1:777", "len_fp=LEN"),
+        (
+            _Rows(error=RuntimeError("decoder blew up")),
+            False,
+            "LEN",
+            "value_fp failed: RuntimeError: decoder blew up",
+        ),
+        (_Rows(row=(10, 777, 7)), False, "LEN", "value_fp: 3 of 10 outputs NULL"),
+        (_Rows(row=(10, None, 10)), False, "LEN", "value_fp: no value"),
+        (
+            _Rows(row=(10, 777, 7)),
+            True,
+            "v1:777",
+            "len_fp=LEN",
+        ),  # a form that allows NULL outputs keeps its value
+    ],
+)
+def test_the_value_fingerprint_keeps_the_length_one_when_the_value_pass_fails(
+    spark, allows_null, want_fp, want_note
+):
+    from databricks.labs.gbx.bench import levels
+
+    form = levels.Form(
+        mvp="X", fn="f", level="L3", variant="v", input="i", sql="", vsql="SELECT 1 FROM {src}",
+        allows_null=allows_null,
+    )  # fmt: skip
+    fp, note = levels._value_fingerprint(_vfp_ctx(spark), form, "t", 10, 10, "LEN")
+    assert (fp, note) == (want_fp, [want_note])

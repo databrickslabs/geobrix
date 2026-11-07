@@ -119,6 +119,34 @@ def test_capture_env_records_the_spark_the_run_is_on(monkeypatch):
     assert row.env_spark_version == "4.3.0"
 
 
+def test_env_caps_are_read_at_each_call_not_frozen_at_the_first_read(monkeypatch):
+    """A probe or a first use decides a capability after the session's env was first read: the next row must say so."""
+    import json
+
+    from databricks.labs.gbx.manager import capabilities
+
+    seen = {"caps": {"a": {"value": False, "source": "unprobed"}}, "info": 0}
+    real_info = capabilities.runtime_info
+
+    def info(spark):
+        seen["info"] += 1
+        return real_info(spark)
+
+    monkeypatch.setattr(capabilities, "runtime_info", info)
+    monkeypatch.setattr(capabilities, "report", lambda spark: seen["caps"])
+    session = _Session("4.3.0")
+    first = rn.spark_env(session)
+    assert json.loads(first["env_caps"]) == {"a": "off:unprobed"}
+    seen["caps"] = {
+        "a": {"value": True, "source": "probe"}
+    }  # decided after the first read
+    again = rn.spark_env(session)
+    assert json.loads(again["env_caps"]) == {"a": "on:probe"}
+    assert (
+        again["env_spark_version"] == "4.3.0" and seen["info"] == 1
+    )  # the versions are read once
+
+
 def test_capture_env_never_raises_when_the_session_cannot_say():
     class Broken:
         @property

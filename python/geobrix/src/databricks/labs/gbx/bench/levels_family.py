@@ -70,12 +70,22 @@ _SCALAR_V = (
     "SELECT count(*) AS n, sum(pmod({udf}(c), 2147483647)) AS fp, count(c) AS n_out "
     "FROM (SELECT {call} AS c FROM {{src}})"
 )
+# The few tiles are the first `_VFP_TILE_ROWS` BY A KEY OF THE INPUT, not of the scan: an unordered LIMIT takes whichever
+# rows the scan meets first (the file order of the table, the task that finishes first), so two levels or two runs hashed
+# different tiles and differed in value while every output was equal. The key is a function of the row's own content.
 _TILE_V = (
     "SELECT count(*) AS n, sum(pmod({udf}(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
-    "FROM (SELECT {call} AS t FROM (SELECT * FROM {{src}} LIMIT "
+    "FROM (SELECT {call} AS t FROM (SELECT * FROM {{src}} ORDER BY {order} LIMIT "
     + str(_VFP_TILE_ROWS)
     + "))"
 )
+# the ordering key of each input a tile-producing representative reads (a tile's path, then a hash of its bytes: a
+# virtual tile has no bytes, a path-less one has no path)
+_VFP_ORDER = {
+    "tiles_n": "tile.path, xxhash64(tile.raster)",
+    "points_arrays": "xxhash64(x, y, z)",
+    "file_bytes": "xxhash64(content)",
+}
 _AGG_V = (
     "SELECT (SELECT count(*) FROM {{src}}) AS n, sum(pmod({udf}(x), 2147483647)) AS fp, "
     "CASE WHEN count(x) = count(*) THEN (SELECT count(*) FROM {{src}}) ELSE count(x) END AS n_out "
@@ -529,8 +539,13 @@ def _vsql(rep: Rep, name: str) -> str:
         return ""
     from databricks.labs.gbx.bench import value_fp
 
+    order = _VFP_ORDER.get(rep.inp)
+    if order is None and rep.shape is _TILE:
+        raise KeyError(
+            f"{rep.fn}: no ordering key for the input {rep.inp!r} (_VFP_ORDER)"
+        )
     return _VFP_SHAPE[id(rep.shape)].format(
-        call=rep.call.replace("{fn}", name), udf=value_fp.udf_name(rep.vfp)
+        call=rep.call.replace("{fn}", name), udf=value_fp.udf_name(rep.vfp), order=order
     )
 
 

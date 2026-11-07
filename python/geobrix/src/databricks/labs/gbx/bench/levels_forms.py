@@ -770,19 +770,33 @@ def _scan_epsgs(spark, paths: List[str], batch: int, take):
 
 
 def _plan_stack_tiles(sources, n, spark=None):
-    """`("stack", path)` pairs: the first `n` corpus row tiles of the CRS of the first one. The tiles of one system share
-    their place, so the `n` references are one deep stack on one footprint (`n` is the depth of the merge's VRT).
+    """`("stack", path)` pairs: the first `n` corpus row tiles of the CRS of the first one that has a CRS. The tiles of
+    one system share their place, so the `n` references are one deep stack on one footprint (`n` is the depth of the
+    merge's VRT).
     """
     corpus_guard("tiles_stack", "the corpus rows", len(sources), n)
     batch = max(int(n), SMALL_INPUT_ROWS)
+
+    def anchor_of(found):
+        # the first CRS a tile has: a tile whose header gives no EPSG is no anchor (the stack would then be every other
+        # tile without one). Inline, not a module helper: a planner's stamp is its own source.
+        return next((c for _, c in found if c is not None), None)
+
     # the corpus cycles four systems: the n-th of the first one is about the 4n-th file
     got = _scan_epsgs(
         spark,
         sources[: 4 * n + 64],
         batch,
-        lambda f: sum(1 for _, c in f if c == f[0][1]) >= n,
+        lambda f: anchor_of(f) is not None
+        and sum(1 for _, c in f if c == anchor_of(f)) >= n,
     )
-    same = [p for p, c in got if got and c == got[0][1]][:n]
+    anchor = anchor_of(got)
+    if anchor is None:
+        raise ValueError(
+            f"a stack of {n} tiles on one footprint needs tiles with a CRS, but none of the first {len(got)} corpus "
+            "tiles gives an EPSG code in its header"
+        )
+    same = [p for p, c in got if c == anchor][:n]
     if len(same) < n:
         held = len(sources)
         raise ValueError(
@@ -988,10 +1002,12 @@ _TCRS = (
     "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
     "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM {src})"
 )
-# the value-level twin (value_fp): the decoded pixels of a few tiles, not the length of every encoding
+# the value-level twin (value_fp): the decoded pixels of a few tiles, not the length of every encoding. The few are the
+# first 64 by a key of the tile (see `levels_family._TILE_V`): an unordered LIMIT would hash whichever tiles the scan met.
 _TCRS_V = (
     "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
-    "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM (SELECT * FROM {src} LIMIT 64))"
+    "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM "
+    "(SELECT * FROM {src} ORDER BY tile.path, xxhash64(tile.raster) LIMIT 64))"
 )
 _MV = (
     "SELECT count(*) AS n, sum(length(g)) AS fp, count(g) AS n_out "

@@ -675,3 +675,51 @@ def test_the_preflight_knows_a_qualified_name_and_judges_only_the_forms_it_names
     ]
     got = preflight.forms_of("A", ("gbx_rst_merge_agg:c0",))
     assert [(f.fn, f.variant) for f in got] == [("gbx_rst_merge_agg", "c0")]
+
+
+def test_a_stack_is_anchored_on_a_tile_that_has_a_crs(monkeypatch):
+    """The first tile's header gave no EPSG: the stack was then every tile without one (or none at all) instead of the
+    first system a tile has."""
+    epsgs = [None, None, 4326, 3857, 4326, 4326, None, 4326]
+    paths = [f"/c/t{i}.tif" for i in range(len(epsgs))]
+    monkeypatch.setattr(lf, "corpus_guard", lambda *a, **k: None)
+    monkeypatch.setattr(
+        lf, "_epsgs", lambda spark, chunk: [epsgs[paths.index(p)] for p in chunk]
+    )
+    got = lf._plan_stack_tiles(paths, 3)
+    assert got == [
+        ("stack", "/c/t2.tif"),
+        ("stack", "/c/t4.tif"),
+        ("stack", "/c/t5.tif"),
+    ]
+    # no tile with a CRS at all: refused, naming why (not an empty or an all-None stack)
+    epsgs[:] = [None] * len(epsgs)
+    with pytest.raises(ValueError, match="needs tiles with a CRS"):
+        lf._plan_stack_tiles(paths, 3)
+
+
+def test_a_virtual_tile_table_is_written_in_files_of_two_rows(tmp_path, monkeypatch):
+    """Optimized write packed 1000 virtual tiles (13 KB) into ONE file; a scan task then held 12 GB of outputs. The table of
+    virtual tiles passes the family cap (2) as its rows per file, and the writer turns it into maxRecordsPerFile.
+    """
+    from unittest import mock
+
+    assert fam.FAMILY_ROWS_PER_PARTITION == 2
+    seen = {}
+    monkeypatch.setattr(
+        lf, "_table", lambda spark, schema, label, build, **kw: seen.update(kw) or label
+    )
+    rows = tmp_path / "rows"
+    rows.mkdir()
+    for i in range(4):
+        (rows / f"t{i}.tif").write_bytes(b"")
+    lf._tiles(True)(mock.MagicMock(), 4, str(tmp_path), "s")
+    assert seen["per_file"] == 2
+    seen.clear()
+    lf._tiles(False)(mock.MagicMock(), 4, str(tmp_path), "s")
+    assert seen["per_file"] is None  # a materialized tile is a file of its own already
+
+    df = mock.MagicMock()
+    spark = mock.MagicMock()
+    lf._write_input(spark, df, "s.t", rows=1000, per_file=2)
+    df.write.format.return_value.option.assert_called_once_with("maxRecordsPerFile", 2)

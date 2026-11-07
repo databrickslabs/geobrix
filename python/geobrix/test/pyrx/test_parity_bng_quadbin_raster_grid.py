@@ -4,10 +4,12 @@ raster-grid functions.
 Both tiers are run on the SAME in-memory sample raster + resolution and their
 outputs compared against the design §4.1 parity bar:
 
-  * ``rst_quadbin_tessellate`` / ``rst_bng_tessellate`` — identical emitted
-    cell-id set (quadbin Long / BNG String) + identical chip count, for both
-    ``covering`` and ``centroid`` modes; under ``centroid`` the chips also match
-    per cell (size, geotransform and source pixels), for h3 too.
+  * ``rst_quadbin_tessellate`` (and h3) — identical emitted cell-id set + identical chip
+    count, for both ``covering`` and ``centroid`` modes; under ``centroid`` the chips
+    also match per cell (size, geotransform and source pixels).
+  * ``rst_bng_tessellate`` has only the lightweight level, so there is no second tier:
+    its cases assert the light result on its own (the expected cell, the chips' NoData,
+    no warp fill, masked and fallback pixels never valid).
   * ``rst_quadbin_rasterize_agg`` / ``rst_bng_rasterize_agg`` — same output
     raster on a shared explicit grid: band NoData == -9999 both tiers, and the
     covered-pixel mask + burned values identical (NoData-aware).
@@ -304,11 +306,11 @@ def test_quadbin_tessellate_cellset_parity(spark_with_jar, mode):
 
 
 @pytest.mark.parametrize("mode", ["covering", "centroid"])
-def test_bng_tessellate_cellset_parity(spark_with_jar, mode):
-    """BNG tessellate: identical BNG-String cell-id set + chip count, both modes.
+def test_bng_tessellate_cellset(spark_with_jar, mode):
+    """BNG tessellate (lightweight level only): the BNG-String cell ids of the footprint, both modes.
 
-    27700-native fixture so BOTH tiers skip the warp (isolates enumeration
-    parity from resampling).
+    The 27700 fixture spans x 530000..530800, y 180200..181000: inside the 1 km cell TQ3080, so
+    that is the one cell either mode emits at resolution 3 (1 km), one chip.
     """
     spark = spark_with_jar
     raster = _bng_raster_27700()
@@ -317,26 +319,11 @@ def test_bng_tessellate_cellset_parity(spark_with_jar, mode):
     light_ids, light_n = _light_tessellate_ids(
         spark, raster, "gbx_rst_bng_tessellate", resolution, mode, bng=True
     )
-    heavy_ids, heavy_n = _heavy_tessellate_ids(
-        spark, raster, "rst_bng_tessellate", resolution, mode, bng=True
-    )
 
     assert light_ids, f"light emitted no BNG chips (mode={mode})"
-    assert heavy_ids, f"heavy emitted no BNG chips (mode={mode})"
     assert all(isinstance(c, str) for c in light_ids), "light BNG id must be String"
-    assert all(isinstance(c, str) for c in heavy_ids), "heavy BNG id must be String"
-
-    if light_ids != heavy_ids:
-        pytest.fail(
-            f"BNG tessellate mode={mode} cell-set MISMATCH: "
-            f"|light|={len(light_ids)} |heavy|={len(heavy_ids)} "
-            f"light_only={sorted(light_ids - heavy_ids)[:8]} "
-            f"heavy_only={sorted(heavy_ids - light_ids)[:8]}"
-        )
-    assert light_n == heavy_n, (
-        f"BNG tessellate mode={mode} chip-count mismatch: "
-        f"light={light_n} heavy={heavy_n}"
-    )
+    assert light_ids == {"TQ3080"}, f"BNG tessellate mode={mode} cells: {light_ids}"
+    assert light_n == 1, f"BNG tessellate mode={mode} chip count: {light_n}"
 
 
 # ---------------------------------------------------------------------------
@@ -513,6 +500,17 @@ _TESS_CONFIG = {
     "bng": ("gbx_rst_bng_tessellate", "rst_bng_tessellate", True),
     "quadbin": ("gbx_rst_quadbin_tessellate", "rst_quadbin_tessellate", False),
 }
+
+
+def _tiers(grid):
+    """The tiers that run a grid's raster tessellate: the manifest keeps ``gbx_rst_bng_tessellate`` at the
+    lightweight level only, so a BNG case has no heavy tier to compare against."""
+    from databricks.labs.gbx import manifest
+
+    levels = manifest.load().functions[_TESS_CONFIG[grid][0]].levels
+    return ("light", "heavy") if "L1" in levels else ("light",)
+
+
 _TESS_CENTROID_RES = {"h3": 5, "bng": 3, "quadbin": 12}
 _TESS_COVERING_RES = {"h3": 4, "bng": 1, "quadbin": 8}
 
@@ -563,6 +561,9 @@ def test_tessellate_coverage_assignment_parity(
       the same 1×1 chip in both. Covering chips are clipped to the cell geometry,
       and their dimensions are not compared here.
 
+    BNG tessellate has no heavyweight level (``_tiers``): its cases run the light tier
+    alone, with every check above that does not compare two tiers.
+
     PERFORMANCE: covering mode uses a coarser resolution so the raster's footprint
     fits in very few cells, keeping the clip-to-cell-geometry work fast.
     """
@@ -580,40 +581,48 @@ def test_tessellate_coverage_assignment_parity(
     def _id(cid):
         return _tess_id(cid, bng=is_bng)
 
+    tiers = _tiers(grid)
+
     # Collect LIGHT first, then register heavy (both share the gbx_rst_* SQL name).
     light_rows = tp.light_chips(
         spark, raster, sql_name, resolution, assignment, coverage, _id
     )
-    heavy_rows = tp.heavy_chips(
-        spark, raster, fn_name, resolution, assignment, coverage, _id
-    )
-    light = tp.by_cell(light_rows, f"{label} light")
-    heavy = tp.by_cell(heavy_rows, f"{label} heavy")
-    light_ids, heavy_ids = set(light), set(heavy)
-
-    assert light_ids, f"{label}: light emitted no chips"
-    assert heavy_ids, f"{label}: heavy emitted no chips"
-    assert not tp.error_rows(light_rows), f"{label}: light error rows"
-    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
-
-    if light_ids != heavy_ids:
-        pytest.fail(
-            f"{label} cell-set MISMATCH: "
-            f"|light|={len(light_ids)} |heavy|={len(heavy_ids)} "
-            f"light_only={sorted(light_ids - heavy_ids)[:8]} "
-            f"heavy_only={sorted(heavy_ids - light_ids)[:8]}"
+    rows = {"light": light_rows}
+    if "heavy" in tiers:
+        rows["heavy"] = tp.heavy_chips(
+            spark, raster, fn_name, resolution, assignment, coverage, _id
         )
+    chips = {tier: tp.by_cell(r, f"{label} {tier}") for tier, r in rows.items()}
+    light = chips["light"]
+    light_ids = set(light)
 
-    assert len(light_rows) == len(
-        heavy_rows
-    ), f"{label} chip-count mismatch: light={len(light_rows)} heavy={len(heavy_rows)}"
+    for tier, tier_rows in rows.items():
+        assert chips[tier], f"{label}: {tier} emitted no chips"
+        assert not tp.error_rows(tier_rows), f"{label}: {tier} error rows"
 
-    if assignment == "centroid":
-        tp.assert_centroid_chips_match(light, heavy, tp.source_transform(raster), label)
+    if "heavy" in tiers:
+        heavy = chips["heavy"]
+        heavy_ids = set(heavy)
+        if light_ids != heavy_ids:
+            pytest.fail(
+                f"{label} cell-set MISMATCH: "
+                f"|light|={len(light_ids)} |heavy|={len(heavy_ids)} "
+                f"light_only={sorted(light_ids - heavy_ids)[:8]} "
+                f"heavy_only={sorted(heavy_ids - light_ids)[:8]}"
+            )
+        assert len(light_rows) == len(rows["heavy"]), (
+            f"{label} chip-count mismatch: "
+            f"light={len(light_rows)} heavy={len(rows['heavy'])}"
+        )
+        if assignment == "centroid":
+            tp.assert_centroid_chips_match(
+                light, heavy, tp.source_transform(raster), label
+            )
 
     # complete ⊇ sparse: verify superset (at cell-id level) when coverage=complete.
     if coverage == "complete":
-        light_sparse_ids, _ = _light_tessellate_ids(
+        sparse_ids = {}
+        sparse_ids["light"], _ = _light_tessellate_ids(
             spark,
             raster,
             sql_name,
@@ -622,37 +631,34 @@ def test_tessellate_coverage_assignment_parity(
             bng=is_bng,
             coverage="sparse",
         )
-        heavy_sparse_ids, _ = _heavy_tessellate_ids(
-            spark,
-            raster,
-            fn_name,
-            resolution,
-            assignment,
-            bng=is_bng,
-            coverage="sparse",
-        )
-        assert (
-            light_sparse_ids <= light_ids
-        ), f"{label}: sparse cell set not subset of complete (light)"
-        assert (
-            heavy_sparse_ids <= heavy_ids
-        ), f"{label}: sparse cell set not subset of complete (heavy)"
+        if "heavy" in tiers:
+            sparse_ids["heavy"], _ = _heavy_tessellate_ids(
+                spark,
+                raster,
+                fn_name,
+                resolution,
+                assignment,
+                bng=is_bng,
+                coverage="sparse",
+            )
+        for tier, ids in sparse_ids.items():
+            assert ids <= set(
+                chips[tier]
+            ), f"{label}: sparse cell set not subset of complete ({tier})"
 
         # Cells in complete but NOT in sparse are covered-but-empty: their chips
-        # must be all-NoData in BOTH tiers, and 1×1 under centroid.
-        all_empty_ids = (light_ids - light_sparse_ids) | (heavy_ids - heavy_sparse_ids)
+        # must be all-NoData in every tier, and 1×1 under centroid.
+        all_empty_ids = set()
+        for tier, ids in sparse_ids.items():
+            all_empty_ids |= set(chips[tier]) - ids
         for cid in all_empty_ids:
-            assert _is_chip_all_nodata(light.get(cid)), (
-                f"{label}: light chip for empty cell {cid} contains valid pixels "
-                "(expected all-NoData for covered-but-empty cell)"
-            )
-            assert _is_chip_all_nodata(heavy.get(cid)), (
-                f"{label}: heavy chip for empty cell {cid} contains valid pixels "
-                "(expected all-NoData for covered-but-empty cell)"
-            )
-            if assignment == "centroid":
-                for tier, chips in (("light", light), ("heavy", heavy)):
-                    size = tp.chip_shape(chips[cid])[:2]
+            for tier in tiers:
+                assert _is_chip_all_nodata(chips[tier].get(cid)), (
+                    f"{label}: {tier} chip for empty cell {cid} contains valid pixels "
+                    "(expected all-NoData for covered-but-empty cell)"
+                )
+                if assignment == "centroid":
+                    size = tp.chip_shape(chips[tier][cid])[:2]
                     assert size == (1, 1), f"{label}: {tier} empty chip {cid} is {size}"
 
 
@@ -694,7 +700,7 @@ def _no_nodata_raster(dtype, *, epsg, origin, px, n):
 @pytest.mark.parametrize("grid", ["h3", "bng", "quadbin"])
 @pytest.mark.parametrize("dtype", ["uint16", "uint8"])
 def test_tessellate_without_nodata_parity(spark_with_jar, dtype, grid, assignment):
-    """A source without NoData tessellates the same way in both tiers.
+    """A source without NoData tessellates the same way in both tiers (BNG: the light tier).
 
     Both tiers stamp the shared dtype fallback (65535 for uint16, 0 for uint8) on
     every chip and emit the same rows, with no error rows. Every valid chip pixel is
@@ -723,21 +729,27 @@ def test_tessellate_without_nodata_parity(spark_with_jar, dtype, grid, assignmen
     def _id(cid):
         return _tess_id(cid, bng=is_bng)
 
+    tiers = _tiers(grid)
     light_rows = tp.light_chips(
         spark, raster, sql_name, resolution, assignment, "complete", _id
     )
-    heavy_rows = tp.heavy_chips(
-        spark, raster, fn_name, resolution, assignment, "complete", _id
-    )
+    tier_rows = {"light": light_rows}
+    if "heavy" in tiers:
+        tier_rows["heavy"] = tp.heavy_chips(
+            spark, raster, fn_name, resolution, assignment, "complete", _id
+        )
     assert light_rows, f"{label}: light emitted no chips"
-    assert not tp.error_rows(light_rows), f"{label}: light error rows"
-    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
-    assert len(light_rows) == len(
-        heavy_rows
-    ), f"{label} row-count mismatch: light={len(light_rows)} heavy={len(heavy_rows)}"
+    for tier, rows in tier_rows.items():
+        assert not tp.error_rows(rows), f"{label}: {tier} error rows"
+    if "heavy" in tiers:
+        heavy_rows = tier_rows["heavy"]
+        assert len(light_rows) == len(heavy_rows), (
+            f"{label} row-count mismatch: "
+            f"light={len(light_rows)} heavy={len(heavy_rows)}"
+        )
 
     src_tf = tp.source_transform(raster)
-    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+    for tier, rows in tier_rows.items():
         nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
         assert nodatas == {fallback}, f"{label}: {tier} chip NoData {nodatas}"
         valid = {px for _, b, _ in rows for px in tp.chip_pixels(b, src_tf)}
@@ -760,8 +772,9 @@ def test_tessellate_without_nodata_parity(spark_with_jar, dtype, grid, assignmen
 
     if assignment == "centroid":
         light = tp.by_cell(light_rows, f"{label} light")
-        heavy = tp.by_cell(heavy_rows, f"{label} heavy")
-        tp.assert_centroid_chips_match(light, heavy, src_tf, label)
+        if "heavy" in tiers:
+            heavy = tp.by_cell(tier_rows["heavy"], f"{label} heavy")
+            tp.assert_centroid_chips_match(light, heavy, src_tf, label)
         covered = {px[:2] for b in light.values() for px in tp.chip_pixels(b, src_tf)}
         expected = n * n - len(fallback_rows) * n
         assert (
@@ -797,18 +810,17 @@ def _warp_fill_raster():
 
 
 @pytest.mark.parametrize("assignment", ["centroid", "covering"])
-def test_bng_tessellate_warp_fill_parity(spark_with_jar, assignment):
-    """BNG tessellate of a 4326 source without NoData: the warp fill is NoData in both tiers.
+def test_bng_tessellate_warp_fill(spark_with_jar, assignment):
+    """BNG tessellate of a 4326 source without NoData: the warp fill is NoData.
 
-    The warp to EPSG:27700 fills the pixels outside the source footprint. Both tiers
-    mark that fill as NoData (the uint16 fallback, 65535) instead of keeping valid
-    zeros, so every valid chip pixel carries a source value (1..n*n, no 0), and both
-    tiers emit the same cells.
+    The warp to EPSG:27700 fills the pixels outside the source footprint. The fill is
+    marked as NoData (the uint16 fallback, 65535) instead of kept as valid zeros, so
+    every valid chip pixel carries a source value (1..n*n, no 0).
     """
     from rasterio.io import MemoryFile
 
     spark = spark_with_jar
-    sql_name, fn_name, _ = _TESS_CONFIG["bng"]
+    sql_name = _TESS_CONFIG["bng"][0]
     raster = _warp_fill_raster()
     label = f"bng warp-fill {assignment}"
 
@@ -816,30 +828,21 @@ def test_bng_tessellate_warp_fill_parity(spark_with_jar, assignment):
         return _tess_id(cid, bng=True)
 
     light_rows = tp.light_chips(spark, raster, sql_name, 3, assignment, "sparse", _id)
-    heavy_rows = tp.heavy_chips(spark, raster, fn_name, 3, assignment, "sparse", _id)
     assert light_rows, f"{label}: light emitted no chips"
     assert not tp.error_rows(light_rows), f"{label}: light error rows"
-    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
-    light_cells = {cid for cid, _, _ in light_rows}
-    heavy_cells = {cid for cid, _, _ in heavy_rows}
-    assert light_cells == heavy_cells, (
-        f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
-        f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
-    )
 
-    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
-        nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
-        assert nodatas == {65535.0}, f"{label}: {tier} chip NoData {nodatas}"
-        valid = []
-        for _, b, _ in rows:
-            with MemoryFile(b) as mf, mf.open() as ds:
-                valid.append(ds.read(1)[ds.read_masks(1) != 0])
-        valid = np.concatenate(valid)
-        assert valid.size, f"{label}: {tier} chips hold no valid pixel"
-        fill = int(((valid < 1) | (valid > _FILL_N**2)).sum())
-        assert (
-            fill == 0
-        ), f"{label}: {tier} {fill} of {valid.size} valid chip pixels are not source values (warp fill)"
+    nodatas = {tp.chip_shape(b)[3] for _, b, _ in light_rows}
+    assert nodatas == {65535.0}, f"{label}: chip NoData {nodatas}"
+    valid = []
+    for _, b, _ in light_rows:
+        with MemoryFile(b) as mf, mf.open() as ds:
+            valid.append(ds.read(1)[ds.read_masks(1) != 0])
+    valid = np.concatenate(valid)
+    assert valid.size, f"{label}: chips hold no valid pixel"
+    fill = int(((valid < 1) | (valid > _FILL_N**2)).sum())
+    assert (
+        fill == 0
+    ), f"{label}: {fill} of {valid.size} valid chip pixels are not source values (warp fill)"
 
 
 # name -> (CRS, bounds of the 40x40 source): the 4326 source is warped to EPSG:27700 for BNG
@@ -903,8 +906,8 @@ _RGBA_CASES = [
 
 
 def _rgba_chip_stats(spark, grid, source, assignment, coverage):
-    """Tessellate the RGBA source in both tiers; return ``{tier: stats}`` after checking that
-    both emit the same cells.
+    """Tessellate the RGBA source in each tier the grid has (``_tiers``); return ``{tier: stats}`` after
+    checking that the tiers emit the same cells.
 
     ``stats`` counts the valid chip pixels (``valid_mask``) by where their source pixel
     lies: ``valid``, ``outside`` the source footprint, ``transparent`` (the alpha-0 rows
@@ -931,18 +934,20 @@ def _rgba_chip_stats(spark, grid, source, assignment, coverage):
     rows = {
         "light": tp.light_chips(spark, raster, sql_name, res, assignment, coverage, _id)
     }
-    rows["heavy"] = tp.heavy_chips(
-        spark, raster, fn_name, res, assignment, coverage, _id
-    )
+    if "heavy" in _tiers(grid):
+        rows["heavy"] = tp.heavy_chips(
+            spark, raster, fn_name, res, assignment, coverage, _id
+        )
     for tier, tier_rows in rows.items():
         assert tier_rows, f"{label}: {tier} emitted no chips"
         assert not tp.error_rows(tier_rows), f"{label}: {tier} error rows"
-    light_cells = {cid for cid, _, _ in rows["light"]}
-    heavy_cells = {cid for cid, _, _ in rows["heavy"]}
-    assert light_cells == heavy_cells, (
-        f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
-        f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
-    )
+    if "heavy" in rows:
+        light_cells = {cid for cid, _, _ in rows["light"]}
+        heavy_cells = {cid for cid, _, _ in rows["heavy"]}
+        assert light_cells == heavy_cells, (
+            f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
+            f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
+        )
 
     n = _FILL_N
     # a chip pixel is on the source grid as it is, except BNG chips of a source it warps
@@ -985,7 +990,8 @@ def test_tessellate_rgba_parity(spark_with_jar, grid, source, assignment, covera
     off the source footprint (the BNG warp fill is NoData); the source's real all-zero pixels
     under an opaque alpha stay valid; the transparent pixels (alpha 0, RGB non-zero) are NoData
     in the chips of both tiers, also for a source that is not warped (H3, quadbin, BNG of a
-    27700 source); and centroid chips hold the same number of valid pixels per cell."""
+    27700 source); and centroid chips hold the same number of valid pixels per cell. BNG has
+    no heavyweight tessellate: its cases check the light tier alone."""
     label = f"{grid} rgba {source} {assignment} {coverage}"
     stats = _rgba_chip_stats(spark_with_jar, grid, source, assignment, coverage)
     for tier, st in stats.items():
@@ -998,7 +1004,7 @@ def test_tessellate_rgba_parity(spark_with_jar, grid, source, assignment, covera
         assert (
             st["transparent"] == 0
         ), f"{label}: {tier} {st['transparent']} transparent valid"
-    if assignment == "centroid":
+    if assignment == "centroid" and "heavy" in stats:
         light, heavy = stats["light"]["counts"], stats["heavy"]["counts"]
         differ = {c: (light[c], heavy[c]) for c in light if light[c] != heavy[c]}
         assert not differ, f"{label}: valid pixels per cell (light, heavy): {differ}"
@@ -1074,7 +1080,8 @@ def test_tessellate_covering_masked_source_parity(
     stamps must not override the source mask. Source pixels equal to the chip
     NoData (the fallback 65535, or the source's own NoData) are NoData in both
     tiers, and both tiers' chips declare the same NoData. The light tier starts
-    from ``start``: its bytes, or a virtual tile over the file holding them.
+    from ``start``: its bytes, or a virtual tile over the file holding them. BNG has
+    no heavyweight tessellate: its cases check the light tier alone.
     """
     spark = spark_with_jar
     sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
@@ -1099,19 +1106,25 @@ def test_tessellate_covering_masked_source_parity(
     def _id(cid):
         return _tess_id(cid, bng=is_bng)
 
-    light_rows = tp.light_chips(
-        spark, raster, sql_name, resolution, "covering", "complete", _id
-    )
-    heavy_rows = tp.heavy_chips(
-        spark, raster, fn_name, resolution, "covering", "complete", _id
-    )
-    assert light_rows, f"{label}: light emitted no chips"
-    assert not tp.error_rows(light_rows), f"{label}: light error rows"
-    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
-    assert len(light_rows) == len(heavy_rows), f"{label} row-count mismatch"
+    tier_rows = {
+        "light": tp.light_chips(
+            spark, raster, sql_name, resolution, "covering", "complete", _id
+        )
+    }
+    if "heavy" in _tiers(grid):
+        tier_rows["heavy"] = tp.heavy_chips(
+            spark, raster, fn_name, resolution, "covering", "complete", _id
+        )
+    assert tier_rows["light"], f"{label}: light emitted no chips"
+    for tier, rows in tier_rows.items():
+        assert not tp.error_rows(rows), f"{label}: {tier} error rows"
+    if "heavy" in tier_rows:
+        assert len(tier_rows["light"]) == len(
+            tier_rows["heavy"]
+        ), f"{label} row-count mismatch"
 
     src_tf = tp.source_transform(raster)
-    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+    for tier, rows in tier_rows.items():
         nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
         assert nodatas == {chip_nodata}, f"{label}: {tier} chip NoData {nodatas}"
         valid = {px for _, b, _ in rows for px in tp.chip_pixels(b, src_tf)}
@@ -1277,18 +1290,18 @@ def _mw_raster(*, epsg, origin, px, masked, nodata):
 @pytest.mark.parametrize("start", _STARTS)
 @pytest.mark.parametrize("nodata", [None, 7.0])
 @pytest.mark.parametrize("assignment", ["centroid", "covering"])
-def test_bng_tessellate_masked_warp_parity(
+def test_bng_tessellate_masked_warp(
     spark_with_jar, tmp_path, assignment, nodata, start
 ):
     """BNG tessellate of a 4326 source with its own mask band, without NoData or with
-    one: the EPSG:27700 warp keeps the mask in both tiers. Both tiers emit the same
-    cells with the same chip NoData; no valid chip pixel is the warp fill, a masked
-    source pixel or a pixel equal to the NoData (65535 moved to 65534 included). The
-    light tier starts from ``start``: its bytes, or a virtual tile over their file."""
+    one: the EPSG:27700 warp keeps the mask. The chips carry the expected NoData; no
+    valid chip pixel is the warp fill, a masked source pixel or a pixel equal to the
+    NoData (65535 moved to 65534 included). The tile starts from ``start``: its bytes,
+    or a virtual tile over their file."""
     from rasterio.io import MemoryFile
 
     spark = spark_with_jar
-    sql_name, fn_name, _ = _TESS_CONFIG["bng"]
+    sql_name = _TESS_CONFIG["bng"][0]
     raster = _start_from(
         _mw_raster(**_MW_SRC_4326, masked=True, nodata=nodata), start, tmp_path
     )
@@ -1297,37 +1310,28 @@ def test_bng_tessellate_masked_warp_parity(
     def _id(cid):
         return _tess_id(cid, bng=True)
 
-    light_rows = tp.light_chips(spark, raster, sql_name, 3, assignment, "sparse", _id)
-    heavy_rows = tp.heavy_chips(spark, raster, fn_name, 3, assignment, "sparse", _id)
-    assert light_rows, f"{label}: light emitted no chips"
-    assert not tp.error_rows(light_rows), f"{label}: light error rows"
-    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
-    light_cells = {cid for cid, _, _ in light_rows}
-    heavy_cells = {cid for cid, _, _ in heavy_rows}
-    assert light_cells == heavy_cells, (
-        f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
-        f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
-    )
+    rows = tp.light_chips(spark, raster, sql_name, 3, assignment, "sparse", _id)
+    assert rows, f"{label}: light emitted no chips"
+    assert not tp.error_rows(rows), f"{label}: light error rows"
     chip_nodata = 65535.0 if nodata is None else nodata
     n = _MW_N
-    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
-        nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
-        assert nodatas == {chip_nodata}, f"{label}: {tier} chip NoData {nodatas}"
-        valid = []
-        for _, b, _ in rows:
-            with MemoryFile(b) as mf, mf.open() as ds:
-                valid.append(ds.read(1)[ds.read_masks(1) != 0].astype("int64"))
-        v = np.concatenate(valid)
-        assert v.size, f"{label}: {tier} chips hold no valid pixel"
-        named = v[(v >= 1) & (v <= n * n)]
-        fill = int((v == 0).sum())
-        shown = int(np.isin((named - 1) // n, _MW_MASKED_ROWS).sum())
-        kept = int(((v == chip_nodata) | ((v == 65534) & (nodata is None))).sum())
-        assert fill == 0, f"{label}: {tier} {fill} warp-fill zeros are valid"
-        assert shown == 0, f"{label}: {tier} {shown} masked source pixels are valid"
-        assert kept == 0, f"{label}: {tier} {kept} pixels equal to the NoData are valid"
-        if nodata is not None:
-            assert (v == 65535).any(), f"{label}: {tier} lost the real 65535s"
+    nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
+    assert nodatas == {chip_nodata}, f"{label}: chip NoData {nodatas}"
+    valid = []
+    for _, b, _ in rows:
+        with MemoryFile(b) as mf, mf.open() as ds:
+            valid.append(ds.read(1)[ds.read_masks(1) != 0].astype("int64"))
+    v = np.concatenate(valid)
+    assert v.size, f"{label}: chips hold no valid pixel"
+    named = v[(v >= 1) & (v <= n * n)]
+    fill = int((v == 0).sum())
+    shown = int(np.isin((named - 1) // n, _MW_MASKED_ROWS).sum())
+    kept = int(((v == chip_nodata) | ((v == 65534) & (nodata is None))).sum())
+    assert fill == 0, f"{label}: {fill} warp-fill zeros are valid"
+    assert shown == 0, f"{label}: {shown} masked source pixels are valid"
+    assert kept == 0, f"{label}: {kept} pixels equal to the NoData are valid"
+    if nodata is not None:
+        assert (v == 65535).any(), f"{label}: lost the real 65535s"
 
 
 def _single_tile(spark, raster, tier, fn):
@@ -1512,11 +1516,11 @@ def _clip_source(nodata):
 
 @pytest.mark.parametrize("start", _STARTS)
 @pytest.mark.parametrize("nodata", [None, 7.0])
-def test_clip_masked_source_hexagon_parity(spark_with_jar, tmp_path, nodata, start):
-    """``rst_clip`` of a source with its own mask band by a hexagon (all touched): both
-    tiers fill the masked pixels like the area outside the geometry (0 without a
-    source NoData, the NoData when there is one) and agree on every pixel. The light
-    tier starts from ``start``: its bytes, or a virtual tile over the file."""
+def test_clip_masked_source_hexagon(spark_with_jar, tmp_path, nodata, start):
+    """``rst_clip`` (lightweight level only) of a source with its own mask band by a hexagon (all
+    touched): the masked pixels are filled like the area outside the geometry (0 without a source
+    NoData, the NoData when there is one). The tile starts from ``start``: its bytes, or a virtual
+    tile over the file."""
     from pyspark.sql import functions as f
 
     spark = spark_with_jar
@@ -1527,16 +1531,8 @@ def test_clip_masked_source_hexagon_parity(spark_with_jar, tmp_path, nodata, sta
         return f.call_function("gbx_rst_clip", t, f.lit(_CLIP_HEXAGON), f.lit(True))
 
     light = _decoded(_single_tile(spark, raster, "light", clip))
-    heavy = _decoded(_single_tile(spark, raster, "heavy", clip))
-    for key in ("shape", "dtype", "nodata"):
-        assert light[key] == heavy[key], f"{key}: light={light[key]} heavy={heavy[key]}"
-    assert tp._gt_close(
-        light["transform"], heavy["transform"]
-    ), f"transform: light={light['transform']} heavy={heavy['transform']}"
     assert light["nodata"] == nodata
-    assert (light["valid"] == heavy["valid"]).all(), "the tiers' masks differ"
-    assert (light["data"] == heavy["data"]).all(), "the tiers' pixel values differ"
-    # the masked source pixels the clip covers hold the fill, in both tiers
+    # the masked source pixels the clip covers hold the fill
     gt = light["transform"]
     _, h, w = light["shape"]
     rows, cols = np.mgrid[0:h, 0:w]
@@ -1549,6 +1545,5 @@ def test_clip_masked_source_hexagon_parity(spark_with_jar, tmp_path, nodata, sta
     on_masked[inside] = hidden[sr[inside], sc[inside]]
     assert on_masked.any(), "the clip covers no masked source pixel"
     fill = 0 if nodata is None else nodata
-    for tier, out in (("light", light), ("heavy", heavy)):
-        held = out["data"][0][on_masked]
-        assert (held == fill).all(), f"{tier}: masked source pixels kept their values"
+    held = light["data"][0][on_masked]
+    assert (held == fill).all(), "masked source pixels kept their values"

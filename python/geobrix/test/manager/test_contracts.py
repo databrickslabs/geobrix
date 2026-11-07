@@ -355,6 +355,46 @@ def test_the_array_family_keeps_the_unmeasured_and_the_engine_rows_as_they_were(
     assert levels.order(MAN.functions["gbx_rst_mapalgebra"]) == ("L1", "L3")
 
 
+# A value of one of these types cannot sit under `explode` or `inline`, where a SQL dispatch wrapper is refused.
+_ONE_VALUE = {"INT", "BIGINT", "DOUBLE", "STRING", "BOOLEAN", "BINARY"}
+JVM_FIRST_ACCESSORS = [
+    f
+    for f in FNS
+    if f.family == "raster-accessor" and levels.order(f)[0] == "L1" and "L1" in f.levels
+]
+
+
+def test_the_accessors_that_return_one_value_run_on_the_jvm_first():
+    names = {f.sql_name for f in JVM_FIRST_ACCESSORS}
+    assert names == {
+        f"gbx_rst_{n}"
+        for n in (
+            "boundingbox crs format height memsize numbands pixelheight pixelwidth rastertoworldcoordx "
+            "rastertoworldcoordy rotation scalex scaley skewx skewy srid upperleftx upperlefty width "
+            "worldtorastercoordx worldtorastercoordy"
+        ).split()
+    }
+
+
+@pytest.mark.parametrize("fn", JVM_FIRST_ACCESSORS, ids=lambda f: f.sql_name)
+def test_a_jvm_first_accessor_returns_one_value_and_has_the_virtual_dispatch(fn):
+    """The decision is by the manifest return type: a name that returns an array, a map or a struct is never JVM first."""
+    assert fn.returns_session in _ONE_VALUE
+    assert fn.accepts_virtual_tile
+    assert levels.order(fn) == ("L1", "L3")
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L1"
+    assert levels.select(fn, _caps()).level == "L3"  # no JAR: light
+
+
+def test_no_array_map_or_struct_function_of_the_accessors_and_statistics_is_jvm_first():
+    for f in FNS:
+        if (
+            f.family in ("raster-accessor", "raster-stat")
+            and f.returns_session not in _ONE_VALUE
+        ):
+            assert levels.order(f) == ("L3",), f.sql_name
+
+
 @pytest.mark.parametrize(
     "fn", [f for f in FNS if {"L1", "L2"} & set(f.levels)], ids=lambda f: f.sql_name
 )

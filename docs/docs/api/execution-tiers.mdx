@@ -70,6 +70,7 @@ Most functions run on L3. Raster tile operations default to L3, because the Pyth
 - the BNG, custom-grid and H3 cell functions that have a JVM form, and the BNG explode, tessellate, `gbx_bng_kring` and `gbx_bng_cellfill` functions;
 - `gbx_rst_frombands`, which is not measured yet;
 - `gbx_rst_fromcontent` and `gbx_rst_bng_rasterize_agg`;
+- the raster accessors that return one value (`gbx_rst_width`, `gbx_rst_height`, `gbx_rst_numbands`, `gbx_rst_srid`, `gbx_rst_crs`, `gbx_rst_format`, `gbx_rst_memsize`, `gbx_rst_boundingbox`, the pixel size, scale, skew, rotation and upper-left functions, and the single-axis coordinate functions). A virtual tile goes to the Python level, as described below;
 - `gbx_rst_slope`, `gbx_st_triangulate`, `gbx_st_transformcrs` and `gbx_st_interpolateelevationbbox`.
 
 ### GeoBrix says why
@@ -124,6 +125,8 @@ The JVM level reads bytes only. In SQL, GeoBrix routes the two kinds for you:
 - A virtual tile goes to the Python implementation.
 - A materialized tile goes to the JVM implementation, when the JVM level is the chosen one.
 - An error tile comes out unchanged at every level.
+
+The accessors that return an `ARRAY<...>`, a `MAP<...>` or a `STRUCT<...>` (`gbx_rst_avg`, `gbx_rst_georeference` and the like) run at the Python level only. Such a function can sit under `explode` or `inline`, where Spark refuses the SQL function that does the routing.
 
 A few functions run on the JVM level without that routing when you force L1 (`gbx_rst_contour`, `gbx_rst_isoband`). A virtual tile raises an error there. To use one, materialize the tile first: pass `materialize=True`, or write with a raster writer and read the output back. Every writer is a materialization boundary.
 

@@ -312,6 +312,33 @@ _session_accessor_rows = (
     _c("width_error_tile", "width", (ERR,), "null"),
     _c("width_corrupt_tile", "width", (CORRUPT,), "null"),
     _c("bandmetadata_null_band", "bandmetadata", (TWO, None), "null"),
+    # every accessor that returns one value is JVM first behind a dispatch wrapper that sends a virtual tile to light: a
+    # reference (the 64 x 48 oracle tile as a path) in, the value of its materialized row out
+    *(
+        _c(f"{short}_virtual", short, (VIRT,) + extra, kind, expect)
+        for short, extra, kind, expect in (
+            ("height", (), "exact", 48),
+            ("numbands", (), "exact", 1),
+            ("srid", (), "exact", 4326),
+            ("crs", (), "exact", "EPSG:4326"),
+            ("format", (), "exact", "GTiff"),
+            ("pixelwidth", (), "approx", 0.01),
+            ("pixelheight", (), "approx", 0.01),
+            ("scalex", (), "approx", 0.01),
+            ("scaley", (), "approx", -0.01),
+            ("upperleftx", (), "approx", -1.0),
+            ("upperlefty", (), "approx", 52.0),
+            ("skewx", (), "approx", 0.0),
+            ("skewy", (), "approx", 0.0),
+            ("rotation", (), "approx", 0.0),
+            ("boundingbox", (), "geom_equals", BOX_4326),
+            # pixel (column 1, row 2) has its centre at (-1 + 1.5 * 0.01, 52 - 2.5 * 0.01)
+            ("rastertoworldcoordx", (1, 2), "approx", -0.985),
+            ("rastertoworldcoordy", (1, 2), "approx", 51.975),
+            ("worldtorastercoordx", (-0.985, 51.975), "exact", 1),
+            ("worldtorastercoordy", (-0.985, 51.975), "exact", 2),
+        )
+    ),
 )
 
 _session_stat_rows = (

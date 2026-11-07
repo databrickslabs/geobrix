@@ -110,6 +110,38 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_combinemin": ("L3",),
     "gbx_rst_combinestddev": ("L3",),
     "gbx_rst_combinesum": ("L3",),
+    # The accessors that return one value (a number, a string or a polygon's WKB) are JVM first: reading a header is
+    # 0.26x (boundingbox) and 0.18x (width) of the light time at 4x rows, and 0.24x for both at 16x (dedicated,
+    # 1 + 4 x m5d.2xlarge, DBR 19, equal output). A value of this kind cannot sit under `explode`, so the SQL dispatch
+    # wrapper that sends a virtual tile to light (the JVM raises `VirtualTileException` for one) is usable. Accessors that
+    # return an `ARRAY`, a `MAP` or a `STRUCT` can sit under `explode` and `inline`, where that wrapper is refused
+    # (UNSUPPORTED_SQL_UDF_USAGE), so they are light only and keep no JVM level; they take the family order.
+    **{
+        f"gbx_rst_{n}": ("L1", "L3")
+        for n in (
+            "boundingbox",
+            "crs",
+            "format",
+            "height",
+            "memsize",
+            "numbands",
+            "pixelheight",
+            "pixelwidth",
+            "rastertoworldcoordx",
+            "rastertoworldcoordy",
+            "rotation",
+            "scalex",
+            "scaley",
+            "skewx",
+            "skewy",
+            "srid",
+            "upperleftx",
+            "upperlefty",
+            "width",
+            "worldtorastercoordx",
+            "worldtorastercoordy",
+        )
+    },
 }
 # The order a function with no PREFERENCE row takes, by its manifest family (measured on-cluster where a record or
 # the benchmark tables have the family; the spec's "highest available" where not). Per-name exceptions are

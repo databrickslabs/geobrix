@@ -30,8 +30,8 @@ L1_TILE_FNS = [f for f in FNS if _takes_tile(f) and _first_available(f) == "L1"]
 
 def test_there_are_jvm_first_tile_functions_to_hold():
     """The set is derived, not listed; this keeps the checks below from passing on an empty one."""
-    # color_relief, frombands, mapalgebra and slope
-    assert len(L1_TILE_FNS) >= 4, [f.sql_name for f in L1_TILE_FNS]
+    # color_relief, frombands, mapalgebra and slope, and the 21 accessors that return one value
+    assert len(L1_TILE_FNS) >= 25, [f.sql_name for f in L1_TILE_FNS]
 
 
 @pytest.mark.parametrize("fn", L1_TILE_FNS, ids=lambda f: f.sql_name)
@@ -64,6 +64,26 @@ def _literal(p, tile_expr, tiles_expr):
     if t == "ARRAY<TILE>":
         return tiles_expr
     return {"STRING": "'x'", "INT": "1", "DOUBLE": "1.0", "BOOLEAN": "true"}.get(t, "1")
+
+
+# What a function that returns one value answers for 'light': a value of its return type that no other level gives.
+_LIGHT_VALUE = {
+    "STRING": "light",
+    "INT": 7,
+    "BIGINT": 7,
+    "DOUBLE": 7.5,
+    "BOOLEAN": True,
+    "BINARY": bytearray(b"light"),
+}
+
+
+def _returns_tile(fn) -> bool:
+    return fn.returns_session == "TILE"
+
+
+def _who(fn, out):
+    """'light' for what a light stand-in answered: its tile's metadata, or its value for a function that returns one."""
+    return out["metadata"]["who"] if _returns_tile(fn) else out
 
 
 @pytest.fixture(scope="module")
@@ -102,8 +122,13 @@ def stand_ins(spark):
     )
     spark.createDataFrame([(virt, mat)], schema).createOrReplaceTempView("_gbx_vd")
     for fn in L1_TILE_FNS:
-        for suffix, body in (("l1", refused), ("l3", light)):
-            spark.udf.register(jvm._priv(fn, suffix.upper()), body, V2_TILE_SCHEMA)
+        if _returns_tile(fn):
+            answer, rtype = light, V2_TILE_SCHEMA
+        else:
+            value = _LIGHT_VALUE[fn.returns_session]
+            answer, rtype = (lambda *_, v=value: v), fn.returns_session
+        spark.udf.register(jvm._priv(fn, "L1"), refused, rtype)
+        spark.udf.register(jvm._priv(fn, "L3"), answer, rtype)
     return spark
 
 
@@ -126,8 +151,9 @@ def test_the_dispatch_sends_a_reference_to_light_and_never_to_the_jvm(stand_ins,
             0
         ]["out"]
 
-    assert call("v", "array(v, v)")["metadata"]["who"] == "light"
-    assert call("v", "array(m, v)")["metadata"]["who"] == "light"
+    light = "light" if _returns_tile(fn) else _LIGHT_VALUE[fn.returns_session]
+    assert _who(fn, call("v", "array(v, v)")) == light
+    assert _who(fn, call("v", "array(m, v)")) == light
     with pytest.raises(Exception, match="VirtualTileException"):
         call(
             "m", "array(m, m)"
@@ -169,3 +195,39 @@ def test_every_jvm_first_tile_function_has_an_oracle_row_for_a_reference(fn, tmp
         f"{fn.sql_name} is served from the JVM first, and no session oracle row gives it a virtual tile and expects a "
         "result. Fix: add a row in its oracle table that builds the input as paths"
     )
+
+
+@pytest.mark.integration
+def test_a_scalar_accessor_answers_a_reference_from_light_and_bytes_from_the_jvm(
+    jvm_spark, tmp_path
+):
+    """With the JAR the width is JVM first: the SQL name is the dispatch wrapper over both private functions, a bytes
+    tile and the reference to the same file give the same width, and the JVM function alone refuses the reference.
+    """
+    from pyspark.sql.types import StructField, StructType
+
+    from databricks.labs.gbx import register
+    from databricks.labs.gbx.bench import oracles
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    name = "gbx_rst_width"
+    chosen = register(jvm_spark, only=[name])
+    assert chosen[name].level == "L1", chosen[name]
+    body = " ".join(
+        str(r[0]) for r in jvm_spark.sql(f"DESCRIBE FUNCTION EXTENDED {name}").collect()
+    )
+    assert "gbx__l1_rst_width" in body and "gbx__l3_rst_width" in body
+    mat, virt = (
+        oracles.resolve_arg(oracles.Build(b), str(tmp_path))
+        for b in ("tile_4326", "tile_virtual")
+    )
+    schema = StructType(
+        [StructField("m", V2_TILE_SCHEMA), StructField("v", V2_TILE_SCHEMA)]
+    )
+    jvm_spark.createDataFrame([(mat, virt)], schema).createOrReplaceTempView("_gbx_w")
+    row = jvm_spark.sql(
+        f"SELECT {name}(m) AS m, {name}(v) AS v, gbx__l3_rst_width(v) AS light FROM _gbx_w"
+    ).collect()[0]
+    assert (row["m"], row["v"], row["light"]) == (64, 64, 64)
+    with pytest.raises(Exception, match="VirtualTileException"):
+        jvm_spark.sql("SELECT gbx__l1_rst_width(v) FROM _gbx_w").collect()

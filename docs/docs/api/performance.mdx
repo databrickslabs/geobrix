@@ -39,7 +39,7 @@ The light level runs every function on every compute. It is the default for the 
 
 | Function family | What runs | Measured result |
 |---|---|---|
-| Metadata accessors and statistics | Arrow scalar UDF | The default. The JVM form is faster on a dedicated cluster (1.5x to 5.6x for `gbx_rst_width`, `gbx_rst_boundingbox` and `gbx_rst_avg` at 4x and 16x), but it cannot read a virtual tile, so it is not the default. |
+| Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The default. The JVM form is faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the light time at 4x and 16x rows), but such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to light is refused. A JVM form would raise on a virtual tile there, so it is not the default. |
 | Band math and spectral indices | NumPy in the worker | 3.1x to 3.9x faster than the JVM form |
 | Warps and resampling | rasterio | 2.1x to 4.7x faster than the JVM form |
 | Terrain (slope, aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
@@ -82,6 +82,9 @@ The same JAR also serves these functions, measured on earlier runs by the time t
 | The five BNG `*explode` generators | 0.37 to 0.67 | Dedicated |
 | `gbx_st_interpolateelevationbbox` | 0.75 | Dedicated |
 | `gbx_h3_cellfill` | 0.57 | Dedicated |
+| The raster accessors that return one value (`gbx_rst_width` and `gbx_rst_boundingbox` measured) | 0.18 to 0.26 | Dedicated |
+
+A raster accessor that returns one value (a number, a string or a WKB polygon) runs on the JVM for a materialized tile. A virtual tile goes to the light form, because the JVM level reads bytes only. The accessors that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` stay on light.
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 

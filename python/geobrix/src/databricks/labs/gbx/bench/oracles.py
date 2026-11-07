@@ -197,8 +197,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
         cid: {"L1": _L1_NO_VIRTUAL}
         for cid in (
-            "width_virtual",
-            "memsize_virtual",
             "avg_virtual",
             "summary_virtual",
         )

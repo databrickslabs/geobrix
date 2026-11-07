@@ -59,7 +59,7 @@ def test_plan_resolves_modules_and_tests_and_runs_nothing(tmp_path):
     ]
     assert plan["old"] == ["test/pygx/test_bng_codec.py", "--ignore=test/pygx/test_parity_bng.py"]
     assert plan["oracle_tables"] == "GRID_SCALAR"
-    assert "/gbx-mut-unit-" in plan["work"] and "mutate_only_covered_lines = true" in plan["mutmut"]
+    assert "/gbx-mut-unit-" in plan["work"] and "<random>" in plan["work"] and "mutate_only_covered_lines = true" in plan["mutmut"]
 
 
 def test_a_missing_module_or_test_is_refused():
@@ -119,3 +119,33 @@ def test_the_sample_is_seeded_and_stratified_by_function():
 )
 def test_mutant_keys_name_their_module_and_function(key, module, func):
     assert (gate.mutant_module(key), gate.mutant_function(key)) == (module, func)
+
+
+def test_the_venv_defaults_to_a_per_user_cache_and_honours_the_overrides(monkeypatch, tmp_path):
+    monkeypatch.delenv("GBX_MUTATION_VENV", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    assert gate.mutmut_venv() == tmp_path / "cache" / "geobrix" / "mutation-venv"
+    monkeypatch.delenv("XDG_CACHE_HOME")
+    assert gate.mutmut_venv() == gate.Path.home() / ".cache" / "geobrix" / "mutation-venv"
+    assert "/tmp" not in str(gate.mutmut_venv())
+    monkeypatch.setenv("GBX_MUTATION_VENV", str(tmp_path / "mine"))
+    assert gate.mutmut_venv() == tmp_path / "mine"
+
+
+def test_a_venv_dir_another_user_could_have_planted_is_refused(tmp_path):
+    ok = tmp_path / "ok"
+    ok.mkdir(mode=0o700)
+    gate.require_private(ok)  # owned by this user, not writable by group or world
+
+    for mode in (0o770, 0o707, 0o777):
+        bad = tmp_path / f"mode{mode:o}"
+        bad.mkdir()
+        bad.chmod(mode)
+        with pytest.raises(SystemExit) as exc:
+            gate.require_private(bad)
+        assert "Fix:" in str(exc.value)
+
+    link = tmp_path / "link"
+    link.symlink_to(ok)
+    with pytest.raises(SystemExit):
+        gate.require_private(link)

@@ -21,8 +21,10 @@ import random
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -200,7 +202,20 @@ def host_venv() -> Path:
 
 
 def mutmut_venv() -> Path:
-    return Path(os.environ.get("GBX_MUTATION_VENV") or tmp_root() / "gbx-mut-venv")
+    """The venv the gate runs mutmut from: per-user cache, never a shared temp path (it is executed)."""
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return Path(os.environ.get("GBX_MUTATION_VENV") or cache / "geobrix" / "mutation-venv")
+
+
+def require_private(path: Path) -> None:
+    """Refuse to run code from a path another user could have planted: it must be a real directory (not a
+    link) owned by this user and not group- or world-writable."""
+    st = os.lstat(path)
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid() or st.st_mode & 0o022:
+        sys.exit(
+            f"{path} is not a private directory of this user (owner, mode or link). "
+            f"Fix: remove it or point GBX_MUTATION_VENV at a directory you own with mode 0700, and run again."
+        )
 
 
 def run(cmd, **kw):
@@ -210,6 +225,10 @@ def run(cmd, **kw):
 def ensure_venv(venv: Path, host: Path) -> Path:
     """A throwaway venv with the pinned mutmut and pytest and a .pth onto the host venv's packages (shapely,
     pyproj, rasterio, pyspark are the repo's); nothing is installed into the host venv."""
+    if venv.exists() or venv.is_symlink():
+        require_private(venv)
+    else:
+        venv.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     py = venv / "bin" / "python"
     want = {"mutmut": MUTMUT_PIN.split("==")[1], "pytest": PYTEST_PIN.split("==")[1]}
 
@@ -226,6 +245,7 @@ def ensure_venv(venv: Path, host: Path) -> Path:
     if versions() != want:
         if not py.exists():
             run(["uv", "venv", "--python", "3.12", str(venv)])
+            venv.chmod(0o700)
         run(["uv", "pip", "install", "--python", str(py), MUTMUT_PIN, PYTEST_PIN])
         if versions() != want:
             sys.exit(f"mutation venv {venv} does not hold {MUTMUT_PIN} and {PYTEST_PIN}: {versions()}")
@@ -242,7 +262,6 @@ IGNORE_COPY = shutil.ignore_patterns("__pycache__", "*.pyc", "coverage-report", 
 
 def build_work_dir(work: Path) -> None:
     """src/ and test/ of python/geobrix, the pyproject (its pytest config), and the Tier 0 plugin."""
-    work.mkdir(parents=True)
     shutil.copytree(PKG_ROOT / "src", work / "src", ignore=IGNORE_COPY)
     shutil.copytree(PKG_ROOT / "test", work / "test", ignore=IGNORE_COPY)
     shutil.copy(PKG_ROOT / "pyproject.toml", work / "pyproject.toml")
@@ -318,7 +337,8 @@ def main(argv=None) -> int:
     out = Path(args.out) if args.out else REPO_ROOT / "test-logs" / "mutation-gate" / args.family
     if not out.is_absolute():
         out = REPO_ROOT / out
-    work = tmp_root() / f"gbx-mut-{args.family}-{os.getpid()}"
+    prefix = f"gbx-mut-{args.family}-"
+    work = tmp_root() / (prefix + "<random>")  # made by mkdtemp (mode 0700) when the run starts
 
     warn = []
     for label, sel in (("old", old_sel), ("slim", slim_sel)):
@@ -338,6 +358,7 @@ def main(argv=None) -> int:
 
     out.mkdir(parents=True, exist_ok=True)
     py = ensure_venv(mutmut_venv(), host_venv())
+    work = Path(tempfile.mkdtemp(prefix=prefix, dir=tmp_root()))
     try:
         build_work_dir(work)
         t0 = time.time()

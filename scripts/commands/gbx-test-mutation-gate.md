@@ -16,7 +16,7 @@ Check that a slimmer test selection still catches what the old one catches. It m
 - `--out <dir>` — output dir. Default: `test-logs/mutation-gate/<family>`.
 - `--max-children <n>` — mutmut workers. Default: 10. Lower it when two gates run at once.
 - `--seed <n>` — sample seed. Default: 31.
-- `--keep-work` — keep the throwaway copy under `/private/tmp`.
+- `--keep-work` — keep the throwaway copy (a private `mktemp`-style dir under `/private/tmp`, mode 0700).
 - `--plan` — print the plan and stop. Nothing runs.
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path.
 - `--help`, `-h` — show usage.
@@ -49,7 +49,8 @@ The command runs the old selection, then the slim one, over every mutant of the 
 
 - Tier 0 only. Tests that use the `spark`, `jvm_spark` or `spark_connect_local` fixture are skipped. The command warns when a selected file imports `pyspark` at module level.
 - Rows of an oracle table reach the kernels only through the `test_family_oracle_l3_callables` and `test_family_oracle_uc_handlers` legs. A table module opts its scalars into the first with `L3_CALLABLE = True`.
-- A throwaway venv holds `mutmut==3.8.0` and `pytest==9.1.1`. `GBX_MUTATION_VENV` moves it. mutmut 3.8.0 crashes under pytest 9.2.0.
+- A venv holds `mutmut==3.8.0` and `pytest==9.1.1`. It lives in `~/.cache/geobrix/mutation-venv` (`XDG_CACHE_HOME` is honoured); `GBX_MUTATION_VENV` moves it. mutmut 3.8.0 crashes under pytest 9.2.0.
+- The command runs code from that venv, so it refuses one that is a link, is owned by another user, or is group- or world-writable. The message starts its fix with `Fix:`.
 - It uses the host venv (`GBX_PYRX_VENV` or `.venv-pyrx`) for shapely, pyproj and the rest. Nothing is installed into it.
 - It never touches the repo tree. The work dir is removed at the end.
 - It does not use the container or its lock, so gates for several families can run at once.

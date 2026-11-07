@@ -251,7 +251,8 @@ def _invalid_polys(spark, n, corpus, schema):
 
 def _bng_polys(spark, n, corpus, schema):
     """2800 x 1800 m rectangles at random places inside Great Britain (EPSG:27700): each one covers
-    about six 1 km cells, so a tessellation of them makes about six rows per input row.
+    about 10.6 1 km cells on average, ((2.8 + 1) x (1.8 + 1): a side of w km crosses w + 1 cells at a random offset), so
+    a tessellation of them makes about 10 to 11 rows per input row (the fixed oracle polygon is the 6-cell case).
     """
     from pyspark.sql import functions as F
 

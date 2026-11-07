@@ -57,7 +57,7 @@ def spark():
 def test_rows_to_dataframe_schema_and_where(spark):
     df = cl.rows_to_dataframe([_row(), _row(fn="rst_avg")], spark, where="cluster")
     cols = df.columns
-    assert len(cols) == 65
+    assert len(cols) == 71
     assert {"run_mode", "concurrent", "cluster_id", "part"} <= set(
         cols
     )  # how the run was set up
@@ -77,7 +77,7 @@ def test_rows_to_dataframe_schema_and_where(spark):
     assert cols[mo + 1] == "avg_wall_clock_s"
     assert cols[mo + 2] == "per_tile_avg_s"
     assert cols[mo + 3] == "per_tile_avg_ms"
-    assert cols[-20:] == [
+    assert cols[-26:-6] == [
         "level",
         "form",
         "compute",
@@ -99,7 +99,7 @@ def test_rows_to_dataframe_schema_and_where(spark):
         "cluster_id",
         "part",
     ]
-    assert cols[-33:-20] == [
+    assert cols[-39:-26] == [
         "iter_min_s",
         "iter_p90_s",
         "iter_total_wall_clock_s",
@@ -114,8 +114,32 @@ def test_rows_to_dataframe_schema_and_where(spark):
         "slots_available",
         "chunk_size",
     ]
+    assert cols[-6:] == [
+        "env_spark_version",
+        "env_pyspark_version",
+        "env_dbr_version",
+        "env_version",
+        "env_caps",
+        "path",
+    ]
     vals = {r["fn"]: r["env_where"] for r in df.collect()}
     assert vals == {"rst_width": "cluster", "rst_avg": "cluster"}
+
+
+def test_the_spark_provenance_columns_round_trip_and_older_rows_read_empty(spark):
+    row = _row(
+        env_spark_version="4.3.0",
+        env_pyspark_version="4.3.0.dev0",
+        env_dbr_version="19.x-snapshot-scala2.13",
+        env_version="6",
+        env_caps='{"arrow_grouped_agg_iter":"on:override"}',
+        path="merge_agg:arrow_iter",
+    )
+    got = cl.rows_to_dataframe([row, _row()], spark).collect()
+    by_path = {r["path"]: r for r in got}
+    assert by_path["merge_agg:arrow_iter"]["env_spark_version"] == "4.3.0"
+    assert by_path["merge_agg:arrow_iter"]["env_caps"].startswith('{"arrow_grouped')
+    assert by_path[""]["env_spark_version"] == ""  # a row that did not record them
 
 
 def test_build_bench_notebook_cells():

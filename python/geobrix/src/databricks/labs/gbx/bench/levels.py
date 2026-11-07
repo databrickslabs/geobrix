@@ -77,6 +77,24 @@ class Form:
     vsql: str = ""
 
 
+# (fn, level) of a form -> the operation whose code path a capability chooses (`manager.capabilities.path`): the row's
+# `path` says which one the form took, so the same compute can be compared path against path.
+PATH_OPS = {("gbx_rst_merge_agg", "L3"): "merge_agg"}
+
+
+def _path_of(spark, form: "Form") -> str:
+    """The code path the session takes for *form* (``merge_agg:arrow_iter``), "" when no capability chooses one."""
+    op = PATH_OPS.get((form.fn, form.level))
+    if op is None:
+        return ""
+    try:
+        from databricks.labs.gbx.manager import capabilities
+
+        return capabilities.path(spark, op)
+    except Exception:  # noqa: BLE001 - a record that cannot be read must not stop a run
+        return ""
+
+
 def detect_compute(spark) -> str:
     from databricks.labs.gbx.manager.capabilities import is_connect, is_serverless
 
@@ -554,7 +572,7 @@ def run_mvp(
         heartbeat=heartbeat,
     )
     compute = detect_compute(spark)
-    env = capture_env(where)
+    env = capture_env(where, spark)
     forms = list(lf.FORMS[mvp])
     if inject_stall:
         lf.STALL_SECONDS = float(inject_stall)
@@ -616,6 +634,7 @@ def run_mvp(
             concurrent=int(concurrent),
             cluster_id=cluster_id,
             part=part,
+            path=_path_of(spark, form),
             **env,
         )
         rows, prev = by_form[i], hist.get(i)

@@ -1,3 +1,4 @@
+import dataclasses
 import os
 import time
 
@@ -62,6 +63,70 @@ def test_capture_env_has_required_fields():
     ):
         assert k in env
     assert env["env_where"] == "venv"
+
+
+def _ok_row_fields():
+    """A value for every ResultRow field that has no default (the env record supplies the rest)."""
+    required = [
+        f
+        for f in dataclasses.fields(rn.ResultRow)
+        if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+    ]
+    return {f.name: (0 if f.type in ("int", "float") else "") for f in required}
+
+
+class _Session:
+    """A session as `spark_env` reads it: the server's version and conf."""
+
+    def __init__(self, version="4.3.0"):
+        self.version = version
+
+        class _Conf:
+            @staticmethod
+            def get(key):
+                if key == "spark.databricks.clusterUsageTags.sparkVersion":
+                    return "19.x-snapshot-scala2.13"
+                raise KeyError(key)
+
+        self.conf = _Conf()
+
+
+def test_capture_env_records_the_spark_the_run_is_on(monkeypatch):
+    """The server's Spark version (not the client's), the runtime, the Serverless env and the capability report ride in
+    the env record, so no row is unattributable to 4.2 or 4.3. Without a session they are the empty string.
+    """
+    import json
+
+    from databricks.labs.gbx.manager import capabilities
+
+    monkeypatch.setattr(capabilities, "_has_arrow_eval", lambda name: True)
+    monkeypatch.setenv("DATABRICKS_ENV_VERSION", "6")
+    monkeypatch.setenv("GBX_CAP_ARROW_GROUPED_AGG_ITER", "1")
+    env = rn.capture_env("cluster", _Session("4.3.0"))
+    assert env["env_spark_version"] == "4.3.0"
+    assert env["env_pyspark_version"]  # the client's, whatever it is
+    assert env["env_dbr_version"] == "19.x-snapshot-scala2.13"
+    assert env["env_version"] == "6"
+    caps = json.loads(env["env_caps"])
+    assert caps["arrow_grouped_agg_iter"] == "on:override"
+    assert caps["arrow_grouped_agg"] == "off:default"
+    assert caps["udtf_table_partition_ok"] == "off:unprobed"  # a report starts no probe
+    # an older server: the same override is refused, and the record says off
+    with pytest.warns(RuntimeWarning):
+        old = rn.capture_env("cluster", _Session("4.1.0"))
+    assert json.loads(old["env_caps"])["arrow_grouped_agg_iter"].startswith("off:")
+    row = rn.ResultRow(**{**_ok_row_fields(), **env})  # `**env` builds a row
+    assert row.env_spark_version == "4.3.0"
+
+
+def test_capture_env_never_raises_when_the_session_cannot_say():
+    class Broken:
+        @property
+        def version(self):
+            raise RuntimeError("connection lost")
+
+    env = rn.capture_env("venv", Broken())
+    assert env["env_where"] == "venv" and env["env_spark_version"] == ""
 
 
 def test_run_pure_core_produces_ok_rows(tmp_path):

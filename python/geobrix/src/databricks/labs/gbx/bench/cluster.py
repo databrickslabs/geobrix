@@ -88,6 +88,13 @@ ORDER = [
     "concurrent",
     "cluster_id",
     "part",
+    # Spark provenance (mergeSchema adds these to an existing table; older rows read NULL).
+    "env_spark_version",
+    "env_pyspark_version",
+    "env_dbr_version",
+    "env_version",
+    "env_caps",
+    "path",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.

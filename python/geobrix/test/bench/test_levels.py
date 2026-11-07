@@ -239,6 +239,15 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
     bad = [r for r in rows if r.status != "ok"]
     assert bad == [], [(r.fn, r.form, r.status, r.failure_mode, r.note) for r in bad]
     assert len(rows) == 14 and {r.level for r in rows} == {"L3"}
+    # provenance: the merge aggregate records the path a capability chose (pandas by default), the BNG one chooses none,
+    # and every row says which Spark it ran on
+    assert {r.path for r in rows if r.fn == lf._MA} == {"merge_agg:pandas"}
+    assert {r.path for r in rows if r.fn == lf._BR} == {""}
+    assert {r.env_spark_version for r in rows} == {spark_session_local.version}
+    assert all(  # off by default (the source is the client on a pyspark that has no Arrow aggregate)
+        r.env_caps.startswith("{") and '"arrow_grouped_agg":"off:' in r.env_caps
+        for r in rows
+    )
     for fn in (lf._MA, lf._BR):
         for sfx in ("", "-skew"):
             mine = {

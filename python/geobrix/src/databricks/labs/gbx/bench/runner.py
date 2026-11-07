@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import dataclasses as _dc
+import json
 import os
 import platform
 import statistics
 import threading
 import time
+import weakref
 from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -97,7 +99,59 @@ def time_iters(
     }
 
 
-def capture_env(where: str) -> Dict:
+# session -> the Spark half of the env record: it answers the same for the whole session
+_SPARK_ENV: "weakref.WeakKeyDictionary" = weakref.WeakKeyDictionary()
+_NO_SPARK_ENV = {
+    "env_spark_version": "",
+    "env_pyspark_version": "",
+    "env_dbr_version": "",
+    "env_version": "",
+    "env_caps": "",
+}
+
+
+def _caps_json(report: Dict) -> str:
+    """The capability report as one compact JSON object, ``{"name": "on|off:source"}`` (queryable with from_json)."""
+    return json.dumps(
+        {
+            name: f"{'on' if r['value'] else 'off'}:{r['source']}"
+            for name, r in sorted(report.items())
+        },
+        separators=(",", ":"),
+    )
+
+
+def spark_env(spark=None) -> Dict:
+    """Where the run's Spark is: the SERVER's ``spark.version`` (on Connect, not the client's), the client pyspark, the
+    Databricks runtime (the cluster's runtime key on a classic cluster) and Serverless environment, and what each Spark
+    capability resolved to (``env_caps``, without running a probe). *spark*: the session; None uses the active one if
+    there is one (it never starts a session), else the fields that need a session are "". Never raises: an env record
+    that cannot be read must not stop a run."""
+    from pyspark.sql import SparkSession
+
+    try:
+        if spark is None:
+            spark = SparkSession.getActiveSession()
+        if spark is not None and spark in _SPARK_ENV:
+            return dict(_SPARK_ENV[spark])
+        from databricks.labs.gbx.manager import capabilities as caps
+
+        info = caps.runtime_info(spark)
+        out = {
+            "env_spark_version": info["spark_version"],
+            "env_pyspark_version": info["pyspark_version"],
+            "env_dbr_version": info["dbr_version"],
+            "env_version": info["env_version"],
+            "env_caps": "" if spark is None else _caps_json(caps.report(spark)),
+        }
+        if spark is not None:
+            _SPARK_ENV[spark] = dict(out)
+        return out
+    except Exception:  # noqa: BLE001
+        return dict(_NO_SPARK_ENV)
+
+
+def capture_env(where: str, spark=None) -> Dict:
     try:
         import rasterio
 
@@ -121,6 +175,7 @@ def capture_env(where: str) -> Dict:
         "env_gdal_version": str(gdal_version),
         "env_runtime_version": "py" + platform.python_version(),
         "env_where": where,
+        **spark_env(spark),
     }
 
 

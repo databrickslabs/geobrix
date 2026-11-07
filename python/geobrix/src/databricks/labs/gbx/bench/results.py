@@ -147,6 +147,17 @@ class ResultRow:
     concurrent: int = 1
     cluster_id: str = ""
     part: str = ""
+    # Provenance of the Spark the row ran on. env_spark_version: the SERVER's spark.version (on Connect, not the client's);
+    # env_pyspark_version: the client pyspark; env_dbr_version: the runtime (the cluster's runtime key on a classic cluster,
+    # DATABRICKS_RUNTIME_VERSION otherwise); env_version: the Serverless environment version. env_caps: what each Spark
+    # capability resolved to, as JSON {"name": "on|off:source"} (manager.capabilities; no probe is run for it). path: which
+    # code path the form took, when a capability chose it (e.g. "merge_agg:arrow_iter"). "" where not known or not chosen.
+    env_spark_version: str = ""
+    env_pyspark_version: str = ""
+    env_dbr_version: str = ""
+    env_version: str = ""
+    env_caps: str = ""
+    path: str = ""
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:

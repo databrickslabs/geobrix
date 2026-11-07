@@ -144,10 +144,37 @@ def stamped_name(schema: Optional[str], name: str) -> str:
     return name if schema is None else f"{name}_{_stamp_of(sys._getframe(1))}"
 
 
-def _table(spark, schema: Optional[str], name: str, build, exact: bool = False) -> str:
+def _write_input(spark, df, full: str, rows: Optional[int]) -> None:
+    """Write `df` as the Delta table `full`, in at least as many files as the compute has slots when `rows` is given.
+
+    A scan task reads whole files (a Parquet row group does not split), so the files an input is written in cap the
+    parallelism of every form that reads it. Delta's optimized write packs a few million narrow rows into ONE file: the
+    4M-row `bng_points` input had one file and the 16M-row one four, so the BNG scalar's 4x rung ran on one task and the
+    16x on four, and its time came out flat from 4x to 16x (the floor too). `maxRecordsPerFile` splits the packed file
+    again, so the scan of an input has the compute's slots in tasks at every scale and the time follows the rows.
+    """
+    w = df.write.format("delta")
+    if rows:
+        from databricks.labs.gbx.bench.runner import _bench_parallelism
+
+        w = w.option(
+            "maxRecordsPerFile", max(1, -(-int(rows) // _bench_parallelism(spark)))
+        )
+    w.saveAsTable(full)
+
+
+def _table(
+    spark,
+    schema: Optional[str],
+    name: str,
+    build,
+    exact: bool = False,
+    rows: Optional[int] = None,
+) -> str:
     """The input as a table of `schema` (or a temp view): built once under a name that holds its stamp, so every form and
     every run that asks for the same input at the same scale shares it. `exact` names the table as given (a companion
-    table of an input that already carries its stamp)."""
+    table of an input that already carries its stamp). `rows` is the row count of an input of narrow rows (a range,
+    not a tile per row): it is written in a file per compute slot (`_write_input`)."""
     if schema is None:
         build().createOrReplaceTempView(name)
         return name
@@ -157,7 +184,7 @@ def _table(spark, schema: Optional[str], name: str, build, exact: bool = False) 
     if not spark.catalog.tableExists(full):
         t0 = time.perf_counter()
         try:
-            build().write.format("delta").saveAsTable(full)
+            _write_input(spark, build(), full, rows)
             # a tile input of thousands of files takes minutes: say so, so a form cap hit while building is seen as that
             print(
                 f"[LEVELS input] {full} built in {time.perf_counter() - t0:.1f} s",
@@ -234,6 +261,7 @@ def _bng_points(spark, n, corpus, schema):
         lambda: spark.range(n).select(
             (F.rand(7) * 700000).alias("e"), (F.rand(8) * 1300000).alias("n")
         ),
+        rows=n,
     )
 
 
@@ -257,6 +285,7 @@ def _invalid_polys(spark, n, corpus, schema):
                 F.col("y") + 1,
             ).alias("wkt")
         ),
+        rows=n,
     )
 
 
@@ -284,6 +313,7 @@ def _bng_polys(spark, n, corpus, schema):
                 F.col("y") + 1800,
             ).alias("wkt")
         ),
+        rows=n,
     )
 
 
@@ -804,6 +834,7 @@ def _bng_cells(skew: bool):
                 cell.alias("cellid"),
                 (F.rand(9) * 100).alias("value"),
             ),
+            rows=n,
         )
 
     return build
@@ -904,6 +935,11 @@ _TCRS = (
     "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
     "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM {src})"
 )
+# the value-level twin (value_fp): the decoded pixels of a few tiles, not the length of every encoding
+_TCRS_V = (
+    "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM (SELECT * FROM {src} LIMIT 64))"
+)
 _MV = (
     "SELECT count(*) AS n, sum(length(g)) AS fp, count(g) AS n_out "
     "FROM (SELECT {fn}(wkt) AS g FROM {src})"
@@ -950,11 +986,12 @@ def floor_bng(spark, src):
     return r[0], r[1], r[2], df
 
 
-def _f(level, variant, fn, inp, sql, uc=False, **kw):
+def _f(level, variant, fn, inp, sql, uc=False, vsql="", **kw):
     name = ("{uc}." + fn) if uc else fn  # an L4 function is addressed by its UC schema
     return Form(
-        "S", fn, level, variant, inp, sql.replace("{fn}", name), register=not uc, **kw
-    )
+        "S", fn, level, variant, inp, sql.replace("{fn}", name), register=not uc,
+        vsql=vsql.replace("{fn}", name), **kw,
+    )  # fmt: skip
 
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
@@ -986,11 +1023,19 @@ FORMS: Dict[str, List[Form]] = {
             uc=True,
             computes=("serverless", "dedicated"),
         ),
-        _f("L1", "-", T, "tiles_mat", _TCRS, computes=("dedicated",)),
-        _f("L1", "dispatch-virtual", T, "tiles_virt", _TCRS, computes=("dedicated",)),
-        _f("L2", "-", T, "tiles_mat", _TCRS, computes=("dedicated",)),
-        _f("L3", "-", T, "tiles_mat", _TCRS),
-        _f("L3", "virtual", T, "tiles_virt", _TCRS),
+        _f("L1", "-", T, "tiles_mat", _TCRS, computes=("dedicated",), vsql=_TCRS_V),
+        _f(
+            "L1",
+            "dispatch-virtual",
+            T,
+            "tiles_virt",
+            _TCRS,
+            computes=("dedicated",),
+            vsql=_TCRS_V,
+        ),
+        _f("L2", "-", T, "tiles_mat", _TCRS, computes=("dedicated",), vsql=_TCRS_V),
+        _f("L3", "-", T, "tiles_mat", _TCRS, vsql=_TCRS_V),
+        _f("L3", "virtual", T, "tiles_virt", _TCRS, vsql=_TCRS_V),
         _f("L3", "-", M, "invalid_polys", _MV),
         _f(
             "L4",

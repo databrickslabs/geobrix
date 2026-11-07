@@ -63,6 +63,25 @@ _AGG = (
     "CASE WHEN count(x) = count(*) THEN (SELECT count(*) FROM {{src}}) ELSE count(x) END AS n_out "
     "FROM (SELECT {call} AS x FROM {{src}} GROUP BY key)"
 )
+# The value-level twins (`value_fp`): the same call and input, `fp` the sum of a hash of the DECODED output. A tile output is
+# decoded for a few tiles only (the decode costs more than the work); a scalar or an aggregate (few outputs) for all of them.
+_VFP_TILE_ROWS = 64
+_SCALAR_V = (
+    "SELECT count(*) AS n, sum(pmod({udf}(c), 2147483647)) AS fp, count(c) AS n_out "
+    "FROM (SELECT {call} AS c FROM {{src}})"
+)
+_TILE_V = (
+    "SELECT count(*) AS n, sum(pmod({udf}(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {call} AS t FROM (SELECT * FROM {{src}} LIMIT "
+    + str(_VFP_TILE_ROWS)
+    + "))"
+)
+_AGG_V = (
+    "SELECT (SELECT count(*) FROM {{src}}) AS n, sum(pmod({udf}(x), 2147483647)) AS fp, "
+    "CASE WHEN count(x) = count(*) THEN (SELECT count(*) FROM {{src}}) ELSE count(x) END AS n_out "
+    "FROM (SELECT {call} AS x FROM {{src}} GROUP BY key)"
+)
+_VFP_SHAPE = {id(_SCALAR): _SCALAR_V, id(_TILE): _TILE_V, id(_AGG): _AGG_V}
 _AGG_FLOOR = _AGG.format(call="CAST(max(length({col})) AS STRING)")
 _TILE_SCAN = "SELECT count(*) AS n, sum(length(tile.raster)) AS fp, count(tile) AS n_out FROM {src}"
 # a generator: n is the rows it was given, fp the rows it made
@@ -97,6 +116,8 @@ class Rep:
     computes_l3: Tuple[str, ...] = ("dedicated", "standard", "serverless")
     allows_null: bool = False
     l1_virtual: bool = False
+    # the kind of output whose decoded value the row's fingerprint hashes (`value_fp.KINDS`); None: the length/hash one
+    vfp: Optional[str] = None
 
 
 WEB_TILES_PENDING = "web-tiles"
@@ -113,10 +134,17 @@ REPS: List[Rep] = [
         _SCALAR,
         "{fn}(tile)",
         "binary",
+        vfp="wkb",
     ),
     # pixel statistics: a full decode
     Rep(
-        "raster-stat", "gbx_rst_avg", _BNG_TILE, _SCALAR, "{fn}(tile)", "array<double>"
+        "raster-stat",
+        "gbx_rst_avg",
+        _BNG_TILE,
+        _SCALAR,
+        "{fn}(tile)",
+        "array<double>",
+        vfp="doubles",
     ),
     # tile to tile
     Rep(
@@ -126,8 +154,17 @@ REPS: List[Rep] = [
         _TILE,
         "{fn}(tile, tile)",
         "tile",
+        vfp="raster",
     ),
-    Rep("raster-tile-op", "gbx_rst_proximity", _BNG_TILE, _TILE, "{fn}(tile)", "tile"),
+    Rep(
+        "raster-tile-op",
+        "gbx_rst_proximity",
+        _BNG_TILE,
+        _TILE,
+        "{fn}(tile)",
+        "tile",
+        vfp="raster",
+    ),
     Rep(
         "raster-file-op",
         "gbx_rst_cog_convert",
@@ -135,6 +172,7 @@ REPS: List[Rep] = [
         _TILE,
         "{fn}(tile, 'DEFLATE')",
         "tile",
+        vfp="raster",
     ),
     # tile to vectors: contour intervals are data dependent, isoband breaks span the corpus' value range
     Rep(
@@ -154,6 +192,7 @@ REPS: List[Rep] = [
         _TILE,
         "{fn}(x, y, z, 0D, 0D, 100D, 100D, 64, 64, 4326, 'mean')",
         floor_sql="SELECT count(*) AS n, sum(size(x)) AS fp, count(x) AS n_out FROM {src}",
+        vfp="raster",
     ),
     # file bytes to a tile
     Rep(
@@ -163,6 +202,7 @@ REPS: List[Rep] = [
         _TILE,
         "{fn}(content, 'GTiff')",
         floor_sql="SELECT count(*) AS n, sum(length(content)) AS fp, count(content) AS n_out FROM {src}",
+        vfp="raster",
     ),
     # BNG cells
     Rep(
@@ -190,6 +230,7 @@ REPS: List[Rep] = [
         "{fn}(cellid, value, 27700, NULL, CAST(500000.0 AS DOUBLE), CAST(100000.0 AS DOUBLE), "
         "CAST(600000.0 AS DOUBLE), CAST(200000.0 AS DOUBLE), CAST(200 AS INT), CAST(200 AS INT), 'centroids', 0)",
         floor_sql=_AGG_FLOOR.format(col="cellid", src="{src}"),
+        vfp="raster",
     ),
     # vectors
     Rep(
@@ -199,6 +240,7 @@ REPS: List[Rep] = [
         _SCALAR,
         "{fn}(wkt, 'EPSG:3857', 'EPSG:27700')",
         "binary",
+        vfp="wkb",
     ),
     Rep(
         "vector-aggregate",
@@ -207,6 +249,7 @@ REPS: List[Rep] = [
         _AGG,
         "{fn}(wkb, struct(id AS id), 'bench')",
         floor_sql=_AGG_FLOOR.format(col="wkb", src="{src}"),
+        vfp="mvt",
     ),
     Rep(
         "vector-generator",
@@ -330,6 +373,7 @@ def _points_arrays(spark, n, corpus, schema):
             F.expr("transform(sequence(1, 400), i -> rand(22) * 100)").alias("y"),
             F.expr("transform(sequence(1, 400), i -> rand(23) * 10)").alias("z"),
         ),
+        rows=n,
     )
 
 
@@ -391,6 +435,7 @@ def _mvt_rows(spark, n, corpus, schema):
                 (F.rand(32) * 4096).cast("int").cast("double"),
             ).alias("wkb"),
         ),
+        rows=n,
     )
 
 
@@ -414,6 +459,7 @@ def _tin_points(spark, n, corpus, schema):
                 " cast(rand(43) * 10 as string), ')'))"
             ).alias("points")
         ),
+        rows=n,
     )
 
 
@@ -477,6 +523,17 @@ def _sql(rep: Rep, name: str) -> str:
     return rep.shape.format(call=rep.call.replace("{fn}", name))
 
 
+def _vsql(rep: Rep, name: str) -> str:
+    """The value-level query of a representative's form ('' when its output has no decoder yet)."""
+    if rep.vfp is None:
+        return ""
+    from databricks.labs.gbx.bench import value_fp
+
+    return _VFP_SHAPE[id(rep.shape)].format(
+        call=rep.call.replace("{fn}", name), udf=value_fp.udf_name(rep.vfp)
+    )
+
+
 def family_forms() -> Dict[str, List[Form]]:
     """`{family: forms}` for the generated representatives (L1, then each L3 variant, then the floor)."""
     rows = _manifest_rows()
@@ -501,6 +558,7 @@ def family_forms() -> Dict[str, List[Form]]:
                     level="L1",
                     variant=f"l1@{tag}",
                     sql=_sql(rep, rep.fn),
+                    vsql=_vsql(rep, rep.fn),
                     computes=("dedicated",),
                     **common,
                 )
@@ -512,6 +570,7 @@ def family_forms() -> Dict[str, List[Form]]:
                     level="L3",
                     variant=f"{v}@{tag}",
                     sql=_sql(rep, rep.fn),
+                    vsql=_vsql(rep, rep.fn),
                     computes=rep.computes_l3,
                     **common,
                 )

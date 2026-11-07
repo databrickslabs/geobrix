@@ -188,6 +188,16 @@ def test_the_family_forms_run_at_the_light_level_and_report_a_fingerprint(
         ]
         assert not bad, (family, bad)
         assert all(r.output_fingerprint for r in rows), family
+        # a representative with a decoder reports the fingerprint of its decoded values (a failed pass is only a note)
+        decoded = {r.fn for r in fam.REPS if r.vfp}
+        not_value = [
+            (r.fn, r.form, r.failure_mode)
+            for r in rows
+            if r.fn in decoded
+            and not r.form.startswith("floor")
+            and not r.output_fingerprint.startswith("v1:")
+        ]
+        assert not not_value, (family, not_value)
         ran.append(family)
     assert len(ran) >= 10, ran
 

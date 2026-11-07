@@ -185,3 +185,59 @@ def test_virtualize_dir_writes_a_result_over_the_read_cap(tmp_path):
     with _gdal_policy.carried(None, 1024):
         out = ot.shape_output(vt, virtualize_dir=str(tmp_path))
     assert out.is_virtual() and os.path.exists(out.path)
+
+
+def _px(path):
+    with rasterio.open(path) as ds:
+        return ds.read()
+
+
+def test_virtualize_dir_names_two_same_size_results_apart(tmp_path):
+    """Two results of one cell and size in one directory are two files: the name carries the cell and the size, which
+    tell them apart for nothing, so a random id does (the second used to overwrite the first).
+    """
+    first = ot.shape_output(
+        VirtualTile(cellid=0, raster=make_geotiff_bytes(width=4, height=3)),
+        virtualize_dir=str(tmp_path),
+    )
+    second = ot.shape_output(
+        VirtualTile(cellid=0, raster=make_geotiff_bytes(width=4, height=3, count=2)),
+        virtualize_dir=str(tmp_path),
+    )
+    assert first.path != second.path
+    assert len(list(tmp_path.glob("*.tif"))) == 2
+    assert _px(first.path).shape[0] == 1 and _px(second.path).shape[0] == 2
+
+
+def test_virtualize_dir_name_keeps_prefix_cell_and_size(tmp_path):
+    out = ot.shape_output(
+        VirtualTile(cellid=5, raster=make_geotiff_bytes(width=4, height=3)),
+        virtualize_dir=str(tmp_path),
+        virtualize_prefix="run1",
+    )
+    name = os.path.basename(out.path)
+    assert name.startswith("run1_5_0_0_4_3_") and name.endswith(".tif")
+
+
+def _two_stacks(values):
+    import numpy as np  # noqa: F811
+
+    from .test_core_agg import _ras
+
+    return [
+        {"cellid": 0, "raster": _ras(np.full((2, 2), v)), "path": None} for v in values
+    ]
+
+
+@pytest.mark.parametrize("udf_name", ["_combineavg_v2_udf", "_frombands_v2_udf"])
+def test_array_builders_force_output_two_same_size_results_apart(tmp_path, udf_name):
+    """combineavg and frombands name the file by their members' cell (equal here) and the result's size: two results of
+    one size in one directory must be two files."""
+    from databricks.labs.gbx.pyrx import functions as fx
+
+    fn = getattr(fx, udf_name).func
+    first = fn(_two_stacks([1, 2]), str(tmp_path), "pre", False)
+    second = fn(_two_stacks([7, 9]), str(tmp_path), "pre", False)
+    assert first["path"] != second["path"]
+    assert len(list(tmp_path.glob("pre_*.tif"))) == 2
+    assert not np.array_equal(_px(first["path"]), _px(second["path"]))

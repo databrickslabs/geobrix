@@ -19,6 +19,7 @@ a nested ``with`` that has already closed.
 import atexit
 import os
 import shutil
+import uuid
 from contextlib import ExitStack, contextmanager
 from typing import Iterator, Optional, Tuple
 
@@ -1396,7 +1397,8 @@ def shape_output(
       - The tile carries PRODUCED pixels (``raster`` set — a pixel-producing op
         such as reproject/merge/combineavg/frombands materialized its result):
         write bytes to
-        ``<dir>/[<prefix>_]<cellid>_<col>_<row>_<w>_<h>.tif`` (overwrite),
+        ``<dir>/[<prefix>_]<cellid>_<col>_<row>_<w>_<h>_<id>.tif`` (``<id>`` random,
+        so two results of one cell and size never share a file),
         FUSE-safe (local temp -> shutil.copyfile), return a VirtualTile with
         ``raster=None`` referencing the written file. This is the ONLY way a
         pixel-producer returns a virtual tile. The returned ``window`` is the
@@ -1439,7 +1441,16 @@ def shape_output(
         else:
             col, row, w, h = 0, 0, own_w, own_h
 
-        parts = [str(vt.cellid), str(col), str(row), str(w), str(h)]
+        # The random id keeps two results of one cell and size in one directory apart: the cell and the size are
+        # all a pixel-producing function knows of its result, and equal for two outputs of the same shape.
+        parts = [
+            str(vt.cellid),
+            str(col),
+            str(row),
+            str(w),
+            str(h),
+            uuid.uuid4().hex[:12],
+        ]
         base = "_".join(parts) + ".tif"
         if virtualize_prefix:
             base = f"{virtualize_prefix}_{base}"

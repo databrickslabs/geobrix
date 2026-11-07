@@ -17,7 +17,6 @@ import json
 import math
 import os
 import re
-import uuid
 import warnings
 from typing import Optional
 
@@ -1218,13 +1217,6 @@ def _merge_udf(tiles):
     return tile
 
 
-def _unique_prefix(prefix) -> str:
-    """*prefix* with a random id: a merge's file is named by its cell (0) and size only, so two merges of one size in one
-    directory would write the same file, the second over the first."""
-    token = uuid.uuid4().hex[:12]
-    return f"{prefix}_{token}" if prefix else token
-
-
 @f.udf(V2_TILE_SCHEMA)
 def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     # Force-output variant (Python API only): same mosaic via shape_output.
@@ -1241,7 +1233,7 @@ def _merge_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
         new_bytes,
         0,
         virtualize_dir,
-        _unique_prefix(virtualize_prefix) if virtualize_dir else virtualize_prefix,
+        virtualize_prefix,
         materialize,
     )
     if row is not None and dropped:

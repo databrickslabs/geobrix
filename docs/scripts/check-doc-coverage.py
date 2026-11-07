@@ -37,7 +37,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from _manifest_names import stable_names  # noqa: E402
+from _manifest_names import stable_rows  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
@@ -98,17 +98,32 @@ REAL_CELL_RE = re.compile(
 )
 
 
+def manifest_pages() -> dict[str, list[Path]]:
+    """The docs page each stable manifest row names (``doc.page``): the page its ``### <name>`` section is on."""
+    return {
+        name: [REPO_ROOT / "docs/docs" / f"{row['doc']['page']}.mdx"]
+        for name, row in stable_rows().items()
+        if row.get("doc", {}).get("page")
+    }
+
+
 def canonical_sql() -> list[str]:
-    names = []
+    """Every stable manifest function plus any name still in the legacy registered list."""
+    names = set(stable_rows())
     for line in REGISTERED_TXT.read_text().splitlines():
         line = line.strip()
         if line and not line.startswith("#"):
-            names.append(line)
-    return names
+            names.add(line)
+    return sorted(names)
 
 
 def pages_for(name: str) -> list[Path] | None:
-    """Return the list of candidate doc pages for *name*, or None if unmapped."""
+    """Return the list of candidate doc pages for *name*, or None if unmapped.
+
+    A stable manifest row names its own page; the prefix map serves any other name."""
+    row_pages = manifest_pages().get(name)
+    if row_pages:
+        return row_pages
     for prefix, pages in PAGE_MAP.items():
         if name.startswith(prefix):
             return pages
@@ -456,20 +471,33 @@ def check_d2(names: list[str]) -> tuple[bool, str]:
     all_pages: set[Path] = set()
     for pages in PAGE_MAP.values():
         all_pages.update(pages)
+    for pages in manifest_pages().values():
+        all_pages.update(pages)
     page_texts: dict[Path, str] = {}
     for page in all_pages:
         page_texts[page] = page.read_text() if page.exists() else ""
 
     # Group missing by prefix-group (represented by first candidate page)
     missing_by_group: dict[Path, list[str]] = {}
+    unmapped: list[str] = []
     for name in names:
         candidate_pages = pages_for(name)
         if candidate_pages is None:
+            unmapped.append(name)
             continue
         combined_text = "\n".join(page_texts.get(p, "") for p in candidate_pages)
         if not is_documented(name, combined_text):
             # Key by the first page for display grouping
             missing_by_group.setdefault(candidate_pages[0], []).append(name)
+
+    if not names:
+        return False, "[FAIL] D2 doc-coverage FAILED -- 0 registered functions to check (nothing was verified)."
+    if unmapped:
+        return False, (
+            "[FAIL] D2 doc-coverage FAILED -- registered functions with no documentation page "
+            "(add `doc.page` to the manifest row or a PAGE_MAP prefix):\n"
+            + "\n".join(f"     - {n}" for n in unmapped)
+        )
 
     if not missing_by_group:
         total = len(names)
@@ -500,6 +528,7 @@ def check_d3(names: list[str]) -> tuple[bool, str]:
             sql_texts[sql_file] = {}
 
     placeholders: list[str] = []
+    inspected = 0
     for name in names:
         sql_file = sql_file_for(name)
         if sql_file is None:
@@ -511,11 +540,19 @@ def check_d3(names: list[str]) -> tuple[bool, str]:
             # No output constant at all -- out of scope for this check
             continue
         value = constants[const_name]
+        inspected += 1
         if _is_placeholder_output(value):
             placeholders.append(name)
 
+    if not inspected:
+        return False, (
+            "[FAIL] D3 placeholder-output FAILED -- found 0 example output constants for the "
+            "registered functions (an example file moved?); nothing was verified."
+        )
     if not placeholders:
-        return True, "[OK] D3 placeholder-output OK -- no registered function has a placeholder-only example output."
+        return True, (
+            f"[OK] D3 placeholder-output OK -- none of the {inspected} example outputs is placeholder-only."
+        )
 
     lines = ["[FAIL] D3 placeholder-output FAILED -- registered functions with placeholder-only example outputs:"]
     for fn in placeholders:
@@ -617,9 +654,7 @@ def main() -> int:
         print(f"[FAIL] missing required file: {REGISTERED_TXT}", file=sys.stderr)
         return 1
 
-    # A stable manifest row is checked by gbx:manifest:gen --check; this script keeps the other names.
-    owned = stable_names()
-    names = [n for n in canonical_sql() if n not in owned]
+    names = canonical_sql()
     print(f"Canonical registered functions: {len(names)}")
     print()
 
@@ -627,6 +662,15 @@ def main() -> int:
     tile_functions = _classify_tile_returning_functions()
     print(f"TILE-returning rasterx functions detected: {len(tile_functions)}")
     print()
+
+    # A silent zero must never pass: an empty set means a source moved and nothing was checked.
+    if not names or not tile_functions:
+        print(
+            f"[FAIL] empty scan -- {len(names)} registered functions, {len(tile_functions)} TILE-returning "
+            "functions; a source moved and nothing was verified.",
+            file=sys.stderr,
+        )
+        return 1
 
     d2_ok, d2_report = check_d2(names)
     d3_ok, d3_report = check_d3(names)

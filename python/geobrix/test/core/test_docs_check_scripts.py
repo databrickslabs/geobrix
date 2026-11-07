@@ -144,39 +144,88 @@ def test_check_since_passes_on_the_committed_tree():
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_check_since_reports_a_legacy_name_without_a_row_but_not_a_manifest_name(
+def test_check_since_reads_the_manifest_rows(monkeypatch, capsys):
+    mod = _load("check-since")
+    rows = {
+        "gbx_rst_ok": {"since": "0.5.0"},
+        "gbx_rst_nosince": {},
+        "gbx_rst_bad": {"since": "v1"},
+        "gbx_rst_split": {"since": "0.6.0"},
+    }
+    monkeypatch.setattr(mod, "stable_rows", lambda: rows)
+    monkeypatch.setattr(mod, "_load_registered", lambda: ["gbx_zz_legacy_probe"])
+    monkeypatch.setattr(
+        mod, "_load_since", lambda *a, **k: {"gbx_rst_split": "0.5.0", "gbx_x": "0.1.0"}
+    )
+    assert mod.main() == 1
+    err = capsys.readouterr().err
+    assert "gbx_rst_nosince" in err and "gbx_zz_legacy_probe" in err
+    assert "gbx_rst_bad" in err and "not a version" in err
+    assert "gbx_rst_split" in err and "function-since.tsv says 0.5.0" in err
+    assert "gbx_rst_ok" not in err
+
+
+def test_check_since_fails_on_a_row_that_disagrees_with_the_tsv_alone(
     monkeypatch, capsys
 ):
     mod = _load("check-since")
-    owned = mod.stable_names()
-    # Every registered name is a manifest row now (the legacy set is empty), so the test brings its own.
-    legacy = "gbx_zz_legacy_probe"
-    registered = [*mod._load_registered(), legacy]
-    assert "gbx_rst_slope" in registered and "gbx_rst_slope" in owned
-    assert legacy not in owned
-    monkeypatch.setattr(mod, "_load_registered", lambda: registered)
-    monkeypatch.setattr(mod, "_load_since", lambda *a, **k: {})
+    monkeypatch.setattr(mod, "stable_rows", lambda: {"gbx_rst_a": {"since": "0.6.0"}})
+    monkeypatch.setattr(mod, "_load_registered", lambda: [])
+    monkeypatch.setattr(mod, "_load_since", lambda *a, **k: {"gbx_rst_a": "0.5.0"})
     assert mod.main() == 1
-    err = capsys.readouterr().err
-    assert legacy in err and "gbx_rst_slope" not in err
+    assert "function-since.tsv says 0.5.0" in capsys.readouterr().err
+
+
+def test_check_since_fails_on_an_empty_source(monkeypatch, capsys):
+    mod = _load("check-since")
+    monkeypatch.setattr(mod, "stable_rows", lambda: {})
+    assert mod.main() == 1
+    assert "nothing to check" in capsys.readouterr().err
 
 
 # --- check-doc-coverage.py / check-diagram-coverage.py --------------------------------------------------
 
 
-def test_check_doc_coverage_passes_and_leaves_the_manifest_names_out_of_its_count():
+def test_check_doc_coverage_passes_and_counts_every_manifest_function():
     r = _run("check-doc-coverage")
     assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
     mod = _load("check-doc-coverage")
-    listed = [
-        ln.strip()
-        for ln in mod.REGISTERED_TXT.read_text().splitlines()
-        if ln.strip() and not ln.startswith("#")
-    ]
-    owned = mod.stable_names()
-    kept = len([n for n in listed if n not in owned])
-    assert f"Canonical registered functions: {kept}" in r.stdout
-    assert kept < len(listed)  # gbx_rst_slope is in the legacy list and the manifest
+    n = len(mod.canonical_sql())
+    assert n >= len(mod.stable_rows()) > 200
+    assert f"Canonical registered functions: {n}" in r.stdout
+
+
+def test_check_doc_coverage_uses_the_row_page_and_fails_an_unmapped_name(tmp_path):
+    mod = _load("check-doc-coverage")
+    page = tmp_path / "p.mdx"
+    page.write_text("### zz_documented\n")
+    mod.stable_rows = lambda: {
+        "gbx_zz_documented": {"doc": {"page": "x"}},
+        "gbx_zz_missing": {"doc": {"page": "x"}},
+        "gbx_zz_nopage": {},
+    }
+    mod.REPO_ROOT = tmp_path
+    (tmp_path / "docs/docs").mkdir(parents=True)
+    (tmp_path / "docs/docs/x.mdx").write_text("### zz_documented\n")
+    ok, report = mod.check_d2(["gbx_zz_documented", "gbx_zz_missing"])
+    assert not ok and "gbx_zz_missing" in report and "gbx_zz_documented" not in report
+    ok, report = mod.check_d2(["gbx_zz_nopage"])
+    assert not ok and "gbx_zz_nopage" in report
+
+
+def test_check_doc_coverage_fails_on_an_empty_scan(monkeypatch):
+    mod = _load("check-doc-coverage")
+    ok, report = mod.check_d2([])
+    assert not ok and "0 registered functions" in report
+    monkeypatch.setattr(mod, "SQL_FILE_MAP", {})
+    ok, report = mod.check_d3(["gbx_rst_slope"])
+    assert not ok and "0 example output constants" in report
+    monkeypatch.setattr(mod, "canonical_sql", lambda: [])
+    assert mod.main() == 1
+    # Names present, but no TILE-returning function found (the Scala sources moved): still a failure.
+    monkeypatch.undo()
+    monkeypatch.setattr(mod, "_classify_tile_returning_functions", lambda: set())
+    assert mod.main() == 1
 
 
 def test_the_diagram_check_counts_the_manifests_rst_names():
@@ -184,3 +233,80 @@ def test_the_diagram_check_counts_the_manifests_rst_names():
     names = mod.canonical_rst()
     assert {"rst_transformcrs", "rst_merge_agg"} <= names
     assert not any(n.startswith("gbx_") for n in names)
+
+
+# --- check-docs-examples.py -----------------------------------------------------------------------------
+
+
+def test_docs_examples_passes_and_reports_the_delegated_blocks():
+    r = _run("check-docs-examples")
+    assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
+    assert "blocks belong to manifest rows" in r.stdout
+
+
+def test_docs_examples_fails_when_a_scan_is_empty(monkeypatch, tmp_path, capsys):
+    mod = _load("check-docs-examples")
+    monkeypatch.setattr(mod, "_example_modules", lambda: [])
+    assert any("scanned 0" in f for f in mod.check_output_tables())
+    mdx = tmp_path / "page.mdx"
+    mdx.write_text("no examples here")
+    monkeypatch.setattr(mod, "MDX", mdx)
+    monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+    assert any("0 <FunctionExamples> blocks" in f for f in mod.check_tab_completeness())
+    monkeypatch.setattr(mod, "_output_constants", lambda path: iter(()))
+    assert any("compared 0" in f for f in mod.check_annotation_consistency())
+    monkeypatch.setattr(mod, "stable_names", lambda: set())
+    assert any("no stable rows" in f for f in mod.check_tab_completeness())
+
+
+# --- check-param-names.py -------------------------------------------------------------------------------
+
+
+def test_param_names_hold_the_published_names_to_the_manifest(monkeypatch):
+    mod = _load("check-param-names")
+    assert mod.check_against_manifest() == []
+    assert len(mod.load_fixture()) > 150  # a real number of signatures is checked
+    rows = mod.stable_rows()
+    renamed = {n: dict(r) for n, r in rows.items()}
+    first = next(n for n in mod.load_fixture() if n not in mod.load_waiver())
+    renamed[first]["params"] = [{"name": "zz"}]
+    monkeypatch.setattr(mod, "stable_rows", lambda: renamed)
+    assert any(first in v for v in mod.check_against_manifest())
+    monkeypatch.setattr(
+        mod, "stable_rows", lambda: {k: v for k, v in rows.items() if k != first}
+    )
+    assert any("not a stable manifest row" in v for v in mod.check_against_manifest())
+
+
+def test_param_names_fail_on_an_empty_source(monkeypatch):
+    mod = _load("check-param-names")
+    monkeypatch.setattr(mod, "stable_rows", lambda: {})
+    assert any(v.startswith("[empty]") for v in mod.check_against_manifest())
+    monkeypatch.setattr(mod, "load_fixture", lambda: {})
+    monkeypatch.setattr(mod, "stable_rows", lambda: {"gbx_a": {"params": []}})
+    assert any("lists no functions" in v for v in mod.check_against_manifest())
+    assert mod.main.__module__  # main() returns 1 on any violation
+    monkeypatch.setattr(sys, "argv", ["check-param-names"])
+    assert mod.main() == 1
+
+
+# --- scripts/manifest/check_surfaces.py -----------------------------------------------------------------
+
+
+def test_the_replacement_gates_fail_on_a_manifest_with_no_stable_row(monkeypatch):
+    import types
+
+    from databricks.labs.gbx import manifest
+
+    path = REPO / "scripts/manifest/check_surfaces.py"
+    spec = importlib.util.spec_from_file_location("gbx_check_surfaces_empty", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    def load():
+        return types.SimpleNamespace(functions={}, private={})
+
+    load.cache_clear = lambda: None
+    monkeypatch.setattr(manifest, "load", load)
+    found = mod.run()
+    assert found and "0 stable function rows" in found[0]

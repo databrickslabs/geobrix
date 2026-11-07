@@ -282,8 +282,7 @@ def form_findings(man) -> List[str]:
     implicit = {
         f"gbx__{fn.sql_name[4:]}"
         for fn in fns.values()
-        if any(p.default for p in fn.params)
-        and "handler" in fn.levels.get("L4", {})
+        if any(p.default for p in fn.params) and "handler" in fn.levels.get("L4", {})
     }
     taken = set(fns) | implicit | set(getattr(man, "private", {}))
     out, seen = [], {}
@@ -585,13 +584,22 @@ def legacy_findings(fns: Iterable) -> List[str]:
     ]
 
 
+def empty_findings(fns: Iterable) -> List[str]:
+    """A manifest with no stable row verifies nothing: every gate below would pass over an empty set."""
+    if not any(fn.status == "stable" for fn in fns):
+        return [
+            "manifest: 0 stable function rows (did manifest/functions.json move or empty out?); no gate checked anything"
+        ]
+    return []
+
+
 def run() -> List[str]:
     from databricks.labs.gbx import manifest
 
     manifest.load.cache_clear()
     man = manifest.load()
     fns = sorted(man.functions.values(), key=lambda f: f.sql_name)
-    return (
+    return empty_findings(fns) or (
         oracle_findings(fns)
         + completeness_findings(man, fns)
         + since_findings(fns)

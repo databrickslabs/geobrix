@@ -3,17 +3,19 @@
 
 Single docs site = latest release only, so a "Since vX.Y.Z" marker is what tells a
 user on an older version whether a call exists for them. This check keeps that map
-complete: every name in registered_functions.txt must have a row in
-function-since.tsv. Run in CI / QC before a release; a new function without a
+complete: every stable function-manifest row carries a `since` (and agrees with
+function-since.tsv where that lists it); a name only in registered_functions.txt needs a
+row in function-since.tsv. Run in CI / QC before a release; a new function without a
 `since` fails here (the same way check-binding-parity guards bindings).
 
 Exit 0 = every registered function has a since; non-zero + a list otherwise.
 """
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _manifest_names import stable_names  # noqa: E402
+from _manifest_names import stable_rows  # noqa: E402
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 REGISTERED = os.path.join(
@@ -56,24 +58,52 @@ def _load_since(path, key_col=0, header_first_col="function_name"):
     return since
 
 
-def main() -> int:
-    # A stable manifest row carries its own `since` (gbx:manifest:gen --check); this script keeps the other names.
-    owned = stable_names()
-    registered = [n for n in _load_registered() if n not in owned]
-    since = _load_since(SINCE_TSV)
-    missing = sorted(n for n in registered if n not in since)
-    extra = sorted(n for n in since if n not in registered and n not in owned)
+_VERSION = re.compile(r"\d+\.\d+\.\d+")
 
-    if missing:
+
+def main() -> int:
+    # A stable manifest row carries its own `since`; function-since.tsv is the older record and must agree with it.
+    rows = stable_rows()
+    registered = sorted(set(rows) | set(_load_registered()))
+    since = _load_since(SINCE_TSV)
+
+    # A silent zero must never pass: an empty source means a path moved and nothing was checked.
+    if not rows or not registered or not since:
         print(
-            "ERROR: %d registered function(s) missing a `since` version in %s:"
-            % (len(missing), os.path.relpath(SINCE_TSV, REPO_ROOT)),
+            "ERROR: nothing to check (%d manifest rows, %d registered names, %d `since` rows): "
+            "a source moved or is unreadable." % (len(rows), len(registered), len(since)),
             file=sys.stderr,
         )
-        for n in missing:
-            print("  %s" % n, file=sys.stderr)
+        return 1
+
+    def resolved(n):
+        return rows[n].get("since") if n in rows else since.get(n)
+
+    missing = [n for n in registered if not resolved(n)]
+    malformed = [
+        (n, resolved(n)) for n in registered if resolved(n) and not _VERSION.fullmatch(resolved(n))
+    ]
+    disagree = [(n, rows[n].get("since"), since[n]) for n in registered if n in rows and n in since and rows[n].get("since") != since[n]]
+    extra = sorted(n for n in since if n not in registered)
+
+    if missing or malformed or disagree:
+        if missing:
+            print(
+                "ERROR: %d registered function(s) missing a `since` version (manifest row or %s):"
+                % (len(missing), os.path.relpath(SINCE_TSV, REPO_ROOT)),
+                file=sys.stderr,
+            )
+            for n in missing:
+                print("  %s" % n, file=sys.stderr)
+        for n, v in malformed:
+            print("ERROR: %s: `since` %r is not a version like 0.4.0" % (n, v), file=sys.stderr)
+        for n, rv, tv in disagree:
+            print(
+                "ERROR: %s: manifest row says since %s, function-since.tsv says %s" % (n, rv, tv),
+                file=sys.stderr,
+            )
         print(
-            "\nAdd a `<name>\\t<version>` row (the version that first shipped it).",
+            "\nSet `since` on the manifest row (the version that first shipped it).",
             file=sys.stderr,
         )
         return 1
@@ -81,8 +111,8 @@ def main() -> int:
     # Stale entries are a warning, not a hard failure (a removed function leaves a row).
     if extra:
         print(
-            "WARNING: %d `since` row(s) name a function not in registered_functions.txt "
-            "(removed/renamed?): %s" % (len(extra), ", ".join(extra)),
+            "WARNING: %d `since` row(s) name a function not in the manifest or "
+            "registered_functions.txt (removed/renamed?): %s" % (len(extra), ", ".join(extra)),
             file=sys.stderr,
         )
 

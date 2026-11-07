@@ -21,3 +21,5 @@ gbx_custom_geomkringexplode   # [B] INTENTIONAL: light tier is a streaming UDTF 
 gbx_custom_geomkloopexplode   # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
 gbx_h3_geomkringexplode       # [B] INTENTIONAL: lightweight-only streaming UDTF (one row/cell, array-free); no Column form; SQL FROM t, LATERAL.
 gbx_h3_geomkloopexplode       # [B] INTENTIONAL: lightweight-only streaming UDTF (one row/cell, array-free); no Column form; SQL FROM t, LATERAL.
+gbx_rst_mapalgebra  # 0.6.0 breaking rename json_spec -> expression (docs/docs/migration-0-6.mdx)
+gbx_rst_transformcrs  # 0.6.0 breaking rename crs -> target_crs (docs/docs/release-notes-0-6.mdx)

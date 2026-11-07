@@ -124,6 +124,10 @@ def check_output_tables() -> list[str]:
                 rel = path.relative_to(REPO_ROOT)
                 failures.append(f"{rel}::{name}: " + "; ".join(probs))
     print(f"  scanned {scanned} *_example_output constants")
+    if not scanned:
+        failures.append(
+            "output tables: scanned 0 *_example_output constants (the example modules moved?); nothing was verified"
+        )
     return failures
 
 
@@ -176,9 +180,21 @@ def check_tab_completeness() -> list[str]:
     fe_checked = 0
     # A stable manifest row's tabs are checked by gbx:manifest:gen --check (the docs-tab gate, every page).
     owned = {n[len("gbx_") :] for n in stable_names()}
-    for block in re.findall(r"<FunctionExamples\b(.*?)/>", mdx, re.S):
+    if not owned:
+        failures.append("tab completeness: the manifest has no stable rows; nothing was verified")
+    blocks = re.findall(r"<FunctionExamples\b(.*?)/>", mdx, re.S)
+    if not blocks:
+        failures.append(
+            f"tab completeness: found 0 <FunctionExamples> blocks in {MDX.relative_to(REPO_ROOT)} "
+            "(the page moved?); nothing was verified"
+        )
+    delegated = 0
+    for block in blocks:
         nm = re.search(r'name="([^"]+)"', block)
-        if not nm or nm.group(1) in owned:
+        if not nm:
+            continue
+        if nm.group(1) in owned:
+            delegated += 1
             continue
         name = nm.group(1)
         tiers = _bindings_for(fns, name)
@@ -222,7 +238,10 @@ def check_tab_completeness() -> list[str]:
                 f"{base}: single-tab <CodeFromTest> but bindings={sorted(tiers)} "
                 f"(should be 4-tab <FunctionExamples>)"
             )
-    print(f"  checked {fe_checked} declared FunctionExamples tabs")
+    print(
+        f"  checked {fe_checked} declared FunctionExamples tabs; "
+        f"{delegated} of {len(blocks)} blocks belong to manifest rows (checked by gbx:manifest:gen --check)"
+    )
     return failures
 
 
@@ -304,6 +323,10 @@ def check_annotation_consistency() -> list[str]:
                     f"annotation — {detail}"
                 )
     print(f"  compared {compared} identical-output tab groups")
+    if not compared:
+        failures.append(
+            "annotation consistency: compared 0 identical-output tab groups; nothing was verified"
+        )
     return failures
 
 

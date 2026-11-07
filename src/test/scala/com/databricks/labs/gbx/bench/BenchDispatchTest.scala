@@ -54,7 +54,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_gridfrompoints_agg and rst_dtmfromgeoms_agg left with their companions: 144 - 30 = 114.
     // gbx_quadbin_cellfill left with its companion: 111 - 1 = 110.
     // rst_transformcrs, rst_cog_convert, rst_align_to and rst_binpoints left with their companions: 110 - 4 = 106.
-    assert(BenchDispatch.all.size == 106)
+    // rst_gridfrompoints left with its companion: 106 - 1 = 105.
+    assert(BenchDispatch.all.size == 105)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -86,7 +87,6 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
     assert(BenchDispatch.category("rst_h3_tessellate_centroid") == "dggs")
     assert(BenchDispatch.inputKind("rst_h3_tessellate_centroid") == "tile")
-    assert(BenchDispatch.inputKind("rst_gridfrompoints") == "geometry")
     assert(BenchDispatch.category("rst_contour") == "vector")
     assert(BenchDispatch.category("rst_polygonize") == "vector")
     assert(BenchDispatch.category("rst_xyzpyramid") == "format")

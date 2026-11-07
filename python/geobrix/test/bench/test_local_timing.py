@@ -124,7 +124,6 @@ def test_only_the_known_sets_are_implemented(capsys):
     assert set(lt.SETS) - {"IO", "S", "SE"} - {
         "raster-generator-tess",
         "raster-vectorize-contour",
-        "raster-rasterize-gridfrompoints",
     } == {
         f.family
         for f in __import__("databricks.labs.gbx.manifest", fromlist=["x"])

@@ -2091,7 +2091,7 @@ df = (
 ### rst_gridfrompoints
 
 {/* BEGIN GENERATED gbx_rst_gridfrompoints: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -2124,7 +2124,7 @@ Powered by **rasterio** + **SciPy** (`cKDTree` IDW). Inverse-distance interpolat
 IDW-interpolate an array of Z-valued point geometries to a Float64 GeoTIFF tile covering an explicit bounding box and pixel grid. Supply the points and their scalar values as arrays in a single row; use `rst_gridfrompoints_agg` when points arrive one per row.
 
 :::note Python-only `out_crs` parameter
-The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL and Scala do not. The JVM builder takes at most 11 arguments (`…, out_srid, [power, [max_pts]]`).
+The **Python** function takes an optional trailing `out_crs` (string CRS) that SQL does not. SQL takes the integer `out_srid` only.
 :::
 
 Output CRS via `out_srid` (int); input points are assumed already in the output CRS. See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs).
@@ -2135,7 +2135,6 @@ On Unity Catalog the points are an `ARRAY<GEOMETRY(ANY)>`. See [Points as geomet
   name="rst_gridfrompoints"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 

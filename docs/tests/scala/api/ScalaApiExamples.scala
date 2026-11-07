@@ -1866,33 +1866,6 @@ result.show(truncate = false)
 (array of sampled values, one per band)
 """.trim
 
-  val rst_gridfrompoints_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Registration is a Python step: from databricks.labs.gbx import register; register(spark)
-// Create synthetic point cloud with WKB-encoded points and values
-val points = spark.createDataFrame(Seq(
-  (Array[Array[Byte]](/* WKB point 1 */, /* WKB point 2 */), Array[Double](100.0, 110.0))
-)).toDF("points_wkb", "values")
-val result = points.select(
-  rx.rst_gridfrompoints(col("points_wkb"), col("values"), lit(0.0), lit(0.0),
-    lit(1000.0), lit(1000.0), lit(256), lit(256), lit(32633)).alias("idw")
-)
-result.show(truncate = false)
-""".trim
-
-  val rst_gridfrompoints_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|idw                                                        |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(IDW-interpolated tile over specified extent)
-""".trim
-
   // ========================================================================
   // Coordinate Transforms & Tiling
   // ========================================================================

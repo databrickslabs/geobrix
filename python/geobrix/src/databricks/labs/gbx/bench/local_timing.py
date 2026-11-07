@@ -181,13 +181,6 @@ def _family_sets() -> Dict[str, SetSpec]:
         "raster-constructor": tile_fn(
             "raster-constructor", "gbx_rst_fromcontent", "bytes"
         ),
-        "raster-rasterize": gen_fn(
-            "raster-rasterize",
-            "gbx_rst_binpoints",
-            "pts",
-            (200, 800, 3200),
-            l1=False,
-        ),
         "raster-generator": SetSpec(
             mvp="raster-generator",
             forms=("udtf", "udtf-arrow", "floor"),
@@ -212,12 +205,6 @@ def _family_sets() -> Dict[str, SetSpec]:
             **tiles,
         ),
         "raster-vectorize-contour": tile_fn("raster-vectorize", "gbx_rst_contour"),
-        "raster-rasterize-gridfrompoints": gen_fn(
-            "raster-rasterize",
-            "gbx_rst_gridfrompoints",
-            "wktpts",
-            (200, 800, 3200),
-        ),
         "raster-array-op": SetSpec(
             mvp="raster-array-op",
             forms=("h_combine_l3", "h_combine_l1", "floor"),

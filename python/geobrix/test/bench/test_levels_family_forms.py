@@ -725,12 +725,11 @@ def test_a_virtual_tile_table_is_written_in_files_of_two_rows(tmp_path, monkeypa
     df.write.format.return_value.option.assert_called_once_with("maxRecordsPerFile", 2)
 
 
-# ---- the second-function sets: raster bng_tessellate, contour and gridfrompoints beside their family's first set
+# ---- the second-function sets: raster bng_tessellate and contour beside their family's first set
 
 SECOND_SETS = {
     "raster-generator-tess": ("raster-generator", "gbx_rst_bng_tessellate"),
     "raster-vectorize-contour": ("raster-vectorize", "gbx_rst_contour"),
-    "raster-rasterize-gridfrompoints": ("raster-rasterize", "gbx_rst_gridfrompoints"),
 }
 
 

@@ -447,27 +447,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_resample_to_res(tile: Column, xRes: Double, yRes: Double, algorithm: String): Column =
         rst_resample_to_res(tile, lit(xRes), lit(yRes), lit(algorithm))
 
-    // IDW interpolation - non-aggregator (arrays in a single row)
-    def rst_gridfrompoints(
-        pointsArray: Column, valuesArray: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, out_srid: Column
-    ): Column =
-        ColumnAdapter(RST_GridFromPoints.name, Seq(
-            pointsArray, valuesArray, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid,
-            lit(RST_GridFromPoints.DefaultPower),
-            lit(RST_GridFromPoints.DefaultMaxPoints)
-        ))
-    def rst_gridfrompoints(
-        pointsArray: Column, valuesArray: Column,
-        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
-        widthPx: Column, heightPx: Column, out_srid: Column,
-        power: Column, maxPts: Column
-    ): Column =
-        ColumnAdapter(RST_GridFromPoints.name, Seq(
-            pointsArray, valuesArray, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
-        ))
-
     // Bin one (x,y,z) point per row — aggregator form
     def rst_binpoints_agg(
         x: Column, y: Column, z: Column,

@@ -214,11 +214,8 @@ REPS: List[Rep] = [
         floor_sql="SELECT count(*) AS n, sum(size(x)) AS fp, count(x) AS n_out FROM {src}",
         vfp="raster",
     ),
-    # inverse-distance weighting of a row's WKT points onto a grid: the power and neighbour count the JVM defaults to,
-    # given outright so both levels run the same k-nearest search (a NULL power reaches the JVM as no power). `points` goes
-    # through `slice`, at both levels: the JVM level returns NULL for a point array read straight from a table column
-    # (it takes the elements with `ArrayData.get(i, null)`, which an UnsafeArrayData cannot answer), and a computed array
-    # is the shape it handles.
+    # inverse-distance weighting of a row's WKT points onto a grid: the power and neighbour count given outright. The function
+    # has no JVM level (it measured 1.78x and 1.91x slower than light at 4x and 16x rows), so the forms are light and the floor.
     Rep(
         "raster-rasterize",
         "gbx_rst_gridfrompoints",

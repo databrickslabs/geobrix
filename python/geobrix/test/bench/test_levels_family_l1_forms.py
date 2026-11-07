@@ -1,4 +1,4 @@
-"""The L1/L3 forms added for raster `bng_tessellate`, `contour` and `gridfrompoints` run at both levels.
+"""The L1/L3 forms added for raster `bng_tessellate` and `contour` run at both levels.
 
 L1 is the geobrix JAR, so the module skips when none is staged under ``python/geobrix/lib/``. Run in geobrix-dev
 Docker, on its own (``spark.jars`` only applies to the first session of a process):
@@ -35,11 +35,6 @@ _NEW = [
         "raster-vectorize",
         "gbx_rst_contour",
         ["l1@n", "c0@n", "floor@n"],
-    ),
-    (
-        "raster-rasterize",
-        "gbx_rst_gridfrompoints",
-        ["l1@wktpts", "c0@wktpts", "floor@wktpts"],
     ),
 ]
 

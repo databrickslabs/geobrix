@@ -103,7 +103,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.resample.RST_Resample",
         "com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToSize",
         "com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToRes",
-        "com.databricks.labs.gbx.rasterx.expressions.grid.RST_GridFromPoints",
         "com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsAgg",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_BuildOverviews",

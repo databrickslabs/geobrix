@@ -4,7 +4,7 @@ One parameterized round-trip across the 3-function resample family, plus a
 single round-trip for the IDW grid.
 Following the streamlined test budget: only verify JVM bindings fire and a
 non-empty tile comes back; numerical correctness is asserted in the Scala
-suites (ResampleTest, RST_GridFromPointsTest).
+suites (ResampleTest).
 """
 
 import logging
@@ -42,15 +42,19 @@ def spark():
     from test._heavy import heavy_register
 
     heavy_register(spark, ("gbx_rst_",))
+    # the IDW functions have no JVM level: they register at the light level
+    from databricks.labs.gbx import register
+
+    register(spark, only=["gbx_rst_gridfrompoints", "gbx_rst_gridfrompoints_agg"])
     return spark
 
 
 def test_idw_roundtrip_non_agg_and_agg_match(spark):
     """IDW non-aggregator and aggregator return non-empty tiles on the same data.
 
-    Both functions delegate to ``RST_GridFromPoints.execute`` under the hood,
-    so the goal here is JVM-bindings + SQL coverage. Numerical parity between
-    the two paths is asserted in the Scala test.
+    Both functions run the lightweight IDW core, so the goal here is SQL
+    coverage. Numerical parity between the two paths is asserted by the
+    gridfrompoints oracle rows.
     """
     # 4 corner points of a 100x100 m extent (EPSG:32633), values 0/10/20/30.
     # WKB-encode each POINT directly (struct: byte-order=little + type=Point=1 + x + y).

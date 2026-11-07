@@ -3039,8 +3039,9 @@ REGISTRY: Dict[str, FnSpec] = {
             a["max_pts"],
         ),
         input_kind="geometry",
-        sources=_TIN_LIGHT + (_HEAVY + "grid/RST_GridFromPoints.scala",),
+        sources=_TIN_LIGHT,
         core=False,
+        heavy=False,
     ),
     "rst_dtmfromgeoms": FnSpec(
         "rst_dtmfromgeoms",
@@ -3226,11 +3227,7 @@ REGISTRY: Dict[str, FnSpec] = {
         ),
         core_fn=lambda t, a: t,
         input_kind="geometry_aggregate",
-        sources=_TIN_LIGHT
-        + (
-            _PYRX_SERDE,
-            _HEAVY + "grid/RST_GridFromPoints.scala",
-        ),
+        sources=_TIN_LIGHT + (_PYRX_SERDE,),
         core=False,
         heavy=False,
     ),

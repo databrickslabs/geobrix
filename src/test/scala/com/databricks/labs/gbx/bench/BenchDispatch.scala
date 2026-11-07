@@ -33,7 +33,6 @@ import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Contour
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize
-import com.databricks.labs.gbx.rasterx.expressions.grid.RST_GridFromPoints
 import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
 import com.databricks.labs.gbx.rasterx.expressions.RST_Chm
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
@@ -199,9 +198,6 @@ object BenchDispatch {
     // LiDAR functions: isoband is geometry/vector; chm is tile-array format.
     "rst_isoband" -> VECTOR,
     "rst_chm" -> FMT,
-    // bucket D: geometry-in constructors (burn/interpolate a geometry set into a
-    // new raster). Categorized vector (they bridge vector geometry -> raster).
-    "rst_gridfrompoints" -> VECTOR,
     // bucket A: the 7 *_agg aggregators (Spark groupBy aggregate harness). The 4
     // tile aggregators reduce a group of tiles -> one tile (format); the 3 geometry
     // aggregators reduce a group of (geom, value) rows -> one tile (vector bridge).
@@ -240,8 +236,8 @@ object BenchDispatch {
   // bucket D: geometry-in fns are handed the open tile PLUS the tile's
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
-  private val geometryInput: Set[String] =
-    Set("rst_gridfrompoints")
+  // (No function takes this kind now: rst_gridfrompoints was the last, and it has no heavyweight level.)
+  private val geometryInput: Set[String] = Set.empty
   // bucket A: the 7 *_agg aggregators reduce a GROUP of rows to ONE tile via a real
   // df.groupBy(key).agg(...). The 4 tile aggregators build their fixed consistency
   // group from synthesized tiles (write-once-read-both); the 3 geometry aggregators
@@ -910,17 +906,7 @@ object BenchDispatch {
     Files.createDirectories(NodeFilePathUtil.rootPath)
     val (xmin, ymin, xmax, ymax, w, h, srid) = tileExtentSizeSrid(ds)
     val row: org.apache.spark.sql.catalyst.InternalRow = fn match {
-      // ARRAY of points: IDW grid over all corpus points (wkb, value pairs).
-      // max_pts default mirrors the pyrx FnSpec sentinel (>= any corpus point
-      // count). gdal_grid `invdist` with no search radius ignores max_points and
-      // uses ALL points; the lightweight idw_grid does a nearest-max_pts cKDTree
-      // selection, so the bench feeds a large max_pts to force the light tier to
-      // ALSO use all points -> the two tiers IDW over the identical point set.
-      case "rst_gridfrompoints" =>
-        RST_GridFromPoints.execute(geom.pointPairs, xmin, ymin, xmax, ymax, w, h, srid,
-          argD(a, "power", 2.0), argI(a, "max_pts", 1000000))
-      // ARRAY of 3D points: Delaunay DTM over all corpus zpoints; breaklines empty,
-      // tolerances 0.0 (no scipy analogue on the light side either).
+      // no function has this input kind now (rst_gridfrompoints, the last, has no heavyweight level)
       case other => throw new IllegalArgumentException(s"unknown bench geometry fn: $other")
     }
     if (row == null) return BenchFingerprint.empty
@@ -1155,14 +1141,6 @@ object BenchDispatch {
         val breaks = argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))
         rst_isoband(tile, org.apache.spark.sql.functions.array(
           breaks.map(org.apache.spark.sql.functions.lit): _*))
-      // bucket D: geometry-in constructors are pure-core-only (the spark-path tile
-      // DataFrame carries no geometry column, and they are fingerprinted via the
-      // geometry adapter, not the column path). The spark-path runner filters by
-      // modes, so column() is never invoked for them; guard explicitly rather than
-      // synthesize a meaningless geometry Column.
-      case "rst_gridfrompoints" =>
-        throw new IllegalArgumentException(
-          s"$fn is geometry-in / pure-core-only; no spark-path column form")
       // bucket A aggregators have no scalar column form; they are aggregate
       // expressions handled by aggregateColumn (the spark-path runner routes them
       // through the aggregate branch, not column()).

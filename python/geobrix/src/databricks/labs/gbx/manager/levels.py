@@ -61,10 +61,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # The cell-fill aggregates are light by family, except H3's: 0.57x on a cluster (inside the 0.8 rule), and its
     # Catalyst level returns the session's BINARY payload and the deterministic largest value, as light does.
     "gbx_h3_cellfill": ("L1", "L3"),
-    # The rasterize family is L1 first (gridfrompoints is 5x to 16x faster on the JVM on a cluster). binpoints has no
-    # JVM level (it measured 1.85x and 1.68x slower than light at 4x and 16x rows, so its Catalyst expression is gone)
-    # and takes the family order down to light. Two rows are light: the terrain model is 18x faster on light, and rasterize is
-    # 15x faster in the pure-core timing (no cluster number; default, unmeasured). Neither keeps a JVM level.
+    # The rasterize family is light: gridfrompoints measured 1.78x and 1.91x slower on the JVM than on light at 4x and 16x
+    # rows (3 iterations, equal output), and binpoints 1.85x and 1.68x slower, so neither keeps a Catalyst expression.
+    # The terrain model is 18x faster on light, and rasterize is 15x faster in the pure-core timing (no cluster number;
+    # default, unmeasured). Neither keeps a JVM level.
     "gbx_rst_rasterize": ("L3",),
     "gbx_rst_dtmfromgeoms": ("L3",),
     # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.
@@ -105,7 +105,7 @@ FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "raster-stat": ("L3",),
     "raster-tile-op": ("L3",),
     "raster-constructor": ("L1", "L3"),
-    "raster-rasterize": ("L1", "L3"),
+    "raster-rasterize": ("L3",),
     "raster-array-op": ("L1", "L3"),
     "raster-aggregate": ("L3",),
     "raster-vectorize": ("L1", "L3"),

@@ -112,7 +112,11 @@ def test_the_dispatch_sends_a_reference_to_light_and_never_to_the_jvm(stand_ins,
     tile reaches the JVM one. A wrapper that sent the reference to the JVM would raise here.
     """
     spark = stand_ins
-    spark.sql(jvm.dispatch_ddl(fn, jvm._priv(fn, "L1"), jvm._priv(fn, "L3")))
+    # The manager's own install step, not a bare CREATE OR REPLACE: the session is shared across this directory, and an
+    # earlier test may have left the light UDF under this SQL name, which only a drop-then-create can replace.
+    jvm._create_wrapper(
+        spark, fn, jvm.dispatch_ddl(fn, jvm._priv(fn, "L1"), jvm._priv(fn, "L3"))
+    )
     required = fn.params[: fn.min_args]
 
     def call(tile_expr, tiles_expr):

@@ -98,6 +98,11 @@ object MvtWriter {
           "MINZOOM=0",
           "COMPRESS=NO",
           s"EXTENT=$extent",
+          // The driver's defaults (MAX_SIZE 500000 bytes, MAX_FEATURES 200000) make it coarsen an over-size tile
+          // (EXTENT 4096 -> 128) and drop features, silently, so a large group came out smaller than the light tier's
+          // tile. This function encodes the group it is given, so lift both caps.
+          s"MAX_SIZE=${Int.MaxValue}",
+          s"MAX_FEATURES=${Int.MaxValue}",
           "FORMAT=DIRECTORY"
         ).asJava)
 

@@ -821,6 +821,44 @@ def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
     )
 
 
+def test_bng_tessellateexplode_geometrycollection_parity(spark_with_jar):
+    """``gbx_bng_tessellateexplode`` of a large GeometryCollection gives the rows of both tiers.
+
+    A collection big enough to leave core cells used to fail heavy before any cell was
+    clipped (no rows) and light with an AttributeError; the carve now uses the union of
+    its polygonal leaves. Same fixture as the ``geometrycollection_large`` row above.
+    """
+    from databricks.labs.gbx import manager as gbx_manager
+
+    spark = spark_with_jar
+    wkt = next(w for n, _, w in _MIXED_CLIP_FIXTURES if n == "geometrycollection_large")
+    spark.createDataFrame([(wkt, _RES)], "wkt string, res int").createOrReplaceTempView(
+        "bng_te_gc"
+    )
+
+    def cells(df):
+        return {r["cellid"]: r["core"] for r in df.collect()}
+
+    gbx_manager.register_family(spark, ("gbx_bng_",), level="L3")
+    light = cells(
+        spark.sql(
+            "SELECT t.cellid, t.core FROM bng_te_gc, "
+            "LATERAL gbx_bng_tessellateexplode(wkt, res) t"
+        )
+    )
+    heavy_register(spark, ("gbx_bng_",))
+    heavy = cells(
+        spark.sql(
+            "SELECT cellid, core FROM bng_te_gc "
+            "LATERAL VIEW gbx_bng_tessellateexplode(wkt, res, false) t AS cellid, core, chip"
+        )
+    )
+
+    assert light, "light gave no cells for the collection"
+    assert any(light.values()), "the collection must leave core cells after carving"
+    assert heavy == light
+
+
 # --- grid-aligned geomkring / geomkloop lock-in -----------------------------------------------
 
 

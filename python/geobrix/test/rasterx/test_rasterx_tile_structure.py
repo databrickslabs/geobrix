@@ -36,7 +36,7 @@ MODIS_DIR = (HERE.parents[4] / "src/test/resources/modis").resolve()
 @pytest.fixture(scope="module")
 def spark():
     """Create SparkSession with GeoBrix JAR loaded"""
-    from test._heavy import pin_l1
+    from test._heavy import forget_generators, pin_l1
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark_session = (
@@ -52,6 +52,8 @@ def spark():
     # Only the heavy function the heavy tests call, at the heavy level; the tests that need the light level skip
     # without the light packages and register what they use on first call.
     pin_l1(spark_session, ["gbx_rst_fromcontent"])
+    # a module that ran before this one in the process may have registered the generators at the heavy level
+    forget_generators(spark_session)
     return spark_session
 
 

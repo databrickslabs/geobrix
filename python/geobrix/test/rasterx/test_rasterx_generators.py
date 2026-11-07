@@ -28,7 +28,7 @@ MODIS_B03 = (
 
 @pytest.fixture(scope="module")
 def spark():
-    from test._heavy import pin_l1
+    from test._heavy import forget_generators, pin_l1
 
     logging.getLogger("py4j").setLevel(logging.ERROR)
     spark = (
@@ -44,6 +44,8 @@ def spark():
     # Only the heavy function the heavy tests call, at the heavy level; the table-function tests skip without the
     # light packages and register what they use on first call.
     pin_l1(spark, ["gbx_rst_fromcontent"])
+    # a module that ran before this one in the process may have registered the generators at the heavy level
+    forget_generators(spark)
     return spark
 
 

@@ -65,6 +65,10 @@ def test_rst_setcrs_bare_string_literal(spark):
 
 def test_rst_transformcrs_reprojects(spark):
     """rst_transformcrs(tile, target_crs) should reproject and return a non-null tile."""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     if not Path(SRTM_PATH).exists():
@@ -91,6 +95,10 @@ def test_rst_transformcrs_reprojects(spark):
 
 def test_rst_sample_bare_string_crs(spark):
     """rst_sample with bare string CRS arg should not resolve as UNRESOLVED_COLUMN."""
+    # Served by the light level (or a heavy level that dispatches to it): needs the light deps, which the
+    # heavyweight CI env does not have (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     from databricks.labs.gbx.rasterx import functions as rx
 
     if not Path(SRTM_PATH).exists():

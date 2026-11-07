@@ -56,6 +56,10 @@ def test_idw_roundtrip_non_agg_and_agg_match(spark):
     coverage. Numerical parity between the two paths is asserted by the
     gridfrompoints oracle rows.
     """
+    # Served by the light level: needs the light deps, which the heavyweight CI env does not have
+    # (test/conftest.py).
+    pytest.importorskip("rasterio")
+    pytest.importorskip("pandas")
     # 4 corner points of a 100x100 m extent (EPSG:32633), values 0/10/20/30.
     # WKB-encode each POINT directly (struct: byte-order=little + type=Point=1 + x + y).
     import struct as _struct

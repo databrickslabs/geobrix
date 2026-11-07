@@ -42,6 +42,7 @@ import json
 import threading
 import time
 import uuid
+from types import SimpleNamespace
 from typing import Callable, Dict, Iterable, List, Optional
 
 POOL_TAG = "gbx_bench_pool"
@@ -110,6 +111,21 @@ def _slot_token(name: str, cname: str, user: str) -> str:
     return hashlib.sha1(f"gbx-pool:{name}:{cname}:{user}".encode()).hexdigest()
 
 
+def _create_cluster(w, spec: dict, token: str):
+    """Create a cluster under an idempotency token and give the waiter for its RUNNING state. The SDK's
+    `clusters.create` has no `idempotency_token` argument (it raises TypeError), so this posts the REST call itself."""
+
+    def plain(v):
+        if hasattr(v, "as_dict"):
+            return v.as_dict()
+        return v.value if hasattr(v, "value") else v
+
+    body = {k: plain(v) for k, v in spec.items() if v is not None}
+    body["idempotency_token"] = token
+    cid = w.api_client.do("POST", "/api/2.1/clusters/create", body=body)["cluster_id"]
+    return SimpleNamespace(result=lambda: w.clusters.wait_get_cluster_running(cid))
+
+
 def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True) -> List[str]:
     """Bring the pool to `n` clusters and make them run; their ids. Idempotent: a cluster the pool already has is reused
     (and started if it ended), a missing slot is created once under a token of its own, and a create that failed after the
@@ -146,10 +162,9 @@ def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int
                 if on_demand
                 else None
             ),
-            idempotency_token=_slot_token(name, cname, user),
         )
         try:
-            waiter = w.clusters.create(**spec)
+            waiter = _create_cluster(w, spec, _slot_token(name, cname, user))
             ids.append(waiter.result().cluster_id)
         except TimeoutError as exc:
             raise PoolError(
@@ -239,12 +254,24 @@ class Leases:
             self.w.files.create_directory(self.dir)
         except Exception:  # noqa: BLE001 - it exists, or the upload below makes it
             pass
-        try:
-            self._put(cluster_id, info, overwrite=False)
-        except Exception as exc:  # noqa: BLE001
-            if _is_exists(exc):
-                return False
-            raise
+        for attempt in range(4):
+            try:
+                self._put(cluster_id, info, overwrite=False)
+                break
+            except Exception as exc:  # noqa: BLE001
+                if _is_exists(exc):
+                    return False
+                # The SDK cannot always parse a server error (a non-JSON body makes it raise a TypeError of its own),
+                # so the exception does not say what happened. The file does: someone else's lease means "taken",
+                # our own token means the create went through, nothing there means a transient failure to try again.
+                held = self.read(cluster_id)
+                if held is not None:
+                    if held.get("token") == token:
+                        break
+                    return False
+                if attempt == 3:
+                    raise
+                time.sleep(2.0 * (attempt + 1))
         self.tokens[cluster_id] = token
         return True
 

@@ -68,6 +68,9 @@ class FakeW:
                     raise ConnectionError("the response was lost")
                 return SimpleNamespace(result=lambda: w.clusters_by_id[cid])
 
+            def wait_get_cluster_running(self, cid):
+                return w.clusters_by_id[cid]
+
             def ensure_cluster_is_running(self, cid):
                 c = w.clusters_by_id[cid]
                 if c.state != "RUNNING":
@@ -138,6 +141,12 @@ class FakeW:
 
         self.jar_mtime = {}
         self.clusters, self.files, self.libraries, self.jobs = Clusters(), Files(), Libraries(), Jobs()
+
+        def do(method, path, body=None):  # the REST create `up` posts: the SDK's clusters.create has no idempotency_token
+            assert (method, path) == ("POST", "/api/2.1/clusters/create")
+            return {"cluster_id": self.clusters.create(**body).result().cluster_id}
+
+        self.api_client = SimpleNamespace(do=do)
 
     def add(self, cid, name="p", state="RUNNING", **kw):
         tags = {"gbx_bench_pool": name} if name else {}
@@ -490,3 +499,30 @@ def test_up_is_idempotent_a_lost_response_or_a_second_up_never_makes_a_second_cl
     w3 = FakeW()
     w3.add("t", state="TERMINATED")
     assert pool.up(w3, "p", 1, **spec) == ["t"] and w3.created == 0 and ("start", "t") in w3.calls
+
+
+def test_an_unparseable_server_error_on_the_lease_create_reads_the_file_instead_of_crashing(pool, monkeypatch):
+    # the SDK raises a TypeError of its own when the error body is not JSON: the lease file says what really happened
+    monkeypatch.setattr(pool.time, "sleep", lambda s: None)
+    w = FakeW()
+    w.add("a")
+    real = w.files.upload
+
+    def other_got_it(path, contents, overwrite=False):  # another launch's create won; ours gets the unparseable error
+        w.fs[path] = json.dumps({"token": "someone-else"}).encode()
+        raise TypeError("object of type '_io.BytesIO' has no len()")
+
+    w.files.upload = other_got_it
+    assert pool.Leases(w, VOL, "p").acquire("a", {}) is False
+
+    flaky = {"n": 0}
+
+    def transient(path, contents, overwrite=False):  # nothing was created: a transient failure is tried again
+        flaky["n"] += 1
+        if flaky["n"] < 3:
+            raise TypeError("object of type '_io.BytesIO' has no len()")
+        return real(path, contents, overwrite=overwrite)
+
+    w.fs.clear()
+    w.files.upload = transient
+    assert pool.Leases(w, VOL, "p").acquire("a", {}) is True and flaky["n"] == 3

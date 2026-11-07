@@ -540,6 +540,10 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - The STAC windowed download and the vizx tile-simplify raster path read a JPEG/YCbCr source. They failed on `PHOTOMETRIC=YCBCR`.
   - The lightweight `rst_cog_convert` keeps the red, green and blue labels of RGB tiles.
 
+### Heavyweight proximity, COG overviews and tile size (fix) {#l1-parity}
+
+- **The heavyweight `rst_proximity` returns the exact Euclidean distance.** It used GDAL's approximate proximity, which was off by up to 6%. It now matches the lightweight function to Float32 precision.
+
 ### `rst_sample` on virtual tiles (fix) {#rst-sample}
 
 - **The lightweight `rst_sample` on a virtual tile reads only the block that holds its point.** The points of one file in a task share one open. Each call used to open the file twice and decode and re-encode the tile's whole window. That took about a second of task time per point on a Volume.

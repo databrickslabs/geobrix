@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.analysis
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.operations.ExactDistance
 import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -12,13 +13,12 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 
-import java.util.{Vector => JVector}
-
 /**
   * Compute a proximity raster: each output pixel holds the distance to the
   * nearest non-NoData (or matching `target_values`) source pixel.
   *
-  * Wraps `gdal.ComputeProximity`. The output raster has the same extent, CRS,
+  * Computes the exact Euclidean distance (a Felzenszwalb-Huttenlocher transform, [[ExactDistance]]), the same
+  * answer as the lightweight tier; `gdal.ComputeProximity` is approximate (up to ~6% off). The output raster has the same extent, CRS,
   * and GeoTransform as the source; pixel dtype is Float32. Distances are
   * measured in pixels (`distunits = "PIXEL"`) or in CRS ground units
   * (`distunits = "GEO"`, default).
@@ -77,6 +77,7 @@ object RST_Proximity extends WithExpressionInfo {
             // A wrong argument fails the call (naming the value); only the tile's own failures become its error tile.
             val unitsArg = Option(distUnits).map(_.toString).getOrElse("GEO")
             requireUnits(unitsArg)
+            Option(targetValues).map(_.toString).foreach(parseTargets) // a bad value fails the call, naming it
             requireMaxDistance(maxDistance match {
                 case d: Double => Some(d)
                 case n: Number => Some(n.doubleValue())
@@ -126,8 +127,8 @@ object RST_Proximity extends WithExpressionInfo {
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
-      * Creates a Float32 GTiff at the same extent/CRS as `ds`, then runs
-      * `gdal.ComputeProximity(srcBand, outBand, options)`. The output's NoData
+      * Creates a Float32 GTiff at the same extent/CRS as `ds`, then fills it with the exact distance to the
+      * nearest source pixel. The output's NoData
       * value is set to -1.0 so unreachable pixels (beyond `maxDistance`) are
       * distinguishable from zero-distance pixels.
       */
@@ -154,31 +155,47 @@ object RST_Proximity extends WithExpressionInfo {
         val outBand = outDs.GetRasterBand(1)
         outBand.SetNoDataValue(-1.0)
 
-        val gdalOpts = new JVector[String]()
-        gdalOpts.add(s"DISTUNITS=$distUnits")
-        gdalOpts.add("NODATA=-1.0")
-        targetValues.foreach(tv => gdalOpts.add(s"VALUES=$tv"))
-        maxDistance.foreach(d => gdalOpts.add(s"MAXDIST=$d"))
-
+        // Exact Euclidean distance, as the lightweight tier computes it (gdal.ComputeProximity is approximate, up to
+        // ~6% off). GDAL compares targets in the integer domain (a pixel is rounded half away from zero to a
+        // 32-bit integer first), so the same rounding picks the source pixels here.
         val srcBand = ds.GetRasterBand(1)
-        val rc = gdal.ComputeProximity(srcBand, outBand, gdalOpts)
-        if (rc != 0) {
-            val errMsg = gdal.GetLastErrorMsg()
-            outDs.delete()
-            throw new RuntimeException(
-                s"gbx_rst_proximity: gdal.ComputeProximity failed (rc=$rc): " +
-                  (if (errMsg == null || errMsg.isEmpty) "<no error>" else errMsg)
-            )
+        val targets: Option[Set[Long]] = targetValues.filter(_.trim.nonEmpty).map(parseTargets)
+        val rowBuf = new Array[Double](w)
+        val (xSpacing, ySpacing) =
+            if (distUnits == "GEO" && gt != null && gt(1) != 0.0 && gt(5) != 0.0) (math.abs(gt(1)), math.abs(gt(5)))
+            else (1.0, 1.0)
+        var anySource = false
+        val squared = ExactDistance.squaredDistances(w, h, xSpacing, ySpacing, (y, flags) => {
+            val rc = srcBand.ReadRaster(0, y, w, 1, rowBuf)
+            if (rc != 0) {
+                outDs.delete()
+                throw new RuntimeException(s"gbx_rst_proximity: reading row $y failed (rc=$rc): ${gdal.GetLastErrorMsg()}")
+            }
+            var x = 0
+            while (x < w) {
+                val r = roundHalfAway(rowBuf(x))
+                flags(x) = targets.map(_.contains(r)).getOrElse(r != 0L)
+                if (flags(x)) anySource = true
+                x += 1
+            }
+        })
+        val unlimited = maxDistance.isEmpty
+        val cap = maxDistance.map(_.toFloat).getOrElse(0f)
+        val result = new Array[Float](w * h)
+        var i = 0
+        while (i < result.length) {
+            val dist = if (anySource) math.sqrt(squared(i)).toFloat else -1.0f
+            result(i) = if (!anySource || (!unlimited && dist > cap)) -1.0f else dist
+            i += 1
         }
-        outBand.FlushCache()
-        outDs.FlushCache()
+        outBand.WriteRaster(0, 0, w, h, result)
         val errMsg = gdal.GetLastErrorMsg()
 
         val metadata = Map(
             "path" -> outPath,
             "driver" -> "GTiff",
             "extension" -> "tif",
-            "last_command" -> s"gdal.ComputeProximity(distunits=$distUnits)",
+            "last_command" -> s"ExactDistance(distunits=$distUnits)",
             "last_error" -> (if (errMsg == null) "" else errMsg),
             "all_parents" -> Option(ds.GetDescription()).getOrElse(""),
             "size" -> "-1",
@@ -189,6 +206,26 @@ object RST_Proximity extends WithExpressionInfo {
         )
         (outDs, metadata)
     }
+
+    /** The integer GDAL compares a pixel as: rounded half away from zero (NaN reads as 0), clamped to a 32-bit int. */
+    private def roundHalfAway(v: Double): Long =
+        if (v.isNaN) 0L
+        else {
+            val r = if (v < 0) -math.floor(-v + 0.5) else math.floor(v + 0.5)
+            math.max(Int.MinValue.toDouble, math.min(Int.MaxValue.toDouble, r)).toLong
+        }
+
+    /** The values of a comma-separated `target_values`, each rounded to the nearest integer (ties to even, as the
+      * lightweight tier reads them); a bad entry fails the call, naming the argument. */
+    private def parseTargets(text: String): Set[Long] =
+        text.split(",").map(_.trim).filter(_.nonEmpty).map { t =>
+            try math.rint(t.toDouble).toLong
+            catch {
+                case _: NumberFormatException =>
+                    throw new IllegalArgumentException(
+                        s"gbx_rst_proximity: target_values must be comma-separated numbers; got '$text'")
+            }
+        }.toSet
 
     override def name: String = "gbx_rst_proximity"
 

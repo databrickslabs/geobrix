@@ -2879,6 +2879,57 @@ def test_bench_cluster_takes_a_profile_and_hands_it_to_the_launcher(sandbox):
     assert "--profile oauth-fe" in last and last.endswith("PROFILE=oauth-fe"), last
 
 
+def _worktree_of(sandbox, tmp_path):
+    """The sandbox repo as a git main checkout and a detached linked worktree of it (no .venv-pyrx, no config env)."""
+
+    def git(*a, cwd=sandbox.root):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=cwd, check=True, capture_output=True)
+
+    git("init", "-q")
+    git("add", "scripts")
+    git("commit", "-q", "-m", "x")
+    wt = tmp_path / "wt"
+    git("worktree", "add", "-q", "--detach", str(wt))
+    return wt
+
+
+def test_bench_cluster_in_a_detached_worktree_takes_the_untracked_config_and_venv_from_the_main_checkout(sandbox, tmp_path):
+    # Cluster work must launch from a clean detached worktree, which has neither the untracked config env nor .venv-pyrx.
+    _venv_python(sandbox, sdk=False)  # the main checkout's .venv-pyrx
+    uv_log = sandbox.root / "uv.log"
+    uv = sandbox.bin / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$* CFG=$GBX_CLUSTER_CONFIG_ENV" >> "{uv_log}"\n')
+    uv.chmod(0o755)
+    config = sandbox.root / "examples" / "tests" / "databricks_cluster_config.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("")
+    wt = _worktree_of(sandbox, tmp_path)
+    assert not (wt / ".venv-pyrx").exists() and not (wt / "examples" / "tests" / "databricks_cluster_config.env").exists()
+
+    proc = subprocess.run(
+        ["bash", str(wt / "scripts" / "commands" / "gbx-bench-cluster.sh"), "--serverless", "--profile", "p"],
+        cwd=wt, env=sandbox.env(), capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    out = proc.stdout + proc.stderr
+
+    assert proc.returncode == 0, out
+    last = uv_log.read_text().splitlines()[-1]
+    main = os.path.realpath(sandbox.root)
+    assert f"--python {main}/.venv-pyrx/bin/python" in last, last
+    assert last.endswith(f"CFG={main}/examples/tests/databricks_cluster_config.env"), last
+    assert f"using the main checkout's {main}/examples/tests/databricks_cluster_config.env" in out, out
+    assert f"using the main checkout's {main}/.venv-pyrx" in out, out
+
+
+def test_bench_cluster_in_a_worktree_without_a_config_anywhere_still_says_how_to_make_one(sandbox, tmp_path):
+    wt = _worktree_of(sandbox, tmp_path)
+    proc = subprocess.run(
+        ["bash", str(wt / "scripts" / "commands" / "gbx-bench-cluster.sh"), "--serverless", "--profile", "p"],
+        cwd=wt, env=sandbox.env(), capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    assert proc.returncode == 1 and "databricks_cluster_config.env not found" in proc.stderr, proc.stderr
+
+
 # ------------------------------------------------------------------- gbx:bench:uc-probes
 
 

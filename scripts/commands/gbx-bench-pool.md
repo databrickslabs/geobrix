@@ -18,7 +18,7 @@ Keep N DBR 19 clusters up for a working period so a run does not pay a cluster s
 ## Rules in code
 
 - Only clusters tagged `gbx_bench_pool=<name>` are touched. Cluster `1016-152458-i5qbli6q` is on a deny-list.
-- The lease is a file `bench-pool/<name>/<cluster_id>.lease` under the Volume root (`GBX_BUNDLE_VOLUME_*`), created with the Files API (exclusive). Its holder refreshes it every minute and writes the job run id on it. It is reclaimed when its holder has been silent for 5 minutes and its job run is over.
+- The lease is a file `bench-pool/<name>/<cluster_id>.lease` under the Volume root (`GBX_BUNDLE_VOLUME_*`), created with the Files API (exclusive). Its holder refreshes it every minute and writes the job run id on it. It is reclaimed when its holder has been silent for 5 minutes and its job run is over. The refresh starts the moment the lease is taken, so it covers the start of a terminated cluster, the jar reinstall and the restart.
 - The jar identity is the (path, size, mtime) of each jar, kept in the cluster's `gbx_jar` tag. A mismatch uninstalls the old jars, sets the tag (which restarts a running cluster) and installs the run's jars.
 
 The code is `examples/tests/_cluster_pool.py` (one module; `leased_cluster(...)` is the entry point for any launcher), and its tests `scripts/ci/test_bench_pool.py`.

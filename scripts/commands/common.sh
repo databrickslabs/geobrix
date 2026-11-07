@@ -527,6 +527,34 @@ run_in_pyrx_venv() {
     return $_rc
 }
 
+# gbx_main_checkout_root [root]: the main checkout's root, when `root` (default PROJECT_ROOT) is a linked git worktree
+# (git's common dir is the main checkout's .git). Returns 1 in the main checkout itself or outside git.
+gbx_main_checkout_root() {
+    local root="${1:-$PROJECT_ROOT}" common main
+    common="$(cd "$root" 2>/dev/null && git rev-parse --git-common-dir 2>/dev/null)" || return 1
+    common="$(cd "$root" && cd "$common" 2>/dev/null && pwd -P)" || return 1
+    main="$(dirname "$common")"
+    [[ "$(cd "$root" && pwd -P)" == "$main" ]] && return 1
+    [[ -d "$main" ]] || return 1
+    echo "$main"
+}
+
+# gbx_resolve_untracked <relative-path> [root]: prints the path of an untracked file or directory (a config env, a venv).
+# It is `root`'s own when that exists; in a linked worktree that lacks it, the main checkout's, with one line on stderr that
+# says so (cluster work builds and launches from a clean detached worktree, which has no untracked files). Returns 1 when
+# neither has it.
+gbx_resolve_untracked() {
+    local rel="$1" root="${2:-$PROJECT_ROOT}" main
+    if [[ -e "$root/$rel" ]]; then echo "$root/$rel"; return 0; fi
+    main="$(gbx_main_checkout_root "$root")" || return 1
+    if [[ -e "$main/$rel" ]]; then
+        echo "gbx: $rel is not in this worktree; using the main checkout's $main/$rel" >&2
+        echo "$main/$rel"
+        return 0
+    fi
+    return 1
+}
+
 # The databricks-sdk the launchers run against (gbx_python_with_sdk pins `uv run --with` to it,
 # so a launcher does not float to whatever PyPI has that day). 0.157.0 is the release that
 # `uv run --with databricks-sdk` resolved on the dev workstation on 2026-10-27, and every
@@ -558,6 +586,13 @@ _gbx_py_ok() {
 # otherwise this prints one hint and returns 1.
 # Needs PROJECT_ROOT (every command sets it before sourcing this file); GBX_PYRX_VENV moves the venv.
 gbx_python_with_sdk() {
+    # A linked worktree has no .venv-pyrx of its own: the main checkout's is used (GBX_PYRX_VENV still wins).
+    if [[ -z "${GBX_PYRX_VENV:-}" && ! -x "${PROJECT_ROOT}/.venv-pyrx/bin/python" ]]; then
+        local _main_venv
+        if _main_venv="$(gbx_resolve_untracked .venv-pyrx)" && [[ -x "${_main_venv}/bin/python" ]]; then
+            GBX_PYRX_VENV="${_main_venv}"
+        fi
+    fi
     local _venv_py="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}/bin/python"
     local _with=(--with "${GBX_DATABRICKS_SDK_SPEC}") _pkg
     for _pkg in "$@"; do _with+=(--with "${_pkg}"); done
@@ -758,5 +793,5 @@ gbx_snapshot_exec() {
 export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
+          print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_main_checkout_root gbx_resolve_untracked gbx_python_with_sdk validate_set \
           print_lock_help _gbx_lock_abort gbx_acquire_test_lock gbx_ensure_container_python_deps zarr_extra_installed ensure_zarr_extra ensure_zarr_test_env zarr_doc_tests_selected gbx_snapshot_exec 2>/dev/null || true

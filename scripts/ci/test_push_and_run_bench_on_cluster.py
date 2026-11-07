@@ -718,3 +718,24 @@ def test_a_part_killed_by_a_signal_is_a_failure_and_the_split_follows_the_comput
     monkeypatch.setattr(sys, "argv", ["x", "--levels", "IO", "--levels-only", "--serverless", "--purpose", "p", "--split-by", "fn", "--no-wait"])
     mod.main()
     assert seen == ["serverless"]  # the parts are the functions the compute offers
+
+
+def test_the_launcher_reads_the_config_the_command_resolved_when_its_own_dir_has_none(tmp_path):
+    # A detached worktree has no untracked databricks_cluster_config.env: gbx:bench:cluster points the launcher at the main
+    # checkout's through GBX_CLUSTER_CONFIG_ENV. A config in the launcher's own dir wins.
+    import shutil
+    import subprocess
+
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    for f in (REPO_ROOT / "examples" / "tests").glob("*.py"):
+        shutil.copy(f, tests)
+    cfg = tmp_path / "main.env"
+    cfg.write_text("GBX_T_FROM_MAIN=yes\n")
+    code = "import sys; sys.path.insert(0, %r); import push_and_run_bench_on_cluster, os; print(os.environ.get('GBX_T_FROM_MAIN'))" % str(tests)
+    env = {k: v for k, v in os.environ.items() if k != "GBX_T_FROM_MAIN"}
+    env["GBX_CLUSTER_CONFIG_ENV"] = str(cfg)
+    run = lambda: subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, cwd=tmp_path)  # noqa: E731
+    assert run().stdout.strip().endswith("yes"), run().stderr
+    (tests / "databricks_cluster_config.env").write_text("GBX_T_FROM_MAIN=local\n")
+    assert run().stdout.strip().endswith("local")

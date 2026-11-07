@@ -190,10 +190,12 @@ show_banner "gbx:bench:cluster"
 setup_log_file "$LOG_PATH"
 
 CONFIG="examples/tests/databricks_cluster_config.env"
-if [[ ! -f "$CONFIG" ]]; then
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+if ! GBX_CLUSTER_CONFIG_ENV="$(gbx_resolve_untracked "$CONFIG")" || [[ ! -f "$GBX_CLUSTER_CONFIG_ENV" ]]; then
     echo "ERROR: $CONFIG not found. Copy examples/tests/databricks_cluster_config.example.env and fill it." >&2
     exit 1
 fi
+export GBX_CLUSTER_CONFIG_ENV
 
 echo "Submitting benchmark job (this runs on a real cluster and costs compute)..."
 # The launcher imports the bench package (-> pyrx -> rasterio) and the databricks SDK: it runs

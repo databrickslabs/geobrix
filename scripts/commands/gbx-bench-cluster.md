@@ -332,6 +332,16 @@ Only the run's time limit then ends a stalled run.
 - **Snapshot.** The command copies the scripts, the launcher and the bench package to a temp dir at launch and runs from it. An edit during the run cannot change it. `GBX_NO_SNAPSHOT=1` runs in place.
 - `--inject-stall <seconds>` (test only) adds a form that sleeps on the driver, to prove the watchdog.
 
+## Detached worktree
+
+Cluster work builds and launches from a clean detached worktree. That worktree has no untracked files, so the command finds two of them in the main checkout.
+
+- `examples/tests/databricks_cluster_config.env`: used from the main checkout when the worktree has none. The launcher reads it through `GBX_CLUSTER_CONFIG_ENV`. A config in the worktree wins.
+- `.venv-pyrx`: used from the main checkout when the worktree has none. `GBX_PYRX_VENV` wins over both.
+- The command prints one line for each file it takes from the main checkout, with its path.
+- The main checkout is the parent of `git rev-parse --git-common-dir`. With no file in either place the command stops as before.
+- `gbx:bench:pool` resolves the config the same way.
+
 ## Interpreter
 
 The launcher needs `databricks-sdk` and Python 3.11 or newer. It does not use whatever `python` is on the PATH. The shared `gbx_python_with_sdk` helper in `common.sh` picks the first of these that works:

@@ -75,6 +75,9 @@ from _preflight import serverless_dependencies
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
 _env_file = TESTS_DIR / "databricks_cluster_config.env"
+if not _env_file.exists() and os.environ.get("GBX_CLUSTER_CONFIG_ENV"):
+    # A detached worktree has no untracked config: gbx:bench:cluster points at the main checkout's.
+    _env_file = Path(os.environ["GBX_CLUSTER_CONFIG_ENV"])
 
 
 def _strip_invisible(s: str) -> str:

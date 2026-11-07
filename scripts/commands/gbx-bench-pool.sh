@@ -38,7 +38,10 @@ cd "$PROJECT_ROOT"
 show_banner "gbx:bench:pool"
 setup_log_file "$LOG_PATH"
 CONFIG="examples/tests/databricks_cluster_config.env"
-if [[ -f "$CONFIG" ]]; then set -a; source "$CONFIG"; set +a; fi
+# A detached worktree has no untracked config: the main checkout's is used.
+if GBX_CLUSTER_CONFIG_ENV="$(gbx_resolve_untracked "$CONFIG")" && [[ -f "$GBX_CLUSTER_CONFIG_ENV" ]]; then
+    set -a; source "$GBX_CLUSTER_CONFIG_ENV"; set +a
+fi
 gbx_python_with_sdk || exit 1
 "${GBX_SDK_PYTHON[@]}" "$PROJECT_ROOT/examples/tests/bench_pool.py" "${PASS_ARGS[@]}"
 exit $?

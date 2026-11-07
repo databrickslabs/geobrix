@@ -194,13 +194,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         cid: {"L1": _XYZ_ERROR_L1}
         for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
     },
-    **{
-        cid: {"L1": _L1_NO_VIRTUAL}
-        for cid in (
-            "avg_virtual",
-            "summary_virtual",
-        )
-    },
+    "summary_virtual": {"L1": _L1_NO_VIRTUAL},
     "cg_grid_null_arg": {
         "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
     },

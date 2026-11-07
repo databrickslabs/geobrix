@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_Max, RST_Min, RST_PixelCount, RST_Summary}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Summary
 import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
@@ -89,6 +89,10 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
     private def validCounts(l: Layout): Seq[Int] =
         if (l.alphaLast) Seq.fill(l.count - 1)(8) :+ 16 else Seq.fill(l.count)(16)
 
+    /** The statistics of each band over the pixels valid for it (the shared reader the light tier is held to). */
+    private def stats(ds: Dataset): Seq[BandAccessors.ValidStats] =
+        (1 to ds.GetRasterCount()).map(i => BandAccessors.validStats(ds, i))
+
     // ------------------------------------------------------------------------------------------------
     // band statistics and isEmpty
     // ------------------------------------------------------------------------------------------------
@@ -97,15 +101,16 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         test(s"the pixel count, minimum, maximum and mean of ${l.name} are over the pixels valid for each band") {
             val ds = fixture(l)
             try {
-                assert(RST_PixelCount.execute(ds).toSeq == validCounts(l).map(_.toLong))
-                val (mins, maxs) = (RST_Min.execute(ds).map(_.doubleValue).toSeq, RST_Max.execute(ds).map(_.doubleValue).toSeq)
+                val st = stats(ds)
+                assert(st.map(_.count) == validCounts(l).map(_.toLong))
+                val (mins, maxs) = (st.map(_.min), st.map(_.max))
                 if (l.alphaLast) {
                     // band 1: 4 zeros (row 1) and 4 sevens (row 3) over the opaque pixels
                     assert(mins.head == 0.0 && maxs.head == 7.0)
-                    assert(RST_Avg.execute(ds).head.doubleValue == 3.5)
+                    assert(st.head.mean == 3.5)
                     // the alpha band: 0 and 255 over every pixel
                     assert(mins.last == 0.0 && maxs.last == 255.0)
-                    assert(RST_Avg.execute(ds).last.doubleValue == 127.5)
+                    assert(st.last.mean == 127.5)
                 } else assert(mins.head == 0.0 && maxs.head == 7.0)
             } finally RasterDriver.releaseDataset(ds)
         }
@@ -150,10 +155,11 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         try {
             assert(GDAL.hasOwnMask(ds.GetRasterBand(1)))
             // columns 1-3 of the pattern: rows 0 and 3 hold 7, rows 1 and 2 hold 0
-            assert(RST_PixelCount.execute(ds).toSeq == Seq.fill(4)(12L))
+            val st = stats(ds)
+            assert(st.map(_.count) == Seq.fill(4)(12L))
             // band 4 of the fixture holds the pattern's last-band values (0 and 255): 6 of each over the 12 pixels
-            assert(RST_Avg.execute(ds).map(_.doubleValue).toSeq == Seq(3.5, 3.5, 3.5, 127.5))
-            assert(RST_Min.execute(ds).head.doubleValue == 0.0 && RST_Max.execute(ds).head.doubleValue == 7.0)
+            assert(st.map(_.mean) == Seq(3.5, 3.5, 3.5, 127.5))
+            assert(st.head.min == 0.0 && st.head.max == 7.0)
             assert(!RasterAccessors.isEmpty(ds))
         } finally RasterDriver.releaseDataset(ds)
     }

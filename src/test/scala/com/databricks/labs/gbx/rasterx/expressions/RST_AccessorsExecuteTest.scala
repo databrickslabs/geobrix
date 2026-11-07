@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_BandMetaData, RST_BoundingBox, RST_Format, RST_GeoReference, RST_GetNoData, RST_GetSubdataset, RST_Height, RST_Max, RST_MemSize, RST_Min, RST_NumBands, RST_PixelCount, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_Subdatasets, RST_Summary, RST_Type, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_BoundingBox, RST_Format, RST_GetSubdataset, RST_Height, RST_MemSize, RST_NumBands, RST_PixelHeight, RST_PixelWidth, RST_Rotation, RST_SRID, RST_ScaleX, RST_ScaleY, RST_SkewX, RST_SkewY, RST_Summary, RST_UpperLeftX, RST_UpperLeftY, RST_Width}
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.BeforeAndAfterAll
@@ -25,19 +25,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         ds.delete()
     }
 
-    test("RST_Avg should return the average px value of the raster") {
-        val expected = ds.GetRasterBand(1).AsMDArray().GetStatistics().getMean
-        val avg = RST_Avg.execute(ds)
-        avg.foreach(a => a shouldBe expected)
-    }
-
-    test("RST_BandMetaData should return a map of metadata") {
-        val b = ds.GetRasterBand(1)
-        val mtd = RST_BandMetaData.execute(b)
-        mtd should not be null
-        b.delete()
-    }
-
     test("RST_BoundingBox should return a non empty polygon") {
         val bbox = RST_BoundingBox.execute(ds)
         bbox should not be null
@@ -48,25 +35,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val format = RST_Format.execute(ds)
         format shouldBe a[String]
         format shouldBe "GTiff"
-    }
-
-    test("RST_GeoReference should return 6 elements of the raster affine") {
-        val gt = RST_GeoReference.execute(ds)
-        gt.size shouldBe 6
-        gt shouldBe Map(
-          "scaleY" -> -463.3127165274999,
-          "skewX" -> 0.0,
-          "skewY" -> 0.0,
-          "upperLeftY" -> 2223901.039333,
-          "upperLeftX" -> -8895604.157333,
-          "scaleX" -> 463.31271652749973
-        )
-    }
-
-    test("RST_GetNoData should return designated no data values") {
-        val noData = RST_GetNoData.execute(ds)
-        noData.isEmpty shouldBe false
-        noData should contain theSameElementsAs Array(32767.0)
     }
 
     test("RST_GetSubdataset should return a subdaset of the raster") {
@@ -89,11 +57,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         height shouldBe ds.GetRasterYSize()
     }
 
-    test("RST_Max should return the max value of the raster per band") {
-        val max = RST_Max.execute(ds)
-        max.head shouldBe ds.GetRasterBand(1).AsMDArray().GetStatistics().getMax
-    }
-
     test("RST_MemSize should return approximated memory storage size") {
         val memSize = RST_MemSize.execute(ds)
         val location = ds.GetDescription()
@@ -108,25 +71,10 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         gdal.Unlink("/vsimem/cpy.tif")
     }
 
-    test("RST_Min should return the min value of the raster per band") {
-        val min = RST_Min.execute(ds)
-        min.head shouldBe ds.GetRasterBand(1).AsMDArray().GetStatistics().getMin
-    }
-
     test("RST_NumBands should return the number of bands of the raster") {
         val bandCount = RST_NumBands.execute(ds)
         bandCount should be > 0
         bandCount shouldBe ds.GetRasterCount()
-    }
-
-    test("RST_PixelCount should return the number of pixels of the raster") {
-        val pxCount = RST_PixelCount.execute(ds).head
-        pxCount should be > 0L
-        val buf = Array.ofDim[Double](ds.GetRasterXSize() * ds.GetRasterYSize())
-        ds.GetRasterBand(1).ReadRaster(0, 0, ds.GetRasterXSize(), ds.GetRasterYSize(), buf)
-        val noData = RST_GetNoData.execute(ds)
-        val validPxCount = buf.count(_ != noData.head)
-        pxCount shouldBe validPxCount
     }
 
     test("RST_PixelHeight should return the pixel height of the raster") {
@@ -196,31 +144,12 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("RST_Subdatasets should return a map of subdatasets" ) {
-        val netcdfPath = this.getClass
-            .getResource(
-              "/binary/netcdf-CMIP5/prAdjust_day_HadGEM2-CC_SMHI-DBSrev930-GFD-1981-2010-postproc_rcp45_r1i1p1_20201201-20201231.nc"
-            )
-            .toString
-            .replace("file:/", "/")
-        val netcdf = gdal.Open(netcdfPath)
-        val sdsMap = RST_Subdatasets.execute(netcdf)
-        sdsMap should not be null
-        sdsMap should contain key "SUBDATASET_1_NAME"
-        netcdf.delete()
-    }
-
     test("RST_Summary should return a summary of the raster") {
         val summary = RST_Summary.execute(ds)
         summary should not be null
         summary.contains("driverShortName") shouldBe true
         summary.contains("size") shouldBe true
         summary.contains("coordinateSystem") shouldBe true
-    }
-
-    test("RST_Type should return the data type of the raster") {
-        val dtype = RST_Type.execute(ds).head
-        dtype shouldBe "Int16"
     }
 
     test("RST_UpperLeftX should return the upper left x coordinate of the raster") {
@@ -237,82 +166,6 @@ class RST_AccessorsExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         val width = RST_Width.execute(ds)
         width should be > 0
         width shouldBe ds.GetRasterXSize()
-    }
-
-    /** Build a 4x4 single-band Float32 /vsimem raster where every pixel == nodata. */
-    private def allNodataDs(nodata: Double = -9999.0): Dataset = {
-        val path = s"/vsimem/all_nodata_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
-        val drv = gdal.GetDriverByName("GTiff")
-        val d = drv.Create(path, 4, 4, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
-        d.SetGeoTransform(Array(0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
-        val srs = new org.gdal.osr.SpatialReference()
-        srs.ImportFromEPSG(4326)
-        d.SetProjection(srs.ExportToWkt())
-        srs.delete()
-        val band = d.GetRasterBand(1)
-        band.SetNoDataValue(nodata)
-        val buf = Array.fill[Double](16)(nodata)
-        band.WriteRaster(0, 0, 4, 4, buf)
-        band.FlushCache()
-        d.FlushCache()
-        band.delete()
-        d
-    }
-
-    /** Build a 4x4 single-band Float32 /vsimem raster of genuine 0.0 pixels. */
-    private def allZeroDs(nodata: Double = -9999.0): Dataset = {
-        val path = s"/vsimem/all_zero_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
-        val drv = gdal.GetDriverByName("GTiff")
-        val d = drv.Create(path, 4, 4, 1, org.gdal.gdalconst.gdalconstConstants.GDT_Float32)
-        d.SetGeoTransform(Array(0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
-        val srs = new org.gdal.osr.SpatialReference()
-        srs.ImportFromEPSG(4326)
-        d.SetProjection(srs.ExportToWkt())
-        srs.delete()
-        val band = d.GetRasterBand(1)
-        band.SetNoDataValue(nodata)
-        val buf = Array.fill[Double](16)(0.0)
-        band.WriteRaster(0, 0, 4, 4, buf)
-        band.FlushCache()
-        d.FlushCache()
-        band.delete()
-        d
-    }
-
-    test("RST_Avg returns null for an all-nodata band (issue #59)") {
-        val empty = allNodataDs()
-        RST_Avg.execute(empty).head shouldBe null
-        empty.delete()
-    }
-
-    test("RST_Avg returns 0.0 (not null) for a genuine-zero band") {
-        val zeros = allZeroDs()
-        RST_Avg.execute(zeros).head shouldBe (0.0: java.lang.Double)
-        zeros.delete()
-    }
-
-    test("RST_Max returns null for an all-nodata band (issue #59)") {
-        val empty = allNodataDs()
-        RST_Max.execute(empty).head shouldBe null
-        empty.delete()
-    }
-
-    test("RST_Max returns 0.0 (not null) for a genuine-zero band") {
-        val zeros = allZeroDs()
-        RST_Max.execute(zeros).head shouldBe (0.0: java.lang.Double)
-        zeros.delete()
-    }
-
-    test("RST_Min returns null for an all-nodata band (issue #59)") {
-        val empty = allNodataDs()
-        RST_Min.execute(empty).head shouldBe null
-        empty.delete()
-    }
-
-    test("RST_Min returns 0.0 (not null) for a genuine-zero band") {
-        val zeros = allZeroDs()
-        RST_Min.execute(zeros).head shouldBe (0.0: java.lang.Double)
-        zeros.delete()
     }
 
 }

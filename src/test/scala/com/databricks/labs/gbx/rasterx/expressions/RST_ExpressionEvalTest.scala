@@ -31,7 +31,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
                 .cache()
             base.collect()
             Seq(
-              rst_avg(col("clipped")),
               rst_boundingbox(col("clipped")),
               rst_asformat(col("clipped"), lit("GTiff")),
               rst_derivedband(col("clipped"), pyfunc, "myfunc"),
@@ -39,10 +38,8 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               rst_isempty(col("clipped")),
               rst_mapalgebra(array(col("clipped")), lit("{\"calc\": \"A+2*A\"}")),
               rst_merge(array(col("clipped"), col("clipped"))),
-              rst_rastertoworldcoord(col("clipped"), lit(10), lit(10)),
               rst_rastertoworldcoordx(col("clipped"), lit(10), lit(10)),
               rst_rastertoworldcoordy(col("clipped"), lit(10), lit(10)),
-              rst_worldtorastercoord(col("clipped"), lit(500000.0), lit(5000000.0)),
               rst_worldtorastercoordx(col("clipped"), lit(500000.0), lit(5000000.0)),
               rst_worldtorastercoordy(col("clipped"), lit(500000.0), lit(5000000.0)),
               rst_transform(col("clipped"), lit(4326)),

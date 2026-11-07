@@ -94,15 +94,12 @@ object CustomRasterUDFs {
       val width = RST_Width.execute(ds)
       val height = RST_Height.execute(ds)
       val numBands = RST_NumBands.execute(ds)
-      val band = ds.GetRasterBand(1)
-      val noData = RST_GetNoData.execute(band)
       
       // Custom quality logic
       val validSize = width >= 512 && height >= 512
       val hasMultipleBands = numBands >= 3
-      val hasNoDataValue = noData.isDefined
       
-      validSize && hasMultipleBands && hasNoDataValue
+      validSize && hasMultipleBands
     } catch {
       case _: Exception => false
     }

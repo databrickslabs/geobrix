@@ -3,11 +3,9 @@ package com.databricks.labs.gbx.bench
 import com.databricks.labs.gbx.rasterx.expressions.RST_IsEmpty
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import com.databricks.labs.gbx.rasterx.expressions.RST_NDVI
-import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
-import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
@@ -34,7 +32,6 @@ import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_FillNodata
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold
@@ -123,8 +120,7 @@ object BenchDispatch {
   }
 
   private val cats: Map[String, String] = Map(
-    "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC, "rst_avg" -> ACC,
-    "rst_min" -> ACC, "rst_max" -> ACC, "rst_pixelcount" -> ACC,
+    "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
     "rst_slope" -> TER, "rst_aspect" -> TER, "rst_hillshade" -> TER,
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
     "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
@@ -133,16 +129,16 @@ object BenchDispatch {
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
     "rst_scaley" -> ACC, "rst_skewx" -> ACC, "rst_skewy" -> ACC,
-    "rst_rotation" -> ACC, "rst_isempty" -> ACC, "rst_getnodata" -> ACC,
-    "rst_format" -> ACC, "rst_type" -> ACC, "rst_memsize" -> ACC,
+    "rst_rotation" -> ACC, "rst_isempty" -> ACC,
+    "rst_format" -> ACC, "rst_memsize" -> ACC,
     // coordinate / index accessors
-    "rst_rastertoworldcoord" -> ACC, "rst_rastertoworldcoordx" -> ACC,
-    "rst_rastertoworldcoordy" -> ACC, "rst_worldtorastercoord" -> ACC,
+    "rst_rastertoworldcoordx" -> ACC,
+    "rst_rastertoworldcoordy" -> ACC,
     "rst_worldtorastercoordx" -> ACC, "rst_worldtorastercoordy" -> ACC,
     "rst_tilexyz" -> ACC,
-    // map / struct accessors: timing-only
-    "rst_bandmetadata" -> ACC, "rst_georeference" -> ACC,
+    // timing-only accessors
     "rst_boundingbox" -> ACC, "rst_summary" -> ACC,
+    // (the accessors and statistics that return an array, a map or a struct have no heavyweight level)
     // tile-out transforms with scalar / fixed args
     "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
@@ -154,13 +150,12 @@ object BenchDispatch {
     "rst_evi" -> BM, "rst_savi" -> BM, "rst_index" -> BM,
     "rst_mapalgebra" -> FMT, "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
     "rst_clip" -> EDIT, "rst_color_relief" -> TER, "rst_viewshed" -> ANALYSIS,
-    "rst_sample" -> FMT,
     // bucket C, group C1 (readers + buildoverviews) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
     // and buildoverviews emit a tile -> format.
     "rst_tryopen" -> ACC, "rst_fromcontent" -> FMT,
     "rst_buildoverviews" -> FMT,
-    "rst_subdatasets" -> ACC, "rst_getsubdataset" -> ACC,
+    "rst_getsubdataset" -> ACC,
     // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles) -> format.
     // (The combine family has no heavyweight level: it measured slower than light.)
     "rst_frombands" -> FMT, "rst_merge" -> FMT,
@@ -425,10 +420,6 @@ object BenchDispatch {
     case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
-    case "rst_avg"        => BenchFingerprint.ofArray(RST_Avg.execute(ds))
-    case "rst_min"        => BenchFingerprint.ofArray(RST_Min.execute(ds))
-    case "rst_max"        => BenchFingerprint.ofArray(RST_Max.execute(ds))
-    case "rst_pixelcount" => BenchFingerprint.ofArray(RST_PixelCount.execute(ds).map(_.toDouble))
     case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "xscale", Double.NaN), argD(a, "yscale", Double.NaN)))
     case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))
     case "rst_hillshade"  => fpDerived(RST_Hillshade.execute(ds, argD(a, "azimuth", 315.0), argD(a, "altitude", 45.0), argD(a, "z_factor", 1.0)))
@@ -456,10 +447,8 @@ object BenchDispatch {
     case "rst_rotation"    => BenchFingerprint.ofScalar(RST_Rotation.execute(ds))
     // bool -> 1.0/0.0 to match the pyrx core_fn's numeric coercion
     case "rst_isempty"     => BenchFingerprint.ofScalar(if (RST_IsEmpty.execute(ds)) 1.0 else 0.0)
-    case "rst_getnodata"   => BenchFingerprint.ofArray(RST_GetNoData.execute(ds))
     case "rst_format"      => BenchFingerprint.ofScalar(RST_Format.execute(ds))
     // timing-only (per-band string array; no cross-engine fingerprint)
-    case "rst_type"        => { RST_Type.execute(ds); BenchFingerprint.empty }
     // timing-only (file size vs in-memory size; not comparable)
     case "rst_memsize"     => { RST_MemSize.execute(ds); BenchFingerprint.empty }
     // coordinate / index accessors.
@@ -468,24 +457,17 @@ object BenchDispatch {
       BenchFingerprint.ofScalar(RST_RasterToWorldCoordX.execute(ds, argI(a, "x", 64), argI(a, "y", 64))._1)
     case "rst_rastertoworldcoordy" =>
       BenchFingerprint.ofScalar(RST_RasterToWorldCoordY.execute(ds, argI(a, "x", 64), argI(a, "y", 64))._2)
-    case "rst_rastertoworldcoord" =>
-      val p = RST_RasterToWorldCoord.execute(ds, argI(a, "x", 64), argI(a, "y", 64))
-      BenchFingerprint.ofArray(Array(p._1, p._2))
     // world->raster: timing-only (CRS-dependent inverse-affine index; not comparable).
     case "rst_worldtorastercoordx" =>
       RST_WorldToRasterCoordX.execute(ds, argD(a, "x", -73.985), argD(a, "y", 40.745)); BenchFingerprint.empty
     case "rst_worldtorastercoordy" =>
       RST_WorldToRasterCoordY.execute(ds, argD(a, "x", -73.985), argD(a, "y", 40.745)); BenchFingerprint.empty
-    case "rst_worldtorastercoord" =>
-      RST_WorldToRasterCoord.execute(ds, argD(a, "x", -73.985), argD(a, "y", 40.745)); BenchFingerprint.empty
     // rst_tilexyz: timing-only (render/encode-dependent bytes; not comparable).
     case "rst_tilexyz" =>
       RST_TileXYZ.execute(ds, Map.empty, argI(a, "z", 12), argI(a, "x", 1205),
         argI(a, "y", 1539), argS(a, "format", "PNG"), argI(a, "size", 256), argS(a, "resampling", "bilinear"))
       BenchFingerprint.empty
-    // map / struct accessors: timing-only (maps, structs, CRS/JSON bytes).
-    case "rst_bandmetadata"  => { RST_BandMetaData.execute(ds.GetRasterBand(1)); BenchFingerprint.empty }
-    case "rst_georeference"  => { RST_GeoReference.execute(ds); BenchFingerprint.empty }
+    // timing-only accessors (polygon, JSON bytes).
     case "rst_boundingbox"   => { RST_BoundingBox.execute(ds); BenchFingerprint.empty }
     case "rst_summary"       => { RST_Summary.execute(ds); BenchFingerprint.empty }
     // tile-out transforms with scalar / fixed args: all produce a raster
@@ -570,20 +552,13 @@ object BenchDispatch {
         argD(a, "observer_height", 2.0), argD(a, "target_height", 1.6), None)
       RasterDriver.releaseDataset(res._1)
       BenchFingerprint.empty
-    // timing-only: sample at world (0,0) (no in-extent point across CRSs).
-    case "rst_sample" =>
-      RST_Sample.execute(ds, 0.0, 0.0); BenchFingerprint.empty
     // bucket C, group C1: rst_buildoverviews (tile-in). Internal overviews leave
     // the base band unchanged, so the raster fingerprint (full-resolution band)
     // is identical pre/post -> a full comparison.
     case "rst_buildoverviews" =>
       fpDerived(RST_BuildOverviews.execute(ds, Map.empty,
         argIntArray(a, "levels", Array(2, 4)), argS(a, "resampling", "average")))
-    // bucket C, group C2: subdataset fns (timing-only). A plain GTiff corpus tile
-    // has no subdatasets -> rst_subdatasets returns an empty map (timed, not
-    // compared).
-    case "rst_subdatasets" =>
-      RST_Subdatasets.execute(ds); BenchFingerprint.empty
+    // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
     // fingerprint is suppressed regardless. Mirrors the pyrx core swallowing its
@@ -913,10 +888,6 @@ object BenchDispatch {
       case "rst_width"      => rst_width(tile)
       case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
-      case "rst_avg"        => rst_avg(tile)
-      case "rst_min"        => rst_min(tile)
-      case "rst_max"        => rst_max(tile)
-      case "rst_pixelcount" => rst_pixelcount(tile)
       case "rst_slope"      => rst_slope(tile, argS(a, "unit", "degrees"))
       case "rst_aspect"     => rst_aspect(tile)
       case "rst_hillshade"  => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.dem.RST_Hillshade.name, Seq(tile, org.apache.spark.sql.functions.lit(315.0), org.apache.spark.sql.functions.lit(45.0), org.apache.spark.sql.functions.lit(1.0)))
@@ -941,24 +912,16 @@ object BenchDispatch {
       case "rst_skewy"       => rst_skewy(tile)
       case "rst_rotation"    => rst_rotation(tile)
       case "rst_isempty"     => rst_isempty(tile)
-      case "rst_getnodata"   => rst_getnodata(tile)
       case "rst_format"      => rst_format(tile)
-      case "rst_type"        => rst_type(tile)
       case "rst_memsize"     => rst_memsize(tile)
       // coordinate / index accessors
       case "rst_rastertoworldcoordx" => rst_rastertoworldcoordx(tile, argI(a, "x", 64), argI(a, "y", 64))
       case "rst_rastertoworldcoordy" => rst_rastertoworldcoordy(tile, argI(a, "x", 64), argI(a, "y", 64))
-      case "rst_rastertoworldcoord"  => rst_rastertoworldcoord(tile, argI(a, "x", 64), argI(a, "y", 64))
       // world->raster + tilexyz are pure-core-only; the column form is here only
       // to keep the match exhaustive (the spark-path runner filters by modes).
       case "rst_worldtorastercoordx" => rst_worldtorastercoordx(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_worldtorastercoordy" => rst_worldtorastercoordy(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
-      case "rst_worldtorastercoord"  => rst_worldtorastercoord(tile, argD(a, "x", -73.985), argD(a, "y", 40.745))
       case "rst_tilexyz"             => rst_tilexyz(tile, argI(a, "z", 12), argI(a, "x", 1205), argI(a, "y", 1539))
-      // map / struct accessors are pure-core-only; the column form is here
-      // only to keep the match exhaustive (the spark-path runner filters by modes).
-      case "rst_bandmetadata"  => rst_bandmetadata(tile, 1)
-      case "rst_georeference"  => rst_georeference(tile)
       case "rst_boundingbox"   => rst_boundingbox(tile)
       case "rst_summary"       => rst_summary(tile)
       // tile-out transforms with scalar / fixed args
@@ -1019,9 +982,6 @@ object BenchDispatch {
         import org.apache.spark.sql.functions.lit
         org.apache.spark.sql.functions.call_function("gbx_rst_viewshed", tile, lit("POINT (0 0)"),
           lit(argD(a, "observer_height", 2.0)), lit(argD(a, "target_height", 1.6)))
-      case "rst_sample" =>
-        import org.apache.spark.sql.functions.lit
-        rst_sample(tile, lit("POINT (0 0)"))
       // bucket C, group C1/C2. tryopen takes the tile; fromcontent reads the
       // tile's raster (binary content) column; buildoverviews takes the tile +
       // an ARRAY<INT> levels literal. subdatasets / getsubdataset are
@@ -1033,7 +993,6 @@ object BenchDispatch {
         rst_fromcontent(tile.getField("raster"), argS(a, "driver", "GTiff"))
       case "rst_buildoverviews" =>
         rst_buildoverviews(tile, argIntArray(a, "levels", Array(2, 4)), argS(a, "resampling", "average"))
-      case "rst_subdatasets"   => rst_subdatasets(tile)
       case "rst_getsubdataset" => rst_getsubdataset(tile, argS(a, "name", "0"))
       // bucket C, group C3: multi-tile fns. The `tile` Column passed here IS the
       // ARRAY<tile> column the runner built from the synthesized tiles (the same

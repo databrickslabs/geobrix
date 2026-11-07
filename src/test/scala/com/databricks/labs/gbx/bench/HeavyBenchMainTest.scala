@@ -19,7 +19,7 @@ class HeavyBenchMainTest extends PlanTest with SilentSparkSession {
     val out = dir.resolve("heavyweight.jsonl").toString
 
     // local test: corpusRoot == localCorpusRoot (no Volume), so pure-core reads dir directly.
-    HeavyBenchMain.run(spark, dir.toString, dir.toString, out, "rst_width,rst_avg", "pure-core", "2,4", 1, 2, "c2")
+    HeavyBenchMain.run(spark, dir.toString, dir.toString, out, "rst_width,rst_height", "pure-core", "2,4", 1, 2, "c2")
 
     val lines = Files.readAllLines(Paths.get(out)).toArray
     assert(lines.length == 2)

@@ -178,6 +178,7 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 | `gbx_rst_bng_rasterize_agg`, group input | not run | 0.50 | Heavy default |
 | `gbx_rst_width` | 0.18 | 0.24 | Heavy default for a materialized tile; a virtual tile goes to light |
 | `gbx_rst_boundingbox` | 0.26 | 0.24 | Heavy default for a materialized tile; a virtual tile goes to light |
+| `gbx_rst_avg` | 0.59 | 0.65 | Heavy form removed (an array result cannot take the routing function) |
 | `gbx_bng_eastnorthasbng` (three iterations) | 1.17 | 1.35 | Heavy form removed |
 | `gbx_rst_gridfrompoints` (three iterations) | 1.78 | 1.91 | Heavy form removed |
 | `gbx_st_asmvt` | 1.67 | 2.94 | Heavy form removed |
@@ -190,7 +191,7 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 
 On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower. It took 1.9x the time of the light batch form at 4 million rows (3.24 s against 1.70 s). At 16 million rows it took 1.3x (5.42 s against 4.27 s). The function now has a SQL form that needs no JAR, with the Python batch form as the fallback.
 
-The same rule keeps the JVM form of every raster accessor that returns one value, by its return type. `gbx_rst_width` and `gbx_rst_boundingbox` are the measured ones. A function in that group runs on the JVM for a materialized tile. A virtual tile runs on light. A SQL function routes the two. The JVM form is also faster for `gbx_rst_avg` (0.59 and 0.65), `gbx_rst_isoband` (0.39 and 0.42) and `gbx_rst_contour` (0.10 at 4x). These return an `ARRAY<...>` or a table, so they can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. The light form stays the default for them.
+The same rule keeps the JVM form of every raster accessor that returns one value, by its return type. `gbx_rst_width` and `gbx_rst_boundingbox` are the measured ones. A function in that group runs on the JVM for a materialized tile. A virtual tile runs on light. A SQL function routes the two. An accessor or statistic that returns an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` can sit under `explode` or `inline`, where that routing function is refused and a virtual tile would raise. These have no JVM form, even where it was faster, as `gbx_rst_avg` was. `gbx_rst_isoband` (0.39 and 0.42) and `gbx_rst_contour` (0.10 at 4x) are also faster on the JVM, but they return arrays. Their light form stays the default, and their JVM form runs only when you force it.
 
 On Serverless the table reports shape, not speed. These functions grow in step with the row count (3.7 to 3.9 per 4x rows): the BNG tessellates, `gbx_st_transformcrs`, `gbx_st_makevalid` and `gbx_st_triangulate`. At 16x they take 37 to 622 times their scan floor. Accessors, statistics, `gbx_rst_fromcontent`, `gbx_rst_cog_convert` and `gbx_rst_proximity` grow less than the row count, because Serverless adds workers. The grouped merge of tiles with bytes fails at every size tried, and the by-reference form runs.
 

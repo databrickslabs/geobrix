@@ -245,27 +245,6 @@ Table converted_features: feature_id, wkb_geom, geometry columns
   // RasterX per-function examples (proof subset for tabbed docs)
   // =========================================================================
 
-  val rst_avg_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Reads the multiband_rasters Setup view (rgb_nir_small.tif, 3 bands);
-// the single-band sentinel2 tile is all-NoData for this function.
-val df = spark.table("multiband_rasters")
-val result = df.select(rx.rst_avg(col("tile")).alias("band_averages"))
-result.show()
-""".trim
-
-  val rst_avg_scala_example_output: String =
-    """
-+------------------------------------+
-|band_averages                       |
-+------------------------------------+
-|[83.59375, 153.125, 114.3125]       |
-+------------------------------------+
-""".trim
-
   val rst_boundingbox_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -325,26 +304,6 @@ result.show()
 +-----+
 """.trim
 
-  val rst_bandmetadata_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif) which carries per-band GDAL metadata tags.
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_bandmetadata(col("tile"), lit(1)).alias("band_meta"))
-result.show(truncate = false)
-""".trim
-
-  val rst_bandmetadata_scala_example_output: String =
-    """
-+----------------------------------------------+
-|band_meta                                     |
-+----------------------------------------------+
-|{name -> red, wavelength_nm -> 665, band_in...|
-+----------------------------------------------+
-""".trim
-
   val rst_format_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -362,44 +321,6 @@ result.show()
 +------+
 |GTiff |
 +------+
-""".trim
-
-  val rst_georeference_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_georeference(col("tile")).alias("georeference"))
-result.show(truncate = false)
-""".trim
-
-  val rst_georeference_scala_example_output: String =
-    """
-+--------------------------------------------------------------+
-|georeference                                                  |
-+--------------------------------------------------------------+
-|{scaleX -> 10.0, scaleY -> -10.0, upperLeftX -> 2121950.0,... |
-+--------------------------------------------------------------+
-""".trim
-
-  val rst_getnodata_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_getnodata(col("tile")).alias("nodata"))
-result.show()
-""".trim
-
-  val rst_getnodata_scala_example_output: String =
-    """
-+--------+
-|nodata  |
-+--------+
-|[0.0]   |
-+--------+
 """.trim
 
   val rst_getsubdataset_scala_example: String =
@@ -446,26 +367,6 @@ result.show()
 +------+
 """.trim
 
-  val rst_max_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_max(col("tile")).alias("band_max"))
-result.show()
-""".trim
-
-  val rst_max_scala_example_output: String =
-    """
-+---------------------+
-|band_max             |
-+---------------------+
-|[119.0, 197.0, 148.0]|
-+---------------------+
-""".trim
-
   val rst_memsize_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -483,46 +384,6 @@ result.show()
 +-------+
 |71749  |
 +-------+
-""".trim
-
-  val rst_min_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands); single-band sentinel2 is all-NoData.
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_min(col("tile")).alias("band_min"))
-result.show()
-""".trim
-
-  val rst_min_scala_example_output: String =
-    """
-+-------------------+
-|band_min           |
-+-------------------+
-|[50.0, 102.0, 82.0]|
-+-------------------+
-""".trim
-
-  val rst_pixelcount_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 8x8, no NoData); single-band sentinel2 returns [0].
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_pixelcount(col("tile")).alias("pixel_count"))
-result.show()
-""".trim
-
-  val rst_pixelcount_scala_example_output: String =
-    """
-+------------+
-|pixel_count |
-+------------+
-|[64, 64, 64]|
-+------------+
 """.trim
 
   val rst_pixelheight_scala_example: String =
@@ -696,27 +557,6 @@ result.show(truncate = false)
 +----------+
 """.trim
 
-  val rst_subdatasets_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses committed CMIP5 NetCDF fixture (has time_bnds and prAdjust subdatasets).
-val rasters = spark.table("netcdf_rasters")
-val result = rasters.select(rx.rst_subdatasets(col("tile")).alias("subdatasets"))
-result.show(truncate = false)
-""".trim
-
-  val rst_subdatasets_scala_example_output: String =
-    """
-+------------------------------------------------------+
-|subdatasets                                           |
-+------------------------------------------------------+
-|{SUBDATASET_1_NAME -> ..., SUBDATASET_1_DESC -> [31...|
-+------------------------------------------------------+
-(map with SUBDATASET_1_NAME/DESC for time_bnds and SUBDATASET_2_NAME/DESC for prAdjust)
-""".trim
-
   val rst_summary_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}
@@ -735,26 +575,6 @@ result.show(truncate = false)
 +------------------------------------------------------------+
 |{"driverShortName": "GTiff", "size": [8, 8], "coordinateS...|
 +------------------------------------------------------------+
-""".trim
-
-  val rst_type_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-// Uses multiband fixture (rgb_nir_small.tif, 3 bands, UInt16).
-val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_type(col("tile")).alias("band_types"))
-result.show()
-""".trim
-
-  val rst_type_scala_example_output: String =
-    """
-+-----------------------------+
-|band_types                   |
-+-----------------------------+
-|[UInt16, UInt16, UInt16]     |
-+-----------------------------+
 """.trim
 
   val rst_upperleftx_scala_example: String =
@@ -1662,49 +1482,9 @@ result.show(truncate = false)
 (array of contour features: LineString + elevation value)
 """.trim
 
-  val rst_sample_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_sample(col("tile"), lit("SRID=4326;POINT(-73.97 40.75)")).alias("sampled"))
-result.show(truncate = false)
-""".trim
-
-  val rst_sample_scala_example_output: String =
-    """
-+--------+
-|sampled |
-+--------+
-|[1234.5]|
-+--------+
-(array of sampled values, one per band)
-""".trim
-
   // ========================================================================
   // Coordinate Transforms & Tiling
   // ========================================================================
-
-  val rst_rastertoworldcoord_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_rastertoworldcoord(col("tile"), lit(100), lit(80)).alias("world_coord"))
-result.show(truncate = false)
-""".trim
-
-  val rst_rastertoworldcoord_scala_example_output: String =
-    """
-+-------------------+
-|world_coord        |
-+-------------------+
-|{500980.0, ...}    |
-+-------------------+
-(struct with x: DOUBLE, y: DOUBLE)
-""".trim
 
   val rst_rastertoworldcoordx_scala_example: String =
     """
@@ -1742,26 +1522,6 @@ result.show(truncate = false)
 +--------+
 |4599220 |
 +--------+
-"""
-
-  val rst_worldtorastercoord_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val raster = spark.table("rasters")
-val result = raster.select(rx.rst_worldtorastercoord(col("tile"), lit(554880), lit(4545120)).alias("pixel_coord"))
-result.show(truncate = false)
-""".trim
-
-  val rst_worldtorastercoord_scala_example_output: String =
-    """
-+-----------+
-|pixel_coord|
-+-----------+
-|{5490, ...}|
-+-----------+
-(struct with x: INT, y: INT)
 """
 
   val rst_worldtorastercoordx_scala_example: String =
@@ -3054,11 +2814,11 @@ result.show()
 import com.databricks.labs.gbx.rasterx.{functions => rx}
 import org.apache.spark.sql.functions._
 
-// The wrapper calls gbx_rst_avg by name. A Python step ran gbx.register(spark)
+// The wrapper calls gbx_rst_width by name. A Python step ran gbx.register(spark)
 // in this session, so the name resolves.
-val averages = spark.table("main.geobrix.rasters")
-  .select(col("path"), rx.rst_avg(col("tile")).alias("band_averages"))
-averages.show()
+val widths = spark.table("main.geobrix.rasters")
+  .select(col("path"), rx.rst_width(col("tile")).alias("width"))
+widths.show()
 """.trim
 
   val jvm_job_uc_example: String =

@@ -56,7 +56,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_transformcrs, rst_cog_convert, rst_align_to and rst_binpoints left with their companions: 110 - 4 = 106.
     // rst_gridfrompoints left with its companion: 106 - 1 = 105.
     // rst_combine{avg,count,max,median,min,stddev,sum} and rst_bng_tessellate left with their companions: 105 - 8 = 97.
-    assert(BenchDispatch.all.size == 97)
+    // the accessors and statistics that return an array, a map or a struct (avg, min, max, pixelcount, sample,
+    // getnodata, type, georeference, bandmetadata, subdatasets and the two coordinate pairs) left with their companions: 97 - 12 = 85.
+    assert(BenchDispatch.all.size == 85)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")

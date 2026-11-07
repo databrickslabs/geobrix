@@ -386,6 +386,31 @@ def test_a_jvm_first_accessor_returns_one_value_and_has_the_virtual_dispatch(fn)
     assert levels.select(fn, _caps()).level == "L3"  # no JAR: light
 
 
+_NO_JVM_ACCESSORS = [
+    f"gbx_rst_{n}"
+    for n in (
+        "avg min max pixelcount sample getnodata type georeference bandmetadata subdatasets "
+        "rastertoworldcoord worldtorastercoord"
+    ).split()
+]
+
+
+@pytest.mark.parametrize("name", _NO_JVM_ACCESSORS)
+def test_an_accessor_or_statistic_that_returns_an_array_map_or_struct_has_no_jvm_level(
+    name,
+):
+    """It can sit under explode or inline, where the dispatch wrapper is refused, so the JVM form could not be the
+    default; avg measured 0.59x and 0.65x of light at 4x and 16x rows, and the JVM class is removed.
+    """
+    fn = MAN.functions[name]
+    assert fn.returns_session not in _ONE_VALUE
+    assert not {"L1", "L2"} & set(fn.levels)
+    assert levels.order(fn) == ("L3",)
+    assert (
+        levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
+    )  # the JAR does not change it
+
+
 def test_no_array_map_or_struct_function_of_the_accessors_and_statistics_is_jvm_first():
     for f in FNS:
         if (
@@ -393,6 +418,7 @@ def test_no_array_map_or_struct_function_of_the_accessors_and_statistics_is_jvm_
             and f.returns_session not in _ONE_VALUE
         ):
             assert levels.order(f) == ("L3",), f.sql_name
+            assert "L1" not in f.levels, f.sql_name
 
 
 @pytest.mark.parametrize(
@@ -2083,7 +2109,8 @@ def _light(spark, names):
 
 
 def _heavy(spark, names):
-    """The Catalyst accessors under their own names (the manifest does not hold them yet)."""
+    """The Catalyst accessors under their own names (a function the manifest holds JVM first; an array, map or struct
+    accessor has no Catalyst form)."""
     from databricks.labs.gbx.manager import jvm
 
     def install():
@@ -2094,9 +2121,7 @@ def _heavy(spark, names):
             cls = {
                 "rst_numbands": "NumBands",
                 "rst_srid": "SRID",
-                "rst_getnodata": "GetNoData",
                 "rst_boundingbox": "BoundingBox",
-                "rst_georeference": "GeoReference",
             }.get(n, n[len("rst_") :].capitalize())
             r = inst.install(spark._jsparkSession, f"gbx_{n}", base + cls)
             assert str(r) == "ok", r
@@ -2115,10 +2140,11 @@ def test_light_header_accessors_answer_for_a_tile_over_the_read_cap(spark, tmp_p
 def test_heavy_header_accessors_answer_for_a_tile_over_the_read_cap(
     jvm_spark, tmp_path
 ):
-    names = [*_HEADER_ANSWERS, "rst_avg"]
+    names = list(
+        _HEADER_ANSWERS
+    )  # the JVM has no pixel reader of this kind left (avg is light only)
     got = _answers(jvm_spark, tmp_path, names, _heavy(jvm_spark, names), cap=4096)
-    assert {k: got[k] for k in _HEADER_ANSWERS} == _HEADER_ANSWERS
-    assert got["rst_avg"] is None, "a pixel reader still refuses the tile"
+    assert got == _HEADER_ANSWERS
 
 
 def test_light_format_of_a_netcdf_tile_is_its_own(spark, tmp_path):
@@ -2147,14 +2173,7 @@ def test_heavy_and_light_accessors_agree_on_a_single_variable_netcdf_tile(
     """A non-container netCDF tile (one variable, a band): heavy reads its source dataset for the header and
     ungated accessors, and every one of these answers as light's, which never translates.
     """
-    names = [
-        "rst_format",
-        "rst_type",
-        "rst_getnodata",
-        "rst_boundingbox",
-        "rst_georeference",
-        "rst_srid",
-    ]
+    names = ["rst_format", "rst_boundingbox", "rst_srid"]
     light = _answers(
         jvm_spark, tmp_path, names, _light(jvm_spark, names), "tile_4326_netcdf"
     )
@@ -3091,8 +3110,15 @@ def test_light_container_tile_answers_its_header_and_has_no_pixel(spark):
 
 @pytest.mark.integration
 def test_heavy_container_tile_answers_its_header_and_has_no_pixel(jvm_spark):
-    names = _CONTAINER_ANSWERS + _CONTAINER_PIXEL
-    got = _container_answers(jvm_spark, names, _heavy(jvm_spark, names))
+    # the JVM answers the header and the summary; subdatasets and avg are light only
+    jvm_names = ["rst_width", "rst_height", "rst_numbands", "rst_summary"]
+    light_names = ["rst_subdatasets", "rst_avg"]
+
+    def register_it():
+        _light(jvm_spark, light_names)()
+        _heavy(jvm_spark, jvm_names)()
+
+    got = _container_answers(jvm_spark, jvm_names + light_names, register_it)
     assert got == _CONTAINER_WANT
 
 
@@ -3151,10 +3177,10 @@ def test_the_managers_choice_stands_with_the_jar_loaded(jvm_spark):
         f"SELECT typeof(gbx_rst_combineavg_agg(t)) AS k FROM (SELECT {tile} AS t)"
     ).collect()[0]["k"]
     assert kind == "binary"
-    # a tile op the table prefers light for runs as a Python UDF, not the JVM scalar
+    # a function that returns a map (it can sit under explode) is light only: a Python UDF, not the JVM scalar
     full = f"CAST(NULL AS {manifest.TILE_SQL})"
     plan = (
-        jvm_spark.sql(f"SELECT gbx_rst_width(t) AS w FROM (SELECT {full} AS t)")
+        jvm_spark.sql(f"SELECT gbx_rst_metadata(t) AS w FROM (SELECT {full} AS t)")
         ._jdf.queryExecution()
         .executedPlan()
         .treeString()

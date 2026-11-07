@@ -26,19 +26,12 @@ import org.apache.spark.sql.Column
 object functions extends Serializable {
 
     // Accessors
-    def rst_avg(tile: Column): Column = ColumnAdapter(RST_Avg.name, Seq(tile))
-    def rst_bandmetadata(tile: Column, band: Column): Column = ColumnAdapter(RST_BandMetaData.name, Seq(tile, band))
     def rst_boundingbox(tile: Column): Column = ColumnAdapter(RST_BoundingBox.name, Seq(tile))
     def rst_format(tile: Column): Column = ColumnAdapter(RST_Format.name, Seq(tile))
-    def rst_georeference(tile: Column): Column = ColumnAdapter(RST_GeoReference.name, Seq(tile))
-    def rst_getnodata(tile: Column): Column = ColumnAdapter(RST_GetNoData.name, Seq(tile))
     def rst_getsubdataset(tile: Column, subsetName: Column): Column = ColumnAdapter(RST_GetSubdataset.name, Seq(tile, subsetName))
     def rst_height(tile: Column): Column = ColumnAdapter(RST_Height.name, Seq(tile))
-    def rst_max(tile: Column): Column = ColumnAdapter(RST_Max.name, Seq(tile))
     def rst_memsize(tile: Column): Column = ColumnAdapter(RST_MemSize.name, Seq(tile))
-    def rst_min(tile: Column): Column = ColumnAdapter(RST_Min.name, Seq(tile))
     def rst_numbands(tile: Column): Column = ColumnAdapter(RST_NumBands.name, Seq(tile))
-    def rst_pixelcount(tile: Column): Column = ColumnAdapter(RST_PixelCount.name, Seq(tile))
     def rst_pixelheight(tile: Column): Column = ColumnAdapter(RST_PixelHeight.name, Seq(tile))
     def rst_pixelwidth(tile: Column): Column = ColumnAdapter(RST_PixelWidth.name, Seq(tile))
     def rst_rotation(tile: Column): Column = ColumnAdapter(RST_Rotation.name, Seq(tile))
@@ -48,9 +41,7 @@ object functions extends Serializable {
     def rst_skewy(tile: Column): Column = ColumnAdapter(RST_SkewY.name, Seq(tile))
     def rst_crs(tile: Column): Column = ColumnAdapter(RST_Crs.name, Seq(tile))
     def rst_srid(tile: Column): Column = ColumnAdapter(RST_SRID.name, Seq(tile))
-    def rst_subdatasets(tile: Column): Column = ColumnAdapter(RST_Subdatasets.name, Seq(tile))
     def rst_summary(tile: Column): Column = ColumnAdapter(RST_Summary.name, Seq(tile))
-    def rst_type(tile: Column): Column = ColumnAdapter(RST_Type.name, Seq(tile))
     def rst_upperleftx(tile: Column): Column = ColumnAdapter(RST_UpperLeftX.name, Seq(tile))
     def rst_upperlefty(tile: Column): Column = ColumnAdapter(RST_UpperLeftY.name, Seq(tile))
     def rst_width(tile: Column): Column = ColumnAdapter(RST_Width.name, Seq(tile))
@@ -258,8 +249,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_isempty(tile: Column): Column = ColumnAdapter(RST_IsEmpty.name, Seq(tile))
     def rst_mapalgebra(tiles: Column, expression: Column): Column = ColumnAdapter(RST_MapAlgebra.name, Seq(tiles, expression))
     def rst_merge(tiles: Column): Column = ColumnAdapter(RST_Merge.name, Seq(tiles))
-    def rst_rastertoworldcoord(tile: Column, x: Column, y: Column): Column =
-        ColumnAdapter(RST_RasterToWorldCoord.name, Seq(tile, x, y))
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
     def rst_rastertoworldcoordy(tile: Column, x: Column, y: Column): Column =
@@ -267,8 +256,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_transform(tile: Column, srid: Column): Column = ColumnAdapter(RST_Transform.name, Seq(tile, srid))
     def rst_tryopen(tile: Column): Column = ColumnAdapter(RST_TryOpen.name, Seq(tile))
     def rst_updatetype(tile: Column, newType: Column): Column = ColumnAdapter(RST_UpdateType.name, Seq(tile, newType))
-    def rst_worldtorastercoord(tile: Column, x: Column, y: Column): Column =
-        ColumnAdapter(RST_WorldToRasterCoord.name, Seq(tile, x, y))
     def rst_worldtorastercoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_WorldToRasterCoordX.name, Seq(tile, x, y))
     def rst_worldtorastercoordy(tile: Column, x: Column, y: Column): Column =
@@ -277,7 +264,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     // Scalar-literal overloads — so users can pass plain values for non-Column params
     // (e.g. rst_clip(tile, clip, true) instead of rst_clip(tile, clip, lit(true))).
     // Column params (tile, geometry, kernel, tiles, content) stay as Column.
-    def rst_bandmetadata(tile: Column, band: Int): Column = rst_bandmetadata(tile, lit(band))
     def rst_getsubdataset(tile: Column, subsetName: String): Column = rst_getsubdataset(tile, lit(subsetName))
     def rst_fromcontent(content: Column, driver: String): Column = rst_fromcontent(content, lit(driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper or scalar
@@ -307,16 +293,12 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_filter(tile: Column, kernelSize: Int, operation: String): Column =
         rst_filter(tile, lit(kernelSize), lit(operation))
     def rst_mapalgebra(tiles: Column, expression: String): Column = rst_mapalgebra(tiles, lit(expression))
-    def rst_rastertoworldcoord(tile: Column, x: Int, y: Int): Column =
-        rst_rastertoworldcoord(tile, lit(x), lit(y))
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
     def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordy(tile, lit(x), lit(y))
     def rst_transform(tile: Column, srid: Int): Column = rst_transform(tile, lit(srid))
     def rst_updatetype(tile: Column, newType: String): Column = rst_updatetype(tile, lit(newType))
-    def rst_worldtorastercoord(tile: Column, x: Double, y: Double): Column =
-        rst_worldtorastercoord(tile, lit(x), lit(y))
     def rst_worldtorastercoordx(tile: Column, x: Double, y: Double): Column =
         rst_worldtorastercoordx(tile, lit(x), lit(y))
     def rst_worldtorastercoordy(tile: Column, x: Double, y: Double): Column =
@@ -449,9 +431,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_fillnodata(tile, lit(maxSearchDist))
     def rst_fillnodata(tile: Column, maxSearchDist: Double, smoothingIter: Int): Column =
         rst_fillnodata(tile, lit(maxSearchDist), lit(smoothingIter))
-
-    def rst_sample(tile: Column, geom: Column): Column =
-        ColumnAdapter(RST_Sample.name, Seq(tile, geom))
 
     def rst_setsrid(tile: Column, srid: Column): Column =
         ColumnAdapter(RST_SetSrid.name, Seq(tile, srid))

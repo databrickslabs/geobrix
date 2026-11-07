@@ -16,17 +16,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     // ====== Accessor Functions ======
 
-    test("rst_avg should create Column") {
-        val result = functions.rst_avg(col("tile"))
-        result should not be null
-        result.getClass.getName should include("Column")
-    }
-
-    test("rst_bandmetadata should accept tile and band") {
-        val result = functions.rst_bandmetadata(col("tile"), col("band"))
-        result should not be null
-    }
-
     test("rst_boundingbox should create Column") {
         val result = functions.rst_boundingbox(col("tile"))
         result should not be null
@@ -34,16 +23,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("rst_format should create Column") {
         val result = functions.rst_format(col("tile"))
-        result should not be null
-    }
-
-    test("rst_georeference should create Column") {
-        val result = functions.rst_georeference(col("tile"))
-        result should not be null
-    }
-
-    test("rst_getnodata should create Column") {
-        val result = functions.rst_getnodata(col("tile"))
         result should not be null
     }
 
@@ -57,28 +36,13 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_max should create Column") {
-        val result = functions.rst_max(col("tile"))
-        result should not be null
-    }
-
     test("rst_memsize should create Column") {
         val result = functions.rst_memsize(col("tile"))
         result should not be null
     }
 
-    test("rst_min should create Column") {
-        val result = functions.rst_min(col("tile"))
-        result should not be null
-    }
-
     test("rst_numbands should create Column") {
         val result = functions.rst_numbands(col("tile"))
-        result should not be null
-    }
-
-    test("rst_pixelcount should create Column") {
-        val result = functions.rst_pixelcount(col("tile"))
         result should not be null
     }
 
@@ -122,18 +86,8 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_subdatasets should create Column") {
-        val result = functions.rst_subdatasets(col("tile"))
-        result should not be null
-    }
-
     test("rst_summary should create Column") {
         val result = functions.rst_summary(col("tile"))
-        result should not be null
-    }
-
-    test("rst_type should create Column") {
-        val result = functions.rst_type(col("tile"))
         result should not be null
     }
 
@@ -240,11 +194,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_rastertoworldcoord should accept tile, pixelX, and pixelY") {
-        val result = functions.rst_rastertoworldcoord(col("tile"), col("x"), col("y"))
-        result should not be null
-    }
-
     test("rst_rastertoworldcoordx should accept tile, pixelX, and pixelY") {
         val result = functions.rst_rastertoworldcoordx(col("tile"), col("x"), col("y"))
         result should not be null
@@ -270,11 +219,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_worldtorastercoord should accept tile, worldX, and worldY") {
-        val result = functions.rst_worldtorastercoord(col("tile"), col("x"), col("y"))
-        result should not be null
-    }
-
     test("rst_worldtorastercoordx should accept tile, worldX, and worldY") {
         val result = functions.rst_worldtorastercoordx(col("tile"), col("x"), col("y"))
         result should not be null
@@ -289,7 +233,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
 
     test("scalar-literal overloads should accept plain values for non-Column args") {
         // int scalars
-        functions.rst_bandmetadata(col("tile"), 1) should not be null
         functions.rst_transform(col("tile"), 4326) should not be null
         // string scalars
         functions.rst_asformat(col("tile"), "GTiff") should not be null
@@ -297,7 +240,7 @@ class RasterXFunctionsTest extends AnyFunSuite {
         functions.rst_filter(col("tile"), 3, "median") should not be null
         functions.rst_mapalgebra(col("tiles"), "{\"calc\": \"A+2*A\"}") should not be null
         // double scalars
-        functions.rst_worldtorastercoord(col("tile"), 1.0, 2.0) should not be null
+        functions.rst_worldtorastercoordx(col("tile"), 1.0, 2.0) should not be null
     }
 
     // ====== Registration Tests ======

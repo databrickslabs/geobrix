@@ -98,12 +98,9 @@ class CustomUdfsDocTest extends AnyFunSuite with BeforeAndAfterAll {
     test("pixel accessor execute methods") {
         val pixelWidth = RST_PixelWidth.execute(testDataset)
         val pixelHeight = RST_PixelHeight.execute(testDataset)
-        val pixelCount = RST_PixelCount.execute(testDataset)
 
         pixelWidth should be > 0.0
         pixelHeight should be > 0.0
-        pixelCount should not be empty
-        pixelCount.head should be > 0L
     }
 
     test("coordinate accessor execute methods") {

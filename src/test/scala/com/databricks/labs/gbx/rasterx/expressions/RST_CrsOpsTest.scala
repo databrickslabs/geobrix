@@ -211,14 +211,4 @@ class RST_CrsOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         finally ds.delete()
     }
 
-    test("RST_Sample.execute is CRS-pre-aligned; reprojection is done in doInvoke") {
-        import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
-        // execute() samples at raster-CRS coords: the fixture centre pixel must read back.
-        val gt = ds.GetGeoTransform()
-        val cx = gt(0) + gt(1) * (ds.GetRasterXSize / 2.0)
-        val cy = gt(3) + gt(5) * (ds.GetRasterYSize / 2.0)
-        val vals = RST_Sample.execute(ds, cx, cy)
-        vals should not be null
-        vals.length shouldBe ds.GetRasterCount
-    }
 }

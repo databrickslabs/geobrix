@@ -140,12 +140,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
     }
 
-    test("RST_RasterToWorldCoord should convert raster to world coordinates") {
-        val (x, y) = RST_RasterToWorldCoord.execute(ds, 10000, 10000)
-        x should not be 0.0
-        y should not be 0.0
-    }
-
     test("RST_RasterToWorldCoordX should convert raster to world X coordinate") {
         val x = RST_RasterToWorldCoordX.execute(ds, 10000, 10000)
         x should not be 0.0
@@ -170,12 +164,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         updatedDs.getRasterXSize shouldBe ds.getRasterXSize
         updatedDs.getRasterYSize shouldBe ds.getRasterYSize
         updatedDs.delete()
-    }
-
-    test("RST_WorldToRasterCoord should convert world coordinates to raster") {
-        val (x, y) = RST_WorldToRasterCoord.execute(ds, 0.0, 0.0)
-        x should be >= 0
-        y should be >= 0
     }
 
     test("RST_WorldToRasterCoordX should convert world X coordinate to raster") {

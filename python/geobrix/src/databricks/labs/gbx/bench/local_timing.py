@@ -173,7 +173,8 @@ def _family_sets() -> Dict[str, SetSpec]:
             # the light level opens the tile (~20 ms) where the JVM reads a header: a finding, not a scaling defect
             peer_exempt=("c0@n",),
         ),
-        "raster-stat": tile_fn("raster-stat", "gbx_rst_avg"),
+        # avg returns an array, which can sit under explode, so it has no JVM level (it ran at 0.59x and 0.65x of light)
+        "raster-stat": tile_fn("raster-stat", "gbx_rst_avg", l1=False),
         # align_to, cog_convert, binpoints and asmvt have no JVM level (it measured slower than light): light and floor only
         "raster-tile-op": tile_fn("raster-tile-op", "gbx_rst_align_to", l1=False),
         "raster-file-op": tile_fn("raster-file-op", "gbx_rst_cog_convert", l1=False),

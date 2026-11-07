@@ -23,18 +23,11 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
             val base = df.cache()
             base.collect()
             Seq(
-              rst_avg(col("raster")),
-              rst_bandmetadata(col("raster"), lit(1)),
               rst_boundingbox(col("raster")),
               rst_format(col("raster")),
-              rst_georeference(col("raster")),
-              rst_getnodata(col("raster")),
               rst_height(col("raster")),
-              rst_max(col("raster")),
               rst_memsize(col("raster")),
-              rst_min(col("raster")),
               rst_numbands(col("raster")),
-              rst_pixelcount(col("raster")),
               rst_pixelheight(col("raster")),
               rst_pixelwidth(col("raster")),
               rst_rotation(col("raster")),
@@ -43,9 +36,7 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
               rst_skewx(col("raster")),
               rst_skewy(col("raster")),
               rst_srid(col("raster")),
-              rst_subdatasets(col("raster")),
               rst_summary(col("raster")),
-              rst_type(col("raster")),
               rst_upperleftx(col("raster")),
               rst_upperlefty(col("raster")),
               rst_width(col("raster"))

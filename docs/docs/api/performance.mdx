@@ -39,7 +39,7 @@ The light level runs every function on every compute. It is the default for the 
 
 | Function family | What runs | Measured result |
 |---|---|---|
-| Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The default. The JVM form is faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the light time at 4x and 16x rows), but such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to light is refused. A JVM form would raise on a virtual tile there, so it is not the default. |
+| Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The only form. The JVM form was faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the light time at 4x and 16x rows). Such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to light is refused, so the JVM form could not be the default. It is no longer shipped. |
 | Band math and spectral indices | NumPy in the worker | 3.1x to 3.9x faster than the JVM form |
 | Warps and resampling | rasterio | 2.1x to 4.7x faster than the JVM form |
 | Terrain (slope, aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
@@ -55,7 +55,7 @@ The light level runs every function on every compute. It is the default for the 
 | `gbx_bng_eastnorthasbng` | SQL function, then a Python batch form | The JVM form took 1.17x and 1.35x the time of the Python batch form at 4 and 16 million rows, and is no longer shipped |
 | Other families | Per-function UDF | Not yet measured: highest available level |
 
-Source: a dedicated cluster (one driver and four `m5d.2xlarge` workers, DBR 19). Rows are multiples of each function's base row count. The accessor row comes from two functions and the statistic row from one.
+Source: a dedicated cluster (one driver and four `m5d.2xlarge` workers, DBR 19). Rows are multiples of each function's base row count.
 
 ### Heavy level (with the JAR)
 
@@ -84,7 +84,7 @@ The same JAR also serves these functions, measured on earlier runs by the time t
 | `gbx_h3_cellfill` | 0.57 | Dedicated |
 | The raster accessors that return one value (`gbx_rst_width` and `gbx_rst_boundingbox` measured) | 0.18 to 0.26 | Dedicated |
 
-A raster accessor that returns one value (a number, a string or a WKB polygon) runs on the JVM for a materialized tile. A virtual tile goes to the light form, because the JVM level reads bytes only. The accessors that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` stay on light.
+A raster accessor that returns one value (a number, a string or a WKB polygon) runs on the JVM for a materialized tile. A virtual tile goes to the light form, because the JVM level reads bytes only. The accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` have no JVM form.
 
 Standard access mode runs Spark Connect, which cannot load a Catalyst expression. No function has a JVM level there.
 

@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
-import com.databricks.labs.gbx.rasterx.expressions.accessors.RST_Max
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import org.gdal.gdal.{Dataset, gdal}
 import org.locationtech.jts.geom.Geometry
@@ -53,6 +52,12 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             case ac: AutoCloseable => ac.close()
             case _                 =>
         }
+    }
+
+    /** The maximum of band 1 over its valid pixels; null when it has none. */
+    private def bandMax(chip: Dataset): java.lang.Double = {
+        val st = BandAccessors.validStats(chip, 1)
+        if (st.count == 0L) null else java.lang.Double.valueOf(st.max)
     }
 
     /** Counts valid (non-nodata) pixels across all bands of a chip dataset. */
@@ -210,7 +215,7 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         try {
             iter.foreach { case (_, chip, _) =>
                 val vc = validPixelCount(chip)
-                val mx = RST_Max.execute(chip).headOption.orNull
+                val mx = bandMax(chip)
                 if (vc == 0L) { emptySeen += 1; mx shouldBe null }
                 else { dataSeen += 1; mx should not be null }
                 RasterDriver.releaseDataset(chip)
@@ -418,15 +423,15 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         )
     }
 
-    test("BNG covering chip content: aligned raster yields RST_Max non-null for data cells and null for all-NoData cells") {
+    test("BNG covering chip content: aligned raster yields band maximum non-null for data cells and null for all-NoData cells") {
         val res = BNG.getResolution("1km")
-        // All-data raster: every chip has valid pixels -> RST_Max must be non-null.
+        // All-data raster: every chip has valid pixels -> band maximum must be non-null.
         val iter = RasterTessellate.tessellateBngIter(bngAlignedDs(fill = Some(42.0)), Map.empty, res, "covering", "complete")
         var count = 0
         try {
             iter.foreach { case (_, chip, _) =>
-                val mx = RST_Max.execute(chip).headOption.orNull
-                withClue(s"BNG covering chip from all-data raster must have non-null RST_Max: ") {
+                val mx = bandMax(chip)
+                withClue(s"BNG covering chip from all-data raster must have non-null band maximum: ") {
                     mx should not be null
                 }
                 RasterDriver.releaseDataset(chip)
@@ -435,13 +440,13 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally iter match { case ac: AutoCloseable => ac.close(); case _ => }
         withClue(s"bngAlignedDs covers exactly 4 whole 1km cells: ") { count shouldBe 4 }
 
-        // All-NoData raster: every chip is all-nodata -> RST_Max must be null.
+        // All-NoData raster: every chip is all-nodata -> band maximum must be null.
         val iterNd = RasterTessellate.tessellateBngIter(bngAlignedDs(fill = None), Map.empty, res, "covering", "complete")
         var ndCount = 0
         try {
             iterNd.foreach { case (_, chip, _) =>
-                val mx = RST_Max.execute(chip).headOption.orNull
-                withClue(s"BNG covering chip from all-NoData raster must have null RST_Max: ") {
+                val mx = bandMax(chip)
+                withClue(s"BNG covering chip from all-NoData raster must have null band maximum: ") {
                     mx shouldBe null
                 }
                 RasterDriver.releaseDataset(chip)
@@ -453,15 +458,15 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("Quadbin covering chip content: aligned raster yields RST_Max non-null for data cells and null for all-NoData cells") {
+    test("Quadbin covering chip content: aligned raster yields band maximum non-null for data cells and null for all-NoData cells") {
         val z = 12
-        // All-data: RST_Max non-null for every chip.
+        // All-data: band maximum non-null for every chip.
         val iter = RasterTessellate.tessellateQuadbinIter(quadbinAlignedDs(z, fill = Some(42.0)), Map.empty, z, "covering", "complete")
         var count = 0
         try {
             iter.foreach { case (_, chip, _) =>
-                val mx = RST_Max.execute(chip).headOption.orNull
-                withClue(s"Quadbin covering chip from all-data raster must have non-null RST_Max: ") {
+                val mx = bandMax(chip)
+                withClue(s"Quadbin covering chip from all-data raster must have non-null band maximum: ") {
                     mx should not be null
                 }
                 RasterDriver.releaseDataset(chip)
@@ -470,13 +475,13 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally iter match { case ac: AutoCloseable => ac.close(); case _ => }
         withClue(s"quadbinAlignedDs(z=$z) covers exactly 4 child cells: ") { count shouldBe 4 }
 
-        // All-NoData: RST_Max null for every chip.
+        // All-NoData: band maximum null for every chip.
         val iterNd = RasterTessellate.tessellateQuadbinIter(quadbinAlignedDs(z, fill = None), Map.empty, z, "covering", "complete")
         var ndCount = 0
         try {
             iterNd.foreach { case (_, chip, _) =>
-                val mx = RST_Max.execute(chip).headOption.orNull
-                withClue(s"Quadbin covering chip from all-NoData raster must have null RST_Max: ") {
+                val mx = bandMax(chip)
+                withClue(s"Quadbin covering chip from all-NoData raster must have null band maximum: ") {
                     mx shouldBe null
                 }
                 RasterDriver.releaseDataset(chip)

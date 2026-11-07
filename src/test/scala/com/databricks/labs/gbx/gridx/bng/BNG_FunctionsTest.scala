@@ -8,13 +8,11 @@ class BNG_FunctionsTest extends AnyFunSuite {
 
     test("scalar-literal overloads should accept plain values for non-Column args") {
         // Int resolution overloads
-        functions.bng_eastnorthasbng(col("e"), col("n"), 1) should not be null
         functions.bng_pointascell(col("pt"), 1) should not be null
         functions.bng_polyfill(col("geom"), 1) should not be null
         functions.bng_tessellate(col("geom"), 1) should not be null
 
         // String resolution overloads
-        functions.bng_eastnorthasbng(col("e"), col("n"), "1km") should not be null
         functions.bng_pointascell(col("pt"), "1km") should not be null
         functions.bng_polyfill(col("geom"), "1km") should not be null
         functions.bng_tessellate(col("geom"), "1km") should not be null

@@ -45,8 +45,6 @@ class BNG_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               bng_cellunion(nonCoreCell, nonCoreCell),
               bng_centroid(df("cellId")),
               bng_distance(df("cellId"), df("cellId")),
-              bng_eastnorthasbng(lit(100000), lit(200000), lit(3)),
-              bng_eastnorthasbng(lit(100000), lit(200000), lit("50m")),
               bng_euclideandistance(df("cellId"), df("cellId")),
               bng_geomkring(lit(wkbLit), lit(1), lit(1)),
               bng_geomkloop(lit(wkbLit), lit(1), lit(1)),

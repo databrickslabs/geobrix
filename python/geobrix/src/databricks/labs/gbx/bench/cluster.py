@@ -1834,6 +1834,8 @@ def _bng_legs(_api):
     # Run the selected BNG legs for one tier, in table order, returning the rows.
     _out = []
     for _fn, _kw in _BNG_LEGS:
+        if _api == "heavyweight" and _fn == "bng_eastnorthasbng":
+            continue  # no heavyweight level (it measured slower than light)
         if not _BNG_SEL or _fn in _BNG_SEL:
             _out.append(getattr(_rd, "run_" + _fn)(
                 spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
@@ -2127,31 +2129,6 @@ if LIGHTWEIGHT and HEAVYWEIGHT:
         _v = "BNG EUCLIDEANDISTANCE PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
     print(_v); _verdicts.append(_v)
     assert _v.startswith("BNG EUCLIDEANDISTANCE PARITY: PASS"), _v
-    # --- eastnorthasbng: exact STRING cell-id equality. ---
-    try:
-        _edata, _eschema = _cv.generate_bng_eastnorth(_BNG_N_ROWS)
-        spark.createDataFrame(_edata, schema=_eschema).createOrReplaceTempView(
-            "_bng_eastnorth_parity_v")
-        from databricks.labs.gbx.pygx import functions as _gx_en
-        from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_', 'gbx_custom_', 'gbx_quadbin_', 'gbx_h3_'), level="L3")
-        _light_en = [r["cell"] for r in spark.sql(
-            "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
-            "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
-        from databricks.labs.gbx.gridx.bng import functions as _hx_en
-        from databricks.labs.gbx import manager as _gbx_mgr
-        _gbx_mgr.register_family(spark, ('gbx_bng_',), only=_gbx_mgr.names_at_level(('gbx_bng_',), "L1"), level="L1")
-        _heavy_en = [r["cell"] for r in spark.sql(
-            "SELECT gbx_bng_eastnorthasbng(e, n, '%s') AS cell "
-            "FROM _bng_eastnorth_parity_v" % _BNG_CELL_RES).collect()]
-        _en_ok = (len(_light_en) == len(_heavy_en) > 0 and _light_en == _heavy_en)
-        _v = ("BNG EASTNORTHASBNG PARITY: PASS (%d points, exact id equality)"
-              % len(_light_en)
-              if _en_ok else "BNG EASTNORTHASBNG PARITY: FAIL -- cell id mismatch")
-    except Exception as _pe:
-        _v = "BNG EASTNORTHASBNG PARITY: FAIL -- %s: %s" % (type(_pe).__name__, _pe)
-    print(_v); _verdicts.append(_v)
-    assert _v.startswith("BNG EASTNORTHASBNG PARITY: PASS"), _v
     # --- kloop: exact sorted cell-set per row (shared single-cell corpus). ---
     try:
         from databricks.labs.gbx.pygx import functions as _gx_kl

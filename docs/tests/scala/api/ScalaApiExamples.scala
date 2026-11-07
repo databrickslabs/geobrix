@@ -2578,27 +2578,6 @@ result.show()
 +-----------+
 ... (WKB binary — POINT(530500 180500) in EPSG:27700)""".trim
 
-  val bng_eastnorthasbng_scala_example: String =
-    """
-import com.databricks.labs.gbx.gridx.bng.{functions => bx}
-import org.apache.spark.sql.functions._
-
-// Reads the bng_points view (easting=530000, northing=180000, EPSG:27700)
-val df = spark.table("bng_points")
-val result = df.select(
-  bx.bng_eastnorthasbng(col("easting"), col("northing"), lit("1km")).alias("bng_cell")
-)
-result.show()
-""".trim
-
-  val bng_eastnorthasbng_scala_example_output: String =
-    """
-+--------+
-|bng_cell|
-+--------+
-|TQ3080  |
-+--------+""".trim
-
   val bng_pointascell_scala_example: String =
     """
 import com.databricks.labs.gbx.gridx.bng.{functions => bx}

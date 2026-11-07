@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.kernels.KernelGdal
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.BngEastNorthAsBngUdf
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import org.apache.spark.sql.Row
@@ -50,14 +49,11 @@ object SlimClasspathProbe {
     }
 
     private def facades(): Unit = {
-        val udf = new BngEastNorthAsBngUdf()
         val absent = Seq("org.apache.spark.sql.catalyst.InternalRow", "org.apache.spark.unsafe.types.UTF8String", "com.esotericsoftware.kryo.Kryo")
         // scalastyle:off classforname
         val loadable = absent.filter(n => try { Class.forName(n); true } catch { case _: Throwable => false })
         // scalastyle:on classforname
         val lines = Seq(
-          "L2 good: " + attempt(udf.call(530000.0, 180000.0, Integer.valueOf(3))),
-          "L2 bad: " + attempt(udf.call(530000.0, 180000.0, Integer.valueOf(1001))),
           "UC good: " + attempt(BngUc.eastNorthAsBng(530000.0, 180000.0, "-3")),
           "UC bad: " + attempt(BngUc.eastNorthAsBng(530000.0, 180000.0, "1001")),
           "UC cells: " + attempt(Seq(BngUc.cellArea("TQ3080"), BngUc.kRing("TQ3080", 1).size, BngUc.asWkb("TQ3080").length,

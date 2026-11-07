@@ -2112,8 +2112,7 @@
       "surfaces": [
         "session",
         "uc",
-        "python",
-        "scala"
+        "python"
       ],
       "since": "0.2.0"
     },

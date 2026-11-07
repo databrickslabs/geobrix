@@ -60,7 +60,6 @@ _LEGS = (
             "cellarea",
             "distance",
             "euclideandistance",
-            "eastnorthasbng",
             "kloop",
             "geomkring",
             "geomkloop",

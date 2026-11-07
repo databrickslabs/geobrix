@@ -1152,7 +1152,7 @@ Convert coordinates or geometries to BNG cells.
 ### bng_eastnorthasbng
 
 {/* BEGIN GENERATED gbx_bng_eastnorthasbng: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -1170,7 +1170,7 @@ Convert coordinates or geometries to BNG cells.
 Convert easting/northing coordinates to a BNG cell reference.
 
 :::note Implementation
-Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London). Bit-identical cell IDs to the JVM level.
+Runs as a SQL function that needs no JAR and no Python, and falls back to a numpy-vectorized Python encoder. The env wheel adds a Rust kernel. Eastings/northings must be **EPSG:27700** (e.g. `530000, 180000` for London).
 :::
 
 **Returns:**
@@ -1180,7 +1180,6 @@ Powered by the **pure-Python port of `BNG.scala`** (numpy-vectorized encoder). E
   name="bng_eastnorthasbng"
   sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
   python={gridxLightCode}           pythonSource="docs/tests/python/api/gridx_functions_python_light.py"
-  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
 />
 

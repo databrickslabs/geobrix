@@ -113,38 +113,6 @@ def run_detect(spark) -> dict:
     }
 
 
-def run_ek1(spark, n: int = 1_000_000) -> dict:
-    """E-K1: registerJavaFunction from Python on standard; called from SQL and call_function; vs L3."""
-    from pyspark.sql import functions as F
-
-    from databricks.labs.gbx import register
-
-    name = "gbx_bng_eastnorthasbng"
-    out = {}
-    pts = spark.range(n).select(
-        (F.rand(7) * 700000).alias("e"), (F.rand(8) * 1300000).alias("n")
-    )
-    pts.createOrReplaceTempView("ek1_pts")
-    for lv in (("L2", "-"), ("L3", "c0")):
-        try:
-            register(spark, only=[name], _levels={name: lv})
-            t = time.time()
-            # the call in a subquery (a Java UDF is not deterministic, so it cannot sit inside an aggregate) and
-            # the hash reduced before the sum (a sum of raw 64-bit hashes overflows under ANSI): the leg's own shape
-            spark.sql(
-                f"SELECT sum(pmod(xxhash64(c), 2147483647)) FROM (SELECT {name}(e, n, 3) AS c FROM ek1_pts)"
-            ).collect()
-            out[f"{lv[0]}_sql_s"] = time.time() - t
-            out[f"{lv[0]}_call_function"] = (
-                pts.limit(1)
-                .select(F.call_function(name, "e", "n", F.lit(3)))
-                .first()[0]
-            )
-        except Exception as exc:  # noqa: BLE001 - a refusal is a measured outcome
-            out[f"{lv[0]}_error"] = f"{type(exc).__name__}: {str(exc)[:500]}"
-    return out
-
-
 def run_etvf(spark, src: str) -> dict:
     """E-TVF: a JVM generator installed as a table function, called with a TABLE argument (expected refused)."""
     from databricks.labs.gbx import register

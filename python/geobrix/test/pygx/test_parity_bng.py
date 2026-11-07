@@ -3,7 +3,7 @@
 The bar (per the pygx BNG spec) is EXACT, not tolerant, for cell ids / sets:
 
 - **Cell IDs / sets are bit-exact** (BNG ids are STRINGS): ``pointascell`` /
-  ``eastnorthasbng`` (same STRING), ``cellarea`` (same DOUBLE), ``distance`` /
+  ``cellarea`` (same DOUBLE), ``distance`` /
   ``euclideandistance`` (same LONG), ``kring`` / ``kloop`` (sorted set),
   ``polyfill`` (sorted cell-set), ``tessellate`` (cell-set), ``geomkring`` /
   ``geomkloop`` (sorted set), and the five ``*explode`` UDTFs (light SQL UDTF vs
@@ -190,9 +190,6 @@ def test_bng_full_parity(spark_with_jar):
             f.call_function("gbx_bng_pointascell", f.col("pt"), f.col("res")).alias(
                 "pac"
             ),
-            f.call_function(
-                "gbx_bng_eastnorthasbng", f.col("e"), f.col("n"), f.col("res")
-            ).alias("enb"),
             f.call_function("gbx_bng_cellarea", f.col("seed")).alias("area"),
             f.call_function("gbx_bng_distance", f.col("seed"), f.col("cell_b")).alias(
                 "dist"
@@ -329,9 +326,6 @@ def test_bng_full_parity(spark_with_jar):
     assert (
         light["pac"] == heavy["pac"]
     ), f"pointascell mismatch: light={light['pac']} heavy={heavy['pac']}"
-    assert (
-        light["enb"] == heavy["enb"]
-    ), f"eastnorthasbng mismatch: light={light['enb']} heavy={heavy['enb']}"
     assert (
         light["area"] == heavy["area"]
     ), f"cellarea mismatch: light={light['area']} heavy={heavy['area']}"

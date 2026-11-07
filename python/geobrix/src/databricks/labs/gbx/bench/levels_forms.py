@@ -1090,10 +1090,7 @@ def _f(level, variant, fn, inp, sql, uc=False, vsql="", **kw):
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 FORMS: Dict[str, List[Form]] = {
     "S": [
-        _f("L1", "-", B, "bng_points", _BNG, computes=("dedicated",)),
-        # Standard access mode runs a Java UDF only from a Java class of a JAR added to the session
-        # (`connect_class` in the manifest): the BNG scalar has one, the forms below do not.
-        _f("L2", "-", B, "bng_points", _BNG, computes=("dedicated", "standard")),
+        # the BNG scalar has no JVM form (L1 and L2 measured slower than the light batch form): L3 forms and the floor
         _f("L3", "c0", B, "bng_points", _BNG),
         _f("L3", "c1", B, "bng_points", _BNG),
         _f("L3", "d", B, "bng_points", _BNG),

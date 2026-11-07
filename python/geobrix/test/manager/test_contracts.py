@@ -1438,14 +1438,9 @@ def test_uc_scala_key_is_closed_and_paired_with_a_python_handler():
             assert re.search(rf"def {method}\(", src.read_text()), l4["scala"]
 
 
-# --- Java handlers on standard access mode -----------------------------------------------------------------
-# Measured on a DBR 19 standard cluster: a JAR installed as a cluster library is invisible to the Java UDF
-# sandbox (CLASS_NOT_FOUND, for a Java class too); a JAR added to the SESSION (`spark.addArtifact`) is seen, but
-# only its Java classes are loaded (a Scala `class` still fails) and their parameters must be concrete types
-# (an `Object` parameter fails in the input conversion). So the manifest names a Java `connect_class` per row.
-
-BNG = MAN.functions["gbx_bng_eastnorthasbng"]
-CONNECT_BNG = BNG.levels["L2"]["connect_class"]
+# --- the JAR on standard access mode ----------------------------------------------------------------------
+# A JAR added to the SESSION (`spark.addArtifact`) is seen by the Java UDF sandbox; the capability probe reads the
+# JAR's identity and GDAL through two Java handlers. No function has a JVM level there (the one Java UDF is gone).
 
 
 def _standard_stub(monkeypatch, tmp_path, jar=True):
@@ -1464,122 +1459,10 @@ def _standard_stub(monkeypatch, tmp_path, jar=True):
         monkeypatch.setattr(_native, "jar_path", lambda root=None: None)
     stub = ConnectStub()
     stub.sandbox_classes = {
-        CONNECT_BNG,
         caps_mod.BUILDINFO_CONNECT_UDF,
         caps_mod.GDALPROBE_CONNECT_UDF,
     }
     return stub, str(path)
-
-
-def test_standard_l2_registers_the_java_handler_on_a_session_jar(monkeypatch, tmp_path):
-    from databricks.labs.gbx.manager import jvm
-
-    stub, jar = _standard_stub(monkeypatch, tmp_path)
-    assert jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR)) is None
-    assert stub.artifacts == [jar]  # the JAR goes to the session first
-    # the Java UDF under its private name; the SQL name is the wrapper that casts to its declared types
-    assert stub.java_registered == [
-        ("gbx__l2_bng_eastnorthasbng", CONNECT_BNG, "string")
-    ]
-    # one JAR, one attach per session, however many names register
-    jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR))
-    assert stub.artifacts == [jar]
-
-
-def test_cast_call_wraps_the_private_java_udf_with_declared_types():
-    """The L2 SQL wrapper, as text (the JAR-gated test only sees it run): each parameter typed in order, each
-    argument cast to the same type, the session return type, and a call to the private name.
-    """
-    from databricks.labs.gbx.manager import sqlwrap
-
-    assert sqlwrap.cast_call(
-        BNG, "gbx__l2_bng_eastnorthasbng", ["DOUBLE", "DOUBLE", "STRING"]
-    ) == (
-        "CREATE OR REPLACE TEMPORARY FUNCTION gbx_bng_eastnorthasbng("
-        "easting DOUBLE, northing DOUBLE, resolution STRING) RETURNS STRING "
-        "RETURN gbx__l2_bng_eastnorthasbng(CAST(easting AS DOUBLE), "
-        "CAST(northing AS DOUBLE), CAST(resolution AS STRING))"
-    )
-
-
-@pytest.mark.parametrize("types", [["DOUBLE", "DOUBLE"], ["DOUBLE"] * 4, []])
-def test_cast_call_refuses_a_type_list_that_does_not_match_the_parameters(types):
-    from databricks.labs.gbx.manager import sqlwrap
-
-    with pytest.raises(ValueError, match="arg_types"):
-        sqlwrap.cast_call(BNG, "gbx__l2_bng_eastnorthasbng", types)
-
-
-_ARG_TYPE_NAMES = {"DOUBLE", "STRING", "INT", "BIGINT", "BOOLEAN", "BINARY", "FLOAT"}
-
-
-@pytest.mark.parametrize(
-    "fn",
-    [f for f in FNS if "arg_types" in f.levels.get("L2", {})],
-    ids=lambda f: f.sql_name,
-)
-def test_l2_arg_types_name_every_parameter_with_a_sql_type(fn):
-    types = fn.levels["L2"]["arg_types"]
-    assert len(types) == len(fn.params), (fn.sql_name, types)
-    assert set(types) <= _ARG_TYPE_NAMES, types
-    assert fn.min_args == fn.max_args, "a cast wrapper takes every parameter"
-
-
-def test_l2_with_arg_types_needs_sql_functions_and_falls_back_without_them():
-    """Both polarities of the gate: with SQL functions L2 is offered; without, it is refused with a reason
-    (the manager then falls back to the next level and says why)."""
-    on = _caps(connect=True, jar=OK_JAR, sql_functions=True)
-    off = _caps(connect=True, jar=OK_JAR, sql_functions=False)
-    assert levels.available(BNG, "L2", on) is None
-    why = levels.available(BNG, "L2", off)
-    assert why and "needs a SQL function wrapper" in why
-    assert why == levels.no_sql_functions(BNG)
-
-
-@pytest.mark.parametrize(
-    "fn, connect",
-    [
-        (BNG, True),  # an `arg_types` row (standard access mode)
-    ],
-    ids=lambda p: p.sql_name if hasattr(p, "sql_name") else str(p),
-)
-def test_forced_l2_without_sql_functions_refuses_before_touching_the_session(
-    fn, connect, monkeypatch, tmp_path
-):
-    """A forced L2 skips `levels.available`. It must refuse before it registers the Java UDF or runs the
-    wrapper's DROP, so the registration already under the SQL name (L3, say) stays."""
-    from databricks.labs.gbx.manager import jvm
-
-    stub, _ = _standard_stub(monkeypatch, tmp_path)
-    caps = _caps(connect=connect, jar=OK_JAR, sql_functions=False)
-    why = jvm.install_l2(stub, fn, caps)
-    assert why == levels.no_sql_functions(fn)
-    assert stub.artifacts == [] and stub.java_registered == []
-    assert stub.sql_text == []  # no DROP, no CREATE
-
-
-def test_l2_wrapper_replaces_the_sql_name_after_the_private_udf_is_registered(
-    monkeypatch, tmp_path
-):
-    from databricks.labs.gbx.manager import jvm, sqlwrap
-
-    stub, _ = _standard_stub(monkeypatch, tmp_path)
-    assert jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR)) is None
-    # one statement: the name holds no non-SQL function, so CREATE OR REPLACE is enough (no DROP round trip)
-    assert stub.sql_text == [
-        sqlwrap.cast_call(
-            BNG, "gbx__l2_bng_eastnorthasbng", ["DOUBLE", "DOUBLE", "STRING"]
-        ),
-    ]
-
-
-def test_standard_l2_without_a_jar_says_where_to_get_one(monkeypatch, tmp_path):
-    from databricks.labs.gbx.manager import jvm
-
-    stub, _ = _standard_stub(monkeypatch, tmp_path, jar=False)
-    why = jvm.install_l2(stub, BNG, _caps(connect=True, jar=OK_JAR))
-    assert why and "GBX_JAR_PATH" in why and "standard access mode" in why
-    assert stub.artifacts == [] and stub.java_registered == []
 
 
 def test_detect_on_standard_reads_the_jar_through_the_session_handlers(
@@ -1593,39 +1476,6 @@ def test_detect_on_standard_reads_the_jar_through_the_session_handlers(
         caps_mod.BUILDINFO_CONNECT_UDF,
         caps_mod.GDALPROBE_CONNECT_UDF,
     }
-
-
-@pytest.mark.parametrize(
-    "fn", [f for f in FNS if "L2" in f.levels], ids=lambda f: f.sql_name
-)
-def test_standard_offers_l2_only_for_a_row_with_a_java_handler(fn):
-    why = levels.available(fn, "L2", _caps(connect=True, jar=OK_JAR))
-    if "connect_class" in fn.levels["L2"]:
-        assert why is None
-    else:
-        assert why and "Java handler" in why and "standard access mode" in why
-    # classic is unaffected: the Scala class is what it registers
-    assert "Java handler" not in (levels.available(fn, "L2", _caps(jar=OK_JAR)) or "")
-
-
-@pytest.mark.parametrize(
-    "fn",
-    [f for f in FNS if "L2" in f.levels and "connect_class" not in f.levels["L2"]],
-    ids=lambda f: f.sql_name,
-)
-def test_forced_l2_on_standard_refuses_a_row_without_a_java_handler_cleanly(
-    fn, monkeypatch, tmp_path
-):
-    """The test-only L2 override skips `levels.available`; install must still refuse, not raise a raw KeyError."""
-    from databricks.labs.gbx.manager import jvm
-
-    stub, _ = _standard_stub(monkeypatch, tmp_path)
-    why = jvm.install_l2(stub, fn, _caps(connect=True, jar=OK_JAR))
-    assert why and "has no Java handler for standard access mode" in why
-    assert "KeyError" not in why
-    assert stub.java_registered == []
-    # the same words the default path gives
-    assert levels.available(fn, "L2", _caps(connect=True, jar=OK_JAR)) == why
 
 
 def _gates():
@@ -1728,7 +1578,7 @@ def test_completeness_gate_names_each_missing_surface(tmp_path, monkeypatch):
     tvf = {**fn.levels, "L4": {"tvf_over": "gbx_nope"}}
     assert any("gbx_nope, which has no row" in f for f in found(_row(name, levels=tvf)))
     # a Scala companion that does not declare the name, and a surface with no wrapper in its own package
-    bng = MAN.functions["gbx_bng_eastnorthasbng"]
+    bng = MAN.functions["gbx_bng_cellarea"]
     l1 = {
         **bng.levels,
         "L1": {
@@ -1743,9 +1593,7 @@ def test_completeness_gate_names_each_missing_surface(tmp_path, monkeypatch):
         "no wrapper" in f
         for f in found(
             bng,
-            _scala_wrappers=lambda: {
-                "bng_eastnorthasbng": {"other/functions.scala": [[]]}
-            },
+            _scala_wrappers=lambda: {"bng_cellarea": {"other/functions.scala": [[]]}},
         )
     )
 

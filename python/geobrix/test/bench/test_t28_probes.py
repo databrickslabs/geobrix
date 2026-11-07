@@ -229,16 +229,16 @@ def test_run_family_oracles_with_a_level_runs_only_functions_that_have_it(
     spark, tmp_path
 ):
     man = manifest.load()
-    names = [n for n in ("gbx_bng_cellarea", "gbx_bng_eastnorthasbng", "gbx_bng_aswkb")]
+    names = ["gbx_bng_cellarea", "gbx_quadbin_aswkb", "gbx_bng_aswkb"]
     out = probes.run_family_oracles(
-        spark, str(tmp_path), level="L2", tables=["GRID_SCALAR"], only=names
+        spark, str(tmp_path), level="L1", tables=["GRID_SCALAR"], only=names
     )
     rec = out["tables"]["GRID_SCALAR"]
-    without = {n for n in names if "L2" not in man.functions[n].levels}
+    without = {n for n in names if "L1" not in man.functions[n].levels}
     assert without and {n for n in rec["skipped"] if n in names} >= without
-    assert all(rec["skipped"][n] == "no L2 form" for n in without)
-    assert out["level"] == "L2"
-    assert all(v.startswith("L2/") for v in out["levels"].values())
+    assert all(rec["skipped"][n] == "no L1 form" for n in without)
+    assert out["level"] == "L1"
+    assert all(v.startswith("L1/") for v in out["levels"].values())
 
 
 class _Lib:

@@ -18,10 +18,11 @@ LEVEL_TABLE_VERSION = manifest.load().level_table_version  # one source: the man
 # L0 (a SQL kernel the session installs as a temporary SQL function) is never a default: a name takes it only where a
 # row here lists it first, after a measurement; a function whose only level is L0 is served by it.
 PREFERENCE: Dict[str, Tuple[str, ...]] = {
-    # The SQL kernel (L0) runs in the JVM with no Python: over 1M rows on a local[4] session it takes 0.28 s, against 0.37 s
-    # for the Catalyst level (L1), 0.36 s for the Java UDF (L2) and 2.43 s for light (L3). A session with the JAR keeps
-    # L1; any other session takes L0 before light.
-    "gbx_bng_eastnorthasbng": ("L1", "L0", "L2", "L3"),
+    # The SQL kernel (L0) runs in the JVM with no Python and needs no JAR: over 1M rows on a local[4] session it takes
+    # 0.28 s against 2.43 s for light (L3). That is the only measurement of L0 against light (local, not on a cluster).
+    # The Catalyst level (L1) and the Java UDF (L2) are gone: on dedicated compute L1 measured 1.17x and 1.35x slower than
+    # the light batch form at 4M and 16M rows, and on standard L2 was slower than it too (3.24 s against 1.70 s at 4M).
+    "gbx_bng_eastnorthasbng": ("L0", "L3"),
     # cellarea: L0 0.19 s, L1 0.19 s, light 0.76 s over 1M rows locally (same session).
     "gbx_bng_cellarea": ("L1", "L0", "L3"),
     # transformcrs: the JVM level is 1.6x slower than light (47.7 s against 29.7 s over 1000 tiles) and the Java UDF

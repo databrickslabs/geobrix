@@ -266,7 +266,7 @@ SETS.update(_family_sets())
 SETS["grid-scalar"] = dataclasses.replace(
     SETS["S"],
     mvp="grid-scalar",
-    forms=("l1@pts", "l2@pts", "c0", "c1", "floor"),
+    forms=("c0", "c1", "floor"),
     reference="c1",
     ns=(500_000, 2_000_000, 8_000_000),
 )

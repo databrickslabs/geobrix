@@ -94,11 +94,12 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
 - **These Scala wrappers and classes are removed.**
   - Raster: `rst_retile`, `rst_polygonize`, `rst_rasterize`, `rst_viewshed`, `rst_clip`, `rst_histogram`, `rst_median`, `rst_metadata`, `rst_hillshade`, `rst_ndvi`, `rst_ndwi`, `rst_nbr`, `rst_evi`, `rst_savi`, `rst_index`, `rst_threshold`, `rst_chm`, `rst_align_to`, `rst_binpoints`, `rst_cog_convert`, `rst_transformcrs`, and the 96 `rst_{h3,quadbin,bng,custom}_rastertogrid{stat}` overloads.
   - Vector: `st_asmvt`, `st_asmvt_pyramid`.
+  - Grid: `bng_eastnorthasbng`.
   - The `com.databricks.labs.gbx.gridx.quadbin` package. Call `call_function("gbx_quadbin_<name>", ...)`.
   - The expression classes behind these functions, and `BNG_CellUnionAgg`, `BNG_CellIntersectionAgg`, `RST_MergeAgg`, `RST_DTMFromGeoms`, `RST_DTMFromGeomsAgg` and `RST_GridFromPointsAgg`. The SQL names run on the lightweight level.
 - **The JAR no longer holds the Scala expressions `RST_AlignTo`, `RST_CogConvert`, `RST_TransformCrs` and `ST_AsMvt`, or the `RstTransformCrsBytesUdf` Java UDF.** Their JVM forms measured slower than the lightweight forms at every scale tried on a dedicated cluster. GeoBrix keeps JVM code only where it is faster. `gbx_rst_binpoints` and `gbx_rst_cog_convert` ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call these functions with `call_function("gbx_<name>", ...)`. The aggregate `gbx_rst_binpoints_agg` keeps its JVM form.
+- **The JAR no longer holds `BNG_EastNorthAsBNG` or its Java UDFs `BngEastNorthAsBngUdf` and `BngEastNorthAsBngConnectUdf`.** On a dedicated cluster the JVM form took 1.17x and 1.35x the time of the lightweight batch form at 4 and 16 million rows. On a standard cluster the Java UDF was also slower (3.24 s against 1.70 s at 4 million rows). `gbx_bng_eastnorthasbng` now runs as a SQL function that needs no JAR, and falls back to the lightweight form.
 - **Scala wrappers gained or renamed arguments.**
-  - `bng_eastnorthasbng(easting, northing)` replaces `(east, north)`.
   - `rst_transform` takes `srid`, not `targetSrid`.
   - `rst_rastertoworldcoord*` and `rst_worldtorastercoord*` take `x` and `y`.
   - `rst_derivedband` names its second argument `pythonFunc`. `rst_gridfrompoints` names its arguments `pointsArray` and `valuesArray`. `rst_maketiles` names its size `sizeInMb`.

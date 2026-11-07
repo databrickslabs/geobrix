@@ -124,7 +124,6 @@ object TestL1 {
         "com.databricks.labs.gbx.gridx.bng.BNG_CellUnion",
         "com.databricks.labs.gbx.gridx.bng.BNG_Centroid",
         "com.databricks.labs.gbx.gridx.bng.BNG_Distance",
-        "com.databricks.labs.gbx.gridx.bng.BNG_EastNorthAsBNG",
         "com.databricks.labs.gbx.gridx.bng.BNG_EuclideanDistance",
         "com.databricks.labs.gbx.gridx.bng.BNG_GeometryKLoop",
         "com.databricks.labs.gbx.gridx.bng.BNG_GeometryKRing",

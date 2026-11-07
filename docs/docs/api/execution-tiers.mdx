@@ -54,11 +54,10 @@ A level is one implementation of a function. A function has one to four levels.
 | Level | What runs | Where it is available |
 |---|---|---|
 | **L1** | JVM expression (Scala and GDAL) | Dedicated clusters with the GeoBrix JAR |
-| **L2** | JVM scalar function (a Java UDF) | Standard access mode with the JAR added to the session. Only `gbx_bng_eastnorthasbng` has this level |
 | **L3** | Python (rasterio, NumPy, Shapely and the other libraries named in each function's note) | Everywhere the env wheel installs: Serverless, standard, dedicated, Lakeflow pipelines and the UC sandbox |
 | **L4** | Unity Catalog function | SQL warehouses, and any compute through a three-part name |
 
-Every function has an L3 level, so the wheel alone runs the whole library. The JAR adds L1 and L2 where they are faster. The [Unity Catalog page](./uc-functions) covers L4.
+Every function has an L3 level, so the wheel alone runs the whole library. The JAR adds L1 where it is faster. The [Unity Catalog page](./uc-functions) covers L4.
 
 ## How GeoBrix picks a level
 
@@ -73,8 +72,6 @@ Most functions run on L3. Raster tile operations default to L3, because the Pyth
 - `gbx_rst_fromcontent` and `gbx_rst_gridfrompoints`;
 - `gbx_rst_slope`, `gbx_st_triangulate` and `gbx_st_interpolateelevationbbox`.
 
-On standard access mode, `gbx_bng_eastnorthasbng` runs on L2 when the JAR is added to the session. Everything else runs on L3.
-
 ### GeoBrix says why
 
 When a faster level cannot run, `register` prints one line that names the level and the reason. A reason that applies to several functions prints once, with a count. Each line prints once per session.
@@ -87,7 +84,7 @@ geobrix: heavy (Catalyst) unavailable: Spark Connect session (standard access mo
 
 ```python
 chosen = register(spark)
-chosen["gbx_bng_eastnorthasbng"].level   # 'L1', 'L2' or 'L3'
+chosen["gbx_bng_eastnorthasbng"].level   # 'L0' (SQL) or 'L3'
 ```
 
 A name that no level can serve on this compute is skipped, with a line that says why. The other names still register.

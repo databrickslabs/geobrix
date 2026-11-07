@@ -45,10 +45,7 @@ def bng_registered(spark):
     from databricks.labs.gbx.gridx.bng import functions as bng_funcs
 
     # Only the functions this file tests, at the heavy level: the rest of the family has light-only forms.
-    pin_l1(
-        spark,
-        ["gbx_bng_eastnorthasbng", "gbx_bng_tessellate", "gbx_bng_tessellateexplode"],
-    )
+    pin_l1(spark, ["gbx_bng_tessellate", "gbx_bng_tessellateexplode"])
     return bng_funcs
 
 

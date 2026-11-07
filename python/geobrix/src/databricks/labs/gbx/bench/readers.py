@@ -6003,12 +6003,16 @@ def run_bng_eastnorthasbng(
 ) -> "ResultRow":
     """Time gbx_bng_eastnorthasbng ((e, n, res) -> STRING cell) over ``n_rows`` points.
 
-    Light registers pygx; heavy registers gridx.bng (the SAME SQL name). Inputs
-    are EPSG:27700 eastings/northings (DOUBLE, BNG, not WGS84). Records ``rows`` =
-    number of input points. Returns one ResultRow (mode="spark-path",
-    category="grid"). Parity (cluster cell): exact STRING cell-id equality.
+    ``api`` must be "lightweight" (pygx): the function has no heavyweight level, so any other value raises.
+    Inputs are EPSG:27700 eastings/northings (DOUBLE, BNG, not WGS84). Records ``rows`` =
+    number of input points. Returns one ResultRow (mode="spark-path", category="grid").
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_eastnorth
+
+    if api != "lightweight":
+        raise ValueError(
+            f"gbx_bng_eastnorthasbng has no heavyweight implementation (api={api!r}); time api='lightweight'."
+        )
 
     env = capture_env(where)
     fn = "bng_eastnorthasbng"

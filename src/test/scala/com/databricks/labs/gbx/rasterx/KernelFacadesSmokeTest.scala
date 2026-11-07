@@ -9,7 +9,7 @@ import java.util.zip.ZipEntry
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.df.BngTessellateJob
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngConnectUdf, BngEastNorthAsBngUdf, BuildInfoConnectUdf, GdalProbeConnectUdf}
+import com.databricks.labs.gbx.kernels.udf.{BuildInfoConnectUdf, GdalProbeConnectUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes, TileBytesRefused}
@@ -68,45 +68,14 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
     }
 
     test("L1Installer installs a companion under the manifest name and reports arities") {
-        val fqn = "com.databricks.labs.gbx.gridx.bng.BNG_EastNorthAsBNG"
-        assert(L1Installer.acceptedArities(fqn, 2, 3) == "3")
-        assert(L1Installer.install(spark, "gbx_bng_eastnorthasbng", fqn) == "ok")
-        assert(L1Installer.install(spark, "gbx_other", fqn) == "name-mismatch:gbx_bng_eastnorthasbng")
-        assert(spark.sql("SELECT gbx_bng_eastnorthasbng(530000d, 180000d, 3)").head().getString(0) == "TQ3080")
-        // The same contract as the other levels: digit strings and INT coordinates are accepted; a resolution BNG
-        // does not define, or a non-number, raises and names the value.
-        assert(spark.sql("SELECT gbx_bng_eastnorthasbng(530000, 180000, '-3')").head().getString(0) == "TQ38SW")
-        for (bad <- Seq("1001", "0", "7", "'1001'", "'abc'")) {
-            val e = intercept[Exception](spark.sql(s"SELECT gbx_bng_eastnorthasbng(530000d, 180000d, $bad)").head())
-            assert(e.getMessage.contains(bad.stripPrefix("'").stripSuffix("'")), s"resolution $bad: ${e.getMessage}")
-        }
-        val easting = intercept[Exception](spark.sql("SELECT gbx_bng_eastnorthasbng('abc', 180000d, 3)").head())
-        assert(easting.getMessage.contains("abc"), easting.getMessage)
-    }
-
-    test("BngEastNorthAsBngUdf coerces SQL values and returns NULL for data errors") {
-        val f = new BngEastNorthAsBngUdf()
-        assert(f.call(530000.0, 180000.0, "1km") == "TQ3080")
-        assert(f.call(530000.0, 180000.0, "3") == "TQ3080" && f.call(530000.0, 180000.0, "-3") == "TQ38SW") // digits
-        assert(f.call(java.math.BigDecimal.valueOf(530000L), 180000.0, Integer.valueOf(3)) == "TQ3080")
-        assert(f.call(null, 180000.0, 3) == null && f.call(Double.NaN, 180000.0, 3) == null)
-        // PARAMETER errors raise and name the value; they never become a wrong cell or NULL.
-        for (bad <- Seq[Any](1000, 0, 7, -7, java.lang.Long.valueOf(4294967299L), "3km")) {
-            val e = intercept[Exception](f.call(530000.0, 180000.0, bad))
-            assert(e.getMessage.contains(bad.toString), s"resolution $bad: ${e.getMessage}")
-        }
-        assert(intercept[Exception](f.call("abc", 180000.0, 3)).getMessage.contains("abc"))
+        val fqn = "com.databricks.labs.gbx.gridx.bng.BNG_CellArea"
+        assert(L1Installer.acceptedArities(fqn, 1, 1) == "1")
+        assert(L1Installer.install(spark, "gbx_bng_cellarea", fqn) == "ok")
+        assert(L1Installer.install(spark, "gbx_other", fqn) == "name-mismatch:gbx_bng_cellarea")
+        assert(spark.sql("SELECT gbx_bng_cellarea('TQ3080')").head().getDouble(0) == 1.0)
     }
 
     test("the Java shells for standard access mode give the Scala answers, with the typed parameters SQL binds") {
-        val shell = new BngEastNorthAsBngConnectUdf() // (double, double, string): an INT resolution arrives as digits
-        val scala = new BngEastNorthAsBngUdf()
-        for (res <- Seq("3", "-3", "1km")) {
-            assert(shell.call(530000.0, 180000.0, res) == scala.call(530000.0, 180000.0, res), res)
-        }
-        assert(shell.call(530000.0, 180000.0, "3") == "TQ3080")
-        assert(shell.call(null, 180000.0, "3") == null && shell.call(Double.NaN, 180000.0, "3") == null)
-        assert(intercept[Exception](shell.call(530000.0, 180000.0, "3km")).getMessage.contains("3km"))
         assert(new BuildInfoConnectUdf().call() == BuildInfo.identity())
         assert(new GdalProbeConnectUdf().call() == KernelGdal.probe())
     }
@@ -184,7 +153,7 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         def whereNamed(name: String): String = where(Class.forName(name)) // a class that is private[spark]
         // scalastyle:on classforname
         val classpath = Seq(
-          where(classOf[BngEastNorthAsBngUdf]), // target/classes
+          where(BngUc.getClass), // target/classes
           where(SlimClasspathProbe.getClass), // target/test-classes: the probe only is used
           where(classOf[scala.collection.immutable.List[_]]), // scala-library
           where(classOf[org.locationtech.jts.geom.Geometry]), // jts-core
@@ -228,14 +197,13 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(skipped.exists(s => GDALManager.DefaultSkippedDrivers.split(" ").forall(s.contains)), lines.mkString("\n"))
     }
 
-    test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
+    test("the BNG UC and raster facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
         val output = runSlim()
         val lines = output.linesIterator.toSeq
-        assert(lines.contains("L2 good: TQ3080"), output)
         assert(lines.contains("UC good: TQ38SW"), output)
         // the cell handlers answer on the slim classpath too (JTS and the grid, no Catalyst): area, ring size, EWKB sizes
         assert(lines.contains("UC cells: 1.0,9,97,25"), output)
-        for (bad <- Seq("L2 bad: ", "UC bad: ")) {
+        for (bad <- Seq("UC bad: ")) {
             assert(lines.exists(l => l.startsWith(bad + "RAISES IllegalStateException") && l.contains("found 1001")), output)
         }
         // The raster facades run end to end on that classpath, natives included: no Catalyst or unsafe class on their path.

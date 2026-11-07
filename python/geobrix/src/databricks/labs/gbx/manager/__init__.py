@@ -64,7 +64,7 @@ def register(
 
     requested = None if only is None else [norm(n) for n in only]
     if requested is None:
-        names = [n for n, f in man.functions.items() if f.status != "mvp"]
+        names = list(man.functions)
     else:
         unknown = [n for n in requested if n not in man.functions]
         if unknown:
@@ -232,11 +232,11 @@ def _warn_uc_version(spark, catalog: str, schema: str) -> None:
             "the version of its GeoBrix functions is unknown",
         )
         return
-    # the product functions only: the private (gbx__) and probe (gbx_mvp_) names are not versioned with the wheel
+    # the product functions only: the private (gbx__) and probe (gbx_probe_) names are not versioned with the wheel
     product = [
         r
         for r in rows
-        if not r["routine_name"].lower().startswith(("gbx_mvp_", "gbx__"))
+        if not r["routine_name"].lower().startswith(("gbx_probe_", "gbx__"))
     ]
     have = sorted(
         {v for v in (ddl.version_of_comment(r["comment"]) for r in product) if v}
@@ -251,11 +251,9 @@ def _warn_uc_version(spark, catalog: str, schema: str) -> None:
 
 
 def manifest_names(prefix: str = "gbx_") -> List[str]:
-    """Every SQL name starting with ``prefix`` that the manager serves (the manifest rows that are not probes)."""
+    """Every SQL name starting with ``prefix`` that the manager serves (every manifest row)."""
     return sorted(
-        n
-        for n, f in manifest.load().functions.items()
-        if n.startswith(prefix) and f.status != "mvp"
+        n for n, f in manifest.load().functions.items() if n.startswith(prefix)
     )
 
 
@@ -325,7 +323,7 @@ def names_at_level(prefixes: Iterable[str], level: str) -> list:
     return [
         n
         for n, f in man.functions.items()
-        if f.status != "mvp" and n.startswith(prefixes) and level in f.levels
+        if n.startswith(prefixes) and level in f.levels
     ]
 
 
@@ -345,11 +343,7 @@ def register_family(
     man = manifest.load()
     prefixes = (prefixes,) if isinstance(prefixes, str) else tuple(prefixes)
     if only is None:
-        names = [
-            n
-            for n, f in man.functions.items()
-            if f.status != "mvp" and n.startswith(prefixes)
-        ]
+        names = [n for n in man.functions if n.startswith(prefixes)]
     else:
         names = [n if n.lower().startswith("gbx_") else f"gbx_{n}" for n in only]
         names = [n.lower() for n in names]

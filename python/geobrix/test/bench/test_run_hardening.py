@@ -684,12 +684,12 @@ def test_a_levels_forms_name_that_matches_no_variant_is_reported():
 
 
 def test_the_memory_probes_of_the_g_set_are_marked():
-    """The collect-a-partition shape and the big-tile forms are memory probes by design; nothing else in G is."""
+    """The big-tile forms are memory probes by design; nothing else in G is."""
     marked = {(f.fn, f.level, f.variant) for f in lf.FORMS["G"] if f.memory_probe}
     for f in lf.FORMS["G"]:
         by_shape = f.variant.startswith("count_part") or f.input == "tiles_big"
         assert f.memory_probe == by_shape, (f.fn, f.level, f.variant)
-    assert ("gbx_rst_retile", "L3", "count_part-big") in marked
+    assert ("gbx_rst_retile", "L3", "udtf-big") in marked
     assert not any(
         f.memory_probe for mvp in ("S", "A", "H", "SE") for f in lf.FORMS[mvp]
     )

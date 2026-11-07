@@ -226,7 +226,7 @@ def function_ddl(
     has_default = any(p.default for p in fn.params)
     if not has_default:
         impl = sql_name
-    elif sql_name.startswith("gbx_mvp_"):
+    elif sql_name.startswith("gbx_probe_"):
         impl = f"{sql_name}_impl"  # a bench probe copy: its wrapper's implementation is a probe routine too
     else:
         impl = f"gbx__{sql_name[len('gbx_'):]}"
@@ -322,8 +322,8 @@ def private_ddl(
             f"wheel_uri {wheel_uri!r} has a quote, backslash or control character. "
             "Fix: stage the wheel under a plain /Volumes path."
         )
-    # a bench probe copy of a private routine is named gbx_mvp_perf_<name>, beside the product's and never over it
-    if not re.fullmatch(r"gbx__[a-z0-9_]+|gbx_mvp_perf_[a-z0-9_]+", pf.name):
+    # a bench probe copy of a private routine is named gbx_probe_perf_<name>, beside the product's and never over it
+    if not re.fullmatch(r"gbx__[a-z0-9_]+|gbx_probe_perf_[a-z0-9_]+", pf.name):
         raise ValueError(f"private routine name {pf.name!r} must be gbx__<name>")
     mod, _, attr = pf.handler.partition(":")
     params = ", ".join(f"{n} {sql_type(t)}" for n, t in pf.params)

@@ -231,15 +231,15 @@ def test_validate_sql_names_each_kind_of_defect():
     cases = {
         "SELECT gbx_rst_width(NULL)": "is not qualified",
         f"SELECT {Q}gbx_rst_nonsense(NULL)": "no function of the manifest",
-        f"SELECT {Q}gbx_mvp_t28_x(1)": "called before the file creates it",
+        f"SELECT {Q}gbx_probe_t28_x(1)": "called before the file creates it",
         "SELECT `other`.`s`.gbx_rst_width(NULL)": "is not qualified",
     }
     for sql, why in cases.items():
         bad = t28.validate_sql(oracles.uc_sql_text([("a", sql)]), "c", "s")
         assert any(why in b for b in bad), (sql, bad)
     created = oracles.uc_sql_text([
-        ("a", f"CREATE OR REPLACE FUNCTION {Q}gbx_mvp_t28_x(x INT) RETURNS INT RETURN x"),
-        ("b", f"SELECT {Q}gbx_mvp_t28_x(1)"),
+        ("a", f"CREATE OR REPLACE FUNCTION {Q}gbx_probe_t28_x(x INT) RETURNS INT RETURN x"),
+        ("b", f"SELECT {Q}gbx_probe_t28_x(1)"),
     ])  # fmt: skip
     assert t28.validate_sql(created, "c", "s") == []
     dup = oracles.uc_sql_text([("a", "SELECT 1"), ("a", "SELECT 2")])
@@ -248,7 +248,7 @@ def test_validate_sql_names_each_kind_of_defect():
         [
             (
                 "a",
-                f"CREATE OR REPLACE FUNCTION {Q}gbx_mvp_t28_y(x INT) RETURNS INT LANGUAGE PYTHON AS $$\nreturn (\n$$",
+                f"CREATE OR REPLACE FUNCTION {Q}gbx_probe_t28_y(x INT) RETURNS INT LANGUAGE PYTHON AS $$\nreturn (\n$$",
             )
         ]
     )

@@ -20,7 +20,6 @@ def session(monkeypatch):
     """A session stand-in that keeps which level answers `gbx_rst_merge`: the light registration or the JVM install."""
     import databricks.labs.gbx as gbx
     from databricks.labs.gbx import manager
-    from databricks.labs.gbx.pyrx import _mvp_forms
 
     state = {NAME: None}
 
@@ -35,7 +34,6 @@ def session(monkeypatch):
             {n: level for n in only}
         ),
     )
-    monkeypatch.setattr(_mvp_forms, "register_probe_forms", lambda spark: None)
     monkeypatch.setattr(gbx, "register", lambda spark, only=None, _levels=None: None)
     installer = SimpleNamespace(install=jvm_install)
     spark = SimpleNamespace(

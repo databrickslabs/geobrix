@@ -7,9 +7,9 @@ Reads:
                      If unset or empty, prints a notice and exits 0 (nothing to check).
 
 Algorithm:
-  1. The added names: the registered names at the range's end (the stable rows of the function manifest,
-     ``manifest/functions.json``, plus the legacy ``docs/tests-function-info/registered_functions.txt``)
-     minus the names at the range's base (the same two files, read with ``git show <rev>:<path>``).
+  1. The added names: the registered names at the range's end (the rows of the function manifest,
+     ``manifest/functions.json``) minus the names at the range's base (the same file, read with
+     ``git show <rev>:<path>``).
      The end is HEAD when the range has none; the base of ``a...b`` is the merge-base of a and b.
   2. For each added name, check whether it appears (substring) anywhere in
      ``docs/docs/release-notes.mdx``, ``docs/docs/release-notes-0-6.mdx`` or
@@ -35,7 +35,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
 MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
 RELEASE_NOTES = REPO_ROOT / "docs/docs/release-notes.mdx"
 # The release notes are split across the summary page and the series subpages; a function
@@ -45,10 +44,6 @@ RELEASE_NOTES_PAGES = [
     REPO_ROOT / "docs/docs/release-notes-0-6.mdx",
     REPO_ROOT / "docs/docs/release-notes-0-5-and-earlier.mdx",
 ]
-
-# A registered-function line of the legacy list: ``gbx_foo_bar``.
-LISTED_RE = re.compile(r"^(gbx_[a-z0-9_]+)\s*$", re.MULTILINE)
-
 
 def _show(rev: str, path: Path) -> str | None:
     """``path`` at ``rev`` ("" when the file did not exist there); None on any other git error."""
@@ -73,15 +68,15 @@ def _show(rev: str, path: Path) -> str | None:
 
 
 def names_at(rev: str) -> set[str] | None:
-    """The registered names at ``rev``: the legacy list's and the manifest's stable rows."""
-    listed, manifest = _show(rev, REGISTERED_TXT), _show(rev, MANIFEST_JSON)
-    if listed is None or manifest is None:
+    """The registered names at ``rev``: the manifest's rows."""
+    manifest = _show(rev, MANIFEST_JSON)
+    if manifest is None:
         return None
-    names = set(LISTED_RE.findall(listed))
+    names: set[str] = set()
     if manifest.strip():
         try:
             rows = json.loads(manifest).get("functions", [])
-            names |= {r["sql_name"] for r in rows if r.get("status", "stable") == "stable"}
+            names |= {r["sql_name"] for r in rows}
         except (ValueError, KeyError, TypeError, AttributeError):
             print(f"the manifest at {rev} is not readable; treating as advisory skip.", file=sys.stderr)
             return None
@@ -164,8 +159,8 @@ def main() -> int:
 
     print(f"Range: {qc_range}")
 
-    if not REGISTERED_TXT.exists():
-        print(f"registered_functions.txt not found at {REGISTERED_TXT}; skipping.", file=sys.stderr)
+    if not MANIFEST_JSON.exists():
+        print(f"The function manifest not found at {MANIFEST_JSON}; skipping.", file=sys.stderr)
         return 0
 
     if not RELEASE_NOTES.exists():

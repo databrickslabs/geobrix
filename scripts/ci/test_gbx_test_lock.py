@@ -185,7 +185,6 @@ LOCKED = {
         "--path",
         "python/geobrix/test/zarr/test_keys.py",
     ],
-    "gbx-test-function-info.sh": [],
     "gbx-coverage-scala.sh": [],
     "gbx-coverage-scala-package.sh": ["rasterx"],
     "gbx-coverage-scala-docs.sh": [],

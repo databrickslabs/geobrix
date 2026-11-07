@@ -905,11 +905,9 @@ def _far_and_near(spark):
 def _surfaces(spark, df, d):
     """Each way to merge a group, as (is the result a tile?, the DataFrame of (k, t))."""
     from databricks.labs.gbx import register
-    from databricks.labs.gbx.pyrx import _mvp_forms
     from databricks.labs.gbx.pyrx.functions import _merge_agg_udf
 
     df.createOrReplaceTempView("far_and_near")
-    _mvp_forms.register_probe_forms(spark)
     register(spark, only=["gbx_rst_merge_tvf"])
     by = df.groupBy("k")
     return {

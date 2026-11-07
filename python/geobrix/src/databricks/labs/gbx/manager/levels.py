@@ -79,9 +79,6 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.
     "gbx_rst_slope": ("L1", "L3"),
     "gbx_rst_mapalgebra": ("L1", "L3"),
-    # MVP-IO's decode of a virtual tile has no JVM level (the Scala decode kernel was retired: it measured 0.37x the
-    # Python decode at 4000 tiles): the light UDF only.
-    "gbx_mvp_rst_materialize": ("L3",),
     # The file functions: color_relief has only a pure-core timing (default, unmeasured: highest available).
     # cog_convert (its JVM level measured 1.25x and 1.46x slower than light at 4x and 16x rows, so it has none),
     # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (2.2x light

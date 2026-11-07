@@ -621,7 +621,7 @@ def custom_cellfill_array(cells, grid, k=1, method="mean", power=2.0):
 
 # --- the Python twin of the chip union: a bench probe only -----------------------------------------------------------------
 def bng_chips_union_probe(chips):
-    """Probe copy (``gbx_mvp_perf_bng_chips_union``, made by the bench, never by an install): the chips of ONE cell
+    """Probe copy (``gbx_probe_perf_bng_chips_union``, made by the bench, never by an install): the chips of ONE cell
     folded by the session kernel in one Python call, as EWKB with SRID 27700 (as the SQL fold writes it). It is what ``gbx_bng_cellunion_array`` (a SQL fold) is
     timed against; it has no manifest row and no public name."""
     import shapely
@@ -992,7 +992,7 @@ def rst_retile_tiles(tile, tile_width, tile_height):
 def rst_retile_tiles_probe(tile, tile_width, tile_height):
     """The bench probe copy of :func:`rst_retile_tiles`: the same function with the cap raised to :data:`PROBE_DECODED_CAP`
     for the input, each tile and the array, so a timing can measure what the product function refuses. Created only under
-    a ``gbx_mvp_perf_`` name; never a product routine."""
+    a ``gbx_probe_perf_`` name; never a product routine."""
     return _retile_tiles(
         tile, tile_width, tile_height, PROBE_DECODED_CAP, PROBE_DECODED_CAP
     )

@@ -156,8 +156,7 @@ PY_EXTRAS = {
     "force_output": ("virtualize_dir", "virtualize_prefix", "materialize"),
     "materialize": ("materialize",),
 }
-# "mvp" marks a probe: installed when named (`register(only=[...])`), never by a plain `register()`.
-STATUSES = frozenset({"stable", "mvp"})
+STATUSES = frozenset({"stable"})
 DATASOURCE_KINDS = frozenset({"reader", "writer", "reader_writer"})
 DATASOURCE_IMPLS = frozenset({"python", "scala"})
 
@@ -731,7 +730,7 @@ class Function:
     columns: Tuple[Tuple[str, str], ...] = ()
     # The GDAL spec engine's spec for this row (its `gdal` block), when the row has one.
     gdal: Optional[GdalSpec] = None
-    # A key of STATUSES; "mvp" marks a probe: installed when named, never by a plain `register()`.
+    # A key of STATUSES.
     status: str = "stable"
     doc: Doc = Doc("")
     python: Optional[PythonEntry] = None

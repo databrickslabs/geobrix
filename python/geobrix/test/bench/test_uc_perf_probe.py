@@ -42,10 +42,10 @@ def test_the_warehouse_file_is_one_statement_per_cid_probes_only_and_round_trips
     for cid, s in pairs:
         m = re.match(r"CREATE OR REPLACE (?:FUNCTION|TABLE) (\S+?)[( ]", s)
         if m:
-            assert m.group(1).split(".")[-1].startswith("gbx_mvp_"), cid
+            assert m.group(1).split(".")[-1].startswith("gbx_probe_"), cid
         d = re.match(r"(?:DROP FUNCTION IF EXISTS|DROP TABLE IF EXISTS) (\S+)", s)
         if d:
-            assert d.group(1).split(".")[-1].startswith("gbx_mvp_perf_"), cid
+            assert d.group(1).split(".")[-1].startswith("gbx_probe_perf_"), cid
 
 
 def test_every_measurement_is_built_or_says_what_it_needs():
@@ -73,7 +73,7 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     # the chip union is timed three ways: the native recipe, the SQL fold and the Python twin (a probe-only routine)
     assert {"c_c3", "c_fold", "c_python_twin"} <= set(labels["m6"])
     m6 = {u.id: u for u in plan}["m6"]
-    assert any("gbx_mvp_perf_bng_chips_union" in sql for _, sql in m6.setup)
+    assert any("gbx_probe_perf_bng_chips_union" in sql for _, sql in m6.setup)
     assert all(
         "struct(cellid, core, chip)" in leg.sql
         for leg in m6.legs
@@ -84,7 +84,7 @@ def test_every_measurement_is_built_or_says_what_it_needs():
 
 def test_m10_times_retile_on_the_product_and_on_a_probe_copy_with_the_cap_raised():
     """The product function refuses a tile decoded over the cap, so the 128 and 256 MiB window reads are timed through a
-    `gbx_mvp_perf_` copy whose handler takes the raised cap; the product leg stays beside it (where its refusal lands).
+    `gbx_probe_perf_` copy whose handler takes the raised cap; the product leg stays beside it (where its refusal lands).
     """
     (m10,) = uc_perf.perf_plan("cat", "sch", wheel_path=WHEEL, only=["m10"])
     labels = [leg.label for leg in m10.legs]
@@ -94,15 +94,17 @@ def test_m10_times_retile_on_the_product_and_on_a_probe_copy_with_the_cap_raised
     raised = next(x for x in m10.legs if x.label == "retile_raised_256mib").sql
     assert "LATERAL `cat`.`sch`.gbx_rst_retile(" in product
     assert (
-        "gbx_mvp_perf_retile_tiles(s.tile, 512, 512)" in raised
+        "gbx_probe_perf_retile_tiles(s.tile, 512, 512)" in raised
         and "gbx_rst_retile" not in raised
     )
     ((_, create),) = [x for x in m10.setup if x[0] == "create_retile_raised"]
-    assert "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_mvp_perf_retile_tiles(" in create
+    assert (
+        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_probe_perf_retile_tiles(" in create
+    )
     assert "import rst_retile_tiles_probe as handler" in create
     assert (
-        "drop_gbx_mvp_perf_retile_tiles",
-        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_retile_tiles",
+        "drop_gbx_probe_perf_retile_tiles",
+        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_probe_perf_retile_tiles",
     ) in m10.drops
     from databricks.labs.gbx.uc import forms
 
@@ -210,7 +212,7 @@ def test_m4_compares_per_function_and_shared_dependency_lists_on_copies():
     # six probe copies, each with the whole dependency list
     deps = manifest.load().uc_dependencies
     for name in ("sh_kring", "sh_width", "sh_ndvi"):
-        assert f"gbx_mvp_perf_{name}" in created
+        assert f"gbx_probe_perf_{name}" in created
     env = (
         re.search(r"dependencies = '(\[.*?\])'", u.setup[0][1])
         .group(1)
@@ -230,8 +232,8 @@ def test_m4_compares_per_function_and_shared_dependency_lists_on_copies():
     } <= labels
     by = {leg.label: leg.sql for leg in u.legs}
     assert (
-        "gbx_mvp_perf_sh_" in by["b_3fn_100kr"]
-        and "gbx_mvp_perf_sh_" not in by["a_3fn_100kr"]
+        "gbx_probe_perf_sh_" in by["b_3fn_100kr"]
+        and "gbx_probe_perf_sh_" not in by["a_3fn_100kr"]
     )
     assert (
         "perf_64MiB.tif" in by["b_width_64mib"]
@@ -274,15 +276,15 @@ def test_a_sql_probe_creates_its_own_helpers_and_drops_them_never_the_products()
     uc_perf._copy(c, u, "gbx_bng_cellarea", "bng_cellarea_sql", form="sql")
     created = "\n".join(s for _, s in u.setup)
     assert "gbx__shared_helper" not in created  # the product's helper is not touched
-    assert "FUNCTION `cat`.`sch`.gbx_mvp_perf_shared_helper(" in created
-    assert "RETURN `cat`.`sch`.gbx_mvp_perf_shared_helper(cellid)" in created
+    assert "FUNCTION `cat`.`sch`.gbx_probe_perf_shared_helper(" in created
+    assert "RETURN `cat`.`sch`.gbx_probe_perf_shared_helper(cellid)" in created
     assert sorted(s for _, s in u.drops) == [
-        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_bng_cellarea_sql",
-        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_perf_shared_helper",
+        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_probe_perf_bng_cellarea_sql",
+        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_probe_perf_shared_helper",
     ]
 
 
-def test_every_routine_a_probe_creates_or_drops_is_a_gbx_mvp_routine(monkeypatch):
+def test_every_routine_a_probe_creates_or_drops_is_a_gbx_probe_routine(monkeypatch):
     monkeypatch.setattr(manifest, "load", _kernel_manifest)
     monkeypatch.setattr(uc_perf, "_has_uc", lambda c, *names: [])
     monkeypatch.setattr(
@@ -306,7 +308,7 @@ def test_every_routine_a_probe_creates_or_drops_is_a_gbx_mvp_routine(monkeypatch
     ]
     assert any("shared_helper" in n for n in made)  # the kernels were exercised
     for name in made + dropped:
-        assert name.split(".")[-1].startswith("gbx_mvp_"), name
+        assert name.split(".")[-1].startswith("gbx_probe_"), name
 
 
 # ---- the runners on a session that records its SQL -----------------------------------------------------------
@@ -343,7 +345,7 @@ def no_volume(monkeypatch):
 def test_run_uc_perf_prints_start_and_done_times_each_leg_and_drops_after_an_error(
     no_volume, capsys
 ):
-    spark = _Spark(fail_on=("gbx_mvp_perf_py_env(1)",))
+    spark = _Spark(fail_on=("gbx_probe_perf_py_env(1)",))
     out = probes.run_uc_perf(
         spark, "cat", "sch", "/Volumes/c/s/v", only=["m0"], repeats=3, cap_s=60
     )
@@ -648,20 +650,22 @@ def test_the_step_total_counts_the_register_and_cleanup_steps(no_volume, monkeyp
 
 
 def test_run_proc_warm_drops_the_rest_when_one_drop_fails(capsys):
-    spark = _Spark(fail_on=("DROP TABLE IF EXISTS `cat`.`sch`.gbx_mvp_perf_warm_tgt",))
+    spark = _Spark(
+        fail_on=("DROP TABLE IF EXISTS `cat`.`sch`.gbx_probe_perf_warm_tgt",)
+    )
     # the target drops before each CALL fail too; the final cleanup must still try every table
     out = probes.run_proc_warm(spark, "cat", "sch", idle_s=0, calls=1, polygons=2)
     cleanup = [e for e in out["errors"] if e.startswith("drop:")]
-    assert cleanup == ["drop:drop_gbx_mvp_perf_warm_tgt"]
+    assert cleanup == ["drop:drop_gbx_probe_perf_warm_tgt"]
     assert len(out["dropped"]) == 4 and any("ERROR" in d for d in out["dropped"])
     assert spark.stmts[-1].endswith(
-        "gbx_mvp_perf_warm_new"
+        "gbx_probe_perf_warm_new"
     )  # the drops after the failed one still ran
 
 
 def test_proc_warm_plan_quotes_both_names_and_refuses_a_backtick():
     plan = uc_perf.proc_warm_plan("cat", "sch")
-    assert "`cat`.`sch`.gbx_mvp_perf_warm_src" in plan["setup"][0][1]
+    assert "`cat`.`sch`.gbx_probe_perf_warm_src" in plan["setup"][0][1]
     with pytest.raises(ValueError, match="schema"):
         uc_perf.proc_warm_plan("cat", "sch`; DROP SCHEMA x")
     with pytest.raises(ValueError, match="catalog"):
@@ -692,15 +696,15 @@ def test_m2_builds_its_sql_leg_from_the_rows_own_kernel():
     names = [k for k in created if k.startswith("create_bng_eastnorthasbng_sql")]
     sql = created[names[-1]]  # the helpers are created first, the function last
     assert (
-        "gbx_mvp_perf_bng_eastnorthasbng_sql(" in sql
+        "gbx_probe_perf_bng_eastnorthasbng_sql(" in sql
         and "LANGUAGE SQL\nDETERMINISTIC" in sql
     )
     # the candidate's helpers are probe routines of their own, created before the function and dropped with it
-    assert any("gbx_mvp_perf_bng_cell(" in created[k] for k in names[:-1])
+    assert any("gbx_probe_perf_bng_cell(" in created[k] for k in names[:-1])
     assert all("gbx__bng_" not in created[k] for k in names)
     dropped = " ".join(s for _, s in u.drops)
     assert (
-        "gbx_mvp_perf_bng_resindex" in dropped
+        "gbx_probe_perf_bng_resindex" in dropped
         and "`gbx_bng_eastnorthasbng`" not in dropped
     )
     # the row carries the kernel itself now (the candidate table is empty)
@@ -729,7 +733,7 @@ def test_m2_times_and_diffs_the_sql_candidate_of_both_grid_scalars():
 def test_m1_compares_the_products_own_quadbin_kernel_with_the_same_expression_inline():
     u = uc_perf._m1(_w_ctx())
     created = dict(u.setup)["create_qres"]
-    assert "gbx_mvp_perf_qres(" in created and "(cell >> 52) & 31" in created
+    assert "gbx_probe_perf_qres(" in created and "(cell >> 52) & 31" in created
     inline = next(leg.sql for leg in u.legs if leg.label == "explain_inline")
     assert "`cat`" not in inline and "(shiftleft(id % 27, 52)) >> 52" in inline
     assert [leg.label for leg in u.legs][-2:] == ["t_sql_10m", "t_inline_10m"]

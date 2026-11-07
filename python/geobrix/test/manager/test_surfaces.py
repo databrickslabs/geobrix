@@ -294,6 +294,23 @@ def test_first_statement_respects_quotes_and_comments():
     assert surfaces.first_statement(sql) == "SELECT gbx_f('a;b', 'c--d') FROM t"
 
 
+def test_neutral_paths_shows_a_checkout_path_as_a_volume_path_and_keeps_the_file_name():
+    surfaces = _tool("surfaces")
+    text = f"x '{REPO}/src/test/resources/a/b.clr') y"
+    assert (
+        surfaces.neutral_paths(text)
+        == "x '/Volumes/<catalog>/<schema>/<volume>/b.clr') y"
+    )
+    assert (
+        surfaces.neutral_paths(f'"{REPO}/c.tif"')
+        == '"/Volumes/<catalog>/<schema>/<volume>/c.tif"'
+    )
+    assert (
+        surfaces.neutral_paths("SELECT '/Volumes/c/s/v/d.tif'")
+        == "SELECT '/Volumes/c/s/v/d.tif'"
+    )
+
+
 def test_a_hand_example_with_a_checkout_path_ships_a_volume_path(monkeypatch):
     surfaces = _tool("surfaces")
     man = manifest.load()

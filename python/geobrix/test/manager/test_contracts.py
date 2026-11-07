@@ -129,11 +129,6 @@ def test_level_keys_are_in_the_closed_vocabulary(fn):
 def test_schema2_fields(fn):
     assert fn.status in manifest.STATUSES
     assert all(p.py in manifest.PY_MODES for p in fn.params)
-    if (
-        fn.status == "mvp"
-    ):  # a probe: installed by name only, with no Python entry or docs
-        assert fn.python is None, fn.sql_name
-        return
     assert fn.doc.summary and fn.doc.page.startswith("api/"), fn.sql_name
     assert re.fullmatch(r"\d+\.\d+\.\d+", fn.since), fn.sql_name
     if fn.status == "stable":
@@ -698,9 +693,7 @@ def test_connect_session_never_touches_the_jvm(
         any(f"TEMPORARY FUNCTION {n}(" in t for t in stub.sql_text) for n in l0
     ), "an L0 name was reported without its SQL statement"
     # every manifest name, and the light data sources
-    assert set(out) == set(MAN.functions) - {
-        f.sql_name for f in FNS if f.status == "mvp"
-    }
+    assert set(out) == set(MAN.functions)
     assert "raster_gbx" in stub.sources
     assert stub.touched == []  # _jvm/_jsc/sparkContext/conf.set never accessed
     printed = capsys.readouterr().out.splitlines()
@@ -908,7 +901,7 @@ def test_uc_batch_style_is_python_even_with_a_jar():
         MAN.uc_dependencies,
         "0.6.0",
         style="batch",
-        name="gbx_mvp_bng_eastnorthasbng_batch",
+        name="gbx_probe_bng_eastnorthasbng_batch",
         jar_uri=JAR,
     )
     assert "LANGUAGE PYTHON\nPARAMETER STYLE PANDAS\n" in stmt
@@ -923,15 +916,15 @@ def test_uc_ddl_batch_style_names_a_pandas_handler_beside_the_product_function()
         MAN.uc_dependencies,
         "0.6.0",
         style="batch",
-        name="gbx_mvp_bng_eastnorthasbng_batch",
+        name="gbx_probe_bng_eastnorthasbng_batch",
     )
     assert "LANGUAGE PYTHON\nPARAMETER STYLE PANDAS\n" in stmt
-    assert "`cat`.`sch`.gbx_mvp_bng_eastnorthasbng_batch(" in stmt
+    assert "`cat`.`sch`.gbx_probe_bng_eastnorthasbng_batch(" in stmt
     assert "bng_eastnorthasbng_batch as handler" in stmt
 
 
 def test_uc_ddl_names_a_bench_probe_copys_implementation_beside_its_wrapper():
-    # a probe copy (gbx_mvp_*) with a DEFAULT: its wrapper calls gbx_mvp_<x>_impl, not the public gbx__<x>
+    # a probe copy (gbx_probe_*) with a DEFAULT: its wrapper calls gbx_probe_<x>_impl, not the public gbx__<x>
     impl, wrapper = ddl.function_ddl(
         MAN.functions["gbx_bng_geomkring"],
         "cat",
@@ -939,15 +932,15 @@ def test_uc_ddl_names_a_bench_probe_copys_implementation_beside_its_wrapper():
         "file:///Volumes/c/s/v/geobrix-0.6.0-py3-none-any.whl",
         MAN.uc_dependencies,
         "0.6.0",
-        name="gbx_mvp_bng_geomkring",
+        name="gbx_probe_bng_geomkring",
     )
     assert impl.startswith(
-        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_mvp_bng_geomkring_impl("
+        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_probe_bng_geomkring_impl("
     )
     assert wrapper.startswith(
-        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_mvp_bng_geomkring("
+        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_probe_bng_geomkring("
     )
-    assert "RETURN `cat`.`sch`.gbx_mvp_bng_geomkring_impl(" in wrapper
+    assert "RETURN `cat`.`sch`.gbx_probe_bng_geomkring_impl(" in wrapper
     assert "gbx__bng_geomkring" not in impl + wrapper
 
 
@@ -1477,7 +1470,7 @@ def test_register_session_says_once_when_the_uc_schema_has_another_version(
         "gbx_bng_cellarea": "geobrix 0.5.3: Return the area of a BNG cell in square kilometres.",
         "gbx_st_makevalid": "geobrix 0.5.4: Repair an invalid geometry.",
         "gbx_other": "someone else's function",
-        "gbx_mvp_probe_batch": "geobrix 0.4.0: A probe an older wheel left.",
+        "gbx_probe_probe_batch": "geobrix 0.4.0: A probe an older wheel left.",
         "gbx__private": "geobrix 0.4.1: A private name.",
     }
     fake = _UcSpark(routines)
@@ -3408,11 +3401,7 @@ def test_register_family_with_a_level_raises_for_names_without_it(monkeypatch):
     from databricks.labs.gbx import manager
 
     monkeypatch.setattr(manager, "register", lambda *a, **k: pytest.fail("registered"))
-    no_l1 = [
-        n
-        for n, f in MAN.functions.items()
-        if "L1" not in f.levels and f.status != "mvp"
-    ]
+    no_l1 = [n for n, f in MAN.functions.items() if "L1" not in f.levels]
     name = next(n for n in no_l1 if n.startswith("gbx_h3_"))
     with pytest.raises(ValueError, match=name) as ei:
         manager.register_family(None, ("gbx_h3_",), level="L1")
@@ -3423,8 +3412,8 @@ def test_register_family_with_a_level_raises_for_names_without_it(monkeypatch):
         manager.register_family(None, ("gbx_h3_",), only=["no_such_fn"], level="L3")
 
 
-def test_names_at_level_filters_prefix_level_and_mvp_and_takes_a_bare_string():
-    """The prefix, the level and ``status != 'mvp'`` filters; a bare string is one prefix, not its characters."""
+def test_names_at_level_filters_prefix_and_level_and_takes_a_bare_string():
+    """The prefix and the level filters; a bare string is one prefix, not its characters."""
     from databricks.labs.gbx import manager
 
     got = manager.names_at_level(("gbx_h3_",), "L1")
@@ -3433,10 +3422,6 @@ def test_names_at_level_filters_prefix_level_and_mvp_and_takes_a_bare_string():
     )
     assert "gbx_h3_geomkring" not in got  # an L3-only name of the family
     assert "gbx_h3_geomkring" in manager.names_at_level(("gbx_h3_",), "L3")
-    assert not any(
-        MAN.functions[n].status == "mvp"
-        for n in manager.names_at_level(("gbx_",), "L3")
-    )
     assert manager.names_at_level("gbx_h3_", "L1") == got
     assert manager.names_at_level("gbx_h3_", "L3") == manager.names_at_level(
         ("gbx_h3_",), "L3"
@@ -3759,3 +3744,30 @@ def test_install_with_only_skips_a_procedure_whose_functions_are_not_installed(
     assert not [s for s in got if "gbx__h3_cellfill_cells(" in s.split("\n")[0]]
     out = capsys.readouterr().out
     assert "procedure gbx_features_to_mvt skipped: needs gbx_st_asmvt_pyramid" in out
+
+
+@pytest.mark.integration
+def test_describe_function_shows_the_usage_args_of_every_l1_row(jvm_spark):
+    """For every row with an L1 companion, `DESCRIBE FUNCTION EXTENDED` of the Catalyst function shows
+    `name(<usage_args>)` as the row gives it (optional parameters in brackets). A tile function sits behind a SQL
+    dispatch wrapper under its SQL name, so its Catalyst function is read under the private `gbx__l1_` name.
+    """
+    from databricks.labs.gbx import register
+
+    def describe(name):
+        rows = jvm_spark.sql(f"DESCRIBE FUNCTION EXTENDED {name}").collect()
+        return "\n".join(str(r[0]) for r in rows)
+
+    wrong = []
+    for fn in FNS:
+        companion = fn.levels.get("L1", {}).get("companion")
+        if companion is None:
+            continue
+        register(jvm_spark, only=[fn.sql_name], _levels={fn.sql_name: ("L1", "-")})
+        text = describe(fn.sql_name)
+        if companion not in text:  # behind the dispatch wrapper
+            text = describe(f"gbx__l1_{fn.sql_name[len('gbx_'):]}")
+        want = f"{fn.sql_name}({manifest.usage_args(fn)})"
+        if want not in text:
+            wrong.append(f"{fn.sql_name}: want {want!r}")
+    assert not wrong, "\n".join(wrong)

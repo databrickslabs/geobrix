@@ -10,10 +10,8 @@ import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.df.BngTessellateJob
 import com.databricks.labs.gbx.kernels.uc.BngUc
 import com.databricks.labs.gbx.kernels.udf.{BuildInfoConnectUdf, GdalProbeConnectUdf}
-import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, TileBytes, TileBytesRefused}
-import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdalconst.gdalconstConstants
@@ -34,9 +32,6 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         ds.GetRasterBand(1).WriteRaster(0, 0, 16, 16, Array.fill(256)(fill))
         try RasterDriver.writeToBytes(ds, Map("driver" -> "GTiff")) finally RasterDriver.releaseDataset(ds)
     }
-
-    private def vsimemEntries(): Set[String] =
-        Option(org.gdal.gdal.gdal.ReadDir("/vsimem/")).map(_.toArray.map(_.toString).toSet).getOrElse(Set.empty)
 
     test("BuildInfo reads version and sha from the one JAR, and says so when it cannot") {
         assert(BuildInfo.identity().split('|').length == 2)
@@ -113,37 +108,6 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(RasterDriver.sourceDriverOf(tile, options).isDefined == readable)
     }
 
-    // The first band of a GTiff as rows of pixels, and its size.
-    private def decode(bytes: Array[Byte]): (Int, Int, Seq[Seq[Double]]) = {
-        val ds = RasterDriver.readFromBytes(bytes, Map("driver" -> "GTiff"))
-        try {
-            val (w, h) = (ds.getRasterXSize, ds.getRasterYSize)
-            val all = new Array[Double](w * h)
-            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, all)
-            (w, h, all.toSeq.grouped(w).toSeq)
-        } finally RasterDriver.releaseDataset(ds)
-    }
-
-    test("BngRasterizeCellsBytesUdf burns a canvas: the largest value of a repeated cell, 1.0 for a NULL value") {
-        val f = new BngRasterizeCellsBytesUdf()
-        val cells = Seq(Row("TQ3080", 1.0), Row("TQ3080", 3.0), Row("TQ3180", 2.0), Row("TQ3081", null))
-        def burn(c: Seq[Row]): Array[Byte] = f.call(c, 530000.0, 180000.0, 532000.0, 182000.0, 2, 2)
-        val before = vsimemEntries()
-        assert(decode(burn(cells))._3 == Seq(Seq(1.0, -9999.0), Seq(3.0, 2.0)))
-        assert(decode(burn(cells.reverse))._3 == decode(burn(cells))._3, "the order of the rows must not matter")
-        val nan = decode(burn(Row("TQ3181", Double.NaN) +: cells))._3
-        assert(nan.head(1).isNaN && nan(1) == Seq(3.0, 2.0), "a NaN value burns NaN")
-        assert(burn(Seq(Row(null, 1.0))) == null && burn(Seq.empty) == null, "no cell id, nothing to burn")
-        // A NaN beside numbers in one cell never wins, whatever the order or the number of rows (an invalid sort order
-        // can make the sort raise on 32 rows or more); a cell of nothing but NaN burns NaN.
-        val crowd = Row("TQ3080", Double.NaN) +: (1 to 200).map(i => Row("TQ3080", i.toDouble)) :+ Row("TQ3180", Double.NaN)
-        for (rows <- Seq(crowd, crowd.reverse, scala.util.Random.shuffle(crowd))) {
-            val px = decode(burn(rows))._3
-            assert(px.head.forall(_ == -9999.0) && px(1)(0) == 200.0 && px(1)(1).isNaN, px.toString)
-        }
-        assert(vsimemEntries() == before, "the facade left in-memory GDAL files behind")
-    }
-
     /** [[SlimClasspathProbe]] with `args` in a child JVM whose classpath is the facades, scala-library, JTS, the GDAL bindings,
       * spark-sql-api with what its `Row` needs, and what the GDAL start-up needs of Spark core, Hadoop and log4j: no
       * Catalyst, no unsafe types, no Kryo, and no spark-network-common. Its output, once it exited 0. */
@@ -197,7 +161,7 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(skipped.exists(s => GDALManager.DefaultSkippedDrivers.split(" ").forall(s.contains)), lines.mkString("\n"))
     }
 
-    test("the BNG UC and raster facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
+    test("the BNG UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
         val output = runSlim()
         val lines = output.linesIterator.toSeq
         assert(lines.contains("UC good: TQ38SW"), output)
@@ -206,9 +170,6 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         for (bad <- Seq("UC bad: ")) {
             assert(lines.exists(l => l.startsWith(bad + "RAISES IllegalStateException") && l.contains("found 1001")), output)
         }
-        // The raster facades run end to end on that classpath, natives included: no Catalyst or unsafe class on their path.
-        // The larger duplicate wins and the empty pixel is NoData; a NaN beside 7.0 does not win, a cell of NaN burns NaN.
-        assert(lines.contains("L2 rasterize: 7.0,NaN;3.0,2.0"), output)
         // the classpath really is slim: nothing of Catalyst, the unsafe types or Kryo can load in the child
         assert(lines.contains("loadable: none"), output)
     }

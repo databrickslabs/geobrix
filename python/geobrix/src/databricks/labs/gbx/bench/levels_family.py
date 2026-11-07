@@ -296,7 +296,7 @@ REPS: List[Rep] = [
 # The forms keep their names; the family key only re-keys them, and each set gets a scan floor.
 _B, _T, _M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 _REAL_VARIANTS = {
-    "udtf", "udtf-arrow", "tvf", "scala-mapPartitions", "uc-tvf", "array_inline", "uc-scalar",
+    "udtf", "tvf", "scala-mapPartitions", "uc-tvf", "array_inline", "uc-scalar",
     "h_retile_udtf", "h_tess_udtf", "h_merge_l3_agg", "h_combine_l3", "h_merge_fold", "h_merge_vrt",
     "h_combine_avg",
 }  # fmt: skip

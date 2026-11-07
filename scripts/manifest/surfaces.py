@@ -286,15 +286,49 @@ def render_doc_block(fn) -> str:
     return "\n".join(out) + "\n"
 
 
-def _info_script():
-    """docs/scripts/generate-function-info.py, the one owner of statement splitting and path neutralizing."""
-    import importlib.util
+def _split_sql_statements(sql: str) -> List[str]:
+    """Split SQL on ';' outside single-quoted string literals and -- line comments."""
+    stmts: List[str] = []
+    buf: List[str] = []
+    in_str = False
+    in_line_comment = False
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+        if in_line_comment:
+            buf.append(ch)
+            if ch == "\n":
+                in_line_comment = False
+        elif in_str:
+            if ch == "'":
+                in_str = False
+            buf.append(ch)
+        elif ch == "-" and sql[i + 1 : i + 2] == "-":
+            in_line_comment = True
+            buf.append(ch)
+        elif ch == "'":
+            in_str = True
+            buf.append(ch)
+        elif ch == ";":
+            stmts.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+        i += 1
+    if "".join(buf).strip():
+        stmts.append("".join(buf))
+    return stmts
 
-    path = REPO / "docs/scripts/generate-function-info.py"
-    spec = importlib.util.spec_from_file_location("gbx_generate_function_info", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+
+_NEUTRAL_DIR = "/Volumes/<catalog>/<schema>/<volume>"
+
+
+def neutral_paths(text: str) -> str:
+    """The example with each path under this checkout shown as a Volume path (keeping the file name), so the
+    shipped metadata names no machine. The doc test still runs the real path; only the rendered text changes.
+    """
+    root = re.escape(str(REPO).rstrip("/"))
+    return re.sub(rf"{root}/(?:[^'\" )/]+/)*([^'\" )/]+)", rf"{_NEUTRAL_DIR}/\1", text)
 
 
 def _strip_comments(stmt: str) -> str:
@@ -323,7 +357,7 @@ def first_statement(sql: str) -> Optional[str]:
     """The first statement naming a gbx_ function, comments stripped (what DESCRIBE shows). Statements split
     on a ``;`` outside quotes and comments, so a ``;`` or ``--`` inside a string literal stays.
     """
-    for stmt in _info_script()._split_sql_statements(sql):
+    for stmt in _split_sql_statements(sql):
         flat = " ".join(_strip_comments(stmt).split())
         if "gbx_" in flat:
             return flat
@@ -486,8 +520,7 @@ def render_examples(man) -> str:
 def function_info_entries(man) -> Dict[str, dict]:
     from databricks.labs.gbx.manifest import usage_args
 
-    neutral = _info_script().neutral_paths
-    hand = {n: neutral(t) for n, t in hand_written_sql_examples().items()}
+    hand = {n: neutral_paths(t) for n, t in hand_written_sql_examples().items()}
     gen = examples_by_name(man)
     out = {}
     for f in man.functions.values():
@@ -597,17 +630,7 @@ def render_uc_routes(man) -> str:
 
 
 def all_sql_names(man) -> List[str]:
-    names = {f.sql_name for f in man.functions.values() if f.status == "stable"}
-    legacy = PKG / "bench/registered_functions.txt"
-    if (
-        legacy.exists()
-    ):  # until every family is in the manifest (deleted in the release-gate cleanup)
-        names |= {
-            ln.strip()
-            for ln in legacy.read_text().splitlines()
-            if ln.strip() and not ln.startswith("#")
-        }
-    return sorted(names)
+    return sorted(f.sql_name for f in man.functions.values() if f.status == "stable")
 
 
 def render_counts_md(man) -> str:

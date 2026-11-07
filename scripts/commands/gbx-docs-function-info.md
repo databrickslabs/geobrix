@@ -1,6 +1,6 @@
 # Generate Function Info (DESCRIBE FUNCTION EXTENDED)
 
-Regenerates `function-info.json` from doc SQL examples so `DESCRIBE FUNCTION EXTENDED <name>` stays in sync with the API docs (one-copy pattern).
+Regenerates `function-info.json` from the function manifest so `DESCRIBE FUNCTION EXTENDED <name>` stays in sync with the API docs. It runs `scripts/manifest/gen_surfaces.py --write --only function-info` in Docker, so the file names no host path.
 
 ## Usage
 
@@ -15,10 +15,7 @@ bash scripts/commands/gbx-docs-function-info.sh [OPTIONS]
 
 ## When to run
 
-After adding or changing SQL examples in:
-
-- `docs/tests/python/api/rasterx_functions_sql.py`
-- `docs/tests/python/api/gridx_functions_sql.py`
+After changing a manifest row, an oracle example, or a hand-written SQL example in `docs/tests/python/api/*_functions_sql.py`.
 
 Then **commit** the updated file:
 
@@ -27,7 +24,7 @@ Then **commit** the updated file:
 ## Examples
 
 ```bash
-# Regenerate from current doc examples
+# Regenerate from the manifest
 gbx:docs:function-info
 
 # With log
@@ -36,5 +33,5 @@ gbx:docs:function-info --log function-info.log
 
 ## Notes
 
-- **Runs inside Docker**: Uses `geobrix-dev` container so the generator runs with the same layout and Python path as in CI (script adds `docs` to path automatically).
+- **Runs inside Docker**: Uses the `geobrix-dev` container so the generated file carries container paths, not the host's.
 - Requires the container to be running (e.g. `./scripts/docker/start_docker_with_volumes.sh`).

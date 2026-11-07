@@ -32,15 +32,18 @@ Run directly on the host -- pure stdlib, no Docker needed.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _manifest_names import stable_rows  # noqa: E402
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
+MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
+
+
+def _manifest_rows() -> dict:
+    """The raw manifest row of every function, by SQL name."""
+    return {r["sql_name"]: r for r in json.loads(MANIFEST_JSON.read_text())["functions"]}
 RASTERX_SCALA_ROOT = REPO_ROOT / "src/main/scala/com/databricks/labs/gbx/rasterx"
 RASTERX_SQL_FILE = REPO_ROOT / "docs/tests/python/api/rasterx_functions_sql.py"
 
@@ -102,19 +105,14 @@ def manifest_pages() -> dict[str, list[Path]]:
     """The docs page each stable manifest row names (``doc.page``): the page its ``### <name>`` section is on."""
     return {
         name: [REPO_ROOT / "docs/docs" / f"{row['doc']['page']}.mdx"]
-        for name, row in stable_rows().items()
+        for name, row in _manifest_rows().items()
         if row.get("doc", {}).get("page")
     }
 
 
 def canonical_sql() -> list[str]:
-    """Every stable manifest function plus any name still in the legacy registered list."""
-    names = set(stable_rows())
-    for line in REGISTERED_TXT.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            names.add(line)
-    return sorted(names)
+    """Every function of the manifest."""
+    return sorted(_manifest_rows())
 
 
 def pages_for(name: str) -> list[Path] | None:
@@ -650,10 +648,6 @@ def check_d5() -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    if not REGISTERED_TXT.exists():
-        print(f"[FAIL] missing required file: {REGISTERED_TXT}", file=sys.stderr)
-        return 1
-
     names = canonical_sql()
     print(f"Canonical registered functions: {len(names)}")
     print()

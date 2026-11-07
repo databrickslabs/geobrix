@@ -18,7 +18,7 @@ show_help() {
     echo -e "     modules has width/tick-consistent ASCII result tables (no orphan"
     echo -e "     separators, no mismatched column widths)."
     echo -e "  ${YELLOW}2. Tab completeness${NC} — every ${YELLOW}<FunctionExamples>${NC} tab declared in"
-    echo -e "     function-info.json bindings has BOTH an example and an output constant,"
+    echo -e "     the function manifest has BOTH an example and an output constant,"
     echo -e "     and no single-tab <CodeFromTest> is used on a multi-tier function."
     echo ""
     echo -e "${CYAN}Options:${NC}"

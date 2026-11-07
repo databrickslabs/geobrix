@@ -1,31 +1,17 @@
-"""The read-path oracle (MVP-IO): the oracle file read through every path comes back exactly, once.
-
-Forms: ``b`` the light reader (materialized tiles) and ``d-py`` its virtual tiles decoded in one Python call per Arrow
-batch (pyrx). The manifest function ``gbx_mvp_rst_materialize`` is the same decode as a row UDF (L3 only).
+"""The read path's decode and its oracle: virtual tiles decoded in one Python call per Arrow batch (`tile_batches`),
+and the reader oracle that judges what a read brings back (coverage, CRS, dtype, every band).
 """
-
-import os
 
 import pytest
 
-from databricks.labs.gbx import register
 from databricks.labs.gbx.bench import oracles
 
 COVER = next(c for c in oracles.MVP_IO if c.cid == "io_cover")
-MATERIALIZE = next(c for c in oracles.MVP_IO if c.cid == "io_materialize")
-FN = oracles.IO
 
 
 @pytest.mark.parametrize("form", ["b", "d-py"])
-def test_mvp_io_cover(spark, tmp_path, form):
+def test_the_read_paths_cover_the_file_exactly_once(spark, tmp_path, form):
     assert oracles.run_reader(spark, COVER, form, str(tmp_path)) == []
-
-
-def test_mvp_io_materialize_row(spark, tmp_path):
-    """The manifest function (the light UDF, its only level): a virtual tile of the file in, the file's pixels out."""
-    register(spark, only=[FN], _levels={FN: ("L3", "-")})
-    (result,) = oracles.run_session(spark, [MATERIALIZE], tmpdir=str(tmp_path))
-    assert result[1] is None
 
 
 def _batch_of(path, window=None, metadata=None):
@@ -88,28 +74,19 @@ def test_resource_exhaustion_fails_the_task_it_is_not_an_error_tile(
         _decoded_rows(_batch_of(_tif(tmp_path / "f.tif")))
 
 
-def test_the_row_udf_returns_an_error_tile_for_a_refused_location():
-    """L3 `gbx_mvp_rst_materialize`: the row UDF gives the same error tile as the batch form (the reason under
-    `last_error`), keeping the tile's cell id."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
-    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
-
-    tile = VirtualTile(cellid=7, path="/vsicurl/https://example.invalid/x.tif").to_row()
-    got = _mvp_forms.materialize_udf.func(tile)
-    assert got["raster"] is None and got["cellid"] == 7
-    assert "/vsicurl/" in dict(got["metadata"])["last_error"]
-
-
-def test_a_tile_with_pending_instructions_decodes_as_the_row_udf_decodes_it(tmp_path):
-    """A real Arrow batch (map metadata as pairs): the pending key is applied and gone, and the row is the L3 UDF's."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
+def test_a_tile_with_pending_instructions_is_decoded_and_the_instruction_is_applied(
+    tmp_path,
+):
+    """A real Arrow batch (map metadata as pairs): the pending key is applied and gone, and the row is the one the
+    row-wise decode (`tile_batches.materialized`) gives."""
+    from databricks.labs.gbx.pyrx import tile_batches
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     path = _tif(tmp_path / "f.tif")
     md = {"pending_nodata": "0", "keep": "me"}
     (got,) = _decoded_rows(_batch_of(path, metadata=md))
-    want = _mvp_forms.materialize_udf.func(
-        VirtualTile(cellid=1, path=path, metadata=md).to_row()
+    want = tile_batches.materialized(
+        VirtualTile(cellid=1, path=path, metadata=md).to_row(), None, who="test"
     )
     assert dict(got["metadata"]) == want["metadata"]
     assert (
@@ -267,55 +244,6 @@ def test_a_rewritten_file_is_not_served_the_header_of_the_old_one(tmp_path):
     assert tile_batches.source_header(path)[:4] == (64, 64, 1, "float32")
     _tif(tmp_path / "f.tif", size=32, dtype="uint8")
     assert tile_batches.source_header(path)[:4] == (32, 32, 1, "uint8")
-
-
-def test_plain_register_leaves_a_probe_out_and_a_named_one_installs_it():
-    from databricks.labs.gbx import manager
-
-    from .connect_stub import ConnectStub
-
-    assert FN not in manager.register(ConnectStub())
-    assert FN in manager.register(ConnectStub(), only=[FN], _levels={FN: ("L3", "-")})
-
-
-def test_every_io_bench_form_runs(spark, tmp_path):
-    """The levels leg's IO forms (reads b / udf / d-py / floor, writer W1) on four local tiles: each ends `ok`, and the
-    writer leaves no scratch behind."""
-    import numpy as np
-    import rasterio
-    from rasterio.transform import from_origin
-
-    from databricks.labs.gbx.bench import levels, levels_forms
-
-    rows = tmp_path / "corpus" / "rows"
-    rows.mkdir(parents=True)
-    for i in range(4):
-        with rasterio.open(
-            rows / f"t{i}.tif",
-            "w",
-            driver="GTiff",
-            width=16,
-            height=16,
-            count=1,
-            dtype="float32",
-            crs="EPSG:4326",
-            transform=from_origin(i * 16, 16, 1, 1),
-        ) as dst:
-            dst.write(np.full((1, 16, 16), i, dtype="float32"))
-    got = levels.run_mvp(
-        spark, "IO", "io-test", 0, 1, corpus=str(tmp_path / "corpus"), schema=None, scales=(1,), base_rows=4,
-        where="test",
-    )  # fmt: skip
-    by_form = {r.form: r for r in got}
-    assert set(by_form) == {f.variant for f in levels_forms.FORMS["IO"]}
-    bad = {
-        k: (r.status, r.failure_mode or r.note)
-        for k, r in by_form.items()
-        if r.status != "ok"
-    }
-    assert not bad, bad
-    scratch = levels_forms._io_scratch(str(tmp_path / "corpus"))
-    assert not os.path.isdir(scratch) or not os.listdir(scratch)
 
 
 def test_the_batch_decode_yields_bounded_slices_in_order(tmp_path, monkeypatch):

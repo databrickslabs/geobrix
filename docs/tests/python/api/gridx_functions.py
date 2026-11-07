@@ -312,7 +312,7 @@ def bng_tessellateexplode_example(spark):
 # bng_eastnorthasbng, bng_pointascell
 #
 # These are the *_python_heavy_example functions consumed by FunctionExamples
-# and scanned by generate-function-info.py for the "python-heavy" binding.
+# and scanned by the docs "python-heavy" binding.
 #
 # Fixture views required (created by bng_heavy_setup in test_gridx_functions.py):
 #   bng_cells  — 1 row: cellid STRING = 'TQ3080'

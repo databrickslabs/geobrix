@@ -7,9 +7,9 @@ procedure CALL, warm and cold. Nothing here is run by a test against Databricks.
 
 Rules the plan keeps:
 
-* Probe functions and tables are named ``gbx_mvp_perf_*`` (functions built from a product row use
-  ``ddl.function_ddl(..., name=...)``), beside the product functions and never over them. Only ``gbx_mvp_`` routines and
-  ``gbx_mvp_perf_`` tables are dropped. A probe copy of a SQL kernel creates its helpers as ``gbx_mvp_perf_`` routines of
+* Probe functions and tables are named ``gbx_probe_perf_*`` (functions built from a product row use
+  ``ddl.function_ddl(..., name=...)``), beside the product functions and never over them. Only ``gbx_probe_`` routines and
+  ``gbx_probe_perf_`` tables are dropped. A probe copy of a SQL kernel creates its helpers as ``gbx_probe_perf_`` routines of
   its own, so no statement of a probe creates, replaces or drops a product routine.
 * A measurement whose product function does not exist in this wheel yet (the manifest holds no UC form of it) is not
   built: the plan records ``skipped`` with the missing name, and the same call builds it once the function lands.
@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
-PERF = "gbx_mvp_perf_"
+PERF = "gbx_probe_perf_"
 TAG = "T28 uc-perf"
 SURFACES = ("w", "s6")
 
@@ -168,11 +168,11 @@ _HELPER_CALL = re.compile(r"\{q\}gbx__([a-z0-9_]+)\(")
 
 
 def _drops_for(stmts: Sequence[str]) -> List[Tuple[str, str]]:
-    """DROPs of the probe routines ``stmts`` create (only ``gbx_mvp_`` routines: a product routine is never dropped)."""
+    """DROPs of the probe routines ``stmts`` create (only ``gbx_probe_`` routines: a product routine is never dropped)."""
     out = []
     for s in stmts:
         m = _CREATED.match(s)
-        if m and m.group(1).split(".")[-1].strip("`").startswith("gbx_mvp_"):
+        if m and m.group(1).split(".")[-1].strip("`").startswith("gbx_probe_"):
             out.append(
                 (
                     f"drop_{m.group(1).split('.')[-1].strip('`')}",
@@ -183,7 +183,7 @@ def _drops_for(stmts: Sequence[str]) -> List[Tuple[str, str]]:
 
 
 def _probe_helpers(fn):
-    """``fn`` with its SQL kernel's helpers renamed ``gbx__<x>`` -> ``gbx_mvp_perf_<x>``: the probe copy creates (and
+    """``fn`` with its SQL kernel's helpers renamed ``gbx__<x>`` -> ``gbx_probe_perf_<x>``: the probe copy creates (and
     drops) helpers of its own and never replaces the product's. A row with no SQL kernel is returned as it is.
     """
     from databricks.labs.gbx.uc import sqlbody
@@ -211,9 +211,9 @@ def _probe_helpers(fn):
 
 
 def _copy(c: Ctx, u: Unit, product: str, short: str, **kw) -> Optional[str]:
-    """Create the probe copy ``gbx_mvp_perf_<short>`` of a product scalar in the form ``kw`` names; its qualified name,
+    """Create the probe copy ``gbx_probe_perf_<short>`` of a product scalar in the form ``kw`` names; its qualified name,
     or None (recorded in ``u.skipped``) when the row cannot be that form. A SQL kernel's helpers are created as
-    ``gbx_mvp_perf_`` routines of the probe, never over the product's."""
+    ``gbx_probe_perf_`` routines of the probe, never over the product's."""
     from databricks.labs.gbx.uc import candidates, ddl
 
     fn = c.man.functions[product]
@@ -677,7 +677,7 @@ def _m6(c: Ctx) -> Unit:
     have_twin = "gbx__h3_cellfill_cells" in c.man.private
     if have_twin:
         pf = dataclasses.replace(
-            c.man.private["gbx__h3_cellfill_cells"], name="gbx_mvp_perf_h3_cellfill"
+            c.man.private["gbx__h3_cellfill_cells"], name="gbx_probe_perf_h3_cellfill"
         )
         twin_sql = ddl.private_ddl(
             pf, c.catalog, c.schema, c.wheel_uri, c.man.uc_dependencies, c.version
@@ -712,7 +712,7 @@ def _m6(c: Ctx) -> Unit:
             u.legs.append(
                 Leg(
                     f"py_twin_{_n(n)}",
-                    f"SELECT grp, size({c.q}.gbx_mvp_perf_h3_cellfill({arr}, 1, 'mean', 2.0)) FROM {table} GROUP BY grp",
+                    f"SELECT grp, size({c.q}.gbx_probe_perf_h3_cellfill({arr}, 1, 'mean', 2.0)) FROM {table} GROUP BY grp",
                 )
             )
         u.legs.append(Leg(f"c1_{_n(n)}", _c1(table)))
@@ -769,7 +769,7 @@ def _m6(c: Ctx) -> Unit:
         )
         u.drops.append(("drop_chips", f"DROP TABLE IF EXISTS {chips}"))
         twin = PrivateRoutine(
-            name="gbx_mvp_perf_bng_chips_union",
+            name="gbx_probe_perf_bng_chips_union",
             handler="databricks.labs.gbx.uc.forms:bng_chips_union_probe",
             deps=("h3", "shapely"),
             params=(
@@ -798,7 +798,7 @@ def _m6(c: Ctx) -> Unit:
             ),
             Leg(
                 "c_python_twin",
-                f"SELECT count(*), sum(length(u)) FROM (SELECT {c.q}.gbx_mvp_perf_bng_chips_union("
+                f"SELECT count(*), sum(length(u)) FROM (SELECT {c.q}.gbx_probe_perf_bng_chips_union("
                 f"collect_list(struct(cellid, core, chip))) AS u FROM {chips} GROUP BY cellid)",
             ),
         ]
@@ -950,7 +950,7 @@ def _m10_retile_probe(c: Ctx, u: Unit) -> Optional[str]:
     """Create the probe copy of the retile routine with the decode cap raised (``forms.rst_retile_tiles_probe``) and return
     its qualified name; None, with the reason in ``u.skipped``, when the wheel has no retile routine. A product function
     refuses a tile decoded over 64 MiB, so a timing at 128 or 256 MiB can only be taken on a probe copy; the copy is a
-    ``gbx_mvp_perf_`` routine that is dropped at the end, never over the product's."""
+    ``gbx_probe_perf_`` routine that is dropped at the end, never over the product's."""
     from databricks.labs.gbx.uc import ddl
 
     private = c.man.private.get("gbx__rst_retile_tiles")
@@ -1281,7 +1281,7 @@ def uc_perf_sql(
     ``wheel_path`` is the env 6 wheel on a Volume and ``jar_path`` the JAR with dependencies (None: no Scala leg).
     The tiles the statements read are written by ``perf_stage_tiles`` (a Serverless ``run_uc_perf`` stages them first, or
     call it on a cluster) into ``tile_dir`` (default ``<wheel folder>/perf_tiles``). The product functions the legs name
-    must be installed in ``catalog.schema``; the file creates and drops the ``gbx_mvp_perf_*`` probes itself.
+    must be installed in ``catalog.schema``; the file creates and drops the ``gbx_probe_perf_*`` probes itself.
     """
     return flatten(
         perf_plan(

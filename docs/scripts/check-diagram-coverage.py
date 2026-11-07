@@ -19,15 +19,13 @@ Run directly on the host -- pure stdlib, no Docker needed.
 """
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _manifest_names import all_names  # noqa: E402
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REGISTERED_TXT = REPO_ROOT / "docs/tests-function-info/registered_functions.txt"
+MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
 DIAGRAM_PY = REPO_ROOT / "resources/images/generators/rasterx-function-categories.py"
 
 # Matches bare rst_ tokens (the pill labels used in the diagram script).
@@ -41,8 +39,9 @@ COUNT_RE = re.compile(r"""(\d+)\s+(?:SQL\s+)?functions""")
 
 
 def canonical_rst() -> set[str]:
-    """Return the set of registered rst_ names (without the gbx_ prefix): the manifest's and the legacy list's."""
-    return {n[len("gbx_"):] for n in all_names() if n.startswith("gbx_rst_")}
+    """Return the set of registered rst_ names (without the gbx_ prefix): the manifest's."""
+    names = {r["sql_name"] for r in json.loads(MANIFEST_JSON.read_text())["functions"]}
+    return {n[len("gbx_"):] for n in names if n.startswith("gbx_rst_")}
 
 
 def diagram_tokens(text: str) -> set[str]:
@@ -132,7 +131,7 @@ def check_d4b(true_count: int, text: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 def main() -> int:
-    for required in (REGISTERED_TXT, DIAGRAM_PY):
+    for required in (MANIFEST_JSON, DIAGRAM_PY):
         if not required.exists():
             print(f"FAIL missing required file: {required}", file=sys.stderr)
             return 1

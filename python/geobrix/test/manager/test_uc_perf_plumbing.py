@@ -388,7 +388,7 @@ def test_the_shipped_stub_rows_are_the_product_mappings_and_the_session_only_sca
     assert "st_transform(" in stubs["gbx_st_transformcrs"]
     assert "gbx_rst_fromcontent" in stubs["gbx_rst_fromfile"]
     assert "gbx_rst_mapalgebra" in stubs["gbx_rst_derivedband"]
-    assert "gbx_mvp_rst_materialize" not in stubs  # a probe name gets none
+    assert "gbx_probe_rst_materialize" not in stubs  # a probe name gets none
     # opt-in: a plain install creates none, stubs=True adds one statement for each
     plain = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True)
     with_stubs = uc.install("c", "s", "/Volumes/c/s/v", dry_run=True, stubs=True)

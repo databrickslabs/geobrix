@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 /**
  * Loads function metadata (e.g. examples for DESCRIBE FUNCTION EXTENDED) from
  * a JSON resource generated from doc examples (single-copy pattern).
- * See docs/scripts/generate-function-info.py.
+ * Generated from the function manifest: see scripts/manifest/gen_surfaces.py.
  */
 object FunctionInfoLoader {
 

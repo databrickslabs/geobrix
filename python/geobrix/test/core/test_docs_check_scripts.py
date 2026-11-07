@@ -1,6 +1,5 @@
-"""The docs/scripts checks that now skip or read the function manifest: the path neutralizer of the function-info
-generator, the release-notes name diff, and the manifest exclusion of each legacy check (a stable manifest name is
-the manifest gate's; every other name is still checked)."""
+"""The docs/scripts checks that read the function manifest: the release-notes name diff, the doc and diagram
+coverage, and the docs example checks."""
 
 import importlib.util
 import subprocess
@@ -32,26 +31,6 @@ def _run(name):
     )
 
 
-# --- generate-function-info.py: neutral_paths -----------------------------------------------------------
-
-
-def test_neutral_paths_shows_a_checkout_path_as_a_volume_path_and_keeps_the_file_name():
-    gen = _load("generate-function-info")
-    root = gen.REPO_ROOT
-    text = f"x '{root}/src/test/resources/a/b.clr') y"
-    assert (
-        gen.neutral_paths(text) == "x '/Volumes/<catalog>/<schema>/<volume>/b.clr') y"
-    )
-    assert (
-        gen.neutral_paths(f'"{root}/c.tif"')
-        == '"/Volumes/<catalog>/<schema>/<volume>/c.tif"'
-    )
-    assert (
-        gen.neutral_paths("SELECT '/Volumes/c/s/v/d.tif'")
-        == "SELECT '/Volumes/c/s/v/d.tif'"
-    )
-
-
 # --- check-release-notes-functions.py -------------------------------------------------------------------
 
 
@@ -62,34 +41,26 @@ def _notes(monkeypatch, files):
     return mod
 
 
-LEGACY = "gbx_old_a\n# comment\n"
-MANIFEST = (
-    '{"functions": [{"sql_name": "gbx_new_b"}, {"sql_name": "gbx_old_a"},'
-    ' {"sql_name": "gbx_mvp_c", "status": "mvp"}]}'
-)
+MANIFEST = '{"functions": [{"sql_name": "gbx_new_b"}, {"sql_name": "gbx_old_a"}]}'
 
 
 def test_added_names_are_the_set_difference_between_the_ranges_ends(monkeypatch):
     mod = _notes(
         monkeypatch,
         {
-            ("base", "registered_functions.txt"): LEGACY,
             ("base", "functions.json"): '{"functions": [{"sql_name": "gbx_old_a"}]}',
-            ("end", "registered_functions.txt"): LEGACY,
             ("end", "functions.json"): MANIFEST,
         },
     )
-    # only the new stable manifest name: not the probe row, not the name that was already there
+    # only the new name: not the one that was already there
     assert mod.added_functions("base..end") == ["gbx_new_b"]
 
 
-def test_a_manifest_absent_at_the_base_counts_all_its_stable_rows_as_added(monkeypatch):
+def test_a_manifest_absent_at_the_base_counts_all_its_rows_as_added(monkeypatch):
     mod = _notes(
         monkeypatch,
         {
-            ("base", "registered_functions.txt"): "",
             ("base", "functions.json"): "",  # the revision exists; the file did not
-            ("end", "registered_functions.txt"): "",
             ("end", "functions.json"): MANIFEST,
         },
     )
@@ -102,9 +73,7 @@ def test_an_unreadable_revision_or_manifest_is_an_advisory_skip(monkeypatch):
     mod = _notes(
         monkeypatch,
         {
-            ("base", "registered_functions.txt"): "",
             ("base", "functions.json"): "{not json",
-            ("end", "registered_functions.txt"): "",
             ("end", "functions.json"): MANIFEST,
         },
     )
@@ -112,9 +81,7 @@ def test_an_unreadable_revision_or_manifest_is_an_advisory_skip(monkeypatch):
     mod = _notes(
         monkeypatch,
         {
-            ("base", "registered_functions.txt"): "",
             ("base", "functions.json"): '{"functions": [{"no_name": 1}]}',
-            ("end", "registered_functions.txt"): "",
             ("end", "functions.json"): MANIFEST,
         },
     )
@@ -136,53 +103,6 @@ def test_the_range_ends_are_parsed_and_a_three_dot_range_starts_at_the_merge_bas
     assert mod.range_ends("HEAD...HEAD") == (sha, "HEAD")
 
 
-# --- check-since.py -------------------------------------------------------------------------------------
-
-
-def test_check_since_passes_on_the_committed_tree():
-    r = _run("check-since")
-    assert r.returncode == 0, r.stdout + r.stderr
-
-
-def test_check_since_reads_the_manifest_rows(monkeypatch, capsys):
-    mod = _load("check-since")
-    rows = {
-        "gbx_rst_ok": {"since": "0.5.0"},
-        "gbx_rst_nosince": {},
-        "gbx_rst_bad": {"since": "v1"},
-        "gbx_rst_split": {"since": "0.6.0"},
-    }
-    monkeypatch.setattr(mod, "stable_rows", lambda: rows)
-    monkeypatch.setattr(mod, "_load_registered", lambda: ["gbx_zz_legacy_probe"])
-    monkeypatch.setattr(
-        mod, "_load_since", lambda *a, **k: {"gbx_rst_split": "0.5.0", "gbx_x": "0.1.0"}
-    )
-    assert mod.main() == 1
-    err = capsys.readouterr().err
-    assert "gbx_rst_nosince" in err and "gbx_zz_legacy_probe" in err
-    assert "gbx_rst_bad" in err and "not a version" in err
-    assert "gbx_rst_split" in err and "function-since.tsv says 0.5.0" in err
-    assert "gbx_rst_ok" not in err
-
-
-def test_check_since_fails_on_a_row_that_disagrees_with_the_tsv_alone(
-    monkeypatch, capsys
-):
-    mod = _load("check-since")
-    monkeypatch.setattr(mod, "stable_rows", lambda: {"gbx_rst_a": {"since": "0.6.0"}})
-    monkeypatch.setattr(mod, "_load_registered", lambda: [])
-    monkeypatch.setattr(mod, "_load_since", lambda *a, **k: {"gbx_rst_a": "0.5.0"})
-    assert mod.main() == 1
-    assert "function-since.tsv says 0.5.0" in capsys.readouterr().err
-
-
-def test_check_since_fails_on_an_empty_source(monkeypatch, capsys):
-    mod = _load("check-since")
-    monkeypatch.setattr(mod, "stable_rows", lambda: {})
-    assert mod.main() == 1
-    assert "nothing to check" in capsys.readouterr().err
-
-
 # --- check-doc-coverage.py / check-diagram-coverage.py --------------------------------------------------
 
 
@@ -191,7 +111,7 @@ def test_check_doc_coverage_passes_and_counts_every_manifest_function():
     assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
     mod = _load("check-doc-coverage")
     n = len(mod.canonical_sql())
-    assert n >= len(mod.stable_rows()) > 200
+    assert n == len(mod._manifest_rows()) > 200
     assert f"Canonical registered functions: {n}" in r.stdout
 
 
@@ -199,7 +119,7 @@ def test_check_doc_coverage_uses_the_row_page_and_fails_an_unmapped_name(tmp_pat
     mod = _load("check-doc-coverage")
     page = tmp_path / "p.mdx"
     page.write_text("### zz_documented\n")
-    mod.stable_rows = lambda: {
+    mod._manifest_rows = lambda: {
         "gbx_zz_documented": {"doc": {"page": "x"}},
         "gbx_zz_missing": {"doc": {"page": "x"}},
         "gbx_zz_nopage": {},
@@ -255,39 +175,10 @@ def test_docs_examples_fails_when_a_scan_is_empty(monkeypatch, tmp_path, capsys)
     assert any("0 <FunctionExamples> blocks" in f for f in mod.check_tab_completeness())
     monkeypatch.setattr(mod, "_output_constants", lambda path: iter(()))
     assert any("compared 0" in f for f in mod.check_annotation_consistency())
-    monkeypatch.setattr(mod, "stable_names", lambda: set())
+    empty = tmp_path / "functions.json"
+    empty.write_text('{"functions": []}')
+    monkeypatch.setattr(mod, "MANIFEST_JSON", empty)
     assert any("no stable rows" in f for f in mod.check_tab_completeness())
-
-
-# --- check-param-names.py -------------------------------------------------------------------------------
-
-
-def test_param_names_hold_the_published_names_to_the_manifest(monkeypatch):
-    mod = _load("check-param-names")
-    assert mod.check_against_manifest() == []
-    assert len(mod.load_fixture()) > 150  # a real number of signatures is checked
-    rows = mod.stable_rows()
-    renamed = {n: dict(r) for n, r in rows.items()}
-    first = next(n for n in mod.load_fixture() if n not in mod.load_waiver())
-    renamed[first]["params"] = [{"name": "zz"}]
-    monkeypatch.setattr(mod, "stable_rows", lambda: renamed)
-    assert any(first in v for v in mod.check_against_manifest())
-    monkeypatch.setattr(
-        mod, "stable_rows", lambda: {k: v for k, v in rows.items() if k != first}
-    )
-    assert any("not a stable manifest row" in v for v in mod.check_against_manifest())
-
-
-def test_param_names_fail_on_an_empty_source(monkeypatch):
-    mod = _load("check-param-names")
-    monkeypatch.setattr(mod, "stable_rows", lambda: {})
-    assert any(v.startswith("[empty]") for v in mod.check_against_manifest())
-    monkeypatch.setattr(mod, "load_fixture", lambda: {})
-    monkeypatch.setattr(mod, "stable_rows", lambda: {"gbx_a": {"params": []}})
-    assert any("lists no functions" in v for v in mod.check_against_manifest())
-    assert mod.main.__module__  # main() returns 1 on any violation
-    monkeypatch.setattr(sys, "argv", ["check-param-names"])
-    assert mod.main() == 1
 
 
 # --- scripts/manifest/check_surfaces.py -----------------------------------------------------------------

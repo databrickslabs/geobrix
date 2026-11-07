@@ -138,11 +138,13 @@ _OUT = "import shapely\ng = shapely.set_srid(shapely.from_wkt(w), 4326)\nreturn 
 
 
 def run_pgeom(spark, catalog: str, schema: str) -> dict:
-    """P-GEOM (OD-15): what a UC Python function receives for GEOMETRY, and whether it can return one."""
+    """P-GEOM: what a UC Python function receives for GEOMETRY, and whether it can return one."""
     q = f"`{catalog}`.`{schema}`"
     out = {}
     for decl in ("GEOMETRY(ANY)", "GEOMETRY(4326)", "GEOMETRY"):
-        name = "gbx_mvp_pgeom_in_" + "".join(ch for ch in decl.lower() if ch.isalnum())
+        name = "gbx_probe_pgeom_in_" + "".join(
+            ch for ch in decl.lower() if ch.isalnum()
+        )
         try:
             spark.sql(
                 f"CREATE OR REPLACE FUNCTION {q}.{name}(g {decl}) RETURNS STRING LANGUAGE PYTHON "
@@ -155,14 +157,14 @@ def run_pgeom(spark, catalog: str, schema: str) -> dict:
             out[decl] = f"ERROR {type(exc).__name__}: {str(exc)[:400]}"
     try:
         spark.sql(
-            f"CREATE OR REPLACE FUNCTION {q}.gbx_mvp_pgeom_out(w STRING) RETURNS GEOMETRY LANGUAGE PYTHON "
+            f"CREATE OR REPLACE FUNCTION {q}.gbx_probe_pgeom_out(w STRING) RETURNS GEOMETRY LANGUAGE PYTHON "
             "ENVIRONMENT (dependencies = '[\"shapely==2.1.2\"]', environment_version = '6') "
             f"AS $$\n{_OUT}\n$$"
         )
         out["return"] = (
             spark.sql(
-                f"SELECT st_srid({q}.gbx_mvp_pgeom_out('POINT(1 2)')) AS srid, "
-                f"st_astext({q}.gbx_mvp_pgeom_out('POINT(1 2)')) AS wkt"
+                f"SELECT st_srid({q}.gbx_probe_pgeom_out('POINT(1 2)')) AS srid, "
+                f"st_astext({q}.gbx_probe_pgeom_out('POINT(1 2)')) AS wkt"
             )
             .first()
             .asDict()
@@ -173,7 +175,7 @@ def run_pgeom(spark, catalog: str, schema: str) -> dict:
 
 
 def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) -> dict:
-    """gbx.uc.install from env 6, the probe batch form, then the MVP-S and MVP-G oracles through 3-level names."""
+    """gbx.uc.install from env 6, the probe batch form, then the MVP_S and MVP_G oracle tables through 3-level names."""
     from databricks.labs.gbx import __version__ as ver
     from databricks.labs.gbx import manifest, register, uc
     from databricks.labs.gbx.bench import oracles
@@ -195,7 +197,7 @@ def run_uc_s6(spark, catalog: str, schema: str, volume_dir: str, tmpdir: str) ->
         man.uc_dependencies,
         ver.split("+", 1)[0],
         style="batch",
-        name="gbx_mvp_bng_eastnorthasbng_batch",
+        name="gbx_probe_bng_eastnorthasbng_batch",
     ):
         spark.sql(s)
     register(spark, target="uc", catalog=catalog, schema=schema)
@@ -347,7 +349,7 @@ def run_uc_slice(
 def uc_probe_sql(
     catalog: str, schema: str, jar_path: str, n: int = 1_000_000
 ) -> List[Tuple[str, str]]:
-    """E-UCScala + the OD-18 batch form + per-statement timing at n rows, for gbx-uc-sql on the warehouse."""
+    """E-UCScala + the batch form + per-statement timing at n rows, for gbx-uc-sql on the warehouse."""
     q = f"`{catalog}`.`{schema}`"
     gen = f"(SELECT rand(7) * 700000 AS e, rand(8) * 1300000 AS n FROM range({n}))"
     env = f"ENVIRONMENT (java_dependencies = '[\"{jar_path}\"]', environment_version = '6')"
@@ -355,31 +357,31 @@ def uc_probe_sql(
     return [
         (
             "ucscala_create",
-            f"CREATE OR REPLACE FUNCTION {q}.gbx_mvp_bng_eastnorthasbng_jvm(easting DOUBLE, "
+            f"CREATE OR REPLACE FUNCTION {q}.gbx_probe_bng_eastnorthasbng_jvm(easting DOUBLE, "
             f"northing DOUBLE, resolution STRING) RETURNS STRING LANGUAGE SCALA {env} "
             f"{handler}.eastNorthAsBng'",
         ),
         (
             "ucscala_gdal_create",
-            f"CREATE OR REPLACE FUNCTION {q}.gbx_mvp_gdal_version_jvm() RETURNS STRING "
+            f"CREATE OR REPLACE FUNCTION {q}.gbx_probe_gdal_version_jvm() RETURNS STRING "
             f"LANGUAGE SCALA {env} {handler}.gdalVersion'",
         ),
         (
             "ucscala_oracle",
-            f"SELECT {q}.gbx_mvp_bng_eastnorthasbng_jvm(530000d, 180000d, '3')",
+            f"SELECT {q}.gbx_probe_bng_eastnorthasbng_jvm(530000d, 180000d, '3')",
         ),
-        ("ucscala_gdal", f"SELECT {q}.gbx_mvp_gdal_version_jvm()"),
+        ("ucscala_gdal", f"SELECT {q}.gbx_probe_gdal_version_jvm()"),
         (
             "t_ucpython",
             f"SELECT count(*), sum(xxhash64({q}.gbx_bng_eastnorthasbng(e, n, '3'))) FROM {gen}",
         ),
         (
             "t_ucpython_batch",
-            f"SELECT count(*), sum(xxhash64({q}.gbx_mvp_bng_eastnorthasbng_batch(e, n, '3'))) FROM {gen}",
+            f"SELECT count(*), sum(xxhash64({q}.gbx_probe_bng_eastnorthasbng_batch(e, n, '3'))) FROM {gen}",
         ),
         (
             "t_ucscala",
-            f"SELECT count(*), sum(xxhash64({q}.gbx_mvp_bng_eastnorthasbng_jvm(e, n, '3'))) FROM {gen}",
+            f"SELECT count(*), sum(xxhash64({q}.gbx_probe_bng_eastnorthasbng_jvm(e, n, '3'))) FROM {gen}",
         ),
         ("t_select1", "SELECT 1"),
     ]
@@ -425,7 +427,7 @@ def uc_smallagg_sql(
     table: str,
     sizes: Sequence[int] = (10, 50, 200, 1000),
 ) -> List[Tuple[str, str]]:
-    """SMALL-AGG (OD-20): collect_list of a group's rasters into a UC Python finalize (the light merge), per group size."""
+    """SMALL-AGG: collect_list of a group's rasters into a UC Python finalize (the light merge), per group size."""
     q = f"`{catalog}`.`{schema}`"
     env = json.dumps(
         [f"geobrix @ file://{wheel_path}"]
@@ -435,7 +437,7 @@ def uc_smallagg_sql(
     stmts = [
         (
             "smallagg_create",
-            f"CREATE OR REPLACE FUNCTION {q}.gbx_mvp_rst_merge_uc(rasters ARRAY<BINARY>) RETURNS BINARY "
+            f"CREATE OR REPLACE FUNCTION {q}.gbx_probe_rst_merge_uc(rasters ARRAY<BINARY>) RETURNS BINARY "
             f"LANGUAGE PYTHON ENVIRONMENT (dependencies = '{env}', environment_version = '6') AS $$\n{body}\n$$",
         )
     ]
@@ -443,18 +445,18 @@ def uc_smallagg_sql(
         stmts.append(
             (
                 f"t_smallagg_{s}",
-                f"SELECT count(*), sum(length(m)) FROM (SELECT {q}.gbx_mvp_rst_merge_uc(collect_list(raster)) AS m "
+                f"SELECT count(*), sum(length(m)) FROM (SELECT {q}.gbx_probe_rst_merge_uc(collect_list(raster)) AS m "
                 f"FROM (SELECT raster FROM {table} WHERE i < {s}))",
             )
         )
     return stmts
 
 
-# ---- P2: the tile sizes a Unity Catalog Python function accepts (Task 23, D-P2) ----
+# ---- P2: the tile sizes a Unity Catalog Python function accepts ----
 
-P2_FN = "gbx_mvp_p2_tile_echo"
-P2_TMP_FN = "gbx_mvp_p2_tmp_write"
-P2_PYSPARK_FN = "gbx_mvp_p2_import_pyspark"
+P2_FN = "gbx_probe_p2_tile_echo"
+P2_TMP_FN = "gbx_probe_p2_tmp_write"
+P2_PYSPARK_FN = "gbx_probe_p2_import_pyspark"
 P2_SIZES = (
     ("64KiB", 64 << 10),
     ("1MiB", 1 << 20),  # the reference tile: a 512 x 512 Float32 ZSTD GeoTIFF
@@ -647,7 +649,7 @@ def p2_statements(
 
 
 def run_p2_tiles(spark, catalog: str, schema: str, volume_dir: str) -> dict:
-    """P2 (D-P2): which tile sizes a UC Python function takes and returns, whether it can write ``/tmp``, and
+    """P2: which tile sizes a UC Python function takes and returns, whether it can write ``/tmp``, and
     whether ``pyspark`` imports there. Run it on Serverless env 6; the warehouse runs the same statements
     (``p2_statements``) through ``gbx-uc-sql``. ``volume_dir`` holds the one env 6 wheel (the functions'
     dependency) and gets a ``p2_tiles/`` folder with the tile files. The probe functions are dropped at the end.
@@ -1940,7 +1942,7 @@ def run_register_all(
         choices, reg_wall = res
         man = manifest.load()
         wanted = (
-            [n for n, f in man.functions.items() if f.status != "mvp"]
+            list(man.functions)
             if not only
             else [n if n.startswith("gbx_") else f"gbx_{n}" for n in only]
         )
@@ -2212,7 +2214,7 @@ def run_p1(
     poll_s: float = 10.0,
     restart: bool = True,
 ) -> dict:
-    """P1 (D-P1): can a JAR installed as a library through the Libraries API on a RUNNING cluster be used at L1?
+    """P1: can a JAR installed as a library through the Libraries API on a RUNNING cluster be used at L1?
 
     A restart ends the session this runs in, so the probe has two phases, each its own notebook run on the cluster:
 
@@ -2222,7 +2224,7 @@ def run_p1(
       (the run ends with it; the line above is the record).
     * ``phase='after'``: on the restarted cluster, the library status and ``detect`` (``after_restart``).
 
-    D-P1 is the Libraries API route iff ``at_once`` or ``after_restart`` shows a usable JAR. ``client`` is a
+    The Libraries API route works iff ``at_once`` or ``after_restart`` shows a usable JAR. ``client`` is a
     ``WorkspaceClient`` (default: the notebook's own). Prints ``[T28 P1] <step> START`` / ``DONE`` lines.
     """
     if phase not in ("install", "after"):
@@ -2288,10 +2290,10 @@ def run_p1(
 
 # --- the workspace mechanism checks (Task 28 run F) and the engine L4 probe (M-6) ---------------------------------------
 
-MECH = "gbx_mvp_t28_"
+MECH = "gbx_probe_t28_"
 MECH_MIB = (1, 16, 64)
 MECH_ENGINE_DEPS = ("rasterio", "pyproj", "shapely")  # the pins of the probe sandboxes
-M6_FN = "gbx_mvp_se_l4_probe"
+M6_FN = "gbx_probe_se_l4_probe"
 M6_TILE = ("1MiB", 1 << 20)  # the reference tile: a 512 x 512 Float32 ZSTD GeoTIFF
 
 _M6_BODY = (
@@ -2343,7 +2345,7 @@ def _tile_from_content() -> str:
 def m6_statements(
     catalog: str, schema: str, tile_dir: str, wheel_uri: str, deps: dict
 ) -> List[Tuple[str, str]]:
-    """M-6 (engine L4): a UC Python function ``gbx_mvp_se_l4_probe(t TILE) RETURNS TILE`` whose handler runs the GDAL spec
+    """M-6 (engine L4): a UC Python function ``gbx_probe_se_l4_probe(t TILE) RETURNS TILE`` whose handler runs the GDAL spec
     engine for ``gbx_rst_slope`` on the 1 MiB reference tile as ``(cid, sql)``: the CREATE, the call and the DROP. Pass: the
     call answers ``ok|valid:min:max=...|pyspark_imported=False``. The Serverless notebook and the warehouse run the same text.
     """
@@ -2510,7 +2512,7 @@ def t28_mech_units(
 
     A unit is ``{"id", "title", "surfaces", "statements": [(cid, sql, expect)], "drops": [(cid, sql)]}``. ``surfaces``
     names where it runs: ``s6`` (a Serverless notebook) and ``w`` (the warehouse). The statements of a unit run in order;
-    a unit is ``ok`` when every expectation holds. Every routine is named ``gbx_mvp_t28_*`` and dropped at the end.
+    a unit is ``ok`` when every expectation holds. Every routine is named ``gbx_probe_t28_*`` and dropped at the end.
     """
     from databricks.labs.gbx import manifest
     from databricks.labs.gbx import uc as _uc
@@ -2554,7 +2556,7 @@ def t28_mech_units(
     unit(
         "f3", "a SQL table function whose body raises (a TVF stub)", ("s6", "w"),
         [
-            ("create", f"CREATE OR REPLACE FUNCTION {q}.{stub}(x INT) RETURNS TABLE (a INT) RETURN SELECT CAST(raise_error('gbx_mvp_t28 stub: runs in a session') AS INT) AS a", ("any",)),
+            ("create", f"CREATE OR REPLACE FUNCTION {q}.{stub}(x INT) RETURNS TABLE (a INT) RETURN SELECT CAST(raise_error('gbx_probe_t28 stub: runs in a session') AS INT) AS a", ("any",)),
             ("call", f"SELECT * FROM {q}.{stub}(1)", ("error", "stub: runs in a session")),
         ],
         [("drop", f"DROP FUNCTION IF EXISTS {q}.{stub}")],
@@ -2880,7 +2882,7 @@ def temp_share_cells() -> List[str]:
     (both directions), then drop the two functions. Each prints ``[T28 share] <label> OK <value>`` or ``ERROR ...``.
     """
     py_create = (
-        "spark.sql('CREATE OR REPLACE TEMPORARY FUNCTION gbx_mvp_t28_share_py(x INT) RETURNS INT RETURN x + 1')\n"
+        "spark.sql('CREATE OR REPLACE TEMPORARY FUNCTION gbx_probe_t28_share_py(x INT) RETURNS INT RETURN x + 1')\n"
         "print('[T28 share] python_created')"
     )
     scala = """%scala
@@ -2889,16 +2891,16 @@ def probe(label: String)(body: => String): Unit = {
   val r = Try(body)
   println(s"[T28 share] $label " + (if (r.isSuccess) s"OK ${r.get}" else "ERROR " + r.failed.get.getMessage.take(240).replace("\\n", " ")))
 }
-probe("scala_sees_python_function") { spark.sql("SELECT gbx_mvp_t28_share_py(1)").first().get(0).toString }
-probe("scala_creates") { spark.sql("CREATE OR REPLACE TEMPORARY FUNCTION gbx_mvp_t28_share_scala(x INT) RETURNS INT RETURN x + 2"); "created" }"""
+probe("scala_sees_python_function") { spark.sql("SELECT gbx_probe_t28_share_py(1)").first().get(0).toString }
+probe("scala_creates") { spark.sql("CREATE OR REPLACE TEMPORARY FUNCTION gbx_probe_t28_share_scala(x INT) RETURNS INT RETURN x + 2"); "created" }"""
     py_read = (
         "def probe(label, fn):\n"
         "    try:\n"
         "        print('[T28 share]', label, 'OK', fn())\n"
         "    except Exception as exc:\n"
         "        print('[T28 share]', label, 'ERROR', ' '.join(str(exc).split())[:240])\n"
-        "probe('python_sees_scala_function', lambda: spark.sql('SELECT gbx_mvp_t28_share_scala(1)').first()[0])\n"
-        "for name in ('gbx_mvp_t28_share_py', 'gbx_mvp_t28_share_scala'):\n"
+        "probe('python_sees_scala_function', lambda: spark.sql('SELECT gbx_probe_t28_share_scala(1)').first()[0])\n"
+        "for name in ('gbx_probe_t28_share_py', 'gbx_probe_t28_share_scala'):\n"
         "    spark.sql(f'DROP TEMPORARY FUNCTION IF EXISTS {name}')"
     )
     return [py_create, scala, py_read]

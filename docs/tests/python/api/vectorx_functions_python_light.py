@@ -3,8 +3,7 @@ Python code examples for the light (pyvx) tier of VectorX functions.
 
 Single source of truth for the Python (light) tab in
 docs/docs/api/vectorx-functions.mdx. Consumed by the FunctionExamples
-component (``pythonLight`` prop) and by the generate-function-info.py
-``_TIER_SCANS`` binding detector.
+component (``pythonLight`` prop).
 
 All examples use the shared canonical fixtures from ``_fixtures.py``
 so every function's four tabs show the SAME example — the same fixture,
@@ -104,8 +103,7 @@ VectorX (light) registered. You can now use gbx_st_* SQL functions via the pyvx 
 #   <base>_python_light_example_output = """..."""
 #
 # where <base> is the function's base name (e.g. st_asmvt, st_triangulate).
-# The generate-function-info.py _TIER_SCANS scanner detects these by their
-# def signature; the FunctionExamples MDX component renders the source text.
+# The FunctionExamples MDX component renders the source text.
 # ---------------------------------------------------------------------------
 
 

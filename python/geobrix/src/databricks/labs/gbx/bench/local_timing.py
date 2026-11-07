@@ -5,7 +5,7 @@ forms of a set at three sizes on ``local[8]`` (a dropped warmup pass, then ``--r
 is what is judged) and flags what no
 healthy form does:
 
-* more than K times the row UDF (the reference decode) at the largest n;
+* more than K times the reference form (the decode) at the largest n;
 * a time that does not scale with n (the smallest n takes over 60 % of the largest: the form works on more than n tiles);
 * a time that does not grow like n: the largest over the middle n is under MIN_GROWTH (flat) or over 1.5 times the ratio of
   the two ns (worse than linear). Growth below that ratio is normal: a fixed cost (the scan, the worker start-up) and 8
@@ -94,8 +94,8 @@ class SetSpec:
 SETS: Dict[str, SetSpec] = {
     "IO": SetSpec(
         mvp="IO",
-        forms=("b", "udf", "d-py", "floor"),
-        reference="udf",
+        forms=("b", "d-py", "floor"),
+        reference="d-py",
         ns=(6, 24, 96),
         corpus_src="/Volumes/main/default/bench-corpus/rows",
         corpus_dir="/tmp/gbx-local-timing/IO",
@@ -184,7 +184,7 @@ def _family_sets() -> Dict[str, SetSpec]:
         ),
         "raster-generator": SetSpec(
             mvp="raster-generator",
-            forms=("udtf", "udtf-arrow", "floor"),
+            forms=("udtf", "floor"),
             reference="udtf",
             ns=n_tiles,
             fn="gbx_rst_retile",
@@ -213,7 +213,7 @@ def _family_sets() -> Dict[str, SetSpec]:
         ),
         "grid-generator": SetSpec(
             mvp="grid-generator",
-            forms=("udtf", "udtf-arrow", "tvf", "floor"),
+            forms=("udtf", "tvf", "floor"),
             reference="udtf",
             ns=(5_000, 20_000, 80_000),
             fn="gbx_bng_tessellateexplode",
@@ -279,7 +279,7 @@ def flags(
     forms: Sequence[str],
     ns: Sequence[int],
     k: float = K_DEFAULT,
-    reference: str = "udf",
+    reference: str = "d-py",
     peer_exempt: Sequence[str] = (),
 ) -> List[str]:
     """What is wrong with the timings `res` (seconds by `(form, n)`); an empty list is a healthy pass.
@@ -310,7 +310,7 @@ def flags(
     for f in timed:
         t_lo, t_mid, t_hi = res[(f, lo)], res[(f, mid)], res[(f, hi)]
         if f != reference and f not in peer_exempt and _ok(ref) and t_hi / ref > k:
-            out.append(f"{f}: {t_hi / ref:.1f}x the row UDF at n={hi}")
+            out.append(f"{f}: {t_hi / ref:.1f}x the reference {reference} at n={hi}")
         if t_lo > N_INDEPENDENT * t_hi:
             out.append(
                 f"{f}: n-independent (t{lo}={t_lo:.1f}s ~ t{hi}={t_hi:.1f}s): decodes more than n tiles"
@@ -339,7 +339,7 @@ def table(
     *,
     forms: Sequence[str],
     ns: Sequence[int],
-    reference: str = "udf",
+    reference: str = "d-py",
 ) -> str:
     """Seconds per form and n, the ratio to the floor and to the reference at the largest n, and largest/middle n."""
     mid, hi = ns[len(ns) // 2], ns[-1]
@@ -347,7 +347,7 @@ def table(
     lines = [
         "form    "
         + "".join(f"{n:>8}" for n in ns)
-        + "  x floor  x udf  t%d/t%d" % (hi, mid)
+        + "  x floor  x ref  t%d/t%d" % (hi, mid)
     ]
     for f in forms:
         t = [res.get((f, n), float("nan")) for n in ns]

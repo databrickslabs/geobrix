@@ -104,20 +104,14 @@ def test_levels_leg_times_every_light_shape_of_the_generators(
     assert bad == [], [(r.fn, r.form, r.failure_mode) for r in bad]
     ok = [r for r in rows if r.status == "ok"]
     retile = {r.form: r.output_fingerprint for r in ok if r.fn == "gbx_rst_retile"}
-    assert set(retile) == {
-        "udtf",
-        "udtf-arrow",
-        "array_inline",
-        "count_part",
-        "session-tvf",
-    }
+    assert set(retile) == {"udtf"}
     # the tessellate generator and the array function give the same cells, so their shapes share one answer
     cells = {
         (r.fn, r.form): r.output_fingerprint
         for r in ok
         if r.fn in ("gbx_bng_tessellateexplode", "gbx_bng_tessellate")
     }
-    assert len(cells) == 3 and len(set(cells.values())) == 1, cells
+    assert len(cells) == 2 and len(set(cells.values())) == 1, cells
     assert len(set(retile.values())) == 1, retile
     # the big-tile shapes have no tiles here, and say so
     big = [r for r in rows if r.form.endswith("-big")]
@@ -127,9 +121,9 @@ def test_levels_leg_times_every_light_shape_of_the_generators(
 def test_levels_leg_times_every_light_shape_of_the_aggregates(
     spark_session_local, tmp_path, monkeypatch
 ):
-    """The light shapes of one aggregate ask for the same groups in different ways: one fingerprint each (the
-    tree step re-encodes its canvases, so it agrees on the groups only), and each is a form of the Python
-    worker, which is how the runner comes to record its worker memory."""
+    """The light shapes of one aggregate ask for the same groups in different ways: one fingerprint each, and
+    each is a form of the Python worker, which is how the runner comes to record its worker memory.
+    """
     from databricks.labs.gbx.bench import oracles
 
     (tmp_path / "rows").mkdir()
@@ -164,7 +158,7 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
     rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=400, mvp="A")
     bad = [r for r in rows if r.status != "ok"]
     assert bad == [], [(r.fn, r.form, r.status, r.failure_mode, r.note) for r in bad]
-    assert len(rows) == 14 and {r.level for r in rows} == {"L3"}
+    assert len(rows) == 10 and {r.level for r in rows} == {"L3"}
     # provenance: the merge aggregate records the path a capability chose (pandas by default), the BNG one chooses none,
     # and every row says which Spark it ran on
     assert {r.path for r in rows if r.fn == lf._MA} == {"merge_agg:pandas"}
@@ -181,10 +175,6 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
                 for r in rows
                 if r.fn == fn and r.form.endswith("-skew") == bool(sfx)
             }
-            prints = {
-                f: r.output_fingerprint
-                for f, r in mine.items()
-                if not f.startswith("tree")
-            }
+            prints = {f: r.output_fingerprint for f, r in mine.items()}
             assert len(set(prints.values())) == 1, (fn, sfx, prints)
             assert len({r.rows for r in mine.values()}) == 1

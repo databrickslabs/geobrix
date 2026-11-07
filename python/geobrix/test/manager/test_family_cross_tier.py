@@ -12,9 +12,10 @@ import pytest
 from databricks.labs.gbx import _rs, manifest, register
 from databricks.labs.gbx.bench import oracles, product_stand_ins
 from databricks.labs.gbx.ds.file_gbx import READ_CAP_KEY
+from databricks.labs.gbx.manifest import TILE_SQL
 
 # Tables that still have their own cross-tier file. A SPEC_* table of an engine family is never listed here.
-_OWN_FILES = {"MVP_S", "MVP_G", "MVP_A", "MVP_H", "MVP_IO", "SPEC_SE"}
+_OWN_FILES = {"SPEC_SE"}
 _ONLY = {t for t in os.environ.get("GBX_ORACLE_TABLES", "").split(",") if t}
 _IMPL_KEYS = ("variants", "factory", "callable", "udtf")
 
@@ -78,6 +79,25 @@ def _rows():
                 marks=pytest.mark.integration,
                 id=f"{fn.sql_name}-L2-sql",
             )
+        if (
+            "companion" in l1
+            and fn.accepts_virtual_tile
+            and fn.kind == "scalar"
+            and any(
+                c.fn == fn.sql_name and c.kind == "error_tile"
+                for c in oracles.TABLES[fn.oracle]
+            )
+        ):
+            # The Catalyst function itself, without the dispatch wrapper in front of it: the error-tile rows must
+            # hold for a RasterX function that receives an error tile directly.
+            yield pytest.param(
+                fn.sql_name,
+                "L1",
+                "raw",
+                "sql",
+                marks=pytest.mark.integration,
+                id=f"{fn.sql_name}-L1-raw-sql",
+            )
 
 
 def _run(spark, fn, cases, tmpdir, column_of=None):
@@ -87,6 +107,24 @@ def _run(spark, fn, cases, tmpdir, column_of=None):
         return oracles.run_groups(spark, cases, tmpdir=tmpdir, column_of=column_of)
     if fn.kind == "generator":
         return oracles.run_rows(spark, cases, tmpdir=tmpdir, table_of=column_of)
+    empty = [c for c in cases if c.kind == "no_rows"]
+    if fn.kind == "scalar" and empty:
+        # a scalar that returns an array of chips: the rows that expect no chip are judged on the exploded array
+        # (SQL only: the Column API has no exploded form)
+        ran = oracles.run_session(
+            spark,
+            [c for c in cases if c not in empty],
+            tmpdir=tmpdir,
+            column_of=column_of,
+        )
+        if column_of is None:
+            ran += oracles.run_rows(
+                spark,
+                empty,
+                shape_sql="SELECT inline({fn}({args})) FROM _gbx_oracle",
+                tmpdir=tmpdir,
+            )
+        return ran
     return oracles.run_session(spark, cases, tmpdir=tmpdir, column_of=column_of)
 
 
@@ -121,12 +159,28 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
 
 
 def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api):
-    register(spark, only=[sql_name], _levels={sql_name: (level, variant)})
+    raw = variant == "raw"
+    register(
+        spark, only=[sql_name], _levels={sql_name: (level, "-" if raw else variant)}
+    )
     cases = [
         c
         for c in oracles.TABLES[fn.oracle]
-        if c.fn == sql_name and ("session" in c.surfaces or "python" in c.surfaces)
+        if c.fn == sql_name
+        and ("session" in c.surfaces or "python" in c.surfaces)
+        and (not raw or c.kind == "error_tile")
     ]
+    if (
+        raw
+    ):  # the Catalyst function by its private name: only the error-tile rows apply to it
+        ran = oracles.run_session(
+            spark,
+            cases,
+            name_of=lambda f: f"gbx__l1_{f[len('gbx_'):]}",
+            tmpdir=str(tmp_path),
+        )
+        assert [m for _, m in ran if m] == []
+        return
     column_of = (
         (lambda f: manifest.resolve_ref(manifest.load().functions[f].python.ref))
         if api == "python"
@@ -169,6 +223,15 @@ def test_l1_arity_contract_for_every_companion(jvm_spark):
                 fn.levels["L1"]["companion"], fn.min_args, fn.max_args
             )
             assert str(got) == want, fn.sql_name
+
+
+@pytest.mark.integration
+def test_detect_sees_the_jar_and_gdal(jvm_spark):
+    from databricks.labs.gbx.manager import capabilities
+
+    caps = capabilities.detect(jvm_spark, need_jvm=True)
+    assert caps.jar is not None, caps
+    assert caps.jar_reason == "" and caps.gdal_reason == "", caps
 
 
 # --- Unity Catalog: the handler behind every UC row of the slice tables, on Python values (no Spark) ---------------
@@ -331,3 +394,116 @@ def test_the_uc_slice_probe_runs_every_slice_function_and_its_table_functions():
     )  # a BINARY goes in as BINARY
     legacy = dict(sql)["leg_polygon_hole"]
     assert "named_struct('typeId', 5, 'srid', 0" in legacy and "st_asewkb(" in legacy
+
+
+# --- The DataFrame helpers (`rasterx.helpers`): rows of the MVP_H table, which no manifest function owns -------------
+_HELPERS = pytest.mark.skipif(
+    bool(_ONLY) and "MVP_H" not in _ONLY, reason="GBX_ORACLE_TABLES leaves out MVP_H"
+)
+
+
+def _helpers_red(spark, tmp_path):
+    ran = oracles.run_helpers(spark, oracles.MVP_H, tmpdir=str(tmp_path))
+    assert len(ran) == len(oracles.MVP_H)
+    return [m for _, m in ran if m]
+
+
+@_HELPERS
+def test_helpers_oracle_session(spark, tmp_path):
+    assert _helpers_red(spark, tmp_path) == []
+
+
+@_HELPERS
+def test_helpers_oracle_connect(spark_connect_local, tmp_path):
+    """The same rows through a Spark Connect client: the helpers touch no JVM-only API."""
+    assert _helpers_red(spark_connect_local, tmp_path) == []
+
+
+@_HELPERS
+def test_a_virtual_member_is_not_decoded_into_a_row(spark, tmp_path, monkeypatch):
+    """A virtual member goes to the merge by reference, never decoded into a row: only the result is bounded by the cap
+    for bytes in a row, and the error says what to do with a result that does not fit.
+    """
+    from databricks.labs.gbx.rasterx import helpers
+
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1000")  # the cap is read on the driver
+    tile = oracles.resolve_arg(oracles.Build("tile_virtual"), str(tmp_path))
+    df = spark.createDataFrame([("a", tile)], f"key string, tile {TILE_SQL}")
+    with pytest.raises(Exception, match="cap for the bytes of one row"):
+        helpers.merge_by_key(df, ["key"], method="fold").collect()
+
+
+def _frame(spark, tmp_path, name):
+    tiles = oracles.resolve_arg(oracles.Build(name), str(tmp_path))
+    return spark.createDataFrame(
+        [("a", t) for t in tiles], f"key string, tile {TILE_SQL}"
+    )
+
+
+@_HELPERS
+def test_a_group_over_the_materialize_cap_is_merged_not_held(
+    spark, tmp_path, monkeypatch
+):
+    """A key's members are not held: their encoded bytes (2.2 KB here) pass the cap for bytes in a row (1.5 KB), and the
+    merge still runs, its result (0.8 KB) being what the cap bounds. The group had a cap of its own once.
+    """
+    from databricks.labs.gbx.rasterx import helpers
+
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1500")  # the cap is read on the driver
+    for frame in ("quad_tiles", "quad_paths"):
+        rows = helpers.merge_by_key(_frame(spark, tmp_path, frame), ["key"]).collect()
+        assert len(rows) == 1 and 0 < len(rows[0]["raster"]) < 1500
+
+
+@_HELPERS
+def test_a_result_over_the_cap_is_refused_with_the_mosaic_route(
+    spark, tmp_path, monkeypatch
+):
+    """The merged result (0.8 KB here) is bounded by the cap for bytes in a row (0.5 KB), for tiles with bytes and for
+    paths, and the Fix names the files route: `merge_by_key` is bounded by the same cap.
+    """
+    from databricks.labs.gbx.rasterx import helpers
+
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "500")
+    for frame in ("quad_tiles", "quad_paths"):
+        with pytest.raises(Exception, match=r"mint_vrt|cog_gbx writer") as err:
+            helpers.merge_by_key(_frame(spark, tmp_path, frame), ["key"]).collect()
+        assert "cap" in str(err.value)
+
+
+@_HELPERS
+def test_towers_to_crs_adds_the_counts_of_the_reprojected_viewshed(spark, tmp_path):
+    """`to_crs` reprojects each tower's viewshed and counts it again: both counts are there and, on flat ground
+    at the equator, within a few percent of the counts before the reprojection."""
+    from databricks.labs.gbx.rasterx.helpers import rst_viewshed_towers
+
+    manifest, towers, radius, height = (
+        oracles.resolve_arg(oracles.Build("dsm_tiles_edge"), str(tmp_path)),
+        (("t1", 100.0, 100.0),),
+        80.0,
+        20.0,
+    )
+    tiles = spark.createDataFrame(manifest, "tx int, ty int, path string")
+    sites = spark.createDataFrame(
+        list(towers), "tower_cellid string, x double, y double"
+    )
+    row = rst_viewshed_towers(
+        sites,
+        tiles,
+        radius,
+        height,
+        x0=0.0,
+        y0=0.0,
+        tile_m=oracles.DSM_TILE_M,
+        to_crs=4326,
+    ).collect()[0]
+    assert row["total_px_reproj"] > 0 and row["visible_px_reproj"] > 0
+    assert row["visible_px_reproj"] <= row["total_px_reproj"]
+    for after, before in (
+        ("total_px_reproj", "total_px"),
+        ("visible_px_reproj", "visible_px"),
+    ):
+        assert abs(row[after] - row[before]) <= 0.05 * row[before], (
+            after,
+            dict(row.asDict()),
+        )

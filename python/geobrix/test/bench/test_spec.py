@@ -96,7 +96,7 @@ def test_select_defaults_to_core():
 def test_full_has_only_registered_names():
     reg = s.registered_rst()
     assert s.benched_functions(s.select(set="full")) <= reg
-    # The registered rst_ set is the canonical registered_functions.txt list. Guard
+    # The registered rst_ set is the function manifest's. Guard
     # the real invariant (every bench FnSpec is a registered function; the counts
     # agree) without a brittle literal that trips whenever a function is legitimately
     # added. registered_rst() is the source of truth; the bench REGISTRY must be a
@@ -459,7 +459,7 @@ def test_full_set_covers_every_registered_function():
     # from registered_rst() so the test self-adjusts when a function is legitimately
     # added -- it fails only when bench coverage and registration actually diverge,
     # not on a magic count. (The bench REGISTRY is the light-side mirror of the
-    # canonical registered_functions.txt list.)
+    # function manifest.)
     assert s.benched_functions(s.select(set="full")) == s.registered_rst()
 
 

@@ -28,10 +28,8 @@ import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent))
-from _manifest_names import stable_names  # noqa: E402
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+MANIFEST_JSON = REPO_ROOT / "python/geobrix/src/databricks/labs/gbx/manifest/functions.json"
 MDX = REPO_ROOT / "docs" / "docs" / "api" / "raster-functions.mdx"
 FUNCTION_INFO = (
     REPO_ROOT / "src/main/resources/com/databricks/labs/gbx/function-info.json"
@@ -179,7 +177,10 @@ def check_tab_completeness() -> list[str]:
 
     fe_checked = 0
     # A stable manifest row's tabs are checked by gbx:manifest:gen --check (the docs-tab gate, every page).
-    owned = {n[len("gbx_") :] for n in stable_names()}
+    owned = {
+        r["sql_name"][len("gbx_") :]
+        for r in json.loads(MANIFEST_JSON.read_text())["functions"]
+    }
     if not owned:
         failures.append("tab completeness: the manifest has no stable rows; nothing was verified")
     blocks = re.findall(r"<FunctionExamples\b(.*?)/>", mdx, re.S)

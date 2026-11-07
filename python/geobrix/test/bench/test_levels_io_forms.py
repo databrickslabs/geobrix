@@ -31,9 +31,9 @@ def _corpus(tmp_path, n=4):
     return str(tmp_path / "corpus")
 
 
-def test_the_io_set_holds_the_reads_the_udf_the_floor_and_the_writer():
+def test_the_io_set_holds_the_reads_the_floor_and_the_writer():
     forms = {f.variant: f for f in lf.FORMS["IO"]}
-    assert set(forms) == {"b", "udf", "d-py", "floor", "W1"}
+    assert set(forms) == {"b", "d-py", "floor", "W1"}
     # the floor sits beside the d forms: `summarize` keys floor_median_s on (fn, level, rows)
     assert (forms["floor"].fn, forms["floor"].level) == (
         forms["d-py"].fn,
@@ -77,26 +77,6 @@ def test_the_scratch_directory_is_beside_the_corpus_on_a_volume_and_in_temp_else
     assert lf._io_scratch("/tmp/x/corpus").endswith(lf.SCRATCH_PREFIX.rstrip("/"))
 
 
-def test_the_udf_form_installs_the_light_level_it_measures_once(monkeypatch):
-    """udf installs the row UDF at L3, and the repeat installs nothing."""
-    import databricks.labs.gbx as gbx
-    from databricks.labs.gbx.bench import levels
-
-    installed = []
-    monkeypatch.setattr(
-        gbx,
-        "register",
-        lambda spark, only=None, _levels=None: installed.append(_levels[lf.IO_FN][0]),
-    )
-    ctx = levels._Ctx(None, 0, 1, "", None, None, {})
-    udf = {f.variant: f for f in lf.FORMS["IO"]}["udf"]
-    seen = []
-    for _ in range(2):
-        levels._ensure_setup(ctx, udf)
-        seen.append(ctx.registered[lf.IO_FN][0])
-    assert seen == ["L3", "L3"] and installed == ["L3"]
-
-
 def test_an_explicit_default_looking_ladder_is_kept_for_a_set_with_its_own():
     from databricks.labs.gbx.bench import levels
 
@@ -105,10 +85,10 @@ def test_an_explicit_default_looking_ladder_is_kept_for_a_set_with_its_own():
 
 
 def test_the_light_io_forms_run_on_a_local_corpus(spark_session_local, tmp_path):
-    """b, d-py, the row-wise UDF and the light writer W1 on four tiles; the JVM forms are skipped without the JAR."""
+    """b, d-py and the light writer W1 on four tiles; the JVM forms are skipped without the JAR."""
     corpus = _corpus(tmp_path)
     failures, skipped = preflight.probe_failures(
-        spark_session_local, "IO", corpus, rows=4, forms=("b", "d-py", "udf", "W1")
+        spark_session_local, "IO", corpus, rows=4, forms=("b", "d-py", "W1")
     )
     assert failures == [], failures
     assert not os.path.exists(lf._io_scratch(corpus)) or not os.listdir(
@@ -205,18 +185,16 @@ def test_the_io_partition_count_follows_the_compute_and_keeps_a_few_rows_per_par
         )  # a few rows per partition
 
 
-@pytest.mark.parametrize("kind", ["udf", "d-py", "floor", "virtual"])
+@pytest.mark.parametrize("kind", ["d-py", "floor", "virtual"])
 def test_the_limit_sits_below_the_exchange_that_feeds_the_decode(
     spark_session_local, tmp_path, kind
 ):
     """`limit(n)` then `repartition(P, ...)` then the decode: the decode node is above the exchange, the exchange above
     the global limit. (Before, Spark ran a row UDF BELOW the limit, on every file of the corpus.)
     """
-    lf.register_io_udf(spark_session_local)
     corpus = _corpus(tmp_path, 8)
     plan = _plan(lf._io_read(spark_session_local, corpus + "/rows", 3, kind))
     decode = {
-        "udf": ("BatchEvalPython", "ArrowEvalPython"),
         "d-py": ("MapInArrow",), "floor": ("MapInArrow",),
         "virtual": ("Exchange",),
     }[kind]  # fmt: skip
@@ -227,26 +205,6 @@ def test_the_limit_sits_below_the_exchange_that_feeds_the_decode(
     )
     assert min(top, exch, limit) >= 0, "\n".join(plan)
     assert top <= exch < limit, "\n".join(plan)
-
-
-def test_the_row_udf_decodes_exactly_n_tiles_not_the_corpus(
-    spark_session_local, tmp_path
-):
-    """A counting stand-in for the row UDF, installed under its name: it is called once per tile it is given."""
-    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
-
-    count_file = tmp_path / "calls.txt"
-
-    def spy(tile):
-        with open(str(count_file), "a") as fh:
-            fh.write("x\n")
-        return tile
-
-    spark_session_local.udf.register(lf.IO_FN, spy, V2_TILE_SCHEMA)
-    corpus = _corpus(tmp_path, 8)
-    got = lf._io_read(spark_session_local, corpus + "/rows", 3, "udf").collect()
-    assert len(got) == 3
-    assert count_file.read_text().count("x") == 3  # was 8: the decode ran on every file
 
 
 def test_the_scan_decoding_light_reader_reads_exactly_n_files(
@@ -423,7 +381,7 @@ def _max_tasks_in_job(spark, group, action):
     return max(s.numTasks for s in stages if s is not None)
 
 
-@pytest.mark.parametrize("kind", ["virtual", "udf", "d-py", "floor"])
+@pytest.mark.parametrize("kind", ["virtual", "d-py", "floor"])
 def test_the_virtual_input_plans_and_reads_only_n_files_of_a_bigger_folder(
     spark_session_local, tmp_path, kind
 ):
@@ -431,11 +389,6 @@ def test_the_virtual_input_plans_and_reads_only_n_files_of_a_bigger_folder(
     10,000-file corpus paid 10,000 tasks for the first n tiles whatever n was.)
     """
     _light_readers(spark_session_local)
-    lf.register_io_udf(spark_session_local)
-    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
-
-    if kind == "udf":
-        spark_session_local.udf.register(lf.IO_FN, lambda t: t, V2_TILE_SCHEMA)
     corpus = _corpus(tmp_path, 40)
     n = 3
     df = lf._io_read(spark_session_local, corpus + "/rows", n, kind)
@@ -527,7 +480,6 @@ def test_every_io_form_reads_the_same_n_file_names(spark_session_local, tmp_path
     sorted files; the writers' input is the virtual one.
     """
     _light_readers(spark_session_local)
-    lf.register_io_udf(spark_session_local)
     corpus = _corpus(tmp_path, 12)
     rows = corpus + "/rows"
     n = 3
@@ -568,8 +520,48 @@ def test_every_io_form_takes_its_files_from_the_one_filter_it_is_given(
         "b",
         "virtual",
         "floor",
-    ):  # the d / c / udf forms decode above the same virtual input
+    ):  # the d / c forms decode above the same virtual input
         df = lf._io_read(spark_session_local, rows, 3, kind, only=only)
         assert _read_names(df) == want, kind
     named = lf._io_named(spark_session_local, rows, 3, "virtual", only=only)
     assert sorted(os.path.basename(r["tile"]["path"]) for r in named.collect()) == want
+
+
+def test_every_io_bench_form_runs(spark, tmp_path):
+    """The levels leg's IO forms (reads b / d-py / floor, writer W1) on four local tiles: each ends `ok`, and the
+    writer leaves no scratch behind."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.bench import levels, levels_forms
+
+    rows = tmp_path / "corpus" / "rows"
+    rows.mkdir(parents=True)
+    for i in range(4):
+        with rasterio.open(
+            rows / f"t{i}.tif",
+            "w",
+            driver="GTiff",
+            width=16,
+            height=16,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=from_origin(i * 16, 16, 1, 1),
+        ) as dst:
+            dst.write(np.full((1, 16, 16), i, dtype="float32"))
+    got = levels.run_mvp(
+        spark, "IO", "io-test", 0, 1, corpus=str(tmp_path / "corpus"), schema=None, scales=(1,), base_rows=4,
+        where="test",
+    )  # fmt: skip
+    by_form = {r.form: r for r in got}
+    assert set(by_form) == {f.variant for f in levels_forms.FORMS["IO"]}
+    bad = {
+        k: (r.status, r.failure_mode or r.note)
+        for k, r in by_form.items()
+        if r.status != "ok"
+    }
+    assert not bad, bad
+    scratch = levels_forms._io_scratch(str(tmp_path / "corpus"))
+    assert not os.path.isdir(scratch) or not os.listdir(scratch)

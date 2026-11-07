@@ -91,7 +91,7 @@ def test_the_aggregate_forms_count_their_input_rows_not_their_groups(
         [
             f
             for f in lf._a_light(lf._BR, lf._br_shapes(small), (("bng_cells", ""),))
-            if f.variant in ("c0", "finalize")
+            if f.variant in ("c0", "tvf")
         ],
     )
     rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=1000, mvp="A")

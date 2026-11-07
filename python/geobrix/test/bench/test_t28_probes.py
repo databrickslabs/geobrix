@@ -392,9 +392,9 @@ def test_every_mechanism_statement_is_one_statement_and_every_routine_a_probe():
                 sql,
             )
             if m:
-                assert m.group(1).split(".")[-1].startswith("gbx_mvp_t28_"), cid
+                assert m.group(1).split(".")[-1].startswith("gbx_probe_t28_"), cid
         for _cid, sql in u["drops"]:
-            assert re.search(r"gbx_mvp_t28_", sql)
+            assert re.search(r"gbx_probe_t28_", sql)
 
 
 def test_product_functions_named_by_the_mechanism_checks_exist_and_are_qualified():
@@ -404,7 +404,7 @@ def test_product_functions_named_by_the_mechanism_checks_exist_and_are_qualified
             code = re.sub(r"\$\$.*?\$\$", "", _outside_literals(sql), flags=re.S)
             for m in re.finditer(r"(?<![\w.])(`cat`\.`sch`\.)?(gbx_[a-z0-9_]+)", code):
                 qual, name = m.groups()
-                if name.startswith("gbx_mvp_t28_"):
+                if name.startswith("gbx_probe_t28_"):
                     continue
                 assert name in man.functions and "L4" in man.functions[name].levels, (
                     cid,
@@ -446,7 +446,7 @@ def test_check_mech_results_names_the_failed_statement_of_a_unit():
     args = ("cat", "sch", TILE_DIR, WHEEL_URI, manifest.load().uc_dependencies)
     pairs = probes.mech_statements(*args)
     good = {c: {"value": "x"} for c, _ in pairs}
-    good["f3:call"] = {"error": "gbx_mvp_t28 stub: runs in a session"}
+    good["f3:call"] = {"error": "gbx_probe_t28 stub: runs in a session"}
     good["f4:call"] = {"value": "2|4.0"}
     good["f5:call"] = {"value": "m.Geom|True~m.Geom|True"}
     done = probes.check_mech_results(good, *args)
@@ -480,8 +480,8 @@ class _MechSpark:
             raise RuntimeError("UNSUPPORTED_SQL_UDF_USAGE " + text[:40])
         if "current_catalog()" in text:
             return _Rows([("cat0", "sch0")])
-        if "gbx_mvp_t28_tvf_stub(1)" in text:
-            raise RuntimeError("gbx_mvp_t28 stub: runs in a session")
+        if "gbx_probe_t28_tvf_stub(1)" in text:
+            raise RuntimeError("gbx_probe_t28 stub: runs in a session")
         if "tmp_add(41)" in text:
             return _Rows([("42",)])
         if "shadow(1)" in text:
@@ -506,7 +506,7 @@ def test_run_t28_mechanisms_runs_every_serverless_unit_and_drops_every_probe(
     out = probes.run_t28_mechanisms(spark, "cat", "sch", str(tmp_path))
     assert out["ok"] is True and set(out["units"]) == {f"f{i}" for i in range(1, 11)}
     assert out["units"]["f3"]["statements"]["f3:call"]["error"].startswith(
-        "gbx_mvp_t28 stub"
+        "gbx_probe_t28 stub"
     )
     drops = [t for t in spark.seen if t.startswith("DROP")]
     creates = {
@@ -542,12 +542,12 @@ def test_run_t28_mechanisms_records_a_refused_shape_and_still_drops(
     )
     assert out["units"]["f1"]["ok"] is True and out["ok"] is False
     assert any(
-        "DROP FUNCTION IF EXISTS" in t and "gbx_mvp_t28_partial" in t
+        "DROP FUNCTION IF EXISTS" in t and "gbx_probe_t28_partial" in t
         for t in spark.seen
     )
 
 
-def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dropped():
+def test_the_m6_probe_is_a_gbx_probe_function_that_runs_the_slope_engine_and_is_dropped():
     stmts = dict(
         probes.m6_statements(
             "cat",
@@ -559,7 +559,8 @@ def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dr
     )
     assert list(stmts) == ["m6:create", "m6:call", "m6:drop"]
     assert (
-        "gbx_mvp_se_l4_probe" in stmts["m6:create"] and "RETURNS " in stmts["m6:create"]
+        "gbx_probe_se_l4_probe" in stmts["m6:create"]
+        and "RETURNS " in stmts["m6:create"]
     )
     assert (
         "functions['gbx_rst_slope']" in stmts["m6:create"]
@@ -570,7 +571,9 @@ def test_the_m6_probe_is_a_gbx_mvp_function_that_runs_the_slope_engine_and_is_dr
         and "environment_version = '6'" in stmts["m6:create"]
     )
     assert "p2_1MiB.bin" in stmts["m6:call"] and "binaryFile" in stmts["m6:call"]
-    assert stmts["m6:drop"] == "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_mvp_se_l4_probe"
+    assert (
+        stmts["m6:drop"] == "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_probe_se_l4_probe"
+    )
     assert probes.m6_ok("123456|ok|valid:min:max=1000:0.0:12.5|pyspark_imported=False")
     assert not probes.m6_ok("123|ok|valid:min:max=1:0:1|pyspark_imported=True")
     # a sandbox that preloads pyspark: judged by what the handler added
@@ -793,10 +796,10 @@ def test_the_mixed_language_and_temp_share_cells_are_what_the_checklist_asks():
         h3.get_resolution(h3.int_to_str(probes.H3_CELL)) == 8
     )  # a real cell, so a failure is the routine's
     share = probes.temp_share_cells()
-    assert share[1].startswith("%scala") and "gbx_mvp_t28_share_py" in share[1]
+    assert share[1].startswith("%scala") and "gbx_probe_t28_share_py" in share[1]
     assert (
         "DROP TEMPORARY FUNCTION IF EXISTS" in share[2]
-        and "gbx_mvp_t28_share_scala" in share[2]
+        and "gbx_probe_t28_share_scala" in share[2]
     )
 
 

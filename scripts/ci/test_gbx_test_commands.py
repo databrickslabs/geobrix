@@ -22,7 +22,6 @@ PARITY_RE = re.compile(r"python3 -m pytest /root/geobrix/(\S+) ")
 
 # Suites the parity gate deliberately does not run, and why (see gbx-test-parity.md).
 EXCLUDED = {
-    "python/geobrix/test/core/test_check_binding_parity.py",  # unit test of the checker
     "python/geobrix/test/ds/test_vector_writer_parity.py",  # light-only round trip
     "python/geobrix/test/ds/test_writer_parity.py",  # light-only round trip
     "python/geobrix/test/ds/test_reader_parity.py",  # light-only reader check, not a tier comparison
@@ -213,8 +212,8 @@ def test_partial_skips_are_not_reported_as_did_not_run(sandbox):
     # a file where EVERY collected test skipped (or none were collected); a partial skip still
     # fails the gate but states the counts.
     _parity_sandbox(sandbox, TEST_ROOT)
-    path = ("--path", "python/geobrix/test/manager/test_mvp_s_cross_tier.py")
-    report = sandbox.root / "target" / "parity-test_mvp_s_cross_tier.txt"
+    path = ("--path", "python/geobrix/test/ds/test_netcdf_cross_tier.py")
+    report = sandbox.root / "target" / "parity-test_netcdf_cross_tier.txt"
     report.parent.mkdir()
 
     def run(summary):

@@ -17,12 +17,14 @@ def test_p2_statements_build_the_same_text_for_both_surfaces():
         *[f"p2_call_{lab}" for lab, _ in probes.P2_SIZES],
         "p2_call_tmp",
         "p2_call_pyspark",
-        "p2_drop_gbx_mvp_p2_tile_echo",
-        "p2_drop_gbx_mvp_p2_tmp_write",
-        "p2_drop_gbx_mvp_p2_import_pyspark",
+        "p2_drop_gbx_probe_p2_tile_echo",
+        "p2_drop_gbx_probe_p2_tmp_write",
+        "p2_drop_gbx_probe_p2_import_pyspark",
     ]
     echo = by["p2_create_echo"]
-    assert f"`cat`.`sch`.gbx_mvp_p2_tile_echo(t {TILE_SQL}) RETURNS {TILE_SQL}" in echo
+    assert (
+        f"`cat`.`sch`.gbx_probe_p2_tile_echo(t {TILE_SQL}) RETURNS {TILE_SQL}" in echo
+    )
     assert "environment_version = '6'" in echo and "rasterio==1.5.0" in echo
     assert "geobrix @ file:///Volumes/c/s/v/g.whl" in echo
     call = by["p2_call_256MiB"]

@@ -1,7 +1,7 @@
 """Python-only escape-hatches for users whose needs fall outside the rst_* surface.
 
 NOT SQL-registered (tile_to_numpy returns a host object; rst_apply takes a Python
-callable), so neither appears in registered_functions.txt / function-info.json.
+callable), so neither appears in the function manifest / function-info.json.
 """
 
 # Before the pyspark imports: one clear error when PySpark is missing.

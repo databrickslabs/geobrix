@@ -197,7 +197,7 @@ echo -e "  2. ${YELLOW}git grep -n \"${OLD_VER}-py3-none-any.whl\\|${OLD_VER}-ja
 echo -e "  3. ${YELLOW}git grep -n \"Current version: ${OLD_VER}\"${NC} returns nothing."
 echo -e "  4. Build sanity: wheel builds as ${GREEN}geobrix-${NEW_VER}-py3-none-any.whl${NC}, JAR as ${GREEN}geobrix-${NEW_VER}-jar-with-dependencies.jar${NC}"
 echo -e "     (the release workflow parses VERSION from the JAR name)."
-echo -e "  5. Run affected tests: function-info, bindings/parity, and any JAR-path-pinned conftest/parity test."
+echo -e "  5. Run affected tests: the manifest gate (gbx:manifest:gen --check), parity, and any JAR-path-pinned conftest/parity test."
 show_separator
 
 echo -e "${CYAN}Manual step — diagram PNGs (NOT done by this command):${NC}"

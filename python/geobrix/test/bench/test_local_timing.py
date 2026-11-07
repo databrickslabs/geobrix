@@ -24,7 +24,7 @@ def _res(**changes):
 
 
 def _flags(res, k=3.0):
-    return lt.flags(res, forms=tuple(GOOD), ns=NS, k=k)
+    return lt.flags(res, forms=tuple(GOOD), ns=NS, k=k, reference="udf")
 
 
 def test_a_pass_where_every_form_scales_with_n_has_no_flags():
@@ -52,8 +52,10 @@ def test_growth_below_linear_is_normal_with_a_fixed_cost_but_a_flat_time_is_not(
 
 def test_a_form_more_than_k_times_the_row_udf_is_flagged_and_k_is_overridable():
     res = _res(**{"d-py": (3.0, 9.0, 36.0)})
-    assert any(f.startswith("d-py: 5.1x the row UDF at n=96") for f in _flags(res))
-    assert not any("the row UDF" in f for f in _flags(res, k=6.0))
+    assert any(
+        f.startswith("d-py: 5.1x the reference udf at n=96") for f in _flags(res)
+    )
+    assert not any("the reference" in f for f in _flags(res, k=6.0))
 
 
 def test_a_form_whose_cost_per_tile_is_more_than_k_times_its_peers_is_flagged():
@@ -90,8 +92,10 @@ def test_a_form_that_failed_is_a_flag_not_a_crash():
     ]
 
 
-def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_udf_and_t96_over_t24():
-    head, *rows = lt.table(_res(), forms=tuple(GOOD), ns=NS).splitlines()
+def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_reference_and_t96_over_t24():
+    head, *rows = lt.table(
+        _res(), forms=tuple(GOOD), ns=NS, reference="udf"
+    ).splitlines()
     assert head.split() == [
         "form",
         "6",
@@ -100,7 +104,7 @@ def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_udf_and_t96_over_t2
         "x",
         "floor",
         "x",
-        "udf",
+        "ref",
         "t96/t24",
     ]
     udf = next(r.split() for r in rows if r.startswith("udf"))
@@ -180,7 +184,7 @@ def test_a_missing_precondition_exits_2_and_a_flag_exits_1(
     assert "PRECONDITION MISSING" in capsys.readouterr().err
     monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
     monkeypatch.setattr(
-        lt, "measure_runs", lambda spec, corpus, repeats: [_res(udf=(7.1, 7.1, 7.4))]
+        lt, "measure_runs", lambda spec, corpus, repeats: [_res(b=(7.1, 7.1, 7.4))]
     )
     assert lt.main(argv) == 1  # flagged
     monkeypatch.setattr(lt, "measure_runs", lambda spec, corpus, repeats: [_res()])
@@ -203,7 +207,9 @@ def test_a_missing_floor_or_reference_row_is_a_flag_not_a_key_error():
     flags = _flags(res)
     assert "floor: no time at n=6 (the form failed, was skipped or timed 0 s)" in flags
     assert any(f.startswith("udf: no time") for f in flags)
-    assert lt.table(res, forms=tuple(GOOD), ns=NS)  # renders, with nan cells
+    assert lt.table(
+        res, forms=tuple(GOOD), ns=NS, reference="udf"
+    )  # renders, with nan cells
 
 
 def test_a_zero_time_is_a_flag_not_a_division_by_zero():
@@ -214,7 +220,7 @@ def test_a_zero_time_is_a_flag_not_a_division_by_zero():
     ):
         flags = _flags(res)
         assert flags and any("no time" in f for f in flags), flags
-        assert lt.table(res, forms=tuple(GOOD), ns=NS)
+        assert lt.table(res, forms=tuple(GOOD), ns=NS, reference="udf")
 
 
 def test_the_jar_is_found_in_the_order_env_then_lib_then_target(tmp_path, monkeypatch):
@@ -282,8 +288,8 @@ def test_measure_warms_up_at_the_smallest_n_keeps_the_measured_run_and_turns_a_f
     assert all(
         v == list(spec.forms) for v in seen_forms
     )  # the set's forms, in its order (floor last)
-    assert res[("udf", 6)] == 0.6  # the second pass at 6 overwrote the warmup's 100 s
-    assert res[("udf", 96)] == 9.6
+    assert res[("b", 6)] == 0.6  # the second pass at 6 overwrote the warmup's 100 s
+    assert res[("b", 96)] == 9.6
     assert all(math.isnan(res[("d-py", n)]) for n in spec.ns)
     assert "d-py n=6: error boom" in capsys.readouterr().out
 
@@ -390,10 +396,10 @@ def test_main_writes_a_baseline_then_compares_against_it(tmp_path, capsys, monke
     monkeypatch.setattr(
         lt,
         "measure_runs",
-        lambda spec, corpus, repeats: [_res(udf=_doubled_per_tile("udf"))],
+        lambda spec, corpus, repeats: [_res(b=_doubled_per_tile("b"))],
     )
     assert lt.main(argv + ["--baseline", base]) == 1
-    assert "udf: per-tile" in capsys.readouterr().out
+    assert "b: per-tile" in capsys.readouterr().out
     assert lt.main(argv + ["--baseline", base, "--baseline-k", "2.5"]) == 0
     assert lt.main(argv + ["--baseline", str(tmp_path / "nope.json")]) == 2
 
@@ -401,7 +407,7 @@ def test_main_writes_a_baseline_then_compares_against_it(tmp_path, capsys, monke
 def test_a_flagged_pass_does_not_write_a_baseline(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(lt, "ensure_corpus", lambda *a: 96)
     monkeypatch.setattr(
-        lt, "measure_runs", lambda spec, corpus, repeats: [_res(udf=(7.1, 7.1, 7.4))]
+        lt, "measure_runs", lambda spec, corpus, repeats: [_res(b=(7.1, 7.1, 7.4))]
     )
     base = tmp_path / "base.json"
     assert (
@@ -491,7 +497,7 @@ def test_measure_runs_warms_up_once_and_times_every_n_per_repeat(monkeypatch):
     monkeypatch.setattr(levels, "run_mvp", fake_run_mvp)
     runs = lt.measure_runs(spec, "/corpus", 3, spark=object())
     assert calls == [6] + [6, 24, 96] * 3  # one warmup, then a full ladder per repeat
-    assert len(runs) == 3 and all(r[("udf", 96)] == 9.6 for r in runs)
+    assert len(runs) == 3 and all(r[("b", 96)] == 9.6 for r in runs)
 
 
 def test_the_repeats_default_is_one_for_the_plain_pass_and_three_for_the_baseline_modes(
@@ -960,7 +966,7 @@ def test_a_peer_exempt_form_far_slower_than_its_peers_raises_no_peer_flag():
     res = {(f, n): v for f, ts in t.items() for n, v in zip(ns, ts)}
     plain = lt.flags(res, forms=forms, ns=ns, reference="c1")
     assert any("slow: per-tile" in x for x in plain) and any(
-        "slow: " in x and "the row UDF" in x for x in plain
+        "slow: " in x and "the reference" in x for x in plain
     )
     exempt = lt.flags(res, forms=forms, ns=ns, reference="c1", peer_exempt=("slow",))
     assert exempt == []  # no peer flag for it, and it left the peers' median alone

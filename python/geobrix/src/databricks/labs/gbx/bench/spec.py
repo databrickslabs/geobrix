@@ -13,6 +13,7 @@ own adapters in a later task and are added with the appropriate `modes`.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
@@ -4366,8 +4367,14 @@ def benched_functions(specs) -> "frozenset[str]":
     return frozenset(f.variant_of or f.name for f in specs)
 
 
+# A manifest row that is another FORM of a function the bench times under its own entry: the array, partial and
+# finalize scalars, the table-function form, and the scalar twin of a rasterize aggregate.
+_FORM_SUFFIXES = ("_array", "_partial", "_finalize", "_tvf")
+_RASTERIZE_TWIN = re.compile(r"(bng|custom|h3|quadbin)_rasterize")
+
+
 def registered_rst() -> "frozenset[str]":
-    """Canonical benched function names from registered_functions.txt.
+    """Canonical benched function names, from the function manifest.
 
     This is the coverage source-of-truth: the bench REGISTRY must equal this set.
     It is the ``rst_*`` (RasterX) and ``st_*`` (VectorX) surfaces PLUS the four
@@ -4375,39 +4382,18 @@ def registered_rst() -> "frozenset[str]":
     -- the only GridX functions with real grouped-shuffle + fill cost worth a
     light-vs-heavy perf-parity comparison. Every OTHER GridX function (kring /
     kloop / distance / pointascell / ...) is trivial cell-index math and is NOT
-    benched, so it is deliberately excluded here.
+    benched, so it is deliberately excluded here. A row that is only another form of a benched
+    function (see ``_FORM_SUFFIXES``) is left out too.
     """
-    from pathlib import Path
+    from databricks.labs.gbx import manifest
 
-    # resolve repo root robustly from this file's location
-    root = Path(__file__).resolve()
-    cand = None
-    for _ in range(12):
-        c = root / "docs" / "tests-function-info" / "registered_functions.txt"
-        if c.exists():
-            cand = c
-            break
-        root = root.parent
-    if cand is not None:
-        text = cand.read_text()
-    else:
-        # Installed without the repo tree above this file (e.g. the wheel on a cluster):
-        # read the copy packaged alongside this module. Kept byte-identical to the
-        # canonical docs/tests-function-info/registered_functions.txt by the
-        # binding-parity check (check-binding-parity.py), so there is no drift.
-        from importlib.resources import files
-
-        text = (
-            files("databricks.labs.gbx.bench")
-            .joinpath("registered_functions.txt")
-            .read_text()
-        )
     names = set()
-    for line in text.splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
+    for sql_name in manifest.load().functions:
+        s = sql_name[4:] if sql_name.startswith("gbx_") else sql_name
+        if s.endswith(_FORM_SUFFIXES) or (
+            s.startswith("rst_") and _RASTERIZE_TWIN.fullmatch(s[4:])
+        ):
             continue
-        s = s[4:] if s.startswith("gbx_") else s
         if s.startswith("rst_") or s.startswith("st_") or s.endswith("_cellfill"):
             names.add(s)
     return frozenset(names)

@@ -1458,25 +1458,14 @@ SPEC_SE: Tuple[Case, ...] = (
 )
 
 
-# MVP-IO: the ways to read a file into tiles (and the decode that follows a bytes-free read), held to one answer.
-# `io_cover` runs per read path (`run_reader`): the tiles must reproduce the file exactly, each pixel once.
-# `io_materialize` is the manifest row of `gbx_mvp_rst_materialize` (the light UDF, L3 only): the virtual tile of the
-# oracle file comes back materialized, its pixels the file's, with no path left.
-IO = "gbx_mvp_rst_materialize"
+# The read-path table: the ways to read a file into tiles (and the decode that follows a bytes-free read), held to
+# one answer. `io_cover` runs per read path (`run_reader`): the tiles must reproduce the file exactly, each pixel once.
 MVP_IO: Tuple[Case, ...] = (
     Case(
         "io_cover",
         "read",
         (Build("tile_virtual"),),
         "covers_file",
-        None,
-        ("session",),
-    ),
-    Case(
-        "io_materialize",
-        IO,
-        (Build("tile_virtual"),),
-        "materialized_equals_file",
         None,
         ("session",),
     ),
@@ -1622,7 +1611,7 @@ def _tile(raster=None, path=None, window=None) -> dict:
     }
 
 
-# The sampling of the retile probes' cache key (pyrx/_mvp_forms.py, RetileKernel): the first and the last
+# The sampling of a content key for a raster: the first and the last
 # 64 KB and 64 blocks of 4 KB between them, nothing at all of a raster up to 512 KB. An edit that sits
 # between two blocks of a raster above that is invisible to a key made of the sample.
 _SAMPLE_HEAD, _SAMPLE_BLOCK, _SAMPLE_BLOCKS, _SAMPLE_WHOLE = 65536, 4096, 64, 524288
@@ -2354,36 +2343,6 @@ def _check_tile(case: Case, out, args) -> Optional[str]:
             1.0, abs(float(w.mean()))
         ):
             return f"{case.cid}: valid mean {g.mean()} vs reference {w.mean()}"
-    return None
-
-
-def _check_materialized(case: Case, out, args) -> Optional[str]:
-    """A virtual tile of a file, decoded: it holds the pixels of its window of the file and no path."""
-    import numpy as np
-    from rasterio.windows import Window
-
-    raster = _field(out, "raster")
-    if raster is None:
-        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
-    if _field(out, "path") is not None:
-        return f"{case.cid}: the path is still set ({_field(out, 'path')!r})"
-    src_tile = args[0]
-    win = _field(src_tile, "window")
-    with open_bytes(_raster_of(src_tile)) as src:
-        w = (
-            Window(
-                _field(win, "col_off"),
-                _field(win, "row_off"),
-                _field(win, "width"),
-                _field(win, "height"),
-            )
-            if win is not None
-            else Window(0, 0, src.width, src.height)
-        )
-        want = src.read(1, window=w)
-    with open_bytes(bytes(raster)) as got:
-        if not np.array_equal(got.read(1), want):
-            return f"{case.cid}: pixels differ from the file at {w}"
     return None
 
 
@@ -3593,7 +3552,6 @@ _VALUE_CHECKS = {
 _ARG_CHECKS = {
     "tile_props": _check_tile,
     "tile_meta": _check_tile_meta,
-    "materialized_equals_file": _check_materialized,
     "ref": _check_ref,
     "geom_srid": _check_geom_srid,
     "isobands": _oracle_check("check_isobands"),
@@ -3892,7 +3850,7 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
 
 
 def run_reader(spark, case: Case, form: str, tmpdir: Optional[str] = None) -> List[str]:
-    """MVP-IO: read the oracle file through one path; the tiles must reproduce it exactly, once.
+    """Read the oracle file through one path; the tiles must reproduce it exactly, once.
 
     The forms: ``b`` the light reader, materialized; ``d-py`` its virtual tiles decoded in one Python call per Arrow
     batch (pyrx). Each output tile is located by its own geotransform, so this holds whatever window fields a path

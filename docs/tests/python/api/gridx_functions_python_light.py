@@ -3,8 +3,7 @@ Python code examples for the light (pygx) tier of GridX functions.
 
 Single source of truth for the Python (light) tab in
 docs/docs/api/gridx-functions.mdx. Consumed by the FunctionExamples
-component (``pythonLight`` prop) and by the generate-function-info.py
-``_TIER_SCANS`` binding detector.
+component (``pythonLight`` prop).
 
 All examples use the shared canonical fixtures from ``_fixtures.py``
 so every function's four tabs show the SAME example — the same fixture,

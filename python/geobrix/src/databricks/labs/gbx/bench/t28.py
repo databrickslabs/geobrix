@@ -31,7 +31,7 @@ WS_ROOT_PLACEHOLDER = "/Users/<current-user>/GeoBrix"  # what an un-resolved Par
 DEFAULT_PROFILE = "oauth-fe"
 SCHEMA_KEYS = ("w", "s6", "s6j", "se")
 UNQUALIFIED_OK = (
-    "gbx_mvp_t28_tmp_t",
+    "gbx_probe_t28_tmp_t",
 )  # a temporary table made inside a procedure has no schema
 FIXTURE_PATH = "/tmp/t28-fixtures"  # the path a virtual-tile row names; the function refuses the tile before opening it
 # The notebook run for each series whose first cells the pass confirms (the dependency notebook is imported beside it).
@@ -522,7 +522,7 @@ def build(p: Params) -> Tuple[List[File], List[Run]]:
          f"bash scripts/commands/gbx-bench-cluster.sh --levels SE --levels-only --levels-scales 1 --new-cluster --access-mode dedicated --num-workers 4 --node-type m5d.2xlarge --on-demand --spark-version 19.x-scala2.13 --run-id t28-se-ded --profile {p.profile} --log t28-se-ded.log",
          "bash scripts/commands/gbx-test-python-dbr.sh --log t28-dbr-docs.log",
          _cluster_cmd(p, "examples/tests/classic_proj_grid_validation.ipynb", "t28-ded-proj", "dedicated", "t28-ded-proj.log", 60)],
-        ["P-2 P-3 P-4", "no leftover cluster; the job clusters end with their runs"], ["D-A1..D-A6"], "60-100 min")  # fmt: skip
+        ["P-2 P-3 P-4", "no leftover cluster; the job clusters end with their runs"], ["D-A items 1 to 6"], "60-100 min")  # fmt: skip
     if p.cluster_id:
         for phase in ("install", "after"):
             what = {
@@ -724,7 +724,7 @@ def validate_sql(
 ) -> List[str]:
     """Why a statement file is wrong, or []: it round-trips through the runner's parser with unique cids, no statement
     is empty, every ``gbx_`` routine is qualified ``catalog.schema`` and exists in the manifest or was created earlier in
-    the file (a ``gbx_mvp_`` probe), and every Python body compiles."""
+    the file (a ``gbx_probe_`` probe), and every Python body compiles."""
     from databricks.labs.gbx.bench import oracles
 
     pairs = oracles.parse_uc_sql(text)
@@ -754,7 +754,7 @@ def validate_sql(
             is_ddl = re.search(
                 r"(?:FUNCTION|PROCEDURE|TABLE)(?: IF (?:NOT )?EXISTS)?\s*$", before
             )
-            if name.startswith("gbx_mvp_"):
+            if name.startswith("gbx_probe_"):
                 if is_ddl:
                     created.add(name)
                 elif name not in created and code[m.end() :].lstrip().startswith("("):

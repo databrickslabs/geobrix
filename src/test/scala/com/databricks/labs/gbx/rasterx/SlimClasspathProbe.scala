@@ -2,9 +2,7 @@ package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.kernels.KernelGdal
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import org.apache.spark.sql.Row
 
 
 /** Run by [[KernelFacadesSmokeTest]] in a child JVM whose classpath is the facades, scala-library, JTS, the GDAL
@@ -15,23 +13,6 @@ object SlimClasspathProbe {
 
     private def attempt(body: => String): String =
         try body catch { case t: Throwable => "RAISES " + t.getClass.getSimpleName + ": " + t.getMessage }
-
-    private val rasterize = new BngRasterizeCellsBytesUdf()
-
-    /** A 2 x 2 km canvas of 1 km pixels from `xmin` east, 180 to 182 km north. */
-    private def burn(cells: Seq[Row], xmin: Double): Array[Byte] =
-        rasterize.call(cells, xmin, 180000.0, xmin + 2000.0, 182000.0, 2, 2)
-
-    /** The first band as rows of pixels, `;` between rows. */
-    private def pixels(bytes: Array[Byte]): String = {
-        val ds = RasterDriver.readFromBytes(bytes, Map("driver" -> "GTiff"))
-        try {
-            val (w, h) = (ds.getRasterXSize, ds.getRasterYSize)
-            val all = new Array[Double](w * h)
-            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, all)
-            all.grouped(w).map(_.mkString(",")).mkString(";")
-        } finally RasterDriver.releaseDataset(ds)
-    }
 
     def main(args: Array[String]): Unit =
         if (args.headOption.contains("start-up")) startUp() else facades()
@@ -58,11 +39,6 @@ object SlimClasspathProbe {
           "UC bad: " + attempt(BngUc.eastNorthAsBng(530000.0, 180000.0, "1001")),
           "UC cells: " + attempt(Seq(BngUc.cellArea("TQ3080"), BngUc.kRing("TQ3080", 1).size, BngUc.asWkb("TQ3080").length,
             BngUc.centroid("TQ3080").length).mkString(",")),
-          // The raster facades run end to end, GDAL natives included (the image has them): a canvas burned from cells, the
-          // pixels read back. A Catalyst or unsafe class anywhere on their path would raise here.
-          "L2 rasterize: " + attempt(pixels(burn(Seq(
-            Row("TQ3080", 3.0), Row("TQ3080", 1.0), Row("TQ3180", 2.0),
-            Row("TQ3081", Double.NaN), Row("TQ3081", 7.0), Row("TQ3181", Double.NaN)), 530000.0))),
           "loadable: " + (if (loadable.isEmpty) "none" else loadable.mkString(",")))
         // scalastyle:off println
         lines.foreach(println)

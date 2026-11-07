@@ -53,11 +53,10 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 
 The suites are **discovered**, not listed. The gate runs every `python/geobrix/test/**/test_parity*.py`, `test_*_parity.py` and `*_cross_tier.py`, sorted. A cross-tier suite that needs the JAR counts as a parity suite. A short exclusion list (`PARITY_EXCLUDE` in the script) holds the files that are not cross-tier gates:
 
-- `core/test_check_binding_parity.py`: a unit test of the binding-parity checker, run by `gbx:test:bindings`.
 - `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py`: light-only writer round trips.
 - `ds/test_reader_parity.py`: a light-only reader check against the source file.
 
-These four are not part of any parity gate. They run only under `gbx:test:python --with-integration`, which also runs their `ds` tests that need the container's sample data. A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
+These three are not part of any parity gate. They run only under `gbx:test:python --with-integration`, which also runs their `ds` tests that need the container's sample data. A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
 
 `--path` may be given several times, and each value may be a file or a directory. `./x` and `x/` are the same path, so the exclusions still apply. They run once each, in the order given:
 
@@ -71,7 +70,7 @@ bash scripts/commands/gbx-test-parity.sh --skip-build \
 
 - Before pushing a change that touches CRS handling, geometry encoding, or anything implemented in both tiers.
 - After changing any Scala expression that has a light-tier counterpart (the rebuild is what makes the heavy side current).
-- As the final gate for a both-tiers feature, alongside `gbx:test:bindings`.
+- As the final gate for a both-tiers feature, alongside `gbx:manifest:gen --check`.
 
 ## One test run at a time
 

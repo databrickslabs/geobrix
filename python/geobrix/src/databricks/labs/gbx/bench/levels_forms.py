@@ -1474,8 +1474,6 @@ FORMS["H"] = [
 # fingerprint is the summed length of the encoded pieces, and each level encodes with its own writer (rasterio
 # on L3, GDAL with the tile's own options on L1, plain GDAL GTiff on L2), so it agrees between the shapes of ONE
 # level and not between levels: across levels compare `n` (the window count) and the oracle rows.
-# A shape that is not a product function runs under a `gbx_mvp_*` name that its `setup` registers (outside the
-# timed region).
 
 _RT_CELL = (
     128,
@@ -1487,20 +1485,6 @@ _RT_LATERAL = (
     _RT_FP.format(x="t.raster")
     + "{{src}} s, LATERAL {fn}(s.tile, {size}) t"  # the light UDTF: the tile fields
 )
-_RT_ARRAY = (
-    _RT_FP.format(x="x.raster")
-    + "(SELECT explode(gbx_mvp_rst_retile_array(tile, {size})) AS x FROM {{src}})"
-)
-_RT_PART = (
-    _RT_FP.format(x="x.raster")
-    + "(SELECT gbx_mvp_rst_retile_part(tile, {size}, i) AS x FROM {{src}} "
-    "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count(tile, {size}) - 1)) v AS i)"
-)
-# The session TVF over the array form: a SQL body, so no Python between the rows and the plan.
-_RT_TVF = (
-    _RT_FP.format(x="t.tile.raster")
-    + "{{src}} s, LATERAL gbx_mvp_rst_retile_tvf(s.tile, {w}, {h}) t"
-)
 
 _TE_FP = "SELECT count(*) AS n, sum(pmod(xxhash64({x}), 2147483647)) AS fp, count({x}) AS n_out FROM "
 _TE_LATERAL = _TE_FP.format(x="t.cellid") + "{{src}} s, LATERAL {fn}(s.wkt, 3) t"
@@ -1509,25 +1493,6 @@ _TE_UC = (
     _TE_FP.format(x="t.cellid")
     + "{{src}} s, LATERAL {{uc}}.gbx_bng_tessellateexplode(CAST(st_geomfromwkt(s.wkt, 27700) AS GEOMETRY(ANY)), '3') t"
 ).format()
-
-
-def setup_g_probes(spark):
-    """The light probe forms (array, count+part, Arrow UDTFs)."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
-
-    _mvp_forms.register_probe_forms(spark)
-
-
-def setup_g_tvf(spark):
-    """The session SQL table function over the array probe; its body calls the probe UDF."""
-    from databricks.labs.gbx.manifest import TILE_SQL
-
-    setup_g_probes(spark)
-    spark.sql(
-        f"CREATE OR REPLACE TEMPORARY FUNCTION gbx_mvp_rst_retile_tvf(tile {TILE_SQL}, w INT, h INT) "
-        f"RETURNS TABLE (tile {TILE_SQL}) "
-        "RETURN SELECT explode(gbx_mvp_rst_retile_array(tile, w, h)) AS tile"
-    )
 
 
 _G = "databricks.labs.gbx.bench.levels_forms:"
@@ -1564,40 +1529,7 @@ FORMS["G"] = [
         _retile(_RT_LATERAL, _RT_CELL, fn=RT),
         register=True,
     ),
-    _g(
-        RT,
-        "L3",
-        "udtf-arrow",
-        "tiles_mat",
-        _retile(_RT_LATERAL, _RT_CELL, fn="gbx_rst_retile_mvp_arrow"),
-        setup="setup_g_probes",
-    ),
-    _g(
-        RT,
-        "L3",
-        "array_inline",
-        "tiles_mat",
-        _retile(_RT_ARRAY, _RT_CELL),
-        setup="setup_g_probes",
-    ),
-    _g(
-        RT,
-        "L3",
-        "count_part",
-        "tiles_mat",
-        _retile(_RT_PART, _RT_CELL),
-        setup="setup_g_probes",
-        memory_probe=True,
-    ),
-    _g(
-        RT,
-        "L3",
-        "session-tvf",
-        "tiles_mat",
-        _retile(_RT_TVF, _RT_CELL),
-        setup="setup_g_tvf",
-    ),
-    # the same three light shapes on big tiles (512 windows each): what the shapes cost in memory
+    # the same shape on big tiles (512 windows each): what it costs in memory
     _g(
         RT,
         "L3",
@@ -1607,34 +1539,8 @@ FORMS["G"] = [
         register=True,
         memory_probe=True,
     ),
-    _g(
-        RT,
-        "L3",
-        "array_inline-big",
-        "tiles_big",
-        _retile(_RT_ARRAY, _RT_BIG),
-        setup="setup_g_probes",
-        memory_probe=True,
-    ),
-    _g(
-        RT,
-        "L3",
-        "count_part-big",
-        "tiles_big",
-        _retile(_RT_PART, _RT_BIG),
-        setup="setup_g_probes",
-        memory_probe=True,
-    ),
     # BNG tessellate on polygons
     _g(TE, "L3", "udtf", "bng_polys", _TE_LATERAL.format(fn=TE), register=True),
-    _g(
-        TE,
-        "L3",
-        "udtf-arrow",
-        "bng_polys",
-        _TE_LATERAL.format(fn="gbx_bng_tessellateexplode_mvp_arrow"),
-        setup="setup_g_probes",
-    ),
     _g(
         TE,
         "L1",
@@ -1694,16 +1600,14 @@ def g_tessellate_jvm(spark, src):
 # and n_out counts the rasters that are not NULL, so a form that fails on some groups cannot pass on size.
 # The light forms come first and the JVM ones last: both register the same `gbx_rst_*` names, and a `setup`
 # runs once. The forms of one aggregate do not agree on the bytes of the result (each level encodes with its
-# own writer), so across forms compare `n` and the oracle rows. A form that is not a product function runs
-# under a `gbx_mvp_*` name that its `setup` registers (outside the timed region). The light forms are all
-# `L3`, so the runner records the peak Python worker memory of each: the table function and the finalizes are
-# kept or dropped against the grouped aggregate on that column.
+# own writer), so across forms compare `n` and the oracle rows. The light forms are all `L3`, so the runner
+# records the peak Python worker memory of each: the table function and the finalize are kept or dropped against
+# the grouped aggregate on that column.
 
 _A = "databricks.labs.gbx.bench.levels_forms:"
 _MA, _BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
 # xmin, ymin, xmax, ymax, width, height: the 100 km square TQ (where `bng_cells` puts its cells) at 100 m
 _A_CANVAS = (500000.0, 100000.0, 600000.0, 200000.0, 1000, 1000)
-_PAIRS = "collect_list(struct(cellid, value))"
 
 
 def _ma_shapes():
@@ -1724,20 +1628,9 @@ def _br_shapes(canvas=_A_CANVAS):
     lits = [f"CAST({v} AS {t})" for v, t in zip(canvas, types)]
     on = ", ".join(lits)
     args = f"cellid, value, 27700, NULL, {on}, 'centroids', 0"
-    finalize = (
-        "SELECT key, {fn}(" + _PAIRS + ", " + on + ") AS out FROM {{src}} GROUP BY key"
-    )
     return {
         "grouped": f"SELECT key, {_BR}({args}) AS out FROM {{src}} GROUP BY key",
         "udaf": f"SELECT key, {_BR}({args}) AS out FROM {{src}} GROUP BY key",
-        "finalize": finalize.format(fn="gbx_mvp_rst_bng_rasterize_cells"),
-        "finalize_l2": finalize.format(fn="gbx_mvp_rst_bng_rasterize_cells_l2"),
-        # partial canvases per (key, salt), then one per-pixel max per key
-        "tree": (
-            "SELECT key, gbx_mvp_rst_canvas_max(collect_list(p)) AS out FROM ("
-            f"SELECT key, gbx_mvp_rst_bng_rasterize_cells({_PAIRS}, {on}) AS p FROM ("
-            "SELECT *, pmod(xxhash64(cellid, value), 2) AS salt FROM {src}) GROUP BY key, salt) GROUP BY key"
-        ),
         "tvf": (
             "SELECT key, raster AS out FROM gbx_rst_bng_rasterize_tvf("
             f"TABLE(SELECT key, cellid, value FROM {{src}}) PARTITION BY (key), {on})"
@@ -1746,12 +1639,10 @@ def _br_shapes(canvas=_A_CANVAS):
 
 
 def setup_a_probes(spark):
-    """The light probes (finalizes, tree step), the product's table functions and the light `gbx_rst_merge` finalize."""
+    """The product's table functions and the light `gbx_rst_merge` finalize."""
     from databricks.labs.gbx import manager as gbx_manager
     from databricks.labs.gbx import register
-    from databricks.labs.gbx.pyrx import _mvp_forms
 
-    _mvp_forms.register_probe_forms(spark)
     gbx_manager.register_family(
         spark, ("gbx_rst_", "gbx_pmtiles_"), only=["gbx_rst_merge"], level="L3"
     )
@@ -1759,23 +1650,22 @@ def setup_a_probes(spark):
 
 
 # What each of the two setups below leaves under the name `gbx_rst_merge`. The JVM merge replaces the light one in the
-# session, and a setup that is not judged by what is installed runs once: the light finalizes that came after the JVM
-# one then timed the JVM merge (and, given a reference, raised VirtualTileException), whatever level they were labelled.
+# session, and a setup that is not judged by what is installed runs once: the light finalize that came after the JVM
+# one then timed the JVM merge (and, given a reference, raised VirtualTileException), whatever level it was labelled.
 setup_a_probes.installs = {"gbx_rst_merge": ("L3", "-")}
 
 
-def setup_a_l2(spark):
-    """The Java UDF finalizes under probe names (needs the JAR)."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
-
-    _mvp_forms.register_l2_probes(spark)
-
-
 def setup_a_udaf(spark):
-    """The Catalyst aggregates under their product names (needs the JAR; classic only)."""
-    from databricks.labs.gbx.pyrx import _mvp_forms
+    """The Catalyst aggregate under its product name (needs the JAR; classic only)."""
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.manager import (
+        jvm,  # the JVM bridge is the manager's, not the light product's
+    )
 
-    _mvp_forms.register_l1_udafs(spark)
+    companion = manifest.load().functions[_BR].levels["L1"]["companion"]
+    why = jvm.install_companion(spark, companion, _BR)
+    if why:
+        raise RuntimeError(f"{_BR}: L1 install gave {why}")
 
 
 def setup_a_l1_merge(spark):
@@ -1821,20 +1711,17 @@ def _a_light(fn, shapes, inputs):
     since a result row carries the form and not the input."""
     out = []
     for inp, sfx in inputs:
-        out += [
-            _a(fn, "L3", "c0" + sfx, inp, shapes["grouped"], register=True),
-            _a(
-                fn,
-                "L3",
-                "finalize" + sfx,
-                inp,
-                shapes["finalize"],
-                setup="setup_a_probes",
-            ),
-        ]
-        if "tree" in shapes:
+        out.append(_a(fn, "L3", "c0" + sfx, inp, shapes["grouped"], register=True))
+        if "finalize" in shapes:  # the merge: a finalize over collect_list
             out.append(
-                _a(fn, "L3", "tree" + sfx, inp, shapes["tree"], setup="setup_a_probes")
+                _a(
+                    fn,
+                    "L3",
+                    "finalize" + sfx,
+                    inp,
+                    shapes["finalize"],
+                    setup="setup_a_probes",
+                )
             )
         # Serverless's table-function engine fails PARTITION BY on a task's second row (the function says so)
         out.append(
@@ -1852,7 +1739,6 @@ def _a_light(fn, shapes, inputs):
 
 
 def _a_jvm(fn, shapes, inputs):
-    both = ("dedicated",)  # no Java handler for the finalize on standard access mode
     out = []
     for inp, sfx in inputs:
         if (
@@ -1870,16 +1756,7 @@ def _a_jvm(fn, shapes, inputs):
                 )
             )
             continue
-        out += [
-            _a(
-                fn,
-                "L2",
-                "finalize" + sfx,
-                inp,
-                shapes["finalize_l2"],
-                setup="setup_a_l2",
-                computes=both,
-            ),
+        out.append(
             _a(
                 fn,
                 "L1",
@@ -1888,8 +1765,8 @@ def _a_jvm(fn, shapes, inputs):
                 shapes["udaf"],
                 setup="setup_a_udaf",
                 computes=("dedicated",),
-            ),
-        ]
+            )
+        )
     return out
 
 
@@ -2288,7 +2165,6 @@ FORMS["SE"] += [
 # The measured heavy read lead was the cost of moving decoded bytes into Python rows. Every read form reads the corpus
 # tiles under `{CORPUS}/rows` end to end (read, decode, `sum(length(tile.raster))`) at 1000 / 4000 / 10000 tiles:
 #   b      the light `raster_gbx` reader with bytes (the reader decodes in Python, the rows carry the bytes)
-#   udf    virtual tiles, decoded row by row by the light UDF (`gbx_mvp_rst_materialize` at L3)
 #   d-py   virtual tiles, decoded in one Python call per Arrow batch (`mapInArrow`)
 #   floor  d-py's read and `mapInArrow` shell with the decode skipped (the tiles stay virtual): its median is the shell
 #          cost, shown as `floor_median_s` beside d-py
@@ -2297,7 +2173,6 @@ FORMS["SE"] += [
 # (The Scala `gdal` reader, the JVM decode, the Rust decode and the JVM pre-encode writer were measured against these and
 # retired; see the decision record.)
 
-IO_FN = "gbx_mvp_rst_materialize"
 IO_SCALES = (1, 4, 10)  # times BASE_ROWS["io_rows"]: 1000 / 4000 / 10000 tiles
 BASE_ROWS["io_rows"] = 1000
 SCALES: Dict[str, tuple] = {
@@ -2481,6 +2356,13 @@ def _virtual_tiles(spark, rows_dir, n, only=None):
     )
 
 
+def keep_virtual(tile, cap_bytes) -> dict:
+    """The decode of the IO floor form: the tile as it came, still virtual. `tile_batches.materialize_batches(decode=
+    keep_virtual)` is the d-py shell (Arrow rows to Python and back, the metadata made a dict) with the decode skipped.
+    """
+    return tile
+
+
 def _io_read(spark, rows_dir, n, kind, only=None):
     """The read of `kind` over the corpus' first `n` tiles, one `tile` column, every kind on exactly `n` tiles.
 
@@ -2491,7 +2373,7 @@ def _io_read(spark, rows_dir, n, kind, only=None):
     import functools
 
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
-    from databricks.labs.gbx.pyrx import _mvp_forms, tile_batches
+    from databricks.labs.gbx.pyrx import tile_batches
 
     only = only or _only_files_regex(_first_files(rows_dir, n))
     if kind == "b":
@@ -2502,14 +2384,12 @@ def _io_read(spark, rows_dir, n, kind, only=None):
             .load(rows_dir)
         )
     virt = _virtual_tiles(spark, rows_dir, n, only=only)
-    if kind == "udf":
-        return virt.selectExpr(f"{IO_FN}(tile) AS tile")
     if kind in ("d-py", "floor"):
         # the floor is d-py's shell with the decode skipped (`keep_virtual`): same read, same Arrow round trip
         decode = functools.partial(
             tile_batches.materialize_batches,
             cap_bytes=report_detected_cap(spark),
-            **({"decode": _mvp_forms.keep_virtual} if kind == "floor" else {}),
+            **({"decode": keep_virtual} if kind == "floor" else {}),
         )
         return virt.mapInArrow(decode, virt.schema)
     if kind == "virtual":
@@ -2527,7 +2407,7 @@ def _io_form(kind):
     return run
 
 
-io_b, io_udf, io_d_py = (_io_form(k) for k in ("b", "udf", "d-py"))
+io_b, io_d_py = (_io_form(k) for k in ("b", "d-py"))
 
 
 def io_floor(spark, src):
@@ -2616,7 +2496,6 @@ def _io(fn, level, variant, run, *, setup="", **kw):
 
 FORMS["IO"] = [
     _io("read", "DF", "b", io_b),
-    _io(IO_FN, "L3", "udf", io_udf, setup="register_io_udf"),
     _io("read", "DF", "d-py", io_d_py),
     # the shell cost of d-py (Task 17's "decode share" floor): `summarize` puts its median beside it
     _io("read", "DF", "floor", io_floor),
@@ -2624,18 +2503,8 @@ FORMS["IO"] = [
 ]
 
 
-def register_io_udf(spark):
-    """Install `gbx_mvp_rst_materialize` at L3 (the row-wise light UDF) for the `udf` form."""
-    from databricks.labs.gbx import register
-
-    register(spark, only=[IO_FN], _levels={IO_FN: ("L3", "-")})
-
-
-register_io_udf.installs = {IO_FN: ("L3", "-")}
-
-
 # Module-level names the forms resolve by ``module:function``.
-for _fn in (io_b, io_udf, io_d_py, io_floor, io_w1):
+for _fn in (io_b, io_d_py, io_floor, io_w1):
     globals()[_fn.__name__] = _fn
 
 

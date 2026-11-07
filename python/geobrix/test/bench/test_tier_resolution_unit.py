@@ -244,3 +244,20 @@ def test_the_row_count_check_compares_with_the_other_tiers_form(
             rd._explode_rows_match(*args, 4)
     else:
         assert rd._explode_rows_match(*args, 4) is expected
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: rd.run_mvt_agg(None, "r", 0, 1, api="heavyweight"),
+        lambda: rd.run_bng_eastnorthasbng(None, "r", 0, 1, api="heavyweight"),
+        lambda: rd._register_quadbin(None, "heavyweight"),
+    ],
+    ids=["mvt_agg", "bng_eastnorthasbng", "quadbin_register"],
+)
+def test_a_function_with_only_a_lightweight_form_refuses_a_heavyweight_leg(call):
+    """st_asmvt, gbx_bng_eastnorthasbng and quadbin have no heavyweight form: asking for one raises
+    ``ValueError`` before any session is touched (the session here is None), instead of timing a
+    lightweight query under a heavyweight label."""
+    with pytest.raises(ValueError, match="heavyweight"):
+        call()

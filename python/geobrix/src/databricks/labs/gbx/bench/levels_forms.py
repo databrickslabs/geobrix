@@ -515,16 +515,14 @@ def _gb_tiles(virtual: bool):
             _corpus_fingerprint(corpus),
         )  # a corpus that changes is not the one found in
         if memo not in _GB_FOUND:
-            gb = []
             t0 = time.perf_counter()
             # the corpus cycles four systems, so about a quarter are EPSG:27700: look at 4n + 64 files, no more (a
-            # corpus with none must not open every file)
-            for p in sources[: 4 * n + 64]:
-                with open_data(p) as ds:
-                    if ds.crs is not None and ds.crs.to_epsg() == 27700:
-                        gb.append(p)
-                if len(gb) >= n:
-                    break
+            # corpus with none must not open every file). A header read on a Volume costs tens to hundreds of
+            # milliseconds, and a 1x rung looks at a thousand: they are read by the cluster's tasks in ONE pass (as
+            # the grouped planner reads its headers). Stopping early would save nothing: the n-th BNG tile is
+            # about the 4n-th file.
+            cand = sources[: 4 * n + 64]
+            gb = [p for p, c in zip(cand, _epsgs(spark, cand)) if c == 27700][:n]
             print(
                 f"[LEVELS input] BNG tiles found ({len(gb)}) in {time.perf_counter() - t0:.1f} s",
                 flush=True,

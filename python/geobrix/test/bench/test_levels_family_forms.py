@@ -325,6 +325,36 @@ def test_a_short_bng_corpus_names_the_bng_count_and_the_real_corpus_size(
     assert "--rows-from 8 " in why and "--rows-from 3" not in why, why
 
 
+def test_the_bng_tile_input_reads_its_headers_in_tasks_and_keeps_exactly_n(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """Looking for the EPSG:27700 tiles opened up to 4n + 64 headers one after another on the driver (a Volume read
+    each): setup of 261-474 s at 1x. The headers are read by tasks (the driver opens none), and the batch that
+    finds the n-th tile may hold more than n: the input keeps n.
+    """
+    from databricks.labs.gbx.bench import oracles
+
+    rows = tmp_path / "rows"
+    rows.mkdir()
+    systems = ["EPSG:27700", "EPSG:4326", "EPSG:3857", "EPSG:32618"]
+    for i in range(128):
+        (rows / f"r{i:03d}.tif").write_bytes(
+            oracles._tile_bytes(systems[i % 4], 16, 16)
+        )
+    opened = []
+    real = lf.open_data
+
+    def spy(p):
+        opened.append(p)
+        return real(p)
+
+    monkeypatch.setattr(lf, "open_data", spy)
+    lf._GB_FOUND.clear()
+    name = lf.INPUTS["tiles_gb_mat"](spark_session_local, 16, str(tmp_path), None)
+    assert opened == [], "the driver opened a header"
+    assert spark_session_local.table(name).count() == 16
+
+
 def test_the_combineavg_group_is_the_source_twice_and_writes_nothing(
     spark_session_local, tmp_path
 ):

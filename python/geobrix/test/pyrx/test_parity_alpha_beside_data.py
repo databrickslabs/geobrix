@@ -144,16 +144,20 @@ def _scalar(spark, raster, tier, fn):
     return df.select(fn(mod, f.col("tile")).alias("v")).collect()[0]["v"]
 
 
-def _assert_scalar_parity(spark, raster, fn_names, label=""):
-    """Each of ``fn_names`` (an accessor of the tile) gives the same per-band values in both tiers."""
-    for fn_name in fn_names:
-        light = _scalar(
+def _assert_band_statistics(spark, raster, want, label=""):
+    """pixel count, min, max and mean per band, each stated (``want``: one ``(count, min, max, mean)`` per band).
+
+    These four functions have no heavyweight level, so the light tier is checked against the values.
+    """
+    for index, fn_name in enumerate(
+        ("rst_pixelcount", "rst_min", "rst_max", "rst_avg")
+    ):
+        got = _scalar(
             spark, raster, "light", lambda m, t: f.call_function(f"gbx_{fn_name}", t)
         )
-        heavy = _scalar(
-            spark, raster, "heavy", lambda m, t: f.call_function(f"gbx_{fn_name}", t)
-        )
-        assert list(light) == pytest.approx(list(heavy)), f"{label} {fn_name}"
+        assert list(got) == pytest.approx(
+            [band[index] for band in want]
+        ), f"{label} {fn_name}"
 
 
 def _both_tiers(spark, raster, fn):
@@ -166,18 +170,19 @@ def _both_tiers(spark, raster, fn):
 
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba", "rgb_nir"])
 def test_alpha_statistics_parity(spark_with_jar, name):
-    """pixel count, min, max and mean per band, and isempty, agree between the tiers on
-    the pixels valid for each band (an RGBA raster included: heavy's multi-dimensional
-    statistics used to count its transparent pixels)."""
+    """pixel count, min, max and mean per band agree with the pixels valid for each band (an RGBA
+    raster included: heavy's multi-dimensional statistics used to count its transparent pixels), and
+    isempty agrees between the tiers.
+
+    The pattern's data bands hold 7 over rows 0 and 3 and 0 over rows 1 and 2 (mean 3.5 over the
+    pixels valid for them); the last band holds 255 over rows 1 and 3 and 0 over the others, and it is
+    valid everywhere."""
     spark = spark_with_jar
     raster = _pattern_raster(name)
-    _assert_scalar_parity(
-        spark, raster, ("rst_pixelcount", "rst_min", "rst_max", "rst_avg"), name
-    )
-    counts = _scalar(
-        spark, raster, "light", lambda m, t: f.call_function("gbx_rst_pixelcount", t)
-    )
-    assert list(counts) == _valid_counts(name)
+    n = len(al.LAYOUTS[name][0])
+    counts = _valid_counts(name)
+    want = [(counts[i], 0, 7, 3.5) for i in range(n - 1)] + [(16, 0, 255, 127.5)]
+    _assert_band_statistics(spark, raster, want, name)
     assert (
         _scalar(
             spark, raster, "light", lambda m, t: f.call_function("gbx_rst_isempty", t)
@@ -325,19 +330,12 @@ def test_histogram_over_the_pixels_valid_for_each_band(spark_with_jar, name):
 
 
 def test_statistics_of_a_raster_with_its_own_mask_parity(spark_with_jar):
-    """pixel count, min, max, mean per band and isempty: the masked column is left out in both tiers
-    (heavy's multi-dimensional statistics ignored the mask band)."""
-    raster = _masked_rgb_nir()
-    _assert_scalar_parity(
-        spark_with_jar, raster, ("rst_pixelcount", "rst_min", "rst_max", "rst_avg")
-    )
-    counts = _scalar(
-        spark_with_jar,
-        raster,
-        "light",
-        lambda m, t: f.call_function("gbx_rst_pixelcount", t),
-    )
-    assert list(counts) == [12, 12, 12, 12]
+    """pixel count, min, max, mean per band: the masked column is left out (heavy's multi-dimensional
+    statistics ignored the mask band). Column 0 is hidden, so each band counts 12 pixels; the colour
+    bands hold 7 over two rows and 0 over two (mean 3.5), the last band 255 over two rows and 0 over
+    two (mean 127.5)."""
+    want = [(12, 0, 7, 3.5)] * 3 + [(12, 0, 255, 127.5)]
+    _assert_band_statistics(spark_with_jar, _masked_rgb_nir(), want)
 
 
 @pytest.mark.parametrize("op", ["max", "min"])

@@ -442,15 +442,45 @@ def _corpus_rows(corpus: str) -> Optional[List[str]]:
     return _CORPUS_ROWS[rows]
 
 
+_FOLDER_NAMES: Dict[str, List[str]] = {}
+
+
+def _sidecar_free_paths(paths) -> set:
+    """The files among `paths` that the raster reader would stamp ``path_sidecar_free``: nothing beside them in a folder
+    past GDAL's listing limit that a GDAL open could pick up (the reader's own rule, over the names of each folder, listed
+    once per process)."""
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    paths = list(paths)
+    for d in {os.path.dirname(p) for p in paths}:
+        if d not in _FOLDER_NAMES:
+            _FOLDER_NAMES[d] = os.listdir(d)
+    return RasterGbxReader._files_without_sidecars(paths, _FOLDER_NAMES)
+
+
 def _tile_column(spark, pairs, virtual: bool, keyed: bool):
     """A DataFrame of ``[key,] tile`` from ``(key, path)`` pairs: virtual tiles, or tiles read now."""
     from pyspark.sql import functions as F
 
     from databricks.labs.gbx.manifest import TILE_SQL
+    from databricks.labs.gbx.pyrx._env import SIDECAR_FREE_KEY
     from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
     if virtual:
-        rows = [(k, VirtualTile(cellid=0, path=p).to_row()) for k, p in pairs]
+        # stamped as the reader stamps its tiles: a worker that is not told a file has no sidecar lists the folder of the
+        # corpus (tens of thousands of names) at its second open, or checks every sidecar name of each open
+        free = _sidecar_free_paths([p for _, p in pairs])
+        rows = [
+            (
+                k,
+                VirtualTile(
+                    cellid=0,
+                    path=p,
+                    metadata={SIDECAR_FREE_KEY: "1"} if p in free else {},
+                ).to_row(),
+            )
+            for k, p in pairs
+        ]
         df = client_dataframe(
             spark, rows, f"key string, tile {TILE_SQL}", what="virtual tile rows"
         )
@@ -569,7 +599,7 @@ def _gb_tiles(virtual: bool):
         if not sources:
             return None
 
-        kind = "virt" if virtual else "mat"
+        kind = "virtfps" if virtual else "mat"
         name = stamped_name(schema, f"mvp_in_tiles_gb_{kind}_v{RECIPE_VERSION}_{n}")
         if schema is not None and spark.catalog.tableExists(f"{schema}.{name}"):
             return f"{schema}.{name}"  # built by an earlier form or run: no header of the corpus is read again
@@ -827,7 +857,8 @@ def _grouped_virt_tiles(mode: str, label: str = ""):
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_grouped{label}_{mode}_virt_v{RECIPE_VERSION}_{n}",
+            # virtfps: the references carry path_sidecar_free, as the reader's tiles do
+            f"mvp_in_tiles_grouped{label}_{mode}_virtfps_v{RECIPE_VERSION}_{n}",
             tiles,
         )
 
@@ -1672,6 +1703,12 @@ def setup_a_probes(spark):
     register(spark, only=["gbx_rst_merge_tvf", "gbx_rst_bng_rasterize_tvf"])
 
 
+# What each of the two setups below leaves under the name `gbx_rst_merge`. The JVM merge replaces the light one in the
+# session, and a setup that is not judged by what is installed runs once: the light finalizes that came after the JVM
+# one then timed the JVM merge (and, given a reference, raised VirtualTileException), whatever level they were labelled.
+setup_a_probes.installs = {"gbx_rst_merge": ("L3", "-")}
+
+
 def setup_a_l2(spark):
     """The Java UDF finalizes under probe names (needs the JAR)."""
     from databricks.labs.gbx.pyrx import _mvp_forms
@@ -1698,6 +1735,9 @@ def setup_a_l1_merge(spark):
     )
     if got != "ok":
         raise RuntimeError(f"gbx_rst_merge: L1 install gave {got}")
+
+
+setup_a_l1_merge.installs = {"gbx_rst_merge": ("L1", "-")}
 
 
 def _a(fn, level, variant, inp, inner, *, setup="", register=False, **kw):

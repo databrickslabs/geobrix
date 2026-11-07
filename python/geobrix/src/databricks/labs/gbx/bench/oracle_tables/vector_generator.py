@@ -85,6 +85,42 @@ VECTOR_GENERATOR = (
     Case(
         "tri_bad_mode", TRI, (KITE, [], 0.0, 0.0, F, "sideways"), "raises", "sideways"
     ),
+    # A MULTIPOINT as one element of the array is flattened into its member points.
+    Case(
+        "tri_multipoint_element",
+        TRI,
+        (
+            [
+                "MULTIPOINT Z ("
+                + ", ".join(f"({x} {y} {_z(x, y)})" for x, y in _XY)
+                + ")"
+            ],
+            [],
+            0.0,
+            0.0,
+            F,
+        ),
+        "triangles",
+        SQUARE_TRIANGLES,
+        ("session",),
+    ),
+    # The conforming mode is the JVM's; the lightweight function refuses it and says so.
+    Case(
+        "tri_conforming_light_refused",
+        TRI,
+        (KITE, [], 0.0, 0.0, "MIDPOINT", "conforming"),
+        "raises",
+        "conforming",
+        ("session",),
+    ),
+    Case(
+        "elevbbox_conforming_light_refused",
+        EBB,
+        (SQUARE_WKT, [], 0.0, 0.0, F, 0.0, 0.0, 10.0, 10.0, 2, 2, 0, "conforming"),
+        "raises",
+        "conforming",
+        ("session",),
+    ),
     # ---------------------------------------------------------------------------------------------- bbox grid
     Case(
         "elevbbox_plane",

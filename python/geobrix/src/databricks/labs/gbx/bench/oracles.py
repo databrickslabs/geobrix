@@ -223,6 +223,27 @@ HEAVY_PENDING.update(
     }
 )
 
+# The conforming TIN mode is the JVM's: the lightweight generators refuse it, so a row that expects the refusal is red there.
+_CONFORMING_L1 = "the JVM level triangulates in the conforming mode; the lightweight generators refuse it"
+HEAVY_PENDING.update(
+    {
+        cid: {"L1": _CONFORMING_L1}
+        for cid in ("tri_conforming_light_refused", "elevbbox_conforming_light_refused")
+    }
+)
+
+# Two shapes the lightweight level takes and the JVM level does not (measured through the JAR).
+HEAVY_PENDING.update(
+    {
+        "tcrs_mixed_empty": {
+            "L1": "the JVM reads a collection that mixes a Z point and an EMPTY point as unreadable and answers NULL; the lightweight level reprojects it"
+        },
+        "tri_multipoint_element": {
+            "L1": "the JVM triangulates the points of an array and takes a MULTIPOINT element as no point; the lightweight level flattens it"
+        },
+    }
+)
+
 # The JVM companions of two Task 15 / 18b names that refuse a group the light level handles, and are not the default.
 # `gbx_rst_derivedband_agg` has a `session_returns: TILE` L1 block, so it is not selected: a member over the cap is an
 # error tile (a NULL raster, the reason and its Fix in the metadata), not a raise. `gbx_rst_merge` (the array form)
@@ -269,6 +290,18 @@ _BYTES_REFUSED_LIGHT = "is a {} raster, a format that can name other files, whic
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
+BOWTIE_TEXT = "POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))"
+# a shell and a hole that both run clockwise: valid by the OGC rules, not by the product's
+BOTH_CLOCKWISE = "POLYGON((0 0, 0 10, 10 10, 10 0, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2))"
+OPPOSITE = "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0), (2 2, 2 4, 4 4, 4 2, 2 2))"
+
+
+def _poly_wkb(wkt):
+    import shapely
+
+    return shapely.to_wkb(shapely.from_wkt(wkt))
+
+
 MVP_S: Tuple[Case, ...] = (
     Case("bng_1km", B, (530000.0, 180000.0, 3), "exact", "TQ3080"),
     Case("bng_1km_str", B, (530000.0, 180000.0, "1km"), "exact", "TQ3080"),
@@ -555,6 +588,33 @@ MVP_S: Tuple[Case, ...] = (
         (Build("ewkb_bowtie"),),
         "geom_srid",
         "MULTIPOLYGON(((0 0, 0.5 0.5, 0 1, 0 0)), ((0.5 0.5, 1 0, 1 1, 0.5 0.5)))",
+        ("session",),
+    ),
+    Case(
+        "mv_structure",
+        M,
+        ("POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))", "structure"),
+        "geom_props",
+        {"valid": True, "area": 0.5},
+    ),
+    # 'full' is not a level yet
+    Case("mv_full_refused", M, (BOWTIE_TEXT, "full"), "raises", "level"),
+    # The product's ST_IsValid also holds a polygon to opposite ring windings, so the default levels turn the exterior
+    # counter-clockwise and the holes clockwise; 'ogc' repairs the topology and leaves the windings as they came.
+    Case("mv_orients", M, (BOTH_CLOCKWISE,), "wkb_bytes", lambda: _poly_wkb(OPPOSITE)),
+    Case(
+        "mv_ogc_keeps_winding",
+        M,
+        (BOTH_CLOCKWISE, "ogc"),
+        "wkb_bytes",
+        lambda: _poly_wkb(BOTH_CLOCKWISE),
+    ),
+    Case(
+        "mv_text_keeps_srid",
+        M,
+        ("SRID=4326;" + BOTH_CLOCKWISE,),
+        "geom_srid",
+        (OPPOSITE, 4326),
         ("session",),
     ),
 )
@@ -3325,8 +3385,11 @@ def _check_geom_srid(case: Case, out, args) -> Optional[str]:
             sorted(map(tuple, shapely.get_coordinates(g, include_z=True)))
             for g in (got, want)
         )
+        # an absent Z is NaN on both sides: a NaN that became a number is a Z that was made up
         if len(a) != len(b) or any(
-            abs(x - y) > 1e-6 for p, q in zip(a, b) for x, y in zip(p, q)
+            (x != x) != (y != y) or abs(x - y) > 1e-6
+            for p, q in zip(a, b)
+            for x, y in zip(p, q)
         ):
             return f"{case.cid}: coordinates {a}, want {b}"
     if srid is None:
@@ -4957,6 +5020,48 @@ def run_groups(
                 out.append((case, _check_error_group(want, value, tile_out)))
             else:
                 out.append((case, check(want, value, [group_arg, *consts])))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+def l3_callable(fn):
+    """The plain Python function behind a scalar's session form, or None when it has none (a UDTF, a grouped
+    aggregate). A ``callable`` form is the function itself; a ``udf`` form built by a factory has a plain
+    ``_udf_<name>`` beside the factory."""
+    from databricks.labs.gbx import manifest
+
+    l3 = fn.levels.get("L3", {})
+    if "callable" in l3:
+        return manifest.resolve_ref(l3["callable"])
+    if "factory" in l3 and fn.kind == "scalar":
+        module = l3["factory"].split(":")[0]
+        return manifest.resolve_ref(f"{module}:_udf_{fn.sql_name[len('gbx_'):]}")
+    return None
+
+
+def run_l3_callables(cases, tmpdir: Optional[str] = None):
+    """The session rows of a scalar, without Spark: the function a session registers is called with Python values,
+    and each result is judged as the SQL result is (so a mutation of the kernel is seen with no JVM and no worker).
+    """
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        fn = man.functions[case.fn]
+        call = l3_callable(fn)
+        if "session" not in case.surfaces or case.sql is not None or call is None:
+            continue
+        try:
+            msgs = []
+            for row in (case.args, *case.variants):
+                args = [resolve_arg(a, tmpdir) for a in row]
+                msgs.append(check(case, call(*args), args))
+            out.append((case, next(filter(None, msgs), None)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

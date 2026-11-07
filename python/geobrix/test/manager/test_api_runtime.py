@@ -456,3 +456,10 @@ def test_the_first_failure_in_manifest_order_is_the_one_raised(monkeypatch):
     assert _each(ConnectStub(), list(range(8)), lambda i: i * 2) == [
         i * 2 for i in range(8)
     ]
+
+
+def test_register_family_at_a_level_names_the_functions_that_have_none():
+    # an unknown name (a typo) raises before any session is touched, so a leg pinned to a level never falls back
+    with pytest.raises(ValueError) as err:
+        manager.register_family(None, ("gbx_st_",), only=["st_asmtv"], level="L3")
+    assert "gbx_st_asmtv" in str(err.value) and "Fix:" in str(err.value)

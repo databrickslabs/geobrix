@@ -3,6 +3,7 @@
 import warnings
 
 import pyproj
+import pytest
 from rasterio.crs import CRS
 
 from databricks.labs.gbx.core.crs import resolve_crs
@@ -182,3 +183,72 @@ def test_shim_exports_new_helpers():
         crs_to_proj4,
         to_pyproj_crs,
     )
+
+
+# --- in_target_domain and the transformer cache (moved from the pyvx CRS tests: they judge core.crs) ----------------
+
+
+def test_in_target_domain_judges_every_point_against_the_area_of_use():
+    import numpy as np
+
+    from databricks.labs.gbx.core.crs import in_target_domain
+
+    gb = pyproj.CRS.from_epsg(27700)
+    london, antarctic = [-0.13, 51.5], [150.0, -80.0]
+    assert in_target_domain(np.array([london]), gb) is True
+    assert in_target_domain(np.array([antarctic]), gb) is False
+    assert in_target_domain(np.array([london, antarctic]), gb) is False
+    # no area of use, no verdict: the check is skipped
+    no_bounds = pyproj.CRS.from_proj4(
+        "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+    )
+    assert in_target_domain(np.array([[0.0, 0.0]]), no_bounds) in (None, True)
+
+
+_RD_NULL_SHIFT = (
+    "+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 "
+    "+x_0=155000 +y_0=463000 +ellps=bessel +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+)
+
+
+def test_a_fuzzy_authority_never_shares_a_transformer_with_the_exact_crs():
+    """PROJ matches this PROJ4 string to EPSG:28992 at 70%, yet its null datum shift puts points ~177 m away. The cache
+    was once keyed on the canonical name, so whichever came first answered for both, in either order.
+    """
+    from databricks.labs.gbx.core.crs import (
+        _transformer_cache,
+        _transformer_key,
+        crs_to_canonical,
+        get_transformer,
+    )
+
+    proj4, epsg = CRS.from_user_input(_RD_NULL_SHIFT), CRS.from_epsg(28992)
+    assert crs_to_canonical(proj4) == crs_to_canonical(epsg) == "EPSG:28992"
+    assert _transformer_key(proj4) != _transformer_key(epsg)
+    assert _transformer_key(epsg) == "EPSG:28992"
+    for first, second, want in (
+        (
+            _RD_NULL_SHIFT,
+            "EPSG:28992",
+            ((155161.545139, 463362.663804), (155191.353812, 463537.136273)),
+        ),
+        (
+            "EPSG:28992",
+            _RD_NULL_SHIFT,
+            ((155161.545139, 463362.663804), (155191.353812, 463537.136273)),
+        ),
+    ):
+        _transformer_cache().clear()
+        got = {
+            t: get_transformer(4326, t).transform(5.39, 52.16) for t in (first, second)
+        }
+        assert got[_RD_NULL_SHIFT] == pytest.approx(want[0], abs=1e-3)
+        assert got["EPSG:28992"] == pytest.approx(want[1], abs=1e-3)
+
+
+def test_equivalent_spellings_of_one_crs_share_one_transformer():
+    from databricks.labs.gbx.core.crs import _transformer_cache, get_transformer
+
+    _transformer_cache().clear()
+    assert get_transformer(4326, 3857) is get_transformer("EPSG:4326", "3857")
+    assert len(_transformer_cache()) == 1

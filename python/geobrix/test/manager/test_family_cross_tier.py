@@ -204,6 +204,33 @@ def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, 
     assert pending <= set(red), f"{level} now passes {sorted(pending - set(red))}"
 
 
+# Families whose scalar rows also run on the plain Python function (a family opts in once its rows pass there).
+_L3_CALLABLE_FAMILIES = ("vector-scalar",)
+
+
+def _callable_scalars():
+    return [
+        pytest.param(fn.oracle, fn.sql_name, id=f"{fn.sql_name}-L3-callable")
+        for fn in sorted(manifest.load().functions.values(), key=lambda f: f.sql_name)
+        if fn.family in _L3_CALLABLE_FAMILIES
+        and fn.kind == "scalar"
+        and fn.status == "stable"
+        and (not _ONLY or fn.oracle in _ONLY)
+        and oracles.l3_callable(fn) is not None
+    ]
+
+
+@pytest.mark.parametrize("table,sql_name", _callable_scalars())
+def test_family_oracle_l3_callables(tmp_path, table, sql_name):
+    """The session rows of a scalar, on the Python function its registration wraps: no Spark, no worker. The same
+    rows run through SQL and the Column API in test_family_oracle; this leg is the fast host loop and the one a
+    mutation run can use."""
+    cases = [c for c in oracles.TABLES[table] if c.fn == sql_name]
+    ran = oracles.run_l3_callables(cases, tmpdir=str(tmp_path))
+    assert ran
+    assert [m for _, m in ran if m] == []
+
+
 @pytest.mark.integration
 def test_l1_arity_contract_for_every_companion(jvm_spark):
     installer = jvm_spark._jvm.com.databricks.labs.gbx.kernels.L1Installer

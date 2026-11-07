@@ -50,6 +50,30 @@ builder("ewkb_point_utm_z")(lambda tmpdir: _wkb("POINT Z(15 50 100)", 4326))
 builder("ewkb_point_54008")(lambda tmpdir: _wkb("POINT(1 2)", 54008))
 
 
+def _ewkb_dim(wkt, dim, srid=4326):
+    """EWKB of a WKT with `dim` ordinates per vertex (4 keeps the M: shapely's default would drop it at the writer)."""
+    import shapely
+
+    return shapely.to_wkb(
+        shapely.set_srid(shapely.from_wkt(wkt), srid),
+        output_dimension=dim,
+        flavor="extended",
+        include_srid=True,
+    )
+
+
+builder("ewkb_partial_z_line")(
+    lambda tmpdir: _ewkb_dim("LINESTRING Z (15 51 5, 16 52 NaN)", 3)
+)
+builder("ewkb_zm_point")(lambda tmpdir: _ewkb_dim("POINT ZM (15 51 5 99)", 4))
+builder("ewkb_zm_line")(
+    lambda tmpdir: _ewkb_dim("LINESTRING ZM (15 51 5 99, 16 52 6 98)", 4)
+)
+builder("ewkb_m_point")(lambda tmpdir: _ewkb_dim("POINT M (15 51 99)", 4))
+builder("ewkb_point_11_42")(lambda tmpdir: _wkb("POINT(11 42)", 4326))
+builder("ewkb_mislabelled")(lambda tmpdir: _wkb("POINT(500000 5600000)", 4326))
+
+
 def w(k):
     return Build(f"wkb_{k}")
 
@@ -105,6 +129,61 @@ VECTOR_SCALAR = (
         variants=((e("bowtie"),),),
     ),
     Case("ev_null", EV, (None,), "null"),
+    # The reasons GEOS gives, with the stable code each gets (a location it names is the point it embeds).
+    Case(
+        "ev_ring_self_intersection",
+        EV,
+        ("POLYGON((0 0,2 2,4 0,4 4,2 2,0 4,0 0))",),
+        "json_subset",
+        {"valid": False, "code": 11, "location": "POINT(2 2)"},
+    ),
+    Case(
+        "ev_hole_outside_shell",
+        EV,
+        ("POLYGON((0 0,0 3,3 3,3 0,0 0),(5 5,5 6,6 5,5 5))",),
+        "json_subset",
+        {"valid": False, "code": 20, "location": "POINT(5 5)"},
+    ),
+    Case(
+        "ev_holes_nested",
+        EV,
+        (
+            "POLYGON((0 0,0 10,10 10,10 0,0 0),(1 1,1 9,9 9,9 1,1 1),(2 2,2 8,8 8,8 2,2 2))",
+        ),
+        "json_subset",
+        {"valid": False, "code": 21, "location": "POINT(2 2)"},
+    ),
+    Case(
+        "ev_interior_disconnected",
+        EV,
+        ("POLYGON((0 0,0 10,10 10,10 0,0 0),(0 5,5 10,10 5,5 0,0 5))",),
+        "json_subset",
+        {"valid": False, "code": 22},
+    ),
+    Case(
+        "ev_nested_shells",
+        EV,
+        ("MULTIPOLYGON(((0 0,0 10,10 10,10 0,0 0)),((2 2,2 8,8 8,8 2,2 2)))",),
+        "json_subset",
+        {"valid": False, "code": 23},
+    ),
+    Case(
+        "ev_too_few_points",
+        EV,
+        ("POLYGON((0 0,1 1,0 0))",),
+        "json_subset",
+        {"valid": False, "code": 1},
+    ),
+    # two identical holes overlap along their edges, which GEOS finds before it counts rings
+    Case(
+        "ev_duplicate_holes",
+        EV,
+        (
+            "POLYGON((0 0,0 10,10 10,10 0,0 0),(2 2,2 8,8 8,8 2,2 2),(2 2,2 8,8 8,8 2,2 2))",
+        ),
+        "json_subset",
+        {"valid": False, "code": 10},
+    ),
     # --- gbx_st_node
     Case("node_cross", NODE, (SHAPES["line_cross"],), "geom_srid", NODED),
     Case(
@@ -189,7 +268,13 @@ VECTOR_SCALAR = (
         "geom_srid",
         "LINESTRING(0 0, 1 1, 2 2)",
     ),
-    Case("rrp_negative", RRP, (SHAPES["line_dupes"], -0.5), "raises", "-0.5"),
+    Case(
+        "rrp_negative",
+        RRP,
+        (SHAPES["line_dupes"], -0.5),
+        "raises",
+        "tolerance must be a finite number, 0 or more; got -0.5",
+    ),
     Case("rrp_null", RRP, (None,), "null"),
     # --- gbx_st_shiftlongitude: negative longitudes move into [0, 360]
     Case(
@@ -616,6 +701,333 @@ VECTOR_SCALAR = (
         "GeometryCollection",
     ),
     Case("leg_null", LEG, (None,), "null"),
+)
+
+# --- The CRS functions on the geometry shapes that once broke them (session rows). Coordinates (15 51) and (16 52) are
+# inside the area of use of EPSG:32633 (UTM 33N); their UTM values are the `pyproj` values of the two points. The
+# absent Z of a vertex is NaN, never 0: a Z that was not measured must not read as an elevation of zero.
+U51 = (500000.0000000011, 5649824.888255088)
+U52 = (568649.7048951713, 5761510.316555307)
+MIXED = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"  # GEOS refuses this text as it stands
+MIXED_Z = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT Z (16 52 NaN))"
+MIXED_2D = f"GEOMETRYCOLLECTION (POINT ({U51[0]} {U51[1]}), POINT ({U52[0]} {U52[1]}))"
+MIXED_EMPTY = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT EMPTY)"
+MIXED_EMPTY_Z = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT Z EMPTY)"
+MIXED_ZM = "GEOMETRYCOLLECTION ZM (POINT ZM (15 51 5 99), POINT (16 52))"
+MIXED_NESTED = (
+    "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), GEOMETRYCOLLECTION (POINT (16 52)))"
+)
+MIXED_NESTED_Z = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), GEOMETRYCOLLECTION Z (POINT Z (16 52 NaN)))"
+ZM_GC = "GEOMETRYCOLLECTION ZM (POINT ZM (15 51 5 99), LINESTRING ZM (15 51 5 99, 16 52 6 98))"
+ZM_GC_Z = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), LINESTRING Z (15 51 5, 16 52 6))"
+ZM_POLY = "POLYGON ZM ((15 51 5 99, 16 51 5 98, 16 52 5 97, 15 51 5 99))"
+ZM_POLY_Z = "POLYGON Z ((15 51 5, 16 51 5, 16 52 5, 15 51 5))"
+ZM_POLY_UTM_Z = f"POLYGON Z (({U51[0]} {U51[1]} 5, 570168.8615103093 5650300.786644997 5, {U52[0]} {U52[1]} 5, {U51[0]} {U51[1]} 5))"
+CUSTOM_TM = (
+    'PROJCS["Custom_TM",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
+    'PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Transverse_Mercator"],'
+    'PARAMETER["central_meridian",13.7],PARAMETER["scale_factor",0.9996],UNIT["metre",1]]'
+)
+BAD_SRID = "SRID=999999;POINT(15 51)"
+P51 = "POINT(15 51)"
+UP51 = f"POINT({U51[0]} {U51[1]})"
+
+VECTOR_SCALAR += (
+    # --- gbx_st_setcrs never touches a coordinate, so a shape stays what it was, less the measure
+    Case(
+        "setcrs_mixed_dim",
+        SETCRS,
+        (EW(MIXED), "EPSG:32633"),
+        "geom_srid",
+        (MIXED_Z, 32633),
+        SESSION,
+    ),
+    Case(
+        "setcrs_mixed_empty",
+        SETCRS,
+        (EW(MIXED_EMPTY), "EPSG:32633"),
+        "geom_srid",
+        (MIXED_EMPTY_Z, 32633),
+        SESSION,
+    ),
+    Case(
+        "setcrs_mixed_zm",
+        SETCRS,
+        (EW(MIXED_ZM), "EPSG:32633"),
+        "geom_srid",
+        (MIXED_Z, 32633),
+        SESSION,
+    ),
+    Case(
+        "setcrs_mixed_nested",
+        SETCRS,
+        (EW(MIXED_NESTED), "EPSG:32633"),
+        "geom_srid",
+        (MIXED_NESTED_Z, 32633),
+        SESSION,
+    ),
+    Case(
+        "setcrs_zm_gc",
+        SETCRS,
+        (EW(ZM_GC), "EPSG:4326"),
+        "geom_srid",
+        (ZM_GC_Z, 4326),
+        SESSION,
+    ),
+    Case(
+        "setcrs_zm_polygon",
+        SETCRS,
+        (EW(ZM_POLY), "EPSG:4326"),
+        "geom_srid",
+        (ZM_POLY_Z, 4326),
+        SESSION,
+    ),
+    Case(
+        "setcrs_zm_bin",
+        SETCRS,
+        (Build("ewkb_zm_line"), "EPSG:4326"),
+        "geom_srid",
+        ("LINESTRING Z (15 51 5, 16 52 6)", 4326),
+        SESSION,
+    ),
+    Case(
+        "setcrs_m_only",
+        SETCRS,
+        (EW("POINT M (15 51 99)"), "EPSG:4326"),
+        "geom_srid",
+        (P51, 4326),
+        SESSION,
+    ),
+    Case(
+        "setcrs_m_only_bin",
+        SETCRS,
+        (Build("ewkb_m_point"), "EPSG:4326"),
+        "geom_srid",
+        (P51, 4326),
+        SESSION,
+    ),
+    Case(
+        "setcrs_partial_z_bin",
+        SETCRS,
+        (Build("ewkb_partial_z_line"), "EPSG:32633"),
+        "geom_srid",
+        ("LINESTRING Z (15 51 5, 16 52 NaN)", 32633),
+        SESSION,
+    ),
+    Case("setcrs_empty_text", SETCRS, ("", "EPSG:4326"), "null", None, SESSION),
+    Case(
+        "setcrs_ignf_code",
+        SETCRS,
+        (P51, "IGNF:LAMB93"),
+        "raises",
+        "authority-less",
+        SESSION,
+    ),
+    # --- gbx_st_transformcrs: X and Y move, a Z that every vertex has rides along, and the measure is dropped
+    Case(
+        "tcrs_esri",
+        TCRS,
+        (EW(P51), "ESRI:54008"),
+        "geom_srid",
+        ("POINT(1052965.165046599 5652085.722544106)", 54008),
+        SESSION,
+    ),
+    Case(
+        "tcrs_custom_tm",
+        TCRS,
+        (EW("POINT(11 42)"), CUSTOM_TM),
+        "geom_srid",
+        ("POINT(-223616.3728811576 4653303.147689764)", 0),
+        SESSION,
+    ),
+    Case(
+        "tcrs_custom_tm_bin",
+        TCRS,
+        (Build("ewkb_point_11_42"), CUSTOM_TM),
+        "geom_srid",
+        ("POINT(-223616.3728811576 4653303.147689764)", 0),
+        SESSION,
+    ),
+    Case(
+        "tcrs_proj4_target_bin",
+        TCRS,
+        (e("point_utm"), PROJ4_UTM33),
+        "geom_srid",
+        (UTM, 0),
+        SESSION,
+    ),
+    Case(
+        "tcrs_ogc_crs84", TCRS, (EW(P51), "OGC:CRS84"), "geom_srid", (P51, 0), SESSION
+    ),
+    Case(
+        "tcrs_ignf",
+        TCRS,
+        (EW("POINT(2 48)"), "IGNF:LAMB93"),
+        "geom_srid",
+        ("POINT(625422.4046271729 6767095.930771304)", 0),
+        SESSION,
+    ),
+    Case(
+        "tcrs_z_text",
+        TCRS,
+        (EW("POINT Z (15 51 500)"), "EPSG:32633"),
+        "geom_srid",
+        (f"POINT Z({U51[0]} {U51[1]} 500)", 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_partial_z_text",
+        TCRS,
+        (EW("LINESTRING Z (15 51 5, 16 52 NaN)"), "EPSG:32633"),
+        "geom_srid",
+        (f"LINESTRING({U51[0]} {U51[1]}, {U52[0]} {U52[1]})", 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_partial_z_bin",
+        TCRS,
+        (Build("ewkb_partial_z_line"), "EPSG:32633"),
+        "geom_srid",
+        (f"LINESTRING({U51[0]} {U51[1]}, {U52[0]} {U52[1]})", 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_mixed_dim",
+        TCRS,
+        (EW(MIXED), "EPSG:32633"),
+        "geom_srid",
+        (MIXED_2D, 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_mixed_empty",
+        TCRS,
+        (EW(MIXED_EMPTY), "EPSG:32633"),
+        "geom_srid",
+        (f"GEOMETRYCOLLECTION Z (POINT Z ({U51[0]} {U51[1]} 5), POINT Z EMPTY)", 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_mixed_zm",
+        TCRS,
+        (EW(MIXED_ZM), "EPSG:32633"),
+        "geom_srid",
+        (MIXED_2D, 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_mixed_nested",
+        TCRS,
+        (EW(MIXED_NESTED), "EPSG:32633"),
+        "geom_srid",
+        (
+            f"GEOMETRYCOLLECTION (POINT ({U51[0]} {U51[1]}), GEOMETRYCOLLECTION (POINT ({U52[0]} {U52[1]})))",
+            32633,
+        ),
+        SESSION,
+    ),
+    Case(
+        "tcrs_zm_point",
+        TCRS,
+        (EW("POINT ZM (15 51 5 99)"), "EPSG:32633"),
+        "geom_srid",
+        (f"POINT Z({U51[0]} {U51[1]} 5)", 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_zm_polygon",
+        TCRS,
+        (EW(ZM_POLY), "EPSG:32633"),
+        "geom_srid",
+        (ZM_POLY_UTM_Z, 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_zm_bin",
+        TCRS,
+        (Build("ewkb_zm_point"), "EPSG:32633"),
+        "geom_srid",
+        (f"POINT Z({U51[0]} {U51[1]} 5)", 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_m_only",
+        TCRS,
+        (EW("POINT M (15 51 99)"), "EPSG:32633"),
+        "geom_srid",
+        (UP51, 32633),
+        SESSION,
+    ),
+    Case(
+        "tcrs_m_only_bin",
+        TCRS,
+        (Build("ewkb_m_point"), "EPSG:32633"),
+        "geom_srid",
+        (UP51, 32633),
+        SESSION,
+    ),
+    # Bad data is NULL: an SRID nothing knows, a point PROJ sends to infinity, a plain geometry with no source CRS.
+    Case("tcrs_unknown_srid", TCRS, (BAD_SRID, "EPSG:32633"), "null", None, SESSION),
+    Case(
+        "tcrs_unknown_srid_mixed",
+        TCRS,
+        (f"SRID=999999;{MIXED}", "EPSG:32633"),
+        "null",
+        None,
+        SESSION,
+    ),
+    Case("tcrs_mixed_no_source", TCRS, (MIXED, "EPSG:32633"), "null", None, SESSION),
+    Case(
+        "tcrs_mislabelled",
+        TCRS,
+        (EW("POINT(500000 5600000)"), "EPSG:32633"),
+        "null",
+        None,
+        SESSION,
+    ),
+    Case(
+        "tcrs_mislabelled_bin",
+        TCRS,
+        (Build("ewkb_mislabelled"), "EPSG:32633"),
+        "null",
+        None,
+        SESSION,
+    ),
+    Case(
+        "tcrs_invalid_latitude",
+        TCRS,
+        (EW("POINT(10 100)"), "EPSG:32633"),
+        "null",
+        None,
+        SESSION,
+    ),
+    Case(
+        "tcrs_zm_no_source",
+        TCRS,
+        ("POINT ZM (15 51 5 99)", "EPSG:32633"),
+        "null",
+        None,
+        SESSION,
+    ),
+    Case(
+        "tcrs_garbage_target",
+        TCRS,
+        (EW(P51), "GARBAGE_CRS_STRING_XXXX"),
+        "raises",
+        "GARBAGE_CRS_STRING_XXXX",
+        SESSION,
+    ),
+    Case(
+        "tcrs_mixed_bad_source",
+        TCRS,
+        (MIXED, "EPSG:32633", "NOT_A_CRS_XYZ"),
+        "raises",
+        "NOT_A_CRS_XYZ",
+        SESSION,
+    ),
+    # --- gbx_st_crs reads the SRID a shape plainly carries
+    Case("crs_mixed_dim", CRS, (EW(MIXED),), "exact", "EPSG:4326", SESSION),
+    Case("crs_zm", CRS, (Build("ewkb_zm_point"),), "exact", "EPSG:4326", SESSION),
 )
 
 # --- Unity Catalog rows: a GEOMETRY result carries an integer SRID, and the SRID of the argument is kept.

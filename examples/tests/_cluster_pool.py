@@ -182,18 +182,92 @@ def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int
     return ids
 
 
-def status(w, name: str, now: Callable[[], float] = time.time) -> List[dict]:
-    """One row per pool cluster: id, name, state, idle minutes (now - last activity), jar tag, autotermination."""
+JOB_SCAN_WINDOW_S = 6 * 3600  # job runs started this long ago are looked at for what ran on a cluster
+JOB_SCAN_MAX_RUNS = 500  # and no more than this many of them (the newest first): a busy workspace has thousands
+
+
+def _ms(x) -> Optional[float]:
+    try:
+        return float(x) if x else None
+    except (TypeError, ValueError):
+        return None
+
+
+def job_activity(w, now_s: float):
+    """``(latest, live)`` from the workspace's recent job runs: ``latest`` is ``{cluster_id: epoch ms}`` of the last run
+    activity on each cluster, ``live`` the set of clusters a run that has not ended is on.
+
+    A run that has not ended counts as active now; a finished one counts at its end time. The cluster's own
+    ``last_activity_time`` is not enough: it does not move for a job run. Runs whose cluster cannot be told, or a list
+    that cannot be read, leave the cluster's other signals to speak (nothing here).
+    """
+    out: Dict[str, float] = {}
+    live: set = set()
+    try:
+        runs = w.jobs.list_runs(start_time_from=int((now_s - JOB_SCAN_WINDOW_S) * 1000), expand_tasks=True)
+        for n, run in enumerate(runs):
+            if n >= JOB_SCAN_MAX_RUNS:
+                break
+            life = str(_val(getattr(getattr(run, "state", None), "life_cycle_state", None)))
+            ended = life in TERMINAL_RUN_STATES
+            when = (_ms(getattr(run, "end_time", None)) or _ms(getattr(run, "start_time", None)) or 0.0) if ended else now_s * 1000
+            instances = [getattr(run, "cluster_instance", None)] + [
+                getattr(t, "cluster_instance", None) for t in (getattr(run, "tasks", None) or [])
+            ]
+            for inst in instances:
+                cid = getattr(inst, "cluster_id", None)
+                if cid:
+                    out[cid] = max(out.get(cid, 0.0), when)
+                    if not ended:
+                        live.add(cid)
+    except Exception:  # noqa: BLE001 - a missing signal, not a failure of the status
+        pass
+    return out, live
+
+
+def status(w, name: str, now: Callable[[], float] = time.time, leases: Optional["Leases"] = None) -> List[dict]:
+    """One row per pool cluster: id, name, state, jar tag, autotermination, and how busy it is.
+
+    ``busy`` is True while a live lease holds the cluster or a job run is on it; ``holder`` is then the lease (run id and
+    job run id). ``idle_min`` is the minutes since the cluster's latest real activity (None for a cluster that is not
+    running): the latest of the cluster's ``last_activity_time`` (which does not move for a job run), its start, the end
+    of the last job run on it, and the touch time of its lease. ``idle_since`` names the signal that was latest.
+    """
     rows = []
+    t = now()
+    jobs, live = job_activity(w, t)
     for c in members(w, name):
-        last = getattr(c, "last_activity_time", None) or getattr(c, "last_state_loss_time", None)
-        idle = round((now() * 1000 - float(last)) / 60000.0, 1) if last else None
+        signals = {
+            "cluster activity": _ms(getattr(c, "last_activity_time", None)),
+            "cluster start": _ms(getattr(c, "start_time", None)),
+            "job run": jobs.get(c.cluster_id),
+        }
+        holder, busy = None, c.cluster_id in live
+        info = leases.read(c.cluster_id) if leases is not None else None
+        if info is not None and info.get("unreadable"):
+            holder, busy = "unreadable lease", busy or not leases.stale(info)
+        elif info is not None:
+            stale = leases.stale(info)
+            busy = busy or not stale
+            holder = f"{info.get('run_id', '?')} job {info.get('job_run_id', '-')}" + (" (stale)" if stale else "")
+            touched = _ms(info.get("touched_at", info.get("acquired_at")))
+            signals["lease"] = touched * 1000 if touched else None
+        running = state_of(c) == "RUNNING"
+        busy = busy and running
+        known = {k: v for k, v in signals.items() if v}
+        idle, since = None, None
+        if running and known:
+            since, last = max(known.items(), key=lambda kv: kv[1])
+            idle = round(max(0.0, t * 1000 - last) / 60000.0, 1)
         rows.append(
             dict(
                 cluster_id=c.cluster_id,
                 name=c.cluster_name,
                 state=state_of(c),
-                idle_min=idle,
+                busy=busy,
+                holder=holder,
+                idle_min=0.0 if busy else idle,
+                idle_since="busy" if busy else since,
                 jar=tags_of(c).get(JAR_TAG, NO_JAR),
                 autotermination_min=getattr(c, "autotermination_minutes", None),
             )

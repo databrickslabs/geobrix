@@ -44,14 +44,12 @@ def main(argv=None, w=None) -> int:
             ids = pool.up(w, a.name, a.n, spark_version=a.spark_version, node_type=a.node_type, workers=a.workers, user=me)
             print(f"pool {a.name}: {len(ids)} cluster(s) running: {', '.join(ids)} (auto-termination {pool.AUTOTERMINATION_MIN} min)")
         elif a.action == "status":
-            rows = pool.status(w, a.name)
+            vol = _volroot()
+            rows = pool.status(w, a.name, leases=pool.Leases(w, vol, a.name) if vol else None)
             if not rows:
                 print(f"pool {a.name}: no clusters")
-            vol = _volroot()
             for r in rows:
-                held = _holder(w, vol, a.name, r["cluster_id"]) if vol else "?"
-                idle = "?" if r["idle_min"] is None else f"{r['idle_min']:g} min"
-                print(f"{r['cluster_id']}  {r['name']:<24} {r['state']:<12} idle {idle:<10} jar {r['jar']:<16} lease {held}")
+                print(f"{r['cluster_id']}  {r['name']:<24} {r['state']:<12} {_activity(r)}  jar {r['jar']}")
         else:
             ids = pool.down(w, a.name, delete=a.delete)
             print(f"pool {a.name}: {'removed' if a.delete else 'terminated'} {len(ids)} cluster(s): {', '.join(ids)}")
@@ -66,13 +64,16 @@ def _volroot() -> str:
     return f"/Volumes/{cat}/{sch}/{vol}" if cat and sch and vol else ""
 
 
-def _holder(w, vol, name, cluster_id) -> str:
-    leases = pool.Leases(w, vol, name)
-    info = leases.read(cluster_id)
-    if info is None:
-        return "free"
-    stale = " (stale)" if leases.stale(info) else ""
-    return f"{info.get('run_id', '?')} job {info.get('job_run_id', '-')}{stale}"
+def _activity(r) -> str:
+    """One cluster's line: busy (and who holds it), or how long it has been idle and by what signal, and the lease."""
+    if r["busy"]:
+        who = f"leased by {r['holder']}" if r["holder"] and "(stale)" not in r["holder"] else "a job run is on it"
+        return f"busy ({who})"
+    if r["idle_min"] is None:
+        idle = "not running"
+    else:
+        idle = f"idle {r['idle_min']:g} min (since {r['idle_since']})"
+    return f"{idle}, lease {r['holder'] or 'free'}"
 
 
 if __name__ == "__main__":

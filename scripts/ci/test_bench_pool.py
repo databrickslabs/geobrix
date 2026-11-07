@@ -139,7 +139,15 @@ class FakeW:
                     raise NotFound(f"run {run_id} does not exist")
                 return SimpleNamespace(state=SimpleNamespace(life_cycle_state=w.runs[run_id]))
 
+            def list_runs(self, **kw):
+                w.calls.append(("list_runs", kw))
+                if w.list_runs_error:
+                    raise w.list_runs_error
+                return iter(w.run_list)
+
         self.jar_mtime = {}
+        self.run_list = []  # what jobs.list_runs returns: runs with a state, an end time and the cluster they ran on
+        self.list_runs_error = None
         self.clusters, self.files, self.libraries, self.jobs = Clusters(), Files(), Libraries(), Jobs()
 
         def do(method, path, body=None):  # the REST create `up` posts: the SDK's clusters.create has no idempotency_token
@@ -213,7 +221,7 @@ def test_status_shows_state_and_idle_minutes_and_down_ends_only_the_pools_cluste
     w = FakeW()
     w.add("a"), w.add("t", state="TERMINATED"), w.add("b", name="other"), w.add(DENIED)
     rows = pool.status(w, "p", now=lambda: w.now)
-    assert {(r["cluster_id"], r["state"], r["idle_min"]) for r in rows} == {("a", "RUNNING", 10.0), ("t", "TERMINATED", 10.0)}
+    assert {(r["cluster_id"], r["state"], r["idle_min"]) for r in rows} == {("a", "RUNNING", 10.0), ("t", "TERMINATED", None)}
     assert pool.down(w, "p") == ["a", "t"] and w.calls.count(("terminate", "a")) == 1
     assert w.clusters_by_id["b"].state == "RUNNING" and w.clusters_by_id[DENIED].state == "RUNNING"
     assert not any(c[1] in ("b", DENIED) for c in w.calls if c[0] in ("terminate", "delete"))
@@ -526,3 +534,80 @@ def test_an_unparseable_server_error_on_the_lease_create_reads_the_file_instead_
     w.fs.clear()
     w.files.upload = transient
     assert pool.Leases(w, VOL, "p").acquire("a", {}) is True and flaky["n"] == 3
+
+
+# ---- status: idle minutes come from real activity, not from last_activity_time alone
+
+
+def _run(cluster, life="TERMINATED", end_s=None, task=False):
+    inst = SimpleNamespace(cluster_id=cluster)
+    run = SimpleNamespace(
+        state=SimpleNamespace(life_cycle_state=life), end_time=int(end_s * 1000) if end_s else 0, start_time=1, cluster_instance=None, tasks=[]
+    )
+    if task:
+        run.tasks = [SimpleNamespace(cluster_instance=inst)]
+    else:
+        run.cluster_instance = inst
+    return run
+
+
+def test_idle_is_counted_from_the_latest_real_activity_not_from_last_activity_time(pool):
+    """last_activity_time does not move for a job run: a cluster whose run ended 5 min ago was reported idle for 112."""
+    w = FakeW()
+    c = w.add("a")
+    c.last_activity_time = (w.now - 112 * 60) * 1000
+    assert pool.status(w, "p", now=lambda: w.now)[0]["idle_min"] == 112.0 and pool.status(w, "p", now=lambda: w.now)[0]["idle_since"] == "cluster activity"
+    w.run_list = [_run("a", end_s=w.now - 5 * 60), _run("a", end_s=w.now - 50 * 60, task=True), _run("other", end_s=w.now - 1)]
+    row = pool.status(w, "p", now=lambda: w.now)[0]
+    assert (row["idle_min"], row["idle_since"], row["busy"]) == (5.0, "job run", False)
+    c.start_time = (w.now - 2 * 60) * 1000  # started after the run: the start is the latest signal
+    row = pool.status(w, "p", now=lambda: w.now)[0]
+    assert (row["idle_min"], row["idle_since"]) == (2.0, "cluster start")
+    listed = [call[1] for call in w.calls if call[0] == "list_runs"][0]
+    assert listed["start_time_from"] < (w.now - 3600) * 1000  # a window that reaches back past the autotermination
+
+
+def test_the_touch_time_of_a_lease_counts_as_activity_and_a_stale_lease_is_not_busy(pool):
+    w = FakeW()
+    w.add("a").last_activity_time = (w.now - 112 * 60) * 1000
+    leases = pool.Leases(w, VOL, "p", lambda: w.now)
+    leases.acquire("a", dict(INFO, job_run_id=7))
+    w.runs[7] = "RUNNING"
+    w.now += 3 * 60
+    row = pool.status(w, "p", now=lambda: w.now, leases=leases)[0]
+    assert (row["busy"], row["idle_min"], row["idle_since"]) == (True, 0.0, "busy")
+    assert row["holder"] == "r1 job 7"
+    w.now += 10 * 60  # nobody refreshed it for 13 min, but its job run is live: still held
+    assert pool.status(w, "p", now=lambda: w.now, leases=leases)[0]["busy"] is True
+    w.runs[7] = "TERMINATED"  # stale now: free to take, and idle counts from the last touch
+    row = pool.status(w, "p", now=lambda: w.now, leases=leases)[0]
+    assert (row["busy"], row["idle_min"], row["idle_since"]) == (False, 13.0, "lease")
+    assert row["holder"] == "r1 job 7 (stale)"
+
+
+def test_a_live_job_run_makes_the_cluster_busy_with_no_lease_and_an_unreadable_run_list_is_no_failure(pool):
+    w = FakeW()
+    w.add("a"), w.add("t", state="TERMINATED")
+    w.run_list = [_run("a", life="RUNNING"), _run("t", life="RUNNING")]
+    rows = {r["cluster_id"]: r for r in pool.status(w, "p", now=lambda: w.now)}
+    assert rows["a"]["busy"] is True and rows["a"]["idle_min"] == 0.0
+    assert rows["t"]["busy"] is False and rows["t"]["idle_min"] is None  # a cluster that is not running is not busy
+    w.run_list = []
+    w.list_runs_error = RuntimeError("not allowed to list runs")
+    row = pool.status(w, "p", now=lambda: w.now)[0]
+    assert row["idle_min"] == 10.0 and row["busy"] is False  # the cluster's own signal still speaks
+
+
+def test_status_says_busy_leased_by_the_run_for_a_leased_cluster(pool, monkeypatch, capsys):
+    w = FakeW()
+    w.add("a"), w.add("b")
+    leases = pool.Leases(w, VOL, "p", lambda: w.now)
+    leases.acquire("a", dict(INFO, job_run_id=7))
+    w.runs[7] = "RUNNING"
+    monkeypatch.setenv("GBX_BUNDLE_VOLUME_CATALOG", "c"), monkeypatch.setenv("GBX_BUNDLE_VOLUME_SCHEMA", "s"), monkeypatch.setenv("GBX_BUNDLE_VOLUME_NAME", "v")
+    import bench_pool
+
+    assert bench_pool.main(["status", "--name", "p"], w=w) == 0
+    lines = {ln.split()[0]: ln for ln in capsys.readouterr().out.splitlines()}
+    assert "busy (leased by r1 job 7)" in lines["a"]
+    assert "idle " in lines["b"] and "(since cluster activity)" in lines["b"] and "lease free" in lines["b"]  # the real clock here

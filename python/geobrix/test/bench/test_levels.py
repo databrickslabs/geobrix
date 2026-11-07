@@ -255,6 +255,28 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
             assert len({r.rows for r in mine.values()}) == 1
 
 
+def test_the_aggregate_forms_count_their_input_rows_not_their_groups(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """The BNG cell input has 200 keys: a form that answered `n` as its output groups recorded 200 rows at every
+    scale ("short input: 200 of N rows"), so the ladder timed an N-row input as if it were 200 rows.
+    """
+    small = (530000.0, 180000.0, 532000.0, 182000.0, 2, 2)
+    monkeypatch.setitem(
+        lf.FORMS,
+        "A",
+        [
+            f
+            for f in lf._a_light(lf._BR, lf._br_shapes(small), (("bng_cells", ""),))
+            if f.variant in ("c0", "finalize")
+        ],
+    )
+    rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=1000, mvp="A")
+    assert [r.status for r in rows] == ["ok", "ok"], [(r.form, r.note) for r in rows]
+    assert {r.rows for r in rows} == {1000}, [(r.form, r.rows) for r in rows]
+    assert not any("short input" in r.note for r in rows), [r.note for r in rows]
+
+
 def test_a_virtual_tile_input_is_spread_over_partitions_like_a_materialized_one(
     spark_session_local, tmp_path
 ):

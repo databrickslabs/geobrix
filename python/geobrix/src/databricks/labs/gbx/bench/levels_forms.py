@@ -1431,7 +1431,13 @@ def setup_a_l1_merge(spark):
 
 
 def _a(fn, level, variant, inp, inner, *, setup="", register=False, **kw):
-    sql = f"SELECT count(*) AS n, sum(length(out)) AS fp, count(out) AS n_out FROM ({inner})"
+    # n is the INPUT rows (a scalar subquery over the same table, as the family `_AGG` shape): the query's own count(*)
+    # is the groups, which is a few hundred whatever the scale and would read as a short input at every rung
+    sql = (
+        "SELECT (SELECT count(*) FROM {src}) AS n, sum(length(out)) AS fp, "
+        "CASE WHEN count(out) = count(*) THEN (SELECT count(*) FROM {src}) ELSE count(out) END AS n_out "
+        f"FROM ({inner})"
+    )
     return Form(
         "A",
         fn,

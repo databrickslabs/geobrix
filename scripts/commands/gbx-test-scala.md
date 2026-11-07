@@ -32,7 +32,7 @@ Set `GBX_NATIVE_ROOT` in the calling shell to run the test JVM on a native paylo
 
 The shipped JAR is built on Spark 4.0.0 and must run on 4.0 to 4.3. `--spark-version` checks that.
 
-- It passes `-Dspark.version`, `-Dscala.version` and `-Djackson.version` to Maven. The Scala and jackson versions are the ones in that Spark release's `spark-parent_2.13` POM: 4.1 uses 2.13.17 and jackson 2.20.0; 4.2 and 4.3 use 2.13.18 and 2.21.2.
+- It passes `-Dspark.version`, `-Dscala.version` and `-Djackson.version` to Maven. The Scala and jackson versions come from that Spark release's `spark-parent_2.13` POM. Spark 4.1 uses 2.13.17 and jackson 2.20.0. Spark 4.2 and 4.3 use 2.13.18 and 2.21.2.
 - A version other than 4.0.0 builds into `target/spark-<version>/` (`-Dgbx.build.dir`). The default `target/` and its JARs are not touched.
 - With no option, or `--spark-version 4.0.0`, the build is the default build.
 - The suite list the heavy CI job runs is `.github/actions/scala_build/suites-heavy.txt`. Pass it with `--suites "$(grep -vE '^(#|$)' .github/actions/scala_build/suites-heavy.txt | paste -sd, -)"`.

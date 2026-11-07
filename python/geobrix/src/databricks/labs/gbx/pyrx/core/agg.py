@@ -628,7 +628,8 @@ def _sources_readdir_mode(entries: List[_Entry]) -> Optional[str]:
     if not entries or any(e.kind != "r" for e in entries):
         return None
     for e in entries:
-        note_tile_hints(e.path, e.vt.metadata)  # a stamp lapses (it lapses after a time): a long merge renews it here
+        # a stamp lapses (it lapses after a time): a long merge renews it here
+        note_tile_hints(e.path, e.vt.metadata)
     modes = {readdir_mode(e.path) for e in entries}
     return "EMPTY_DIR" if modes == {"EMPTY_DIR"} else None
 

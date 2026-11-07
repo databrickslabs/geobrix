@@ -36,7 +36,6 @@ BASE_ROWS = {
     # DataFrame helpers (H): groups of tiles (merge: two offset copies of a corpus tile, combine: two aligned copies)
     # and the corpus tiles on the British National Grid (the others have no BNG cells).
     "tiles_grouped_mat": 250,
-    "tiles_grouped_virt": 250,
     "tiles_aligned_mat": 250,
     "tiles_gb_mat": 250,
     "tiles_gb_virt": 250,
@@ -46,6 +45,14 @@ BASE_ROWS = {
     # Aggregates (A): tiles in groups of about 50, and (key, BNG cell, value) rows; each also with half of its rows in one key
     "tiles_grouped": 2000,
     "tiles_grouped_skew": 112,  # half of it is one key: 56 tiles, 896 MiB decoded
+    # The same plans as the two above, as virtual tiles (a path each: nothing is held), for the by-reference merge; the
+    # family-sized one is the 250 tiles the family sets and the H set read
+    "tiles_grouped_virt": 2000,
+    "tiles_grouped_virt_skew": 112,
+    "tiles_grouped_family_virt": 250,
+    # One key of 56 tiles at 1x and 896 at 16x (all of one CRS, so one footprint), and groups of tiles in three CRSs
+    "tiles_stack_virt": 56,
+    "tiles_mixed_crs_virt": 250,
     "bng_cells": 1_000_000,
     "bng_cells_skew": 1_000_000,
     # DataFrame helpers (H): towers on a DSM of 16 tiles (the tiles are the same at every scale)
@@ -58,6 +65,9 @@ BASE_ROWS = {
 # stamp differs is another table: it is built under its own name, the old one is left alone (other runs may be reading
 # it), so a changed generator or corpus can never serve a stale input.
 _STAMP_HELPERS = ("_tile_column", "_plan_grouped_tiles", "_epsgs", "_epsg_of")
+# Planners that only some builders use: their source is part of the stamp of a builder that names them (adding one to
+# _STAMP_HELPERS would change the stamp of every input).
+_STAMP_PLANNERS = ("_plan_stack_tiles", "_plan_mixed_tiles")
 _STAMP_CORPUS: List[str] = [""]  # the corpus of the run (set before an input is built)
 
 
@@ -115,6 +125,7 @@ def input_stamp(builder_src: str, corpus: str = "") -> str:
     source as `_source_of` gives it.)"""
     parts = [f"v{RECIPE_VERSION}", builder_src]
     parts += [_source_of(globals()[h]) for h in _STAMP_HELPERS if h in globals()]
+    parts += [_source_of(globals()[h]) for h in _STAMP_PLANNERS if h in builder_src]
     if "synth" in builder_src:
         from databricks.labs.gbx.bench import synth
 
@@ -663,6 +674,113 @@ def _grouped_tiles(skew: bool, label: str = ""):
     return build
 
 
+def _scan_epsgs(spark, paths: List[str], batch: int, take):
+    """`(path, EPSG)` of `paths` in order, read a batch at a time (see :func:`_epsgs`) until `take(found)` is true, so
+    that a search which finds what it wants in the first batch reads no more headers."""
+    found: List[tuple] = []
+    for at in range(0, len(paths), batch):
+        chunk = paths[at : at + batch]
+        found += list(zip(chunk, _epsgs(spark, chunk)))
+        if take(found):
+            break
+    return found
+
+
+def _plan_stack_tiles(sources, n, spark=None):
+    """`("stack", path)` pairs: the first `n` corpus row tiles of the CRS of the first one. The tiles of one system share
+    their place, so the `n` references are one deep stack on one footprint (`n` is the depth of the merge's VRT).
+    """
+    corpus_guard("tiles_stack", "the corpus rows", len(sources), n)
+    batch = max(int(n), SMALL_INPUT_ROWS)
+    # the corpus cycles four systems: the n-th of the first one is about the 4n-th file
+    got = _scan_epsgs(
+        spark,
+        sources[: 4 * n + 64],
+        batch,
+        lambda f: sum(1 for _, c in f if c == f[0][1]) >= n,
+    )
+    same = [p for p, c in got if got and c == got[0][1]][:n]
+    if len(same) < n:
+        held = len(sources)
+        raise ValueError(
+            f"a stack of {n} tiles on one footprint needs {n} corpus tiles of one CRS, but the {held} tiles hold "
+            f"{len(same)} of the first one's. "
+            f"Fix: gbx:bench:gen-data --on-databricks --rows-from {held} --rows-to {held + 4 * (n - len(same)) - 1} "
+            "(generated on Databricks, not uploaded)"
+        )
+    return [("stack", p) for p in same]
+
+
+def _plan_mixed_tiles(sources, n, spark=None):
+    """`(key, path)` pairs for `n` corpus row tiles in groups of up to `_GROUP_SIZE` that each hold SEVERAL CRSs. The
+    corpus' systems 4326, 3857 and 32618 are one place (New York) and 27700 is another (London); a group across the two
+    places is a mosaic of both with a continent of NoData between them. So the groups take the three of one place, in
+    corpus order, which alternates them.
+    """
+    corpus_guard("tiles_mixed_crs", "the corpus rows", len(sources), n)
+    batch = max(int(n), SMALL_INPUT_ROWS)
+    # three of the four systems qualify: about 4n / 3 files hold n of them
+    got = _scan_epsgs(
+        spark,
+        sources[: 2 * n + 64],
+        batch,
+        lambda f: sum(1 for _, c in f if c not in (None, 27700)) >= n,
+    )
+    paths = [(p, c) for p, c in got if c not in (None, 27700)][:n]
+    if len(paths) < n or len({c for _, c in paths}) < 2:
+        held = len(sources)
+        raise ValueError(
+            f"the scale asks for {n} tiles in mixed systems but the {held} tiles of the corpus hold {len(paths)} "
+            f"outside EPSG:27700, in {len({c for _, c in paths})} system(s). "
+            f"Fix: gbx:bench:gen-data --on-databricks --rows-from {held} --rows-to {held + 2 * (n - len(paths)) - 1} "
+            "(generated on Databricks, not uploaded)"
+        )
+    return [(f"mix-{i // _GROUP_SIZE}", p) for i, (p, _) in enumerate(paths)]
+
+
+def _grouped_virt_tiles(mode: str, label: str = ""):
+    """`(key, tile)` of VIRTUAL tiles (a path each, nothing read): the by-reference merge's inputs. `mode` picks the plan:
+    `even` and `skew` are those of :func:`_grouped_tiles` (the same groups of one CRS, as references), `stack` is one key
+    holding all `n` tiles of one CRS (:func:`_plan_stack_tiles`), `mixed` is groups of several CRSs
+    (:func:`_plan_mixed_tiles`). `label` keeps the cached table of another consumer of the same plan apart.
+    """
+
+    def build(spark, n, corpus, schema):
+        sources = _corpus_rows(corpus)
+        if not sources:
+            return None
+
+        def tiles():
+            # planned only when the table is built (the CRS of every header is read, by tasks)
+            from databricks.labs.gbx.bench.runner import _bench_parallelism
+
+            t0 = time.perf_counter()
+            if mode == "stack":
+                pairs = _plan_stack_tiles(sources, n, spark)
+            elif mode == "mixed":
+                pairs = _plan_mixed_tiles(sources, n, spark)
+            else:
+                pairs = _plan_grouped_tiles(sources, n, mode == "skew", spark)
+            print(
+                f"[LEVELS input] {mode} virtual tiles planned (CRS of {len(pairs)} headers) in "
+                f"{time.perf_counter() - t0:.1f} s",
+                flush=True,
+            )
+            # the rows are a few KB: written spread over the compute's slots, so the table is not one file read by one task
+            return _tile_column(spark, pairs, True, keyed=True).repartition(
+                max(1, min(len(pairs), _bench_parallelism(spark)))
+            )
+
+        return _table(
+            spark,
+            schema,
+            f"mvp_in_tiles_grouped{label}_{mode}_virt_v{RECIPE_VERSION}_{n}",
+            tiles,
+        )
+
+    return build
+
+
 def _bng_cells(skew: bool):
     """`(key, cellid, value)`: random 1 km cells inside the 100 km square TQ, 200 keys; with `skew`, half the rows
     are key 0 (and so the same few thousand cells over and over)."""
@@ -746,13 +864,17 @@ INPUTS: Dict[str, Callable] = {
     "tiles_mat": _tiles(False),
     "tiles_virt": _tiles(True),
     "tiles_grouped_mat": _grouped("merge", False),
-    "tiles_grouped_virt": _grouped("merge", True),
     "tiles_aligned_mat": _grouped("combineavg", False),
     "tiles_gb_mat": _gb_tiles(False),
     "tiles_gb_virt": _gb_tiles(True),
     "bng_polys": _bng_polys,
     "tiles_grouped": _grouped_tiles(False),
     "tiles_grouped_skew": _grouped_tiles(True),
+    "tiles_grouped_virt": _grouped_virt_tiles("even"),
+    "tiles_grouped_virt_skew": _grouped_virt_tiles("skew"),
+    "tiles_grouped_family_virt": _grouped_virt_tiles("even", "_family"),
+    "tiles_stack_virt": _grouped_virt_tiles("stack"),
+    "tiles_mixed_crs_virt": _grouped_virt_tiles("mixed"),
     "bng_cells": _bng_cells(False),
     "bng_cells_skew": _bng_cells(True),
     "dsm_towers": _dsm_towers,
@@ -989,10 +1111,54 @@ def h_merge_fold(spark, src):
     return _stats(helpers.merge_by_key(spark.table(src), ["key"], method="fold"), None)
 
 
-def h_merge_vrt(spark, src):
+def _group_stats(spark, src, merged):
+    """`_stats` of a merge of the groups of `src`, with `n` the INPUT rows: the groups are a few dozen whatever the
+    scale (the planned inputs hold up to 50 tiles a group), and their count would read as a short input at every rung.
+    `n_out` is `n` unless a group came out NULL."""
+    rows = spark.table(src).count()
+    n, fp, n_out, out = _stats(merged, None)
+    return rows, fp, (rows if n_out == n else n_out), out
+
+
+def _merge(spark, src, **kw):
     from databricks.labs.gbx.rasterx import helpers
 
-    return _stats(helpers.merge_by_key(spark.table(src), ["key"], method="vrt"), None)
+    return _group_stats(
+        spark, src, helpers.merge_by_key(spark.table(src), ["key"], **kw)
+    )
+
+
+def h_merge_vrt(spark, src):
+    """`merge_by_key` (vrt) over virtual tiles: no pixel is shuffled, each group is a VRT of its references."""
+    return _merge(spark, src, method="vrt")
+
+
+def h_merge_fold_virt(spark, src):
+    """`merge_by_key` (fold) over virtual tiles: the merge holds no member, the shuffle moves paths."""
+    return _merge(spark, src, method="fold")
+
+
+def h_merge_fold_virt_np8(spark, src):
+    """`h_merge_fold_virt` with the shuffle at 8 partitions (the default is the session's slots, 64 at least)."""
+    return _merge(spark, src, method="fold", num_partitions=8)
+
+
+def h_merge_fold_virt_npkeys(spark, src):
+    """`h_merge_fold_virt` with one partition per key (the count is read from the table, a few KB)."""
+    keys = spark.table(src).select("key").distinct().count()
+    return _merge(spark, src, method="fold", num_partitions=keys)
+
+
+def h_merge_stack(spark, src):
+    """One key of n virtual tiles on one footprint (n = 56 at 1x, 896 at 16x): the depth of the merge's VRT grows
+    with n, and the whole stack is the work of one task."""
+    return _merge(spark, src, method="vrt")
+
+
+def h_merge_mixed_crs(spark, src):
+    """Groups of virtual tiles in several CRSs: each group is put on the grid of its first tile of the lowest EPSG
+    code, so every other member is read through a warp."""
+    return _merge(spark, src, method="vrt")
 
 
 def h_combine_avg(spark, src):
@@ -1072,7 +1238,44 @@ FORMS["H"] = [
     # The merge inputs overlap (offset copies), and where members overlap the vrt winner is the last
     # path, the fold winner the last bytes: compare the times of fold, vrt and the aggregate, not
     # their pixels. The vrt result is a COG, so its fingerprint differs from fold's anyway.
-    _h("merge_by_key", "DF", "h_merge_vrt", "tiles_grouped_virt", run="h_merge_vrt"),
+    _h(
+        "merge_by_key",
+        "DF",
+        "h_merge_vrt",
+        "tiles_grouped_family_virt",
+        run="h_merge_vrt",
+    ),
+    # The same plan as `h_merge_fold`'s groups, as references: what the by-reference merge costs against the bytes of
+    # `h_merge_fold` (its input holds the members), and the shuffle's partition count (default, 8, one per key)
+    _h(
+        "merge_by_key",
+        "DF",
+        "h_merge_fold_virt",
+        "tiles_grouped_family_virt",
+        run="h_merge_fold_virt",
+    ),
+    _h(
+        "merge_by_key",
+        "DF",
+        "h_merge_fold_virt_np8",
+        "tiles_grouped_family_virt",
+        run="h_merge_fold_virt_np8",
+    ),
+    _h(
+        "merge_by_key",
+        "DF",
+        "h_merge_fold_virt_npkeys",
+        "tiles_grouped_family_virt",
+        run="h_merge_fold_virt_npkeys",
+    ),
+    _h("merge_by_key", "DF", "h_merge_stack", "tiles_stack_virt", run="h_merge_stack"),
+    _h(
+        "merge_by_key",
+        "DF",
+        "h_merge_mixed_crs",
+        "tiles_mixed_crs_virt",
+        run="h_merge_mixed_crs",
+    ),
     _h(
         "gbx_rst_merge_agg",
         "L3",
@@ -1528,9 +1731,17 @@ def _a_jvm(fn, shapes, inputs):
 
 
 _A_MERGE = (_MA, _ma_shapes(), (("tiles_grouped", ""), ("tiles_grouped_skew", "-skew")))
+# The light shapes again over the same plans as references (a path each): `c0` on the bytes stays as the documented cliff,
+# `c0-virt` is the by-reference form of it. The Catalyst finalize has no by-reference form to time.
+_A_MERGE_VIRT = (
+    _MA,
+    _ma_shapes(),
+    (("tiles_grouped_virt", "-virt"), ("tiles_grouped_virt_skew", "-virt-skew")),
+)
 _A_RASTERIZE = (_BR, _br_shapes(), (("bng_cells", ""), ("bng_cells_skew", "-skew")))
 FORMS["A"] = (
     _a_light(*_A_MERGE)
+    + _a_light(*_A_MERGE_VIRT)
     + _a_light(*_A_RASTERIZE)
     + _a_jvm(*_A_MERGE)
     + _a_jvm(*_A_RASTERIZE)

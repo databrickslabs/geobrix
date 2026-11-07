@@ -215,6 +215,9 @@ def _from_rest(df, t0: float, out: Dict) -> bool:
     attempts = [a for done in stages.values() for a in done]
     if attempts:
         out["gc_s"] = sum(a.get("jvmGcTime", 0) for a in attempts) / 1000.0
+        # the widest stage of the execution: the merge's shuffle partitions, whatever AQE coalesced them to (a note,
+        # not a metric: Connect's plan has no stage)
+        out["stage_tasks"] = max(a.get("numTasks", 0) for a in attempts)
         task_s = sum(a.get("executorRunTime", 0) for a in attempts) / 1000.0
         out["py_eval_frac"] = _fraction(out["py_eval_s"], task_s)
     return True
@@ -305,6 +308,36 @@ def _physical_text(df) -> str:
     from databricks.labs.gbx.bench.readers import _plan_text
 
     return _plan_text(df)
+
+
+_EXCHANGE_PARTS = (
+    re.compile(r"(?:hash|range)partitioning\(.*?,\s*(\d+)\)", re.I),
+    re.compile(r"roundrobinpartitioning\((\d+)\)", re.I),
+)
+
+
+def shuffle_partitions(df) -> Optional[str]:
+    """The widest shuffle of the physical plan that `df` ran, as ``"64"`` (or ``"64, coalesced"`` when AQE then merged
+    them into fewer tasks): the partitions of the largest exchange. None when there is no exchange or the plan cannot
+    be read. A merge over a few KB of path rows shows here what its shuffle was cut to; ``num_partitions`` is the lever
+    (a count the user gives is never coalesced).
+    """
+    if df is None:
+        return None
+    try:
+        text = _physical_text(df)
+    except Exception:  # noqa: BLE001 - no plan text
+        return None
+    counts = [
+        int(m.group(1))
+        for rx in _EXCHANGE_PARTS
+        for line in text.splitlines()
+        if "Exchange" in line
+        for m in rx.finditer(line)
+    ]
+    if not counts:
+        return None
+    return f"{max(counts)}" + (", coalesced" if "coalesced" in text.lower() else "")
 
 
 def _early_stop_node(df) -> Optional[str]:

@@ -416,6 +416,48 @@ def test_connect_session_records_unavailable_metrics_instead_of_failing():
     assert _Forbidden.touched == []  # nothing a Connect session refuses was even tried
 
 
+def test_the_plan_says_how_many_partitions_its_widest_shuffle_has(monkeypatch):
+    plan = (
+        "AdaptiveSparkPlan isFinalPlan=true\n"
+        "+- MapInArrow\n"
+        "   +- Exchange hashpartitioning(key#12, xxhash64(a#1, 42), 8), REPARTITION_BY_NUM, [plan_id=9]\n"
+        "      +- Exchange RoundRobinPartitioning(64), REPARTITION_BY_NUM, [plan_id=8]\n"
+    )
+    monkeypatch.setattr(attribution, "_physical_text", lambda df: plan)
+    assert attribution.shuffle_partitions(object()) == "64"
+    monkeypatch.setattr(
+        attribution, "_physical_text", lambda df: plan + "AQEShuffleRead coalesced\n"
+    )
+    assert attribution.shuffle_partitions(object()) == "64, coalesced"
+    monkeypatch.setattr(attribution, "_physical_text", lambda df: "Scan table\n")
+    assert attribution.shuffle_partitions(object()) is None
+    assert attribution.shuffle_partitions(None) is None
+
+
+def test_the_rest_plan_reports_the_widest_stage_so_a_coalesced_shuffle_shows(
+    monkeypatch,
+):
+    """A merge over a few KB of path rows can run its groups on one task after AQE coalesces the shuffle: the task count
+    of the widest stage is in the row's note, from the REST API (Connect's plan has no stage).
+    """
+    answers = {
+        "/sql": [{"id": 3, "submissionTime": "2026-11-06T10:00:00.000GMT", "status": "COMPLETED", "successJobIds": [7], "nodes": []}],  # fmt: skip
+        "/jobs/7": {"stageIds": [11, 12]},
+        "/stages/11": [{"status": "COMPLETE", "numTasks": 64, "executorRunTime": 10, "jvmGcTime": 0}],  # fmt: skip
+        "/stages/12": [{"status": "COMPLETE", "numTasks": 3, "executorRunTime": 10, "jvmGcTime": 0}],  # fmt: skip
+    }
+
+    def get(url):
+        return next(v for k, v in answers.items() if k in url)
+
+    monkeypatch.setattr(attribution, "_get", get)
+    sc = type("SC", (), {"uiWebUrl": "http://ui", "applicationId": "app"})()
+    df = type("DF", (), {"sparkSession": type("S", (), {"sparkContext": sc})()})()
+    out = {k: None for k in attribution.METRICS}
+    assert attribution._from_rest(df, 0.0, out)
+    assert out["stage_tasks"] == 64
+
+
 @contextlib.contextmanager
 def _own_worker_pool(spark):
     """Python UDFs built inside run in workers of their own: Spark keeps a pool per worker

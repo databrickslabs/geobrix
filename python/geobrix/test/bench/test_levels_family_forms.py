@@ -355,6 +355,215 @@ def test_the_bng_tile_input_reads_its_headers_in_tasks_and_keeps_exactly_n(
     assert spark_session_local.table(name).count() == 16
 
 
+def _systems_corpus(tmp_path, n):
+    """`n` tiles cycling the generator's four systems (4326, 3857, 32618 are one place, 27700 another)."""
+    from databricks.labs.gbx.bench import oracles
+
+    rows = tmp_path / "corpus" / "rows"
+    rows.mkdir(parents=True)
+    systems = ["EPSG:4326", "EPSG:3857", "EPSG:32618", "EPSG:27700"]
+    for i in range(n):
+        (rows / f"r{i:04d}.tif").write_bytes(
+            oracles._tile_bytes(systems[i % 4], 16, 16)
+        )
+    return str(tmp_path / "corpus")
+
+
+def _crs_of(path):
+    from databricks.labs.gbx._gdal_policy import open_data
+
+    with open_data(path) as ds:
+        return ds.crs.to_epsg()
+
+
+def test_the_virtual_merge_inputs_are_the_same_plans_as_references(
+    spark_session_local, tmp_path
+):
+    """`tiles_grouped_virt` (and `-skew`) hold the groups of `tiles_grouped` as virtual tiles: a path each, no bytes."""
+    corpus = _systems_corpus(tmp_path, 128)
+    spark = spark_session_local
+    for virt, mat_plan, skew in (
+        ("tiles_grouped_virt", "even", False),
+        ("tiles_grouped_virt_skew", "skew", True),
+    ):
+        got = spark.table(lf.INPUTS[virt](spark, 24, corpus, None))
+        rows = got.select("key", "tile.path", "tile.raster").collect()
+        assert len(rows) == 24 and all(r.path and r.raster is None for r in rows)
+        planned = lf._plan_grouped_tiles(lf._corpus_rows(corpus), 24, skew, spark)
+        assert sorted((r.key, r.path) for r in rows) == sorted(planned), mat_plan
+    # the table is spread, not one file read by one task
+    assert got.rdd.getNumPartitions() > 1
+
+
+def test_the_stack_input_is_one_key_of_n_tiles_of_one_crs(
+    spark_session_local, tmp_path
+):
+    corpus = _systems_corpus(tmp_path, 128)
+    got = spark_session_local.table(
+        lf.INPUTS["tiles_stack_virt"](spark_session_local, 20, corpus, None)
+    )
+    rows = got.select("key", "tile.path").collect()
+    assert {r.key for r in rows} == {"stack"} and len({r.path for r in rows}) == 20
+    assert len({_crs_of(r.path) for r in rows}) == 1
+    # a corpus with fewer tiles of one CRS than the depth asked for names the generator, as the other inputs do
+    with pytest.raises(ValueError, match="one footprint.*gen-data"):
+        lf.INPUTS["tiles_stack_virt"](spark_session_local, 40, corpus, None)
+
+
+def test_the_mixed_crs_input_has_groups_of_several_systems_of_one_place(
+    spark_session_local, tmp_path
+):
+    corpus = _systems_corpus(tmp_path, 128)
+    got = spark_session_local.table(
+        lf.INPUTS["tiles_mixed_crs_virt"](spark_session_local, 60, corpus, None)
+    )
+    by_key = {}
+    for r in got.select("key", "tile.path").collect():
+        by_key.setdefault(r.key, set()).add(_crs_of(r.path))
+    assert len(by_key) == 2  # 60 tiles in groups of up to 50
+    assert all(len(systems) >= 2 for systems in by_key.values()), by_key
+    assert 27700 not in set().union(*by_key.values())  # the other place stays out
+
+
+def test_the_planners_are_part_of_the_stamp_of_their_builders_only(monkeypatch):
+    """A changed stack planner is another table for the stack input, and leaves the stamp of every other input (the
+    materialized groups took minutes to build) alone."""
+    before = {
+        k: lf.input_stamp(lf._source_of(b))
+        for k, b in lf.INPUTS.items()
+        if k in ("tiles_stack_virt", "tiles_grouped", "tiles_grouped_virt")
+    }
+
+    def other(sources, n, spark=None):
+        return []
+
+    monkeypatch.setattr(lf, "_plan_stack_tiles", other)
+    after = {k: lf.input_stamp(lf._source_of(lf.INPUTS[k])) for k in before}
+    assert after["tiles_stack_virt"] != before["tiles_stack_virt"]
+    assert after["tiles_grouped"] == before["tiles_grouped"]
+
+
+def test_the_virtual_merge_forms_run_beside_the_byte_ones_which_stay_the_cliff():
+    a = {
+        f.variant: f
+        for f in lf.FORMS["A"]
+        if f.fn == "gbx_rst_merge_agg" and f.level == "L3"
+    }
+    assert a["c0"].input == "tiles_grouped"  # the bytes form: the documented cliff
+    for shape in ("c0", "finalize", "tvf"):
+        for sfx, inp in (
+            ("-virt", "tiles_grouped_virt"),
+            ("-virt-skew", "tiles_grouped_virt_skew"),
+        ):
+            assert a[shape + sfx].input == inp
+            assert a[shape + sfx].computes == a[shape].computes  # tvf: no Serverless
+    h = {f.variant: f for f in lf.FORMS["H"] if f.fn == "merge_by_key"}
+    assert h["h_merge_fold"].input == "tiles_grouped_mat"  # bytes
+    virtual = {
+        "h_merge_vrt", "h_merge_fold_virt", "h_merge_fold_virt_np8", "h_merge_fold_virt_npkeys",
+    }  # fmt: skip
+    assert {h[v].input for v in virtual} == {"tiles_grouped_family_virt"}
+    assert (h["h_merge_stack"].input, h["h_merge_mixed_crs"].input) == (
+        "tiles_stack_virt",
+        "tiles_mixed_crs_virt",
+    )
+    # the family sets read the 250-tile version of the group plan
+    fam_in = {f.variant: f.input for f in lf.FORMS["raster-aggregate"]}
+    assert fam_in["c0-virt"] == fam_in["finalize-virt"] == "tiles_grouped_family_virt"
+    assert (
+        lf.BASE_ROWS["tiles_grouped_family_virt"] == 250
+        and lf.BASE_ROWS["tiles_grouped_virt"] == 2000
+    )
+
+
+def test_the_np_sweep_forms_pass_the_partition_counts_to_the_merge(monkeypatch):
+    """default / 8 / one per key: the three forms differ only in `num_partitions`."""
+    from databricks.labs.gbx.rasterx import helpers
+
+    seen = {}
+
+    class Frame:
+        def select(self, *a):
+            return self
+
+        def distinct(self):
+            return self
+
+        def count(self):
+            return 5
+
+    spark = type("S", (), {"table": lambda self, src: Frame()})()
+    monkeypatch.setattr(
+        helpers,
+        "merge_by_key",
+        lambda df, keys, method="fold", num_partitions=None, **k: seen.setdefault(
+            "calls", []
+        ).append((method, num_partitions))
+        or object(),
+    )
+    monkeypatch.setattr(lf, "_stats", lambda df, expr: (0, 0, 0, df))
+    for fn in (
+        lf.h_merge_fold_virt,
+        lf.h_merge_fold_virt_np8,
+        lf.h_merge_fold_virt_npkeys,
+    ):
+        fn(spark, "t")
+    assert seen["calls"] == [("fold", None), ("fold", 8), ("fold", 5)]
+
+
+def test_the_virtual_merge_forms_run_end_to_end_and_say_their_task_count(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """Every new merge form runs on its input at a small scale: ok, n = the input rows (not the groups), the shuffle's
+    partition count in the note, and the worker's peak memory read (the harness's own hook).
+    """
+    corpus = _systems_corpus(tmp_path, 128)
+    wanted = {
+        "h_merge_vrt", "h_merge_fold_virt", "h_merge_fold_virt_np8", "h_merge_fold_virt_npkeys",
+        "h_merge_stack", "h_merge_mixed_crs",
+    }  # fmt: skip
+    monkeypatch.setitem(
+        lf.FORMS, "H", [f for f in lf.FORMS["H"] if f.variant in wanted]
+    )
+    rows = levels.run_mvp(
+        spark_session_local, "H", "t1", 0, 1, corpus=corpus, schema=None,
+        scales=(1,), where="venv", base_rows=24, only_levels=("DF",),
+    )  # fmt: skip
+    assert {r.form for r in rows} == wanted
+    bad = [(r.form, r.status, r.failure_mode, r.note) for r in rows if r.status != "ok"]
+    assert bad == [], bad
+    assert {r.rows for r in rows} == {24}
+    assert not any("short input" in r.note for r in rows), [r.note for r in rows]
+    by = {r.form: r for r in rows}
+    assert "shuffle_parts=8" in by["h_merge_fold_virt_np8"].note
+    assert (
+        "shuffle_parts=64" in by["h_merge_fold_virt"].note
+    )  # the default: the session's slots, 64 at least
+    keys = by["h_merge_fold_virt_npkeys"].note
+    assert "shuffle_parts=" in keys and "shuffle_parts=64" not in keys, keys
+
+
+def test_the_virtual_aggregate_shapes_agree_on_the_groups_and_count_their_input_rows(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """`c0-virt`, `finalize-virt` and `tvf-virt` merge the same references: one fingerprint, n = the input rows."""
+    corpus = _systems_corpus(tmp_path, 128)
+    monkeypatch.setitem(
+        lf.FORMS, "A", lf._a_light(lf._MA, lf._ma_shapes(), (("tiles_grouped_virt", "-virt"),))
+    )  # fmt: skip
+    rows = levels.run_mvp(
+        spark_session_local, "A", "t1", 0, 1, corpus=corpus, schema=None,
+        scales=(1,), where="venv", base_rows=24, only_levels=("L3",),
+    )  # fmt: skip
+    assert sorted(r.form for r in rows) == ["c0-virt", "finalize-virt", "tvf-virt"]
+    bad = [(r.form, r.status, r.failure_mode) for r in rows if r.status != "ok"]
+    assert bad == [], bad
+    assert {r.rows for r in rows} == {24}
+    assert len({r.output_fingerprint for r in rows}) == 1, [
+        (r.form, r.output_fingerprint) for r in rows
+    ]
+
+
 def test_the_combineavg_group_is_the_source_twice_and_writes_nothing(
     spark_session_local, tmp_path
 ):

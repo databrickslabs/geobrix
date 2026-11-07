@@ -1311,6 +1311,11 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     m = {k: plan[k] for k in attribution.METRICS}
     m["py_worker_rss_mb"] = rss
     note = [f"attr={plan['source']}"]
+    if plan.get("stage_tasks"):
+        note.append(f"stage_tasks={plan['stage_tasks']}")
+    parts = attribution.shuffle_partitions(holder.get("df"))
+    if parts:
+        note.append(f"shuffle_parts={parts}")
     if reused:
         note.append("input reused")
     if rung is not None and rung.cold_note:

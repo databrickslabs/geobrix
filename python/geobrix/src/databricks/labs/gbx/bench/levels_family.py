@@ -531,7 +531,11 @@ def family_forms() -> Dict[str, List[Form]]:
 
 
 # the input a reused form reads in its family: the one n-row tile input, and the family-sized grouped tiles
-_FAMILY_INPUT = {"tiles_mat": "tiles_n", "tiles_grouped": "tiles_grouped_family"}
+_FAMILY_INPUT = {
+    "tiles_mat": "tiles_n",
+    "tiles_grouped": "tiles_grouped_family",
+    "tiles_grouped_virt": "tiles_grouped_family_virt",
+}
 
 
 def reused_forms(lf) -> Dict[str, List[Form]]:

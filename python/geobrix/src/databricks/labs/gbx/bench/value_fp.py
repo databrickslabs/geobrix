@@ -35,20 +35,29 @@ def _digest(*parts: bytes) -> int:
 
 
 def raster_fp(raster) -> int:
-    """The decoded content of a raster: shape, georeferencing, the nodata mask and the rounded pixels. The codec, tiling,
-    overviews and tags do not enter."""
+    """The decoded content of a raster: shape, band dtypes, georeferencing (transform and canonical CRS), the nodata
+    value and mask, and the rounded pixels. The codec, tiling, overviews and tags do not enter.
+    """
     import numpy as np
-    from rasterio.io import MemoryFile
 
-    with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+    from databricks.labs.gbx._gdal_policy import open_bytes
+    from databricks.labs.gbx.core.crs import crs_to_canonical
+
+    with open_bytes(bytes(raster)) as ds:
         arr = ds.read(masked=True)
         tr = np.round(np.array(ds.transform[:6], dtype="float64"), _COORD_DECIMALS)
+        dtypes = str(ds.dtypes)
+        nodata = repr(ds.nodata)
+        crs = str(crs_to_canonical(ds.crs))
     mask = np.ma.getmaskarray(arr)
     data = (
         np.round(arr.filled(0).astype("float64"), _PIXEL_DECIMALS) + 0.0
     )  # + 0.0: -0.0 == 0.0
     return _digest(
         repr(arr.shape).encode(),
+        dtypes.encode(),
+        nodata.encode(),
+        crs.encode(),
         tr.tobytes(),
         np.packbits(mask).tobytes(),
         np.ascontiguousarray(data).tobytes(),

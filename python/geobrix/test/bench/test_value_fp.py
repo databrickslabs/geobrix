@@ -61,6 +61,21 @@ def test_a_raster_with_another_pixel_nodata_cell_or_grid_hashes_apart():
     )  # the grid
 
 
+def test_a_raster_with_another_dtype_nodata_value_or_crs_hashes_apart():
+    a = np.zeros((1, 8, 8), dtype="float32")
+    a[0, 2:4, 2:4] = (
+        5.0  # exactly representable in both float32 and float64: only the dtype differs
+    )
+    base = vfp.raster_fp(_tif(a))
+    assert vfp.raster_fp(_tif(a.astype("float64"))) != base  # dtype
+    assert (
+        vfp.raster_fp(_tif(a, nodata=-9999.0)) != base
+    )  # nodata value, no pixel is nodata
+    assert vfp.raster_fp(_tif(a, crs="EPSG:3857")) != base  # CRS
+    assert vfp.raster_fp(_tif(a, nodata=None)) != base  # nodata present vs absent
+    assert vfp.raster_fp(_tif(a, crs="EPSG:4326")) == base  # the same CRS hashes alike
+
+
 def test_a_raster_with_sub_precision_noise_hashes_alike_and_a_real_gap_does_not():
     a = _field().astype("float64")
     noisy = a + 1e-13

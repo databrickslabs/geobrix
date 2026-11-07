@@ -4,6 +4,8 @@ import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.UnsafeProjection
+import org.apache.spark.sql.execution.vectorized.OnHeapColumnVector
+import org.apache.spark.sql.vectorized.ColumnarArray
 import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.sql.types.{ArrayType, BinaryType, DataType, DoubleType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
@@ -64,7 +66,7 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     /** The array as a table column holds it: an UnsafeArrayData (a literal or `transform` result is a GenericArrayData). */
-    private def columnArray(elementType: DataType, elements: Seq[Any]): ArrayData = {
+    private def unsafeArray(elementType: DataType, elements: Seq[Any]): ArrayData = {
         val row = UnsafeProjection.create(Array[DataType](ArrayType(elementType)))
             .apply(InternalRow(new GenericArrayData(elements)))
         val arr = row.getArray(0)
@@ -72,22 +74,35 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
         arr
     }
 
+    /** The array as the vectorized Parquet and Delta readers hand it: a ColumnarArray over a column vector. */
+    private def columnarArray(elementType: DataType, elements: Seq[Array[Byte]]): ArrayData = {
+        val vec = new OnHeapColumnVector(elements.length, elementType)
+        elements.zipWithIndex.foreach { case (b, i) => vec.putByteArray(i, b) }
+        new ColumnarArray(vec, 0, elements.length)
+    }
+
     test("RST_GridFromPoints reads a points array that is a table column (WKB and WKT elements)") {
         val pts = cornerPoints()
-        val wkb = columnArray(BinaryType, pts.map(_._1))
-        val wkt = columnArray(StringType, pts.map { case (b, _) => UTF8String.fromString(JTS.fromWKB(b).toText) })
-        val values = columnArray(DoubleType, pts.map(_._2))
-        Seq("WKB" -> wkb, "WKT" -> wkt).foreach { case (kind, points) =>
+        val wkbBytes = pts.map(_._1)
+        val wktBytes = wkbBytes.map(b => JTS.fromWKB(b).toText.getBytes("UTF-8"))
+        val values = unsafeArray(DoubleType, pts.map(_._2))
+        val conf = UTF8String.fromString(com.databricks.labs.gbx.expressions.ExpressionConfig(
+            Map.empty[String, String],
+            new org.apache.spark.util.SerializableConfiguration(new org.apache.hadoop.conf.Configuration())).toB64)
+        Seq(
+            "unsafe WKB" -> unsafeArray(BinaryType, wkbBytes),
+            "unsafe WKT" -> unsafeArray(StringType, wktBytes.map(UTF8String.fromBytes)),
+            "columnar WKB" -> columnarArray(BinaryType, wkbBytes),
+            "columnar WKT" -> columnarArray(StringType, wktBytes),
+            "generic WKB" -> new GenericArrayData(wkbBytes),
+            "generic WKT" -> new GenericArrayData(wktBytes.map(UTF8String.fromBytes))
+        ).foreach { case (kind, points) =>
             val geoms = RST_GridFromPoints.geomsFromArrayData(points)
             assert(geoms.length == 4, kind)
             assert(geoms.map(g => (g.getCoordinate.x, g.getCoordinate.y)).toSeq ==
                 Seq((0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (100.0, 100.0)), kind)
-            val row = RST_GridFromPoints.eval(
-                points, values, 0.0, 0.0, 100.0, 100.0, 50, 50, 32633, 2.0, 12, null,
-                UTF8String.fromString(com.databricks.labs.gbx.expressions.ExpressionConfig(
-                    Map.empty[String, String],
-                    new org.apache.spark.util.SerializableConfiguration(new org.apache.hadoop.conf.Configuration())).toB64))
-            assert(row != null, s"$kind column array gave a NULL raster")
+            val row = RST_GridFromPoints.eval(points, values, 0.0, 0.0, 100.0, 100.0, 50, 50, 32633, 2.0, 12, null, conf)
+            assert(row != null, s"$kind array gave a NULL raster")
             centerPixel(row) should (be > 13.0 and be < 17.0)
         }
     }

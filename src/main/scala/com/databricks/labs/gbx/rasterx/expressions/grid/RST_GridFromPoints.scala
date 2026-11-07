@@ -8,8 +8,8 @@ import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, If, IsNull, Literal, Or, UnsafeArrayData}
-import org.apache.spark.sql.catalyst.util.ArrayData
+import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, If, IsNull, Literal, Or}
+import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, GridOptions, gdal}
@@ -172,24 +172,25 @@ object RST_GridFromPoints extends WithExpressionInfo {
 
     /** The geometries of a points array: BINARY elements are WKB, STRING elements are WKT.
       *
-      * The element type is not passed to `eval`, and a column array (`UnsafeArrayData`) cannot answer `get(i, null)`
-      * (it needs the type, and throws a NullPointerException that `safeEval` turned into a NULL raster). Both types
-      * are stored as the same variable-length bytes there, so `getBinary` reads either, and the bytes tell which
-      * they are: a WKB geometry starts with its byte-order marker (0 or 1), WKT text never does. Any other array
-      * (a literal, a `transform` result) holds the objects, and keeps the old path. */
+      * The element type is not passed to `eval`. A `GenericArrayData` (a literal, a `transform` result) holds the
+      * objects, which tell their own type. Any other array is a table column read from storage (`UnsafeArrayData`,
+      * or `ColumnarArray` from the vectorized Parquet and Delta readers), and it cannot answer `get(i, null)`: it
+      * needs the element type, and the NullPointerException that `safeEval` turned into a NULL raster for every row.
+      * BINARY and STRING are the same variable-length bytes there, so `getBinary` reads either (an Arrow-backed
+      * string column refuses it, and `getUTF8String` answers), and the bytes tell which they are: a WKB geometry
+      * starts with its byte-order marker (0 or 1), WKT text never does. */
     private[grid] def geomsFromArrayData(data: ArrayData): Array[org.locationtech.jts.geom.Geometry] = {
         val n = data.numElements()
         val out = new Array[org.locationtech.jts.geom.Geometry](n)
+        val stored = !data.isInstanceOf[GenericArrayData]
         var i = 0
         while (i < n) {
             if (!data.isNullAt(i)) {
-                val elem: Any = data match {
-                    case _: UnsafeArrayData => data.getBinary(i)
-                    case _                  => data.get(i, null) // the objects themselves: the type is not needed
-                }
+                val elem: Any =
+                    if (!stored) data.get(i, null) // the objects themselves: the type is not needed
+                    else try data.getBinary(i) catch { case _: UnsupportedOperationException => data.getUTF8String(i) }
                 out(i) = elem match {
-                    case b: Array[Byte] if b.nonEmpty && (b(0) == 0 || b(0) == 1) => JTS.fromWKB(b)
-                    case b: Array[Byte] if data.isInstanceOf[UnsafeArrayData]     =>
+                    case b: Array[Byte] if stored && !(b.nonEmpty && (b(0) == 0 || b(0) == 1)) =>
                         JTS.fromWKT(new String(b, java.nio.charset.StandardCharsets.UTF_8))
                     case b: Array[Byte] => JTS.fromWKB(b)
                     case s: UTF8String  => JTS.fromWKT(s.toString)

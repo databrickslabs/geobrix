@@ -340,7 +340,7 @@ Cluster work builds and launches from a clean detached worktree. That worktree h
 - `.venv-pyrx`: used from the main checkout when the worktree has none. `GBX_PYRX_VENV` wins over both.
 - The command prints one line for each file it takes from the main checkout, with its path.
 - The main checkout is the parent of `git rev-parse --git-common-dir`. With no file in either place the command stops as before.
-- `gbx:bench:pool` resolves the config the same way.
+- `gbx:bench:pool`, `gbx:data:stage-jar`, `gbx:data:stage-wheel`, `gbx:test:bundle-databricks`, `gbx:test:primitive-databricks`, `gbx:uc:sql`, `gbx:examples:uc-sql` and `gbx:uc:tests` resolve the config the same way.
 
 ## Interpreter
 

@@ -24,10 +24,11 @@ import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
-_env_file = TESTS_DIR / "databricks_cluster_config.env"
+_env_file = cluster_config_file(TESTS_DIR)
 def _strip_invisible(s: str) -> str:
     """Remove BOM and common invisible Unicode so env-derived paths don't break in the notebook."""
     s = (s or "").strip()

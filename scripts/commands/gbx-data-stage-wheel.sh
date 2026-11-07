@@ -74,6 +74,8 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+gbx_export_cluster_config
 # The launcher fills DATABRICKS_CONFIG_PROFILE from databricks_cluster_config.env only when the
 # environment has none, so --profile wins over the config file.
 [[ -n "$PROFILE" ]] && export DATABRICKS_CONFIG_PROFILE="$PROFILE"

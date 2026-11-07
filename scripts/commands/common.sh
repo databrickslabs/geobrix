@@ -559,6 +559,15 @@ gbx_resolve_untracked() {
     return 1
 }
 
+# gbx_export_cluster_config: exports GBX_CLUSTER_CONFIG_ENV, the path of examples/tests/databricks_cluster_config.env, for
+# the launchers (they read it through examples/tests/_cluster_config.py). It is this checkout's own file, else (a linked
+# worktree) the main checkout's, with one line on stderr naming it. Returns 1, exporting nothing, when neither has it.
+gbx_export_cluster_config() {
+    local f
+    f="$(gbx_resolve_untracked examples/tests/databricks_cluster_config.env)" && [[ -f "$f" ]] || return 1
+    export GBX_CLUSTER_CONFIG_ENV="$f"
+}
+
 # The databricks-sdk the launchers run against (gbx_python_with_sdk pins `uv run --with` to it,
 # so a launcher does not float to whatever PyPI has that day). 0.157.0 is the release that
 # `uv run --with databricks-sdk` resolved on the dev workstation on 2026-10-27, and every
@@ -797,5 +806,5 @@ gbx_snapshot_exec() {
 export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_main_checkout_root gbx_resolve_untracked gbx_python_with_sdk validate_set \
+          print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_main_checkout_root gbx_resolve_untracked gbx_export_cluster_config gbx_python_with_sdk validate_set \
           print_lock_help _gbx_lock_abort gbx_acquire_test_lock gbx_ensure_container_python_deps zarr_extra_installed ensure_zarr_extra ensure_zarr_test_env zarr_doc_tests_selected gbx_snapshot_exec 2>/dev/null || true

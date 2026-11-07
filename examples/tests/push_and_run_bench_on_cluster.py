@@ -68,16 +68,15 @@ from pathlib import Path
 from typing import Optional
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
 import _preflight  # sibling module (script dir is on sys.path)
 import _run_watchdog  # sibling module (script dir is on sys.path)
 from _preflight import serverless_dependencies
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
-_env_file = TESTS_DIR / "databricks_cluster_config.env"
-if not _env_file.exists() and os.environ.get("GBX_CLUSTER_CONFIG_ENV"):
-    # A detached worktree has no untracked config: gbx:bench:cluster points at the main checkout's.
-    _env_file = Path(os.environ["GBX_CLUSTER_CONFIG_ENV"])
+# A detached worktree has no untracked config: the gbx:* command points at the main checkout's.
+_env_file = cluster_config_file(TESTS_DIR)
 
 
 def _strip_invisible(s: str) -> str:

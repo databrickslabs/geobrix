@@ -86,6 +86,8 @@ fi
 
 cd "$PROJECT_ROOT" || exit 1
 setup_log_file "$LOG_PATH"
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+gbx_export_cluster_config
 # --profile wins over the config file: the launcher fills the profile from it only when the environment has none.
 [[ -n "$PROFILE" ]] && export DATABRICKS_CONFIG_PROFILE="$PROFILE"
 

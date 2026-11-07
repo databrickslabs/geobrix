@@ -63,6 +63,8 @@ esac; done
 cd "$PROJECT_ROOT" || exit 1
 show_banner "GeoBrix: Unity Catalog SQL examples"
 setup_log_file "$LOG_PATH"
+# A detached worktree has no untracked config: the main checkout's is used.
+gbx_export_cluster_config && CONFIG="$GBX_CLUSTER_CONFIG_ENV"
 
 # The warehouse id may live in the (untracked) cluster config; read that one key, never source the file.
 if [[ "$HAVE_WAREHOUSE" == false && -f "$CONFIG" ]]; then

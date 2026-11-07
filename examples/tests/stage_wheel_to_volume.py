@@ -33,9 +33,10 @@ from pathlib import Path
 
 from _artifact_volume import bundle_root, prune_stale, upload_verified, versioned_dir, wheel_version
 from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
 
 TESTS_DIR = Path(__file__).resolve().parent
-_env_file = TESTS_DIR / "databricks_cluster_config.env"
+_env_file = cluster_config_file(TESTS_DIR)
 if _env_file.exists():
     with open(_env_file) as f:
         for line in f:

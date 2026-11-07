@@ -47,6 +47,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(REPO_ROOT / "python" / "geobrix" / "src"))  # databricks.labs.gbx.bench
 
 import check_uc_integration_evidence as gate  # noqa: E402
+from _cluster_config import cluster_config_file  # noqa: E402
 import uc_sources_hash  # noqa: E402
 
 CMD = REPO_ROOT / "scripts" / "commands"
@@ -56,7 +57,7 @@ ADHOC_EVIDENCE = OUT_DIR / "evidence-adhoc.json"
 SMOKE_STATEMENTS = 12
 SMOKE_EXAMPLES = "00,01"
 KNOWN_FAILURES = REPO_ROOT / "scripts" / "ci" / "uc_integration_known_failures.txt"
-CONFIG = REPO_ROOT / "examples" / "tests" / "databricks_cluster_config.env"
+CONFIG = cluster_config_file(HERE)  # a detached worktree: the one the command resolved
 DEFAULT_CATALOG = "geospatial_docs"
 DEFAULT_VOLROOT = "/Volumes/geospatial_docs/geobrix/sample-data"
 # What a built wheel is made from, besides the UC sources: a wheel built at another commit is reused only when none of these changed.

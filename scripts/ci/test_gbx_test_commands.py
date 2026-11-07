@@ -1221,7 +1221,7 @@ def test_stage_wheel_exits_nonzero_when_the_upload_raises(sandbox, tmp_path, log
     )
     tests = sandbox.root / "examples" / "tests"
     tests.mkdir(parents=True)
-    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):
+    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py", "_cluster_config.py"):
         shutil.copy(REPO_ROOT / "examples" / "tests" / name, tests / name)
     dist = sandbox.root / "dist" / "env6"
     dist.mkdir(parents=True)
@@ -1252,7 +1252,7 @@ def test_stage_wheel_dest_stages_one_env_wheel_to_the_folder_and_refuses_the_res
     (stub / "databricks" / "sdk" / "__init__.py").write_text(_FAILING_SDK)
     tests = tmp_path / "root" / "examples" / "tests"
     tests.mkdir(parents=True)
-    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):
+    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py", "_cluster_config.py"):
         shutil.copy(REPO_ROOT / "examples" / "tests" / name, tests / name)
     dist = tmp_path / "root" / "dist" / "env6"
     dist.mkdir(parents=True)
@@ -1316,7 +1316,7 @@ def test_stage_wheel_dest_removes_the_other_wheels_only_after_the_upload_landed(
     (stub / "databricks" / "sdk" / "__init__.py").write_text(_PRUNING_SDK)
     tests = tmp_path / "root" / "examples" / "tests"
     tests.mkdir(parents=True)
-    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py"):
+    for name in ("stage_wheel_to_volume.py", "_artifact_volume.py", "_cli.py", "_cluster_config.py"):
         shutil.copy(REPO_ROOT / "examples" / "tests" / name, tests / name)
     dist = tmp_path / "root" / "dist" / "env6"
     dist.mkdir(parents=True)
@@ -2941,6 +2941,62 @@ def test_bench_cluster_in_a_worktree_without_a_config_anywhere_still_says_how_to
         cwd=wt, env=sandbox.env(), capture_output=True, text=True, timeout=60,
     )  # fmt: skip
     assert proc.returncode == 1 and "databricks_cluster_config.env not found" in proc.stderr, proc.stderr
+
+
+def test_the_launchers_config_file_is_their_own_else_the_one_the_command_resolved(tmp_path, monkeypatch):
+    cfg = _launcher("_cluster_config", monkeypatch)
+    pointed = tmp_path / "main.env"
+    pointed.write_text("A=1\n")
+    tests = tmp_path / "tests"
+    tests.mkdir()
+    monkeypatch.delenv("GBX_CLUSTER_CONFIG_ENV", raising=False)
+    assert cfg.cluster_config_file(tests) == tests / "databricks_cluster_config.env"  # nothing anywhere: its own, absent
+    monkeypatch.setenv("GBX_CLUSTER_CONFIG_ENV", str(pointed))
+    assert cfg.cluster_config_file(tests) == pointed
+    (tests / "databricks_cluster_config.env").write_text("A=2\n")
+    assert cfg.cluster_config_file(tests) == tests / "databricks_cluster_config.env"  # a file in the worktree wins
+
+
+@pytest.mark.parametrize(
+    "command, args, env, launcher",
+    [
+        ("gbx-data-stage-wheel.sh", [], {"GBX_BUNDLE_SKIP_JAR": "1"}, "stage_wheel_to_volume"),
+        ("gbx-test-bundle-databricks.sh", [], {}, "push_and_run_bundle_on_cluster"),
+        ("gbx-test-primitive-databricks.sh", [], {}, "push_and_run_primitive_on_cluster"),
+        ("gbx-examples-uc-sql.sh", ["--profile", "p"], {}, "uc_examples_sql"),
+        ("gbx-uc-sql.sh", ["--file", "x.sql", "--profile", "p"], {}, "uc_sql"),
+    ],
+)  # fmt: skip
+def test_the_workspace_launchers_in_a_detached_worktree_take_the_config_from_the_main_checkout(
+    sandbox, tmp_path, command, args, env, launcher
+):
+    # A detached worktree has no untracked config env: each command that runs a launcher reading it hands the launcher the
+    # main checkout's through GBX_CLUSTER_CONFIG_ENV (and reads the warehouse id from it), as gbx:bench:cluster does.
+    _venv_python(sandbox, sdk=False)
+    uv_log = sandbox.root / "uv.log"
+    uv = sandbox.bin / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$* CFG=$GBX_CLUSTER_CONFIG_ENV" >> "{uv_log}"\n')
+    uv.chmod(0o755)
+    config = sandbox.root / "examples" / "tests" / "databricks_cluster_config.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("GBX_UC_WAREHOUSE_ID=wh1\n")
+    wt = _worktree_of(sandbox, tmp_path)
+    assert not (wt / "examples" / "tests" / "databricks_cluster_config.env").exists()
+
+    proc = subprocess.run(
+        ["bash", str(wt / "scripts" / "commands" / command), *args],
+        cwd=wt, env={**sandbox.env(), **env}, capture_output=True, text=True, timeout=60,
+    )  # fmt: skip
+    out = proc.stdout + proc.stderr
+
+    assert proc.returncode == 0, out
+    last = uv_log.read_text().splitlines()[-1]
+    main = os.path.realpath(sandbox.root)
+    assert any(w.endswith(f"examples/tests/{launcher}.py") for w in last.split()), last
+    assert last.endswith(f"CFG={main}/examples/tests/databricks_cluster_config.env"), last
+    assert f"using the main checkout's {main}/examples/tests/databricks_cluster_config.env" in out, out
+    if "uc-sql" in command:
+        assert "--warehouse-id wh1" in last, last
 
 
 # ------------------------------------------------------------------- gbx:bench:uc-probes

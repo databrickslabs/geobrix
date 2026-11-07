@@ -86,6 +86,8 @@ esac; done
 cd "$PROJECT_ROOT" || exit 1
 show_banner "GeoBrix: Unity Catalog tests"
 setup_log_file "$LOG_PATH"
+# A detached worktree has no untracked config: the main checkout's is used.
+gbx_export_cluster_config && CONFIG="$GBX_CLUSTER_CONFIG_ENV"
 
 # The warehouse id may live in the (untracked) cluster config; read those keys, never source the file.
 # GBX_UC_GATE_WAREHOUSE_ID (a warehouse sized for the gate) wins over the shared GBX_UC_WAREHOUSE_ID.

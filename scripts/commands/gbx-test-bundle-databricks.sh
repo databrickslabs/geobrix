@@ -59,6 +59,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$PROJECT_ROOT" || exit 1
+# A detached worktree has no untracked config: the main checkout's is used (the launcher reads GBX_CLUSTER_CONFIG_ENV).
+gbx_export_cluster_config
 
 # Needs databricks-sdk and Python >= 3.11: see gbx_python_with_sdk in common.sh (bare `python`
 # was whatever the shell had, often without the SDK). Chosen after --help so help works anywhere.

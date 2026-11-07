@@ -26,6 +26,7 @@ import sys
 import time
 from pathlib import Path
 
+from _cluster_config import cluster_config_file  # sibling module (script dir is on sys.path)
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 # The smoke notebook imports the wheel and runs a few checks: 20 minutes covers a cold Serverless start.
@@ -41,7 +42,7 @@ SMOKE_TIMEOUT_SECS = 20 * 60
 # databricks-cli auth takes a refresh path that fails ("refresh token is invalid")
 # on this setup, whereas the explicit profile= arg with a clean env mints fine.
 _CFG = {}
-_ENV_FILE = Path(__file__).resolve().parent / "databricks_cluster_config.env"
+_ENV_FILE = cluster_config_file(Path(__file__).resolve().parent)
 if _ENV_FILE.exists():
     for _line in _ENV_FILE.read_text().splitlines():
         _line = _line.strip()

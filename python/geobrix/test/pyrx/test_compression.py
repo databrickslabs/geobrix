@@ -1,8 +1,14 @@
 """Tests for pyrx.core.compression authority."""
 
+import numpy as np
 import pytest
+from rasterio.enums import ColorInterp
+from rasterio.io import MemoryFile
+from rasterio.transform import from_bounds
 
 from databricks.labs.gbx.pyrx.core import compression as C
+
+from ._compression_sources import assert_canonical, assert_zstd_without_ycbcr, ycbcr_src
 
 
 def test_predictor_for_dtype():
@@ -644,3 +650,97 @@ def test_the_profile_copy_guard_sees_every_way_to_take_a_profile(source, taken):
 
     tree = ast.parse(f"def writer(ds, mf, kwargs):\n    {source}\n")
     assert len(_copies_of_a_dataset_profile(tree)) == taken
+
+
+# ---------------------------------------------------------------------------
+# write_gtiff: the one canonical light writer
+# ---------------------------------------------------------------------------
+
+
+def test_write_gtiff_is_canonical_and_leaves_profile_alone():
+    prof = dict(
+        driver="COG",
+        width=8,
+        height=8,
+        count=1,
+        dtype="int16",
+        crs="EPSG:32618",
+        transform=from_bounds(0, 0, 8, 8, 8, 8),
+        compress="lzw",
+    )
+    before = dict(prof)
+    out = C.write_gtiff(prof, np.arange(64, dtype="int16").reshape(1, 8, 8))
+    assert prof == before, "write_gtiff must not mutate the caller's profile"
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.driver == "GTiff"
+    assert_canonical(out, "int16")
+
+
+@pytest.mark.parametrize(
+    "count,dtype,alpha_at",
+    [
+        (4, "uint8", 3),  # RGBA: GDAL's own default for a 4-band uint8 raster
+        (4, "uint8", None),  # RGB + NIR: GDAL's default would label band 4 alpha
+        (4, "uint16", 3),  # 16-bit RGBA: GDAL's default has no alpha band
+        (4, "uint16", None),
+        (2, "uint8", 1),  # gray + alpha
+        (3, "uint8", 2),  # gray + extra + alpha: GDAL labels no band alpha
+        (6, "uint8", 5),  # RGB + extra + alpha
+        (
+            5,
+            "uint8",
+            3,
+        ),  # an alpha label that is not the last band is data: not carried
+        (3, "uint8", None),
+        (1, "float32", None),
+    ],
+)
+def test_write_gtiff_labels_a_band_alpha_exactly_where_alpha_like_does(
+    count, dtype, alpha_at
+):
+    like = [ColorInterp.undefined] * count
+    if alpha_at is not None:
+        like[alpha_at] = ColorInterp.alpha
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=count,
+        dtype=dtype,
+        crs="EPSG:32618",
+        transform=from_bounds(0, 0, 4, 4, 4, 4),
+    )
+    data = np.full((count, 4, 4), 9, dtype=dtype)
+    out = C.write_gtiff(prof, data, alpha_like=like)
+    # the alpha band is the last band, when it is labelled alpha (the one alpha rule)
+    want = [i == count - 1 and like[-1] == ColorInterp.alpha for i in range(count)]
+    with MemoryFile(out) as m, m.open() as c:
+        assert [ci == ColorInterp.alpha for ci in c.colorinterp] == want
+        assert np.array_equal(c.read(), data)
+
+
+def test_write_gtiff_drops_ycbcr_photometric_of_a_jpeg_source():
+    """A JPEG/YCbCr source's profile fails a ZSTD write on PHOTOMETRIC unless it is dropped."""
+    with MemoryFile(ycbcr_src()) as m, m.open() as ds:
+        prof, data = ds.profile.copy(), ds.read()
+    assert str(prof.get("photometric")).lower() == "ycbcr"  # premise of the test
+    before = dict(prof)
+    out = C.write_gtiff(prof, data)
+    assert prof == before, "write_gtiff must not mutate the caller's profile"
+    assert_zstd_without_ycbcr(out)
+    with MemoryFile(out) as m, m.open() as c:
+        assert np.array_equal(c.read(), data), "values must survive the re-encode"
+
+
+def test_drop_ycbcr_unless_jpeg_keeps_the_key_only_for_a_jpeg_codec():
+    base = {"photometric": "YCbCr", "count": 3}
+    assert "photometric" not in C.drop_ycbcr({**base, "compress": "jpeg"})
+    assert "photometric" not in C.drop_ycbcr(
+        {**base, "compress": "zstd"}, unless_jpeg=True
+    )
+    assert "photometric" not in C.drop_ycbcr(dict(base), unless_jpeg=True)
+    for codec in ("jpeg", "JPEG"):
+        kept = C.drop_ycbcr({**base, "compress": codec}, unless_jpeg=True)
+        assert kept["photometric"] == "YCbCr"
+    rgb = {"photometric": "rgb", "compress": "zstd"}
+    assert C.drop_ycbcr(rgb, unless_jpeg=True) == rgb

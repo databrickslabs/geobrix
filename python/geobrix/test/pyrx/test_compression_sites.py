@@ -1,16 +1,9 @@
-"""Assert that hot-path light-tier write sites emit ZSTD+predictor.
+"""Every site that writes a raster writes the canonical encoding.
 
-Covers:
-- materialize_to_bytes on a virtual tile -> zstd
-- _window_dataset_bytes (used internally by open_tile) -> zstd
-- _warp_window_bytes (reprojection path) -> zstd
-- _empty_dataset_bytes (1x1 disjoint result) -> zstd
-- encode_tile GTiff path -> zstd
-- encode_tile COG path is exempt (the COG driver owns the codec; not tested here)
-
-Predictor assertion: hard check is Compression.zstd; predictor checked
-best-effort via ds.profile or IMAGE_STRUCTURE tags (rasterio surfaces it
-inconsistently across GDAL builds).
+``test_compression`` pins the canonical writer once (codec, level, predictor, alpha labels, the
+YCbCr rule). Here each site gets one row: it must come out ZSTD with the predictor its dtype
+takes, whatever codec its source had, and a JPEG/YCbCr source must not fail it. Each regression
+a site once had (a copied source profile, BLOCKXSIZE noise, a no-codec name) keeps one table.
 """
 
 from __future__ import annotations
@@ -26,14 +19,18 @@ from rasterio.transform import from_bounds
 from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx.core import open_tile as ot
-from databricks.labs.gbx.pyrx.core.compression import predictor_for
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from ._compression_sources import (
+    assert_canonical,
+    assert_zstd_without_ycbcr,
+    lzw_src,
+    ycbcr_src,
+)
 
-_DTYPES = ["int16", "uint16", "float32", "uint8"]
+# ---------------------------------------------------------------------------
+# The canonical encoding at every site: ZSTD + the predictor of the output dtype
+# ---------------------------------------------------------------------------
 
 
 def _write_tif(tmp_path, dt="int16", sz=64) -> str:
@@ -41,7 +38,6 @@ def _write_tif(tmp_path, dt="int16", sz=64) -> str:
     p = str(tmp_path / f"{dt}.tif")
     rng = np.random.default_rng(seed=42)
     a = (rng.random((sz, sz)) * 1000).astype(dt)
-    transform = from_bounds(-1, -1, 1, 1, sz, sz)
     with rasterio.open(
         p,
         "w",
@@ -51,314 +47,267 @@ def _write_tif(tmp_path, dt="int16", sz=64) -> str:
         count=1,
         dtype=dt,
         crs="EPSG:4326",
-        transform=transform,
+        transform=from_bounds(-1, -1, 1, 1, sz, sz),
     ) as d:
         d.write(a, 1)
     return p
 
 
-def _assert_zstd(out_bytes: bytes, *, context: str = "") -> None:
-    """Assert that out_bytes is a ZSTD-compressed GTiff."""
-    with MemoryFile(out_bytes) as mf, mf.open() as ds:
-        comp = ds.compression
-        assert (
-            comp == Compression.zstd
-        ), f"{context}: expected Compression.zstd, got {comp}"
-        # Best-effort predictor check — rasterio does not always surface the
-        # predictor tag, so we accept it being absent.
-        pred = ds.profile.get("predictor")
-        if pred is None:
-            tags = ds.tags(ns="IMAGE_STRUCTURE")
-            pred = tags.get("PREDICTOR")
-        # If surfaced, it must be a numeric predictor (not 1 for most dtypes).
-        # We only assert it is present if we can read it.
-        return pred  # informational; caller may assert further
-
-
-# ---------------------------------------------------------------------------
-# materialize_to_bytes
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("dt", _DTYPES)
-def test_materialize_to_bytes_is_zstd(tmp_path, dt):
-    """materialize_to_bytes must produce ZSTD-compressed bytes."""
-    p = _write_tif(tmp_path, dt)
-    with rasterio.open(p) as ds:
-        sz = ds.width
-    vt = VirtualTile(cellid=-1, raster=None, path=p, window=(0, 0, sz, sz))
-    mat = ot.materialize_to_bytes(vt)
-    _assert_zstd(mat.raster, context=f"materialize_to_bytes[{dt}]")
-    # Ensure pending keys are stripped from the output tile.
-    for k in ("pending_nodata", "pending_srid", "pending_bands"):
-        assert k not in (
-            mat.metadata or {}
-        ), f"pending key {k!r} leaked into materialized tile"
-
-
-def test_materialize_to_bytes_predictor_for_int16(tmp_path):
-    """int16 should get predictor=2 when surfaced."""
-    p = _write_tif(tmp_path, "int16")
-    with rasterio.open(p) as ds:
-        sz = ds.width
-    vt = VirtualTile(cellid=-1, raster=None, path=p, window=(0, 0, sz, sz))
-    mat = ot.materialize_to_bytes(vt)
-    with MemoryFile(mat.raster) as mf, mf.open() as ds:
-        assert ds.compression == Compression.zstd
-        pred = ds.profile.get("predictor")
-        if pred is not None:
-            assert int(pred) == 2, f"expected predictor=2 for int16, got {pred}"
-
-
-def test_materialize_to_bytes_predictor_for_float32(tmp_path):
-    """float32 should get predictor=3 when surfaced."""
-    p = _write_tif(tmp_path, "float32")
-    with rasterio.open(p) as ds:
-        sz = ds.width
-    vt = VirtualTile(cellid=-1, raster=None, path=p, window=(0, 0, sz, sz))
-    mat = ot.materialize_to_bytes(vt)
-    with MemoryFile(mat.raster) as mf, mf.open() as ds:
-        assert ds.compression == Compression.zstd
-        pred = ds.profile.get("predictor")
-        if pred is not None:
-            assert int(pred) == 3, f"expected predictor=3 for float32, got {pred}"
-
-
-# ---------------------------------------------------------------------------
-# _window_dataset_bytes (internal, but exercised via open_tile virtual path)
-# ---------------------------------------------------------------------------
-
-
-def test_window_dataset_bytes_is_zstd(tmp_path):
-    """_window_dataset_bytes must produce ZSTD bytes (tested via open_tile)."""
-    p = _write_tif(tmp_path, "int16")
-    with rasterio.open(p) as ds:
-        sz = ds.width
-    # open_tile on a virtual tile calls _window_dataset_bytes internally; the
-    # yielded dataset's bytes won't let us inspect compression directly, so we
-    # call _window_dataset_bytes directly.
-    with rasterio.open(p) as src:
-        window = Window(0, 0, sz, sz)
-        out = ot._window_dataset_bytes(src, window)
-    _assert_zstd(out, context="_window_dataset_bytes")
-
-
-# ---------------------------------------------------------------------------
-# _warp_window_bytes
-# ---------------------------------------------------------------------------
-
-
-def test_warp_window_bytes_is_zstd(tmp_path):
-    """_warp_window_bytes must produce ZSTD bytes after reprojection."""
-    # Write in EPSG:4326, warp to EPSG:3857
-    p = _write_tif(tmp_path, "float32")
-    with rasterio.open(p) as src:
-        sz = src.width
-        window = Window(0, 0, sz, sz)
-        out = ot._warp_window_bytes(src, window, want_epsg=3857)
-    _assert_zstd(out, context="_warp_window_bytes")
-
-
-# ---------------------------------------------------------------------------
-# _empty_dataset_bytes
-# ---------------------------------------------------------------------------
-
-
-def test_empty_dataset_bytes_is_zstd(tmp_path):
-    """_empty_dataset_bytes (1x1 NoData) must also use ZSTD."""
-    p = _write_tif(tmp_path, "int16")
-    with rasterio.open(p) as ref:
-        out = ot._empty_dataset_bytes(ref)
-    _assert_zstd(out, context="_empty_dataset_bytes")
-
-
-# ---------------------------------------------------------------------------
-# encode_tile (GTiff path)
-# ---------------------------------------------------------------------------
-
-
-def test_encode_tile_gtiff_is_zstd(tmp_path):
-    """encode_tile with tile_format='gtiff' must emit ZSTD when compress='auto'."""
-    from databricks.labs.gbx.ds._encode import encode_tile
-
-    p = _write_tif(tmp_path, "int16", sz=32)
-    with rasterio.open(p) as ds:
-        _cellid, raster_bytes, metadata = encode_tile(
-            ds,
-            window=(0, 0, ds.width, ds.height),
-            source_path=p,
-            all_parents="",
-            compression="auto",
-            tile_format="gtiff",
-        )
-    _assert_zstd(raster_bytes, context="encode_tile[gtiff,auto]")
-
-
-@pytest.mark.parametrize("dt", ["int16", "float32", "uint8"])
-def test_encode_tile_gtiff_dtype_predictor(tmp_path, dt):
-    """encode_tile GTiff path: check predictor matches dtype when surfaced."""
-    from databricks.labs.gbx.ds._encode import encode_tile
-    from databricks.labs.gbx.pyrx.core.compression import predictor_for
-
-    expected_pred = predictor_for(dt)
-    p = _write_tif(tmp_path, dt, sz=32)
-    with rasterio.open(p) as ds:
-        _cellid, raster_bytes, _meta = encode_tile(
-            ds,
-            window=(0, 0, ds.width, ds.height),
-            source_path=p,
-            all_parents="",
-            compression="auto",
-            tile_format="gtiff",
-        )
-    with MemoryFile(raster_bytes) as mf, mf.open() as out_ds:
-        assert out_ds.compression == Compression.zstd
-        pred = out_ds.profile.get("predictor")
-        if pred is not None:
-            assert (
-                int(pred) == expected_pred
-            ), f"dtype={dt}: expected predictor={expected_pred}, got {pred}"
-
-
-# ---------------------------------------------------------------------------
-# encode_tile with explicit non-auto compression (backward compat)
-# ---------------------------------------------------------------------------
-
-
-def test_encode_tile_explicit_deflate_still_works(tmp_path):
-    """encode_tile must still honour explicit compression='DEFLATE'."""
-    from databricks.labs.gbx.ds._encode import encode_tile
-
-    p = _write_tif(tmp_path, "int16", sz=32)
-    with rasterio.open(p) as ds:
-        _cellid, raster_bytes, _meta = encode_tile(
-            ds,
-            window=(0, 0, ds.width, ds.height),
-            source_path=p,
-            all_parents="",
-            compression="DEFLATE",
-            tile_format="gtiff",
-        )
-    with MemoryFile(raster_bytes) as mf, mf.open() as out_ds:
-        assert out_ds.compression == Compression.deflate
-
-
-# ---------------------------------------------------------------------------
-# Level is size-adaptive: small tile gets higher level than large tile
-# ---------------------------------------------------------------------------
-
-
-def test_auto_level_scales_with_tile_size(tmp_path):
-    """Verify that the auto level for a tiny tile >= level for a large tile."""
-    from databricks.labs.gbx.pyrx.core.compression import auto_level
-
-    small_bytes = 1 * 1024 * 1024  # 1 MiB
-    large_bytes = 512 * 1024 * 1024  # 512 MiB
-    assert auto_level(small_bytes) >= auto_level(large_bytes)
-
-
-# ---------------------------------------------------------------------------
-# Remaining light write sites — one assertion per site-FAMILY
-# ---------------------------------------------------------------------------
-
-# -- edit family (clip_to_geom / update_type / init_nodata / threshold / set_srid / band)
-
-
-def test_init_nodata_is_zstd(tmp_path):
-    """edit.init_nodata (edit family) must emit ZSTD bytes."""
-    from databricks.labs.gbx.pyrx.core import edit as _edit
-
-    p = _write_tif(tmp_path, "int16")
-    with rasterio.open(p) as ds:
-        result = _edit.init_nodata(ds)
-    _assert_zstd(result, context="edit.init_nodata")
-
-
-# -- agg family (merge_tiles / combineavg_tiles / frombands_tiles / rasterize_features)
-
-
-def test_merge_tiles_is_zstd(tmp_path):
-    """agg.merge_tiles must emit ZSTD bytes."""
-    from databricks.labs.gbx.pyrx.core.agg import merge_tiles
-
-    p1 = _write_tif(tmp_path, "int16", sz=32)
-    # Write a second non-overlapping tile
-    p2 = str(tmp_path / "int16_b.tif")
-    rng = np.random.default_rng(seed=99)
-    a2 = (rng.random((32, 32)) * 1000).astype("int16")
-    t2 = from_bounds(0.0, -1.0, 2.0, 1.0, 32, 32)
+def _second_tif(tmp_path, sz=32) -> bytes:
+    """A non-overlapping int16 neighbour of ``_write_tif(tmp_path, "int16", sz=32)``."""
+    p = str(tmp_path / "int16_b.tif")
+    a = (np.random.default_rng(seed=99).random((sz, sz)) * 1000).astype("int16")
     with rasterio.open(
-        p2,
+        p,
         "w",
         driver="GTiff",
-        height=32,
-        width=32,
+        height=sz,
+        width=sz,
         count=1,
         dtype="int16",
         crs="EPSG:4326",
-        transform=t2,
+        transform=from_bounds(0.0, -1.0, 2.0, 1.0, sz, sz),
     ) as d:
-        d.write(a2, 1)
-    with open(p1, "rb") as f:
-        b1 = f.read()
-    with open(p2, "rb") as f:
-        b2 = f.read()
-    result = merge_tiles([b1, b2])
-    _assert_zstd(result, context="agg.merge_tiles")
+        d.write(a, 1)
+    return pathlib.Path(p).read_bytes()
 
 
-# -- tiling family (retile / make_tiles / overlapping_tiles / separate_bands)
+def _virtual_tile(tmp_path, dt):
+    p = _write_tif(tmp_path, dt)
+    with rasterio.open(p) as ds:
+        sz = ds.width
+    return VirtualTile(cellid=-1, raster=None, path=p, window=(0, 0, sz, sz))
 
 
-def test_retile_is_zstd(tmp_path):
-    """tiling.retile must emit ZSTD tiles."""
+def _on_src(tmp_path, dt, fn):
+    with rasterio.open(_write_tif(tmp_path, dt)) as ds:
+        return fn(ds)
+
+
+def _on_lzw(fn):
+    with MemoryFile(lzw_src()) as m, m.open() as ds:
+        return fn(ds)
+
+
+def _encode_gtiff(tmp_path, dt):
+    from databricks.labs.gbx.ds._encode import encode_tile
+
+    p = _write_tif(tmp_path, dt, sz=32)
+    with rasterio.open(p) as ds:
+        return encode_tile(ds, (0, 0, 32, 32), p, "", "auto", "gtiff")[1]
+
+
+def _site_materialize(dt):
+    return lambda tp: ot.materialize_to_bytes(_virtual_tile(tp, dt)).raster
+
+
+def _site_window_dataset_bytes(tp):
+    return _on_src(
+        tp, "int16", lambda ds: ot._window_dataset_bytes(ds, Window(0, 0, 64, 64))
+    )
+
+
+def _site_warp_window_bytes(tp):
+    return _on_src(
+        tp,
+        "float32",
+        lambda ds: ot._warp_window_bytes(ds, Window(0, 0, 64, 64), want_epsg=3857),
+    )
+
+
+def _site_empty_dataset_bytes(tp):
+    return _on_src(tp, "int16", ot._empty_dataset_bytes)
+
+
+def _site_init_nodata(tp):
+    from databricks.labs.gbx.pyrx.core import edit
+
+    return _on_src(tp, "int16", edit.init_nodata)
+
+
+def _site_merge_tiles(tp):
+    from databricks.labs.gbx.pyrx.core.agg import merge_tiles
+
+    first = pathlib.Path(_write_tif(tp, "int16", sz=32)).read_bytes()
+    return merge_tiles([first, _second_tif(tp)])
+
+
+def _site_retile(tp):
     from databricks.labs.gbx.pyrx.core.tiling import retile
 
-    p = _write_tif(tmp_path, "int16", sz=64)
-    with rasterio.open(p) as ds:
-        tiles = retile(ds, 32, 32)
-    assert len(tiles) == 4, f"expected 4 tiles, got {len(tiles)}"
-    for i, tile in enumerate(tiles):
-        _assert_zstd(tile, context=f"retile tile[{i}]")
+    tiles = _on_src(tp, "int16", lambda ds: retile(ds, 32, 32))
+    assert len(tiles) == 4
+    return tiles
 
 
-# -- warp family (reproject_to_srid)
-
-
-def test_reproject_to_srid_is_zstd(tmp_path):
-    """warp.reproject_to_srid must emit ZSTD bytes after reprojection."""
+def _site_reproject(tp):
     from databricks.labs.gbx.pyrx.core.warp import reproject_to_srid
 
-    p = _write_tif(tmp_path, "float32")
-    with rasterio.open(p) as ds:
-        result = reproject_to_srid(ds, 3857)
-    _assert_zstd(result, context="warp.reproject_to_srid")
+    return _on_src(tp, "float32", lambda ds: reproject_to_srid(ds, 3857))
 
 
-# -- resample family (resample_by_factor / resample_to_size / resample_to_res)
-
-
-def test_resample_by_factor_is_zstd(tmp_path):
-    """resample.resample_by_factor must emit ZSTD bytes."""
+def _site_resample(tp):
     from databricks.labs.gbx.pyrx.core.resample import resample_by_factor
 
-    p = _write_tif(tmp_path, "float32")
-    with rasterio.open(p) as ds:
-        result = resample_by_factor(ds, 0.5)
-    _assert_zstd(result, context="resample.resample_by_factor")
+    return _on_src(tp, "float32", lambda ds: resample_by_factor(ds, 0.5))
 
 
-# -- analysis family (proximity / viewshed / cog_convert)
-
-
-def test_proximity_is_zstd(tmp_path):
-    """analysis.proximity must emit ZSTD bytes."""
+def _site_proximity(tp):
     from databricks.labs.gbx.pyrx.core.analysis import proximity
 
-    p = _write_tif(tmp_path, "int16")
+    return _on_src(tp, "int16", lambda ds: proximity(ds, None, "PIXEL", None))
+
+
+def _site_focal_filt(tp):
+    from databricks.labs.gbx.pyrx.core import focal
+
+    return _on_lzw(lambda ds: focal.filt(ds, 3, "max"))
+
+
+def _site_focal_convolve(tp):
+    from databricks.labs.gbx.pyrx.core import focal
+
+    return _on_lzw(lambda ds: focal.convolve(ds, np.ones((3, 3)) / 9.0))
+
+
+def _site_slope(tp):
+    from databricks.labs.gbx.pyrx.core import terrain
+
+    return _on_lzw(terrain.slope)
+
+
+def _site_rasterize_geom(tp):
+    import shapely
+    from shapely.geometry import box
+
+    from databricks.labs.gbx.pyrx.core import features
+
+    poly = shapely.set_srid(box(1, 1, 3, 3), 4326)
+    return features.rasterize_geom(shapely.to_wkb(poly), 5.0, 0, 0, 4, 4, 8, 8, 4326)
+
+
+def _site_chm(tp):
+    from databricks.labs.gbx.pyrx.core.chm import chm
+
+    return chm(lzw_src(), lzw_src())
+
+
+def _site_color_relief(tp):
+    from databricks.labs.gbx.pyrx.core import terrain
+
+    table = tp / "colors.txt"
+    table.write_text("0 0 0 0\n300 255 255 255\n")
+    return _on_lzw(lambda ds: terrain.color_relief(ds, str(table)))
+
+
+def _site_getsubdataset(tp):
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.pyrx.core import accessors
+
+    sub = tp / "prAdjust.tif"
+    sub.write_bytes(lzw_src())
+    return accessors.getsubdataset(
+        SimpleNamespace(subdatasets=[str(sub)]), "prAdjust.tif"
+    )
+
+
+def _site_fill_nodata(tp):
+    from databricks.labs.gbx.pyrx.core import features
+
+    return _on_lzw(features.fill_nodata)
+
+
+def _site_bin_points(tp):
+    from databricks.labs.gbx.pyrx.core.binning import bin_points
+
+    return bin_points(
+        [0.5, 1.5], [0.5, 1.5], [1.0, 2.0], 0, 0, 2, 2, 2, 2, 32618, "max"
+    )
+
+
+def _site_idw_grid(tp):
+    from databricks.labs.gbx.pyrx.core import tin
+
+    pts = np.array([[1.0, 1.0], [3.0, 3.0]])
+    return tin.idw_grid(pts, np.array([10.0, 20.0]), 0.0, 0.0, 4.0, 4.0, 4, 4, 32633)
+
+
+def _site_percentile_stretch(tp):
+    from databricks.labs.gbx.pyrx.core.stretch import percentile_stretch
+
+    return _on_lzw(lambda ds: percentile_stretch(ds, 2.0, 98.0))
+
+
+def _site_fromfile_materialize(tp):
+    from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+    src = tp / "lzw.tif"
+    src.write_bytes(lzw_src())
+    tile = _fromfile_impl(str(src), "GTiff", True)
+    assert tile is not None and tile["raster"] is not None
+    return bytes(tile["raster"])
+
+
+# (site, how it is called, the dtype of the raster it writes)
+_CANONICAL_SITES = [
+    ("materialize_to_bytes[int16]", _site_materialize("int16"), "int16"),
+    ("materialize_to_bytes[float32]", _site_materialize("float32"), "float32"),
+    ("materialize_to_bytes[uint8]", _site_materialize("uint8"), "uint8"),
+    ("encode_tile[int16]", lambda tp: _encode_gtiff(tp, "int16"), "int16"),
+    ("encode_tile[float32]", lambda tp: _encode_gtiff(tp, "float32"), "float32"),
+    ("window_dataset_bytes", _site_window_dataset_bytes, "int16"),
+    ("warp_window_bytes", _site_warp_window_bytes, "float32"),
+    ("empty_dataset_bytes", _site_empty_dataset_bytes, "int16"),
+    ("edit.init_nodata", _site_init_nodata, "int16"),
+    ("agg.merge_tiles", _site_merge_tiles, "int16"),
+    ("tiling.retile", _site_retile, "int16"),
+    ("warp.reproject_to_srid", _site_reproject, "float32"),
+    ("resample.resample_by_factor", _site_resample, "float32"),
+    ("analysis.proximity", _site_proximity, "float32"),
+    ("focal.filt", _site_focal_filt, "float32"),
+    ("focal.convolve", _site_focal_convolve, "float64"),
+    ("terrain.slope", _site_slope, "float32"),
+    ("features.rasterize_geom", _site_rasterize_geom, "float64"),
+    ("chm.chm", _site_chm, "float32"),
+    ("terrain.color_relief", _site_color_relief, "uint8"),
+    ("accessors.getsubdataset", _site_getsubdataset, "float32"),
+    ("features.fill_nodata", _site_fill_nodata, "float32"),
+    ("binning.bin_points", _site_bin_points, "float32"),
+    ("tin.idw_grid", _site_idw_grid, "float64"),
+    ("stretch.percentile_stretch", _site_percentile_stretch, "uint8"),
+    ("functions._fromfile_impl", _site_fromfile_materialize, "float32"),
+]
+
+
+@pytest.mark.parametrize(
+    "call,dtype",
+    [(c, d) for _, c, d in _CANONICAL_SITES],
+    ids=[n for n, _, _ in _CANONICAL_SITES],
+)
+def test_a_site_writes_the_canonical_encoding(tmp_path, call, dtype):
+    """ZSTD and the predictor of the dtype, whatever codec the source had (the LZW sources have
+    none); a site that copied its source's profile, or kept a hand-written one, fails.
+    """
+    out = call(tmp_path)
+    for tile in out if isinstance(out, list) else [out]:
+        assert_canonical(tile, dtype)
+
+
+def test_encode_tile_explicit_deflate_still_works(tmp_path):
+    from databricks.labs.gbx.ds._encode import encode_tile
+
+    p = _write_tif(tmp_path, "int16", sz=32)
     with rasterio.open(p) as ds:
-        result = proximity(ds, None, "PIXEL", None)
-    _assert_zstd(result, context="analysis.proximity")
+        raster = encode_tile(ds, (0, 0, 32, 32), p, "", "DEFLATE", "gtiff")[1]
+    with MemoryFile(raster) as mf, mf.open() as out_ds:
+        assert out_ds.compression == Compression.deflate
+
+
+def test_materialize_to_bytes_strips_the_pending_keys(tmp_path):
+    mat = ot.materialize_to_bytes(_virtual_tile(tmp_path, "int16"))
+    for k in ("pending_nodata", "pending_srid", "pending_bands"):
+        assert k not in (mat.metadata or {}), f"pending key {k!r} leaked"
 
 
 # ---------------------------------------------------------------------------
@@ -454,293 +403,6 @@ def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
 
 
 # ---------------------------------------------------------------------------
-# write_gtiff: one canonical light writer; derived rasters never inherit the
-# source file's codec (fail-on-revert wiring per routed site)
-# ---------------------------------------------------------------------------
-
-
-def _lzw_src(dtype="float32", nodata=-999.0):
-    """A 64x64 tiled LZW GTiff with no predictor: the codec a derived raster must NOT inherit."""
-    a = (np.random.default_rng(7).random((64, 64)) * 300).astype(dtype)
-    prof = dict(
-        driver="GTiff",
-        width=64,
-        height=64,
-        count=1,
-        dtype=dtype,
-        nodata=nodata,
-        crs="EPSG:32618",
-        transform=from_bounds(500000, 4490000, 500640, 4490640, 64, 64),
-        compress="lzw",
-        tiled=True,
-        blockxsize=32,
-        blockysize=32,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**prof) as d:
-            d.write(a, 1)
-        return mf.read()
-
-
-def _assert_canonical(b, dtype="float32"):
-    """b is ZSTD with the predictor creation_opts derives for dtype (1 = tag omitted)."""
-    with MemoryFile(b) as m, m.open() as c:
-        img = c.tags(ns="IMAGE_STRUCTURE")
-        assert img.get("COMPRESSION") == "ZSTD", img
-        want = predictor_for(dtype)
-        if want == 1:
-            assert img.get("PREDICTOR") in (None, "1"), img
-        else:
-            assert img.get("PREDICTOR") == str(want), img
-
-
-def test_write_gtiff_is_canonical_and_leaves_profile_alone():
-    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
-
-    prof = dict(
-        driver="COG",
-        width=8,
-        height=8,
-        count=1,
-        dtype="int16",
-        crs="EPSG:32618",
-        transform=from_bounds(0, 0, 8, 8, 8, 8),
-        compress="lzw",
-    )
-    before = dict(prof)
-    out = write_gtiff(prof, np.arange(64, dtype="int16").reshape(1, 8, 8))
-    assert prof == before, "write_gtiff must not mutate the caller's profile"
-    with MemoryFile(out) as m, m.open() as c:
-        assert c.driver == "GTiff"
-    _assert_canonical(out, "int16")
-
-
-@pytest.mark.parametrize(
-    "count,dtype,alpha_at",
-    [
-        (4, "uint8", 3),  # RGBA: GDAL's own default for a 4-band uint8 raster
-        (4, "uint8", None),  # RGB + NIR: GDAL's default would label band 4 alpha
-        (4, "uint16", 3),  # 16-bit RGBA: GDAL's default has no alpha band
-        (4, "uint16", None),
-        (2, "uint8", 1),  # gray + alpha
-        (3, "uint8", 2),  # gray + extra + alpha: GDAL labels no band alpha
-        (6, "uint8", 5),  # RGB + extra + alpha
-        (
-            5,
-            "uint8",
-            3,
-        ),  # an alpha label that is not the last band is data: not carried
-        (3, "uint8", None),
-        (1, "float32", None),
-    ],
-)
-def test_write_gtiff_labels_a_band_alpha_exactly_where_alpha_like_does(
-    count, dtype, alpha_at
-):
-    from rasterio.enums import ColorInterp
-
-    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
-
-    like = [ColorInterp.undefined] * count
-    if alpha_at is not None:
-        like[alpha_at] = ColorInterp.alpha
-    prof = dict(
-        driver="GTiff",
-        width=4,
-        height=4,
-        count=count,
-        dtype=dtype,
-        crs="EPSG:32618",
-        transform=from_bounds(0, 0, 4, 4, 4, 4),
-    )
-    data = np.full((count, 4, 4), 9, dtype=dtype)
-    out = write_gtiff(prof, data, alpha_like=like)
-    # the alpha band is the last band, when it is labelled alpha (the one alpha rule)
-    want = [i == count - 1 and like[-1] == ColorInterp.alpha for i in range(count)]
-    with MemoryFile(out) as m, m.open() as c:
-        assert [ci == ColorInterp.alpha for ci in c.colorinterp] == want
-        assert np.array_equal(c.read(), data)
-
-
-def test_focal_filt_is_canonical():
-    from databricks.labs.gbx.pyrx.core import focal
-
-    with MemoryFile(_lzw_src()) as m, m.open() as ds:
-        out = focal.filt(ds, 3, "max")
-    _assert_canonical(out)
-
-
-def test_focal_convolve_is_canonical():
-    from databricks.labs.gbx.pyrx.core import focal
-
-    with MemoryFile(_lzw_src()) as m, m.open() as ds:
-        out = focal.convolve(ds, np.ones((3, 3)) / 9.0)
-    _assert_canonical(out, "float64")
-
-
-def test_nodata_emit_is_canonical_via_terrain_slope():
-    from databricks.labs.gbx.pyrx.core import terrain
-
-    with MemoryFile(_lzw_src()) as m, m.open() as ds:
-        out = terrain.slope(ds)
-    _assert_canonical(out)
-
-
-def test_rasterize_geom_is_canonical():
-    import shapely
-    from shapely.geometry import box
-
-    from databricks.labs.gbx.pyrx.core import features
-
-    poly = shapely.set_srid(box(1, 1, 3, 3), 4326)
-    out = features.rasterize_geom(shapely.to_wkb(poly), 5.0, 0, 0, 4, 4, 8, 8, 4326)
-    _assert_canonical(out, "float64")
-
-
-def test_chm_is_canonical():
-    from databricks.labs.gbx.pyrx.core.chm import chm
-
-    src = _lzw_src()
-    _assert_canonical(chm(src, src))
-
-
-def test_color_relief_is_canonical(tmp_path):
-    from databricks.labs.gbx.pyrx.core import terrain
-
-    table = tmp_path / "colors.txt"
-    table.write_text("0 0 0 0\n300 255 255 255\n")
-    with MemoryFile(_lzw_src()) as m, m.open() as ds:
-        out = terrain.color_relief(ds, str(table))
-    _assert_canonical(out, "uint8")
-
-
-def test_getsubdataset_is_canonical(tmp_path):
-    from types import SimpleNamespace
-
-    from databricks.labs.gbx.pyrx.core import accessors
-
-    sub = tmp_path / "prAdjust.tif"
-    sub.write_bytes(_lzw_src())
-    out = accessors.getsubdataset(
-        SimpleNamespace(subdatasets=[str(sub)]), "prAdjust.tif"
-    )
-    _assert_canonical(out)
-
-
-def test_fill_nodata_is_canonical():
-    from databricks.labs.gbx.pyrx.core import features
-
-    with MemoryFile(_lzw_src()) as m, m.open() as ds:
-        out = features.fill_nodata(ds)
-    _assert_canonical(out)
-
-
-def test_bin_points_is_canonical():
-    from databricks.labs.gbx.pyrx.core.binning import bin_points
-
-    out = bin_points([0.5, 1.5], [0.5, 1.5], [1.0, 2.0], 0, 0, 2, 2, 2, 2, 32618, "max")
-    _assert_canonical(out)
-
-
-def test_idw_grid_is_canonical():
-    from databricks.labs.gbx.pyrx.core import tin
-
-    pts = np.array([[1.0, 1.0], [3.0, 3.0]])
-    out = tin.idw_grid(pts, np.array([10.0, 20.0]), 0.0, 0.0, 4.0, 4.0, 4, 4, 32633)
-    _assert_canonical(out, "float64")
-
-
-def test_percentile_stretch_is_canonical():
-    from databricks.labs.gbx.pyrx.core.stretch import percentile_stretch
-
-    with MemoryFile(_lzw_src()) as m, m.open() as ds:
-        out = percentile_stretch(ds, 2.0, 98.0)
-    _assert_canonical(out, "uint8")
-
-
-def _ycbcr_src(x0=500000, crs="EPSG:32618", seed=7):
-    """A 64x64 tiled 3-band uint8 JPEG/YCbCr GTiff: its photometric must not be inherited."""
-    a = (np.random.default_rng(seed).random((3, 64, 64)) * 255).astype("uint8")
-    prof = dict(
-        driver="GTiff",
-        width=64,
-        height=64,
-        count=3,
-        dtype="uint8",
-        crs=crs,
-        transform=from_bounds(x0, 4490000, x0 + 640, 4490640, 64, 64),
-        compress="jpeg",
-        photometric="ycbcr",
-        tiled=True,
-        blockxsize=32,
-        blockysize=32,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**prof) as d:
-            d.write(a)
-        return mf.read()
-
-
-def _assert_zstd_without_ycbcr(b, count=3):
-    with MemoryFile(b) as m, m.open() as c:
-        img = c.tags(ns="IMAGE_STRUCTURE")
-        assert img.get("COMPRESSION") == "ZSTD", img
-        assert "YCbCr" not in img.get("SOURCE_COLOR_SPACE", ""), img
-        assert str(c.profile.get("photometric")).lower() != "ycbcr", c.profile
-        assert c.count == count
-
-
-def test_write_gtiff_drops_ycbcr_photometric_of_a_jpeg_source():
-    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
-
-    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
-        prof, data = ds.profile.copy(), ds.read()
-    assert str(prof.get("photometric")).lower() == "ycbcr"  # premise of the test
-    before = dict(prof)
-    out = write_gtiff(prof, data)
-    assert prof == before, "write_gtiff must not mutate the caller's profile"
-    _assert_zstd_without_ycbcr(out)
-    with MemoryFile(out) as m, m.open() as c:
-        assert np.array_equal(c.read(), data), "values must survive the re-encode"
-
-
-def test_percentile_stretch_accepts_a_ycbcr_jpeg_source():
-    from databricks.labs.gbx.pyrx.core.stretch import percentile_stretch
-
-    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
-        out = percentile_stretch(ds, 2.0, 98.0)
-    _assert_zstd_without_ycbcr(out)
-
-
-def test_focal_filt_accepts_a_ycbcr_jpeg_source():
-    from databricks.labs.gbx.pyrx.core import focal
-
-    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
-        out = focal.filt(ds, 3, "max")
-    _assert_zstd_without_ycbcr(out)
-
-
-def test_rst_fromfile_materialize_is_canonical(tmp_path):
-    from databricks.labs.gbx.pyrx.functions import _fromfile_impl
-
-    src = tmp_path / "lzw.tif"
-    src.write_bytes(_lzw_src())
-    tile = _fromfile_impl(str(src), "GTiff", True)
-    assert tile is not None and tile["raster"] is not None
-    _assert_canonical(bytes(tile["raster"]))
-
-
-def test_rst_fromfile_materialize_accepts_a_ycbcr_jpeg_source(tmp_path):
-    from databricks.labs.gbx.pyrx.functions import _fromfile_impl
-
-    src = tmp_path / "ycbcr.tif"
-    src.write_bytes(_ycbcr_src())
-    tile = _fromfile_impl(str(src), "GTiff", True)
-    assert tile is not None, "a YCbCr source must materialize, not null out"
-    _assert_zstd_without_ycbcr(bytes(tile["raster"]))
-
-
-# ---------------------------------------------------------------------------
 # Every remaining site that copies a source profile and merges the canonical
 # options drops the YCbCr photometric (fail-on-revert wiring per site)
 # ---------------------------------------------------------------------------
@@ -753,13 +415,13 @@ _PIXEL_COPY = (
 
 def _on_ycbcr(fn):
     """Call fn(ds) on an open 3-band JPEG/YCbCr dataset."""
-    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
+    with MemoryFile(ycbcr_src()) as m, m.open() as ds:
         return fn(ds)
 
 
 def _ycbcr_path(tmp_path):
     p = tmp_path / "ycbcr.tif"
-    p.write_bytes(_ycbcr_src())
+    p.write_bytes(ycbcr_src())
     return str(p)
 
 
@@ -813,7 +475,7 @@ def _case_build_overviews(tmp_path):
 def _case_merge_tiles(tmp_path):
     from databricks.labs.gbx.pyrx.core.agg import merge_tiles
 
-    return merge_tiles([_ycbcr_src(), _ycbcr_src(x0=500640)])
+    return merge_tiles([ycbcr_src(), ycbcr_src(x0=500640)])
 
 
 def _case_merge_tiles_mixed_crs(tmp_path):
@@ -821,37 +483,37 @@ def _case_merge_tiles_mixed_crs(tmp_path):
 
     # Tiles in EPSG:32618 and 32619 either side of their zone boundary: the second
     # is reprojected onto the first's CRS before the merge.
-    return merge_tiles([_ycbcr_src(x0=750000), _ycbcr_src(x0=250000, crs="EPSG:32619")])
+    return merge_tiles([ycbcr_src(x0=750000), ycbcr_src(x0=250000, crs="EPSG:32619")])
 
 
 def _case_combineavg_tiles(tmp_path):
     from databricks.labs.gbx.pyrx.core.agg import combineavg_tiles
 
-    return combineavg_tiles([_ycbcr_src(), _ycbcr_src()])
+    return combineavg_tiles([ycbcr_src(), ycbcr_src()])
 
 
 def _case_combine_max_tiles(tmp_path):
     from databricks.labs.gbx.pyrx.core.agg import combine_max_tiles
 
-    return combine_max_tiles([_ycbcr_src(), _ycbcr_src()])
+    return combine_max_tiles([ycbcr_src(), ycbcr_src()])
 
 
 def _case_frombands_tiles(tmp_path):
     from databricks.labs.gbx.pyrx.core.agg import frombands_tiles
 
-    return frombands_tiles([(1, _ycbcr_src()), (2, _ycbcr_src())])
+    return frombands_tiles([(1, ycbcr_src()), (2, ycbcr_src())])
 
 
 def _case_derivedband_tiles(tmp_path):
     from databricks.labs.gbx.pyrx.core.agg import derivedband_tiles
 
-    return derivedband_tiles([_ycbcr_src(), _ycbcr_src()], _PIXEL_COPY, "f")
+    return derivedband_tiles([ycbcr_src(), ycbcr_src()], _PIXEL_COPY, "f")
 
 
 def _case_align_to_tiles(tmp_path):
     from databricks.labs.gbx.pyrx.core.agg import align_to_tiles
 
-    return align_to_tiles(_ycbcr_src(), _ycbcr_src())
+    return align_to_tiles(ycbcr_src(), ycbcr_src())
 
 
 def _case_window_dataset_bytes(tmp_path):
@@ -926,7 +588,7 @@ def _case_tile_to_bytes_cog(tmp_path):
     from databricks.labs.gbx.ds._write import tile_to_bytes
 
     meta = {"compression": "ZSTD", "zstd_level": "6"}
-    return tile_to_bytes(0, _ycbcr_src(), meta, force_driver="COG")
+    return tile_to_bytes(0, ycbcr_src(), meta, force_driver="COG")
 
 
 def _case_windowed_download(tmp_path):
@@ -941,6 +603,26 @@ def _case_windowed_download(tmp_path):
     return pathlib.Path(out).read_bytes()
 
 
+def _case_percentile_stretch(tmp_path):
+    from databricks.labs.gbx.pyrx.core.stretch import percentile_stretch
+
+    return _on_ycbcr(lambda ds: percentile_stretch(ds, 2.0, 98.0))
+
+
+def _case_focal_filt(tmp_path):
+    from databricks.labs.gbx.pyrx.core import focal
+
+    return _on_ycbcr(lambda ds: focal.filt(ds, 3, "max"))
+
+
+def _case_fromfile_materialize(tmp_path):
+    from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+    tile = _fromfile_impl(_ycbcr_path(tmp_path), "GTiff", True)
+    assert tile is not None, "a YCbCr source must materialize, not null out"
+    return bytes(tile["raster"])
+
+
 def _case_simplify_raster(tmp_path):
     from databricks.labs.gbx.vizx._simplify import _simplify_raster
 
@@ -950,7 +632,7 @@ def _case_simplify_raster(tmp_path):
 def _case_apply_compression(tmp_path):
     from databricks.labs.gbx.ds.writer import _apply_compression
 
-    return _apply_compression(_ycbcr_src(), "auto", None, None)
+    return _apply_compression(ycbcr_src(), "auto", None, None)
 
 
 # (case, bands in the result)
@@ -984,6 +666,9 @@ _YCBCR_OPS = [
     (_case_apply_compression, 3),
     (_case_windowed_download, 3),
     (_case_simplify_raster, 3),
+    (_case_percentile_stretch, 3),
+    (_case_focal_filt, 3),
+    (_case_fromfile_materialize, 3),
 ]
 
 
@@ -994,7 +679,7 @@ def test_ops_accept_a_ycbcr_jpeg_source(tmp_path, case, bands):
     """A JPEG/YCbCr source must re-encode to canonical ZSTD, not fail on PHOTOMETRIC."""
     out = case(tmp_path)
     assert out, "the op returned nothing"
-    _assert_zstd_without_ycbcr(bytes(out), count=bands)
+    assert_zstd_without_ycbcr(bytes(out), count=bands)
 
 
 def test_cog_writer_mosaic_accepts_a_ycbcr_jpeg_source(tmp_path):
@@ -1034,7 +719,7 @@ def test_derivedband_tiles_stacks_a_ycbcr_group_losslessly(n):
         "def f(in_ar, out_ar, xoff, yoff, xsize, ysize, rxs, rys, radius, gt, **kw):\n"
         "    out_ar[:] = sum(a.astype('float64') for a in in_ar)\n"
     )
-    tiles = [_ycbcr_src(seed=i) for i in range(n)]
+    tiles = [ycbcr_src(seed=i) for i in range(n)]
     want = 0.0
     for t in tiles:
         with MemoryFile(t) as m, m.open() as c:
@@ -1063,23 +748,7 @@ def test_encode_tile_gtiff_keeps_ycbcr_for_an_explicit_jpeg_codec(tmp_path):
 def test_apply_compression_keeps_ycbcr_for_an_explicit_jpeg_codec():
     from databricks.labs.gbx.ds.writer import _apply_compression
 
-    _assert_jpeg_ycbcr(_apply_compression(_ycbcr_src(), "jpeg", None, None))
-
-
-def test_drop_ycbcr_unless_jpeg_keeps_the_key_only_for_a_jpeg_codec():
-    from databricks.labs.gbx.pyrx.core.compression import drop_ycbcr
-
-    base = {"photometric": "YCbCr", "count": 3}
-    assert "photometric" not in drop_ycbcr({**base, "compress": "jpeg"})
-    assert "photometric" not in drop_ycbcr(
-        {**base, "compress": "zstd"}, unless_jpeg=True
-    )
-    assert "photometric" not in drop_ycbcr(dict(base), unless_jpeg=True)
-    for codec in ("jpeg", "JPEG"):
-        kept = drop_ycbcr({**base, "compress": codec}, unless_jpeg=True)
-        assert kept["photometric"] == "YCbCr"
-    rgb = {"photometric": "rgb", "compress": "zstd"}
-    assert drop_ycbcr(rgb, unless_jpeg=True) == rgb
+    _assert_jpeg_ycbcr(_apply_compression(ycbcr_src(), "jpeg", None, None))
 
 
 # ---------------------------------------------------------------------------
@@ -1129,7 +798,7 @@ def test_centroid_tessellate_chips_use_creation_opts(src_compress, coverage):
     assert chips
     empties = 0
     for _, b in chips:
-        _assert_canonical(b, "float32")
+        assert_canonical(b, "float32")
         with MemoryFile(b) as m, m.open() as c:
             empties += int(not (c.read_masks() != 0).any())
     if coverage == "complete":
@@ -1346,8 +1015,8 @@ def _no_codec_apply_compression(name, tmp_path):
     return _apply_compression(_deflate_tiled_src(), name, None, None)
 
 
-# every spelling of "no compression" is accepted at every site, in either case
-_NO_CODEC_NAMES = ["raw", "none", "RAW", "NONE"]
+# the spellings of "no compression" (the canonical module pins every one, in either case) at every site
+_NO_CODEC_NAMES = ["raw", "NONE"]
 _NO_CODEC_SITES = {
     "cog_convert": _no_codec_cog_convert,
     "cog_convert_file": _no_codec_cog_convert_file,

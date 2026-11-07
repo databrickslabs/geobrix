@@ -32,7 +32,7 @@ Read this before any run on a workspace: a benchmark, a notebook run, UC tests, 
   - Every other rule here applies to Serverless too: parts, sizing, prepare-once inputs, fail fast, isolated staging, isolated timing, cleanup. Pin the environment version (env6).
 - **When a fixed cluster is needed, reuse clusters through a pool.** For an iteration or benchmark period, keep N DBR 19 clusters up (`gbx:bench:pool up`). Each run leases one cluster; one run per cluster at a time.
   - Every pool cluster has a 60-minute idle auto-termination. A lease starts a terminated pool cluster again.
-  - Before a lease, check the cluster's JAR sha. A changed JAR needs a reinstall and a restart.
+  - Before a lease, check the cluster's JAR fingerprint (path, size and modified time, from the Files metadata). A changed JAR needs a reinstall and a restart.
   - Shut the pool down when the work settles (`gbx:bench:pool down`).
 - **Use a smoke check, but not a second cluster.** Run the smoke on the leased cluster, or as the first task of the run. On Serverless the start is cheap, so a separate smoke job is acceptable.
 - **Launch jobs one at a time.** Do not wait for one to finish before the next. A batch launched from one shell loop once exited 2.

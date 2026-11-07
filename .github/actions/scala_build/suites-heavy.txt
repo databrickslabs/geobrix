@@ -95,11 +95,13 @@ com.databricks.labs.gbx.rasterx.operations.RasterTessellateCustomTest
 com.databricks.labs.gbx.rasterx.operations.RasterTessellateTest
 com.databricks.labs.gbx.rasterx.operations.SpatialRefOpsTest
 com.databricks.labs.gbx.rasterx.operations.WindowedExtractTest
+com.databricks.labs.gbx.rasterx.operator.CogConvertOverviewsTest
 com.databricks.labs.gbx.rasterx.operator.DerivedTileCompressionTest
 com.databricks.labs.gbx.rasterx.operator.GDALBuildVRTTest
 com.databricks.labs.gbx.rasterx.operator.GDALInfoTest
 com.databricks.labs.gbx.rasterx.operator.GDALTranslateTest
 com.databricks.labs.gbx.rasterx.operator.GDALWarpTest
+com.databricks.labs.gbx.rasterx.operator.ProximityExactTest
 com.databricks.labs.gbx.rasterx.operator.WarpSourceTest
 com.databricks.labs.gbx.rasterx.parity.*
 com.databricks.labs.gbx.rasterx.tile.*

@@ -55,8 +55,10 @@ after it. A test that changes such state must restore it (see the ``_isolate`` /
 ``_isolate_gdal_env`` fixtures in test/pyvx, test/pyrx and test/ds).
 """
 
+import functools
 import importlib.util
 import os
+import re
 import shlex
 import zlib
 from pathlib import Path
@@ -223,24 +225,43 @@ def _split_run(config, items):
     items[:] = keep
 
 
+# A test file that imports netCDF4 and writes with it leaves the process with GDAL's HDF5Image driver identifying
+# netCDF-4 bytes from memory ahead of the netCDF driver: a netCDF raster the same process reads afterwards from bytes
+# opens without its georeference (the manager's `bytes_class_netcdf_translated` rows fail). The driver order cannot
+# be put back from a fixture, so those files run after every other test of the process.
+_IMPORTS_NETCDF4 = re.compile(r"^[ \t]*(?:import netCDF4|from netCDF4 import)\b", re.M)
+
+
+@functools.lru_cache(maxsize=None)
+def _uses_netcdf4(path):
+    """Whether the test file at ``path`` imports netCDF4 (top level or inside a test)."""
+    return bool(_IMPORTS_NETCDF4.search(Path(path).read_text()))
+
+
+def _collection_rank(item):
+    """Where a test runs in the process: 0 the rest, 1 the netCDF4 files, 2 the policy meta-row (after the policy
+    rows), 3 the local-Connect rows (a classic session must not follow them)."""
+    if "spark_connect_local" in getattr(item, "fixturenames", ()):
+        return 3
+    if "policy_meta" in item.keywords:
+        return 2
+    return 1 if _uses_netcdf4(item.path) else 0
+
+
 def pytest_collection_modifyitems(config, items):
-    """Mark the tests that use the local Connect session `connect`, and order them last (stable for the rest).
+    """Mark the tests that use the local Connect session `connect`, and order the process (stable for the rest).
 
     The marker is what lets gbx:test:pyrx / gbx:test:light run them in a pytest process of their own and
     gbx:test:parity leave them out (the container has no gRPC client): no test carries it by hand. The policy meta-row
-    (marker `policy_meta`) runs after the policy rows and before the Connect rows, so it sees their outcomes.
+    (marker `policy_meta`) runs after the policy rows and before the Connect rows, so it sees their outcomes. The
+    netCDF4 files run last of the rest (see `_IMPORTS_NETCDF4`).
     """
     _split_run(config, items)
     for item in items:
         if "spark_connect_local" in getattr(item, "fixturenames", ()):
             item.add_marker(pytest.mark.connect)
 
-    def rank(item):
-        if "spark_connect_local" in getattr(item, "fixturenames", ()):
-            return 2
-        return 1 if "policy_meta" in item.keywords else 0
-
-    items.sort(key=rank)
+    items.sort(key=_collection_rank)
 
 
 @pytest.fixture

@@ -3,6 +3,10 @@ package com.databricks.labs.gbx.rasterx.expressions.grid
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.expressions.UnsafeProjection
+import org.apache.spark.sql.catalyst.util.{ArrayData, GenericArrayData}
+import org.apache.spark.sql.types.{ArrayType, BinaryType, DataType, DoubleType, StringType}
+import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
 import org.scalatest.BeforeAndAfterAll
@@ -56,6 +60,35 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally {
             ds.delete()
             gdal.Unlink(tmp)
+        }
+    }
+
+    /** The array as a table column holds it: an UnsafeArrayData (a literal or `transform` result is a GenericArrayData). */
+    private def columnArray(elementType: DataType, elements: Seq[Any]): ArrayData = {
+        val row = UnsafeProjection.create(Array[DataType](ArrayType(elementType)))
+            .apply(InternalRow(new GenericArrayData(elements)))
+        val arr = row.getArray(0)
+        assert(arr.getClass.getSimpleName == "UnsafeArrayData", s"expected a column array, got ${arr.getClass}")
+        arr
+    }
+
+    test("RST_GridFromPoints reads a points array that is a table column (WKB and WKT elements)") {
+        val pts = cornerPoints()
+        val wkb = columnArray(BinaryType, pts.map(_._1))
+        val wkt = columnArray(StringType, pts.map { case (b, _) => UTF8String.fromString(JTS.fromWKB(b).toText) })
+        val values = columnArray(DoubleType, pts.map(_._2))
+        Seq("WKB" -> wkb, "WKT" -> wkt).foreach { case (kind, points) =>
+            val geoms = RST_GridFromPoints.geomsFromArrayData(points)
+            assert(geoms.length == 4, kind)
+            assert(geoms.map(g => (g.getCoordinate.x, g.getCoordinate.y)).toSeq ==
+                Seq((0.0, 0.0), (100.0, 0.0), (0.0, 100.0), (100.0, 100.0)), kind)
+            val row = RST_GridFromPoints.eval(
+                points, values, 0.0, 0.0, 100.0, 100.0, 50, 50, 32633, 2.0, 12, null,
+                UTF8String.fromString(com.databricks.labs.gbx.expressions.ExpressionConfig(
+                    Map.empty[String, String],
+                    new org.apache.spark.util.SerializableConfiguration(new org.apache.hadoop.conf.Configuration())).toB64))
+            assert(row != null, s"$kind column array gave a NULL raster")
+            centerPixel(row) should (be > 13.0 and be < 17.0)
         }
     }
 

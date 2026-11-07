@@ -8,7 +8,7 @@ import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, If, IsNull, Literal, Or}
+import org.apache.spark.sql.catalyst.expressions.{Coalesce, Expression, If, IsNull, Literal, Or, UnsafeArrayData}
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -170,15 +170,27 @@ object RST_GridFromPoints extends WithExpressionInfo {
             ).map(_.asInstanceOf[InternalRow]).orNull
         }
 
-    /** Walk ArrayData; first non-null element determines WKB vs WKT encoding. */
+    /** The geometries of a points array: BINARY elements are WKB, STRING elements are WKT.
+      *
+      * The element type is not passed to `eval`, and a column array (`UnsafeArrayData`) cannot answer `get(i, null)`
+      * (it needs the type, and throws a NullPointerException that `safeEval` turned into a NULL raster). Both types
+      * are stored as the same variable-length bytes there, so `getBinary` reads either, and the bytes tell which
+      * they are: a WKB geometry starts with its byte-order marker (0 or 1), WKT text never does. Any other array
+      * (a literal, a `transform` result) holds the objects, and keeps the old path. */
     private[grid] def geomsFromArrayData(data: ArrayData): Array[org.locationtech.jts.geom.Geometry] = {
         val n = data.numElements()
         val out = new Array[org.locationtech.jts.geom.Geometry](n)
         var i = 0
         while (i < n) {
             if (!data.isNullAt(i)) {
-                val elem = data.get(i, null) // get with null DataType pulls raw object
+                val elem: Any = data match {
+                    case _: UnsafeArrayData => data.getBinary(i)
+                    case _                  => data.get(i, null) // the objects themselves: the type is not needed
+                }
                 out(i) = elem match {
+                    case b: Array[Byte] if b.nonEmpty && (b(0) == 0 || b(0) == 1) => JTS.fromWKB(b)
+                    case b: Array[Byte] if data.isInstanceOf[UnsafeArrayData]     =>
+                        JTS.fromWKT(new String(b, java.nio.charset.StandardCharsets.UTF_8))
                     case b: Array[Byte] => JTS.fromWKB(b)
                     case s: UTF8String  => JTS.fromWKT(s.toString)
                     case other          => throw new IllegalArgumentException(

@@ -917,17 +917,22 @@ def note_folder_files(path, count) -> None:
 # A stamp is data like the folder count, but it can only make GDAL skip sidecars of that one
 # file, which a row that says so wrongly asks for itself.
 SIDECAR_FREE_KEY = "path_sidecar_free"
+# A stamp is held for a minute, and every open of a stamped tile renews it (open_tile notes the
+# tile's hints at each open). A stamp not renewed since was noted for a file that is no longer
+# opened as that tile: after the minute the file takes the listing's rule again, so a sidecar
+# written (or a file replaced) in between is found, as for a folder listed once per worker.
+_SIDECAR_FREE_TTL_S = 60.0
 _SIDECAR_FREE: dict = (
     {}
-)  # path -> None, insertion-ordered: the least recently noted go first
+)  # path -> time noted, insertion-ordered: the least recently noted go first
 _SIDECAR_FREE_MAX = 4096
 _SIDECAR_FREE_LOCK = threading.Lock()
 
 
 def note_sidecar_free(path, flag) -> None:
     """Take *flag*, a tile's ``path_sidecar_free``, as the reader's word that *path* has no
-    sidecar: its next open takes ``EMPTY_DIR`` (see readdir_mode) without listing its folder.
-    Anything but ``"1"`` (or ``True``) does nothing."""
+    sidecar: its opens for the next minute take ``EMPTY_DIR`` (see readdir_mode) without
+    listing its folder. Anything but ``"1"`` (or ``True``) does nothing."""
     if not (flag is True or (isinstance(flag, str) and flag.strip() == "1")):
         return
     try:
@@ -939,7 +944,7 @@ def note_sidecar_free(path, flag) -> None:
     key = os.path.abspath(p)
     with _SIDECAR_FREE_LOCK:
         _SIDECAR_FREE.pop(key, None)
-        _SIDECAR_FREE[key] = None
+        _SIDECAR_FREE[key] = _now()
         while len(_SIDECAR_FREE) > _SIDECAR_FREE_MAX:
             del _SIDECAR_FREE[next(iter(_SIDECAR_FREE))]
 
@@ -953,8 +958,15 @@ def note_tile_hints(path, metadata) -> None:
 
 
 def _sidecar_free(abs_path: str) -> bool:
+    """True while the stamp noted for *abs_path* is under its time to live; an expired one is dropped."""
     with _SIDECAR_FREE_LOCK:
-        return abs_path in _SIDECAR_FREE
+        noted = _SIDECAR_FREE.get(abs_path)
+        if noted is None:
+            return False
+        if _now() - noted >= _SIDECAR_FREE_TTL_S:
+            del _SIDECAR_FREE[abs_path]
+            return False
+        return True
 
 
 def _is_plain_file_path(path: str) -> bool:

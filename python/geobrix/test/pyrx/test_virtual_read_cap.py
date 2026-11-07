@@ -234,3 +234,22 @@ def test_tooverlappingtiles_of_a_virtual_tile_over_the_cap_cuts_windows_too(tmp_
     with _gdal_policy.carried(None, 3000):
         rows = list(udtf.eval(_tile(path), 16, 16, 25))
     assert rows and not any(r["metadata"].get("last_error") for r in rows)
+
+
+@pytest.mark.parametrize("band", ["0", "-1", "3", "9"])
+def test_a_pending_band_the_file_lacks_is_refused_as_rasterio_refuses_it(
+    tmp_path, band
+):
+    """The read cap indexes the header with the selected bands: they are checked first, so a band
+    of 0 or a negative one does not index from the end and 9 of 2 is not "tuple index out of range".
+    """
+    path = _write(tmp_path / "two.tif", count=2)
+    with rasterio.open(path) as src:
+        with pytest.raises(IndexError) as want:
+            src.read(window=None, indexes=[int(band)])
+    tile = _tile(path, metadata={"pending_bands": band})
+    with _gdal_policy.carried(None, 1 << 20), pytest.raises(IndexError) as err:
+        with ot._open(tile):
+            pass
+    assert str(err.value) == str(want.value)
+    assert f"band index {band} out of range" in str(err.value)

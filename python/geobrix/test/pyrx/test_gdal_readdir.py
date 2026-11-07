@@ -1546,3 +1546,26 @@ def test_a_batch_task_of_a_plain_read_notes_the_stamps(
     rows = [r for p in parts for r in reader.read(p)]
     assert rows
     assert set(_env._SIDECAR_FREE) == {os.path.abspath(p) for p in paths}
+
+
+def test_a_stamp_expires_and_a_new_note_renews_it(
+    tmp_path, readdir, no_stamps, monkeypatch
+):
+    """A stamp is held for _SIDECAR_FREE_TTL_S: a file whose stamp was not renewed since (a
+    sidecar written, the file replaced) takes the listing's rule again, which finds the sidecar.
+    """
+    readdir(None)
+    a = _plain_tiff(tmp_path / "a.tif")
+    now = [1000.0]
+    monkeypatch.setattr(_env, "_now", lambda: now[0])
+    _env.note_sidecar_free(a, "1")
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    (tmp_path / "a.tif.ovr").write_bytes(b"")  # a sidecar appears
+    now[0] += _env._SIDECAR_FREE_TTL_S - 1
+    assert _env.readdir_mode(a) == "EMPTY_DIR"  # still within the time to live
+    _env.note_sidecar_free(a, "1")  # the next open of the stamped tile renews it
+    now[0] += _env._SIDECAR_FREE_TTL_S - 1
+    assert _env.readdir_mode(a) == "EMPTY_DIR"
+    now[0] += 2
+    assert _env.readdir_mode(a) != "EMPTY_DIR"  # expired: the listing sees the .ovr
+    assert os.path.abspath(a) not in _env._SIDECAR_FREE

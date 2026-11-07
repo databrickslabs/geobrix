@@ -242,6 +242,11 @@ def _window_dataset_bytes(
     indexes = bands if bands else None  # rasterio: 1-based band list or None=all
     # The window is about to be decoded whole into memory: a virtual tile carries no bytes for the read cap's gate
     # (``_serde.open_tile``) to judge, so it is judged here, from the header, for the bands that are read.
+    for b in bands or ():
+        # a band the file lacks is refused as rasterio's read refuses it, before the cap indexes the header with it
+        # (band 0 or a negative one would index from the end, and 9 of 3 would end in "tuple index out of range")
+        if not 1 <= b <= src.count:
+            raise IndexError(f"band index {b} out of range (not in {src.indexes})")
     refuse_window_over_cap(
         window.width,
         window.height,

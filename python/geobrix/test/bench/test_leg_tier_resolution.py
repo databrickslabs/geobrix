@@ -9,7 +9,9 @@ leg's tier. The plan is read here a different way than the bench reads it (the J
 physical plan's node classes, not the printed ``explain`` text).
 
 Each leg runs lightweight then heavyweight, the cluster cells' order, so the heavy leg
-runs in a session where the light functions are registered too. Heavy needs the
+runs in a session where the light functions are registered too. A leg whose function the
+manifest keeps at L3 only (no L1 row) has no heavyweight form to time: it is checked
+light-only, and its heavyweight request must be refused. Heavy needs the
 geobrix JAR, so the module skips when none is staged under ``python/geobrix/lib/``.
 Run in geobrix-dev Docker, on its own (``spark.jars`` only applies to the first
 session of a process):
@@ -156,8 +158,41 @@ def _record_checks(monkeypatch):
     return calls
 
 
+def _sql_name(leg, kwargs):
+    """The gbx_* SQL name a grid or fan-out leg times, or None for a leg that times several."""
+    if leg == "run_fanout_udtf":
+        return f"gbx_{kwargs['fn']}"
+    for family in ("quadbin", "bng", "custom"):
+        if leg.startswith(f"run_{family}_"):
+            return f"gbx_{family}_{leg[len(f'run_{family}_'):]}"
+    return None
+
+
+def _has_heavy_level(leg, kwargs):
+    """True unless the manifest says the leg's function has no L1 (heavyweight) row."""
+    from databricks.labs.gbx import manifest
+
+    name = _sql_name(leg, kwargs)
+    return name is None or "L1" in manifest.load().functions[name].levels
+
+
+_ALL_LEGS = _LEGS + _fanout_legs()
+_TWO_TIER = [(leg, kw) for leg, kw in _ALL_LEGS if _has_heavy_level(leg, kw)]
+_LIGHT_ONLY = [(leg, kw) for leg, kw in _ALL_LEGS if not _has_heavy_level(leg, kw)]
+
+
+def test_the_manifest_still_splits_the_legs_both_ways():
+    """Guards the split below: both lists are non-empty and name the functions that lost L1."""
+    light_only = {_sql_name(leg, kw) for leg, kw in _LIGHT_ONLY}
+    assert "gbx_quadbin_pointascell" in light_only
+    assert "gbx_bng_cellunion_agg" in light_only
+    assert "gbx_custom_pointascell" not in light_only
+    assert "gbx_bng_pointascell" not in light_only
+    assert _TWO_TIER
+
+
 @pytest.mark.parametrize(
-    "leg,kwargs", _LEGS + _fanout_legs(), ids=lambda v: v if isinstance(v, str) else ""
+    "leg,kwargs", _TWO_TIER, ids=lambda v: v if isinstance(v, str) else ""
 )
 def test_each_tier_of_a_leg_checks_the_plan_it_times(
     spark_with_jar, monkeypatch, leg, kwargs
@@ -171,6 +206,37 @@ def test_each_tier_of_a_leg_checks_the_plan_it_times(
         assert row.status == "ok", f"{leg} {api}: {row.note}"
     assert [c[0] for c in calls] == ["lightweight", "heavyweight"], calls
     assert all(api == tier for api, _fn, tier in calls), calls
+
+
+@pytest.mark.parametrize(
+    "leg,kwargs", _LIGHT_ONLY, ids=lambda v: v if isinstance(v, str) else ""
+)
+def test_a_function_with_no_heavyweight_row_times_only_the_light_tier(
+    spark_with_jar, monkeypatch, leg, kwargs
+):
+    """A function the manifest keeps at L3 only: light is checked and timed, heavy never times.
+
+    The heavyweight request is refused before timing: either the leg raises
+    ``TierResolutionError`` (the shared SQL name resolves to the Python implementation) or it
+    returns a non-ok row. In neither case is a heavyweight plan timed: every plan checked is lightweight.
+    """
+    from databricks.labs.gbx.bench import readers as rd
+
+    calls = _record_checks(monkeypatch)
+    row = getattr(rd, leg)(
+        spark_with_jar, "tier-test", 0, 1, api="lightweight", **kwargs
+    )
+    assert row.status == "ok", f"{leg} lightweight: {row.note}"
+    assert [(api, tier) for api, _fn, tier in calls] == [("lightweight", "lightweight")]
+
+    try:
+        heavy = getattr(rd, leg)(
+            spark_with_jar, "tier-test", 0, 1, api="heavyweight", **kwargs
+        )
+    except rd.TierResolutionError:
+        heavy = None
+    assert heavy is None or heavy.status != "ok", f"{leg} timed a heavyweight row"
+    assert all(tier == "lightweight" for _api, _fn, tier in calls), calls
 
 
 @pytest.mark.parametrize(

@@ -7313,7 +7313,12 @@ def _register_custom(spark, api: str) -> None:
         )
     else:
 
-        gbx_manager.register_family(spark, ("gbx_custom_",), level="L1")
+        gbx_manager.register_family(
+            spark,
+            ("gbx_custom_",),
+            only=gbx_manager.names_at_level(("gbx_custom_",), "L1"),
+            level="L1",
+        )
 
 
 def run_custom_pointascell(

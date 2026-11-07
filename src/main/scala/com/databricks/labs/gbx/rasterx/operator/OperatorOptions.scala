@@ -169,7 +169,9 @@ object OperatorOptions {
 
         // Zarr takes its own codec names, levels and no predictor (see zarrCompression). Lazy, with `cos`: the
         // VRT, PNG and PNM branches below drop the codec flags, so a codec Zarr refuses must not fail them.
-        lazy val coComp = if (format == "Zarr") zarrCompression(compression, writeOptions, coFlag)
+        // GDAL looks drivers up case-insensitively, so "zarr" is a Zarr output like "Zarr".
+        val isZarr = format.equalsIgnoreCase("Zarr")
+        lazy val coComp = if (isZarr) zarrCompression(compression, writeOptions, coFlag)
         else compression match {
             case "ZSTD"    => {
                 // COG driver uses "LEVEL"; GTiff uses "ZSTD_LEVEL"
@@ -207,7 +209,7 @@ object OperatorOptions {
             case "PNM" if isCalc                         => s"$command $ofFlag $format"
             case "PNM"                                   => s"$command $ofFlag $format -ot UInt16 -scale -32768 32767 0 65535"
             case "PNG"                                   => s"$command $ofFlag $format -ot Byte -a_nodata none$scaleSuffix" // PNG Byte format, strip NoData to avoid tRNS issues
-            case "Zarr" if missingGeoRef                 => s"$command $ofFlag $format -to SRC_METHOD=NO_GEOTRANSFORM $cos"
+            case _ if isZarr && missingGeoRef            => s"$command $ofFlag $format -to SRC_METHOD=NO_GEOTRANSFORM $cos"
             case f                                       => s"$command $ofFlag $f $cos"
         }
     }

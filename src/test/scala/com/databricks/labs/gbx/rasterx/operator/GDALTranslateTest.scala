@@ -283,6 +283,32 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
+    test("appendOptions applies the Zarr codec rules whatever the case of the format name") {
+        // GDAL looks drivers up case-insensitively, so "zarr" is a Zarr output like "Zarr".
+        // (zarrCommand pins the format to "Zarr", so the command is built here.)
+        def cmdFor(writeOptions: Map[String, String]): String =
+            OperatorOptions.appendOptions("gdal_translate", writeOptions, ds)
+        for (format <- Seq("zarr", "ZARR")) {
+            withClue(s"$format: ") {
+                val cmd = cmdFor(Map("format" -> format))
+                cmd should include("-co COMPRESS=ZLIB")
+                cmd should not include "DEFLATE"
+                cmd should not include "PREDICTOR"
+                val e = intercept[IllegalArgumentException](cmdFor(Map("format" -> format, "compression" -> "LZW")))
+                e.getMessage should include("Zarr output does not support compression 'LZW'")
+                cmdFor(Map("format" -> format, "missingGeoRef" -> "true")) should include("SRC_METHOD=NO_GEOTRANSFORM")
+            }
+        }
+    }
+
+    test("appendOptions does not check the Zarr codec for a command that adds no codec flags") {
+        // The codec flags are built lazily: gdalbuildvrt returns the command as it is, so a codec the Zarr driver
+        // refuses must not fail it. Reverting coComp/cos to eager vals makes this throw.
+        val vrt = "gdalbuildvrt /vsimem/out.vrt /vsimem/in.tif"
+        OperatorOptions.appendOptions(vrt, Map("format" -> "Zarr", "compression" -> "LZW"), ds) shouldBe vrt
+        OperatorOptions.appendOptions("gdal_translate", Map("format" -> "VRT", "compression" -> "LZW"), ds) shouldBe "gdal_translate"
+    }
+
     test("appendOptions leaves the GTiff and COG codecs alone") {
         OperatorOptions.appendOptions("gdal_translate", Map("format" -> "GTiff"), ds) should include("-co COMPRESS=DEFLATE")
         OperatorOptions.appendOptions("gdal_translate", Map("format" -> "COG"), ds) should include("-co COMPRESS=DEFLATE")

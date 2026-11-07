@@ -329,7 +329,8 @@ def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
         # is given and holds the whole partition's outputs in one batch (8 to a partition at 4000 rows lost the
         # executors on a dedicated cluster and passed the 1 GB limit on Serverless; the materialized input, 2 to a
         # partition, ran)
-        label = f"mvp_in_tiles_{name or ('virtfp' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
+        # virtfps: the reader's tiles carry path_sidecar_free (a table of "virtfp" tiles was built without it)
+        label = f"mvp_in_tiles_{name or ('virtfps' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}"
 
         def spread(df):
             if not virtual:

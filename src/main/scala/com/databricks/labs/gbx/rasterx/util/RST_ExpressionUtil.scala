@@ -37,16 +37,15 @@ object RST_ExpressionUtil {
       * IllegalArgumentException when the caller actually passed a single tile.
       *
       * Used by the non-aggregating array-of-tiles functions
-      * (`gbx_rst_combineavg`, `gbx_rst_merge`, `gbx_rst_frombands`,
-      * `gbx_rst_mapalgebra`). Without this guard, callers who write
-      * `gbx_rst_combineavg(tile)` instead of `gbx_rst_combineavg(collect_list(tile))`
+      * (`gbx_rst_merge`, `gbx_rst_frombands`, `gbx_rst_mapalgebra`). Without this guard, callers who write
+      * `gbx_rst_merge(tile)` instead of `gbx_rst_merge(collect_list(tile))`
       * or the aggregator variant get a raw `ClassCastException: StructType
       * cannot be cast to ArrayType` from inside Spark's CheckAnalysis,
       * which is hostile and untraceable from a notebook.
       *
       * `funcName` is the SQL-facing name surfaced in the error.
       * `aggHint` is an optional pointer to the aggregator companion
-      * (e.g. "gbx_rst_combineavg_agg") for functions where the typical
+      * (e.g. "gbx_rst_merge_agg") for functions where the typical
       * mistake is reaching for the non-agg form when an aggregate across
       * rows was wanted.
       *

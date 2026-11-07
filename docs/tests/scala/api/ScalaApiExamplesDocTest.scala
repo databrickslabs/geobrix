@@ -74,13 +74,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_boundingbox_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_numbands_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_width_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combineavg_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinecount_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemax_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemedian_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemin_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinestddev_scala_example.nonEmpty)
-    assert(ScalaApiExamples.rst_combinesum_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples RasterX per-function output vals are non-empty") {
@@ -88,13 +81,6 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_boundingbox_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_numbands_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_width_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combineavg_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinecount_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemax_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemedian_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinemin_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinestddev_scala_example_output.nonEmpty)
-    assert(ScalaApiExamples.rst_combinesum_scala_example_output.nonEmpty)
   }
 
   test("ScalaApiExamples rst_isoband snippet vals are non-empty") {

@@ -122,7 +122,6 @@ def test_only_the_known_sets_are_implemented(capsys):
     assert {"IO", "S", "SE"} <= set(lt.SETS)
     # a second function of a family has a set of its own, named `<family>-<function>`
     assert set(lt.SETS) - {"IO", "S", "SE"} - {
-        "raster-generator-tess",
         "raster-vectorize-contour",
     } == {
         f.family

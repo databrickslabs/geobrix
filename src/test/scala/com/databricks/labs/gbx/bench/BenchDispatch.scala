@@ -18,13 +18,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_Filter
 import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
 import com.databricks.labs.gbx.rasterx.expressions.RST_MapAlgebra
 import com.databricks.labs.gbx.rasterx.expressions.RST_Merge
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineAvg
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineMin
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineMax
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineMedian
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineSum
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineStddev
-import com.databricks.labs.gbx.rasterx.expressions.RST_CombineCount
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
@@ -169,10 +162,8 @@ object BenchDispatch {
     "rst_buildoverviews" -> FMT,
     "rst_subdatasets" -> ACC, "rst_getsubdataset" -> ACC,
     // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles) -> format.
-    "rst_frombands" -> FMT, "rst_combineavg" -> FMT, "rst_merge" -> FMT,
-    // Stage-3 combine family: 6 pixel-stat reduces over aligned tile arrays.
-    "rst_combinemin" -> FMT, "rst_combinemax" -> FMT, "rst_combinemedian" -> FMT,
-    "rst_combinesum" -> FMT, "rst_combinestddev" -> FMT, "rst_combinecount" -> FMT,
+    // (The combine family has no heavyweight level: it measured slower than light.)
+    "rst_frombands" -> FMT, "rst_merge" -> FMT,
     // bucket C, group C4: tiling fns -> a COLLECTION of tiles -> format.
     "rst_maketiles" -> FMT, "rst_tooverlappingtiles" -> FMT,
     "rst_separatebands" -> FMT, "rst_xyzpyramid" -> FMT,
@@ -188,7 +179,7 @@ object BenchDispatch {
     // the 4326-native H3/quadbin), so their timing includes that warp.
     // tessellate generators (DGGS, same as rst_h3_tessellate). quadbin is
     // 4326-native; BNG reprojects to 27700 and emits STRING cell ids.
-    "rst_quadbin_tessellate" -> DGGS, "rst_bng_tessellate" -> DGGS,
+    "rst_quadbin_tessellate" -> DGGS,
     // grid rasterize aggregators (DGGS; routed through the grid-aggregate branch
     // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
     // ids; BNG streams STRING cell ids and burns onto a 27700-native grid.
@@ -230,9 +221,7 @@ object BenchDispatch {
   // synthesizes the multi-tile input from the corpus tile and writes it ONCE
   // (write-once-read-both); the heavy runner reads the SAME synthesized files.
   private val tileArrayInput: Set[String] = Set(
-    "rst_frombands", "rst_combineavg", "rst_merge",
-    "rst_combinemin", "rst_combinemax", "rst_combinemedian",
-    "rst_combinesum", "rst_combinestddev", "rst_combinecount", "rst_chm")
+    "rst_frombands", "rst_merge", "rst_chm")
   // bucket D: geometry-in fns are handed the open tile PLUS the tile's
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
@@ -283,8 +272,8 @@ object BenchDispatch {
   // BNG raster->grid reducers + BNG tessellate reproject to EPSG:27700 internally
   // and drop out-of-GB pixels, so on a sweep tile they bin an EMPTY grid (a vacuous
   // both-empty cross-tier match). Mirrors the Python FnSpec.gb_tile flag exactly.
-  private val gbTileFns: Set[String] = Set(
-    "rst_bng_tessellate")
+  // (rst_bng_tessellate was the last: it has no heavyweight level now.)
+  private val gbTileFns: Set[String] = Set.empty
   def gbTile(fn: String): Boolean = gbTileFns.contains(fn)
 
   // --- rst_h3_rasterize_agg: fixed cell set + EXPLICIT grid (PARITY CONTRACT) ---
@@ -398,18 +387,9 @@ object BenchDispatch {
     if (fn == "h3_cellfill") h3RasterizeCells() else quadbinRasterizeCells()
 
   // bench.synth recipe name for a tile_array fn (mirrors spec.synth_recipe).
-  // The 6 Stage-3 combine-stats functions all reuse the "combineavg" synth input
-  // (2 aligned copies of the corpus tile) — same recipe as rst_combineavg.
-  // rst_chm also uses "combineavg" (two aligned DSM/DEM copies).
+  // rst_chm uses "combineavg" (two aligned DSM/DEM copies).
   def synthRecipe(fn: String): String = fn match {
     case "rst_frombands"     => "frombands"
-    case "rst_combineavg"    => "combineavg"
-    case "rst_combinemin"    => "combineavg"
-    case "rst_combinemax"    => "combineavg"
-    case "rst_combinemedian" => "combineavg"
-    case "rst_combinesum"    => "combineavg"
-    case "rst_combinestddev" => "combineavg"
-    case "rst_combinecount"  => "combineavg"
     case "rst_merge"         => "merge"
     case "rst_chm"           => "combineavg"
     case other               => throw new IllegalArgumentException(s"no synth recipe for: $other")
@@ -670,18 +650,6 @@ object BenchDispatch {
         if (resDs != null) RasterDriver.releaseDataset(resDs)
       }
       BenchFingerprint.ofDggsGridIds(ids.toSeq)
-    // BNG tessellate: STRING cell ids (OS grid refs), reprojects the tile to
-    // EPSG:27700 internally (timing includes that warp). Fingerprint the id-only
-    // STRING dggs_grid (empty agg), the string analogue of the H3/quadbin path.
-    // resolution default 3 == "1km" (BNG.resolutionMap); NEVER metres-as-Int.
-    case "rst_bng_tessellate" =>
-      val iter = RasterTessellate.tessellateBngIter(cloneDs(ds), Map.empty, argI(a, "resolution", 3), "covering", "complete")
-      val ids = scala.collection.mutable.ArrayBuffer.empty[String]
-      iter.foreach { case (cell, resDs, _) =>
-        ids += cell
-        if (resDs != null) RasterDriver.releaseDataset(resDs)
-      }
-      BenchFingerprint.ofDggsGridStrIds(ids.toSeq)
     // bucket B, group B-vec: vector-out fns. RST_Contour / RST_Polygonize each
     // return an ArrayData of struct(geom_wkb BINARY, value DOUBLE); fpVector
     // decodes the WKB -> JTS and fingerprints (feature count + total measure
@@ -837,29 +805,6 @@ object BenchDispatch {
       // one N-band tile. Fingerprint the stacked dataset.
       case "rst_frombands" =>
         val (out, _) = RST_FromBands.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      // combineavg: NoData-aware per-pixel mean across the aligned copies.
-      case "rst_combineavg" =>
-        val (_, out, _) = RST_CombineAvg.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      // Stage-3 combine-stats family: per-pixel reduce over aligned copies.
-      case "rst_combinemin" =>
-        val (_, out, _) = RST_CombineMin.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      case "rst_combinemax" =>
-        val (_, out, _) = RST_CombineMax.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      case "rst_combinemedian" =>
-        val (_, out, _) = RST_CombineMedian.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      case "rst_combinesum" =>
-        val (_, out, _) = RST_CombineSum.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      case "rst_combinestddev" =>
-        val (_, out, _) = RST_CombineStddev.execute(tiles)
-        try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      case "rst_combinecount" =>
-        val (_, out, _) = RST_CombineCount.execute(tiles)
         try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
       // merge: mosaic the offset-origin copies into their union extent.
       case "rst_merge" =>
@@ -1094,13 +1039,6 @@ object BenchDispatch {
       // ARRAY<tile> column the runner built from the synthesized tiles (the same
       // files the pure-core path reads). Each binding takes a single array column.
       case "rst_frombands"     => rst_frombands(tile)
-      case "rst_combineavg"   => rst_combineavg(tile)
-      case "rst_combinemin"   => rst_combinemin(tile)
-      case "rst_combinemax"   => rst_combinemax(tile)
-      case "rst_combinemedian" => rst_combinemedian(tile)
-      case "rst_combinesum"   => rst_combinesum(tile)
-      case "rst_combinestddev" => rst_combinestddev(tile)
-      case "rst_combinecount" => rst_combinecount(tile)
       case "rst_merge"        => rst_merge(tile)
       // rst_chm: compute CHM from DSM + DEM (ARRAY form takes two tiles [DSM, DEM] or one tile used twice).
       case "rst_chm" =>
@@ -1124,7 +1062,6 @@ object BenchDispatch {
       case "rst_h3_tessellate_centroid"    =>
         rst_h3_tessellate(tile, argI(a, "resolution", 7), "centroid", "complete")
       case "rst_quadbin_tessellate"        => rst_quadbin_tessellate(tile, argI(a, "resolution", 15))
-      case "rst_bng_tessellate"            => rst_bng_tessellate(tile, argI(a, "resolution", 3))
       // bucket B, group B-vec: vector-out fns -> ARRAY<struct> column (spark-path
       // is timing-only, not fingerprint-compared, so the args only need to be
       // valid). contour rides FIXED_LEVELS [0.2, 0.4, 0.6, 0.8] as an

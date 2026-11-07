@@ -55,7 +55,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // gbx_quadbin_cellfill left with its companion: 111 - 1 = 110.
     // rst_transformcrs, rst_cog_convert, rst_align_to and rst_binpoints left with their companions: 110 - 4 = 106.
     // rst_gridfrompoints left with its companion: 106 - 1 = 105.
-    assert(BenchDispatch.all.size == 105)
+    // rst_combine{avg,count,max,median,min,stddev,sum} and rst_bng_tessellate left with their companions: 105 - 8 = 97.
+    assert(BenchDispatch.all.size == 97)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -108,7 +109,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   }
 
   test("BenchDispatch registers the BNG/quadbin raster-grid functions") {
-    val tessellates = Seq("rst_bng_tessellate", "rst_quadbin_tessellate")
+    val tessellates = Seq("rst_quadbin_tessellate")
     val aggs = Seq("rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg")
     (tessellates ++ aggs).foreach { fn =>
       assert(BenchDispatch.all.contains(fn), s"$fn not in BenchDispatch.all")

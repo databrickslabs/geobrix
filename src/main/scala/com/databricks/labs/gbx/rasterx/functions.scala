@@ -221,12 +221,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tile, resolution, lit(assignment)))
     def rst_quadbin_tessellate(tile: Column, resolution: Column, assignment: String, coverage: String): Column =
         ColumnAdapter(RST_Quadbin_Tessellate.name, Seq(tile, resolution, lit(assignment), lit(coverage)))
-    def rst_bng_tessellate(tile: Column, resolution: Column): Column =
-        ColumnAdapter(RST_BNG_Tessellate.name, Seq(tile, resolution))
-    def rst_bng_tessellate(tile: Column, resolution: Column, assignment: String): Column =
-        ColumnAdapter(RST_BNG_Tessellate.name, Seq(tile, resolution, lit(assignment)))
-    def rst_bng_tessellate(tile: Column, resolution: Column, assignment: String, coverage: String): Column =
-        ColumnAdapter(RST_BNG_Tessellate.name, Seq(tile, resolution, lit(assignment), lit(coverage)))
     def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column): Column =
         ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution))
     def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, assignment: String): Column =
@@ -255,13 +249,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // Operations
     def rst_asformat(tile: Column, newFormat: Column): Column = ColumnAdapter(RST_AsFormat.name, Seq(tile, newFormat))
-    def rst_combineavg(tiles: Column): Column = ColumnAdapter(RST_CombineAvg.name, Seq(tiles))
-    def rst_combinemin(tiles: Column): Column = ColumnAdapter(RST_CombineMin.name, Seq(tiles))
-    def rst_combinemax(tiles: Column): Column = ColumnAdapter(RST_CombineMax.name, Seq(tiles))
-    def rst_combinemedian(tiles: Column): Column = ColumnAdapter(RST_CombineMedian.name, Seq(tiles))
-    def rst_combinesum(tiles: Column): Column = ColumnAdapter(RST_CombineSum.name, Seq(tiles))
-    def rst_combinestddev(tiles: Column): Column = ColumnAdapter(RST_CombineStddev.name, Seq(tiles))
-    def rst_combinecount(tiles: Column): Column = ColumnAdapter(RST_CombineCount.name, Seq(tiles))
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
     def rst_derivedband(tile: Column, pythonFunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
@@ -305,17 +292,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         rst_quadbin_tessellate(tile, lit(resolution), assignment)
     def rst_quadbin_tessellate(tile: Column, resolution: Int, assignment: String, coverage: String): Column =
         rst_quadbin_tessellate(tile, lit(resolution), assignment, coverage)
-    // BNG resolution accepts an Int index (±1..±6) or a String key ("1km", "100m", ...).
-    def rst_bng_tessellate(tile: Column, resolution: Int): Column = rst_bng_tessellate(tile, lit(resolution))
-    def rst_bng_tessellate(tile: Column, resolution: Int, assignment: String): Column =
-        rst_bng_tessellate(tile, lit(resolution), assignment)
-    def rst_bng_tessellate(tile: Column, resolution: Int, assignment: String, coverage: String): Column =
-        rst_bng_tessellate(tile, lit(resolution), assignment, coverage)
-    def rst_bng_tessellate(tile: Column, resolution: String): Column = rst_bng_tessellate(tile, lit(resolution))
-    def rst_bng_tessellate(tile: Column, resolution: String, assignment: String): Column =
-        rst_bng_tessellate(tile, lit(resolution), assignment)
-    def rst_bng_tessellate(tile: Column, resolution: String, assignment: String, coverage: String): Column =
-        rst_bng_tessellate(tile, lit(resolution), assignment, coverage)
     def rst_maketiles(tile: Column, sizeInMb: Int): Column =
         rst_maketiles(tile, lit(sizeInMb))
     def rst_tooverlappingtiles(tile: Column, tileWidth: Int, tileHeight: Int, overlap: Int): Column =

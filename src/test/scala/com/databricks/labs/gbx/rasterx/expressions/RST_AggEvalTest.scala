@@ -77,9 +77,9 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
 
     }
 
-    test("rst_combineavg on a single tile column raises a friendly error pointing at the _agg form") {
+    test("rst_merge on a single tile column raises a friendly error pointing at the _agg form") {
         // Regression for the user-reported notebook error:
-        //   .selectExpr("gbx_rst_combineavg(tile) AS tile")
+        //   .selectExpr("gbx_rst_merge(tile) AS tile")
         // The non-agg form expects ARRAY<tile>; passing a single tile struct
         // previously produced a raw ClassCastException from inside Catalyst
         // analysis. After RST_ExpressionUtil.arrayOfTileRasterType is in
@@ -97,7 +97,7 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         ).toDF("path").withColumn("tile", udfs.rasterFromPath(col("path")))
 
         val thrown = intercept[Throwable] {
-            df.selectExpr("gbx_rst_combineavg(tile) AS tile").collect()
+            df.selectExpr("gbx_rst_merge(tile) AS tile").collect()
         }
         // Spark wraps analysis-time IllegalArgumentException so the actual
         // class can be either IllegalArgumentException or one of Spark's
@@ -108,8 +108,8 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
             .takeWhile(_.isDefined)
             .flatMap(_.map(_.getMessage).filter(_ != null))
             .mkString(" || ")
-        joined should include ("gbx_rst_combineavg expects ARRAY<tile>")
-        joined should include ("gbx_rst_combineavg_agg")
+        joined should include ("gbx_rst_merge expects ARRAY<tile>")
+        joined should include ("gbx_rst_merge_agg")
     }
 
     test("rst_derivedband_agg actually transforms pixel values (parity with combineavg_agg fix)") {

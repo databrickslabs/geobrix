@@ -41,23 +41,10 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
 
     /** The SQL names Task 7 registers. */
     private val theNine = Seq(
-        "gbx_rst_bng_tessellate",
         "gbx_rst_quadbin_tessellate", "gbx_rst_quadbin_rasterize_agg", "gbx_rst_bng_rasterize_agg"
     )
 
     // ---- raster fixtures (written to temp GTiffs so udfs.rasterFromPath can read them) ----
-
-    /** A 4x4 EPSG:27700 raster over London (TQ region), 1km pixels, all valid, values 1..16. */
-    private def writeLondonBng(path: String): Unit = {
-        val drv = gdal.GetDriverByName("GTiff")
-        val ds = drv.Create(path, 4, 4, 1, gdalconstConstants.GDT_Float64)
-        ds.SetGeoTransform(Array(528000.0, 1000.0, 0.0, 182000.0, 0.0, -1000.0))
-        val sr = new org.gdal.osr.SpatialReference(); sr.ImportFromEPSG(27700)
-        sr.SetAxisMappingStrategy(org.gdal.osr.osrConstants.OAMS_TRADITIONAL_GIS_ORDER)
-        ds.SetProjection(sr.ExportToWkt())
-        ds.GetRasterBand(1).WriteRaster(0, 0, 4, 4, (1 to 16).map(_.toDouble).toArray)
-        ds.FlushCache(); ds.delete(); sr.delete()
-    }
 
     /** A 4x4 EPSG:4326 raster over London (~lon -0.1, lat 51.5), ~0.01deg pixels, values 1..16. */
     private def writeLondon4326(path: String): Unit = {
@@ -111,30 +98,6 @@ class RST_GridIntegrationTest extends PlanTest with SilentSparkSession {
             val n = Seq(p).toDF("path")
                 .withColumn("raster", udfs.rasterFromPath(col("path")))
                 .select(rst_quadbin_tessellate(col("raster"), lit(12)).alias("tile"))
-                .collect()
-            n.length should be > 0
-        } finally {
-            tmp.listFiles().foreach(_.delete()); tmp.delete()
-        }
-    }
-
-    // ---- 3b. bng tessellate generator: real raster -> tile rows -------------
-
-    test("bng tessellate generator emits tile rows end-to-end") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tmp = java.nio.file.Files.createTempDirectory("gbx_grid_int_bngt_").toFile
-        try {
-            val p = s"${tmp.getAbsolutePath}/london_bng.tif"
-            writeLondonBng(p)
-
-            // resolution 3 = 1km cells; the 4km x 4km raster overlaps several cells.
-            val n = Seq(p).toDF("path")
-                .withColumn("raster", udfs.rasterFromPath(col("path")))
-                .select(rst_bng_tessellate(col("raster"), lit(3)).alias("tile"))
                 .collect()
             n.length should be > 0
         } finally {

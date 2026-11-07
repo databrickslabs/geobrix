@@ -55,7 +55,6 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
           "gbx_rst_maketiles"          -> ((r: Column) => rst_maketiles(r, lit(4))),
           "gbx_rst_h3_tessellate"      -> ((r: Column) => rst_h3_tessellate(r, lit(3))),
           "gbx_rst_quadbin_tessellate" -> ((r: Column) => rst_quadbin_tessellate(r, lit(5))),
-          "gbx_rst_bng_tessellate"     -> ((r: Column) => rst_bng_tessellate(r, lit(3))),
           "gbx_rst_custom_tessellate"  -> ((r: Column) => rst_custom_tessellate(r, customGrid, lit(2)))
         )
     }

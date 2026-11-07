@@ -1,4 +1,4 @@
-"""The L1/L3 forms added for raster `bng_tessellate` and `contour` run at both levels.
+"""The L1/L3 forms added for raster `contour` run at both levels.
 
 L1 is the geobrix JAR, so the module skips when none is staged under ``python/geobrix/lib/``. Run in geobrix-dev
 Docker, on its own (``spark.jars`` only applies to the first session of a process):
@@ -26,11 +26,6 @@ _JARS = sorted(
 
 # (family, function, the forms to run: L1 first, then the L3 ones, then the floor)
 _NEW = [
-    (
-        "raster-generator",
-        "gbx_rst_bng_tessellate",
-        ["h_tess_l1", "h_tess_udtf", "floor"],
-    ),
     (
         "raster-vectorize",
         "gbx_rst_contour",

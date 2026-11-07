@@ -725,10 +725,9 @@ def test_a_virtual_tile_table_is_written_in_files_of_two_rows(tmp_path, monkeypa
     df.write.format.return_value.option.assert_called_once_with("maxRecordsPerFile", 2)
 
 
-# ---- the second-function sets: raster bng_tessellate and contour beside their family's first set
+# ---- the second-function sets: contour beside its family's first set
 
 SECOND_SETS = {
-    "raster-generator-tess": ("raster-generator", "gbx_rst_bng_tessellate"),
     "raster-vectorize-contour": ("raster-vectorize", "gbx_rst_contour"),
 }
 
@@ -754,12 +753,6 @@ def test_a_second_function_set_picks_its_own_forms_by_function_and_ends_on_one_f
     assert spec.reference in spec.forms and list(spec.ns) == sorted(spec.ns)
     # the baseline is the set's own: the family's first set holds forms of the same names
     assert lt.default_baseline_path(name) != lt.default_baseline_path(family)
-
-
-def test_the_tessellate_set_copies_the_corpus_files_the_bng_input_looks_at():
-    """`tiles_gb_mat` looks at 4n + 64 files for n EPSG:27700 tiles; a copy of n files would hold too few of them."""
-    spec = lt.SETS["raster-generator-tess"]
-    assert spec.corpus_n >= 4 * spec.ns[-1] + 64
 
 
 def test_the_new_forms_are_selectable_by_the_cluster_ids():

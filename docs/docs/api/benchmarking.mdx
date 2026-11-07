@@ -183,6 +183,8 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 | `gbx_rst_cog_convert` | 1.25 | 1.46 | Heavy form removed |
 | `gbx_rst_align_to` | 1.61 | not run | Heavy form removed |
 | `gbx_rst_transformcrs` | 1.08 | 1.58 | Heavy form removed |
+| `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions (three iterations, `gbx_rst_combineavg` measured) | 1.08 | 1.49 | Heavy form removed |
+| `gbx_rst_bng_tessellate` | 0.97 | 1.03 | Heavy form removed (a tie, under the 1.2x bar) |
 
 On a standard cluster, the Java UDF of `gbx_bng_eastnorthasbng` was also slower. It took 1.9x the time of the light batch form at 4 million rows (3.24 s against 1.70 s). At 16 million rows it took 1.3x (5.42 s against 4.27 s). The function now has a SQL form that needs no JAR, with the Python batch form as the fallback.
 

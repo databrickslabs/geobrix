@@ -39,7 +39,6 @@ object GeneratorContract {
       "gbx_rst_maketiles"               -> RasterSuite,
       "gbx_rst_h3_tessellate"           -> RasterSuite,
       "gbx_rst_quadbin_tessellate"      -> RasterSuite,
-      "gbx_rst_bng_tessellate"          -> RasterSuite,
       "gbx_rst_custom_tessellate"       -> RasterSuite,
       "gbx_rst_xyzpyramid"              -> RasterSuite
     )

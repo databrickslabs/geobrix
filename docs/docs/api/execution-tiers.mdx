@@ -68,7 +68,7 @@ For each function, `register` takes the first level that works on this compute. 
 Most functions run on L3. Raster tile operations default to L3, because the Python implementation measured as fast or faster, or because the JVM form cannot read a virtual tile. On a dedicated cluster with the JAR, GeoBrix picks L1 for these families:
 
 - the BNG, custom-grid and H3 cell functions that have a JVM form, and the BNG explode, tessellate, `gbx_bng_kring` and `gbx_bng_cellfill` functions;
-- the raster combine family and `gbx_rst_frombands`;
+- `gbx_rst_frombands`, which is not measured yet;
 - `gbx_rst_fromcontent` and `gbx_rst_bng_rasterize_agg`;
 - `gbx_rst_slope`, `gbx_st_triangulate`, `gbx_st_transformcrs` and `gbx_st_interpolateelevationbbox`.
 

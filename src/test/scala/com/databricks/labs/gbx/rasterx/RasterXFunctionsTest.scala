@@ -205,11 +205,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_combineavg should accept tiles") {
-        val result = functions.rst_combineavg(col("tiles"))
-        result should not be null
-    }
-
     test("rst_convolve should accept tile and kernel") {
         val result = functions.rst_convolve(col("tile"), col("kernel"))
         result should not be null

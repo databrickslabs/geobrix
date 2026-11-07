@@ -189,25 +189,10 @@ def _family_sets() -> Dict[str, SetSpec]:
             fn="gbx_rst_retile",
             **tiles,
         ),
-        # a second function of a family, under `<family>-<function>`: its forms share variant names with the family's
-        # first set (`l1@n`), so `fn` picks them, and the baseline file is the set's own
-        "raster-generator-tess": SetSpec(
-            mvp="raster-generator",
-            forms=("h_tess_l1", "h_tess_udtf", "floor"),
-            reference="h_tess_udtf",
-            ns=(
-                2,
-                8,
-                32,
-            ),  # BNG tiles; the input looks at 4n + 64 corpus files for them
-            fn="gbx_rst_bng_tessellate",
-            corpus_n=4 * 32 + 64,
-            **tiles,
-        ),
         "raster-vectorize-contour": tile_fn("raster-vectorize", "gbx_rst_contour"),
         "raster-array-op": SetSpec(
             mvp="raster-array-op",
-            forms=("h_combine_l3", "h_combine_l1", "floor"),
+            forms=("h_combine_l3", "floor"),
             reference="h_combine_l3",
             ns=(2, 8, 32),  # groups of two tiles: 4, 16 and 64 tiles in all
             fn="gbx_rst_combineavg",

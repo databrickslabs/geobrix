@@ -5,8 +5,8 @@ import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 
 /**
-  * Grid-alignment precondition guard for the cross-raster combine family
-  * (`gbx_rst_combine{min,max,median,sum,stddev,count}`).
+  * Grid-alignment precondition guard for the cross-raster combine reducer
+  * (`gbx_rst_combineavg_agg`, through `CombineAVG`).
   *
   * These reducers evaluate a per-pixel statistic across a stack of tiles by stacking
   * their bands into a single `-separate` VRT and applying a Python pixel function. That

@@ -50,6 +50,8 @@ The light level runs every function on every compute. It is the default for the 
 | Quadbin and custom grid | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
 | `gbx_rst_binpoints`, `gbx_rst_cog_convert`, `gbx_rst_align_to`, `gbx_rst_transformcrs` | Python | The JVM form took 1.1x to 1.9x the time at 4x and 16x rows, and is no longer shipped |
 | `gbx_rst_gridfrompoints` | Python | The JVM form took 1.8x and 1.9x the time at 4x and 16x rows, and is no longer shipped |
+| `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions | Python | The JVM form took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows (131.56 s against 122.16 s, and 576.44 s against 387.95 s), and is no longer shipped. For many tiles per key, `combine_by_key` took 261.07 s at 16x rows |
+| `gbx_rst_bng_tessellate` | Python | The JVM form took 0.97x and 1.03x the time at 4x and 16x rows (1591.42 s against 1540.71 s at 16x), a tie, and is no longer shipped |
 | `gbx_bng_eastnorthasbng` | SQL function, then a Python batch form | The JVM form took 1.17x and 1.35x the time of the Python batch form at 4 and 16 million rows, and is no longer shipped |
 | Other families | Per-function UDF | Not yet measured: highest available level |
 

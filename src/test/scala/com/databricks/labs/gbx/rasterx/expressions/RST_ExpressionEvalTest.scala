@@ -34,7 +34,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               rst_avg(col("clipped")),
               rst_boundingbox(col("clipped")),
               rst_asformat(col("clipped"), lit("GTiff")),
-              rst_combineavg(array(col("clipped"), col("clipped"))), // one grid: the raster and its clip differ
               rst_derivedband(col("clipped"), pyfunc, "myfunc"),
               rst_initnodata(col("clipped")), //lit(-28672.0)),
               rst_isempty(col("clipped")),

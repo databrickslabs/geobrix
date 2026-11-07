@@ -43,15 +43,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         RasterDriver.releaseDataset(clippedDs)
     }
 
-    test("RST_CombineAvg should combine rasters by average") {
-        val (_, combinedDs, _) = RST_CombineAvg.execute(Seq((1L, ds, Map.empty), (1L, ds, Map.empty)))
-        combinedDs should not be null
-        combinedDs.getRasterCount shouldBe ds.getRasterCount
-        combinedDs.getRasterXSize shouldBe ds.getRasterXSize
-        combinedDs.getRasterYSize shouldBe ds.getRasterYSize
-        RasterDriver.releaseDataset(combinedDs)
-    }
-
     test("RST_Convolve should apply convolution kernel to raster") {
         val miniDsPath = "/tmp/mini.tif"
         val (miniDs, _) = GDALTranslate.executeTranslate(miniDsPath, ds, "gdal_translate -outsize 10% 10% -r bilinear", Map.empty)

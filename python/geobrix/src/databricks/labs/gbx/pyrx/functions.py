@@ -4102,7 +4102,7 @@ class _RstBngTessellateUDTF:
     field is LongType, so the String id is parsed back to its Long digit-id via
     ``pygx._bng.parse`` (round-trips cleanly for the ±1..±6 resolutions the
     iterator emits); the authoritative cell id is carried in the tile's
-    ``cellid`` struct field (matching the heavy ``RST_BNG_Tessellate`` tier),
+    ``cellid`` struct field (as the other grid tessellates do),
     NOT the metadata map.
     """
 

@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operations.BandAccessors
+import com.databricks.labs.gbx.rasterx.operations.{BandAccessors, CombineAVG}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.SpatialReference
@@ -15,7 +15,7 @@ import java.nio.file.Files
  * Comprehensive tests for raster aggregation operations.
  * 
  * These tests validate:
- * - RST_CombineAvg: Pixel-wise averaging of multiple rasters
+ * - CombineAVG: Pixel-wise averaging of multiple rasters (the engine of gbx_rst_combineavg_agg)
  * - RST_DerivedBand: Python-based combination with custom functions
  * - RST_Merge: Spatial merging of rasters
  * - Edge cases: single raster, empty collections, NoData handling
@@ -61,12 +61,19 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ====================================================================
-    // RST_CombineAvg Tests (3 tests)
+    // CombineAVG Tests (3 tests)
     // ====================================================================
+
+    /** The cell id is the tiles' shared id, or -1 when they differ; the pixels come from CombineAVG. */
+    private def combineAvg(tiles: Seq[(Long, Dataset, Map[String, String])]): (Long, Dataset, Map[String, String]) = {
+        val cellID = if (tiles.map(_._1).distinct.size == 1) tiles.head._1 else -1L
+        val (combined, mtd) = CombineAVG.compute(tiles.map(_._2).toArray, tiles.head._3)
+        (cellID, combined, mtd)
+    }
 
     test("CombineAvg should average two identical rasters") {
         // Averaging two identical rasters should produce the same result
-        val (idx, resultDs, metadata) = RST_CombineAvg.execute(Seq((1L, ds1, Map.empty), (1L, ds1, Map.empty)))
+        val (idx, resultDs, metadata) = combineAvg(Seq((1L, ds1, Map.empty), (1L, ds1, Map.empty)))
         
         resultDs should not be null
         resultDs.GetRasterCount shouldBe 1
@@ -81,7 +88,7 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("CombineAvg should average multiple different rasters") {
         // Average 3 different bands - result should have valid pixel values
-        val (idx, resultDs, metadata) = RST_CombineAvg.execute(Seq((1L, ds1, Map.empty), (1L, ds2, Map.empty), (1L, ds3, Map.empty)))
+        val (idx, resultDs, metadata) = combineAvg(Seq((1L, ds1, Map.empty), (1L, ds2, Map.empty), (1L, ds3, Map.empty)))
         
         resultDs should not be null
         resultDs.GetRasterCount shouldBe 1
@@ -112,7 +119,7 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
         val const50  = makeConstantByteRaster(s"${tmpDir.getAbsolutePath}/const_50.tif",  50)
         val const100 = makeConstantByteRaster(s"${tmpDir.getAbsolutePath}/const_100.tif", 100)
         try {
-            val (_, resultDs, _) = RST_CombineAvg.execute(
+            val (_, resultDs, _) = combineAvg(
                 Seq((1L, const50, Map.empty), (1L, const100, Map.empty))
             )
             try {
@@ -153,7 +160,7 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
         val a = makeByteRaster(s"${tmpDir.getAbsolutePath}/a.tif", aVals, w, h, nodata = Some(255))
         val b = makeByteRaster(s"${tmpDir.getAbsolutePath}/b.tif", bVals, w, h, nodata = None)
         try {
-            val (_, resultDs, _) = RST_CombineAvg.execute(
+            val (_, resultDs, _) = combineAvg(
                 Seq((1L, a, Map.empty), (1L, b, Map.empty))
             )
             try {
@@ -188,7 +195,7 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
         val a = makeByteRaster(s"${tmpDir.getAbsolutePath}/a.tif", Array.fill[Byte](w * h)(0),   w, h, nodata = None)
         val b = makeByteRaster(s"${tmpDir.getAbsolutePath}/b.tif", Array.fill[Byte](w * h)(100), w, h, nodata = None)
         try {
-            val (_, resultDs, _) = RST_CombineAvg.execute(
+            val (_, resultDs, _) = combineAvg(
                 Seq((1L, a, Map.empty), (1L, b, Map.empty))
             )
             try {
@@ -216,7 +223,7 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
         val a = makeByteRaster(s"${tmpDir.getAbsolutePath}/a.tif", Array.fill[Byte](w * h)(51),  w, h, nodata = None)
         val b = makeByteRaster(s"${tmpDir.getAbsolutePath}/b.tif", Array.fill[Byte](w * h)(100), w, h, nodata = None)
         try {
-            val (_, resultDs, _) = RST_CombineAvg.execute(
+            val (_, resultDs, _) = combineAvg(
                 Seq((1L, a, Map.empty), (1L, b, Map.empty))
             )
             try {
@@ -241,7 +248,7 @@ class RST_AggregationsTest extends AnyFunSuite with BeforeAndAfterAll {
           "PROCESSING" -> "AVERAGE"
         )
         
-        val (idx, resultDs, metadata) = RST_CombineAvg.execute(Seq((1L, ds1, inputMetadata), (1L, ds2, inputMetadata)))
+        val (idx, resultDs, metadata) = combineAvg(Seq((1L, ds1, inputMetadata), (1L, ds2, inputMetadata)))
         
         resultDs should not be null
         // Verify operation generates internal metadata
@@ -437,7 +444,7 @@ def weighted_avg(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, raster_y
 
     test("Aggregations should handle edge cases gracefully") {
         // Test 1: Single raster in CombineAvg (should return same raster)
-        val (singleIdx, singleDs, _) = RST_CombineAvg.execute(Seq((1L, ds1, Map.empty)))
+        val (singleIdx, singleDs, _) = combineAvg(Seq((1L, ds1, Map.empty)))
         singleDs should not be null
         singleDs.GetRasterXSize shouldBe ds1.GetRasterXSize
         RasterDriver.releaseDataset(singleDs)

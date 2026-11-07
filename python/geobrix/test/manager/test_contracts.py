@@ -331,6 +331,31 @@ def test_a_measured_jvm_loss_has_no_jvm_level():
 
 
 @pytest.mark.parametrize(
+    "name",
+    [
+        f"gbx_rst_combine{s}"
+        for s in ("avg", "count", "max", "median", "min", "stddev", "sum")
+    ]
+    + ["gbx_rst_bng_tessellate"],
+)
+def test_the_combine_functions_and_the_raster_bng_tessellate_have_no_jvm_level(name):
+    fn = MAN.functions[name]
+    assert not {"L1", "L2"} & set(fn.levels)
+    assert levels.order(fn) == ("L3",)
+    # the JAR does not change it
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
+
+
+def test_the_array_family_keeps_the_unmeasured_and_the_engine_rows_as_they_were():
+    # unmeasured: the family order, JVM first with the JAR
+    fb = MAN.functions["gbx_rst_frombands"]
+    assert "L1" in fb.levels and levels.order(fb) == ("L1", "L3")
+    assert levels.select(fb, _caps(jar=OK_JAR)).level == "L1"
+    assert levels.order(MAN.functions["gbx_rst_merge"]) == ("L3",)
+    assert levels.order(MAN.functions["gbx_rst_mapalgebra"]) == ("L1", "L3")
+
+
+@pytest.mark.parametrize(
     "fn", [f for f in FNS if {"L1", "L2"} & set(f.levels)], ids=lambda f: f.sql_name
 )
 def test_override_is_honoured(fn):

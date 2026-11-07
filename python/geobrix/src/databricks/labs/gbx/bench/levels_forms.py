@@ -1162,11 +1162,6 @@ _TESS_UDTF = _TILE_FP.format(
     down="gbx_rst_transformcrs(struct(t.*), 'EPSG:3857')",
     udtf="gbx_rst_bng_tessellate(tile, 3)",
 )
-# The JVM generator answers one `tile` column where the light UDTF answers the tile's fields.
-_TESS_UDTF_L1 = _TILE_FP.format(
-    down="gbx_rst_transformcrs(t.tile, 'EPSG:3857')",
-    udtf="gbx_rst_bng_tessellate(tile, 3)",
-)
 # The aggregate returns the mosaic as BINARY.
 _MERGE_L3 = (
     "SELECT count(*) AS n, sum(length(x)) AS fp, count(x) AS n_out FROM "
@@ -1205,22 +1200,6 @@ register_h_tess_udtf.installs = {
 }
 
 
-def register_h_tess_l1(spark):
-    """The JVM tessellate beside the light downstream op: only the generator differs from `h_tess_udtf`'s query."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(
-        spark, ("gbx_rst_",), only=["gbx_rst_bng_tessellate"], level="L1"
-    )
-    _register_light(spark, "gbx_rst_transformcrs")
-
-
-register_h_tess_l1.installs = {
-    "gbx_rst_bng_tessellate": ("L1", "-"),
-    "gbx_rst_transformcrs": ("L3", "-"),
-}
-
-
 def register_h_merge_l3(spark):
     _register_light(spark, "gbx_rst_merge_agg")
 
@@ -1253,18 +1232,6 @@ def h_combine_l3_sp1000(spark, src):
             else:
                 spark.conf.set(key, before)
     return r[0], r[1], r[2], df
-
-
-def register_h_heavy(spark):
-    """The JVM names (RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(
-        spark,
-        ("gbx_rst_",),
-        only=gbx_manager.names_at_level(("gbx_rst_",), "L1"),
-        level="L1",
-    )
 
 
 def _stats(df, tile_expr: Optional[str]):
@@ -1498,26 +1465,6 @@ FORMS["H"] = [
         setup="register_h_combine_l3",
     ),
     _h("rst_viewshed_towers", "L3", "h_towers_l3", "dsm_towers", run="h_towers_l3"),
-    # The JVM comparators (the staged JAR, a dedicated cluster); last, because they replace the light names.
-    _h(
-        "gbx_rst_combineavg",
-        "L1",
-        "h_combine_l1",
-        "tiles_aligned_mat",
-        sql=_COMBINE_SQL,
-        setup="register_h_heavy",
-        computes=("dedicated",),
-    ),
-    # The raster tessellate at L1, over the input and the downstream op of `h_tess_udtf`: only the generator differs.
-    _h(
-        "gbx_rst_bng_tessellate",
-        "L1",
-        "h_tess_l1",
-        "tiles_gb_mat",
-        sql=_TESS_UDTF_L1,
-        setup="register_h_tess_l1",
-        computes=("dedicated",),
-    ),
 ]
 
 

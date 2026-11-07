@@ -1988,17 +1988,13 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combineavg(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineAvg.scala",
-            _OPS + "CombineAVG.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     # combine family: 6 stats (min/max/median/sum/stddev/count) — same structure as
-    # rst_combineavg; input_kind="tile_array"; sources point at the per-stat
-    # Scala expression + the shared CombineStats ops object.
+    # rst_combineavg; input_kind="tile_array". None has a heavyweight level (it measured slower than light).
     "rst_combinemin": FnSpec(
         "rst_combinemin",
         "gbx_rst_combinemin",
@@ -2009,12 +2005,9 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combinemin(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineMin.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinemax": FnSpec(
@@ -2027,12 +2020,9 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combinemax(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineMax.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinemedian": FnSpec(
@@ -2045,12 +2035,9 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combinemedian(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineMedian.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinesum": FnSpec(
@@ -2063,12 +2050,9 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combinesum(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineSum.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinestddev": FnSpec(
@@ -2081,12 +2065,9 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combinestddev(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineStddev.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     "rst_combinecount": FnSpec(
@@ -2099,12 +2080,9 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds) for ds in dss]
         ),
         col_fn=lambda arr, a: rx.rst_combinecount(arr),
-        sources=_AGG_LIGHT
-        + (
-            _HEAVY + "RST_CombineCount.scala",
-            _OPS + "CombineStats.scala",
-        ),
+        sources=_AGG_LIGHT,
         core=False,
+        heavy=False,
         input_kind="tile_array",
     ),
     # rst_align_to: takes two tiles (source + reference) — no standard input_kind
@@ -2856,7 +2834,7 @@ REGISTRY: Dict[str, FnSpec] = {
     # the tuples; the bytes carry no measure, so the fingerprint is count + hash
     # only (empty agg). quadbin ids are Longs (dggs_grid); BNG ids are STRINGS
     # (dggs_grid_str). BNG tessellate reprojects the tile to EPSG:27700 internally
-    # (timing includes that warp), like the heavy tessellateBngIter.
+    # (timing includes that warp). The BNG tessellate has no heavyweight level (it measured no faster than light).
     "rst_quadbin_tessellate": FnSpec(
         "rst_quadbin_tessellate",
         "gbx_rst_quadbin_tessellate",
@@ -2890,15 +2868,10 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=_lateral_only,  # a table function: SQL LATERAL, never a scalar Column
         fingerprint_kind="dggs_grid_str",
         udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
-        sources=_TESSELLATE_LIGHT
-        + (
-            _BNG_LIB,
-            _HEAVY + "generators/RST_BNG_Tessellate.scala",
-            _OPS + "RasterTessellate.scala",
-            _GRIDX + "BNG.scala",
-        ),
+        sources=_TESSELLATE_LIGHT + (_BNG_LIB,),
         gb_tile=True,
         core=False,
+        heavy=False,
     ),
     # --- bucket B, group B-vec: vector-out functions (2) ----------------------
     # rst_contour (contour LINES) + rst_polygonize (POLYGONS) emit a set of
@@ -3117,7 +3090,6 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_AGG_LIGHT
         + (
             _PYRX_SERDE,
-            _HEAVY + "RST_CombineAvg.scala",
             _HEAVY + "agg/RST_CombineAvgAgg.scala",
             _OPS + "CombineAVG.scala",
         ),

@@ -1809,7 +1809,7 @@ def derivedband_tiles(rasters: List[bytes], python_func: str, func_name: str) ->
 # ---------------------------------------------------------------------------
 # Cross-raster combine family (6 stats)
 # ---------------------------------------------------------------------------
-# Mirrors CombineStats.scala: per-pixel/per-band reduction over VALID (non-NoData)
+# Per-pixel/per-band reduction over VALID (non-NoData)
 # values across a stack of ALIGNED tiles. Alignment is a hard precondition: inputs
 # must share identical CRS, extent, pixel size, and dimensions. A pixel that is
 # NoData in ALL inputs produces NoData in the output.
@@ -1963,7 +1963,7 @@ def _stacked_stat(datasets, nodatas, stat: str, fallback, window=None) -> np.nda
 def _combine_stat_tiles(rasters: List[bytes], stat: str, max_out=None) -> bytes:
     """Per-pixel ``stat`` across aligned tiles, excluding NoData (GTiff bytes).
 
-    Mirrors CombineStats.compute (Scala): the masked reduction per-pixel per-band. min and max fold
+    The masked reduction per-pixel per-band. min and max fold
     one tile at a time into a running value (memory is about four tiles, however many there are);
     sum, count, median and stddev stack all N tile arrays. Either way the canvas is folded in row windows sized to
     the budget (:func:`_merge_budget`), one window when it fits: the peak is a window of the stack, not the canvas.

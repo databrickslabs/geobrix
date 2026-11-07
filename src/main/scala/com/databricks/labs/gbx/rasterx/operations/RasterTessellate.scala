@@ -876,7 +876,7 @@ object RasterTessellate {
 
     // ------------------------------------------------------------------------------------------------
     // Named wrappers — thin delegates to `tessellate`, preserving the exact per-grid return types
-    // so all current callers (RST_H3_Tessellate, RST_Quadbin_Tessellate, RST_BNG_Tessellate) and
+    // so all current callers (RST_H3_Tessellate, RST_Quadbin_Tessellate) and
     // tests compile and run unchanged.
     // ------------------------------------------------------------------------------------------------
 

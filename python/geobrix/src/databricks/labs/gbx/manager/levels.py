@@ -99,6 +99,17 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # 34.3 s against 37.5 s at 1x, 103.8 s against 62.5 s at 4x, 297 s against 310 s at 16x (none within the 0.8 rule).
     # Light first; the JVM block stays for a forced L1.
     "gbx_rst_merge": ("L3",),
+    # The seven combine functions have no JVM level: it ran at 0.93x and 0.67x the speed of the best lightweight SQL form
+    # at 4x and 16x rows (131.56 s against 122.16 s, 576.44 s against 387.95 s), and the DataFrame `combine_by_key` form is
+    # 2.2x faster than the JVM form at 16x (261.07 s). frombands, the array family's other JVM level, is not measured
+    # yet and takes the family order.
+    "gbx_rst_combineavg": ("L3",),
+    "gbx_rst_combinecount": ("L3",),
+    "gbx_rst_combinemax": ("L3",),
+    "gbx_rst_combinemedian": ("L3",),
+    "gbx_rst_combinemin": ("L3",),
+    "gbx_rst_combinestddev": ("L3",),
+    "gbx_rst_combinesum": ("L3",),
 }
 # The order a function with no PREFERENCE row takes, by its manifest family (measured on-cluster where a record or
 # the benchmark tables have the family; the spec's "highest available" where not). Per-name exceptions are
@@ -119,6 +130,8 @@ FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "raster-array-op": ("L1", "L3"),
     "raster-aggregate": ("L3",),
     "raster-vectorize": ("L1", "L3"),
+    # the raster tessellates are light: the BNG one's JVM form ran at 1.03x and 0.97x the speed of light at 4x and 16x rows
+    # (410.74 s against 422.05 s, 1591.42 s against 1540.71 s), so it has no JVM level; the others are light by family (unmeasured)
     "raster-generator": ("L3",),
     "raster-to-grid": ("L3",),
     "web-tiles": ("L3",),

@@ -659,3 +659,89 @@ def test_status_says_busy_leased_by_the_run_for_a_leased_cluster(pool, monkeypat
     lines = {ln.split()[0]: ln for ln in capsys.readouterr().out.splitlines()}
     assert "busy (leased by r1 job 7)" in lines["a"]
     assert "idle " in lines["b"] and "(since cluster activity)" in lines["b"] and "lease free" in lines["b"]  # the real clock here
+
+
+def _touched(w, pool, cid="a"):
+    return json.loads(w.fs[pool.Leases(w, VOL, "p").path(cid)])["touched_at"]
+
+
+def _wait_for_a_refresh(w, pool, cid="a", real_s=3.0):
+    """Block like a slow cluster operation: on the fake clock, let it pass the grace; in real time, let the holder's refresh
+    thread run. True when the lease was refreshed meanwhile."""
+    import time
+
+    before = _touched(w, pool, cid)
+    w.now += pool.TOUCH_GRACE_S + 60  # the operation outlasts the grace a silent lease is given
+    end = time.time() + real_s
+    while time.time() < end:
+        if _touched(w, pool, cid) > before:
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_the_lease_is_refreshed_while_a_terminated_cluster_starts(pool):
+    """The start of a terminated cluster can outlast the grace: another launch then judged the lease stale and took it."""
+    w = FakeW()
+    w.add("a", state="TERMINATED")
+    seen = []
+
+    def start(cid):
+        seen.append(_wait_for_a_refresh(w, pool, cid))
+        w.clusters_by_id[cid].state = "RUNNING"
+
+    w.clusters.ensure_cluster_is_running = start
+    with pool.leased_cluster(w, "p", VOL, INFO, say=lambda s: None, touch_every_s=0.01, clock=lambda: w.now) as ls:
+        assert seen == [True], "the lease was not refreshed while the cluster was starting"
+        # and a second launch, looking at the lease after that silence, finds it held
+        w.add("b", state="TERMINATED")
+        other = pool.Leases(w, VOL, "p", lambda: w.now)
+        assert other.stale(other.read("a")) is False
+        assert ls.cluster_id == "a"
+
+
+def test_the_lease_is_refreshed_while_a_changed_jar_is_reinstalled_and_the_cluster_restarts(pool):
+    w = FakeW()
+    w.add("a", tags={"gbx_jar": "none"})
+    jar = f"{VOL}/geobrix-x-jar-with-dependencies.jar"
+    seen = []
+    install = w.libraries.install
+
+    def slow_install(cid, libs):
+        seen.append(_wait_for_a_refresh(w, pool, cid))
+        install(cid, libs)
+
+    w.libraries.install = slow_install
+    with pool.leased_cluster(w, "p", VOL, INFO, say=lambda s: None, touch_every_s=0.01, clock=lambda: w.now) as ls:
+        ls.sync_jars([jar], sleep=lambda s: None, clock=lambda: w.now)
+        assert seen == [True], "the lease was not refreshed during the jar reinstall"
+        other = pool.Leases(w, VOL, "p", lambda: w.now)
+        assert other.stale(other.read("a")) is False
+
+
+def test_a_cluster_that_cannot_be_started_gives_its_lease_back_and_stops_the_refresh(pool):
+    w = FakeW()
+    w.add("a", state="TERMINATED")
+    path = pool.Leases(w, VOL, "p").path("a")
+
+    def start(cid):
+        raise TimeoutError("still starting")
+
+    w.clusters.ensure_cluster_is_running = start
+    with pytest.raises(TimeoutError):
+        with pool.leased_cluster(w, "p", VOL, INFO, say=lambda s: None, touch_every_s=0.01):
+            pass
+    assert path not in w.fs  # not held until the grace runs out
+    import threading
+
+    assert not [t for t in threading.enumerate() if t.name == "gbx-lease-touch" and t.is_alive()]
+
+
+def test_a_launch_whose_lease_was_taken_stops_before_it_reinstalls_jars_on_the_cluster(pool):
+    w = FakeW()
+    w.add("a", tags={"gbx_jar": "none"})
+    with pool.leased_cluster(w, "p", VOL, INFO, say=lambda s: None, touch_every_s=60, settle_s=0) as ls:
+        w.fs.pop(pool.Leases(w, VOL, "p").path("a"))  # reclaimed by someone else
+        with pytest.raises(pool.LeaseLost):
+            ls.sync_jars([f"{VOL}/x.jar"], sleep=lambda s: None)
+        assert not any(c[0] in ("edit", "install", "uninstall") for c in w.calls)

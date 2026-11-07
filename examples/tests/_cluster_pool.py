@@ -457,11 +457,16 @@ def lease_cluster(
     clock: Callable[[], float] = time.time,
     say: Callable[[str], None] = print,
     leases: Optional["Leases"] = None,
+    on_leased: Optional[Callable[[str], None]] = None,
 ) -> str:
     """Lease one cluster of the pool and make it run: the id. (`leases` is the holder's: it keeps the lease's token.)
 
     Running clusters are tried before terminated ones (no start to pay). A lease whose holder is gone is reclaimed.
     A terminated cluster is started and waited for. PoolError after `wait_s` with every cluster held.
+
+    `on_leased(cluster_id)` is called the moment the lease is ours, before the cluster is started: the start of a
+    terminated cluster can take longer than the grace a silent lease is given (TOUCH_GRACE_S), so the holder must be
+    refreshing the lease by then.
     """
     leases = leases or Leases(w, volroot, name, clock)
     end = clock() + wait_s
@@ -478,6 +483,8 @@ def lease_cluster(
                 continue
             if _try_lease(leases, c.cluster_id, info):
                 say(f"pool {name}: leased {c.cluster_id} ({state_of(c) or '?'})")
+                if on_leased is not None:
+                    on_leased(c.cluster_id)
                 w.clusters.ensure_cluster_is_running(c.cluster_id)  # starts it when terminated, waits when pending
                 return c.cluster_id
         if clock() >= end:
@@ -602,6 +609,7 @@ class Lease:
         """Make the cluster carry exactly these jars (None: do not look). Returns what was done."""
         if jar_paths is None:
             return None
+        self.leases._mine(self.cluster_id)  # LeaseLost now, not after a reinstall and restart of a cluster another launch holds
         self.jars = sync_jars(self.w, self.cluster_id, jar_paths, say=self.say, **kw)
         return self.jars
 
@@ -645,11 +653,10 @@ def leased_cluster(
     for them. A cluster that has ended is started first.
     """
     leases = Leases(w, volroot, name, clock)
-    cluster_id = lease_cluster(w, name, volroot, dict(info or {}), wait_s=wait_s, poll_s=poll_s, sleep=sleep, clock=clock, say=say, leases=leases)
-    lease = Lease(w, leases, cluster_id, say)
     stop = threading.Event()
+    threads: list = []
 
-    def touch():
+    def touch(cluster_id):
         while not stop.wait(touch_every_s):
             try:
                 leases.update(cluster_id)
@@ -659,13 +666,34 @@ def leased_cluster(
             except Exception:  # noqa: BLE001 - a missed refresh is covered by the grace
                 pass
 
-    thread = threading.Thread(target=touch, name="gbx-lease-touch", daemon=True)
-    thread.start()
+    def start_touch(cluster_id):
+        # Started as soon as the lease is ours, so the refresh covers everything that follows: the start of a terminated
+        # cluster, the jar reinstall and restart, the smoke and the run. (Started only after the cluster was running, a
+        # start slower than TOUCH_GRACE_S let another launch judge the lease stale and take it.)
+        t = threading.Thread(target=touch, args=(cluster_id,), name="gbx-lease-touch", daemon=True)
+        t.start()
+        threads.append(t)
+
+    def stop_touch():
+        stop.set()
+        for t in threads:
+            t.join(timeout=5)
+
+    try:
+        cluster_id = lease_cluster(w, name, volroot, dict(info or {}), wait_s=wait_s, poll_s=poll_s, sleep=sleep, clock=clock, say=say, leases=leases, on_leased=start_touch)
+    except BaseException:
+        stop_touch()
+        for held in list(leases.tokens):  # leased, but the cluster never started: do not hold it until the grace runs out
+            try:
+                leases.release(held)
+            except Exception:  # noqa: BLE001 - the lease goes stale by itself
+                pass
+        raise
+    lease = Lease(w, leases, cluster_id, say)
     try:
         yield lease
     finally:
-        stop.set()
-        thread.join(timeout=5)
+        stop_touch()
         end = clock() + settle_s
         while not lease.keep and not lease.jobs_over() and clock() < end:
             sleep(min(5.0, poll_s))

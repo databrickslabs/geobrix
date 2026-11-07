@@ -203,8 +203,8 @@ def job_activity(w, now_s: float):
     """
     out: Dict[str, float] = {}
     live: set = set()
-    try:
-        runs = w.jobs.list_runs(start_time_from=int((now_s - JOB_SCAN_WINDOW_S) * 1000), expand_tasks=True)
+
+    def scan(runs) -> None:
         for n, run in enumerate(runs):
             if n >= JOB_SCAN_MAX_RUNS:
                 break
@@ -220,8 +220,14 @@ def job_activity(w, now_s: float):
                     out[cid] = max(out.get(cid, 0.0), when)
                     if not ended:
                         live.add(cid)
-    except Exception:  # noqa: BLE001 - a missing signal, not a failure of the status
-        pass
+
+    # The window and the cap bound what finished; a run that is still going may have started before the window or sit
+    # beyond the newest runs of a busy workspace, so the runs that have not ended are asked for directly as well.
+    for kw in ({"start_time_from": int((now_s - JOB_SCAN_WINDOW_S) * 1000)}, {"active_only": True}):
+        try:
+            scan(w.jobs.list_runs(expand_tasks=True, **kw))
+        except Exception:  # noqa: BLE001 - a missing signal, not a failure of the status
+            pass
     return out, live
 
 
@@ -339,9 +345,17 @@ class Leases:
                 # so the exception does not say what happened. The file does: someone else's lease means "taken",
                 # our own token means the create went through, nothing there means a transient failure to try again.
                 held = self.read(cluster_id)
+                for _ in range(3):  # a file that exists but cannot be read yet (just made, not yet consistent): read again
+                    if not (held and held.get("unreadable")):
+                        break
+                    time.sleep(1.0)
+                    held = self.read(cluster_id)
                 if held is not None:
                     if held.get("token") == token:
                         break
+                    # Another launch's lease, or a file still unreadable after the re-reads: which of the two is not
+                    # known, so this cluster is not ours to take and the caller tries the next one. An unreadable file
+                    # is not held for ever: `stale` ends it by age (UNREADABLE_STALE_S) and `reclaim` replaces it.
                     return False
                 if attempt == 3:
                     raise

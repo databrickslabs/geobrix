@@ -143,11 +143,14 @@ class FakeW:
                 w.calls.append(("list_runs", kw))
                 if w.list_runs_error:
                     raise w.list_runs_error
+                if kw.get("active_only"):  # the runs that have not ended, whenever they started
+                    return iter(w.active_run_list)
                 return iter(w.run_list)
 
         self.jar_mtime = {}
         self.run_list = []  # what jobs.list_runs returns: runs with a state, an end time and the cluster they ran on
         self.list_runs_error = None
+        self.active_run_list = []  # what jobs.list_runs(active_only=True) returns, besides the window's
         self.clusters, self.files, self.libraries, self.jobs = Clusters(), Files(), Libraries(), Jobs()
 
         def do(method, path, body=None):  # the REST create `up` posts: the SDK's clusters.create has no idempotency_token
@@ -536,6 +539,39 @@ def test_an_unparseable_server_error_on_the_lease_create_reads_the_file_instead_
     assert pool.Leases(w, VOL, "p").acquire("a", {}) is True and flaky["n"] == 3
 
 
+def test_a_create_error_with_an_unreadable_lease_is_read_again_and_never_held_for_ever(pool, monkeypatch):
+    # the create went through (our token is in the file) but the file cannot be read for a moment: the re-read finds it
+    monkeypatch.setattr(pool.time, "sleep", lambda s: None)
+    w = FakeW()
+    w.add("a")
+    real_upload, real_download = w.files.upload, w.files.download
+    reads = {"n": 0}
+
+    def created_then_error(path, contents, overwrite=False):
+        real_upload(path, contents, overwrite=overwrite)
+        raise TypeError("object of type '_io.BytesIO' has no len()")
+
+    def unreadable_twice(path):
+        reads["n"] += 1
+        if reads["n"] <= 2:
+            raise RuntimeError("503 try again")
+        return real_download(path)
+
+    w.files.upload, w.files.download = created_then_error, unreadable_twice
+    leases = pool.Leases(w, VOL, "p")
+    assert leases.acquire("a", {}) is True and "a" in leases.tokens
+
+    # still unreadable after the re-reads: unknown, so not ours, and the caller moves on; no exception, a bounded wait
+    w.fs.clear()
+    slept = []
+    monkeypatch.setattr(pool.time, "sleep", lambda s: slept.append(s))
+    w.files.download = lambda path: (_ for _ in ()).throw(RuntimeError("503"))
+    other = pool.Leases(w, VOL, "p")
+    assert other.acquire("a", {}) is False and 0 < len(slept) <= 3
+    # and the file it left is not held for ever: it goes stale by age and is reclaimed
+    assert other.stale({"unreadable": True, "age_s": pool.UNREADABLE_STALE_S + 1}) is True
+
+
 # ---- status: idle minutes come from real activity, not from last_activity_time alone
 
 
@@ -565,6 +601,18 @@ def test_idle_is_counted_from_the_latest_real_activity_not_from_last_activity_ti
     assert (row["idle_min"], row["idle_since"]) == (2.0, "cluster start")
     listed = [call[1] for call in w.calls if call[0] == "list_runs"][0]
     assert listed["start_time_from"] < (w.now - 3600) * 1000  # a window that reaches back past the autotermination
+
+
+def test_a_job_run_that_started_before_the_window_or_beyond_the_newest_runs_still_makes_the_cluster_busy(pool):
+    """The window (6 h) and the cap (500 newest) bound the finished runs; a live run older than both is asked for directly."""
+    w = FakeW()
+    w.add("a")
+    old_live = _run("a", life="RUNNING")
+    old_live.start_time = int((w.now - 30 * 3600) * 1000)  # started 30 h ago: outside the window
+    w.active_run_list = [old_live]
+    row = pool.status(w, "p", now=lambda: w.now)[0]
+    assert row["busy"] is True and row["idle_min"] == 0.0
+    assert any(c[0] == "list_runs" and c[1].get("active_only") for c in w.calls)
 
 
 def test_the_touch_time_of_a_lease_counts_as_activity_and_a_stale_lease_is_not_busy(pool):

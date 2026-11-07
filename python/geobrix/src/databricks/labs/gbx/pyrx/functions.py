@@ -1328,6 +1328,62 @@ def _array_member_bytes(tile):
     return ot.materialize_to_bytes(vt).raster if vt.is_virtual() else bytes(vt.raster)
 
 
+class _LossyCellId(ValueError):
+    """A member's cell id arrived as a float64 past 2**53: it may no longer be the id that was sent."""
+
+
+def _exact_member(tile):
+    """One member of an Arrow-delivered array with its integers as integers.
+
+    pyspark 4.0 hands a batch to an Arrow-optimized UDF through pandas: an INT or BIGINT field that holds a NULL
+    arrives as float64 (a NULL ``cellid`` or ``window`` taints every row of the batch, a NULL member taints its own
+    array). A whole number below 2**53 is exact and is restored; a cell id at or past 2**53 (H3, quadbin and custom
+    ids are) may have been rounded to another cell and is refused. pyspark 4.1 converts the integers exactly and
+    passes through here unchanged.
+    """
+    if tile is None or isinstance(tile, (bytes, bytearray)):
+        return tile
+    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
+    cellid = d.get("cellid")
+    if isinstance(cellid, float):
+        if abs(cellid) >= 2**53:
+            raise _LossyCellId(
+                f"a tile's cell id came through a float and may have been rounded to another cell ({cellid!r}). "
+                "Fix: take the NULL tiles out of the array first, as in "
+                "gbx_rst_combineavg(filter(tiles, t -> t IS NOT NULL)), and give every tile a cellid."
+            )
+        d["cellid"] = int(cellid)
+    window = d.get("window")
+    if window is not None:
+        w = window.asDict() if hasattr(window, "asDict") else dict(window)
+        d["window"] = {k: (int(v) if isinstance(v, float) else v) for k, v in w.items()}
+    return d
+
+
+def _group_udf(fn):
+    """A tile UDF over a whole group (``ARRAY<tile>`` first, one tile out): an Arrow-optimized UDF, so the rows cross
+    the JVM <-> Python boundary as Arrow buffers.
+
+    ``gbx_rst_combine*(collect_list(tile))`` hands Python a group of N tiles of tens of MB as ONE row. A scalar
+    (pickled) UDF makes the executor JVM pickle the rows on its heap (about 100 rows per pickle, copied as the buffer
+    grows), and at the default shuffle width that exhausted the heap (JVM OutOfMemoryError, executors lost) over
+    1000 groups x 2 tiles x 13 MB. Arrow keeps the same rows in off-heap buffers. The answer is the same: a row UDF
+    over the same function, only the transport differs (see :func:`_exact_member` for the one place it shows). The
+    tiles of every group of the task's partition still arrive in one batch (up to 10000 rows), so a group the
+    executor cannot hold needs ``combine_by_key``, which streams a key's members.
+    """
+
+    @functools.wraps(fn)
+    def run(tiles, *rest):
+        try:
+            members = None if tiles is None else [_exact_member(t) for t in tiles]
+        except _LossyCellId as exc:
+            return _serde.build_error_tile(str(exc), 0)
+        return fn(members, *rest)
+
+    return f.udf(run, V2_TILE_SCHEMA, useArrow=True)
+
+
 # rst_combineavg: single ARRAY<tile struct> arg -> per-pixel mean tile.
 # Mirrors gbx_rst_combineavg: NoData-aware per-pixel mean across the stack
 # (reuses core.agg.combineavg_tiles). cellid follows the heavyweight rule —
@@ -1356,7 +1412,7 @@ def _combineavg_bytes(tiles):
     return agg_core.combineavg_tiles(rasters), cellid, dropped
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_group_udf
 @_refusal_as_error_tile
 def _combineavg_udf(tiles):
     if not tiles:
@@ -1373,7 +1429,7 @@ def _combineavg_udf(tiles):
     return tile
 
 
-@f.udf(V2_TILE_SCHEMA)
+@_group_udf
 @_refusal_as_error_tile
 def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
     if not tiles:
@@ -1395,7 +1451,9 @@ def _combineavg_v2_udf(tiles, virtualize_dir, virtualize_prefix, materialize):
 @f.udf(V2_TILE_SCHEMA)
 @_refusal_as_error_tile
 def _uf_combineavg(tiles, file_refs):
-    """FILE-aware rst_combineavg: reads each input via its per-element FileRef."""
+    """FILE-aware rst_combineavg: reads each input via its per-element FileRef. A plain (row) UDF on purpose: its tiles
+    are references (no bytes cross), and a FILE column's FileRef is a Python object the row transport builds.
+    """
     if not tiles:
         return None
     from databricks.labs.gbx.pyrx import _env
@@ -1486,7 +1544,7 @@ def _combine_stat_bytes(tiles, stat: str):
 
 
 def _make_combine_stat_udf(stat: str):
-    """Factory that produces a ``@f.udf(V2_TILE_SCHEMA)`` for the given stat."""
+    """Factory that produces a ``_group_udf`` for the given stat."""
     _stat_cap = stat.capitalize()
 
     @_refusal_as_error_tile
@@ -1505,7 +1563,7 @@ def _make_combine_stat_udf(stat: str):
         return tile
 
     _udf.__name__ = f"_combine{stat}_udf"
-    return f.udf(V2_TILE_SCHEMA)(_udf)
+    return _group_udf(_udf)
 
 
 def _make_combine_stat_v2_udf(stat: str):
@@ -1530,7 +1588,7 @@ def _make_combine_stat_v2_udf(stat: str):
         return row
 
     _v2_udf.__name__ = f"_combine{stat}_v2_udf"
-    return f.udf(V2_TILE_SCHEMA)(_v2_udf)
+    return _group_udf(_v2_udf)
 
 
 # Module-level UDF objects for each stat (registered in _sql_tile_ops below).

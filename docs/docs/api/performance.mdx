@@ -138,6 +138,8 @@ The aggregates `gbx_rst_merge_agg` and `gbx_rst_combineavg_agg` stream their gro
 - **Members on different CRS or pixel size.** Bring them to one grid first with `gbx_rst_transform` and `gbx_rst_resample_to_res`.
 - **A combine over the cap.** Retile first with `gbx_rst_retile`, or use `combine_by_key`.
 
+The array form, `gbx_rst_combineavg(collect_list(tile))` and the six other `gbx_rst_combine*` functions, receives a whole group as one row. The rows cross to Python as Arrow batches, so the executor's JVM heap does not hold the tiles. A task still holds every group of its shuffle partition at once. That is the encoded tiles in the batch, plus a few times their size in Python. With large groups (tens of MB per tile, many groups per task), use one of two routes. On a classic cluster, give the shuffle more partitions. Or use `combine_by_key` (`avg` or `max`), which reads a key's tiles one at a time. Serverless fixes the shuffle width, so use `combine_by_key` or retile there.
+
 `combine_by_key` and `merge_by_key` (in `rasterx.helpers`) shuffle by key and fold each group once. `merge_by_key` hands each tile to the merge as it arrives, so a key's memory does not follow its tile count. It shuffles with `repartition(N, keys)`, where `N` is `num_partitions` or the session's task slots (at least 64). At 1,000 groups on dedicated compute:
 
 {/* refresh: Task 29 */}

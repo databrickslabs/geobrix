@@ -160,13 +160,18 @@ _SESSION_ROWS = (
         Case(f"combine{s}_stack", CB[s], (STACK,), "ref", f"combine_{s}", ONLY)
         for s in STATS
     ),
-    Case(
-        "combineavg_virtual",
-        CB["avg"],
-        (Build("aa_stack_paths"),),
-        "ref",
-        "combine_avg",
-        ONLY,
+    # a reference per member (a path, no bytes) gives the statistic of the files' pixels at every level that serves the
+    # statistic: one row per statistic, since a level that cannot read a path (the JVM) is told apart per function
+    *(
+        Case(
+            f"combine{s}_virtual",
+            CB[s],
+            (Build("aa_stack_paths"),),
+            "ref",
+            f"combine_{s}",
+            ONLY,
+        )
+        for s in STATS
     ),
     # a NULL or empty array is NULL; the avg and the shared stat reducer are two code paths
     *(

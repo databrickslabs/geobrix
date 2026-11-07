@@ -92,11 +92,7 @@ def install_l1(spark, fn, caps) -> Optional[str]:
         if r != "ok":
             return r
         light = _install_light_side(spark, fn)
-        if _is_tiles(fn):
-            ddl = sqlwrap.tiles_dispatch(fn, _priv(fn, "L1") + "({tiles}{rest})", light)
-        else:
-            ddl = sqlwrap.tile_dispatch(fn, _priv(fn, "L1") + "({tile}{rest})", light)
-        _create_wrapper(spark, fn, ddl)
+        _create_wrapper(spark, fn, dispatch_ddl(fn, _priv(fn, "L1"), light))
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
         return f"{fn.sql_name}: heavy install failed ({type(exc).__name__}: {str(exc)[:160]})"
@@ -104,6 +100,17 @@ def install_l1(spark, fn, caps) -> Optional[str]:
 
 def _is_tiles(fn) -> bool:
     return fn.params[0].session[0] == "ARRAY<TILE>"
+
+
+def dispatch_ddl(fn, l1_name: str, l3_name: str) -> str:
+    """The wrapper that goes under the SQL name of a tile function served by the JVM: a virtual tile (a path, no raster)
+    goes to the light function ``l3_name``, which reads it, and a materialized tile to the JVM function ``l1_name``,
+    which cannot (it raises ``VirtualTileException``). The array form (``ARRAY<TILE>``) sends an array with any virtual,
+    NULL or error element to light.
+    """
+    if _is_tiles(fn):
+        return sqlwrap.tiles_dispatch(fn, l1_name + "({tiles}{rest})", l3_name)
+    return sqlwrap.tile_dispatch(fn, l1_name + "({tile}{rest})", l3_name)
 
 
 def install_l1_engine(spark, fn, caps) -> Optional[str]:
@@ -120,11 +127,7 @@ def install_l1_engine(spark, fn, caps) -> Optional[str]:
             return None if r == "ok" else r
         light = _priv(fn, "L3")
         l3.register_l3_engine(spark, fn, "engine-c0", name=light)
-        if _is_tiles(fn):
-            ddl = sqlwrap.tiles_dispatch(fn, target + "({tiles}{rest})", light)
-        else:
-            ddl = sqlwrap.tile_dispatch(fn, target + "({tile}{rest})", light)
-        _create_wrapper(spark, fn, ddl)
+        _create_wrapper(spark, fn, dispatch_ddl(fn, target, light))
         return None
     except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
         return f"{fn.sql_name}: heavy engine install failed ({type(exc).__name__}: {str(exc)[:160]})"

@@ -1344,6 +1344,15 @@ SPEC_SE: Tuple[Case, ...] = (
         "norm_diff",
         ("session",),
     ),
+    # the same pair as references (a path each, no bytes): the level that serves the function by default reads them
+    Case(
+        "se_ma_virtual",
+        MALG,
+        (Build("se_pair_paths"), NORM_DIFF),
+        "ref",
+        "norm_diff",
+        ("session",),
+    ),
     Case(
         "se_ma_times2",
         MALG,
@@ -1953,6 +1962,16 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
             _tile(_gtiff(a[np.newaxis], "EPSG:3857")),
             _tile(_gtiff(b[np.newaxis], "EPSG:3857")),
         ]
+    if (
+        name == "se_pair_paths" and tmpdir is not None
+    ):  # the se_pair rasters as files, the tiles their paths
+        paths = []
+        for i, t in enumerate(_se_build("se_pair")):
+            path = os.path.join(tmpdir, f"se_pair_{i}.tif")
+            with open(path, "wb") as fh:
+                fh.write(t["raster"])
+            paths.append(_tile(None, path, None))
+        return paths
     if name == "se_mismatch_pair":  # the se_pair rasters, the second one in another CRS
         return [
             _tile(_gtiff(a[np.newaxis], "EPSG:3857")),

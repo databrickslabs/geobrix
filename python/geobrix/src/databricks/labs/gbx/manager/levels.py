@@ -81,6 +81,12 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # Light first until a wrapper-free virtual dispatch exists; the L1 blocks stay for a forced L1.
     "gbx_rst_contour": ("L3",),
     "gbx_rst_isoband": ("L3",),
+    # The array merge: the JVM level refuses a group over the memory budget with an error tile (its merge holds the group),
+    # where light streams the members through a VRT and gives the mosaic, so a hot key on a JAR cluster came back as a NULL
+    # raster. On the dedicated finalize shape (`gbx_rst_merge(collect_list(tile))`, 250 rows) the JVM level is no faster:
+    # 34.3 s against 37.5 s at 1x, 103.8 s against 62.5 s at 4x, 297 s against 310 s at 16x (none within the 0.8 rule).
+    # Light first; the JVM block stays for a forced L1.
+    "gbx_rst_merge": ("L3",),
 }
 # The order a function with no PREFERENCE row takes, by its manifest family (measured on-cluster where a record or
 # the benchmark tables have the family; the spec's "highest available" where not). Per-name exceptions are

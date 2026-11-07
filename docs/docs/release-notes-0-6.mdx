@@ -543,6 +543,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 ### Heavyweight proximity, COG overviews and tile size (fix) {#l1-parity}
 
 - **The heavyweight `rst_proximity` returns the exact Euclidean distance.** It used GDAL's approximate proximity, which was off by up to 6%. It now matches the lightweight function to Float32 precision.
+- **The heavyweight `rst_cog_convert` writes the overview pyramid.** The result had no overviews, so `cog_validate` warned. It now has the same overviews as the lightweight function. Pixels are unchanged.
 
 ### `rst_sample` on virtual tiles (fix) {#rst-sample}
 

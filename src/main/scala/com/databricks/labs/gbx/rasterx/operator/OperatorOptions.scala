@@ -160,7 +160,9 @@ object OperatorOptions {
         val blk = (rawBlk / 16) * 16 // floor to nearest multiple of 16
 
         val coBase = format match {
-            case "COG"   => Seq(s"$coFlag BLOCKSIZE=$blk")
+            case "COG"   =>
+                Seq(s"$coFlag BLOCKSIZE=$blk") ++
+                    writeOptions.get("overview_resampling").filter(_.nonEmpty).map(r => s"$coFlag OVERVIEW_RESAMPLING=$r")
             case "GTiff" => Seq(s"$coFlag TILED=YES", s"$coFlag BLOCKXSIZE=$blk", s"$coFlag BLOCKYSIZE=$blk", s"$coFlag BIGTIFF=IF_SAFER")
             case _       => Seq.empty
         }

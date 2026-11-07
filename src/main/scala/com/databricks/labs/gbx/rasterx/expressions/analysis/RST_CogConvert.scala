@@ -79,9 +79,11 @@ object RST_CogConvert extends WithExpressionInfo {
       * other derived tiles are written with does not apply here. */
     private val MinBlocksize: Int = 16
 
-    /** The write options the result is encoded with: its block size, down to [[MinBlocksize]]. */
-    private def blockWrite(blocksize: Int): Map[String, String] =
-        Map("blocksize" -> blocksize.toString, "blocksize_floor" -> MinBlocksize.toString)
+    /** The write options the result is encoded with: the COG driver again (a GTiff re-encode drops the overview
+      * pyramid and the COG layout), its block size down to [[MinBlocksize]], and the overview resampling. */
+    private[gbx] def blockWrite(blocksize: Int, overviewResampling: String): Map[String, String] =
+        Map("format" -> "COG", "blocksize" -> blocksize.toString, "blocksize_floor" -> MinBlocksize.toString,
+            "overview_resampling" -> overviewResampling)
 
     /** The codecs `compression` takes (GDAL's COG driver, the light tier's profile names), and `AUTO`/`NONE`. */
     private val Codecs: Set[String] = Set(
@@ -115,17 +117,18 @@ object RST_CogConvert extends WithExpressionInfo {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
+              val resampling = Option(overviewResampling).map(_.toString).getOrElse("AVERAGE")
               val (resDs, resMtd) = execute(
                   ds, options,
                   Option(compression).map(_.toString).getOrElse(CogDefaultCompression),
                   blocksize,
-                  Option(overviewResampling).map(_.toString).getOrElse("AVERAGE")
+                  resampling
               )
               RasterDriver.releaseDataset(ds)
-              // the result is encoded with the block size it was asked for (a multiple of 16, below the 64 floor
-              // other tiles are written with), not only translated to it
+              // the result is encoded as a COG with the block size it was asked for (a multiple of 16, below the 64
+              // floor other tiles are written with) and its overview pyramid, not only translated to it
               val out = RasterSerializationUtil.tileToRow(
-                  (cell, resDs, resMtd), dt, exprConf.hConf, None, blockWrite(blocksize))
+                  (cell, resDs, resMtd), dt, exprConf.hConf, None, blockWrite(blocksize, resampling))
               RasterDriver.releaseDataset(resDs)
               out
           },
@@ -176,12 +179,9 @@ object RST_CogConvert extends WithExpressionInfo {
         val baseCommand = "gdal_translate"
         val commandWithOptions = OperatorOptions.appendOptions(baseCommand, writeOpts, ds)
 
-        // Parse the decorated command back into a TranslateOptions vector.
+        // Parse the decorated command back into a TranslateOptions vector (appendOptions adds the COG block size
+        // and OVERVIEW_RESAMPLING).
         val opts = OperatorOptions.parseOptions(commandWithOptions)
-        // Add the OVERVIEW_RESAMPLING if not already present (appendOptions may not emit it).
-        if (!opts.contains(s"OVERVIEW_RESAMPLING=$overviewResampling")) {
-            opts.add("-co"); opts.add(s"OVERVIEW_RESAMPLING=$overviewResampling")
-        }
 
         val tOpts = new TranslateOptions(opts)
         val result =

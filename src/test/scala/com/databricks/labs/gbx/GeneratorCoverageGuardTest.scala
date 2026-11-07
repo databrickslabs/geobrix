@@ -29,7 +29,7 @@ class GeneratorCoverageGuardTest extends PlanTest with SilentSparkSession {
             .filter(_.startsWith("gbx_"))
             .sorted
             .map { name =>
-                val info = registry.lookupFunction(org.apache.spark.sql.catalyst.FunctionIdentifier(name))
+                val info = registry.lookupFunction(com.databricks.labs.gbx.kernels.L1Installer.sessionFunctionId(name))
                 (name, info.map(_.getClassName).getOrElse(""))
             }
     }

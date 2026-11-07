@@ -1,8 +1,8 @@
 package com.databricks.labs.gbx.rasterx
 
+import com.databricks.labs.gbx.kernels.L1Installer
 import com.databricks.labs.gbx.kernels.TestL1
 import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
-import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.test.SilentSparkSession
@@ -18,7 +18,7 @@ class RST_BinPointsRegistrationTest extends PlanTest with SilentSparkSession {
     test("TestL1.installAll(spark) installs gbx_rst_binpoints in the session function registry") {
         TestL1.installAll(spark)
         spark.sessionState.functionRegistry
-            .lookupFunction(FunctionIdentifier("gbx_rst_binpoints")) should not be empty
+            .lookupFunction(L1Installer.sessionFunctionId("gbx_rst_binpoints")) should not be empty
     }
 
     test("rst_binpoints 10-arg Column wrapper delegates to RST_BinPoints.name") {

@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.gridx.grid
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.GeometryTypeEnum._
 import com.databricks.labs.gbx.vectorx.jts.{GeometryTypeEnum, JTS}
-import org.apache.spark.sql.types._
+import org.apache.spark.sql.types.{BinaryType, BooleanType, DataType, DecimalType, DoubleType, FloatType, IntegerType, LongType, StringType, StructField, StructType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom._
 import org.locationtech.jts.geom.util.PolygonExtracter

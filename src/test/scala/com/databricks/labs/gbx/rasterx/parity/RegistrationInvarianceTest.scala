@@ -4,7 +4,6 @@ import com.databricks.labs.gbx.kernels.L1Installer
 import com.databricks.labs.gbx.rasterx.expressions.agg.{
   RST_BNG_RasterizeAgg, RST_H3_RasterizeAgg, RST_Quadbin_RasterizeAgg
 }
-import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
@@ -42,7 +41,7 @@ class RegistrationInvarianceTest extends PlanTest with SilentSparkSession {
 
     expected.foreach { name =>
       withClue(s"$name must resolve in registry") {
-        spark.sessionState.functionRegistry.lookupFunction(FunctionIdentifier(name)) should not be empty
+        spark.sessionState.functionRegistry.lookupFunction(L1Installer.sessionFunctionId(name)) should not be empty
       }
     }
   }

@@ -17,6 +17,18 @@ import scala.util.{Failure, Try}
   * Scala decides nothing here; the Python registrar says which names exist and at which level. */
 object L1Installer {
 
+    /** Spark 4.3 keys the function registries by a 3-part identifier and asserts on any other; a session function
+      * is `system.session.<name>` there (what `createOrReplaceTempFunction` builds). Spark 4.0 to 4.2 key a session
+      * function by its bare name, and a `session` database would make it a different key. The one JAR runs on both,
+      * so the identifier is chosen at run time: `lookupFunctionEntry` exists on a registry from 4.3 on. */
+    private val qualifiedRegistryIds: Boolean =
+        classOf[org.apache.spark.sql.catalyst.analysis.FunctionRegistryBase[_]].getMethods.exists(_.getName == "lookupFunctionEntry")
+
+    /** The identifier a session function `name` is registered and looked up under, on the running Spark. */
+    def sessionFunctionId(name: String): FunctionIdentifier =
+        if (qualifiedRegistryIds) new FunctionIdentifier(name, Some("session"), Some("system"))
+        else FunctionIdentifier(name)
+
     private def companion(fqn: String): WithExpressionInfo = {
         // scalastyle:off classforname
         val cls = Class.forName(fqn + "$")
@@ -45,7 +57,7 @@ object L1Installer {
         if (sqlName != c.name && sqlName != privateName) {
             s"name-mismatch:${c.name}"
         } else {
-            spark.sessionState.functionRegistry.registerFunction(FunctionIdentifier(sqlName), c.info(), c.builder())
+            spark.sessionState.functionRegistry.registerFunction(sessionFunctionId(sqlName), c.info(), c.builder())
             "ok"
         }
     }
@@ -74,7 +86,7 @@ object L1Installer {
             bindLiterals(spark, fn, all)
             GdalSpecExpr(sqlName, all :+ ExpressionConfigExpr())
         }
-        spark.sessionState.functionRegistry.registerFunction(FunctionIdentifier(name), specInfo(name, fn), builder)
+        spark.sessionState.functionRegistry.registerFunction(sessionFunctionId(name), specInfo(name, fn), builder)
         "ok"
     }
 
@@ -116,11 +128,11 @@ object L1Installer {
         } else {
             val b = c.builder()
             spark.sessionState.tableFunctionRegistry.registerFunction(
-              FunctionIdentifier(sqlName),
+              sessionFunctionId(sqlName),
               c.info(),
               (args: Seq[Expression]) => Generate(b(args).asInstanceOf[Generator], Nil, outer = false, None, Nil, OneRowRelation())
             )
-            spark.sessionState.functionRegistry.registerFunction(FunctionIdentifier(sqlName), c.info(), b)
+            spark.sessionState.functionRegistry.registerFunction(sessionFunctionId(sqlName), c.info(), b)
             "ok"
         }
     }

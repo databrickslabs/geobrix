@@ -331,6 +331,11 @@ namespaces = true
 
 [tool.setuptools.package-data]
 geobrix = ["lib/*.jar", "resources/*.png"]
+# Ship the canonical registered-function list inside the bench package so the heavy
+# vs light comparison (spec.registered_rst) works when installed without the repo
+# tree (e.g. the wheel on a cluster). Kept in sync with the canonical
+# docs/tests-function-info/registered_functions.txt by check-binding-parity.py.
+"databricks.labs.gbx.bench" = ["registered_functions.txt"]
 # The per-surface manifest (functions.json) is read at runtime by the registrar and the UC DDL emitter.
 "databricks.labs.gbx.manifest" = ["*.json"]
 

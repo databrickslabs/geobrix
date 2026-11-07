@@ -97,17 +97,6 @@ def test_resolve_format_rejects_unsupported_reader():
         P.resolve_format("file_gbx")
 
 
-def test_read_paths_geojson_matches_batch_reader(spark, tmp_path):
-    a = _geojson(str(tmp_path / "a.geojson"), 3)
-    b = _geojson(str(tmp_path / "b.geojson"), 2)
-    got = P.read_paths(_paths_df(spark, [a, b]), "geojson_gbx")
-    want = _batch_read(spark, "geojson_gbx", str(tmp_path))
-    cols = [c for c in got.columns if not c.startswith("_source_")]
-    assert sorted(cols) == sorted(want.columns)
-    assert got.select(cols).exceptAll(want.select(cols)).count() == 0
-    assert got.count() == want.count() == 5
-
-
 def test_read_paths_lineage_strips_scheme_and_keeps_mtime(spark, tmp_path):
     a = _geojson(str(tmp_path / "a.geojson"), 2)
     got = P.read_paths(_paths_df(spark, [a]), "geojson").collect()
@@ -148,23 +137,6 @@ def test_read_paths_gpkg_layer_option(spark, tmp_path):
     )
     got = P.read_paths(_paths_df(spark, [p]), "gpkg_gbx", {"layerName": "pts"})
     assert got.count() == 2
-
-
-def test_read_paths_lidar(spark, tmp_path):
-    import laspy
-    import numpy as np
-
-    hdr = laspy.LasHeader(point_format=3, version="1.4")
-    hdr.offsets, hdr.scales = [0.0, 0.0, 0.0], [0.01, 0.01, 0.01]
-    las = laspy.LasData(hdr)
-    las.x = np.arange(10.0)
-    las.y = np.arange(10.0)
-    las.z = np.arange(10.0)
-    p = str(tmp_path / "t.las")
-    las.write(p)
-    got = P.read_paths(_paths_df(spark, [p]), "lidar_gbx")
-    want = _batch_read(spark, "lidar_gbx", p)
-    assert got.count() == want.count() == 10
 
 
 def test_read_paths_exif(spark, exif_jpeg):
@@ -1099,6 +1071,10 @@ def _las_file(path):
 @pytest.mark.parametrize(
     "fmt,make",
     [
+        (
+            "geojson_gbx",
+            lambda d: [_geojson(f"{d}/a.geojson", 3), _geojson(f"{d}/b.geojson", 2)],
+        ),
         ("gpkg_gbx", lambda d: [_gpkg_file(f"{d}/a.gpkg"), _gpkg_file(f"{d}/b.gpkg")]),
         (
             "shapefile_gbx",

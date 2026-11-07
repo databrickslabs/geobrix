@@ -16,6 +16,12 @@
     </scm>
 
     <properties>
+        <!-- jackson-databind (provided) must be the Spark build's own version: 2.18.2 for Spark 4.0.0.
+             Override with -Djackson.version=... when building against another Spark (Spark 4.3: 2.21.2). -->
+        <jackson.version>2.18.2</jackson.version>
+        <!-- Build output directory. A Spark compat build (gbx:test:scala with a spark-version option) points
+             it elsewhere so it never touches the default target/ and its JARs. -->
+        <gbx.build.dir>${project.basedir}/target</gbx.build.dir>
         <!-- Build Configuration -->
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
@@ -164,11 +170,13 @@
             <version>2.4.0</version>
             <scope>provided</scope>
         </dependency>
-        <!-- JSON for function-info (DESCRIBE FUNCTION examples); must match Spark 4.x / jackson-module-scala (>= 2.18.0) -->
+        <!-- JSON for function-info (DESCRIBE FUNCTION examples); must match the Spark jackson-module-scala.
+             jackson.version defaults to the Spark 4.0.0 value; a compat build overrides it with the
+             Spark version's own (see the spark-version option of gbx:test:scala). -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.18.2</version>
+            <version>${jackson.version}</version>
             <scope>provided</scope>
         </dependency>
         <!--geo dependencies-->
@@ -198,6 +206,7 @@
     </dependencies>
 
     <build>
+        <directory>${gbx.build.dir}</directory>
         <sourceDirectory>src/main/scala</sourceDirectory>
         <testSourceDirectory>src/test/scala</testSourceDirectory>
         <resources>

@@ -39,9 +39,9 @@ Three API packages, each with its own SQL prefix:
 | **GridX** | `com.databricks.labs.gbx.gridx.{bng,grid,h3}` | `databricks.labs.gbx.gridx.bng` | `gbx_bng_*` | Discrete global grids, primarily BNG (ported — preserve baseline behavior). |
 | **VectorX** | `com.databricks.labs.gbx.vectorx` | `databricks.labs.gbx.vectorx` | `gbx_st_*` | Augments product built-in ST functions: vector-tile (MVT) encoding, TIN surface modeling, and legacy-geometry migration. |
 
-Each package exposes `functions` with `register(spark)` to install SQL UDFs. Shared primitives (`expressions`, `ds`, `util`) live under `com.databricks.labs.gbx`. Spark data source registrations are in `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.
+Each package exposes `functions` with `register(spark)` to install SQL UDFs. Shared primitives (`expressions`, `ds`, `util`) live under `com.databricks.labs.gbx`. The JAR registers no data sources (no `META-INF/services/...DataSourceRegister`); the Python `register(spark)` installs them.
 
-**Readers** are namespace-suffixed (`<format>_<engine>`), e.g. raster (GDAL): `gdal`, `gtiff_gdal`, `netcdf_gdal`; vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`. Light readers use the `*_gbx` suffix (pure Python, no JAR). Named readers extend generic readers and preset driver options via `dsExtraMap`; generic readers (`ogr`, `gdal`) stay clean.
+**Readers** are all pure-Python DataSource V2 classes named `<format>_gbx` (no JAR; the Scala `gdal`/`ogr` readers were retired in 065bf3f12): raster `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx`, `zarr_gbx`, `pmtiles_gbx`; vector `vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx`, `file_gdb_gbx`; other `file_gbx`, `lidar_gbx`, `exif_gbx`. Named readers extend the generic ones (`raster_gbx`, `vector_gbx`) and preset driver options; the generic ones stay clean. Writers use the same `*_gbx` names (see `docs/docs/writers/overview.mdx`). Reader and writer registration is `databricks.labs.gbx.register(spark)` (or `manager.register_sources(spark, only=...)`), driven by the manifest's `datasources` rows with `impl: python`.
 
 Scala 2.13.16, Spark 4.0.0, Java 17. Python 3.12+. A **single wheel + single JAR** runs on DBR 17.3/18/19.
 

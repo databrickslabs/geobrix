@@ -511,6 +511,10 @@ validate_set() {
 # (EST/EDT) makes timestamp tests fail natively, and the Spark JVM takes its zone from TZ too.
 # GBX_TEST_TZ=<zone> runs under another zone on purpose, to check that a timestamp test does not
 # depend on UTC (the caller's own TZ is still ignored).
+# The host's bytecode goes to <venv>/pycache (PYTHONPYCACHEPREFIX), not into the tree's __pycache__ dirs, which the dev
+# container shares through the bind mount. pytest's rewritten test modules carry the absolute path of the file they were
+# compiled from, so a pyc the host wrote ran in the container with /Users/... as its source path, and a test that reads
+# its own source (inspect.getsource) found none there (the input-stamp tests failed, and only in the main tree).
 run_in_pyrx_venv() {
     local _cmd="$1"
     local _venv="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}"
@@ -521,7 +525,7 @@ run_in_pyrx_venv() {
     # shellcheck disable=SC1091
     source "${_venv}/bin/activate"
     PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" TZ="${GBX_TEST_TZ:-UTC}" \
-        bash -c "${_cmd}"
+        PYTHONPYCACHEPREFIX="${_venv}/pycache" bash -c "${_cmd}"
     local _rc=$?
     deactivate || true
     return $_rc

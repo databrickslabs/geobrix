@@ -125,7 +125,7 @@ def test_a_new_parity_suite_is_picked_up_without_editing_the_command(sandbox, tm
 
 def test_path_is_repeatable_and_runs_exactly_those_suites_in_order(sandbox):
     _parity_sandbox(sandbox, TEST_ROOT)
-    a = "python/geobrix/test/pyvx/test_parity_mvt.py"
+    a = "python/geobrix/test/pyvx/test_parity_tin.py"
     b = "python/geobrix/test/pygx/test_parity_bng.py"
 
     res, ran = _run_parity(sandbox, "--path", a, "--path", b)
@@ -140,12 +140,12 @@ def test_a_path_directory_runs_the_parity_suites_under_it(sandbox):
     res, ran = _run_parity(sandbox, "--path", "python/geobrix/test/pyvx/")
 
     assert ran and all(r.startswith("python/geobrix/test/pyvx/") for r in ran)
-    assert "python/geobrix/test/pyvx/test_parity_mvt.py" in ran
+    assert "python/geobrix/test/pyvx/test_parity_tin.py" in ran
 
 
 def test_a_repeated_path_runs_once(sandbox):
     _parity_sandbox(sandbox, TEST_ROOT)
-    a = "python/geobrix/test/pyvx/test_parity_mvt.py"
+    a = "python/geobrix/test/pyvx/test_parity_tin.py"
 
     res, ran = _run_parity(sandbox, "--path", a, "--path", a)
 
@@ -360,6 +360,7 @@ def _fake_venv(sandbox, venv=None):
         "#!/bin/sh\n"
         f'printf "%s|%s|%s\\n" "$PYSPARK_PYTHON" "$PYSPARK_DRIVER_PYTHON" "$*" >> "{log}"\n'
         f'printf "%s\\n" "$TZ" >> "{log}.tz"\n'
+        f'printf "%s\\n" "$PYTHONPYCACHEPREFIX" >> "{log}.pycache"\n'
         f'printf "%s\\n" "$@" > "{log}.argv"\n'  # one word per line: the last call's arguments
         '[ "$1" = "-" ] && cat > /dev/null\n'
         'exit "${FAKE_PYTHON_RC:-0}"\n'
@@ -390,6 +391,18 @@ def test_the_host_run_starts_spark_workers_on_the_venv_python(sandbox):
     assert Path(workers).resolve() == Path(driver).resolve() == python.resolve()
     assert "-m pytest python/geobrix/test/zarr/test_write.py" in argv
     assert sandbox.execs() == []  # the host run never reaches the container
+
+
+def test_the_host_run_keeps_its_bytecode_out_of_the_tree_the_container_shares(sandbox):
+    """pytest's rewritten test modules keep the absolute path of the file they were compiled from: one the host compiled
+    ran in the container with /Users/... as its source path, and a test reading its own source found none."""
+    python, log = _fake_venv(sandbox)
+
+    res = sandbox.run("gbx-test-pyrx.sh", "--path", "python/geobrix/test/zarr/test_write.py")
+
+    assert res.returncode == 0, res.output
+    prefix = Path(str(log) + ".pycache").read_text().strip()
+    assert Path(prefix) == python.parent.parent / "pycache"
 
 
 def _last_m(words):

@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
+import com.databricks.labs.gbx.rasterx.operator.{GDALTranslate, OperatorOptions}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GDT_Float64
 import org.gdal.ogr.{DataSource, Feature, FeatureDefn, FieldDefn, Geometry, Layer, ogr}
@@ -102,11 +103,16 @@ object VectorRasterBridge {
      *  We materialize through GTiff because the RasterX tile invariant is that
      *  binary tiles carry a GTiff-compatible byte stream (the `MEM` driver
      *  produces no bytes — there is nothing to read from `/vsimem/`).
+     *
+     *  The copy goes through [[GDALTranslate.executeTranslate]], so the bytes are encoded with the same codec,
+     *  predictor and tiling as every other derived heavyweight tile ([[OperatorOptions.appendOptions]]):
+     *  `compression` (default [[OperatorOptions.DefaultCompression]]) with the dtype-matched predictor. This is
+     *  the one encoder of the rasterize / binpoints / grid-from-points tile writers; a plain `CreateCopy`
+     *  wrote them uncompressed. Pixels are unchanged.
      */
-    def toGTiffBytes(ds: Dataset): Array[Byte] = {
+    def toGTiffBytes(ds: Dataset, compression: String = OperatorOptions.DefaultCompression): Array[Byte] = {
         val outPath = s"/vsimem/vrbridge_${UUID.randomUUID().toString.replace("-", "")}.tif"
-        val gtiffDriver = gdal.GetDriverByName("GTiff")
-        val out = gtiffDriver.CreateCopy(outPath, ds)
+        val (out, _) = GDALTranslate.executeTranslate(outPath, ds, "gdal_translate", Map("compression" -> compression))
         out.FlushCache()
         out.delete()
         val bytes = gdal.GetMemFileBuffer(outPath)

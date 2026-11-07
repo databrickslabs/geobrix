@@ -1,13 +1,17 @@
 package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
+import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
 import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_CogConvert, RST_Proximity, RST_Viewshed}
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.{Convolve, RasterTessellate, WindowedExtract}
+import com.databricks.labs.gbx.rasterx.util.VectorRasterBridge
 import org.apache.hadoop.conf.Configuration
+import org.apache.spark.sql.Row
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.StringType
@@ -288,6 +292,23 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
                 finally RasterDriver.releaseDataset(out)
             }
         }
+    }
+
+    test("the rasterize and binpoints tile writers emit the heavyweight default codec, not raw bytes") {
+        // RST_BinPoints.execute(x, y, z, xmin, ymin, xmax, ymax, w, h, srid, statistic): Array[Byte]
+        val pts = RST_BinPoints.execute(
+          Array(1.0, 2.0, 3.0), Array(1.0, 2.0, 3.0), Array(5.0, 6.0, 7.0), 0.0, 0.0, 64.0, 64.0, 64, 64, 4326, "mean")
+        assert(storedCompression(pts) == DerivedDefault, s"binpoints wrote ${storedCompression(pts)}")
+        // gbx_rst_bng_rasterize_agg's explicit-cells form: the other callers of VectorRasterBridge.toGTiffBytes
+        // (the rasterize aggregates, rst_gridfrompoints) share its encoder
+        val cells = new BngRasterizeCellsBytesUdf().call(
+          Seq(Row("TQ3080", 1.0), Row("TQ3180", 2.0)), 530000.0, 180000.0, 532000.0, 182000.0, 200, 200)
+        assert(storedCompression(cells) == DerivedDefault, s"bng cells wrote ${storedCompression(cells)}")
+        // an explicit NONE stays raw, and the default is much smaller than raw
+        val raw = VectorRasterBridge.toGTiffBytes(
+          { val p = mem("cells.tif"); gdal.FileFromMemBuffer(p, cells); gdal.Open(p) }, "NONE")
+        assert(storedCompression(raw) == null, "an explicit NONE must stay raw")
+        assert(cells.length < raw.length / 4, s"${cells.length} B vs raw ${raw.length} B")
     }
 
 }

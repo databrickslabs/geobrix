@@ -1208,6 +1208,32 @@ def register_h_combine_l3(spark):
     _register_light(spark, "gbx_rst_combineavg")
 
 
+_WIDE_SHUFFLE = 1000
+
+
+def h_combine_l3_sp1000(spark, src):
+    """`h_combine_l3` with `spark.sql.shuffle.partitions` at 1000 for this query only (bench-only A/B on the width of
+    the group-by shuffle: the default width packs ~16 groups of two 13 MB tiles into a task). The conf is set on classic
+    and dedicated sessions and put back after; it is never set on Serverless."""
+    from databricks.labs.gbx.manager.capabilities import is_serverless
+
+    key = "spark.sql.shuffle.partitions"
+    guarded = not is_serverless()
+    before = spark.conf.get(key, None) if guarded else None
+    if guarded:
+        spark.conf.set(key, str(_WIDE_SHUFFLE))
+    try:
+        df = spark.sql(_COMBINE_SQL.format(src=src))
+        r = df.collect()[0]
+    finally:
+        if guarded:
+            if before is None:
+                spark.conf.unset(key)
+            else:
+                spark.conf.set(key, before)
+    return r[0], r[1], r[2], df
+
+
 def register_h_heavy(spark):
     """The JVM names (RST_CombineAvg): needs the staged JAR. Replaces the light ones."""
     from databricks.labs.gbx import manager as gbx_manager
@@ -1440,6 +1466,14 @@ FORMS["H"] = [
         "h_combine_l3",
         "tiles_aligned_mat",
         sql=_COMBINE_SQL,
+        setup="register_h_combine_l3",
+    ),
+    _h(
+        "gbx_rst_combineavg",
+        "L3",
+        "h_combine_l3_sp1000",
+        "tiles_aligned_mat",
+        run="h_combine_l3_sp1000",
         setup="register_h_combine_l3",
     ),
     _h("rst_viewshed_towers", "L3", "h_towers_l3", "dsm_towers", run="h_towers_l3"),

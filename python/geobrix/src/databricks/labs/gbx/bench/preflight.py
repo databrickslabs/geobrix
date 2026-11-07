@@ -42,14 +42,20 @@ def forms_of(mvp: str, selected=()) -> list:
     return [
         f
         for f in lf.FORMS[mvp]
-        if (f.variant in selected if selected else not f.opt_in)
+        if (lf.form_named(f, selected) if selected else not f.opt_in)
     ]
 
 
 def unknown_form_names(mvp: str, selected) -> List[str]:
-    """The ``--levels-forms`` names that match no variant of `mvp` (all of them for a set with no forms)."""
-    known = {f.variant for f in lf.FORMS.get(mvp, ())}
-    return [n for n in selected if n not in known]
+    """The ``--levels-forms`` names that match no form of `mvp` (all of them for a set with no forms): neither a variant
+    nor a ``<function>:<variant>``."""
+    forms = lf.FORMS.get(mvp, ())
+    return [n for n in selected if not any(lf.form_named(f, (n,)) for f in forms)]
+
+
+def ambiguous_form_names(mvp: str, selected) -> dict:
+    """``{bare name: [qualified names]}`` for the bare ``--levels-forms`` names that are forms of several functions."""
+    return lf.ambiguous_form_names(mvp, selected)
 
 
 @contextlib.contextmanager

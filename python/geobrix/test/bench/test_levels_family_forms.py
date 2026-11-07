@@ -632,3 +632,46 @@ def test_a_synthesised_group_that_is_there_is_not_decoded_again(tmp_path, monkey
         assert synth.synthesize(src, recipe, out) == first
         assert src not in calls, calls
         monkeypatch.undo()
+
+
+# ---- --levels-forms picks a form by variant or by <function>:<variant>
+
+
+def test_a_bare_variant_of_two_functions_picks_both_and_a_qualified_name_picks_one():
+    both = {f.fn for f in lf.select_forms("A", ("c0",))}
+    assert {"gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"} <= both
+    one = lf.select_forms("A", ("gbx_rst_merge_agg:c0",))
+    assert [(f.fn, f.variant) for f in one] == [("gbx_rst_merge_agg", "c0")]
+    mixed = lf.select_forms(
+        "A", ("gbx_rst_merge_agg:c0", "gbx_rst_bng_rasterize_agg:tvf")
+    )
+    assert sorted((f.fn, f.variant) for f in mixed) == [
+        ("gbx_rst_bng_rasterize_agg", "tvf"),
+        ("gbx_rst_merge_agg", "c0"),
+    ]
+
+
+def test_only_a_bare_variant_of_several_functions_is_ambiguous_and_lists_the_qualified_names():
+    amb = lf.ambiguous_form_names("A", ("c0", "gbx_rst_merge_agg:c0", "no-such-form"))
+    assert list(amb) == ["c0"]
+    assert amb["c0"] == ["gbx_rst_bng_rasterize_agg:c0", "gbx_rst_merge_agg:c0"]
+    unique = next(
+        f
+        for f in lf.FORMS["A"]
+        if sum(g.variant == f.variant for g in lf.FORMS["A"]) == 1
+    )
+    assert lf.ambiguous_form_names("A", (unique.variant, lf.form_id(unique))) == {}
+
+
+def test_the_preflight_knows_a_qualified_name_and_judges_only_the_forms_it_names():
+    from databricks.labs.gbx.bench import preflight
+
+    assert preflight.unknown_form_names("A", ("gbx_rst_merge_agg:c0", "c0")) == []
+    assert preflight.unknown_form_names(
+        "A", ("gbx_rst_nope:c0", "gbx_rst_merge_agg:nope")
+    ) == [
+        "gbx_rst_nope:c0",
+        "gbx_rst_merge_agg:nope",
+    ]
+    got = preflight.forms_of("A", ("gbx_rst_merge_agg:c0",))
+    assert [(f.fn, f.variant) for f in got] == [("gbx_rst_merge_agg", "c0")]

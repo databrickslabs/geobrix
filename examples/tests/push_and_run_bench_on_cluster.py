@@ -492,7 +492,12 @@ def levels_scales_problem(levels_mvp, levels_scales, root, levels_forms=()) -> O
 
 
 def levels_forms_problem(levels_mvp, levels_forms, root) -> Optional[str]:
-    """The ``--levels-forms`` names that match no form of the set, as one message, or None when each matches one."""
+    """What is wrong with the ``--levels-forms`` names, as one message, or None when each matches the forms it means.
+
+    A name that matches no form is refused. So is a bare variant that is a form of several functions of the set
+    (``c0`` of ``gbx_rst_merge_agg`` and of ``gbx_rst_bng_rasterize_agg``): the message lists the qualified names
+    (``<function>:<variant>``) to pick from.
+    """
     if not levels_mvp or not levels_forms:
         return None
     sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
@@ -501,11 +506,33 @@ def levels_forms_problem(levels_mvp, levels_forms, root) -> Optional[str]:
     except ImportError:  # no pyspark here: the form table cannot be read, and the preflight says so
         return None
     bad = preflight.unknown_form_names(levels_mvp, levels_forms)
-    if not bad:
+    if bad:
+        known = sorted({f.variant for f in preflight.lf.FORMS.get(levels_mvp, ())})
+        have = ", ".join(known) if known else f"the set {levels_mvp} has no forms"
+        return f"--levels-forms names no form of --levels {levels_mvp}: {', '.join(bad)} (the forms: {have})"
+    return _ambiguous_forms_message(levels_mvp, preflight.ambiguous_form_names(levels_mvp, levels_forms))
+
+
+def _ambiguous_forms_message(levels_mvp, ambiguous) -> Optional[str]:
+    if not ambiguous:
         return None
-    known = sorted({f.variant for f in preflight.lf.FORMS.get(levels_mvp, ())})
-    have = ", ".join(known) if known else f"the set {levels_mvp} has no forms"
-    return f"--levels-forms names no form of --levels {levels_mvp}: {', '.join(bad)} (the forms: {have})"
+    lines = "; ".join(f"{name} is {', '.join(ids)}" for name, ids in ambiguous.items())
+    return (
+        f"--levels-forms names forms of several functions of --levels {levels_mvp}: {lines}. "
+        "Fix: pass the qualified name <function>:<variant> of each form you mean (all of them, to time them all)."
+    )
+
+
+def levels_forms_ambiguity(levels_mvp, levels_forms, root) -> Optional[str]:
+    """Only the ambiguous-name part of `levels_forms_problem`: the check a split run makes before it splits."""
+    if not levels_mvp or not levels_forms:
+        return None
+    sys.path.insert(0, str(Path(root) / "python/geobrix/src"))
+    try:
+        from databricks.labs.gbx.bench import preflight
+    except ImportError:
+        return None
+    return _ambiguous_forms_message(levels_mvp, preflight.ambiguous_form_names(levels_mvp, levels_forms))
 
 
 def launch_problems(w, *, serverless, wheel, env_version, levels_mvp, levels_scales, root, levels_forms=()) -> list:
@@ -811,10 +838,10 @@ def unsupported_node_message(node_type: str) -> str:
 
 
 def levels_functions(levels_mvp, root, only=(), compute=None) -> dict:
-    """``{function: [form names]}`` for the forms a run of the set times (the opt-in ones are left out, as the run
-    leaves them out), in the set's order; `only` limits it to those form names, `compute` (serverless, standard,
-    dedicated) to the forms that compute offers, so no part is a function with nothing to time there. {} where the
-    form table cannot load."""
+    """``{function: [qualified form names]}`` for the forms a run of the set times, each ``<function>:<variant>`` (the
+    opt-in ones are left out, as the run leaves them out), in the set's order; `only` limits it to those form names,
+    `compute` (serverless, standard, dedicated) to the forms that compute offers, so no part is a function with nothing
+    to time there. {} where the form table cannot load."""
     src = str(Path(root) / "python/geobrix/src")
     sys.path.insert(0, src)
     try:
@@ -831,13 +858,14 @@ def levels_functions(levels_mvp, root, only=(), compute=None) -> dict:
     out: dict = {}
     for f in forms:
         if compute is None or compute in f.computes:
-            out.setdefault(f.fn, []).append(f.variant)
+            out.setdefault(f.fn, []).append(lf.form_id(f))
     return out
 
 
 def split_by_function_args(argv, run_id, groups) -> list:
     """The argv of one launch per function: this launch's own, without ``--split-by`` and with its own ``--run-id``
-    (``<run>-<function>``) and ``--levels-forms`` (the function's form names)."""
+    (``<run>-<function>``) and ``--levels-forms`` (the function's qualified form names, ``<function>:<variant>``: a bare
+    variant such as ``c0`` is also a form of other functions of the set, and would pull theirs into this part)."""
     drop = {"--split-by": 1, "--run-id": 1, "--levels-forms": 1, "--part": 1}
     base, skip = [], 0
     for a in argv:
@@ -1269,6 +1297,12 @@ def _main(_stack) -> int:
         split_compute = (
             "serverless" if "--serverless" in sys.argv else ("standard" if _arg("--access-mode", "dedicated") == "standard" else "dedicated")
         )
+        ambiguity = levels_forms_ambiguity(
+            levels_mvp, levels_forms, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent)
+        )
+        if ambiguity:
+            print(f"ERROR: {ambiguity}", file=sys.stderr)
+            return 2
         groups = levels_functions(
             levels_mvp, Path(os.environ.get("GBX_SOURCE_ROOT") or TESTS_DIR.parent.parent), levels_forms, split_compute
         )

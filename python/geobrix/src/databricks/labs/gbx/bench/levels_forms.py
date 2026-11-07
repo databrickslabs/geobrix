@@ -2595,10 +2595,35 @@ from databricks.labs.gbx.bench import levels_family as _levels_family  # noqa: E
 _levels_family.install(__import__(__name__, fromlist=["x"]))
 
 
+def form_id(f: Form) -> str:
+    """The qualified name of a form, ``<function>:<variant>``: unique within a set, where a bare variant is not
+    (``c0`` is a form of both ``gbx_rst_merge_agg`` and ``gbx_rst_bng_rasterize_agg``).
+    """
+    return f"{f.fn}:{f.variant}"
+
+
+def form_named(f: Form, names) -> bool:
+    """True when `names` (``--levels-forms`` entries) pick the form: its qualified name, or its bare variant."""
+    return f.variant in names or form_id(f) in names
+
+
+def ambiguous_form_names(mvp: str, names) -> Dict[str, List[str]]:
+    """``{bare name: [qualified names]}`` for the bare entries of `names` that are the variant of forms of more than one
+    function of the set `mvp`. A qualified entry is never ambiguous."""
+    out: Dict[str, List[str]] = {}
+    for n in names:
+        if ":" in n or n in out:
+            continue
+        ids = sorted({form_id(f) for f in FORMS.get(mvp, ()) if f.variant == n})
+        if len({i.split(":", 1)[0] for i in ids}) > 1:
+            out[n] = ids
+    return out
+
+
 def select_forms(mvp: str, names=()) -> List[Form]:
-    """The forms of `mvp` a run times: those whose variant is in `names` (the ``--levels-forms`` ids, probe twins
-    included), or, with no names, every form that is not opt-in."""
-    return [f for f in FORMS[mvp] if (f.variant in names if names else not f.opt_in)]
+    """The forms of `mvp` a run times: those `names` (the ``--levels-forms`` ids, probe twins included) pick by variant
+    or by ``<function>:<variant>``, or, with no names, every form that is not opt-in."""
+    return [f for f in FORMS[mvp] if (form_named(f, names) if names else not f.opt_in)]
 
 
 # The one-worker readdir probe twins of the JVM forms (`bench.levels_probe`), opt-in

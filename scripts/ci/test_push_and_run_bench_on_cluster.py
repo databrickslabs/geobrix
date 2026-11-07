@@ -492,6 +492,48 @@ def test_split_by_fn_launches_one_job_per_function_with_its_own_run_id_and_forms
     assert first.count("--run-id") == 1 and first.count("--levels-forms") == 1  # the originals are replaced, not repeated
 
 
+def test_a_split_part_selects_only_its_own_functions_forms(monkeypatch):
+    """`c0`, `finalize` and `tvf` are forms of two aggregate functions: a part that passed the bare variants also ran
+    the other function's forms (and one function's failing form failed the other's smoke)."""
+    pytest.importorskip("pyspark")
+    import push_and_run_bench_on_cluster as mod
+
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "python/geobrix/src"))
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    groups = mod.levels_functions("A", REPO_ROOT)
+    fns = {"gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"}
+    assert fns <= set(groups)
+    for fn, names in groups.items():
+        assert all(n.startswith(f"{fn}:") for n in names)
+        assert {f.fn for f in lf.select_forms("A", tuple(names))} == {fn}  # nothing of another function's
+    plans = mod.split_by_function_args(["--levels", "A", "--split-by", "fn"], "r", {k: groups[k] for k in sorted(fns)})
+    for fn, args in plans:
+        assert set(args[args.index("--levels-forms") + 1].split(",")) == set(groups[fn])
+
+
+def test_a_bare_variant_of_several_functions_is_refused_with_the_qualified_names(launch, sdk, monkeypatch, capsys):
+    pytest.importorskip("pyspark")
+    import push_and_run_bench_on_cluster as mod
+
+    started = []
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda cmd: started.append(cmd))
+    for extra in ((), ("--split-by", "fn")):
+        rc = launch("--serverless", "--levels", "A", "--levels-only", "--levels-forms", "c0", *extra, "--no-wait")
+        err = capsys.readouterr().err
+        assert rc == 2 and not sdk.uploads and not started
+        assert "Fix:" in err and "gbx_rst_merge_agg:c0" in err and "gbx_rst_bng_rasterize_agg:c0" in err
+    # a qualified name, and a bare variant of one function only, go on
+    root = REPO_ROOT
+    assert mod.levels_forms_problem("A", ("gbx_rst_merge_agg:c0",), root) is None
+    assert mod.levels_forms_problem("A", ("gbx_rst_merge_agg:nope",), root).startswith("--levels-forms names no form")
+    unique = next(
+        f for f in sys.modules["databricks.labs.gbx.bench.levels_forms"].FORMS["A"]
+        if sum(g.variant == f.variant for g in sys.modules["databricks.labs.gbx.bench.levels_forms"].FORMS["A"]) == 1
+    )
+    assert mod.levels_forms_problem("A", (unique.variant,), root) is None
+
+
 def test_without_split_by_a_levels_run_is_one_job(launch, sdk, monkeypatch):
     assert launch("--serverless", "--levels", "IO", "--levels-only", "--no-wait") == 0
     assert len(sdk.submits) == 1

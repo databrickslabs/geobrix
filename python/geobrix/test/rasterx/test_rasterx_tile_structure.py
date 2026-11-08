@@ -122,7 +122,7 @@ def test_tile_from_content_contains_binary(spark):
 
     df = (
         spark.read.format("binaryFile")
-        .load(str(MODIS_DIR))
+        .load(MODIS_DIR.as_uri())
         .select(rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"))
         .select(f.col("tile.raster").alias("raster_binary"))
     )
@@ -294,7 +294,7 @@ def test_access_raster_binary_for_custom_udfs(spark):
 
     df = (
         spark.read.format("binaryFile")
-        .load(str(MODIS_DIR))
+        .load(MODIS_DIR.as_uri())
         .limit(1)
         .select(rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"))
         .select(

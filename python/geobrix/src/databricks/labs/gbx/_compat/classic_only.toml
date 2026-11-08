@@ -6,6 +6,10 @@
 # python/geobrix/test/pyrx/test_connect_serverless_compat.py scans every shipped package (not bench/, a developer
 # harness) and fails on a use that is not listed, and on an entry that matches no code.
 #
+# bench/ is a developer harness, not a public API. It ships in the wheel on purpose: the cluster bench launcher runs it
+# from the env wheel on the cluster. Product code never imports it (the guard test fails on that), and it reaches the
+# JVM, sparkContext and conf freely because the operator picks the compute it runs on.
+#
 # [[site]]    one per (path, symbol, api): a use the scan finds in the syntax tree. `symbol` is the enclosing function
 #             (a function nested in it is covered too). `api` lists the APIs used there.
 # [[feature]] behaviour no API pattern can see (a refusal on Serverless, a level that needs the JAR). `symbol` must be

@@ -125,6 +125,20 @@ def test_transformcrs_keeps_the_z_a_vertex_has_and_marks_the_rest_nan(text, expe
         assert (z != z) if want is None else z == pytest.approx(want)
 
 
+def test_transformcrs_partial_z_from_a_projected_source_passes_the_domain_check():
+    # a projected source takes the force_2d lon/lat sample: the NaN Z must not reach PROJ and NULL the row
+    out = _crs.st_transformcrs(
+        "SRID=32633;LINESTRING Z (500000 5649824.888 5, 568649.7 5761510.3)",
+        "EPSG:4326",
+    )
+    assert out is not None
+    pts = get_coordinates(_text_geom(out), include_z=True)
+    assert pts[0][0] == pytest.approx(15.0, abs=1e-3)
+    assert pts[0][1] == pytest.approx(51.0, abs=1e-3)
+    assert pts[0][2] == pytest.approx(5.0)
+    assert pts[1][2] != pts[1][2]
+
+
 def test_transformcrs_sql_bytes_of_mixed_dimension_text_carry_the_z():
     out = from_wkb(
         _crs._udf_st_transformcrs(

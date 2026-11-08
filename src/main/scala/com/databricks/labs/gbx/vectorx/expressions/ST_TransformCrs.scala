@@ -13,10 +13,9 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.ogr.{Geometry => OGRGeometry}
 import org.gdal.osr.CoordinateTransformation
 import org.locationtech.jts.geom.impl.CoordinateArraySequence
-import org.locationtech.jts.geom.util.GeometryEditor
 import org.locationtech.jts.geom.{
-    Coordinate, CoordinateSequence, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
-    Polygon, Geometry => JTSGeometry
+    Coordinate, CoordinateSequence, GeometryCollection, LinearRing, LineString, MultiLineString, MultiPoint,
+    MultiPolygon, Point, Polygon, Geometry => JTSGeometry
 }
 
 import scala.util.Try
@@ -297,16 +296,38 @@ private[expressions] object TransformCrsCore {
         var k = 0
         for (i <- in.indices if hasZ(i)) { zOut(i) = movedZ(k); k += 1 }
 
-        // The reprojected geometry is XY only: rebuild each sequence with the Z carried through, in the
-        // same vertex order the input was read in.
+        // The reprojected geometry is XY only: rebuild it with the Z carried through, in the same
+        // vertex order the input was read in. An EMPTY part has no vertex and is kept as it is
+        // (JTS's GeometryEditor would drop it from a collection).
         var next = 0
-        new GeometryEditor(gProj.getFactory).edit(gProj, new GeometryEditor.CoordinateSequenceOperation {
-            override def edit(seq: CoordinateSequence, geometry: JTSGeometry): CoordinateSequence = {
-                val cs = Array.tabulate(seq.size)(i => new Coordinate(seq.getX(i), seq.getY(i), zOut(next + i)))
-                next += seq.size
-                new CoordinateArraySequence(cs)
-            }
-        })
+        val gf = gProj.getFactory
+        def seq(s: CoordinateSequence): CoordinateSequence = {
+            val cs = Array.tabulate(s.size)(i => new Coordinate(s.getX(i), s.getY(i), zOut(next + i)))
+            next += s.size
+            new CoordinateArraySequence(cs, 3)
+        }
+        def rebuild(p: JTSGeometry): JTSGeometry = p match {
+            case e if e.isEmpty => e
+            case pt: Point => gf.createPoint(seq(pt.getCoordinateSequence))
+            case r: LinearRing => gf.createLinearRing(seq(r.getCoordinateSequence))
+            case l: LineString => gf.createLineString(seq(l.getCoordinateSequence))
+            case poly: Polygon =>
+                val shell = rebuild(poly.getExteriorRing).asInstanceOf[LinearRing]
+                val holes = Array.tabulate(poly.getNumInteriorRing)(i =>
+                    rebuild(poly.getInteriorRingN(i)).asInstanceOf[LinearRing])
+                gf.createPolygon(shell, holes)
+            case c: GeometryCollection =>
+                val parts = Array.tabulate(c.getNumGeometries)(i => rebuild(c.getGeometryN(i)))
+                c match {
+                    case _: MultiPoint => gf.createMultiPoint(parts.map(_.asInstanceOf[Point]))
+                    case _: MultiLineString => gf.createMultiLineString(parts.map(_.asInstanceOf[LineString]))
+                    case _: MultiPolygon => gf.createMultiPolygon(parts.map(_.asInstanceOf[Polygon]))
+                    case _ => gf.createGeometryCollection(parts)
+                }
+        }
+        val out = rebuild(gProj)
+        out.setSRID(gProj.getSRID)
+        out
     }
 
     /** Z-aware OGR reprojection through a cache-owned CoordinateTransformation.

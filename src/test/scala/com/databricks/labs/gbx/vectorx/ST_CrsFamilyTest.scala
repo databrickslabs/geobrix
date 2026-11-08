@@ -826,6 +826,32 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         g.getSRID shouldBe 32633
     }
 
+    test("ST_TransformCrs.evalSql: partial Z with an EMPTY member keeps the EMPTY member and the real Z") {
+        val out = ST_TransformCrs.evalSql(
+            UTF8String.fromString(
+                "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52), POINT EMPTY)"),
+            UTF8String.fromString("EPSG:32633"))
+        assert(out != null)
+        val g = JTS.fromWKB(out)
+        g.getSRID shouldBe 32633
+        g.getNumGeometries shouldBe 3
+        g.getGeometryN(0).getCoordinate.z shouldBe 5.0
+        assert(g.getGeometryN(1).getCoordinate.z.isNaN)
+        assert(g.getGeometryN(2).isEmpty)
+    }
+
+    test("ST_TransformCrs.evalSql: partial Z in a MultiPoint with an EMPTY part stays a MultiPoint of 3") {
+        val out = ST_TransformCrs.evalSql(
+            UTF8String.fromString("SRID=4326;MULTIPOINT Z ((15 51 5), (16 52), EMPTY)"),
+            UTF8String.fromString("EPSG:32633"))
+        assert(out != null)
+        val g = JTS.fromWKB(out)
+        g.getGeometryType shouldBe "MultiPoint"
+        g.getNumGeometries shouldBe 3
+        g.getGeometryN(0).getCoordinate.z shouldBe 5.0
+        assert(g.getGeometryN(2).isEmpty)
+    }
+
     test("ST_SetCrs.evalSql / ST_Crs: a collection with an EMPTY point keeps both members") {
         ST_Crs.eval(emptyMember).toString shouldBe "EPSG:4326"
         val out = ST_SetCrs.evalSql(emptyMember, UTF8String.fromString("EPSG:32633"))

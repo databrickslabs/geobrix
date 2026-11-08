@@ -233,11 +233,11 @@ if grep -q 'No changes found' "$SCAN_FILE"; then
     exit 4
 fi
 
-if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long' "$SCAN_FILE"; then
+if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long|Agent execution failed|Failed to parse claude output' "$SCAN_FILE"; then
     rm -f "$SCAN_FILE"
     echo "" >&2
     echo -e "${RED}Isaac Review FAILED silently:${NC} the model call errored (likely 'Prompt is too long' —" >&2
-    echo -e "the ${FILE_COUNT}-file diff overflowed the context window). A '0 findings' result from this" >&2
+    echo -e "the ${FILE_COUNT}-file diff overflowed the context window, or a reviewer agent failed to run). A '0 findings' result from this" >&2
     echo -e "run is ${RED}NOT${NC} trustworthy. Narrow the scope with ${GREEN}--base <recent-ref>${NC} so each pass fits," >&2
     echo -e "or review in smaller commit-range slices." >&2
     exit 4

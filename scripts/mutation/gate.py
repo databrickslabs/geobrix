@@ -610,11 +610,14 @@ class WorkerBudget:
         self.dir = Path(directory) if directory else slots_dir()
         self.capacity = capacity or worker_capacity()
         env_wait = os.environ.get("GBX_MUTATION_SLOT_WAIT", "").strip()
-        self.wait_timeout = (
-            wait_timeout
-            if wait_timeout is not None
-            else (float(env_wait) if env_wait else 3600.0)
-        )
+        try:
+            env_wait_s = float(env_wait) if env_wait else 3600.0
+        except ValueError:
+            sys.exit(
+                f"GBX_MUTATION_SLOT_WAIT is '{env_wait}', not a number of seconds. "
+                "Fix: set it to the seconds to wait for a worker slot, or unset it."
+            )
+        self.wait_timeout = wait_timeout if wait_timeout is not None else env_wait_s
         self.grace, self.progress, self.clock, self.sleep = (
             grace,
             progress,

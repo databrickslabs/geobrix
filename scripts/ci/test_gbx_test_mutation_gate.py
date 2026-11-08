@@ -727,6 +727,13 @@ def _budget(pool_dir, capacity=6, **kw):
     return gate.WorkerBudget(pool_dir, capacity=capacity, **kw)
 
 
+def test_a_slot_wait_that_is_not_a_number_exits_with_a_fix(monkeypatch, tmp_path):
+    monkeypatch.setenv("GBX_MUTATION_SLOT_WAIT", "soon")
+    with pytest.raises(SystemExit) as exc:
+        _budget(tmp_path)
+    assert "Fix:" in str(exc.value)
+
+
 def test_the_capacity_is_the_cores_less_two_unless_the_env_says_otherwise(monkeypatch):
     monkeypatch.delenv("GBX_MUTATION_MAX_WORKERS", raising=False)
     monkeypatch.setattr(gate.os, "cpu_count", lambda: 12)

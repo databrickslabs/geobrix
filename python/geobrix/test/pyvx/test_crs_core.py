@@ -6,7 +6,7 @@ the text it is written in, and the Python defaults.
 """
 
 import pytest
-from shapely import from_wkb, from_wkt, get_srid, set_srid, to_wkb
+from shapely import from_wkb, from_wkt, get_coordinates, get_srid, set_srid, to_wkb
 from shapely.geometry import Point
 
 from databricks.labs.gbx.pyvx import _crs, _validity
@@ -100,6 +100,43 @@ def test_the_untouched_2d_stays_2d_in_the_bytes_the_sql_functions_write():
     assert len(_crs._udf_st_transformcrs(_ewkb(4326), "EPSG:32633")) == 25
     assert len(_crs._udf_st_setcrs("POINT (11 42)", "EPSG:4326")) == 25
     assert _crs._udf_st_transformcrs(_ewkb(4326), None) is None
+
+
+@pytest.mark.parametrize(
+    "text,expect_z",
+    [
+        ("SRID=4326;LINESTRING Z (15 51 5, 16 52)", [5.0, None]),
+        ("SRID=4326;LINESTRING Z (15 51 5, 16 52 NaN)", [5.0, None]),
+        ("SRID=4326;MULTIPOINT Z ((15 51 5), (16 52))", [5.0, None]),
+        ("SRID=4326;LINESTRING Z (15 51 NaN, 16 52 6)", [None, 6.0]),
+        (
+            "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))",
+            [5.0, None],
+        ),
+    ],
+)
+def test_transformcrs_keeps_the_z_a_vertex_has_and_marks_the_rest_nan(text, expect_z):
+    # a real Z is never dropped and a missing one is never filled with 0; X and Y still move
+    g = _text_geom(_crs.st_transformcrs(text, "EPSG:32633"))
+    pts = get_coordinates(g, include_z=True)
+    assert g.has_z and len(pts) == len(expect_z)
+    for (x, y, z), want in zip(pts, expect_z):
+        assert 4e5 < x < 7e5 and 5.6e6 < y < 5.8e6
+        assert (z != z) if want is None else z == pytest.approx(want)
+
+
+def test_transformcrs_sql_bytes_of_mixed_dimension_text_carry_the_z():
+    out = from_wkb(
+        _crs._udf_st_transformcrs(
+            "SRID=4326;LINESTRING Z (15 51 5, 16 52)", "EPSG:32633"
+        )
+    )
+    z = get_coordinates(out, include_z=True)[:, 2]
+    assert z[0] == pytest.approx(5.0) and z[1] != z[1]
+
+
+def test_crs_reads_the_srid_of_mixed_dimension_text():
+    assert _crs.st_crs("SRID=4326;LINESTRING Z (15 51 5, 16 52)") == "EPSG:4326"
 
 
 def test_makevalid_defaults_to_the_linework_level():

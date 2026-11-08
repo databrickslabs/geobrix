@@ -14,6 +14,30 @@ from databricks.labs.gbx._geom import geom_to_wkb, parse_geom  # noqa: E402
 
 
 # --- parse_geom -------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text,zs",
+    [
+        ("LINESTRING Z (15 51 5, 16 52)", [5.0, None]),
+        ("MULTIPOINT Z ((15 51 5), (16 52))", [5.0, None]),
+        ("SRID=4326;LINESTRING ZM (15 51 5 99, 16 52)", [5.0, None]),
+    ],
+)
+def test_parse_geom_mixed_dimension_text_keeps_the_z_it_has_and_marks_the_rest_nan(
+    text, zs
+):
+    # never a fill of 0, never a dropped real Z
+    g = parse_geom(text)
+    got = shapely.get_coordinates(g, include_z=True)[:, 2]
+    assert [None if z != z else z for z in got] == zs
+    assert get_srid(g) == (4326 if text.startswith("SRID") else 0)
+
+
+def test_parse_geom_plain_2d_text_stays_2d_and_garbage_still_raises():
+    assert not parse_geom("LINESTRING (15 51, 16 52)").has_z
+    with pytest.raises(Exception):
+        parse_geom("LINESTRING Z (15 51 5, oops)")
+
+
 def test_parse_geom_wkb_point():
     g = parse_geom(to_wkb(Point(1, 2)))
     assert g.geom_type == "Point"

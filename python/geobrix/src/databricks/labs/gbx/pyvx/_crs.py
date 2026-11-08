@@ -74,11 +74,12 @@ The measure is TRUNCATED, never traded for something else: an ``M``-only geometr
 
 A geometry where **every** vertex has a finite Z keeps its Z through both ``st_setcrs``
 and ``st_transformcrs``; a genuinely 2D geometry stays 2D.  For a **partial-Z** geometry
-(some vertices carry a Z, some do not):
+(some vertices carry a Z, some do not) the rule is one: **keep the Z values that exist,
+mark the missing ones NaN**:
 
-- ``st_transformcrs`` reprojects it as **2D**.  Reprojecting a non-finite Z propagates it
-  into X and Y, so the vertex would come back with no position at all — dropping the Z
-  keeps every X/Y correct.
+- ``st_transformcrs`` reprojects X and Y of every vertex and carries the Z through the
+  transformation for the vertices that have one (:func:`_reproject`).  Handing PROJ a
+  non-finite Z would propagate it into X and Y, so those vertices are transformed without it.
 - ``st_setcrs`` writes the Z back verbatim, because it only stamps an SRID and never
   touches coordinates.  A *mixed-dimensionality WKT body* (which no WKT parser accepts)
   is normalized to uniform 3D first, carrying ``NaN`` for the absent Z — the same
@@ -87,17 +88,16 @@ and ``st_transformcrs``; a genuinely 2D geometry stays 2D.  For a **partial-Z** 
 
 Nothing raises (mixed-dimensionality input must not break a column) and nothing is
 fabricated — a missing Z is never filled with ``0``, which would be indistinguishable
-from measured elevation downstream.  This is the CURRENT rule, matching the heavyweight
-tier.
+from measured elevation downstream.
 
 Serverless-safe: pure Python plus shapely/pyproj, driven entirely through UDFs.
 Session configuration, the JVM bridge, and the resilient-distributed-dataset API
 are all untouched.
 """
 
-import re
 from typing import Optional, Union
 
+import numpy as np
 from shapely import (
     force_2d,
     from_wkb,
@@ -108,6 +108,7 @@ from shapely import (
     to_wkb,
     to_wkt,
 )
+from shapely import transform as shapely_transform
 from shapely.ops import transform
 
 from databricks.labs.gbx.core.crs import (
@@ -132,79 +133,6 @@ def _is_text(x) -> bool:
 # ---------------------------------------------------------------------------
 # Z normalization
 # ---------------------------------------------------------------------------
-
-# A WKT numeric ordinate: decimal, exponent, or the non-finite tokens a 3D writer emits
-# for a missing Z (NaN / inf, optionally signed).
-_WKT_NUM_RE = re.compile(
-    r"[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?" r"|[-+]?nan" r"|[-+]?inf(?:inity)?",
-    re.IGNORECASE,
-)
-
-# A ``Z`` / ``M`` / ``ZM`` dimensionality tag standing as its own token, e.g. the ``Z`` in
-# ``POINT Z (...)`` or in ``POINT Z EMPTY``. Matched with word boundaries so the ``M`` in
-# ``MULTIPOINT`` or the ``Z`` inside a name is never touched.
-_WKT_DIMTAG_RE = re.compile(r"\s+\b(?:ZM|Z|M)\b", re.IGNORECASE)
-
-# The ``EMPTY`` keyword. An empty component carries no ordinates to pad, so its
-# dimensionality can only be restored by re-tagging it explicitly.
-_WKT_EMPTY_RE = re.compile(r"\bEMPTY\b", re.IGNORECASE)
-
-
-def _wkt_pad_z(wkt: str) -> str:
-    """Rewrite a WKT/EWKT body to uniform 3D: every coordinate gets exactly 3 ordinates.
-
-    ONLY meaningful for a body GEOS has already refused to parse. A WKT whose parts
-    disagree about dimensionality (``GEOMETRYCOLLECTION Z (POINT Z (11 42 5), POINT
-    (12 43))``) is rejected outright — ``Cannot mix dimensionality in a geometry`` — so
-    there is no geometry object to normalize and the text must be made uniform first.
-
-    PRECONDITION: call this only on WKT that failed to parse (see
-    :func:`_parse_geom_safe`, its sole caller). Applied to clean 2D WKT it would pad
-    ``POINT (11 42)`` to ``POINT (11 42 NaN)``, turning a 2D geometry 3D — so it must
-    never become an unconditional pre-parse step. :func:`_parse_geom_safe` enforces this
-    by trying a plain parse first and only falling back here.
-
-    Padding UP to 3D (missing Z -> the ``NaN`` token) rather than stripping down to 2D
-    reproduces the heavyweight tier exactly: JTS reads that same WKT into a uniformly-3D
-    geometry carrying ``NaN`` for the absent Z, which is why heavy's ``st_setcrs`` returns
-    ``POINT Z (12 43 NaN)``. ``NaN`` is the ABSENCE of a Z — the marker JTS and shapely
-    both already use internally — not a fabricated elevation; nothing invents a 0.
-
-    Two structural rules make this work for every WKT shape rather than the flat
-    ``GEOMETRYCOLLECTION Z (POINT Z, POINT)`` case only:
-
-    1. **Strip every dimensionality tag first, then let the writer re-derive it.** Editing
-       ordinates while leaving the original tags in place produces contradictions that
-       GEOS rejects just as hard as the input did — a truncated ``POINT ZM (1 2 3)``, or a
-       nested ``GEOMETRYCOLLECTION`` whose coordinates gained a Z but whose tag did not.
-       With all tags removed, a uniform 3-ordinate body parses and shapely re-emits the
-       correct ``Z`` tags at every nesting level.
-    2. **A chunk with fewer than 2 numbers is a keyword, not a coordinate.** An ``EMPTY``
-       component has no ordinates to pad, so it is re-tagged ``Z EMPTY`` explicitly —
-       otherwise it would come back 2D inside an otherwise-3D collection and the encoded
-       bytes would differ from heavy's. A bare top-level ``GEOMETRYCOLLECTION EMPTY``
-       stays 2D, matching heavy (there is nothing to be 3D about).
-
-    **M is dropped**, matching heavy: JTS is XYZ-only, so heavy reads ``POINT ZM (1 2 3 4)``
-    as ``POINT Z (1 2 3)`` and the measure is gone. Keeping M here would make the tiers
-    disagree, and M is out of scope for this family (as it is for ``st_legacyaswkb``).
-    """
-    out = []
-    for chunk in re.split(r"([(),])", wkt):
-        if chunk in "(),":
-            out.append(chunk)
-            continue
-        nums = _WKT_NUM_RE.findall(chunk)
-        if len(nums) < 2:
-            # Keyword chunk (POINT, GEOMETRYCOLLECTION, EMPTY, ...): drop any dim tag so
-            # the writer re-derives it from the now-uniform ordinates, then re-assert Z on
-            # an EMPTY component, which has no ordinates to derive it from.
-            out.append(_WKT_EMPTY_RE.sub("Z EMPTY", _WKT_DIMTAG_RE.sub("", chunk)))
-            continue
-        # Coordinate chunk: exactly 3 ordinates (M truncated, missing Z -> NaN).
-        ordinates = nums[:3] + ["NaN"] * max(0, 3 - len(nums))
-        out.append(" " + " ".join(ordinates) + " ")
-    return "".join(out)
 
 
 def _drop_m(g):
@@ -261,29 +189,31 @@ def _has_partial_z(g) -> bool:
     return bool((z != z).any() or (abs(z) == float("inf")).any())
 
 
-def _as_2d(g):
-    """Return the 2D form of ``g``, preserving its SRID (``force_2d`` clears it)."""
-    srid = int(get_srid(g))
-    g2d = force_2d(g)
-    return set_srid(g2d, srid) if srid > 0 else g2d
+def _reproject(tr, g):
+    """Reproject ``g`` with the pyproj transformer ``tr``, keeping every Z the geometry has.
 
+    A geometry whose Z is uniformly finite (or absent) goes through the transformer in one
+    call, exactly as before.  A partial-Z geometry cannot: PROJ propagates a non-finite Z into
+    X and Y, so the vertex would come back ``NaN NaN NaN`` and lose its horizontal position.
+    So X and Y of every vertex are reprojected without a Z, and the Z is carried through the
+    transformation only for the vertices that have one; the others stay ``NaN``.
 
-def _drop_partial_z(g):
-    """Return ``g`` unchanged when its Z is uniformly finite (or absent), else its 2D form.
-
-    Applied before reprojection.  A partial-Z geometry cannot be reprojected in 3D: PROJ
-    propagates the non-finite Z into X and Y, so the vertex comes back ``NaN NaN NaN`` —
-    silent loss of the horizontal position, which is far worse than losing the Z.  Dropping
-    to 2D keeps every X/Y correct.  The heavyweight tier reaches the same 2D answer from the
-    other direction (OGR refuses non-finite ordinates outright).
-
-    Z is never fabricated: a vertex with no elevation stays without one rather than getting
-    an invented value (e.g. 0) that would be indistinguishable from measured elevation
-    downstream.  Never raises.
-
-    NOTE: this is the CURRENT rule for partial-Z input on both tiers.
+    Nothing is fabricated and nothing real is dropped: a missing Z is never filled with ``0``
+    (indistinguishable from a measured elevation), and a Z that exists is never discarded.
+    The heavyweight tier follows the same rule.  Never raises on a missing Z.
     """
-    return _as_2d(g) if _has_partial_z(g) else g
+    if not _has_partial_z(g):
+        return transform(tr.transform, g)
+
+    def _apply(coords):
+        x, y = tr.transform(coords[:, 0], coords[:, 1])
+        z = coords[:, 2].copy()
+        has_z = np.isfinite(z)
+        if has_z.any():
+            z[has_z] = tr.transform(coords[has_z, 0], coords[has_z, 1], z[has_z])[2]
+        return np.column_stack([x, y, z])
+
+    return shapely_transform(g, _apply, include_z=True)
 
 
 def _has_nonfinite_xy(g) -> bool:
@@ -293,9 +223,9 @@ def _has_nonfinite_xy(g) -> bool:
     ``Infinity`` for a mismatched CRS or an invalid latitude).  Only X/Y is inspected —
     Z is excluded deliberately:
 
-    - ``_drop_partial_z`` strips any NaN Z *before* the transform, so a non-finite value
-      left in X or Y after the transform is unambiguously from the projection, not from a
-      legitimately absent Z ordinate.
+    - :func:`_reproject` transforms X/Y of a partial-Z geometry without its Z, so a
+      non-finite value left in X or Y after the transform is unambiguously from the
+      projection, not from a legitimately absent Z ordinate.
     - Clean-3D geometries (every Z finite) carry those Z values through unchanged; their
       Z cannot become non-finite via a 2D CRS change.
 
@@ -314,32 +244,23 @@ def _has_nonfinite_xy(g) -> bool:
 
 
 def _parse_geom_safe(geom):
-    """Parse a geometry input, retrying mixed-dimensionality WKT as uniform 3D.
+    """Parse a geometry input for the CRS functions: ``None`` when it cannot be read at all.
 
     THE single parse entry point for every CRS function AND for the registered SQL UDFs.
-    Routing every parse through here is what keeps the never-error invariant true on the
-    surface users actually call: a bare ``parse_geom`` raises ``GEOSException`` on
-    mixed-dimensionality WKT, and one such row is enough to kill a whole stage.
-
-    Binary input always parses (EWKB declares one dimensionality for the whole geometry),
-    so the retry only ever fires for text.  Returns ``None`` when the input cannot be
-    parsed at all — callers treat that as a pass-through, never as an error.
+    :func:`databricks.labs.gbx._geom.parse_geom` reads mixed-dimensionality WKT (a Z on one
+    vertex only) as uniform 3D, keeping the Z values that exist and marking the missing ones
+    ``NaN``; what no reader can parse comes back ``None`` here, never as an error, so one
+    unreadable row cannot kill a whole stage.  Callers treat ``None`` as a pass-through.
 
     M is dropped here (:func:`_drop_m`) rather than in each function, so the invariant
     "no geometry inside this module ever carries an M" holds by construction — the same
-    place heavy drops it (its JTS readers). ``_wkt_pad_z`` already truncates M on the
-    mixed-dimensionality retry path; this covers the far more common case of WKT/WKB that
-    parses on the first attempt, which is every UNIFORM ZM geometry.
+    place heavy drops it (its JTS readers). This covers WKT/WKB that parses on the first
+    attempt, which is every UNIFORM ZM geometry, as well as the mixed-dimensionality retry.
     """
     try:
         g = parse_geom(geom)
-    except Exception:  # noqa: BLE001 — mixed-dimensionality WKT and plain garbage alike
-        if not isinstance(geom, str):
-            return None
-        try:
-            g = parse_geom(_wkt_pad_z(geom))
-        except Exception:  # noqa: BLE001
-            return None
+    except Exception:  # noqa: BLE001 — unreadable text/bytes alike
+        return None
     return _drop_m(g) if g is not None else None
 
 
@@ -399,7 +320,7 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     - str in (WKT / EWKT) -> EWKT str out (``SRID=<n>;<WKT>``).
 
     Coordinates are preserved exactly (``rounding_precision=-1``).  Z is preserved
-    when every vertex carries a finite one; a partial-Z geometry is stamped as 2D.
+    for every vertex that carries a finite one; the others stay ``NaN``.
 
     Args:
         geom: WKB / EWKB bytes, or WKT / EWKT string. None returns None.
@@ -420,7 +341,7 @@ def st_setcrs(geom, crs: Union[int, str]) -> Union[bytes, str]:
     g = _parse_geom_safe(geom)
     if g is None:
         return None
-    # NOTE: no _drop_partial_z here, deliberately. st_setcrs only stamps an integer
+    # NOTE: no reprojection here, deliberately. st_setcrs only stamps an integer
     # SRID — it never touches coordinates, so a non-finite Z cannot corrupt X/Y the
     # way it does through a reprojection. Whatever Z the input carried is written back
     # verbatim, which is also what the heavyweight tier's ST_SetCrs does.
@@ -474,8 +395,8 @@ def st_transformcrs(
       such as ``OGC:CRS84``) -> the now-stale SRID is cleared (plain form).
 
     Coordinates are preserved exactly (``rounding_precision=-1``).  Z is carried
-    through the reprojection when every vertex has a finite one; a partial-Z
-    geometry is reprojected as 2D (see the module docstring).
+    through the reprojection for every vertex that has a finite one; the others stay
+    ``NaN`` (see the module docstring).
 
     Args:
         geom: WKB / EWKB bytes, or WKT / EWKT string.
@@ -499,10 +420,6 @@ def st_transformcrs(
     if g is None:
         # Unparseable geometry DATA -> NULL (not a parameter error).
         return None
-    # Partial-Z input is reprojected in 2D: PROJ would otherwise propagate the
-    # non-finite Z into X and Y and lose the horizontal position entirely.
-    g = _drop_partial_z(g)
-
     # Resolve source CRS — data errors degrade to NULL; parameter errors raise.
     embedded_srid = int(get_srid(g))
     src = None
@@ -541,7 +458,7 @@ def st_transformcrs(
         grid_dirs = _env.pyproj_grid_dirs()
     _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
     tr = get_transformer(src, tgt)
-    g_proj = transform(tr.transform, g)
+    g_proj = _reproject(tr, g)
 
     # Non-finite X/Y guard — return NULL rather than propagating Infinity/NaN coordinates.
     #
@@ -559,8 +476,8 @@ def st_transformcrs(
     # meaningless coordinates (e.g. lon=200 reprojects to a real UTM easting) is not caught
     # and must not be — broader domain validation is a separate queued workstream.
     #
-    # NaN Z is excluded from the check: ``_drop_partial_z`` above removes any non-finite Z
-    # before the transform, so any non-finite value now in X or Y is unambiguously from the
+    # NaN Z is excluded from the check: :func:`_reproject` transforms X/Y of a partial-Z
+    # geometry without its Z, so any non-finite value in X or Y is unambiguously from the
     # projection math, not from a legitimately absent Z ordinate.
     if _has_nonfinite_xy(g_proj):
         return None
@@ -597,7 +514,7 @@ def st_transformcrs(
         get_coordinates(g)
         if src.is_geographic
         else get_coordinates(
-            transform(get_transformer(src, resolve_crs(4326)).transform, g)
+            transform(get_transformer(src, resolve_crs(4326)).transform, force_2d(g))
         )
     )
     dom = in_target_domain(lonlat, _tgt_pyproj)

@@ -223,9 +223,6 @@ HEAVY_PENDING.update(
         "percentile_stretch_u16_lut": {
             "L1": "the JVM takes the nearest-rank percentile of a 16-bit band and rounds the rescale; the lightweight level interpolates the percentile and truncates, so one pixel is NoData on one level and not the other"
         },
-        "asformat_vrt_refused": {
-            "L1": "the JVM writes a VRT tile (a format that names other files, which a tile cannot open again) where the lightweight level refuses it with a Fix"
-        },
         "buildoverviews_empty_levels": {
             "L1": "the JVM answers an empty levels array with an error tile; the lightweight level raises the parameter error"
         },

@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.kernels.spec.GdalSpecs
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.operations.TranslateFormat
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
@@ -69,6 +70,12 @@ object RST_AsFormat extends WithExpressionInfo {
         val driver = org.gdal.gdal.gdal.GetDriverByName(name)
         val writes = driver != null && Seq("DCAP_CREATE", "DCAP_CREATECOPY").exists(k => "YES".equalsIgnoreCase(driver.GetMetadataItem(k)))
         require(writes, s"gbx_rst_asformat: driver '$name' is not available in this GDAL build, or cannot write a raster")
+        // A format that can name other files (VRT, ...) would give a tile that does not open again: refused, as light does.
+        require(
+          !GdalSpecs.section.bytesRefusedLight.contains(driver.getShortName),
+          s"gbx_rst_asformat: driver '$name' is a format whose bytes GeoBrix does not open as a tile (it can name other " +
+              "files). Fix: use a self-contained format such as GTiff, PNG or COG, or keep the raster as a virtual tile."
+        )
         driver.getShortName
     }
 

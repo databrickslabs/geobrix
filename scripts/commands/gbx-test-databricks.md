@@ -10,7 +10,7 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 - `--profile <name>` - the Databricks profile. Required on a launch; the command never picks one.
 - `--purpose "<why>"` - required on a launch. It heads each runner notebook and rides on the run name.
-- `--shards <spec>` - what to run. Default: `all-light`.
+- `--shards <spec>` - what to run. Default: `affected`, the pre-push pass.
   - `all-light`: every light shard of CI, plus `scripts/ci`.
   - `all-heavy`: one shard per heavy test dir (needs the JAR pool).
   - `affected`: the shards that hold a test touched by the files changed between `--base` and `--sha`.
@@ -19,10 +19,10 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - `--sha <rev>` - the commit to test. Default: `HEAD`. Uncommitted edits are not in the run; the command names them.
 - `--wheel <path>` - the env6 wheel. Default: `dist/env6/`. It carries the dependencies and the native payload, not the code under test.
 - `--jar-path <path>` - the JAR of the heavy shards. Default: `python/geobrix/lib/`.
-- `--max-parallel <n>` - shards side by side per cluster. Default: the node's cores / 4 (8 on 32 vCPU).
+- `--max-parallel <n>` - shards side by side per cluster. Default: the node's cores / 8 (4 on 32 vCPU).
 - `--clusters <n>` - clusters to spread over. Default: every free cluster the pool has. A busy shared pool gives fewer, never a failure.
 - `--split auto|off` - `auto` (default) cuts each shard longer than `--target-min` into parts of whole files. `off` keeps CI's shards.
-- `--target-min <n>` - the length a cut shard aims at. Default: 6. A task spends about 0.7 min before its first test, so keep it several times that.
+- `--target-min <n>` - the length a cut shard aims at. Default: chosen for about 3.5 chunks per slot, between 3.5 and 10 min. A task spends about 0.7 min before its first test.
 - `--timings <path>` - per-file seconds from earlier runs. Default: `test-logs/databricks-tests/timings.json`. The run reads it to cut and order tasks (longest first) and writes it from the junit files.
 - `--serverless` - run the light shards on Serverless env 6 (a fidelity leg). Spark-free dirs only.
 - `--fresh-cluster` - use a new cluster that ends with the run, not the pools. Every run then pays a cold start.
@@ -41,8 +41,8 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 
 ## Examples
 
-- `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --shards all-light --purpose "light tier before a push"`
-- `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --shards affected --purpose "dirs my change touches"`
+- `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --purpose "dirs my change touches"` (the `affected` shards)
+- `bash scripts/commands/gbx-test-databricks.sh --profile oauth-fe --shards all-light --clusters 3 --purpose "light tier before a release"`
 - Add `--explain-only` to see the plan first.
 
 ## What it does
@@ -57,6 +57,19 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Each task installs the wheel in its own session, unpacks the tarball and runs pytest in that process, on the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
 - Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`, prints one table and writes `summary.md` with the first lines of every failure and the skip reasons.
 - Removes the Volume folder and the runner notebooks after the download. Exit code 1 when any shard failed, errored or did not finish.
+
+## What to expect
+
+- The first all-light pass (2026-11-08, 8 chunks at once on one 32 vCPU node) ran each chunk 1.6 to 3.4 times slower than alone: the tasks share one Spark driver JVM. A shard alone ran about 20% faster than CI's runner. The plan therefore uses 4 slots per node and gets speed from more clusters.
+- Estimate for the full light bank: about 205 min of work in 44 chunks. On 1 cluster that is about 50 min of wall; on 3 clusters about 18 min; on 4 about 14 min. Make the clusters with `gbx:bench:pool up --name gbx-test-1n --n 3 --single-node --node-type m5d.8xlarge`.
+- These numbers come from one partial run (cancelled with 12 chunks unstarted) and the CI minutes. The next real run measures the plan and rewrites `timings.json`; the summary then prints the longest chunk against the mean, the tail and the idle slot time. Read those first.
+- `affected` runs only the shards that hold a changed test, which is usually a few chunks and a few minutes.
+
+## Known failures on a node
+
+- Tests that hand a bare local path to Spark (`test/bench`'s array-agg legs and others) fail with `PATH_NOT_FOUND`: Spark reads a bare path from DBFS on Databricks. They need `file:` URIs, as the overture tests now have.
+- `test/bench/test_levels.py`'s worker-peak tests inspect Spark's local-mode Python workers and cannot pass against the cluster's session.
+- The family oracle chunks need several minutes each; the Scala suites never run here.
 
 ## Limits
 

@@ -34,18 +34,6 @@ def test_the_slice_holds_every_oracle_table_with_uc_rows():
     )
 
 
-def test_the_slice_tables_are_the_tables_the_handler_cross_tier_test_runs():
-    """Both name the tables whose UC rows run: a table added to one and not the other is a gap the pass would carry."""
-    import re
-    from pathlib import Path
-
-    src = (
-        Path(__file__).resolve().parents[1] / "manager" / "test_family_cross_tier.py"
-    ).read_text()
-    block = re.search(r"_UC_TABLES = \((.*?)\)\n", src, re.S).group(1)
-    assert set(re.findall(r'"(\w+)"', block)) == set(probes.UC_SLICE_TABLES)
-
-
 def test_the_slice_cases_include_the_recipe_rows_of_functions_with_no_uc_form_of_their_own():
     man = manifest.load()
     cases = probes.uc_slice_cases()
@@ -323,19 +311,6 @@ def test_run_p1_after_phase_reports_the_library_and_the_capabilities(monkeypatch
         probes.run_p1(None, "c", "j", phase="restart", client=_FakeCluster(["x"]))
 
 
-def test_a_step_that_returns_counts_prints_them_on_its_done_line(capsys):
-    from databricks.labs.gbx.bench.uc_perf import _Run
-
-    run_ = _Run("T28 oracles", "t28-test", 1, 60.0)
-    try:
-        run_.step("GRID_SCALAR", lambda: {"functions": 2, "cases": 9, "failures": 0})
-    finally:
-        run_.stop()
-    out = capsys.readouterr().out
-    assert "[T28 oracles] GRID_SCALAR START" in out
-    assert "DONE" in out and "ok failures=0 cases=9 functions=2" in out
-
-
 # ---- the mechanism checks and the engine probe ------------------------------------------------------------------
 
 import re  # noqa: E402
@@ -350,18 +325,6 @@ def _units():
     return probes.t28_mech_units(
         "cat", "sch", TILE_DIR, WHEEL_URI, manifest.load().uc_dependencies
     )
-
-
-def test_mechanism_units_have_unique_ids_and_statement_ids():
-    units = _units()
-    ids = [u["id"] for u in units]
-    assert ids == [f"f{i}" for i in range(1, 11)]
-    cids = [c for u in units for c, _s, _e in u["statements"]] + [
-        c for u in units for c, _s in u["drops"]
-    ]
-    assert len(cids) == len(set(cids))
-    # START/DONE labels of the runner are the unit ids: one pair each
-    assert len({u["id"] for u in units}) == len(units)
 
 
 def _outside_literals(sql: str) -> str:

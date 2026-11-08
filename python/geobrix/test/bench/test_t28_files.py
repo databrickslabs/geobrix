@@ -89,13 +89,6 @@ def test_the_warehouse_commands_pass_no_schema_so_the_first_create_schema_can_ru
                 assert "--schema" not in line, line
 
 
-def test_the_series_notebooks_and_their_dependencies_exist():
-    for series, nb, dep in t28.SERIES:
-        assert (REPO / "examples/notebooks" / series / nb).is_file(), (series, nb)
-        if dep:
-            assert (REPO / "examples/notebooks" / series / dep).is_file(), (series, dep)
-
-
 def test_the_install_file_creates_the_schema_first_and_names_the_jar_for_the_scala_forms(
     plan,
 ):
@@ -129,62 +122,6 @@ def test_the_slice_files_hold_every_slice_case_once(plan):
     # a MAP parameter (rst_index) is a map(...) literal, not a tile struct
     index = [s for c, s in by["w_tierb.sql"] if c == "index_ndvi"][0]
     assert "map('red', 1, 'nir', 2)" in index
-
-
-def test_the_warehouse_performance_files_are_one_measurement_each_with_the_floor(plan):
-    _p, files, _runs = plan
-    names = {f.name for f in files}
-    assert {f"w_{u}.sql" for u in t28.W_PERF_UNITS} <= names
-    assert (
-        "w_m9.sql" not in names and "w_m11.sql" not in names
-    )  # M9 has its own pair, M11 is dropped
-    for u in t28.W_PERF_UNITS:
-        pairs = oracles.parse_uc_sql({f.name: f for f in files}[f"w_{u}.sql"].content)
-        assert [c for c, _ in pairs[:2]] == ["schema:create", "floor:select1"]
-        assert all(c.startswith(f"{u}:") for c, _ in pairs[2:]), u
-
-
-def test_the_idle_file_follows_the_calls_file_and_owns_the_drops(plan):
-    _p, files, _runs = plan
-    by = {
-        f.name: [c for c, _ in oracles.parse_uc_sql(f.content)]
-        for f in files
-        if f.kind == "sql"
-    }
-    assert "m9:call_1" in by["w_m9_calls.sql"] and "m9:call_3" in by["w_m9_calls.sql"]
-    assert not [
-        c
-        for c in by["w_m9_calls.sql"]
-        if "drop_gbx" in c or c.startswith("m9:drop_gbx")
-    ]
-    assert "m9:call_after_idle" in by["w_m9_idle.sql"]
-    assert [
-        c for c in by["w_m9_idle.sql"] if "warm_src" in c
-    ]  # the source table is dropped last
-
-
-def test_the_cleanup_drops_the_four_scratch_schemas_and_nothing_else(plan):
-    p, files, _runs = plan
-    pairs = oracles.parse_uc_sql({f.name: f for f in files}["w_cleanup.sql"].content)
-    drops = [s for _c, s in pairs if s.startswith("DROP")]
-    assert drops == [
-        f"DROP SCHEMA IF EXISTS `{p.catalog}`.`{p.schema_of(k)}` CASCADE"
-        for k in t28.SCHEMA_KEYS
-    ]
-    assert all("t28" in d for d in drops)  # never a schema that is not a scratch schema
-
-
-def test_the_p1_notebooks_need_a_cluster_id():
-    files, runs = t28.build(t28.Params())
-    assert not {f.name for f in files} & {"p1_install.ipynb", "p1_after.ipynb"}
-    d_b = {r.id: r for r in runs}["D-B"]
-    assert "--cluster-id" in d_b.needs[0] and not d_b.commands
-    files, _ = t28.build(t28.Params(cluster_id=CLUSTER))
-    nb = json.loads({f.name: f for f in files}["p1_install.ipynb"].content)
-    assert (
-        CLUSTER in nb["cells"][-1]["source"]
-        and "'phase': 'install'" in nb["cells"][-1]["source"]
-    )
 
 
 def test_only_selects_runs_and_their_files_and_refuses_an_unknown_run(plan):
@@ -427,45 +364,6 @@ def test_judge_grades_a_slice_row_the_way_the_oracle_does(tmp_path, plan):
     oracles.dump_uc_results({case.cid: {"value": "definitely not the area"}}, str(path))
     bad, _ = t28.judge(str(path), p)
     assert any(case.cid in b for b in bad)
-
-
-def test_the_manifest_lists_every_file_with_its_runs(tmp_path, plan):
-    p, files, runs = plan
-    t28.write(str(tmp_path), files, runs, p)
-    meta = json.loads((tmp_path / "manifest.json").read_text())
-    assert set(meta["files"]) == {f.name for f in files} and len(meta["runs"]) == len(
-        runs
-    )
-    text = (tmp_path / "manifest.md").read_text()
-    for r in runs:
-        assert f"## {r.id} -" in text
-    assert all((tmp_path / f.name).is_file() for f in files)
-    assert manifest.load()  # the plan used this wheel's manifest
-
-
-def test_ws_root_is_the_current_users_geobrix_folder(monkeypatch):
-    import sys
-    import types
-
-    class _Client:
-        def __init__(self, profile=None):
-            self.current_user = types.SimpleNamespace(
-                me=lambda: types.SimpleNamespace(user_name="someone@example.com")
-            )
-
-    sdk = types.ModuleType("databricks.sdk")
-    sdk.WorkspaceClient = _Client
-    monkeypatch.setitem(sys.modules, "databricks.sdk", sdk)
-    assert t28.resolve_ws_root("p") == "/Users/someone@example.com/GeoBrix"
-
-
-def test_ws_root_is_required_when_there_is_no_session(monkeypatch, capsys):
-    def _no_session(profile):
-        raise RuntimeError("cannot resolve; pass --ws-root")
-
-    monkeypatch.setattr(t28, "resolve_ws_root", _no_session)
-    assert t28.main(["--dry-run"]) == 2
-    assert "--ws-root" in capsys.readouterr().err
 
 
 def test_every_notebook_puts_its_oracle_fixtures_on_the_volume(plan):

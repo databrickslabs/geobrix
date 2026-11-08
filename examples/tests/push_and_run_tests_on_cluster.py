@@ -676,14 +676,15 @@ def main(argv=None) -> int:
 
 
 def planned_clusters(a) -> int:
-    """How many clusters the plan is cut for: the clusters the light pool has (the launch leases the free ones among them and
-    spreads the lanes again over what it got). One when the pool cannot be read."""
+    """How many clusters the plan is cut for: the light pool's cap, else the clusters it has (the launch leases the free ones, starts
+    stopped ones and makes new ones up to the cap, and spreads the lanes again over what it got). One when the pool cannot be read."""
     try:
         from databricks.sdk import WorkspaceClient
         import _cluster_pool as cp
 
         w = WorkspaceClient(profile=a.profile or os.environ.get("DATABRICKS_CONFIG_PROFILE") or None)
-        return max(1, len(cp.members(w, a.pool_light)))
+        cfg = cp.read_config(w, _volroot(), a.pool_light)
+        return max(1, int(cfg["cap"]) if cfg else len(cp.members(w, a.pool_light)))
     except Exception as exc:  # noqa: BLE001 - a plan for one cluster is a valid plan
         print(f"  (could not count the clusters of pool {a.pool_light}: {type(exc).__name__}; planning for one)", file=sys.stderr)
         return 1
@@ -793,7 +794,8 @@ def lease_many(stack, w, a, plan: dict, pool: str, *, volroot: str, me: str) -> 
     got = [first]
     if a.fresh_cluster:
         return got
-    want = a.clusters or len(cp.members(w, pool))
+    cfg = cp.read_config(w, volroot, pool_name_of(a, pool))
+    want = a.clusters or (int(cfg["cap"]) if cfg else len(cp.members(w, pool)))  # up to the pool's cap: free ones first, then stopped, then new
     tried = 0
     while len(got) < want and tried < want * 2:
         tried += 1
@@ -803,6 +805,10 @@ def lease_many(stack, w, a, plan: dict, pool: str, *, volroot: str, me: str) -> 
             print(f"  pool {pool}: {len(got)} of {want} cluster(s) free ({str(exc)[:100]}); running on those", flush=True)
             break
     return got
+
+
+def pool_name_of(a, pool: str) -> str:
+    return f"gbx-test-fresh-{a.run_id}"[:60] if a.fresh_cluster else pool
 
 
 def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:

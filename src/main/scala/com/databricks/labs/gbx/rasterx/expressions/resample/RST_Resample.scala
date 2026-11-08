@@ -50,7 +50,7 @@ object RST_Resample extends WithExpressionInfo {
         row: InternalRow, factor: Double, algorithm: UTF8String, conf: UTF8String, dt: DataType
     ): InternalRow = {
         // A wrong argument fails the call (naming the value); only the tile's own failures become its error tile.
-        if (row != null) {
+        if (RasterSerializationUtil.checksArguments(row)) {
             RST_ResampleHelper.checkFactor(factor)
             RST_ResampleHelper.validateAlgorithm(if (algorithm == null) "bilinear" else algorithm.toString, "rst_resample")
         }

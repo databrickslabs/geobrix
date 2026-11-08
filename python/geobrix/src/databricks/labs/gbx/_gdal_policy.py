@@ -1204,7 +1204,11 @@ def open_bytes(data, **kwargs):
             # HDF5Image driver, which reads it with an identity geotransform. Try netCDF first, as the same file
             # opened by path is; bytes it declines (plain HDF5, not a raster) go the way any other bytes go.
             try:
-                ds = open_bytes(memfile, driver="netCDF", **kwargs)
+                ds = open_bytes(
+                    memfile,
+                    driver="netCDF",
+                    **{k: v for k, v in kwargs.items() if k != "driver"},
+                )
             except (
                 Exception
             ):  # noqa: BLE001 - not a netCDF-4 raster: the allowed list decides below

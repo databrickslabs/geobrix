@@ -606,13 +606,22 @@ MVP_S: Tuple[Case, ...] = (
     Case("mv_full_refused", M, (BOWTIE_TEXT, "full"), "raises", "level"),
     # The product's ST_IsValid also holds a polygon to opposite ring windings, so the default levels turn the exterior
     # counter-clockwise and the holes clockwise; 'ogc' repairs the topology and leaves the windings as they came.
-    Case("mv_orients", M, (BOTH_CLOCKWISE,), "wkb_bytes", lambda: _poly_wkb(OPPOSITE)),
+    # (session only: the UC handler returns EWKB with the SRID, so its bytes are not the plain WKB)
+    Case(
+        "mv_orients",
+        M,
+        (BOTH_CLOCKWISE,),
+        "wkb_bytes",
+        lambda: _poly_wkb(OPPOSITE),
+        ("session",),
+    ),
     Case(
         "mv_ogc_keeps_winding",
         M,
         (BOTH_CLOCKWISE, "ogc"),
         "wkb_bytes",
         lambda: _poly_wkb(BOTH_CLOCKWISE),
+        ("session",),
     ),
     Case(
         "mv_text_keeps_srid",

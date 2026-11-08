@@ -170,17 +170,27 @@ def test_affected_follows_a_family_file_to_its_three_shards_and_a_dir_to_its_sha
 def test_affected_follows_source_to_the_tests_of_its_package(shards):
     assert _affected(shards, "python/geobrix/src/databricks/labs/gbx/ds/reader.py") == ["ds"]
     assert _affected(shards, "python/geobrix/src/databricks/labs/gbx/rasterx/functions.py") == ["heavy rasterx"]
-    every_light = [s.name for s in shards if s.kind == "light"]
-    assert _affected(shards, "python/geobrix/src/databricks/labs/gbx/core/crs.py") == every_light
-    assert _affected(shards, "python/geobrix/src/databricks/labs/gbx/_api.py") == every_light  # a top-level module
-    assert _affected(shards, "python/geobrix/test/conftest.py") == every_light
-    assert _affected(shards, "python/geobrix/pyproject.toml") == every_light
 
 
-def test_affected_follows_scripts_and_ignores_the_rest(shards):
-    assert _affected(shards, "scripts/ci/test_light_native.py") == ["scripts/ci"]
-    assert _affected(shards, ".github/workflows/build_main.yml") == ["scripts/ci"]
-    assert _affected(shards, "docs/docs/intro.mdx", "src/main/scala/X.scala", "README.md") == []
+def test_a_change_to_shared_code_selects_the_heavy_shards_too(shards):
+    every = [s.name for s in shards if s.kind in ("light", "heavy")]
+    assert any(n.startswith("heavy") for n in every) and any(n.startswith("pyrx") for n in every)
+    for f in (
+        "python/geobrix/src/databricks/labs/gbx/core/crs.py",  # a shared package
+        "python/geobrix/src/databricks/labs/gbx/_api.py",  # a top-level module
+        "python/geobrix/test/conftest.py",
+        "python/geobrix/test/_provided_spark.py",  # a helper at the top of test/
+        "python/geobrix/pyproject.toml",
+    ):
+        assert _affected(shards, f) == every, f
+    ci = _affected(shards, ".github/workflows/build_main.yml")
+    assert ci == [s.name for s in shards if s.kind in ("light", "heavy", "scripts")]
+
+
+def test_a_helper_of_a_test_dir_selects_every_shard_that_runs_part_of_it(shards):
+    got = _affected(shards, "python/geobrix/test/pyrx/_helpers.py")
+    assert got == ["pyrx 1/2", "pyrx 2/2"], "both halves import it, whichever half its own path hashes to"
+    assert _affected(shards, "python/geobrix/test/zarr/conftest.py") == ["zarr 1/4", "zarr 2/4", "zarr 3/4", "zarr 4/4"]
 
 
 def test_affected_with_no_change_runs_nothing(shards):

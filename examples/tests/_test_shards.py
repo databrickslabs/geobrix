@@ -230,15 +230,22 @@ _SHARED_SRC = ("core", "_compat", "_native", "_rs", "manifest", "manager", "engi
 _HEAVY_SRC = ("rasterx", "gridx", "vectorx")
 
 
+def _is_test_file(rel: str) -> bool:
+    name = rel.rsplit("/", 1)[-1]
+    return (name.startswith("test_") or name.endswith("_test.py")) and name.endswith(".py")
+
+
 def affected(shards: List[Shard], changed: Iterable[str], root: Path) -> List[Shard]:
     """The shards that hold a test touched by ``changed`` (paths from the repo root).
 
     * a test file selects the shards that run it (a split dir: the part that holds it);
-    * a source file under ``src/databricks/labs/gbx/<pkg>/`` selects the shards of ``test/<pkg>``; a shared package
-      (``core``, ``manager``, ...) or a top-level module selects every light shard; ``rasterx``/``gridx``/``vectorx`` the heavy
-      shard of the same name;
-    * the test conftest, the package pyproject or a requirements file selects every light shard;
-    * a file under ``scripts/ci`` or the workflow/action files select the ``scripts/ci`` shard.
+    * a helper or conftest of a test dir selects every shard of that dir, and one at the top of ``test/`` selects every shard;
+    * a source file under ``src/databricks/labs/gbx/<pkg>/`` selects the shards of ``test/<pkg>``; shared code (a shared package
+      such as ``core`` or ``manager``, or a top-level module) selects every shard, light and heavy; ``rasterx``/``gridx``/
+      ``vectorx`` select the heavy shard of the same name;
+    * the package pyproject or a requirements file selects every shard;
+    * the CI workflow and actions select every shard and the ``scripts/ci`` shard; a file under ``scripts/ci``,
+      ``scripts/commands`` or ``examples/tests`` selects the ``scripts/ci`` shard.
     """
     fn = shard_of(root)
     pick: List[Shard] = []
@@ -248,32 +255,37 @@ def affected(shards: List[Shard], changed: Iterable[str], root: Path) -> List[Sh
             if s not in pick:
                 pick.append(s)
 
-    light = [s for s in shards if s.kind == "light"]
+    code = [s for s in shards if s.kind in ("light", "heavy")]
+    scripts = [s for s in shards if s.kind == "scripts"]
+
+    def of_dir(d: str):
+        return [s for s in code if any(p == d or p.startswith(d + "/") or d.startswith(p.rstrip("/") + "/") for p in s.paths)]
+
     for f in changed:
         if f.startswith(PKG + "/test/"):
             rel = f[len(PKG) + 1:]
-            if rel.endswith("conftest.py") and rel.count("/") == 1:
-                add(light)
-                continue
-            add(s for s in shards if s.kind in ("light", "heavy") and _covers(s, rel, fn))
-            if rel.endswith("conftest.py"):  # a dir's conftest: every shard of the dir
-                d = rel.rsplit("/", 1)[0]
-                add(s for s in shards if s.kind in ("light", "heavy") and any(p == d or p.startswith(d + "/") for p in s.paths))
+            if _is_test_file(rel):
+                add(s for s in code if _covers(s, rel, fn))
+            elif rel.count("/") == 1:  # a conftest or helper at the top of test/: everything imports it
+                add(code)
+            else:  # a helper or conftest of one dir: every shard that runs part of that dir
+                add(of_dir(rel.rsplit("/", 1)[0]))
         elif f.startswith(SRC + "/"):
             rest = f[len(SRC) + 1:]
             top = rest.split("/", 1)[0]
-            is_module = "/" not in rest
-            if is_module or top in _SHARED_SRC:
-                add(light)
+            if "/" not in rest or top in _SHARED_SRC:
+                add(code)
             elif top in _HEAVY_SRC:
                 add(s for s in shards if s.kind == "heavy" and s.name == f"heavy {top}")
             else:
-                dirs = f"test/{top}"
-                add(s for s in shards if s.kind in ("light", "heavy") and any(p == dirs or p.startswith(dirs + "/") for p in s.paths))
-        elif f in (f"{PKG}/pyproject.toml",) or f.startswith(PKG + "/requirements"):
-            add(light)
-        elif f.startswith("scripts/ci/") or f in (WORKFLOW, LIGHT_ACTION, HEAVY_ACTION) or f.startswith(".github/actions/"):
-            add(s for s in shards if s.kind == "scripts")
+                add(of_dir(f"test/{top}"))
+        elif f == f"{PKG}/pyproject.toml" or f.startswith(PKG + "/requirements"):
+            add(code)
+        elif f in (WORKFLOW, LIGHT_ACTION, HEAVY_ACTION) or f.startswith(".github/actions/"):
+            add(code)
+            add(scripts)
+        elif f.startswith(("scripts/ci/", "scripts/commands/", "examples/tests/")):
+            add(scripts)
     order = {s.name: i for i, s in enumerate(shards)}
     return sorted(pick, key=lambda s: order[s.name])
 

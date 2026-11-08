@@ -1,7 +1,9 @@
 """tileSize grid emission: materialized per-cell bytes + virtual round-trip."""
 
 import numpy as np
+import pytest
 import rasterio
+from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
@@ -26,78 +28,48 @@ def _write(tmp_path, width=512, height=512):
     return p
 
 
-def test_materialized_tilesize_grid(spark, tmp_path):
+# (virtualTiles, overlapPercent) -> tiles. Materialized tiles carry their pixels, virtual ones none (they open
+# from the window); either way each tile holds the source pixels of its window. A 25% overlap makes a 3 x 3 grid.
+TILE_GRIDS = {
+    "materialized": ("false", None, 4),
+    "virtual": ("true", None, 4),
+    "virtual_with_overlap": ("true", "25", 9),
+}
+
+
+@pytest.mark.parametrize(
+    "virtual,overlap,n", TILE_GRIDS.values(), ids=TILE_GRIDS.keys()
+)
+def test_tile_size_grid(spark, tmp_path, virtual, overlap, n):
     spark.dataSource.register(RasterGbxDataSource)
     p = _write(tmp_path, 512, 512)
-    rows = (
+    reader = (
         spark.read.format("raster_gbx")
         .option("tileSize", "256,256")
-        .option("virtualTiles", "false")
-        .load(p)
-    ).collect()
-    assert len(rows) == 4
-    for r in rows:
-        assert r["tile"]["raster"] is not None
-        assert r["tile"]["clip_polygon"] is None
-        assert r["tile"]["window"]["width"] == 256
-
-
-def test_materialized_tilesize_pixels_match_source(spark, tmp_path):
-    spark.dataSource.register(RasterGbxDataSource)
-    p = _write(tmp_path, 512, 512)
+        .option("virtualTiles", virtual)
+    )
     rows = (
-        spark.read.format("raster_gbx")
-        .option("tileSize", "256,256")
-        .option("virtualTiles", "false")
+        (reader.option("overlapPercent", overlap) if overlap else reader)
         .load(p)
-    ).collect()
-    with rasterio.open(p) as ds:
-        full = ds.read(1)
-    from rasterio.io import MemoryFile
-
-    for r in rows:
-        w = r["tile"]["window"]
-        with MemoryFile(bytes(r["tile"]["raster"])) as mf, mf.open() as t:
-            got = t.read(1)
-        exp = full[
-            w["row_off"] : w["row_off"] + w["height"],
-            w["col_off"] : w["col_off"] + w["width"],
-        ]
-        assert np.array_equal(got, exp)
-
-
-def test_virtual_tilesize_round_trips(spark, tmp_path):
-    spark.dataSource.register(RasterGbxDataSource)
-    p = _write(tmp_path, 512, 512)
-    rows = (
-        spark.read.format("raster_gbx")
-        .option("virtualTiles", "true")
-        .option("tileSize", "256,256")
-        .load(p)
-    ).collect()
-    assert len(rows) == 4
+        .collect()
+    )
+    assert len(rows) == n
     with rasterio.open(p) as ds:
         full = ds.read(1)
     for r in rows:
-        assert r["tile"]["raster"] is None
-        tile = VirtualTile.from_row(r["tile"])
-        with ot.open_tile(tile) as t:
-            got = t.read(1)
-        w = r["tile"]["window"]
-        exp = full[
+        w, tile = r["tile"]["window"], r["tile"]
+        assert tile["clip_polygon"] is None and (
+            w["width"] == 256 or overlap
+        ), "edge tiles are cut only by an overlap grid"
+        if virtual == "true":
+            assert tile["raster"] is None
+            with ot.open_tile(VirtualTile.from_row(tile)) as t:
+                got = t.read(1)
+        else:
+            with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as t:
+                got = t.read(1)
+        want = full[
             w["row_off"] : w["row_off"] + w["height"],
             w["col_off"] : w["col_off"] + w["width"],
         ]
-        assert np.array_equal(got, exp)
-
-
-def test_overlap_grid_count(spark, tmp_path):
-    spark.dataSource.register(RasterGbxDataSource)
-    p = _write(tmp_path, 512, 512)
-    rows = (
-        spark.read.format("raster_gbx")
-        .option("tileSize", "256,256")
-        .option("overlapPercent", "25")
-        .load(p)
-    ).collect()
-    assert len(rows) == 9
+        assert np.array_equal(got, want)

@@ -1,4 +1,8 @@
-"""Driver-side planning for clipPolygons / windows / tileSize selection."""
+"""What a raster_gbx read plans: one partition per clip polygon, window or tile, decided on the driver.
+
+Rows go through the public path: the reader built from its options, then ``partitions()``. Only the
+raster header is opened (no pixels), so even the 10 GB raster of the tileSize guard is a sparse file.
+"""
 
 import numpy as np
 import pytest
@@ -8,214 +12,125 @@ from rasterio.transform import from_origin
 from shapely import set_srid
 from shapely.geometry import box
 
-from databricks.labs.gbx.ds.raster import _plan_partitions_for_file
+from databricks.labs.gbx.ds.raster import RasterGbxReader
 
 
-def _write(tmp_path, width=1000, height=1000):
-    p = str(tmp_path / "r.tif")
-    prof = dict(
-        driver="GTiff",
-        width=width,
-        height=height,
-        count=1,
-        dtype="float32",
-        crs="EPSG:4326",
-        transform=from_origin(10.0, 50.0, 0.001, 0.001),
-        nodata=-9999.0,
-    )
-    with rasterio.open(p, "w", **prof) as ds:
-        ds.write(np.zeros((height, width), "float32"), 1)
-    return p
-
-
-def _write_header(tmp_path, width, height, name="h.tif"):
-    """Create a GTiff with given dimensions but minimal data (no large pixel array).
-
-    The guard reads only ds.width/height/count/dtypes so we write a tiled GTiff
-    and only its first block, so no width*height pixel array is allocated at test time.
-    ``sparse_ok`` makes the file sparse (the unwritten blocks take no space) and spares
-    GDAL's check that the disk could hold the full uncompressed raster: a 50000 x 50000
-    float32 raster is 10 GB, which a CI runner with less free disk would refuse.
+def raster(tmp_path, width=1000, height=1000, tiled=False, name="r.tif"):
+    """A float32 GTiff at 10E 50N, 0.001 degree pixels. `tiled` keeps it header-sized: a sparse file with one
+    block written (sparse_ok also spares GDAL's check that the disk could hold the full raster).
     """
     p = str(tmp_path / name)
-    # blocksize must be a multiple of 16 per TIFF spec; 512 keeps the tile index small.
-    blocksize = 512
     prof = dict(
-        driver="GTiff",
-        width=width,
-        height=height,
-        count=1,
-        dtype="float32",
-        crs="EPSG:4326",
-        transform=from_origin(10.0, 50.0, 0.001, 0.001),
-        tiled=True,
-        blockxsize=blocksize,
-        blockysize=blocksize,
-        sparse_ok=True,
-    )
+        driver="GTiff", width=width, height=height, count=1, dtype="float32", crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.001, 0.001), nodata=-9999.0,
+    )  # fmt: skip
+    if tiled:
+        prof.update(tiled=True, blockxsize=512, blockysize=512, sparse_ok=True)
     with rasterio.open(p, "w", **prof) as ds:
-        # Write only the first block (16x16) — guard reads only metadata.
-        ds.write(
-            np.zeros((16, 16), "float32"),
-            1,
-            window=rasterio.windows.Window(0, 0, 16, 16),
-        )
+        if tiled:
+            ds.write(
+                np.zeros((16, 16), "float32"),
+                1,
+                window=rasterio.windows.Window(0, 0, 16, 16),
+            )
+        else:
+            ds.write(np.zeros((height, width), "float32"), 1)
     return p
 
 
-def _boxwkb(c0, r0, c1, r1):
+def pixel_box(c0, r0, c1, r1):
     return shapely.wkb.dumps(
         box(10.0 + c0 * 0.001, 50.0 - r1 * 0.001, 10.0 + c1 * 0.001, 50.0 - r0 * 0.001)
     )
 
 
-def test_clip_polygons_one_partition_each(tmp_path):
-    p = _write(tmp_path)
-    parts = _plan_partitions_for_file(
+def plan(path, **options):
+    return RasterGbxReader(
+        {"path": path, "virtualTiles": "false", **options}
+    ).partitions()
+
+
+def windows(parts):
+    return [p.window for p in parts]
+
+
+def test_a_clip_polygon_is_one_partition_with_its_window_and_the_clip(tmp_path):
+    p = raster(tmp_path)
+    parts = plan(
         p,
-        0,
-        clip_polygons=[_boxwkb(100, 50, 300, 250), _boxwkb(400, 400, 500, 500)],
-        clip_crs="EPSG:4326",
-        windows=[],
+        clipPolygons=[pixel_box(100, 50, 300, 250), pixel_box(400, 400, 500, 500)],
+        clipCrs="EPSG:4326",
     )
-    assert len(parts) == 2
-    assert parts[0].window == (100, 50, 200, 200)
+    assert len(parts) == 2 and parts[0].window == (100, 50, 200, 200)
     assert parts[0].clip_polygon is not None and parts[0].clip_crs == "EPSG:4326"
 
 
-def test_clip_polygon_disjoint_skipped(tmp_path):
-    p = _write(tmp_path)
-    parts = _plan_partitions_for_file(
-        p,
-        0,
-        clip_polygons=[shapely.wkb.dumps(box(100.0, 10.0, 101.0, 11.0))],
-        clip_crs="EPSG:4326",
-        windows=[],
-    )
-    assert parts == []
-
-
-def test_windows_one_partition_each_partial_clipped(tmp_path):
-    p = _write(tmp_path, width=200, height=200)
-    parts = _plan_partitions_for_file(
-        p,
-        0,
-        clip_polygons=[],
-        clip_crs=None,
-        windows=[(0, 0, 256, 256), (50, 50, 100, 100)],
-    )
-    # first window overhangs 200x200 -> clipped to (0,0,200,200); second fits
-    assert len(parts) == 2
-    assert parts[0].window == (0, 0, 200, 200)
-    assert parts[1].window == (50, 50, 100, 100)
-    assert all(p.clip_polygon is None for p in parts)
-
-
-def test_window_fully_outside_skipped(tmp_path):
-    p = _write(tmp_path, width=200, height=200)
-    parts = _plan_partitions_for_file(
-        p, 0, clip_polygons=[], clip_crs=None, windows=[(500, 500, 10, 10)]
-    )
-    assert parts == []
-
-
-def test_embedded_srid_overrides_clip_crs(tmp_path):
-    p = _write(tmp_path)
-    g = set_srid(box(10.1, 49.8, 10.2, 49.9), 4326)
-    parts = _plan_partitions_for_file(
-        p,
-        0,
-        clip_polygons=[shapely.wkb.dumps(g, include_srid=True)],
-        clip_crs="EPSG:3857",
-        windows=[],
-    )  # clipCrs is 3857 but embedded is 4326
-    assert len(parts) == 1
-    assert parts[0].clip_crs == "EPSG:4326"  # embedded SRID wins
-
-
-# ---------------------------------------------------------------------------
-# tileSize planning branch
-# ---------------------------------------------------------------------------
-
-
-def test_tile_size_plans_grid(tmp_path):
-    p = _write(tmp_path, width=512, height=512)
-    parts = _plan_partitions_for_file(p, 0, tile_size=(256, 256), overlap_percent=0)
-    assert len(parts) == 4
-    assert (0, 0, 256, 256) in [pt.window for pt in parts]
-    assert all(pt.clip_polygon is None for pt in parts)
-
-
-def test_tile_size_overlap_changes_count(tmp_path):
-    p = _write(tmp_path, width=512, height=512)
-    parts = _plan_partitions_for_file(p, 0, tile_size=(256, 256), overlap_percent=25)
-    assert len(parts) == 9  # 3x3 with step 192
-
-
-def test_tile_size_larger_than_raster_single(tmp_path):
-    p = _write(tmp_path, width=300, height=200)
-    parts = _plan_partitions_for_file(p, 0, tile_size=(512, 512), overlap_percent=0)
-    assert len(parts) == 1
-    assert parts[0].window == (0, 0, 300, 200)
-
-
-def test_tile_size_materialized_guard_raises(tmp_path):
-    # a 40000x40000 float32 cell would be ~6.4 GB > ~1.8 GiB guard
-    p = _write_header(
-        tmp_path, width=50000, height=50000
-    )  # header only; not materialized
-    with pytest.raises(ValueError, match="tileSize"):
-        _plan_partitions_for_file(
-            p, 0, tile_size=(40000, 40000), overlap_percent=0, emit_virtual=False
+def test_a_polygon_that_misses_the_raster_is_skipped(tmp_path):
+    assert (
+        plan(
+            raster(tmp_path),
+            clipPolygons=[shapely.wkb.dumps(box(100.0, 10.0, 101.0, 11.0))],
+            clipCrs="EPSG:4326",
         )
-
-
-def test_tile_size_virtual_no_guard(tmp_path):
-    # same oversized tile is fine in virtual mode (bytes-free)
-    p = _write_header(tmp_path, width=50000, height=50000, name="h2.tif")
-    parts = _plan_partitions_for_file(
-        p, 0, tile_size=(40000, 40000), overlap_percent=0, emit_virtual=True
+        == []
     )
-    assert len(parts) >= 1  # no raise
 
 
-# ---------------------------------------------------------------------------
-# Budget-aware virtual split (issue #84): splitStrategy / sizeInMB must bound
-# each VIRTUAL tile's decoded footprint too, not only materialized tiles.
-# Previously the emit_virtual short-circuit returned one whole-file tile and
-# never consulted the budget, so a large raster came through as a single tile
-# (and OOMed downstream) despite a positive budget.
-# ---------------------------------------------------------------------------
+def test_an_srid_embedded_in_the_polygon_beats_clip_crs(tmp_path):
+    wkb = shapely.wkb.dumps(
+        set_srid(box(10.1, 49.8, 10.2, 49.9), 4326), include_srid=True
+    )
+    (part,) = plan(raster(tmp_path), clipPolygons=[wkb], clipCrs="EPSG:3857")
+    assert part.clip_crs == "EPSG:4326"
 
 
-def test_virtual_split_respects_budget(tmp_path):
-    # 1000x1000 float32 decodes to ~4 MB; a ~1 MB budget must split it into
-    # multiple VIRTUAL window tiles rather than one whole-file tile.
-    p = _write(tmp_path, width=1000, height=1000)
-    parts = _plan_partitions_for_file(p, 1_000_000, emit_virtual=True)
-    assert len(parts) > 1, "a positive budget must split the virtual raster"
-    assert all(pt.emit_virtual for pt in parts), "split tiles must stay virtual"
-    assert all(
-        pt.window is not None for pt in parts
-    ), "each budget-split virtual tile carries a concrete window"
-    assert all(not pt.is_whole for pt in parts)
+# (raster size, options) -> the windows planned
+WINDOWS = {
+    "window_overhanging_the_raster_is_clipped_to_it": ((200, 200), {"windows": [(0, 0, 256, 256), (50, 50, 100, 100)]}, [(0, 0, 200, 200), (50, 50, 100, 100)]),
+    "window_outside_the_raster_is_skipped": ((200, 200), {"windows": [(500, 500, 10, 10)]}, []),
+    "tile_grid": ((512, 512), {"tileSize": "256"}, [(0, 0, 256, 256), (256, 0, 256, 256), (0, 256, 256, 256), (256, 256, 256, 256)]),
+    "tile_overlap_makes_a_3x3_grid_of_step_192": ((512, 512), {"tileSize": "256", "overlapPercent": "25"}, [(c, r, min(256, 512 - c), min(256, 512 - r)) for r in (0, 192, 384) for c in (0, 192, 384)]),
+    "tile_larger_than_the_raster_is_the_raster": ((300, 200), {"tileSize": "512"}, [(0, 0, 300, 200)]),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("size,opts,want", WINDOWS.values(), ids=WINDOWS.keys())
+def test_windows_and_tiles_are_planned_inside_the_raster(tmp_path, size, opts, want):
+    parts = plan(raster(tmp_path, *size), **opts)
+    assert all(pt.clip_polygon is None for pt in parts)
+    assert sorted(windows(parts)) == sorted(want)
+
+
+def test_a_materialized_tile_over_the_memory_guard_is_refused_but_a_virtual_one_is_planned(
+    tmp_path,
+):
+    p = raster(
+        tmp_path, 50000, 50000, tiled=True
+    )  # ~10 GB decoded, ~6.4 GB per 40000 x 40000 tile
+    with pytest.raises(ValueError, match="tileSize"):
+        plan(p, tileSize="40000")
+    assert len(plan(p, tileSize="40000", virtualTiles="true")) >= 1
+
+
+# (virtualTiles stays on) raster size, sizeInMB -> the partitions
+def test_a_budget_splits_a_virtual_raster_into_virtual_windows(tmp_path):
+    parts = plan(
+        raster(tmp_path, 1000, 1000), virtualTiles="true", sizeInMB="1"
+    )  # ~4 MB decoded
+    assert len(parts) > 1 and all(
+        pt.emit_virtual and pt.window is not None and not pt.is_whole for pt in parts
+    )
     assert all(pt.clip_polygon is None for pt in parts)
 
 
-def test_virtual_no_budget_keeps_lazy_single_partition(tmp_path):
-    # No budget (default): keep the lazy single whole-file virtual partition
-    # (window=None, header open deferred) — the unchanged fast path.
-    p = _write(tmp_path, width=1000, height=1000)
-    parts = _plan_partitions_for_file(p, 0, emit_virtual=True)
-    assert len(parts) == 1
-    assert parts[0].window is None
-    assert parts[0].is_whole is True
-    assert parts[0].emit_virtual is True
-
-
-def test_virtual_budget_but_fits_single_partition(tmp_path):
-    # Budget set but the raster fits within it -> a single virtual tile, no split.
-    p = _write(tmp_path, width=100, height=100)  # 100*100*4 = 40 KB << 1 MB
-    parts = _plan_partitions_for_file(p, 1_000_000, emit_virtual=True)
-    assert len(parts) == 1
-    assert parts[0].emit_virtual is True
+@pytest.mark.parametrize(
+    "size,mib",
+    [((1000, 1000), None), ((100, 100), "1")],
+    ids=["no_budget", "fits_the_budget"],
+)
+def test_a_virtual_raster_without_a_split_is_one_lazy_whole_file_partition(
+    tmp_path, size, mib
+):
+    opts = {"sizeInMB": mib} if mib else {}
+    (part,) = plan(raster(tmp_path, *size), virtualTiles="true", **opts)
+    assert part.emit_virtual and part.is_whole and part.window is None

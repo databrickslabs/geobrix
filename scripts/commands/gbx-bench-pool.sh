@@ -18,6 +18,7 @@ Usage: bash scripts/commands/gbx-bench-pool.sh <up|status|down> --name <pool> [o
            --spark-version <v>   default 19.x-scala2.13
            --node-type <t>       default m5d.2xlarge
            --workers <n>         default 4
+           --single-node         the driver alone (--workers is ignored)
   status                         each pool cluster: state, idle time, jar fingerprint, lease holder
   down     [--delete]            terminate the pool's clusters (--delete removes them)
   --profile <name>               Databricks profile (default DATABRICKS_CONFIG_PROFILE)

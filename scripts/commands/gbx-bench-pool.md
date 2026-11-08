@@ -6,7 +6,7 @@ Keep N DBR 19 clusters up for a working period so a run does not pay a cluster s
 
 `bash scripts/commands/gbx-bench-pool.sh <up|status|down> --name <pool> [options] [--profile <name>]`
 
-- `up --n <n>`: bring the pool to n clusters (creates the missing ones, waits for them to run). `--spark-version` (default `19.x-scala2.13`), `--node-type` (default `m5d.2xlarge`), `--workers` (default 4). The clusters are dedicated (single user: you), on demand, tagged `gbx_bench_pool=<name>`, and end themselves after **60 idle minutes**.
+- `up --n <n>`: bring the pool to n clusters (creates the missing ones, waits for them to run). `--spark-version` (default `19.x-scala2.13`), `--node-type` (default `m5d.2xlarge`), `--workers` (default 4), `--single-node` (the driver alone: `--workers` is ignored). The clusters are dedicated (single user: you), on demand, tagged `gbx_bench_pool=<name>`, and end themselves after **60 idle minutes**.
 - `status`: each pool cluster's state, the jar fingerprint it carries, and either `busy (leased by <run> job <id>)` or how long it has been idle. A cluster is busy while a live lease holds it or a job run is on it. Its idle time counts from the latest of four signals. They are its own last activity, its start, the end of the last job run on it, and the last touch of its lease. The line names that signal (`since job run`). The cluster's own last-activity time does not move for a job run, so it is never the only signal. A cluster that is not running shows `not running`. The job runs are read from the workspace's runs of the last 6 hours (at most 500 are looked at).
 - `down [--delete]`: terminate the pool's clusters (`--delete` removes them). Do this when the work settles.
 

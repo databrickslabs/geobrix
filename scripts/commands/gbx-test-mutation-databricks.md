@@ -13,7 +13,11 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 - `--tests "<paths>"` - pytest args relative to `python/geobrix`, in one quoted string.
 - `--purpose "<why>"` - required on a launch. It heads the runner notebook and rides on the run name.
 - `--profile <name>` - the Databricks profile. Default: `DATABRICKS_CONFIG_PROFILE`.
-- `--node-type <t>` - the node. Default: `m5d.16xlarge` (64 vCPU, local NVMe). A smoke can use `m5d.8xlarge`.
+- `--node-type <t>` - the node of a NEW cluster. Default: `m5d.16xlarge` (64 vCPU, local NVMe). A leased pool cluster keeps the node it was made with.
+- `--pool <name>` - lease the single-node cluster of this pool. Default: `gbx-test-1n`. The command makes one when the pool has none.
+- `--pool-wait-min <n>` - wait up to n minutes for a free pool cluster. Default: 30.
+- `--fresh-cluster` - run on a new job cluster that ends with the run, not on the pool. Every run then pays a cold start.
+- `--pip-extra "<reqs>"` - more pip requirements the selected tests import. Default: `mercantile>=1.2,<2` (the oracle tables).
 - `--run-id <id>` - Default: `mut-<date>-<time>-<4 hex>`.
 - `--sha <rev>` - the commit to test. Default: `HEAD`.
 - `--wheel <path>` - the env6 wheel. Default: the one in `dist/env6/` (from `gbx:build:wheel --env 6`).
@@ -37,8 +41,9 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 
 - Builds a tarball of the committed tree at `--sha` (`git archive`: `python/geobrix/src`, `python/geobrix/test`, the pyproject, `scripts/mutation`). Uncommitted edits are not in the run; the command names them.
 - Stages the tarball and the env6 wheel to an isolated Volume folder, `<volume>/mutation-runs/<run id>/`. It downloads each file back and compares sha256.
-- Runs one single-node job cluster (DBR 19, dedicated, on demand). It ends with the run. No JAR.
-- On the node: installs the wheel, `mutmut==3.8.0` and `pytest==9.1.1` (the gate's pins), unpacks the tarball and runs `scripts/mutation/guidance_runner.py` with cores minus 2 workers.
+- Leases the pool's single-node cluster (DBR 19, dedicated, on demand). The pool keeps it warm across runs and agents, and it ends itself after 60 idle minutes. This command never ends it. No JAR.
+- Runs the notebook as a job on that cluster. The job installs the wheel, `mutmut==3.8.0` and `pytest==9.1.1` (the gate's pins) in its own Python session, unpacks the tarball and runs `scripts/mutation/guidance_runner.py` with cores minus 2 workers. A later run restages the wheel and the tarball and installs them again; the cluster is not restarted.
+- Runs the selected tests once with no mutant. A test that fails there (a data fixture the node lacks) is deselected and listed in `run.json`. A selection that does not run stops the run with the reason in `preflight.txt`.
 - Writes one row per mutant to the Delta table, and the files to `test-logs/mutation-guidance/<run id>/`.
 - Removes the Volume folder and the runner notebook after the download.
 
@@ -55,7 +60,7 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 - `timeout`, `segfault`: the test run hit its limit or crashed. Both count as detected.
 - `absent`: no selected test reaches the mutant.
 - `unchecked`: the run was stopped by a cap before the mutant was tried.
-- Kill rate = (killed + timeout + segfault) / (those + survived). The gate counts `absent` mutants as detected, so its rates can read higher.
+- Kill rate = (killed + timeout + segfault) / (those + survived).
 
 ## Limits
 
@@ -63,4 +68,5 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 - It does not call the gate. The gate compares an old and a slim selection; this run needs one selection and one pass. It uses the gate's helpers (`scripts/mutation/gate.py`) and its pins.
 - The wheel carries the dependencies and the native payload. The package that is mutated and tested is the tarball's.
 - A stopped run (a cap) exits 3 and still writes the rows of the mutants tried; a cancelled notebook writes no table rows, and the files stay in the Volume folder until you remove them.
-- Cost: one on-demand node for the run, about 6-15 min to start plus the run.
+- Cost: one on-demand node while a run is on it and for 60 idle minutes after the last one. The first run of a phase pays a cold start (about 5 min).
+- Make the pool by hand with `bash scripts/commands/gbx-bench-pool.sh up --name gbx-test-1n --n 1 --single-node --node-type m5d.8xlarge`; end it with `down --name gbx-test-1n --delete`.

@@ -126,12 +126,18 @@ def _create_cluster(w, spec: dict, token: str):
     return SimpleNamespace(result=lambda: w.clusters.wait_get_cluster_running(cid))
 
 
-def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True) -> List[str]:
+SINGLE_NODE_CONF = {"spark.databricks.cluster.profile": "singleNode", "spark.master": "local[*, 4]"}
+SINGLE_NODE_TAGS = {"ResourceClass": "SingleNode"}
+
+
+def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True, single_node: bool = False) -> List[str]:
     """Bring the pool to `n` clusters and make them run; their ids. Idempotent: a cluster the pool already has is reused
     (and started if it ended), a missing slot is created once under a token of its own, and a create that failed after the
     server made the cluster finds it by its tag before it makes another."""
     from databricks.sdk.service import compute
 
+    if single_node:
+        workers = 0  # a single-node cluster is its driver alone
     have = members(w, name)
     ids = [c.cluster_id for c in have]
     for c in have:
@@ -152,7 +158,8 @@ def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int
             autotermination_minutes=AUTOTERMINATION_MIN,
             data_security_mode=compute.DataSecurityMode.SINGLE_USER,
             single_user_name=user,
-            custom_tags={POOL_TAG: name, "gbx_bench": "pool", JAR_TAG: NO_JAR},
+            custom_tags={POOL_TAG: name, "gbx_bench": "pool", JAR_TAG: NO_JAR, **(SINGLE_NODE_TAGS if single_node else {})},
+            spark_conf=dict(SINGLE_NODE_CONF) if single_node else None,
             aws_attributes=(
                 compute.AwsAttributes(
                     availability=compute.AwsAvailability.ON_DEMAND,

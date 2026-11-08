@@ -4,7 +4,7 @@
         --tests "test/pyvx" --purpose "why this run" [--profile oauth-fe] [--node-type m5d.16xlarge] [--run-id ID] [--explain-only]
 
 The local gate (gbx:test:mutation-gate) samples and decides a fold. This run tries all the mutants with `mutmut` on one
-single-node job cluster (DBR 19, dedicated, on demand; it ends with the run), and records a row per mutant in the Delta table
+single-node cluster (DBR 19, dedicated, on demand; a leased pool cluster by default, see --pool), and records a row per mutant in the Delta table
 `<catalog>.<schema>.mutation_results`, plus `test-logs/mutation-guidance/<run id>/summary.md` here. It never blocks a fold.
 
 What it stages, to an isolated Volume folder `<volume>/mutation-runs/<run id>/` (removed at the end): the env6 wheel (the
@@ -18,7 +18,12 @@ Options:
   --tests "<paths>"      pytest args relative to python/geobrix, one quoted string (Tier 0: Spark fixtures are skipped)
   --purpose "<why>"      REQUIRED on a launch (heads the notebook, rides on the run name; --explain-only may omit it)
   --profile <name>       Databricks profile (default DATABRICKS_CONFIG_PROFILE)
-  --node-type <t>        default m5d.16xlarge (64 vCPU, local NVMe); the smoke uses m5d.8xlarge
+  --node-type <t>        default m5d.16xlarge (64 vCPU, local NVMe); the smoke uses m5d.8xlarge. It sizes a NEW cluster: the
+                         pool's cluster keeps the node type it was made with
+  --pool <name>          lease the single-node cluster of this pool (default gbx-test-1n; GBX_MUTATION_POOL). When the pool
+                         has none, one is made (a cold start, once); it ends itself after 60 idle minutes. Later runs only
+                         restage the wheel and the tarball: the job installs them in its own Python session.
+  --fresh-cluster        run on a new job cluster that ends with the run (a cold start every time)
   --run-id <id>          default mut-<date>-<time>-<4 hex>
   --sha <rev>            the commit to test (default HEAD)
   --wheel <path>         the env6 wheel (default: the one in dist/env6/ of the main checkout)
@@ -28,6 +33,7 @@ Options:
   --setup-cap-min <n>    stop when no mutant was tried this long after the node started the work (default 30)
   --stall-min <n>        stop when no mutant finished for this long (default 15)
   --start-cap-min <n>    cancel when the node has not beaten this long after the submit (default 20: a cold DBR 19 start)
+  --pip-extra "<reqs>"   more pip requirements the selected tests import (default "mercantile>=1.2,<2": the oracle tables)
   --keep-stage           leave the Volume folder and the runner notebook (default: remove them after the download)
   --explain-only         print the plan and exit; no network, nothing staged or started
 """
@@ -35,6 +41,7 @@ Options:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import io
 import json
@@ -57,6 +64,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "mutation"))
 import guidance_rows  # noqa: E402  (pure: the rows, the summary, the table DDL)
 
 DEFAULT_NODE = "m5d.16xlarge"
+DEFAULT_PIP_EXTRA = "mercantile>=1.2,<2"  # what the oracle-table tests import and the env6 wheel carries only in [vizx]
+DEFAULT_POOL = "gbx-test-1n"  # shared with the other test-runner commands: one warm single-node cluster for the phase
 SPARK_VERSION = "19.x-scala2.13"
 SUBSET = ("python/geobrix/src", "python/geobrix/test", "python/geobrix/pyproject.toml", "scripts/mutation")
 MUTMUT_PIN = "mutmut==3.8.0"  # the pins the gate holds; scripts/mutation/gate.py is the source, test_gate_pins_match checks
@@ -94,6 +103,10 @@ def parse(argv):
     p.add_argument("--setup-cap-min", type=float, default=30.0)
     p.add_argument("--stall-min", type=float, default=15.0)
     p.add_argument("--start-cap-min", type=float, default=20.0)
+    p.add_argument("--pool", default=os.environ.get("GBX_MUTATION_POOL", DEFAULT_POOL))
+    p.add_argument("--pool-wait-min", type=float, default=30.0)
+    p.add_argument("--fresh-cluster", action="store_true")
+    p.add_argument("--pip-extra", default=DEFAULT_PIP_EXTRA)
     p.add_argument("--keep-stage", action="store_true")
     p.add_argument("--explain-only", action="store_true")
     return p.parse_args(argv)
@@ -190,6 +203,7 @@ def make_plan(a, sha: str, wheel: Path, volroot: str, table: str) -> dict:
         "tests": a.tests, "purpose": " ".join(a.purpose.split()), "node_type": a.node_type, "cores": cores or "?",
         "workers": max(cores - 2, 1) if cores else "cores - 2",
         "spark_version": SPARK_VERSION, "table": table, "stage": stage,
+        "compute": {"mode": "fresh job cluster" if a.fresh_cluster else "pool", "pool": None if a.fresh_cluster else a.pool},
         "wheel": {"local": str(wheel), "name": wheel.name, "built_from": wheel_git_sha(wheel)},
         "tarball": f"{stage}/{run_id}-src.tar.gz", "out_dir": f"{stage}/out",
         "heartbeat": f"{stage}/heartbeat.json", "progress": f"{stage}/progress.json",
@@ -197,6 +211,7 @@ def make_plan(a, sha: str, wheel: Path, volroot: str, table: str) -> dict:
         "run_timeout_min": int(a.start_cap_min + a.wall_cap_min + 25),
         "local_out": f"test-logs/mutation-guidance/{run_id}",
         "pins": [MUTMUT_PIN, PYTEST_PIN],
+        "pip_extra": a.pip_extra,
     }
 
 
@@ -218,9 +233,8 @@ def header_md(plan: dict) -> str:
 
 
 def install_source(plan: dict) -> str:
-    return (
-        f"%pip install --quiet \"geobrix @ file://{plan['stage']}/{plan['wheel']['name']}\" {MUTMUT_PIN} {PYTEST_PIN}"
-    )
+    extra = "".join(f' "{r}"' for r in plan.get("pip_extra", "").split())
+    return f"%pip install --quiet \"geobrix @ file://{plan['stage']}/{plan['wheel']['name']}\" {MUTMUT_PIN} {PYTEST_PIN}{extra}\n"
 
 
 def run_source(plan: dict, token: str, extra: dict) -> str:
@@ -240,7 +254,7 @@ os.makedirs(CFG["stage"], exist_ok=True)
 
 cmd = [sys.executable, root + "/src/scripts/mutation/guidance_runner.py",
        "--family", CFG["family"], "--modules", ",".join(CFG["modules"]), "--tests", CFG["tests"],
-       "--run-id", CFG["run_id"], "--out-dir", root + "/out", "--max-workers", str(CFG["workers"]),
+       "--run-id", CFG["run_id"], "--out-dir", root + "/out", "--max-workers", str(max((os.cpu_count() or 4) - 2, 1)),
        "--python", sys.executable, "--git-sha", CFG["sha"], "--purpose", CFG["purpose"], "--node-type", CFG["node_type"],
        "--wall-cap-min", str(CFG["caps"]["wall_min"]), "--setup-cap-min", str(CFG["caps"]["setup_min"]),
        "--stall-min", str(CFG["caps"]["stall_min"]), "--heartbeat", CFG["heartbeat"], "--token", CFG["token"],
@@ -391,91 +405,125 @@ def main(argv=None) -> int:
     return launch(a, plan)
 
 
+@contextlib.contextmanager
+def lease_pool_cluster(w, a, plan: dict, *, volroot: str, me: str):
+    """Lease the single-node cluster of pool `a.pool` for the length of the block (made once when the pool has none).
+
+    The pool keeps its cluster warm across runs and agents; it ends itself after 60 idle minutes and is never ended
+    here. The lease is released at the end of the block."""
+    import _cluster_pool as pool
+
+    if not pool.members(w, a.pool):
+        print(f"pool {a.pool} has no cluster: making one single-node {a.node_type} (a cold start, once)", flush=True)
+        pool.up(w, a.pool, 1, spark_version=SPARK_VERSION, node_type=a.node_type, workers=0, user=me, single_node=True)
+    with pool.leased_cluster(w, a.pool, volroot, {"run_id": plan["run_id"], "owner": me}, wait_s=a.pool_wait_min * 60.0) as lease:
+        yield lease
+
+
 def launch(a, plan: dict) -> int:
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service import compute, jobs
+    from databricks.sdk.service.workspace import ImportFormat
     from _job_submit import runner_dir, submit_once
+    import _cluster_pool
 
     w = WorkspaceClient(profile=a.profile or os.environ.get("DATABRICKS_CONFIG_PROFILE") or None)
     me = w.current_user.me().user_name
     run_id, stage = plan["run_id"], plan["stage"]
+    volroot = stage.split("/mutation-runs/")[0]
     token = uuid.uuid4().hex
     local_out = REPO_ROOT / plan["local_out"]
     local_out.mkdir(parents=True, exist_ok=True)
-
-    tar_local = local_out / f"{run_id}-src.tar.gz"
-    size = build_tarball(plan["sha"], tar_local)
-    print(f"Source tarball of {plan['sha'][:10]}: {size / 1e6:.1f} MB; wheel {plan['wheel']['name']} (built from {plan['wheel']['built_from'][:10]})", flush=True)
-    stage_file(w, Path(plan["wheel"]["local"]), f"{stage}/{plan['wheel']['name']}")
-    stage_file(w, tar_local, plan["tarball"])
-    tar_local.unlink()
-
     nb_path = f"{runner_dir(w)}/mutation_{run_id}.ipynb"
     nb_path = "/" + nb_path.strip().removeprefix("/Workspace").lstrip("/")
-    from databricks.sdk.service.workspace import ImportFormat
-
-    w.workspace.mkdirs(str(Path(nb_path).parent))
-    w.workspace.upload(nb_path, io.BytesIO(json.dumps(build_notebook(plan, token), indent=1).encode()), format=ImportFormat.JUPYTER, overwrite=True)
-    print(f"Uploaded runner notebook {nb_path}", flush=True)
 
     ok = False
     rc = EXIT_FAILED
     try:
-        name = f"gbx-mutation-{run_id} | {plan['purpose'][:80]} | {plan['sha'][:10]}"
-        timeout_s = plan["run_timeout_min"] * 60
-        print(f"Submitting {name} on a new single-node job cluster ({plan['node_type']}, {SPARK_VERSION}), time limit {plan['run_timeout_min']} min...")
-        spec = compute.ClusterSpec(
-            spark_version=SPARK_VERSION, node_type_id=plan["node_type"], num_workers=0,
-            data_security_mode=compute.DataSecurityMode.SINGLE_USER, single_user_name=me,
-            spark_conf={"spark.databricks.cluster.profile": "singleNode", "spark.master": "local[*, 4]"},
-            custom_tags={"ResourceClass": "SingleNode", "gbx_mutation": run_id[:64]},
-            aws_attributes=compute.AwsAttributes(availability=compute.AwsAvailability.ON_DEMAND, first_on_demand=1, zone_id="auto"),
-        )
-        waiter = submit_once(
-            w, run_name=name, timeout_seconds=timeout_s,
-            tasks=[jobs.SubmitTask(
-                task_key="run_mutation", new_cluster=spec, max_retries=0,
-                description=f"{plan['purpose']} (commit {plan['sha'][:10]})"[:1000],
-                notebook_task=jobs.NotebookTask(notebook_path=nb_path, source=jobs.Source.WORKSPACE),
-            )],
-        )
-        job_run = waiter.run_id
-        try:
-            print(f"  run URL : {w.jobs.get_run(job_run).run_page_url}")
-        except Exception:  # noqa: BLE001
-            pass
-        print(f"  results : {plan['table']}  (run_id = '{run_id}')")
-        print(f"  heartbeat: {plan['heartbeat']}; cancel: databricks jobs cancel-run {job_run}")
-        rc = watch(w, job_run, plan, token)
-        ok = rc == 0
-        got = download_dir(w, plan["out_dir"], local_out)
-        for extra in ("progress.json", "heartbeat.json"):
-            d = read_json(w, f"{stage}/{extra}")
-            if d is not None:
-                (local_out / extra).write_text(json.dumps(d))
-        print(f"Downloaded {len(got)} file(s) to {local_out}: {', '.join(sorted(got))}")
-        write_summary(local_out)
-        if rc == 0:
+        tar_local = local_out / f"{run_id}-src.tar.gz"
+        size = build_tarball(plan["sha"], tar_local)
+        print(f"Source tarball of {plan['sha'][:10]}: {size / 1e6:.1f} MB; wheel {plan['wheel']['name']} (built from {plan['wheel']['built_from'][:10]})", flush=True)
+        stage_file(w, Path(plan["wheel"]["local"]), f"{stage}/{plan['wheel']['name']}")
+        stage_file(w, tar_local, plan["tarball"])
+        tar_local.unlink()
+
+        with contextlib.ExitStack() as stack:
+            lease = None
+            if not a.fresh_cluster:
+                try:
+                    lease = stack.enter_context(lease_pool_cluster(w, a, plan, volroot=volroot, me=me))
+                except _cluster_pool.PoolError as exc:
+                    print(f"ERROR: {exc}", file=sys.stderr)
+                    return EXIT_USAGE
+                plan["node_type"] = w.clusters.get(lease.cluster_id).node_type_id or plan["node_type"]
+                plan["cores"] = cores_of(plan["node_type"]) or "?"
+            w.workspace.mkdirs(str(Path(nb_path).parent))
+            w.workspace.upload(nb_path, io.BytesIO(json.dumps(build_notebook(plan, token), indent=1).encode()), format=ImportFormat.JUPYTER, overwrite=True)
+            print(f"Uploaded runner notebook {nb_path}", flush=True)
+
+            name = f"gbx-mutation-{run_id} | {plan['purpose'][:80]} | {plan['sha'][:10]}"
+            timeout_s = plan["run_timeout_min"] * 60
+            if lease is not None:
+                where = f"leased pool cluster {lease.cluster_id} ({plan['node_type']}, pool {a.pool})"
+                placement = dict(existing_cluster_id=lease.cluster_id)
+            else:
+                where = f"a new single-node job cluster ({plan['node_type']}, {SPARK_VERSION})"
+                placement = dict(new_cluster=compute.ClusterSpec(
+                    spark_version=SPARK_VERSION, node_type_id=plan["node_type"], num_workers=0,
+                    data_security_mode=compute.DataSecurityMode.SINGLE_USER, single_user_name=me,
+                    spark_conf=dict(_cluster_pool.SINGLE_NODE_CONF),
+                    custom_tags={**_cluster_pool.SINGLE_NODE_TAGS, "gbx_mutation": run_id[:64]},
+                    aws_attributes=compute.AwsAttributes(availability=compute.AwsAvailability.ON_DEMAND, first_on_demand=1, zone_id="auto"),
+                ))
+            print(f"Submitting {name} on {where}, time limit {plan['run_timeout_min']} min...")
+            waiter = submit_once(
+                w, run_name=name, timeout_seconds=timeout_s,
+                tasks=[jobs.SubmitTask(
+                    task_key="run_mutation", max_retries=0, **placement,
+                    description=f"{plan['purpose']} (commit {plan['sha'][:10]})"[:1000],
+                    notebook_task=jobs.NotebookTask(notebook_path=nb_path, source=jobs.Source.WORKSPACE),
+                )],
+            )
+            job_run = waiter.run_id
+            if lease is not None:
+                lease.job_run(job_run)  # from here the lease follows the job, not this process
             try:
-                out = w.jobs.get_run_output(w.jobs.get_run(job_run).tasks[0].run_id)
-                if out.notebook_output and out.notebook_output.result:
-                    print("Notebook output:", out.notebook_output.result)
-                    if json.loads(out.notebook_output.result).get("rc") == 3:
-                        print("A cap stopped the mutants before all were tried: the rows are partial (status 'unchecked').", file=sys.stderr)
-                        rc = EXIT_CAPPED
+                print(f"  run URL : {w.jobs.get_run(job_run).run_page_url}")
             except Exception:  # noqa: BLE001
                 pass
+            print(f"  results : {plan['table']}  (run_id = '{run_id}')")
+            print(f"  heartbeat: {plan['heartbeat']}; cancel: databricks jobs cancel-run {job_run}")
+            rc = watch(w, job_run, plan, token)
+            ok = rc == 0
+            got = download_dir(w, plan["out_dir"], local_out)
+            for extra in ("progress.json", "heartbeat.json"):
+                d = read_json(w, f"{stage}/{extra}")
+                if d is not None:
+                    (local_out / extra).write_text(json.dumps(d))
+            print(f"Downloaded {len(got)} file(s) to {local_out}: {', '.join(sorted(got))}")
+            write_summary(local_out)
+            if rc == 0:
+                try:
+                    out = w.jobs.get_run_output(w.jobs.get_run(job_run).tasks[0].run_id)
+                    if out.notebook_output and out.notebook_output.result:
+                        print("Notebook output:", out.notebook_output.result)
+                        if json.loads(out.notebook_output.result).get("rc") == 3:
+                            print("A cap stopped the mutants before all were tried: the rows are partial (status 'unchecked').", file=sys.stderr)
+                            rc = EXIT_CAPPED
+                except Exception:  # noqa: BLE001
+                    pass
     finally:
         if a.keep_stage:
             print(f"Kept {stage} and {nb_path} (--keep-stage).")
         else:
             rm_volume_dir(w, stage)
-            if ok or rc in (_run_watchdog.EXIT_STALLED, EXIT_NO_START):
+            if ok or rc in (_run_watchdog.EXIT_STALLED, EXIT_NO_START, EXIT_USAGE):
                 try:
                     w.workspace.delete(nb_path)
                     print(f"Removed the runner notebook {nb_path}")
-                except Exception as exc:  # noqa: BLE001
-                    print(f"WARNING: could not remove {nb_path} ({exc}); delete it by hand.", file=sys.stderr)
+                except Exception as exc:  # noqa: BLE001 - absent when it was never uploaded
+                    if "RESOURCE_DOES_NOT_EXIST" not in str(exc) and "does not exist" not in str(exc).lower():
+                        print(f"WARNING: could not remove {nb_path} ({exc}); delete it by hand.", file=sys.stderr)
             else:
                 print(f"Kept the runner notebook {nb_path} (the run did not succeed; a repair run reads it).")
     return rc

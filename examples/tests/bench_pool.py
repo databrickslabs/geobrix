@@ -1,6 +1,6 @@
 """gbx:bench:pool -- bring a pool of bench clusters up, show it, take it down.
 
-    bench_pool.py up     --name P --n N [--spark-version 19.x-scala2.13] [--node-type m5d.2xlarge] [--workers 4]
+    bench_pool.py up     --name P --n N [--spark-version 19.x-scala2.13] [--node-type m5d.2xlarge] [--workers 4 | --single-node]
     bench_pool.py status --name P
     bench_pool.py down   --name P [--delete]
 
@@ -31,6 +31,7 @@ def main(argv=None, w=None) -> int:
     ap.add_argument("--spark-version", default="19.x-scala2.13")
     ap.add_argument("--node-type", default="m5d.2xlarge")
     ap.add_argument("--workers", type=int, default=4)
+    ap.add_argument("--single-node", action="store_true", help="up: single-node clusters (the driver alone; --workers is ignored)")
     ap.add_argument("--delete", action="store_true", help="down: remove the clusters, not only terminate them")
     ap.add_argument("--profile", default=os.environ.get("DATABRICKS_CONFIG_PROFILE", ""))
     a = ap.parse_args(argv)
@@ -41,7 +42,7 @@ def main(argv=None, w=None) -> int:
     try:
         if a.action == "up":
             me = w.current_user.me().user_name
-            ids = pool.up(w, a.name, a.n, spark_version=a.spark_version, node_type=a.node_type, workers=a.workers, user=me)
+            ids = pool.up(w, a.name, a.n, spark_version=a.spark_version, node_type=a.node_type, workers=a.workers, user=me, single_node=a.single_node)
             print(f"pool {a.name}: {len(ids)} cluster(s) running: {', '.join(ids)} (auto-termination {pool.AUTOTERMINATION_MIN} min)")
         elif a.action == "status":
             vol = _volroot()

@@ -17,7 +17,11 @@ show_help() {
     echo -e "  ${GREEN}--tests \"<paths>\"${NC}      pytest args relative to python/geobrix, one quoted string"
     echo -e "  ${GREEN}--purpose \"<why>\"${NC}      Required on a launch; heads the notebook and rides on the run name"
     echo -e "  ${GREEN}--profile <name>${NC}       Databricks profile (default DATABRICKS_CONFIG_PROFILE)"
-    echo -e "  ${GREEN}--node-type <t>${NC}        Default m5d.16xlarge (64 vCPU)"
+    echo -e "  ${GREEN}--node-type <t>${NC}        Node of a NEW cluster. Default m5d.16xlarge (64 vCPU)"
+    echo -e "  ${GREEN}--pool <name>${NC}          Lease the single-node cluster of this pool (default gbx-test-1n; made once when the pool has none)"
+    echo -e "  ${GREEN}--pool-wait-min <n>${NC}    Wait up to n minutes for a free pool cluster (default 30)"
+    echo -e "  ${GREEN}--fresh-cluster${NC}        Run on a new job cluster that ends with the run (a cold start every time)"
+    echo -e "  ${GREEN}--pip-extra \"<reqs>\"${NC}  More pip requirements the selected tests import (default \"mercantile>=1.2,<2\")"
     echo -e "  ${GREEN}--run-id <id>${NC}          Default mut-<date>-<time>-<4 hex>"
     echo -e "  ${GREEN}--sha <rev>${NC}            Commit to test (default HEAD)"
     echo -e "  ${GREEN}--wheel <path>${NC}         env6 wheel (default dist/env6/)"
@@ -50,12 +54,12 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --family|--modules|--tests|--purpose|--profile|--node-type|--run-id|--sha|--wheel|--table|--oracle-tables|--wall-cap-min|--setup-cap-min|--stall-min|--start-cap-min)
+        --family|--modules|--tests|--purpose|--profile|--node-type|--run-id|--sha|--wheel|--table|--oracle-tables|--wall-cap-min|--setup-cap-min|--stall-min|--start-cap-min|--pool|--pool-wait-min|--pip-extra)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASS_ARGS+=("$1" "$2")
             shift 2
             ;;
-        --keep-stage|--explain-only)
+        --keep-stage|--explain-only|--fresh-cluster)
             PASS_ARGS+=("$1")
             shift
             ;;

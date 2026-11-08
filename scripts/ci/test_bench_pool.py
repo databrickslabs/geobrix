@@ -220,6 +220,17 @@ def test_up_makes_only_the_missing_clusters_with_a_60_minute_net_and_the_pool_ta
     assert pool.up(w, "p", 3, spark_version="x", node_type="y", workers=1, user="me") == ids and w.created == 2  # nothing missing
 
 
+def test_up_single_node_makes_a_driver_only_cluster(pool):
+    w = FakeW()
+    pool.up(w, "p", 1, spark_version="19.x-scala2.13", node_type="m5d.8xlarge", workers=4, user="me", single_node=True)
+    made = [kw for kind, *rest in w.calls if kind == "create" for kw in rest]
+    assert len(made) == 1
+    kw = made[0]
+    assert kw["num_workers"] == 0 and kw["spark_conf"]["spark.databricks.cluster.profile"] == "singleNode"
+    assert kw["custom_tags"]["ResourceClass"] == "SingleNode" and kw["custom_tags"]["gbx_bench_pool"] == "p"
+    assert kw["aws_attributes"].first_on_demand == 1
+
+
 def test_status_shows_state_and_idle_minutes_and_down_ends_only_the_pools_clusters(pool):
     w = FakeW()
     w.add("a"), w.add("t", state="TERMINATED"), w.add("b", name="other"), w.add(DENIED)

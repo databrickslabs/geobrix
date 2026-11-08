@@ -73,6 +73,8 @@ def test_explain_only_prints_the_plan_and_stages_nothing():
     assert plan["stage"].endswith("/mutation-runs/unit-1")
     assert plan["table"].endswith(".mutation_results")
     assert plan["spark_version"] == "19.x-scala2.13"
+    assert plan["compute"] == {"mode": "pool", "pool": "gbx-test-1n"}
+    assert plan["pip_extra"] == "mercantile>=1.2,<2"
     assert "nothing staged or started" in res.stdout
 
 
@@ -100,7 +102,18 @@ def test_the_runner_notebook_starts_with_the_four_line_header_and_installs_the_p
     assert len(head.splitlines()) == 4
     install = "".join(nb["cells"][1]["source"])
     assert "mutmut==3.8.0" in install and "pytest==9.1.1" in install and "geobrix @ file:///Volumes/c/s/v/mutation-runs/r1/" in install
+    assert '"mercantile>=1.2,<2"' in install
     assert "--wall-cap-min" in "".join(nb["cells"][2]["source"])
+    assert "os.cpu_count() or 4) - 2" in "".join(nb["cells"][2]["source"])  # the workers come from the node it runs on
+
+
+def test_fresh_cluster_is_an_option_and_the_pool_is_the_default():
+    res = _sh("--family", "f", "--modules", "pyvx/_validity", "--tests", "test/pyvx", "--fresh-cluster", "--pool", "p9", "--explain-only")
+    assert res.returncode == 0, res.stderr
+    plan = json.loads(res.stdout[res.stdout.index("{"): res.stdout.rindex("}") + 1])
+    assert plan["compute"] == {"mode": "fresh job cluster", "pool": None}
+    a = launcher.parse(["--pool", "p9"])
+    assert a.pool == "p9" and not a.fresh_cluster
 
 
 def test_the_launcher_has_no_direct_jobs_submit():

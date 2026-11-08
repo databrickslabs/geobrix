@@ -898,6 +898,17 @@ VECTOR_SCALAR += (
         SESSION,
     ),
     Case(
+        "tcrs_partial_z_geocentric",
+        TCRS,
+        (EW("LINESTRING Z (10 50 100, 11 51)"), "EPSG:4978"),
+        "geom_srid",
+        (
+            "LINESTRING Z (4045519.707563044 713334.2754311836 4862865.642150745, 3948134.630575159 767439.6300085314 NaN)",
+            4978,
+        ),
+        SESSION,
+    ),
+    Case(
         "tcrs_mixed_dim",
         TCRS,
         (EW(MIXED), "EPSG:32633"),

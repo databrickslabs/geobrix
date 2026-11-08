@@ -769,17 +769,17 @@ def test_an_error_tile_is_known_by_its_reason_in_every_form_a_map_arrives_in(md)
 def test_an_error_tile_passes_through_map_algebra_before_its_expression_is_read(
     tmp_path,
 ):
-    """The builtin 'norm_diff' calc is a session dialect (UC evaluates numexpr): over real tiles it is a wrong
-    argument, over an error tile the error goes through first, as it does in a session.
+    """An expression numexpr cannot evaluate is a wrong argument over real tiles; over an error tile the error
+    goes through first, as it does in a session.
     """
-    norm_diff = '{"calc": "norm_diff", "dialect": "builtin"}'
+    expression = "A +* 2"
     err = {**WAREHOUSE_EMPTY_TILE, "metadata": {"last_error": "upstream"}}
-    out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([err, err], norm_diff)
+    out = tier_b.HANDLERS["gbx_rst_mapalgebra"]([err, err], expression)
     assert out["raster"] is None and out["metadata"] == {"last_error": "upstream"}
     assert (
-        tier_b.HANDLERS["gbx_rst_mapalgebra"]([WAREHOUSE_EMPTY_TILE] * 2, norm_diff)
+        tier_b.HANDLERS["gbx_rst_mapalgebra"]([WAREHOUSE_EMPTY_TILE] * 2, expression)
         is None
     )
     pair = _built("se_pair", tmp_path)
     with pytest.raises(ValueError, match="cannot be evaluated"):
-        tier_b.HANDLERS["gbx_rst_mapalgebra"](pair, norm_diff)
+        tier_b.HANDLERS["gbx_rst_mapalgebra"](pair, expression)

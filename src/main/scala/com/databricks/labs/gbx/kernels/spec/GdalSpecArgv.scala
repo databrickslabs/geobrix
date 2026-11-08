@@ -49,9 +49,9 @@ object GdalSpecArgv {
     private val Vars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     /** A map-algebra variable: one capital letter that is not part of a longer name, a number or an indexed V[n]. */
     private val Var: Regex = """(?<![A-Za-z0-9_\]])([A-Z])(?![A-Za-z0-9_\[])""".r
-    private val Dialects = Seq("muparser", "builtin")
-    /** The envelope's closed vocabulary: calc, dialect, and per variable V_index / V_band. */
-    private val EnvelopeKeys: Set[String] = Set("calc", "dialect") ++ Vars.flatMap(v => Seq(s"${v}_index", s"${v}_band"))
+    /** The envelope's closed vocabulary: calc, and per variable V_index / V_band. There is no dialect: GDAL's muparser
+      * grammar evaluates every expression. */
+    private val EnvelopeKeys: Set[String] = Set("calc") ++ Vars.flatMap(v => Seq(s"${v}_index", s"${v}_band"))
     private val TemplateCacheSize = 512
     private val templates = new java.util.LinkedHashMap[(String, Map[String, Any], Seq[RasterProps], GdalSection), Option[Seq[String]]](
       64, 0.75f, true
@@ -59,7 +59,7 @@ object GdalSpecArgv {
     /** The templates cached now, for the smoke test's bound-and-bounded row (M7). */
     private[spec] def cachedTemplates: Int = templates.synchronized(templates.size)
 
-    private final case class Calc(expr: String, dialect: String, variables: Seq[(String, Int)])
+    private final case class Calc(expr: String, variables: Seq[(String, Int)])
 
     /** A double as both tiers print it: the shortest round-trip digits, plain notation, no trailing zeros. */
     def fmtDouble(x: Double): String =
@@ -147,7 +147,7 @@ object GdalSpecArgv {
 
     private def isInt(n: JsonNode): Boolean = n != null && n.isIntegralNumber
 
-    /** The map-algebra envelope -> GDAL `raster calc`'s expression, dialect and one `--input=V=` per variable
+    /** The map-algebra envelope -> GDAL `raster calc`'s muparser expression and one `--input=V=` per variable
       * (see `engine/argv.py:_calc_binding`, which this mirrors). */
     private def calcBinding(fn: SpecFunction, a: SpecArg, value: Any, inputs: Seq[RasterProps]): Calc = {
         var s = value.toString.trim
@@ -155,7 +155,6 @@ object GdalSpecArgv {
             throw new SpecParamException(s"${fn.sqlName}: map algebra takes at most ${Vars.length} rasters (A to Z); got ${inputs.length}")
         }
         val bindings = scala.collection.mutable.LinkedHashMap.empty[String, (Int, Int)]
-        var dialect = "muparser"
         if (s.startsWith("{")) {
             val env =
                 try new ObjectMapper().readTree(s)
@@ -171,18 +170,19 @@ object GdalSpecArgv {
                       "raster calc). Fix: express the computation in calc"
                 )
             }
+            if (env.has("dialect")) {
+                throw new SpecParamException(
+                  s"${fn.sqlName}: the expression envelope takes no dialect: GeoBrix evaluates every expression with " +
+                      "GDAL's muparser grammar. Fix: remove \"dialect\" and write the expression in that grammar " +
+                      "(for example (A - B) / (A + B))"
+                )
+            }
             val unknown = env.fieldNames.asScala.filterNot(EnvelopeKeys).toSeq.sorted
             if (unknown.nonEmpty) {
                 throw new SpecParamException(
                   s"${fn.sqlName}: the expression envelope has unknown key(s) ${unknown.mkString(", ")}; it takes calc, " +
-                      "dialect, and V_index / V_band for a variable V from A to Z"
+                      "and V_index / V_band for a variable V from A to Z"
                 )
-            }
-            if (env.has("dialect")) {
-                dialect = env.get("dialect").asText
-                if (!Dialects.contains(dialect)) {
-                    throw new SpecParamException(s"${fn.sqlName}: dialect must be one of ${Dialects.mkString(", ")} (got '$dialect')")
-                }
             }
             Vars.zipWithIndex.foreach { case (v, ordinal) =>
                 val (ik, bk) = (s"${v}_index", s"${v}_band")
@@ -208,21 +208,13 @@ object GdalSpecArgv {
         }
         checkValue(fn.sqlName, a.source.get, s)
         val positional = inputs.indices.map(i => Vars(i).toString -> (i, 1)).toMap
-        if (dialect == "builtin") {
-            if (bindings.exists { case (v, b) => !positional.get(v).contains(b) }) {
-                throw new SpecParamException(
-                  s"${fn.sqlName}: raster and band selection (A_index, A_band, ...) needs the muparser dialect"
-                )
-            }
-            return Calc(s, dialect, positional.toSeq.sortBy(_._1).map { case (v, (i, _)) => v -> i })
-        }
         val resolved = positional ++ bindings
         val unbound = Var.findAllMatchIn(s).map(_.group(1)).toSet.filterNot(resolved.contains).toSeq.sorted
         if (unbound.nonEmpty) {
             throw new SpecParamException(s"${fn.sqlName}: the expression uses ${unbound.mkString(", ")}, which no raster is bound to")
         }
         val expr = Var.replaceAllIn(s, m => Regex.quoteReplacement(s"${m.group(1)}[${resolved(m.group(1))._2}]"))
-        Calc(expr, dialect, resolved.toSeq.sortBy(_._1).map { case (v, (i, _)) => v -> i })
+        Calc(expr, resolved.toSeq.sortBy(_._1).map { case (v, (i, _)) => v -> i })
     }
 
     /** True when this call binds a value to a `bad: data` argument: GDAL refusing the argv is then that value's fault,
@@ -264,7 +256,7 @@ object GdalSpecArgv {
                     val c = calcBinding(fn, a, v, inputs)
                     calc = Some(c)
                     tokens += s"--${a.arg}=${c.expr}"
-                    tokens += s"--dialect=${c.dialect}"
+                    tokens += "--dialect=muparser"
                 } else {
                     if (!a.tpe.contains("crs")) checkValue(fn.sqlName, a.source.get, v)
                     bindValue(fn, a, v).foreach { text =>

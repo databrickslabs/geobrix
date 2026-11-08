@@ -1096,7 +1096,6 @@ SL, MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
 _VT_POLICY = "which GeoBrix does not open for a virtual tile"
 _VT_TOP = f"a file no driver on the virtual-tile allowlist reads, {_VT_POLICY}"
 _VT_NESTED = f"a source GDAL has no driver for here, {_VT_POLICY}"
-NORM_DIFF = '{"calc": "norm_diff", "dialect": "builtin"}'
 SPEC_SE: Tuple[Case, ...] = (
     # Horn's slope with no edges: the 1-pixel border and the neighbours of the NoData hole are NoData.
     Case(
@@ -1359,21 +1358,21 @@ SPEC_SE: Tuple[Case, ...] = (
         None,
         ("session",),
     ),
-    # norm_diff over two tiles, A then B, NoData in either one NoData out: the builtin dialect; the rows below use
-    # muparser, which the pinned GDAL build carries (the native self-check holds it).
+    # One grammar: GDAL's muparser evaluates every expression (the pinned build carries it, the native self-check
+    # holds it), and the envelope takes no dialect.
     Case(
-        "se_ma_norm_diff",
+        "se_ma_dialect",
         MALG,
-        (Build("se_pair"), NORM_DIFF),
-        "ref",
-        "norm_diff",
+        (Build("se_pair"), '{"calc": "norm_diff", "dialect": "builtin"}'),
+        "raises",
+        "dialect",
         ("session",),
     ),
     # the same pair as references (a path each, no bytes): the level that serves the function by default reads them
     Case(
         "se_ma_virtual",
         MALG,
-        (Build("se_pair_paths"), NORM_DIFF),
+        (Build("se_pair_paths"), "(A - B) / (A + B)"),
         "ref",
         "norm_diff",
         ("session",),
@@ -1434,7 +1433,7 @@ SPEC_SE: Tuple[Case, ...] = (
     Case(
         "se_ma_error_in",
         MALG,
-        (Build("se_error_pair"), NORM_DIFF),
+        (Build("se_error_pair"), "(A - B) / (A + B)"),
         "error_tile",
         UPSTREAM_ERROR,
         ("session", "uc"),
@@ -1457,7 +1456,9 @@ SPEC_SE: Tuple[Case, ...] = (
         "norm_diff",
         ("session", "uc"),
     ),
-    Case("se_ma_null", MALG, (None, NORM_DIFF), "null", None, ("session", "uc")),
+    Case(
+        "se_ma_null", MALG, (None, "(A - B) / (A + B)"), "null", None, ("session", "uc")
+    ),
     # Unity Catalog evaluates with numexpr: an expression it cannot evaluate is a wrong argument, found before any
     # raster is read; an array of members over the cap, or with a virtual member, is refused with a Fix
     Case(

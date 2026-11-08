@@ -118,7 +118,7 @@ SAME_PIXELS = [
     "tcrs_esri102003",
     "tcrs_proj4",
     "tcrs_wkt",
-    "se_ma_norm_diff",
+    "se_ma_nd_two_tiles",
     "se_slope_png",
     "se_tcrs_projjson",
 ]

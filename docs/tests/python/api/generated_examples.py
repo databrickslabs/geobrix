@@ -791,8 +791,8 @@ EXAMPLES = {
     ),
     "gbx_rst_mapalgebra": (
         "SPEC_SE",
-        "se_ma_norm_diff",
-        'SELECT gbx_rst_mapalgebra(c0, \'{"calc": "norm_diff", "dialect": "builtin"}\') AS out FROM gbx_example',
+        "se_ma_nd_two_tiles",
+        "SELECT gbx_rst_mapalgebra(c0, '(A - B) / (A + B)') AS out FROM gbx_example",
     ),
     "gbx_rst_max": (
         "RASTER_STAT",

@@ -49,10 +49,10 @@ _ITEMSIZE = {
 _VARS = string.ascii_uppercase
 # A map-algebra variable: one capital letter that is not part of a longer name, a number or an indexed V[n].
 _VAR = re.compile(r"(?<![A-Za-z0-9_\]])([A-Z])(?![A-Za-z0-9_\[])")
-_DIALECTS = ("muparser", "builtin")
-# The envelope's closed vocabulary: calc, dialect, and per variable V_index / V_band.
+# The envelope's closed vocabulary: calc, and per variable V_index / V_band. There is no dialect: GDAL's muparser
+# grammar evaluates every expression.
 _ENVELOPE_KEYS = frozenset(
-    {"calc", "dialect"} | {f"{v}_{k}" for v in _VARS for k in ("index", "band")}
+    {"calc"} | {f"{v}_{k}" for v in _VARS for k in ("index", "band")}
 )
 _TEMPLATE_CACHE_SIZE = 512
 _templates: "OrderedDict" = OrderedDict()
@@ -73,7 +73,6 @@ class RasterProps:
 @dataclass(frozen=True)
 class _Calc:
     expr: str
-    dialect: str
     variables: Tuple[
         Tuple[str, int], ...
     ]  # (variable, input index), sorted by variable
@@ -195,12 +194,12 @@ def canonical_crs(text: str) -> str:
 
 
 def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
-    """The map-algebra envelope -> GDAL `raster calc`'s expression, dialect and one `--input=V=` per variable.
+    """The map-algebra envelope -> GDAL `raster calc`'s muparser expression and one `--input=V=` per variable.
 
     Today's envelope (``{"calc": ..., "A_index": i, "A_band": b, ...}``) or a bare expression. Variable V reads
     band 1 of input V's ordinal unless the envelope says otherwise; every bare V in the expression is written
-    V[b], so the output is one band. ``"dialect": "builtin"`` runs a GDAL builtin pixel function (for example
-    ``norm_diff``) over the inputs in variable order. ``extra_options`` (gdal_calc flags) is refused.
+    V[b], so the output is one band. There is one grammar, GDAL's muparser, so the envelope takes no dialect.
+    ``extra_options`` (gdal_calc flags) is refused.
     """
     s = str(value).strip()
     if len(inputs) > len(_VARS):
@@ -208,7 +207,6 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
             f"{fn.sql_name}: map algebra takes at most {len(_VARS)} rasters (A to Z); got {len(inputs)}"
         )
     bindings: Dict[str, Tuple[int, int]] = {}
-    dialect = "muparser"
     if s.startswith("{"):
         try:
             env = json.loads(s)
@@ -225,16 +223,17 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
                 f"{fn.sql_name}: extra_options is not supported (gdal_calc flags have no place in GDAL's "
                 "raster calc). Fix: express the computation in calc"
             )
+        if "dialect" in env:
+            raise ParamError(
+                f"{fn.sql_name}: the expression envelope takes no dialect: GeoBrix evaluates every expression with "
+                'GDAL\'s muparser grammar. Fix: remove "dialect" and write the expression in that grammar '
+                "(for example (A - B) / (A + B))"
+            )
         unknown = sorted(set(env) - _ENVELOPE_KEYS)
         if unknown:
             raise ParamError(
                 f"{fn.sql_name}: the expression envelope has unknown key(s) {', '.join(unknown)}; it takes calc, "
-                "dialect, and V_index / V_band for a variable V from A to Z"
-            )
-        dialect = env.get("dialect", "muparser")
-        if dialect not in _DIALECTS:
-            raise ParamError(
-                f"{fn.sql_name}: dialect must be one of {', '.join(_DIALECTS)} (got '{dialect}')"
+                "and V_index / V_band for a variable V from A to Z"
             )
         for ordinal, var in enumerate(_VARS):
             ik, bk = f"{var}_index", f"{var}_band"
@@ -258,14 +257,6 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
         s = env["calc"]
     check_value(fn.sql_name, arg.source, s)
     positional = {_VARS[i]: (i, 1) for i in range(len(inputs))}
-    if dialect == "builtin":
-        if any(positional.get(v) != b for v, b in bindings.items()):
-            raise ParamError(
-                f"{fn.sql_name}: raster and band selection (A_index, A_band, ...) needs the muparser dialect"
-            )
-        return _Calc(
-            s, dialect, tuple((v, i) for v, (i, _) in sorted(positional.items()))
-        )
     resolved = {**positional, **bindings}
     unbound = sorted(set(_VAR.findall(s)) - set(resolved))
     if unbound:
@@ -273,7 +264,7 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
             f"{fn.sql_name}: the expression uses {', '.join(unbound)}, which no raster is bound to"
         )
     expr = _VAR.sub(lambda m: f"{m.group(1)}[{resolved[m.group(1)][1]}]", s)
-    return _Calc(expr, dialect, tuple((v, i) for v, (i, _) in sorted(resolved.items())))
+    return _Calc(expr, tuple((v, i) for v, (i, _) in sorted(resolved.items())))
 
 
 def data_bound(fn, values: Mapping[str, Any]) -> bool:
@@ -323,7 +314,7 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             return None
         if a.type == "calc_envelope":
             calc = _calc_binding(fn, a, v, inputs)
-            tokens += [f"--{a.arg}={calc.expr}", f"--dialect={calc.dialect}"]
+            tokens += [f"--{a.arg}={calc.expr}", "--dialect=muparser"]
             continue
         if a.type not in ("crs",):
             check_value(fn.sql_name, a.source, v)

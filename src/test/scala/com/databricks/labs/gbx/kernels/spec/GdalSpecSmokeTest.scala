@@ -271,7 +271,7 @@ class GdalSpecSmokeTest extends AnyFunSuite {
         val calls = Seq(
           "gbx_rst_slope" -> (Seq(a), Map[String, Any]("unit" -> "degrees", "xscale" -> null, "yscale" -> null)),
           "gbx_rst_transformcrs" -> (Seq(a), Map[String, Any]("target_crs" -> "EPSG:4326")),
-          "gbx_rst_mapalgebra" -> (Seq(a, b), Map[String, Any]("expression" -> """{"calc": "norm_diff", "dialect": "builtin"}"""))
+          "gbx_rst_mapalgebra" -> (Seq(a, b), Map[String, Any]("expression" -> "(A - B) / (A + B)"))
         )
         for ((name, (rasters, vals)) <- calls) {
             val res = GdalSpecEngine.run(GdalSpecs.function(name), rasters, vals).get

@@ -82,7 +82,7 @@ symbol = "_identity"
 api = ["_jvm"]
 computes = ["dedicated"]
 gate = "capability"
-gate_detail = "the Connect check (is_connect) runs before any JVM access, and a Serverless session returns before the probe; the py4j branch is taken only when connect is false"
+gate_detail = "the Connect check (is_connect) runs before any JVM access, and every Connect session (Serverless or standard) returns before the probe; the py4j branch is taken only when connect is false"
 why = "Reads the JAR's version and sha256 through py4j to compare with the wheel"
 
 [[site]]
@@ -91,7 +91,7 @@ symbol = "_gdal"
 api = ["_jvm"]
 computes = ["dedicated"]
 gate = "capability"
-gate_detail = "the py4j branch is taken only when connect is false; a Connect session probes with a Java UDF instead"
+gate_detail = "the py4j branch is taken only when connect is false; a Connect session never reaches this probe (it returns before it) and the Java UDF branch is kept for a possible standard-mode JVM level"
 why = "Asks the JVM whether its GDAL natives load, through py4j"
 
 [[site]]
@@ -100,8 +100,8 @@ symbol = "attach_jar"
 api = ["addArtifact"]
 computes = ["standard"]
 gate = "capability"
-gate_detail = "reached only from register_java, from the Connect branch of _identity and _gdal; a Serverless session returns before any probe (Capabilities.serverless), so no JAR is added there"
-why = "Adds the GeoBrix JAR to a standard-access session as an artifact so its Java probe functions can register; the result only decides the reason line, since the JVM level is not used on Connect"
+gate_detail = "reached only from register_java, from the Connect branch of _identity and _gdal; detect returns before either on every Connect session, so no JAR is uploaded by registration (kept for a possible standard-mode JVM level)"
+why = "Adds the GeoBrix JAR to a standard-access session as an artifact so its Java probe functions can register; not used by registration today, since the JVM level is refused on Connect"
 
 [[site]]
 path = "manager/capabilities.py"
@@ -109,8 +109,8 @@ symbol = "register_java"
 api = ["registerJavaFunction"]
 computes = ["standard"]
 gate = "capability"
-gate_detail = "reached only from the Connect branch of _identity and _gdal on a non-Serverless session; a refused artifact becomes a fallback reason"
-why = "Registers the two Java probe functions (JAR identity, GDAL load) on a standard-access session"
+gate_detail = "reached only from the Connect branch of _identity and _gdal, which detect no longer takes on any Connect session; a refused artifact becomes a fallback reason"
+why = "Registers the two Java probe functions (JAR identity, GDAL load) on a standard-access session; not used by registration today (kept for a possible standard-mode JVM level)"
 
 # --- developer / diagnostic helpers ------------------------------------------------------------------------------
 

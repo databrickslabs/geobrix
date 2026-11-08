@@ -17,7 +17,8 @@ from databricks.labs.gbx import __version__
 BUILDINFO_UDF = "com.databricks.labs.gbx.kernels.udf.BuildInfoUdf"
 GDALPROBE_UDF = "com.databricks.labs.gbx.kernels.udf.GdalProbeUdf"
 # Standard access mode runs a Java UDF in a sandbox that loads only Java classes of a JAR added to the session
-# (see `attach_jar`), so the two probes have Java twins there.
+# (see `attach_jar`), so the two probes have Java twins there. Registration does not call them today (`detect` returns
+# before any JAR probe on a Connect session); they stay for a possible standard-mode JVM level.
 BUILDINFO_CONNECT_UDF = "com.databricks.labs.gbx.kernels.udf.BuildInfoConnectUdf"
 GDALPROBE_CONNECT_UDF = "com.databricks.labs.gbx.kernels.udf.GdalProbeConnectUdf"
 JAR_PATH_ENV = "GBX_JAR_PATH"
@@ -248,6 +249,12 @@ def _detect_uncached(spark, need_jvm: bool) -> Capabilities:
         return Capabilities(True, True, None, reason, reason, False)
     if not need_jvm:
         return Capabilities(connect, False, None, "not probed", "not probed", False)
+    if connect:
+        # Standard access mode. Every JVM level is refused on a Connect session (`levels._jvm_unavailable`) before
+        # the JAR's identity is read, so probing it would upload the whole JAR to the session for an answer nothing
+        # uses. Only the SQL-function probe is kept: the SQL kernels (L0) are what a standard session serves.
+        reason = "Spark Connect session (standard access mode)"
+        return Capabilities(True, False, None, reason, reason, _sql_functions(spark))
     raw, reason = _identity(spark, connect)
     jar = None
     if raw is not None:

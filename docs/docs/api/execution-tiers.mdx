@@ -130,7 +130,7 @@ Almost everything runs on every compute through the wheel. These features need m
 | Zarr `access="direct"` | Yes | No | No | No |
 | TIN `conforming` mode | Yes, with the JAR | No | No | No |
 
-- **JAR on standard access mode.** The JAR is a cluster library only when a metastore admin has allowed its path. Even then GeoBrix uses the Python level. A Serverless session never loads the JAR.
+- **JAR on standard access mode.** The JAR is a cluster library only when a metastore admin has allowed its path. Even then GeoBrix uses the Python level, and it does not add the JAR to the session. A Serverless session never loads the JAR.
 - **UC Scala functions.** `gbx.uc.install` makes `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid` Scala functions when the install folder holds the JAR of the wheel's version. Without it they are Python functions with the same answers. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` are always SQL functions. Scala functions on UC are verified on a SQL warehouse only. See [Unity Catalog functions](./uc-functions#python-and-scala-handlers).
 - **Zarr `access="auto"`** reads and writes through the Volume mount where direct access is not available. Only an explicit `"direct"` raises, with a fix.
 - A refusal names the compute that can run the feature, and a fix.

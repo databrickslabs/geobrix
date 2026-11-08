@@ -1541,8 +1541,8 @@ def test_uc_scala_key_is_closed_and_paired_with_a_python_handler():
 
 
 # --- the JAR on standard access mode ----------------------------------------------------------------------
-# A JAR added to the SESSION (`spark.addArtifact`) is seen by the Java UDF sandbox; the capability probe reads the
-# JAR's identity and GDAL through two Java handlers. No function has a JVM level there (the one Java UDF is gone).
+# The JVM level is refused on every Spark Connect session before the JAR's identity is read, so a standard
+# session never uploads the JAR or registers a Java probe: that would be an upload of the whole JAR for nothing.
 
 
 def _standard_stub(monkeypatch, tmp_path, jar=True):
@@ -1567,17 +1567,50 @@ def _standard_stub(monkeypatch, tmp_path, jar=True):
     return stub, str(path)
 
 
-def test_detect_on_standard_reads_the_jar_through_the_session_handlers(
+def test_detect_on_standard_uploads_no_jar_and_registers_no_probe(
     monkeypatch, tmp_path
 ):
-    stub, jar = _standard_stub(monkeypatch, tmp_path)
+    stub, _ = _standard_stub(monkeypatch, tmp_path)
     caps = caps_mod.detect(stub, need_jvm=True)
-    assert caps.connect and caps.jar is not None and caps.gdal_reason == ""
-    assert stub.artifacts == [jar]
-    assert {c for _, c, _ in stub.java_registered} == {
-        caps_mod.BUILDINFO_CONNECT_UDF,
-        caps_mod.GDALPROBE_CONNECT_UDF,
-    }
+    assert caps.connect and not caps.serverless and caps.jar is None
+    assert caps.jar_reason == "Spark Connect session (standard access mode)"
+    assert stub.artifacts == [] and stub.java_registered == []
+    assert stub.touched == []
+    # the SQL-function probe still runs: the SQL kernels (L0) are what a standard session serves
+    assert caps.sql_functions
+    assert any("gbx__probe_sqlfn" in t for t in stub.sql_text)
+
+
+def test_register_on_standard_with_a_jar_staged_falls_back_with_the_same_reason(
+    monkeypatch, tmp_path, capsys
+):
+    from databricks.labs.gbx import manager
+
+    stub, _ = _standard_stub(monkeypatch, tmp_path)
+    out = manager.register(stub)
+    assert {c.level for c in out.values()} == {"L0", "L3"}
+    assert stub.artifacts == [] and stub.java_registered == []
+    printed = capsys.readouterr().out.splitlines()
+    assert any(
+        "Spark Connect session (standard access mode); using light" in p
+        for p in printed
+    ), printed
+
+
+def test_detect_on_classic_still_reads_the_jar_through_the_jvm():
+    """Classic sessions keep the py4j probe: the Connect shortcut does not reach them."""
+    import types
+
+    calls = []
+
+    class _Gateway:
+        def __getattr__(self, name):
+            calls.append(name)
+            raise AttributeError(name)
+
+    spark = types.SimpleNamespace(_jvm=_Gateway())
+    raw, why = caps_mod._identity(spark, connect=False)
+    assert raw is None and calls and why == "no geobrix JAR on classpath"
 
 
 def _gates():

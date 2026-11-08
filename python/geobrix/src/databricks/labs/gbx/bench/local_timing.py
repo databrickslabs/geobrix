@@ -126,26 +126,24 @@ SETS: Dict[str, SetSpec] = {
         ),  # the batch UDF behind the wrapper: recorded, not a peer
     ),
     # the engine's other two functions: map algebra over 512 px pairs replicated in memory and transformcrs over the
-    # corpus tiles, each with its two light UDFs, today's light form and a floor (the engine's shell cost)
+    # corpus tiles, each with its two light UDFs and a floor (the engine's shell cost)
     "SE-mapalgebra": SetSpec(
         mvp="SE",
         forms=(
             "engine-c0@mem",
             "engine-c1@mem",
-            "today@mem",
             "floor-c0@mem",
         ),
         reference="engine-c0@mem",
         ns=(32, 128, 512),
         fn="gbx_rst_mapalgebra",
-        peer_exempt=("today@mem", "engine-c1@mem"),  # slower by design, not peers
+        peer_exempt=("engine-c1@mem",),  # slower by design, not a peer
     ),
     "SE-transformcrs": SetSpec(
         mvp="SE",
         forms=(
             "engine-c0@mat",
             "engine-c1@mat",
-            "today@mat",
             "floor-c0@mat",
         ),
         reference="engine-c0@mat",
@@ -155,10 +153,7 @@ SETS: Dict[str, SetSpec] = {
             16,
         ),  # 4-band corpus tiles of 16 MiB: 32 or more can overflow a local[8] heap
         fn="gbx_rst_transformcrs",
-        peer_exempt=(
-            "today@mat",
-            "engine-c1@mat",
-        ),  # different cost by design, not peers
+        peer_exempt=("engine-c1@mat",),  # different cost by design, not a peer
         corpus_src="/Volumes/main/default/bench-corpus/rows",
         corpus_dir="/tmp/gbx-local-timing/IO",
     ),

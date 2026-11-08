@@ -1,5 +1,5 @@
 """The SE forms at scale: slope, transformcrs and map algebra, each with the engine's light row-wise and batch UDFs and
-a floor (and today's light implementation where one remains), on one input that scales past the client cap. The engine
+a floor, on one input that scales past the client cap. The engine
 has no JVM level, so no form of the set is L1.
 """
 
@@ -57,10 +57,9 @@ def test_the_levels_are_compared_by_decoded_pixels_not_encoding_length(fn, inp):
 
 def test_the_engine_has_no_jvm_form():
     assert [f for f in lf.FORMS["SE"] if f.level == "L1"] == []
+    # no light kernel remains either: a `today` or plain `-` form would time the engine under another label
     assert not [
-        f
-        for f in lf.FORMS["SE"]
-        if f.variant.startswith("today") and f.fn == "gbx_rst_slope"
+        f for f in lf.FORMS["SE"] if f.variant.startswith("today") or f.variant == "-"
     ]
 
 

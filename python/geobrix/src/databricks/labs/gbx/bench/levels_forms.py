@@ -2032,9 +2032,8 @@ _SE_FLOOR_C1 = (
 )
 _SE_TCRS = _SE_FP.format(call="{fn}(tile, 'EPSG:3857')")
 # The call is inserted as it is; the run formats the query with {src}, so the JSON braces are doubled once.
-_SE_MA_TODAY = _SE_FP.format(call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""")
-# The engine evaluates GDAL's muparser grammar alone (no dialect key), the same expression today's form takes.
-_SE_MA_ENGINE = _SE_MA_TODAY
+# The engine evaluates GDAL's muparser grammar alone (no dialect key).
+_SE_MA_ENGINE = _SE_FP.format(call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""")
 
 
 def _se(
@@ -2057,7 +2056,7 @@ def _se(
 
 _SL, _MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
 # A label `<variant>@<size>` registers `<variant>` (see levels._run_one) and names the tile size. The engine has no
-# JVM level, so every form is light: its two UDFs, today's light form where one still measures something, and a floor.
+# JVM level and no light kernel of its own, so every form is the engine's: its two UDFs and a floor.
 FORMS["SE"] = (
     [
         _se(
@@ -2089,11 +2088,9 @@ FORMS["SE"] = (
         for s in _SE_SIZES
     ]
     + [
-        _se(T, "L3", "-", "tiles_mat", _SE_TCRS),
         _se(T, "L3", "engine-c0", "tiles_mat", _SE_TCRS),
         _se(T, "L3", "engine-c1", "tiles_mat", _SE_TCRS),
         _se(T, "L3", "engine-c1", "tiles_virt", _SE_TCRS),
-        _se(_MALG, "L3", "-", "se_pair_512", _SE_MA_TODAY),
         _se(_MALG, "L3", "engine-c0", "se_pair_512", _SE_MA_ENGINE),
         _se(_MALG, "L3", "engine-c1", "se_pair_512", _SE_MA_ENGINE),
     ]
@@ -2117,7 +2114,7 @@ FORMS["SE"] += [
 ]
 
 # The light forms of the three engine functions at scale: each on one input that scales without the client cap, with its
-# row-wise UDF (c0), its batch UDF behind the wrapper (c1), today's light implementation (where one remains) and a
+# row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a
 # floor, every one with a value-level
 # fingerprint so the levels are compared by the pixels they return. Slope reads the replicated 1024 px tiles
 # (`@mem`), transformcrs the corpus tiles (`@mat`), map algebra the replicated 512 px pairs (`@mem`).
@@ -2142,11 +2139,6 @@ _SE_TCRS_NULLS = (
     "(SELECT tile.path AS p FROM (SELECT tile, {fn}(tile, 'EPSG:3857') AS t FROM {src}) WHERE t.raster IS NULL)"
 )
 _SE_MA_V = _SE_VFP.format(
-    call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""",
-    col="tiles[0].raster",
-    k=8,
-)
-_SE_MA_TODAY_V = _SE_VFP.format(
     call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""",
     col="tiles[0].raster",
     k=8,
@@ -2185,16 +2177,6 @@ FORMS["SE"] += [
     _se(
         T,
         "L3",
-        "today@mat",
-        "tiles_mat",
-        _SE_TCRS,
-        vsql=_SE_TCRS_V,
-        nullsql=_SE_TCRS_NULLS,
-        allows_null=True,
-    ),
-    _se(
-        T,
-        "L3",
         "floor-c0@mat",
         "tiles_mat",
         _SE_FLOOR_C0,
@@ -2203,14 +2185,6 @@ FORMS["SE"] += [
     ),
     _se(_MALG, "L3", "engine-c0@mem", "se_pair_512_mem", _SE_MA_ENGINE, vsql=_SE_MA_V),
     _se(_MALG, "L3", "engine-c1@mem", "se_pair_512_mem", _SE_MA_ENGINE, vsql=_SE_MA_V),
-    _se(
-        _MALG,
-        "L3",
-        "today@mem",
-        "se_pair_512_mem",
-        _SE_MA_TODAY,
-        vsql=_SE_MA_TODAY_V,
-    ),
     _se(
         _MALG,
         "L3",

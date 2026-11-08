@@ -42,18 +42,15 @@ def _rows():
         if fn.status != "stable" or not _tables_of(fn):
             continue
         for variant in _l3_forms(fn.levels.get("L3", {})):
-            engine = variant.startswith("engine")
             # the Python API leg needs a Python entry: a Column function, or for a generator the DataFrame-first
             # function (`_api.table`), run over the same frame as the SQL leg
             apis = ("sql",) if fn.python is None else ("sql", "python")
             for api in apis:
-                marks = [pytest.mark.integration] if engine else []
                 yield pytest.param(
                     fn.sql_name,
                     "L3",
                     variant,
                     api,
-                    marks=marks,
                     id=f"{fn.sql_name}-L3{variant}-{api}",
                 )
         if (

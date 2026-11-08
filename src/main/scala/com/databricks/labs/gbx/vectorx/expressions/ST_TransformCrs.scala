@@ -279,7 +279,7 @@ private[expressions] object TransformCrsCore {
       * A geometry whose Z is uniform (all vertices or none) goes through [[transformWithCachedCT]]
       * unchanged. A partial-Z geometry cannot go to OGR in 3D (OGR refuses a NaN Z), so X and Y of every
       * vertex are reprojected without a Z, and the vertices that have a Z are then reprojected as 3D
-      * points to carry their Z through the transformation. A vertex without a Z stays NaN: a missing Z is
+      * points, and those vertices take X, Y and Z from that result. A vertex without a Z stays NaN: a missing Z is
       * never filled in, and a Z that exists is never dropped. The lightweight level follows the same rule. */
     private[expressions] def transformKeepingZ(
         g: JTSGeometry, ct: CoordinateTransformation
@@ -289,12 +289,18 @@ private[expressions] object TransformCrsCore {
         val hasZ = in.map(c => java.lang.Double.isFinite(c.z))
         if (!hasZ.exists(identity) || hasZ.forall(identity)) return gProj
 
+        // A vertex with a Z takes X, Y and Z from the 3D transform: for a pair that moves the height
+        // (geocentric, ellipsoidal or vertical), Z changes X and Y too. The others keep the 2D result.
+        val flat = gProj.getCoordinates
+        val xOut = flat.map(_.x)
+        val yOut = flat.map(_.y)
         val zOut = Array.fill(in.length)(Double.NaN)
         val withZ = in.zip(hasZ).collect { case (c, true) => JTS.point(c.copy()) }
-        val moved = transformWithCachedCT(JTS.multiPoint(withZ.toArray[JTSGeometry]), ct)
-        val movedZ = moved.getCoordinates.map(_.z)
+        val moved = transformWithCachedCT(JTS.multiPoint(withZ.toArray[JTSGeometry]), ct).getCoordinates
         var k = 0
-        for (i <- in.indices if hasZ(i)) { zOut(i) = movedZ(k); k += 1 }
+        for (i <- in.indices if hasZ(i)) {
+            xOut(i) = moved(k).x; yOut(i) = moved(k).y; zOut(i) = moved(k).z; k += 1
+        }
 
         // The reprojected geometry is XY only: rebuild it with the Z carried through, in the same
         // vertex order the input was read in. An EMPTY part has no vertex and is kept as it is
@@ -302,7 +308,7 @@ private[expressions] object TransformCrsCore {
         var next = 0
         val gf = gProj.getFactory
         def seq(s: CoordinateSequence): CoordinateSequence = {
-            val cs = Array.tabulate(s.size)(i => new Coordinate(s.getX(i), s.getY(i), zOut(next + i)))
+            val cs = Array.tabulate(s.size)(i => new Coordinate(xOut(next + i), yOut(next + i), zOut(next + i)))
             next += s.size
             new CoordinateArraySequence(cs, 3)
         }

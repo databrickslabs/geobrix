@@ -195,8 +195,9 @@ def _reproject(tr, g):
     A geometry whose Z is uniformly finite (or absent) goes through the transformer in one
     call, exactly as before.  A partial-Z geometry cannot: PROJ propagates a non-finite Z into
     X and Y, so the vertex would come back ``NaN NaN NaN`` and lose its horizontal position.
-    So X and Y of every vertex are reprojected without a Z, and the Z is carried through the
-    transformation only for the vertices that have one; the others stay ``NaN``.
+    So X and Y of every vertex are reprojected without a Z, and a vertex that has a Z takes
+    X, Y and Z from the 3D transformation (a height-moving pair changes all three); the others
+    stay ``NaN`` in Z.
 
     Nothing is fabricated and nothing real is dropped: a missing Z is never filled with ``0``
     (indistinguishable from a measured elevation), and a Z that exists is never discarded.
@@ -207,10 +208,15 @@ def _reproject(tr, g):
 
     def _apply(coords):
         x, y = tr.transform(coords[:, 0], coords[:, 1])
+        x, y = np.array(x, dtype=float), np.array(y, dtype=float)
         z = coords[:, 2].copy()
         has_z = np.isfinite(z)
         if has_z.any():
-            z[has_z] = tr.transform(coords[has_z, 0], coords[has_z, 1], z[has_z])[2]
+            # A vertex with a Z takes X, Y and Z from the 3D transform: for a pair that moves
+            # the height (geocentric, ellipsoidal or vertical), Z changes X and Y too.
+            x[has_z], y[has_z], z[has_z] = tr.transform(
+                coords[has_z, 0], coords[has_z, 1], z[has_z]
+            )
         return np.column_stack([x, y, z])
 
     return shapely_transform(g, _apply, include_z=True)

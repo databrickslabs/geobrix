@@ -139,6 +139,17 @@ def test_transformcrs_partial_z_from_a_projected_source_passes_the_domain_check(
     assert pts[1][2] != pts[1][2]
 
 
+def test_transformcrs_partial_z_vertex_takes_x_y_z_from_the_3d_transform():
+    # a pair that moves the height (geocentric) changes X and Y with Z: the vertex with a Z must match
+    # the 3D point transform, and the vertex without one keeps a NaN Z
+    out = _crs.st_transformcrs("SRID=4326;LINESTRING Z (10 50 100, 11 51)", "EPSG:4978")
+    pts = get_coordinates(_text_geom(out), include_z=True)
+    assert pts[0] == pytest.approx(
+        [4045519.707563044, 713334.2754311836, 4862865.642150745], abs=1e-3
+    )
+    assert pts[1][2] != pts[1][2]
+
+
 def test_transformcrs_sql_bytes_of_mixed_dimension_text_carry_the_z():
     out = from_wkb(
         _crs._udf_st_transformcrs(

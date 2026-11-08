@@ -447,6 +447,19 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(result.isInstanceOf[Array[Byte]])
     }
 
+    test("ST_TransformCrs: a partial-Z vertex takes X, Y and Z from the 3D transform (geocentric target)") {
+        // A height-moving pair changes X and Y with Z; the vertex without a Z keeps a NaN Z.
+        val ls = gf.createLineString(Array(new Coordinate(10.0, 50.0, 100.0), new Coordinate(11.0, 51.0)))
+        ls.setSRID(4326)
+        val result = ST_TransformCrs.eval(JTS.toEWKBAdaptive(ls), UTF8String.fromString("EPSG:4978"))
+        assert(result != null)
+        val cs = JTS.fromWKB(result.asInstanceOf[Array[Byte]]).getCoordinates
+        cs(0).x shouldBe (4045519.707563044 +- 1e-3)
+        cs(0).y shouldBe (713334.2754311836 +- 1e-3)
+        cs(0).z shouldBe (4862865.642150745 +- 1e-3)
+        cs(1).z.isNaN shouldBe true
+    }
+
     test("ST_TransformCrs: mixed-Z LINESTRING does not throw") {
         // LINESTRING where first vertex has NaN Z but second has Z=5; both in EPSG:32633 domain
         val ls = gf.createLineString(Array(
@@ -815,6 +828,23 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         inner.getGeometryN(0).getGeometryType shouldBe "Point"
         assert(inner.getGeometryN(0).isEmpty)
         inner.getGeometryN(1).getCoordinates.head.x shouldBe (500000.0 +- 1e-3)
+    }
+
+    test("ST_TransformCrs.evalSql: a MultiLineString and a MultiPolygon keep their type and an EMPTY part") {
+        val cases = Seq(
+            "MULTILINESTRING" -> "SRID=4326;MULTILINESTRING (EMPTY, (15 51, 16 52))",
+            "MULTIPOLYGON" -> "SRID=4326;MULTIPOLYGON (EMPTY, ((15 51, 16 51, 16 52, 15 51)))"
+        )
+        for ((tpe, wkt) <- cases) {
+            val out = ST_TransformCrs.evalSql(UTF8String.fromString(wkt), UTF8String.fromString("EPSG:32633"))
+            assert(out != null, s"$tpe: an EMPTY part must not make the collection NULL")
+            val g = JTS.fromWKB(out)
+            g.getGeometryType.toUpperCase shouldBe tpe
+            g.getSRID shouldBe 32633
+            g.getNumGeometries shouldBe 2
+            assert(g.getGeometryN(0).isEmpty, s"$tpe: the EMPTY part moved")
+            g.getGeometryN(1).getCoordinates.head.x shouldBe (500000.0 +- 1e-3)
+        }
     }
 
     test("ST_TransformCrs.evalSql: a bare EMPTY geometry stays EMPTY with the target SRID") {

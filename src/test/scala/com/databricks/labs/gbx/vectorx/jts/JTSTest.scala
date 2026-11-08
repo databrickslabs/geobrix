@@ -292,6 +292,11 @@ class JTSTest extends AnyFunSuite {
         assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("LINESTRING Z (15 51 5, oops)") }
     }
 
+    test("fromWKT refuses a Z tag over 2D ordinates instead of reading a NaN Z") {
+        assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("POINT Z (1 2)") }
+        assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("LINESTRING Z (1 2, 3 4)") }
+    }
+
     test("fromWKT should leave SRID=0 for plain WKT") {
         val geom = JTS.fromWKT("POINT (1 2)")
         geom.getSRID shouldBe 0

@@ -38,6 +38,15 @@ def test_parse_geom_plain_2d_text_stays_2d_and_garbage_still_raises():
         parse_geom("LINESTRING Z (15 51 5, oops)")
 
 
+@pytest.mark.parametrize(
+    "text", ["POINT Z (1 2)", "LINESTRING Z (1 2, 3 4)", "POINT ZM (1 2 3)"]
+)
+def test_parse_geom_refuses_a_dim_tag_that_contradicts_its_ordinates(text):
+    # malformed, not mixed: reading it as 3D with a NaN Z would invent a geometry
+    with pytest.raises(Exception):
+        parse_geom(text)
+
+
 def test_parse_geom_wkb_point():
     g = parse_geom(to_wkb(Point(1, 2)))
     assert g.geom_type == "Point"

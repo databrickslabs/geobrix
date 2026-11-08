@@ -91,15 +91,34 @@ def wkt_pad_z(wkt: str) -> str:
     return "".join(out)
 
 
+def is_mixed_dimension(wkt: str) -> bool:
+    """True when WKT text mixes dimensionalities, the only text :func:`wkt_pad_z` may repair.
+
+    Mixed means coordinates with different ordinate counts (``LINESTRING Z (15 51 5, 16 52)``)
+    or an ``EMPTY`` component beside tagged ones, which has no ordinates to count. Text whose
+    coordinates all agree but contradict the tag (``POINT Z (1 2)``) is malformed, not mixed.
+    The heavyweight reader applies the same test, so both levels refuse the same text.
+    """
+    counts = set()
+    for chunk in re.split(r"[(),]", wkt):
+        n = len(_WKT_NUM_RE.findall(chunk))
+        if n >= 2:
+            counts.add(n)
+    return len(counts) > 1 or (bool(counts) and bool(_WKT_EMPTY_RE.search(wkt)))
+
+
 def _from_wkt_mixed_dim(text: str) -> BaseGeometry:
     """``from_wkt``, reading mixed-dimensionality text (a Z on one vertex only) as uniform 3D.
 
     The Z values that exist are kept and the missing ones are ``NaN``; nothing is filled with 0
-    and no real Z is dropped. Text that is still unreadable raises the original error.
+    and no real Z is dropped. Malformed text that is not mixed (``POINT Z (1 2)``) and text
+    that is still unreadable raise the original error.
     """
     try:
         return from_wkt(text)
     except Exception as exc:  # noqa: BLE001 — GEOSException and friends
+        if not is_mixed_dimension(text):
+            raise
         padded = wkt_pad_z(text)
         if padded == text:
             raise

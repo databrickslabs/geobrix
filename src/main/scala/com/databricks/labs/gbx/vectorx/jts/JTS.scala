@@ -344,6 +344,7 @@ object JTS {
                     // A text whose parts disagree about dimensionality (a Z on one vertex only) is no
                     // geometry to the reader. Read it as uniform 3D instead: the Z values that exist stay,
                     // the missing ones are NaN. Text that is still unreadable raises the original error.
+                    if (!isMixedDimension(body)) throw e
                     val padded = padMixedDimension(body)
                     if (padded == body) throw e
                     try reader.read(padded)
@@ -357,6 +358,19 @@ object JTS {
         java.util.regex.Pattern.compile("[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?|[-+]?nan|[-+]?inf(?:inity)?", java.util.regex.Pattern.CASE_INSENSITIVE)
     private val wktDimTag = java.util.regex.Pattern.compile("\\s+\\b(?:ZM|Z|M)\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
     private val wktEmpty = java.util.regex.Pattern.compile("\\bEMPTY\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+
+    /** True when a WKT body mixes dimensionalities, the only text [[padMixedDimension]] may repair: coordinates
+      * with different ordinate counts, or an `EMPTY` component beside coordinates. Text whose coordinates all
+      * agree but contradict the tag (`POINT Z (1 2)`) is malformed, not mixed. Mirrors the lightweight level. */
+    private[jts] def isMixedDimension(wkt: String): Boolean = {
+        val counts = wkt.split("[(),]").iterator.map(c => {
+            val m = wktOrdinate.matcher(c)
+            var n = 0
+            while (m.find()) n += 1
+            n
+        }).filter(_ >= 2).toSet
+        counts.size > 1 || (counts.nonEmpty && wktEmpty.matcher(wkt).find())
+    }
 
     /** Rewrites a WKT body whose parts disagree about dimensionality to uniform 3D: every coordinate gets
       * exactly three ordinates and every geometry is tagged `Z`.

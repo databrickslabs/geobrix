@@ -553,7 +553,7 @@ def st_transformcrs(
     # implies here: the target CRS resolved fine; it is the input row that cannot be
     # projected.  The heavy tier reaches the same NULL by a different route: OGR/PROJ throws
     # ("PROJ: utm: Invalid latitude") mid-transform and TransformCrsCore catches that NonFatal
-    # error on an already-valid CRS pair, so both tiers agree (see test_crs_parity.py).
+    # error on an already-valid CRS pair, so both tiers agree (the tcrs_invalid_latitude row of the vector scalar oracle table).
     #
     # This guard is scoped to NON-FINITE X/Y only.  A reprojection that yields finite-but-
     # meaningless coordinates (e.g. lon=200 reprojects to a real UTM easting) is not caught

@@ -1033,7 +1033,117 @@ VECTOR_SCALAR += (
     # --- gbx_st_crs reads the SRID a shape plainly carries
     Case("crs_mixed_dim", CRS, (EW(MIXED),), "exact", "EPSG:4326", SESSION),
     Case("crs_zm", CRS, (Build("ewkb_zm_point"),), "exact", "EPSG:4326", SESSION),
+    Case("crs_unknown_srid", CRS, (BAD_SRID,), "null", None, SESSION),
 )
+
+# --- Reprojection on the CRS shapes the checks above do not reach (session rows; the values are `pyproj` values).
+# A point in the target's area of use comes out where the library puts it; a target of the same CRS leaves it.
+RD_PROJ4 = (
+    "+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 +x_0=155000 +y_0=463000 "
+    "+ellps=bessel +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+)
+MERCATOR_PROJ4 = "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+VECTOR_SCALAR += (
+    Case(
+        "tcrs_in_domain_bng",
+        TCRS,
+        (EW("POINT(-0.13 51.5)"), "EPSG:27700"),
+        "geom_srid",
+        ("POINT(529895.3736306638 179553.1035017661)", 27700),
+        SESSION,
+    ),
+    # and back: the UTM point of (15 E, 50 N) is that longitude and latitude again
+    Case(
+        "tcrs_utm_to_geographic",
+        TCRS,
+        ("SRID=32633;POINT(500000 5538630.702867474)", "EPSG:4326"),
+        "geom_srid",
+        ("POINT(15 50)", 4326),
+        SESSION,
+    ),
+    Case(
+        "tcrs_same_crs",
+        TCRS,
+        (EW(P51), "EPSG:4326"),
+        "geom_srid",
+        (P51, 4326),
+        SESSION,
+    ),
+    # a target with no area of use is not read as out of domain
+    Case(
+        "tcrs_bounds_absent",
+        TCRS,
+        (EW("POINT(0 0)"), MERCATOR_PROJ4),
+        "geom_srid",
+        ("POINT(0 0)", 0),
+        SESSION,
+    ),
+    # A PROJ4 string that PROJ's fuzzy matcher pairs with EPSG:28992 (its null datum shift puts the point ~177 m away)
+    # must be projected by its own definition: the two targets are asked in turn, and each must keep its own answer.
+    Case(
+        "tcrs_rd_authority",
+        TCRS,
+        (EW("POINT(5.39 52.16)"), "EPSG:28992"),
+        "geom_srid",
+        ("POINT(155191.35381243424 463537.13627329096)", 28992),
+        SESSION,
+    ),
+    Case(
+        "tcrs_rd_proj4_null_shift",
+        TCRS,
+        (EW("POINT(5.39 52.16)"), RD_PROJ4),
+        "geom_srid",
+        ("POINT(155161.54513868762 463362.66380410263)", 0),
+        SESSION,
+    ),
+    Case(
+        "tcrs_no_source_bin",
+        TCRS,
+        (Build("wkb_point_utm"), "EPSG:32633"),
+        "null",
+        None,
+        SESSION,
+    ),
+)
+
+# --- Mixed dimensionality that is no collection: `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. The
+# lightweight level normalizes it (the absent Z is NaN), the JVM reads the text as no geometry and answers NULL
+# (HEAVY_PENDING).
+MIXED_LINE = "LINESTRING Z (15 51 5, 16 52)"
+MIXED_MULTIPOINT = "MULTIPOINT Z ((15 51 5), (16 52))"
+for _name, _wkt, _z, _utm in (
+    (
+        "line",
+        MIXED_LINE,
+        "LINESTRING Z (15 51 5, 16 52 NaN)",
+        f"LINESTRING ({U51[0]} {U51[1]}, {U52[0]} {U52[1]})",
+    ),
+    (
+        "multipoint",
+        MIXED_MULTIPOINT,
+        "MULTIPOINT Z ((15 51 5), (16 52 NaN))",
+        f"MULTIPOINT (({U51[0]} {U51[1]}), ({U52[0]} {U52[1]}))",
+    ),
+):
+    VECTOR_SCALAR += (
+        Case(f"crs_mixed_{_name}", CRS, (EW(_wkt),), "exact", "EPSG:4326", SESSION),
+        Case(
+            f"setcrs_mixed_{_name}",
+            SETCRS,
+            (EW(_wkt), "EPSG:32633"),
+            "geom_srid",
+            (_z, 32633),
+            SESSION,
+        ),
+        Case(
+            f"tcrs_mixed_{_name}",
+            TCRS,
+            (EW(_wkt), "EPSG:32633"),
+            "geom_srid",
+            (_utm, 32633),
+            SESSION,
+        ),
+    )
 
 # --- Unity Catalog rows: a GEOMETRY result carries an integer SRID, and the SRID of the argument is kept.
 VECTOR_SCALAR += (

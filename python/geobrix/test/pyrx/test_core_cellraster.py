@@ -1,8 +1,12 @@
 import h3
 import pytest
 
+from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import cellraster as cr
+from databricks.labs.gbx.pyrx.core import gridagg
+
+from . import _duplicate_cells as dc
 
 
 def _cell(lat, lon, res=9):
@@ -242,3 +246,43 @@ def test_a_null_is_none_nan_or_pandas_na_and_nothing_else():
     assert not any(cr.is_missing(v) for v in (0, 0.0, "centroids", -9999.0))
     # the NA-safe check keeps cell_out_srid and the canvas rule working on pd.NA, which has no truth value
     assert cr.cell_out_srid("fn", pd.NA, pd.NA) == 4326
+
+
+_RES = {"h3": 9, "quadbin": 12, "bng": 3}
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin", "bng"])
+def test_cells_burn_to_a_raster_that_reduces_back_to_the_same_values(grid):
+    """A centroid burn is the inverse of the pixel-centre reducer: avg over a cell's pixels is its burned value."""
+    cells = dc.GRIDS[grid]()
+    res = _RES[grid]
+    values = {c: float(100 + i) for i, c in enumerate(cells)}
+    srid = 27700 if grid == "bng" else 4326
+    spec = cr.compute_gridspec(cells, srid=srid, kring_pad=0, grid=grid)
+    assert spec[7] == srid
+    raster = cr.cells_to_raster(values, *spec, resolution=res, grid=grid)
+    with _serde.open_tile(raster) as ds:
+        assert ds.nodata == -9999.0 and ds.crs.to_epsg() == srid
+        back = gridagg.raster_to_grid(
+            ds, res, grid, "avg", coverage="sparse", assignment="centroid"
+        )[0]
+    got = {r["cellID"]: r["measure"] for r in back}
+    for c, v in values.items():
+        key = c if grid == "bng" else int(c) & cr._U64 if grid == "quadbin" else c
+        assert got[key] == pytest.approx(v, abs=1e-9), c
+
+
+@pytest.mark.parametrize(
+    "grid, other",
+    [
+        ("h3", lambda: _cell(0.0, 0.0, 8)),
+        ("quadbin", lambda: _quadbin.point_as_cell(-0.1, 51.5, 11)),
+        ("bng", lambda: _bng.point_to_cell_id(530000, 180000, 4)),
+    ],
+)
+def test_a_gridspec_of_cells_at_two_resolutions_is_refused(grid, other):
+    cell = dc.GRIDS[grid]()[0]
+    if grid == "bng":
+        cell = _bng.parse(cell)
+    with pytest.raises(ValueError, match="resolution"):
+        cr.compute_gridspec([cell, other()], grid=grid)

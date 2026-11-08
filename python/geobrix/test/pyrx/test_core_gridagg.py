@@ -1,269 +1,260 @@
-"""Pure-function tests for pyrx raster->grid aggregation (h3 + quadbin).
+"""Raster -> grid aggregation (`gridagg.raster_to_grid`): one table of (grid x coverage x assignment x statistic) rows.
 
-Spark-free: open the GTiff bytes with rasterio and call gridagg.raster_to_grid
-directly, mirroring the heavyweight RST_{H3,Quadbin}_RasterToGrid semantics.
+Each row aggregates a small two-band raster on one grid and judges every (band, cell) against definitions the function
+does not use:
+
+* centroid: a valid pixel belongs to the cell its centre is in, and numpy reduces the values there (population variance
+  and standard deviation, the median of the values); `complete` coverage adds the cells that share positive area with
+  the raster and hold no valid pixel, with a NULL measure (0.0 for a count); `sparse` adds none;
+* covering: every valid pixel is shared out over the cells it overlaps by area (the share of the pixel in the cell,
+  from shapely), a count adds up to the valid pixels, a sum, mean, variance and standard deviation are weighted by the
+  shares, and a minimum and maximum take every value that touches the cell.
+
+Per grid the raster straddles cell boundaries both ways, and has NoData holes that differ by band. The BNG ids are text,
+the others integers; a count is a float. The BNG warp, the GB edge and the alias of a resolution are separate rows.
 """
 
-import h3
+from dataclasses import asdict
+
 import numpy as np
 import pytest
-import quadbin
 from rasterio.io import MemoryFile
-from rasterio.transform import from_origin
+from shapely.geometry import box
 
+from databricks.labs.gbx.pygx import _bng
 from databricks.labs.gbx.pyrx.core import gridagg
 
-from .conftest import make_geotiff_bytes
+from . import _grid_defs as gd
+from ._grid_defs import CUSTOM_CONF, GRIDS, NODATA
+
+STATS = ["avg", "count", "max", "median", "min", "stddev", "sum", "variance"]
+HOLES = [(1, 0, 1), (1, 5, 5), (2, 2, 2), (2, 2, 3), (2, 9, 9)]
+
+# grid -> (crs, bounds, pixels a side, resolution, step of the walk over the extent)
+ROWS = {
+    "h3": ("EPSG:4326", (-0.100, 51.500, -0.052, 51.548), 12, 7, 0.004),
+    "quadbin": ("EPSG:4326", (-0.100, 51.500, -0.052, 51.548), 12, 12, 0.01),
+    "bng": ("EPSG:27700", (529600, 179600, 530560, 180560), 12, 3, 200),
+    "custom": (None, (20, 20, 164, 164), 12, 1, 20),
+}
 
 
-def _open(raster_bytes):
-    return MemoryFile(raster_bytes).open()
+def _raster(grid):
+    crs, bounds, size, _, _ = ROWS[grid]
+    return gd.gtiff(crs, bounds, size, bands=2, holes=HOLES)
 
 
-def _custom_raster(data, nodata=-9999.0, epsg=4326, origin=(10.0, 50.0), px=0.5):
-    """Single-band GTiff from a 2-D numpy array with a WGS84 georeference."""
-    h, w = data.shape
-    profile = dict(
-        driver="GTiff",
-        width=w,
-        height=h,
-        count=1,
-        dtype="float32",
-        crs=f"EPSG:{epsg}",
-        transform=from_origin(origin[0], origin[1], px, px),
-        nodata=nodata,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data.astype("float32"), 1)
-        return mf.read()
-
-
-# --- count: total counts == number of valid pixels, values are ints ---------
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_count_total_equals_valid_pixels(grid):
-    raster = make_geotiff_bytes(width=4, height=3, count=1)  # all 12 valid
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 6, grid, "count", coverage="sparse", assignment="centroid"
+def _aggregate(grid, stat, coverage, assignment, res=None):
+    crs, bounds, size, default_res, _ = ROWS[grid]
+    res = res or default_res
+    conf = asdict(CUSTOM_CONF) if grid == "custom" else None
+    with MemoryFile(_raster(grid)) as mf, mf.open() as ds:
+        data = ds.read()
+        out = gridagg.raster_to_grid(
+            ds,
+            res,
+            grid,
+            stat,
+            coverage=coverage,
+            assignment=assignment,
+            grid_conf=conf,
         )
-    assert len(result) == 1
-    band = result[0]
-    total = sum(c["measure"] for c in band)
-    assert total == 12
-    assert all(isinstance(c["measure"], float) for c in band)  # count is now float
-    assert all(isinstance(c["cellID"], int) for c in band)
+    return data, out
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_count_excludes_nodata(grid):
-    data = np.arange(12, dtype="float32").reshape(3, 4)
-    data[0, 0] = -9999.0  # one invalid pixel
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 7, grid, "count", coverage="sparse", assignment="centroid"
-        )
-    total = sum(c["measure"] for c in result[0])
-    assert total == 11
+def _reduce(stat, v):
+    v = np.asarray(v, dtype="float64")
+    return {
+        "avg": v.mean(),
+        "count": float(v.size),
+        "max": v.max(),
+        "median": float(np.median(v)),
+        "min": v.min(),
+        "stddev": v.std(),
+        "sum": v.sum(),
+        "variance": v.var(),
+    }[stat]
 
 
-# --- avg / min / max: cell measures within [band min, band max] -------------
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-@pytest.mark.parametrize("agg", ["avg", "min", "max"])
-def test_agg_within_band_range(grid, agg):
-    data = np.arange(12, dtype="float32").reshape(3, 4)
-    raster = _custom_raster(data)
-    lo, hi = float(data.min()), float(data.max())
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 5, grid, agg, coverage="sparse", assignment="centroid"
-        )
-    for c in result[0]:
-        assert lo <= c["measure"] <= hi
-        assert isinstance(c["measure"], float)
+def _weighted(stat, pairs):
+    """The covering statistic of [(value, share of the pixel in the cell)]."""
+    v = np.array([p[0] for p in pairs])
+    w = np.array([p[1] for p in pairs])
+    mean = (v * w).sum() / w.sum()
+    if stat == "median":
+        order = np.argsort(v, kind="stable")
+        v, w = v[order], w[order]
+        cum = np.cumsum(w)
+        i = int(np.searchsorted(cum, w.sum() / 2 - 1e-12))
+        if i < len(v) - 1 and abs(cum[i] - w.sum() / 2) < 1e-9:
+            return float((v[i] + v[i + 1]) / 2)
+        return float(v[i])
+    return {
+        "avg": mean,
+        "count": w.sum(),
+        "max": v.max(),
+        "min": v.min(),
+        "stddev": np.sqrt((w * (v - mean) ** 2).sum() / w.sum()),
+        "sum": (v * w).sum(),
+        "variance": (w * (v - mean) ** 2).sum() / w.sum(),
+    }[stat]
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_avg_is_mean_of_cell_pixels(grid):
-    # Coarse resolution so all pixels land in a single cell; avg == grand mean.
-    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "avg", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(5.0)
+def _covering_shares(grid, data, band):
+    """{cell: [(value, area share of the pixel in the cell)]} for the valid pixels of a band."""
+    crs, (minx, miny, maxx, maxy), size, res, _ = ROWS[grid]
+    out = {}
+    for r in range(size):
+        for c in range(size):
+            v = float(data[band, r, c])
+            if v == NODATA:
+                continue
+            px = box(
+                minx + c * (maxx - minx) / size,
+                maxy - (r + 1) * (maxy - miny) / size,
+                minx + (c + 1) * (maxx - minx) / size,
+                maxy - r * (maxy - miny) / size,
+            )
+            x, y = px.centroid.coords[0]
+            corners = {
+                gd.cell_of(grid, res, *xy)
+                for xy in list(px.exterior.coords)[:4] + [(x, y)]
+            }
+            for cell in {n for k in corners for n in gd._near(grid, res, k)} | corners:
+                share = px.intersection(gd.polygon_of(grid, res, cell)).area / px.area
+                if share > 1e-12:
+                    out.setdefault(cell, []).append((v, share))
+    return out
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_sum_is_total_of_cell_pixels(grid):
-    # Coarse resolution so all pixels land in a single cell; sum == grand total.
-    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "sum", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(20.0)
-    assert isinstance(band[0]["measure"], float)
+def _got(band):
+    keys = [c["cellID"] for c in band]
+    assert len(keys) == len(set(keys))
+    return {c["cellID"]: c["measure"] for c in band}
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_sum_excludes_nodata(grid):
-    # One nodata pixel is skipped; sum == 2+6+8 == 16 (single coarse cell).
-    data = np.array([[2.0, -9999.0], [6.0, 8.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "sum", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(16.0)
+@pytest.mark.parametrize("stat", STATS)
+@pytest.mark.parametrize("coverage", ["sparse", "complete"])
+@pytest.mark.parametrize("grid", GRIDS)
+def test_centroid_reduces_the_valid_pixels_of_each_cell(grid, coverage, stat):
+    _, bounds, _, res, step = ROWS[grid]
+    data, out = _aggregate(grid, stat, coverage, "centroid")
+    assert len(out) == 2
+    for b, band in enumerate(out):
+        want = {
+            cell: _reduce(stat, v)
+            for cell, v in gd.pixel_values_by_cell(grid, res, data, bounds, b).items()
+        }
+        got = _got(band)
+        empty = 0.0 if stat == "count" else None
+        if coverage == "sparse":
+            assert set(got) == set(want), f"band {b + 1}"
+        else:
+            extra = gd.overlapping_cells(grid, res, bounds, step) - set(want)
+            assert set(got) == set(want) | extra
+            assert all(got[c] == empty for c in set(got) - set(want))
+        for cell, value in want.items():
+            assert got[cell] == pytest.approx(value, rel=1e-6), (b + 1, cell)
+        for c in band:
+            assert isinstance(c["cellID"], str if grid == "bng" else int)
+            assert c["measure"] is None or isinstance(c["measure"], float)
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_variance_is_population_variance_of_cell_pixels(grid):
-    # Coarse resolution so [2,4,6,8] land in one cell. Population (ddof=0):
-    # mean=5, sq-devs=[9,1,1,9] sum 20, variance = 20/4 = 5.0 (NOT 20/3).
-    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "variance", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(5.0)
-    assert isinstance(band[0]["measure"], float)
+@pytest.mark.parametrize("stat", STATS)
+@pytest.mark.parametrize("grid", GRIDS)
+def test_covering_shares_each_pixel_out_over_the_cells_it_overlaps(grid, stat):
+    data, out = _aggregate(grid, stat, "sparse", "covering")
+    for b, band in enumerate(out):
+        want = {
+            cell: _weighted(stat, pairs)
+            for cell, pairs in _covering_shares(grid, data, b).items()
+        }
+        got = _got(band)
+        assert set(got) == set(want), f"band {b + 1}"
+        for cell, value in want.items():
+            assert got[cell] == pytest.approx(value, rel=1e-6, abs=1e-9), (b + 1, cell)
+        if stat == "count":
+            assert sum(got.values()) == pytest.approx(
+                float((data[b] != NODATA).sum()), rel=1e-9
+            )
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_stddev_is_sqrt_of_population_variance(grid):
-    # stddev == sqrt(population variance); sqrt(5.0) == 2.2360679...
-    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "stddev", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(np.sqrt(5.0))
-    assert isinstance(band[0]["measure"], float)
+@pytest.mark.parametrize("grid", GRIDS)
+def test_covering_with_complete_coverage_adds_the_empty_cells(grid):
+    data, sparse = _aggregate(grid, "count", "sparse", "covering")
+    _, complete = _aggregate(grid, "count", "complete", "covering")
+    _, bounds, _, res, step = ROWS[grid]
+    for s, c in zip(sparse, complete):
+        have = _got(s)
+        got = _got(c)
+        assert set(got) == set(have) | gd.overlapping_cells(grid, res, bounds, step)
+        assert all(got[k] == 0.0 for k in set(got) - set(have))
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-@pytest.mark.parametrize("agg", ["variance", "stddev"])
-def test_single_pixel_cell_variance_stddev_zero(grid, agg):
-    # A cell covering exactly one valid pixel has zero spread -> variance 0,
-    # stddev 0 (clean under population semantics; no divide-by-(n-1)).
-    # Fine resolution so each pixel occupies its own cell.
-    # Uses sparse to avoid empty cells from complete default polluting the check.
-    data = np.array([[2.0, 4.0], [6.0, 8.0]], dtype="float32")
-    raster = _custom_raster(data)
-    res = 12 if grid == "quadbin" else 9
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, res, grid, agg, coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 4  # one cell per pixel
-    for cell in band:
-        assert cell["measure"] == pytest.approx(0.0)
+def test_a_band_with_no_valid_pixel_has_no_cell_when_sparse_and_only_empty_cells_when_complete():
+    holes = [(1, r, c) for r in range(12) for c in range(12)]
+    raw = gd.gtiff("EPSG:27700", ROWS["bng"][1], 12, bands=2, holes=holes)
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        sparse = gridagg.raster_to_grid(ds, 3, "bng", "avg", coverage="sparse")
+        complete = gridagg.raster_to_grid(ds, 3, "bng", "avg", coverage="complete")
+    assert sparse[0] == [] and sparse[1]
+    assert complete[0] and all(c["measure"] is None for c in complete[0])
 
 
-# --- median: even/odd correctness on a hand-built single cell ---------------
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_median_even_count(grid):
-    # 4 pixels -> single coarse cell; median of [1,2,3,4] = 2.5 (numpy.median).
-    data = np.array([[1.0, 2.0], [3.0, 4.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "median", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(2.5)
+@pytest.mark.parametrize(
+    "grid, fine", [("h3", 10), ("quadbin", 18), ("bng", 5), ("custom", 5)]
+)
+def test_a_cell_with_one_valid_pixel_has_no_spread(grid, fine):
+    # cells smaller than a pixel: each holds at most one pixel centre, so every measure is its own value, spread 0
+    data, var = _aggregate(grid, "variance", "sparse", "centroid", res=fine)
+    _, total = _aggregate(grid, "count", "sparse", "centroid", res=fine)
+    for b in range(2):
+        valid = int((data[b] != NODATA).sum())
+        assert {c["measure"] for c in var[b]} == {0.0}
+        assert len(var[b]) == valid and sum(c["measure"] for c in total[b]) == valid
 
 
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_median_odd_count(grid):
-    # 3 valid pixels (one nodata) -> single coarse cell; median of [1,3,5] = 3.
-    data = np.array([[1.0, 3.0], [5.0, -9999.0]], dtype="float32")
-    raster = _custom_raster(data)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 0, grid, "median", coverage="sparse", assignment="centroid"
-        )
-    band = result[0]
-    assert len(band) == 1
-    assert band[0]["measure"] == pytest.approx(3.0)
-
-
-# --- multi-band -> outer array length == band count -------------------------
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_multiband_outer_length(grid):
-    raster = make_geotiff_bytes(width=4, height=3, count=2)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 6, grid, "count", coverage="sparse", assignment="centroid"
-        )
-    assert len(result) == 2
-    for band in result:
-        assert sum(c["measure"] for c in band) == 12
-
-
-# --- cell ids are real, positive int64 cells --------------------------------
-def test_h3_cell_ids_are_valid():
-    raster = make_geotiff_bytes(width=4, height=3, count=1)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 7, "h3", "count", coverage="sparse", assignment="centroid"
-        )
-    for c in result[0]:
-        cid = c["cellID"]
-        assert 0 < cid < 2**63
-        assert h3.is_valid_cell(h3.int_to_str(cid))
-
-
-def test_quadbin_cell_ids_are_valid():
-    raster = make_geotiff_bytes(width=4, height=3, count=1)
-    with _open(raster) as ds:
-        result = gridagg.raster_to_grid(
-            ds, 10, "quadbin", "count", coverage="sparse", assignment="centroid"
-        )
-    for c in result[0]:
-        cid = c["cellID"]
-        assert 0 < cid < 2**63
-        tile = quadbin.cell_to_tile(cid)  # raises if not a real cell
-        assert tile is not None
-
-
-# --- resolution validation --------------------------------------------------
-def test_h3_resolution_too_high_raises():
-    raster = make_geotiff_bytes(width=2, height=2)
-    with _open(raster) as ds:
-        with pytest.raises(ValueError):
+def test_a_resolution_the_grid_does_not_have_raises():
+    raw = _raster("h3")
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        for grid, res in (("h3", 16), ("h3", -1), ("quadbin", 21), ("quadbin", -1)):
+            with pytest.raises(ValueError):
+                gridagg.raster_to_grid(ds, res, grid, "count")
+        with pytest.raises(ValueError, match="between 0 and 15"):
             gridagg.raster_to_grid(ds, 16, "h3", "count")
-
-
-def test_quadbin_resolution_too_high_raises():
-    raster = make_geotiff_bytes(width=2, height=2)
-    with _open(raster) as ds:
+    with MemoryFile(raw) as mf, mf.open() as ds:
         with pytest.raises(ValueError):
-            gridagg.raster_to_grid(ds, 21, "quadbin", "count")
-
-
-@pytest.mark.parametrize("grid", ["h3", "quadbin"])
-def test_negative_resolution_raises(grid):
-    raster = make_geotiff_bytes(width=2, height=2)
-    with _open(raster) as ds:
+            gridagg.raster_to_grid(ds, 7, "h3", "mode")
         with pytest.raises(ValueError):
-            gridagg.raster_to_grid(ds, -1, grid, "count")
+            gridagg.raster_to_grid(ds, 7, "h3", "avg", coverage="bad")
+        with pytest.raises(ValueError):
+            gridagg.raster_to_grid(ds, 7, "h3", "avg", assignment="bad")
+
+
+def test_the_bng_resolution_alias_is_the_index():
+    with MemoryFile(_raster("bng")) as mf, mf.open() as ds:
+        by_index = gridagg.raster_to_grid(ds, 3, "bng", "avg", coverage="sparse")
+        by_name = gridagg.raster_to_grid(ds, "1km", "bng", "avg", coverage="sparse")
+    assert by_index == by_name
+
+
+def test_a_4326_raster_over_great_britain_is_warped_to_27700_for_the_bng_grid():
+    raw = gd.gtiff("EPSG:4326", (-0.13, 51.49, -0.10, 51.52), 3, holes=[])
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        band = gridagg.raster_to_grid(ds, 2, "bng", "count", coverage="sparse")[0]
+    assert band and all(
+        _bng.is_valid(_bng.parse(c["cellID"])) and isinstance(c["cellID"], str)
+        for c in band
+    )
+
+
+def test_a_pixel_east_of_the_gb_grid_is_dropped():
+    raw = gd.gtiff("EPSG:27700", (690000, 200000, 720000, 205000), 6, height=1)
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        band = gridagg.raster_to_grid(ds, 2, "bng", "count", coverage="sparse")[0]
+    want = set()
+    for col in range(6):
+        cid = _bng.point_to_cell_id(690000 + (col + 0.5) * 5000, 202500, 2)
+        if _bng.is_valid(cid):
+            want.add(_bng.format(cid))
+    assert len(want) < 6 and {c["cellID"] for c in band} == want

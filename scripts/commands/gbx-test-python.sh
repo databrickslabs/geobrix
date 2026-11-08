@@ -55,7 +55,7 @@ show_help() {
     echo -e "  ${YELLOW}gbx:test:python --with-integration${NC}                  ${CYAN}# unit + integration (network)${NC}"
     echo -e "  ${YELLOW}gbx:test:python --path python/geobrix/test/rasterx/${NC}"
     echo -e "  ${YELLOW}gbx:test:python --heavy-ci-env${NC}                      ${CYAN}# the heavy CI selection, without the light packages${NC}"
-    echo -e "  ${YELLOW}gbx:test:python --heavy-ci-env --path python/geobrix/test/gridx/${NC}"
+    echo -e "  ${YELLOW}gbx:test:python --heavy-ci-env --path python/geobrix/test/pygx/${NC}"
     echo -e "  ${YELLOW}gbx:test:python --markers 'not slow' --log python-tests.log${NC}"
     echo ""
 }

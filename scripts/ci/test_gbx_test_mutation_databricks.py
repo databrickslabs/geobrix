@@ -242,6 +242,10 @@ def test_cores_of_node_types():
         (33, "absent"),
         (None, "unchecked"),
         (7, "killed"),
+        (2, "unchecked"),
+        (35, "unchecked"),
+        (37, "unchecked"),
+        (-15, "unchecked"),
     ],
 )
 def test_status_of_exit_codes(code, status):
@@ -253,6 +257,7 @@ def test_function_and_module_of_a_mutant_key():
     assert rows_mod.function_of(p + "x_st_makevalid__mutmut_12") == "st_makevalid"
     assert rows_mod.function_of(p + "x__finish__mutmut_1") == "_finish"
     assert rows_mod.function_of(p + "xǁFooǁbar__mutmut_2") == "Foo.bar"
+    assert rows_mod.function_of(p + "xǁFooǁ_bar__mutmut_2") == "Foo._bar"
     assert (
         rows_mod.module_of(p + "x_a__mutmut_1", ["pyvx/_cleaning", "pyvx/_validity"])
         == "pyvx/_validity"

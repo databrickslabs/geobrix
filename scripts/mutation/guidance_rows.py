@@ -57,6 +57,8 @@ def status_of(code: Optional[int]) -> str:
         return "unchecked"
     if code in (33, 5, 34):
         return "absent"
+    if code in (2, 35, 37, -15):  # interrupted, skipped, suspicious, terminated: no test saw the mutant
+        return "unchecked"
     return (
         "killed" if code else "survived"
     )  # an unlisted non-zero exit is a failed run: a kill
@@ -65,7 +67,7 @@ def status_of(code: Optional[int]) -> str:
 def function_of(key: str) -> str:
     """The function a mutant sits in: 'x_foo__mutmut_3' -> 'foo'; a method 'xǁCǁbar__mutmut_1' -> 'C.bar'."""
     last = re.sub(r"__mutmut_\d+$", "", key.rsplit(".", 1)[-1])
-    m = re.match(r"^xǁ([^ǁ]*)ǁ_?(.*)$", last)
+    m = re.match(r"^xǁ([^ǁ]*)ǁ(.*)$", last)
     if m:
         return f"{m.group(1)}.{m.group(2)}"
     return re.sub(r"^x_?", "", last)

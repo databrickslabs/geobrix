@@ -651,3 +651,27 @@ def test_the_estimate_and_the_split_count_an_untimed_file_the_same(shards):
     parts = ts.split_shard(ds, 2, REPO_ROOT, secs)
     total_parts = sum(p.est_min - ts.FIXED_MIN for p in parts)
     assert abs((est - ts.FIXED_MIN) - total_parts) < 0.05
+
+
+def test_a_missing_base_is_a_usage_error_not_a_traceback(capsys):
+    assert launcher.main(["--explain-only", "--shards", "affected", "--base", "no-such-rev/at-all"]) == launcher.EXIT_USAGE
+    assert "cannot diff no-such-rev/at-all" in capsys.readouterr().err
+
+
+def test_a_missing_wheel_does_not_stop_a_plan_but_does_stop_a_launch(monkeypatch, capsys):
+    def no_wheel(explicit):
+        raise SystemExit("PRECONDITION MISSING: expected one wheel, found 2; wheel stage not run.")
+
+    monkeypatch.setattr(launcher.mut, "find_wheel", no_wheel)
+    monkeypatch.setattr(launcher, "planned_clusters", lambda a: 1)
+    assert launcher.main(["--explain-only", "--shards", "ds"]) == 0
+    assert "no usable env6 wheel" in capsys.readouterr().out
+    assert launcher.main(["--profile", "p", "--purpose", "x", "--shards", "ds"]) == launcher.EXIT_USAGE
+    assert "PRECONDITION MISSING" in capsys.readouterr().err
+
+
+def test_a_plan_that_only_explains_makes_no_copy_of_the_jar(tmp_path):
+    jar = tmp_path / "geobrix-0.6.0-jar-with-dependencies.jar"
+    jar.write_bytes(b"jar")
+    got = launcher.stage_jar(jar, REPO_ROOT, copy=False)
+    assert got["local"] == str(jar) and got["sha256"] and got["dir"].startswith("test-pool-jars/")

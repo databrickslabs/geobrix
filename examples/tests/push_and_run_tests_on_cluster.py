@@ -53,6 +53,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -633,15 +634,19 @@ def stage_resources(w, res: dict, sha: str, work: Path) -> None:
     tar.unlink()
 
 
-def stage_jar(path: Path, root: Path) -> dict:
-    """Copy the JAR out of the tree it was built in (another build may replace it) and name it by its content."""
+def stage_jar(path: Path, root: Path, copy: bool = True) -> dict:
+    """Copy the JAR out of the tree it was built in (another build may replace it) and name it by its content. ``copy=False``
+    (a plan that only explains) hashes it where it is and makes no copy."""
     import hashlib
     import shutil
     import tempfile
 
-    work = Path(tempfile.mkdtemp(prefix="gbx-test-jar-"))
-    local = work / path.name
-    shutil.copy(path, local)
+    if copy:
+        work = Path(tempfile.mkdtemp(prefix="gbx-test-jar-"))
+        local = work / path.name
+        shutil.copy(path, local)
+    else:
+        local = Path(path)
     sha256 = mut.sha256_file(local)
     sha1 = hashlib.sha1(local.read_bytes()).hexdigest()
     return {"local": str(local), "name": path.name, "sha256": sha256, "sha1": sha1, "dir": f"test-pool-jars/{sha256[:12]}"}
@@ -664,7 +669,11 @@ def main(argv=None) -> int:
     all_shards = ts.load(REPO_ROOT)
     changed = None
     if "affected" in a.shards:
-        changed = ts.changed_files(REPO_ROOT, a.base, sha)
+        try:
+            changed = ts.changed_files(REPO_ROOT, a.base, sha)
+        except subprocess.CalledProcessError as exc:
+            print(f"ERROR: cannot diff {a.base}...{sha[:10]} ({(exc.stderr or '').strip()[:120] or 'git failed'}); fetch the base or pass --base <rev>", file=sys.stderr)
+            return EXIT_USAGE
     try:
         shards = ts.select(all_shards, a.shards, changed, REPO_ROOT)
     except ValueError as exc:
@@ -689,8 +698,15 @@ def main(argv=None) -> int:
     if a.serverless and any(s.pool == ts.POOL_JAR for s in shards):
         print("ERROR: --serverless runs light shards only (the heavy shards need the JAR on a cluster)", file=sys.stderr)
         return EXIT_USAGE
-    wheel = mut.find_wheel(a.wheel) if not a.explain_only or a.wheel or list(REPO_ROOT.glob("dist/env6/*.whl")) else None
-    notes = split_notes + wheel_notes(wheel, sha) if wheel else split_notes + ["no env6 wheel found in dist/env6/ (a launch needs one: gbx:build:wheel --env 6, or --wheel)"]
+    wheel, wheel_problem = None, ""
+    try:
+        wheel = mut.find_wheel(a.wheel)
+    except SystemExit as exc:  # find_wheel exits with the reason; a plan can still be shown without a wheel
+        wheel_problem = str(exc)
+    if wheel is None and not a.explain_only:
+        print(wheel_problem or "PRECONDITION MISSING: no env6 wheel; run not started.", file=sys.stderr)
+        return EXIT_USAGE
+    notes = split_notes + (wheel_notes(wheel, sha) if wheel else [f"no usable env6 wheel ({wheel_problem[:140]}); a launch needs one"])
     dirty = uncommitted()
     if dirty:
         notes.append(f"{len(dirty)} uncommitted path(s) under the staged subset are NOT in this run (it tests {sha[:10]}): "
@@ -706,7 +722,7 @@ def main(argv=None) -> int:
                 print("PRECONDITION MISSING: no JAR for the heavy shards (python/geobrix/lib/ or --jar-path); heavy shards not run.", file=sys.stderr)
                 return EXIT_USAGE
         else:
-            jar = stage_jar(jar_src, REPO_ROOT)
+            jar = stage_jar(jar_src, REPO_ROOT, copy=not a.explain_only)
             jar["volume"] = f"{volroot}/{jar['dir']}/{jar['name']}"
     resources = resources_entry(sha, volroot)
     plan = make_plan(a, sha, shards, wheel, jar, volroot, REPO_ROOT, resources)
@@ -715,8 +731,6 @@ def main(argv=None) -> int:
     if a.explain_only:
         print("\nexplain-only: nothing staged or started.")
         return 0
-    if wheel is None:
-        return EXIT_USAGE
     return launch(a, plan, shards)
 
 
@@ -846,7 +860,7 @@ def lease_many(stack, w, a, plan: dict, pool: str, *, volroot: str, me: str) -> 
         tried += 1
         try:
             got.append(stack.enter_context(lease_pool(w, a, plan, pool, jar=jar, volroot=volroot, me=me, wait_min=0.05)))
-        except cp.PoolError as exc:
+        except Exception as exc:  # noqa: BLE001 - an extra cluster is optional: whatever stops it, the run goes on with those it has
             print(f"  pool {pool}: {len(got)} of {want} cluster(s) free ({str(exc)[:100]}); running on those", flush=True)
             break
     return got
@@ -1033,10 +1047,8 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     except Exception as exc:  # noqa: BLE001
                         if "does not exist" not in str(exc).lower():
                             print(f"WARNING: could not remove {nb} ({exc}); delete it by hand.", file=sys.stderr)
-        try:
-            Path(plan["jar"]["local"]).unlink() if plan["jar"] else None
-        except OSError:
-            pass
+        if plan["jar"]:
+            shutil.rmtree(Path(plan["jar"]["local"]).parent, ignore_errors=True)  # the temporary copy and its folder
     return rc
 
 

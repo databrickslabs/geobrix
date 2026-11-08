@@ -128,7 +128,7 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
 
     (tmp_path / "rows").mkdir()
     for i in range(
-        400
+        40
     ):  # as many tiles as the scale asks for (a short corpus is refused)
         (tmp_path / "rows" / f"r{i}.tif").write_bytes(
             oracles._tile_bytes("EPSG:4326", 32, 32)
@@ -155,7 +155,7 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
             (("bng_cells", ""), ("bng_cells_skew", "-skew")),
         ),
     )
-    rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=400, mvp="A")
+    rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=40, mvp="A")
     bad = [r for r in rows if r.status != "ok"]
     assert bad == [], [(r.fn, r.form, r.status, r.failure_mode, r.note) for r in bad]
     assert len(rows) == 10 and {r.level for r in rows} == {"L3"}

@@ -80,6 +80,11 @@ class Form:
     # output (`value_fp`), not of its encoding. It runs once, after the timed iterations and outside them, and its
     # fingerprint replaces the length one in the row (`v1:<n>`; the length one moves to the note as `len_fp`).
     vsql: str = ""
+    # A one-row SELECT over {src} answering (n_null, set, first): how many outputs are NULL, a digest of the sorted
+    # input paths whose output is NULL (equal digests across forms: the same tiles fail), and the first few of them. It
+    # runs once, after `vsql` and outside the timed iterations; the row's note carries `nulls=<n> null_set=<digest>
+    # null_first=<paths>`.
+    nullsql: str = ""
 
 
 # (fn, level) of a form -> the operation whose code path a capability chooses (`manager.capabilities.path`): the row's
@@ -1376,10 +1381,8 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
     if gone:
         note.append("unavailable: " + ",".join(gone))
     note += _tasks_note(scan_tasks)
-    fp = str(fp)
-    if form.vsql:
-        fp, vnote = _value_fingerprint(ctx, form, src, n, n_out, fp)
-        note += vnote
+    fp, after = _after_timing(ctx, form, src, n, n_out, str(fp))
+    note += after
     return _row(
         {**base, "rows": min(int(n), requested)},
         note="; ".join(note),
@@ -1397,6 +1400,44 @@ def _caps_now(spark, env: Dict) -> str:
     """What each Spark capability resolved to NOW (``env_caps``): the run's start-up read goes stale once a probe or a first
     use decides one. The start-up value stands when the session cannot say."""
     return spark_env(spark).get("env_caps") or env.get("env_caps", "")
+
+
+def _after_timing(
+    ctx: "_Ctx", form: Form, src: str, n: int, n_out: int, fp: str
+) -> Tuple[str, List[str]]:
+    """The steps a form runs once after its timed iterations, each named on the heartbeat: the value fingerprint (which
+    replaces `fp`) and the NULL-output report. Returns ``(fp, notes)``."""
+    notes: List[str] = []
+    if form.vsql:
+        _say_phase(ctx, "value fingerprint (after the timed iterations)")
+        fp, vnote = _value_fingerprint(ctx, form, src, n, n_out, fp)
+        notes += vnote
+    if form.nullsql:
+        _say_phase(ctx, "NULL-output report (after the timed iterations)")
+        notes += _null_report(ctx, form, src)
+    _say_phase(ctx, "row written")
+    return fp, notes
+
+
+def _say_phase(ctx: "_Ctx", text: str) -> None:
+    """Name the step the form is in on the rung and the heartbeat, so a slow step after the timed iterations (the
+    fingerprint, the NULL report) reads as that step, not as a hang in the last iteration.
+    """
+    if ctx.rung is not None:
+        ctx.rung.phase = text
+    if ctx.heartbeat is not None and hasattr(ctx.heartbeat, "set_phase"):
+        ctx.heartbeat.set_phase(text)
+
+
+def _null_report(ctx: "_Ctx", form: Form, src: str) -> List[str]:
+    """The note parts of the form's ``nullsql``: ``nulls=<n> null_set=<digest> null_first=<paths>``. A failure of this
+    pass is a note, not a failure of the form."""
+    try:
+        r = ctx.spark.sql(form.nullsql.format(src=src, uc=ctx.uc or "")).collect()[0]
+        first = ",".join(str(x) for x in (r[2] or []))
+        return [f"nulls={r[0]}", f"null_set={r[1]}", f"null_first={first}"]
+    except Exception as exc:  # noqa: BLE001 - the timed row stands
+        return [f"null_report failed: {type(exc).__name__}: {str(exc)[:120]}"]
 
 
 def _value_fingerprint(

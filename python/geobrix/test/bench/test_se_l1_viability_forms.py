@@ -85,3 +85,10 @@ def test_the_fingerprint_query_of_the_corpus_tiles_does_not_hash_every_tile():
             assert (
                 f.allows_null
             )  # a tile the corpus holds that a level cannot warp is a note, not a lost row
+
+
+def test_the_corpus_tile_forms_report_which_tiles_are_null():
+    for f in _on("gbx_rst_transformcrs", "tiles_mat"):
+        if not f.variant.startswith("floor"):
+            assert "{fn}" not in f.nullsql and f.fn in f.nullsql, f.variant
+            assert f.nullsql.format(src="t", uc="")

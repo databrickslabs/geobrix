@@ -296,3 +296,31 @@ def test_the_value_fingerprint_keeps_the_length_one_when_the_value_pass_fails(
     )  # fmt: skip
     fp, note = levels._value_fingerprint(_vfp_ctx(spark), form, "t", 10, 10, "LEN")
     assert (fp, note) == (want_fp, [want_note])
+
+
+def test_the_null_report_names_how_many_which_set_and_the_first_tiles():
+    from databricks.labs.gbx.bench import levels
+
+    form = levels.Form(
+        mvp="X", fn="f", level="L3", variant="v", input="i", sql="", nullsql="SELECT 1 FROM {src}"
+    )  # fmt: skip
+    spark = _Rows(row=(2, "abc123", ["/a.tif", "/b.tif"]))
+    assert levels._null_report(_vfp_ctx(spark), form, "t") == [
+        "nulls=2",
+        "null_set=abc123",
+        "null_first=/a.tif,/b.tif",
+    ]
+    bad = _Rows(error=RuntimeError("no such column"))
+    (note,) = levels._null_report(_vfp_ctx(bad), form, "t")
+    assert note == "null_report failed: RuntimeError: no such column"
+
+
+def test_a_step_after_the_timed_iterations_is_named_on_the_rung_and_the_heartbeat():
+    from databricks.labs.gbx.bench import levels
+
+    seen = []
+    ctx = _vfp_ctx(_Rows(row=(1, 1, 1)))
+    ctx.rung = types.SimpleNamespace(phase="")
+    ctx.heartbeat = types.SimpleNamespace(set_phase=seen.append)
+    levels._say_phase(ctx, "value fingerprint")
+    assert ctx.rung.phase == "value fingerprint" and seen == ["value fingerprint"]

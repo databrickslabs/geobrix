@@ -2073,7 +2073,9 @@ _SE_MA_TODAY = _SE_FP.format(call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}
 _SE_MA_ENGINE = _SE_MA_TODAY
 
 
-def _se(fn, level, variant, inp, sql, *, setup="", register=True, vsql="", **kw):
+def _se(
+    fn, level, variant, inp, sql, *, setup="", register=True, vsql="", nullsql="", **kw
+):
     return Form(
         "SE",
         fn,
@@ -2084,6 +2086,7 @@ def _se(fn, level, variant, inp, sql, *, setup="", register=True, vsql="", **kw)
         setup=("databricks.labs.gbx.bench.levels_forms:" + setup) if setup else "",
         register=register,
         vsql=vsql.replace("{fn}", fn),
+        nullsql=nullsql.replace("{fn}", fn),
         **kw,
     )
 
@@ -2209,6 +2212,12 @@ _SE_TCRS_V = (
     "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM "
     "(SELECT * FROM {src} ORDER BY tile.path LIMIT 64))"
 )  # by path only: ordering by a hash of every tile's bytes reads and sorts the whole table
+# Which corpus tiles a level returns NULL for: how many, a digest of their sorted paths, and the first few.
+_SE_TCRS_NULLS = (
+    "SELECT count(*) AS n_null, md5(concat_ws('|', array_sort(collect_list(p)))) AS s, "
+    "slice(array_sort(collect_list(p)), 1, 8) AS first FROM "
+    "(SELECT tile.path AS p FROM (SELECT tile, {fn}(tile, 'EPSG:3857') AS t FROM {src}) WHERE t.raster IS NULL)"
+)
 _SE_MA_V = _SE_VFP.format(
     call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""",
     col="tiles[0].raster",
@@ -2248,6 +2257,7 @@ FORMS["SE"] += [
         _SE_TCRS,
         computes=_DED,
         vsql=_SE_TCRS_V,
+        nullsql=_SE_TCRS_NULLS,
         allows_null=True,
     ),
     _se(
@@ -2257,6 +2267,7 @@ FORMS["SE"] += [
         "tiles_mat",
         _SE_TCRS,
         vsql=_SE_TCRS_V,
+        nullsql=_SE_TCRS_NULLS,
         allows_null=True,
     ),
     _se(
@@ -2266,9 +2277,19 @@ FORMS["SE"] += [
         "tiles_mat",
         _SE_TCRS,
         vsql=_SE_TCRS_V,
+        nullsql=_SE_TCRS_NULLS,
         allows_null=True,
     ),
-    _se(T, "L3", "today@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V, allows_null=True),
+    _se(
+        T,
+        "L3",
+        "today@mat",
+        "tiles_mat",
+        _SE_TCRS,
+        vsql=_SE_TCRS_V,
+        nullsql=_SE_TCRS_NULLS,
+        allows_null=True,
+    ),
     _se(
         T,
         "L3",

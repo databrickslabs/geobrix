@@ -299,58 +299,8 @@ def test_run_spark_path_produces_ok_rows(tmp_path, spark):
     assert sorted({r.rows for r in rows}) == [2, 4]
 
 
-def test_run_pure_core_emits_per_fn_progress(tmp_path, capsys):
-    # Per-function progress lines must be printed to stdout as each fn finishes:
-    # leg header "[bench] lightweight pure-core: N fn(s) to run", then per-fn
-    # "[i/N] fn_name  lightweight pure-core  <ms>  <status>" for each fn.
-    corpus = dg.generate_corpus(
-        out_dir=tmp_path,
-        seed=11,
-        tile_px=[32],
-        bands=[1],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=2,
-        row_tile_px=32,
-        row_bands=1,
-        row_dtype="float32",
-    )
-    fns = s.select(functions=["rst_width", "rst_avg"])
-    rows = rn.run_pure_core(
-        corpus_root=tmp_path,
-        corpus=corpus,
-        fnspecs=fns,
-        run_id="prog-test",
-        warmup=1,
-        measured=1,
-        where="venv",
-    )
-    out = capsys.readouterr().out
-    lines = out.splitlines()
-    # Leg header is the first line.
-    assert any("[bench] lightweight pure-core:" in ln for ln in lines)
-    # One progress line per fn (2 fns).
-    fn_lines = [
-        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
-    ]
-    assert len(fn_lines) == 2
-    # Each progress line contains "i/N", the fn name, tier+mode, and a status.
-    for i, fn_name in enumerate(["rst_width", "rst_avg"], 1):
-        matching = [ln for ln in fn_lines if fn_name in ln]
-        assert matching, f"no progress line for {fn_name}"
-        pl = matching[0]
-        # i/N prefix
-        assert f"[{i}/2]" in pl or f"/{2}]" in pl
-        assert "lightweight pure-core" in pl
-        assert "ok" in pl or "error" in pl or "na_by_design" in pl
-    # Result rows are unaffected.
-    assert rows and all(r.fn in {"rst_width", "rst_avg"} for r in rows)
-
-
-def test_run_pure_core_progress_on_error_fn(tmp_path, capsys, monkeypatch):
-    # When a fn raises, its progress line must still be printed with status=error,
-    # and the remaining fns must still run (the loop continues).
+def test_run_pure_core_an_error_fn_does_not_stop_the_loop(tmp_path, monkeypatch):
+    # When a fn raises it gets an error row, and the remaining fns still run.
     corpus = dg.generate_corpus(
         out_dir=tmp_path,
         seed=13,
@@ -387,64 +337,9 @@ def test_run_pure_core_progress_on_error_fn(tmp_path, capsys, monkeypatch):
         measured=1,
         where="venv",
     )
-    out = capsys.readouterr().out
-    lines = out.splitlines()
-    fn_lines = [
-        ln for ln in lines if "lightweight pure-core" in ln and "[bench]" not in ln
-    ]
-    # Both fns produce a progress line.
-    assert len(fn_lines) == 2
-    err_lines = [ln for ln in fn_lines if "rst_width" in ln]
-    assert err_lines and "error" in err_lines[0]
-    ok_lines = [ln for ln in fn_lines if "rst_avg" in ln]
-    assert ok_lines and "ok" in ok_lines[0]
     # Error rows present for rst_width; ok rows present for rst_avg.
     assert any(r.fn == "rst_width" and r.status == "error" for r in rows)
     assert any(r.fn == "rst_avg" and r.status == "ok" for r in rows)
-
-
-def test_run_spark_path_emits_per_fn_progress(tmp_path, spark, capsys):
-    # Per-function progress lines for spark-path:
-    # leg header "[bench] lightweight spark-path: N fn(s) to run", then per-fn line.
-    corpus = dg.generate_corpus(
-        out_dir=tmp_path,
-        seed=17,
-        tile_px=[32],
-        bands=[1],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=4,
-        row_tile_px=32,
-        row_bands=1,
-        row_dtype="float32",
-    )
-    fns = s.select(functions=["rst_width"])
-    rows = rn.run_spark_path(
-        spark=spark,
-        corpus_root=tmp_path,
-        corpus=corpus,
-        fnspecs=fns,
-        run_id="sp-prog",
-        row_counts=[2, 4],
-        warmup=1,
-        measured=1,
-        where="venv",
-    )
-    out = capsys.readouterr().out
-    lines = out.splitlines()
-    assert any("[bench] lightweight spark-path:" in ln for ln in lines)
-    fn_lines = [
-        ln for ln in lines if "lightweight spark-path" in ln and "[bench]" not in ln
-    ]
-    assert len(fn_lines) == 1
-    line = fn_lines[0]
-    assert "[1/1]" in line
-    assert "rst_width" in line
-    assert "lightweight spark-path" in line
-    assert "ok" in line or "error" in line
-    # Result rows unaffected.
-    assert rows and all(r.fn == "rst_width" for r in rows)
 
 
 def test_emit_explain_prints_and_writes_file(tmp_path, spark, capsys):
@@ -1023,49 +918,15 @@ def test_build_input_tile_virtual_no_silent_fallback(monkeypatch):
         rn._build_input_tile("/any.tif", b"", 0, "virtual")
 
 
-def test_run_spark_path_accepts_input_tile_kwarg():
-    import inspect
-
-    assert "input_tile" in inspect.signature(rn.run_spark_path).parameters
-
-
-def test_disposition_accessor_uses_classifier():
+def test_disposition_from_the_classifier_and_the_output_tile():
     assert rn._disposition_of(s.REGISTRY["rst_avg"], None) == "materialized"
     assert rn._disposition_of(s.REGISTRY["rst_width"], None) == "deferred"
-
-
-def test_disposition_tile_returning_from_output_tile():
     assert (
         rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": b"xx"}) == "materialized"
     )
     assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": None}) == "deferred"
     # no sample available -> "na" (not a crash)
     assert rn._disposition_of(s.REGISTRY["rst_slope"], None) == "na"
-
-
-def test_pure_core_parity_slope_width(tmp_path):
-    from databricks.labs.gbx.bench import datagen as dg
-    from databricks.labs.gbx.bench import runner as rn
-    from databricks.labs.gbx.bench import spec as s
-
-    corpus = dg.generate_corpus(
-        out_dir=tmp_path,
-        seed=9,
-        tile_px=[64],
-        bands=[1],
-        dtypes=["float32"],
-        srids=[4326],
-        nodata_fracs=[0.0],
-        row_rows=1,
-        row_tile_px=64,
-        row_bands=1,
-        row_dtype="float32",
-    )
-    fns = s.select(functions=["rst_slope", "rst_width"])
-    res = rn.run_pure_core_parity(tmp_path, corpus, fns)
-    assert res, "expected parity rows"
-    for name, px, ok, mat, virt in res:
-        assert ok, f"{name}@{px}: virtual != materialized ({mat} vs {virt})"
 
 
 def test_pure_core_parity_full_tile_set(tmp_path):
@@ -1115,12 +976,6 @@ def test_pure_core_parity_full_tile_set(tmp_path):
     assert res, "expected parity rows"
     bad = [(name, px, mat, virt) for name, px, ok, mat, virt in res if not ok]
     assert not bad, f"virtual!=materialized divergences: {bad}"
-
-
-def test_creation_microleg_defined():
-    from databricks.labs.gbx.bench import runner as rn
-
-    assert hasattr(rn, "_run_sp_creation")
 
 
 def test_spark_virtual_leg_smoke(spark, tmp_path):

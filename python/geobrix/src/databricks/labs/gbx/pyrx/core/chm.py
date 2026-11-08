@@ -4,6 +4,10 @@ Canopy Height Model convenience: aligns the DSM onto the DEM's georeference
 (CRS, transform, and pixel dimensions) via nearest-neighbour resampling, then
 subtracts, then clamps negatives to 0.  NoData in either input propagates to
 the output.  Output sentinel is -9999 (Float32).
+
+``chm_engine`` is the session function's body: the subtraction is the GDAL spec engine's map algebra, so it needs
+the engine (no numpy fallback). ``chm`` keeps the NumPy subtraction for the Unity Catalog handler, which runs where
+the engine does not.
 """
 
 import numpy as np
@@ -22,6 +26,38 @@ def chm_working_bytes(width_px: int, height_px: int) -> int:
     (24), the Float32 result (4) and its copy for the encoder with the encoded bytes (8): 55 bytes a pixel.
     """
     return int(width_px) * int(height_px) * 55
+
+
+class EngineUnavailable(RuntimeError):
+    """The GDAL spec engine cannot run here; the message is the engine's reason, with its Fix."""
+
+
+def chm_engine(dsm_bytes: bytes, dem_bytes: bytes) -> bytes:
+    """Compute the Canopy Height Model: the DSM aligned to the DEM's grid, minus the DEM, no lower than 0.
+
+    The DSM is warped onto the DEM's georeference (nearest neighbour, uncovered pixels NoData), then the engine's
+    map algebra computes ``max(A - B, 0)`` on the two rasters: a pixel is NoData in the output when either input is
+    NoData there. Returns single-band Float32 GTiff bytes (NoData -9999), or ``None`` when either input is
+    missing or empty. Raises :class:`EngineUnavailable` where the engine cannot run, and ``ValueError`` with
+    the engine's reason for a raster it cannot compute on.
+    """
+    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.engine import run
+
+    why = run.unavailable_reason()
+    if why:
+        raise EngineUnavailable(why)
+    aligned_dsm = warp.align_to_tiles(dsm_bytes, dem_bytes, dst_nodata=_NODATA)
+    if aligned_dsm is None:
+        return None
+    res = run.run(
+        manifest.load().functions["gbx_rst_mapalgebra"],
+        [bytes(aligned_dsm), bytes(dem_bytes)],
+        {"expression": "max(A - B, 0)"},
+    )
+    if res is None or res.raster is None:
+        raise ValueError(res.error if res is not None else "rst_chm: no result")
+    return res.raster
 
 
 def chm(dsm_bytes: bytes, dem_bytes: bytes) -> bytes:

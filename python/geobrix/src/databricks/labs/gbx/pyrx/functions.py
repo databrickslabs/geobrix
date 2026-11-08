@@ -1669,8 +1669,8 @@ def _chm_udf(dsm_tile, dem_tile):
             if vt_dem.is_virtual()
             else bytes(vt_dem.raster)
         )
-        new_bytes = chm_core.chm(dsm_bytes, dem_bytes)
-    except (MemoryError, RecursionError):
+        new_bytes = chm_core.chm_engine(dsm_bytes, dem_bytes)
+    except (MemoryError, RecursionError, chm_core.EngineUnavailable):
         raise
     except (
         Exception

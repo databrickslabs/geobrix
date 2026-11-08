@@ -9,6 +9,17 @@ import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+
+@pytest.fixture(autouse=True)
+def _engine():
+    """The subtraction runs on the GDAL spec engine, which needs the env wheel's GDAL."""
+    from databricks.labs.gbx.engine import run as engine_run
+
+    why = engine_run.unavailable_reason()
+    if why:
+        pytest.skip(why)
+
+
 # ---------------------------------------------------------------------------
 # Local helper: build GTiff bytes from a custom numpy array
 # ---------------------------------------------------------------------------

@@ -313,8 +313,17 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
             return engine_unavailable(
                 fn, level, caps
             )  # the engine is this row's only light form
+        needs = spec.get("needs", ())
+        if (
+            "osgeo" in needs
+        ):  # a row that calls the engine inside its own UDF (rst_chm): the engine's own reason
+            from databricks.labs.gbx.engine import run
+
+            why = run.unavailable_reason()
+            if why:
+                return why
         missing = [
-            m for m in spec.get("needs", ()) if importlib.util.find_spec(m) is None
+            m for m in needs if m != "osgeo" and importlib.util.find_spec(m) is None
         ]
         return f"{fn.sql_name} needs {', '.join(missing)}" if missing else None
     return f"{level} is not a session level"

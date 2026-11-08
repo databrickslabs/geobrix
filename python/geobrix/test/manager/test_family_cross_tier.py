@@ -126,12 +126,15 @@ ROWS = list(_rows())
 def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
     if (level, variant) == ("L3", "d") and _rs.unavailable_reason():
         pytest.skip(_rs.unavailable_reason())
-    if variant.startswith("engine"):
+    fn = manifest.load().functions[sql_name]
+    # an engine row, or a row that calls the engine inside its own UDF (rst_chm needs osgeo)
+    if level == "L3" and (
+        variant.startswith("engine") or "osgeo" in fn.levels["L3"].get("needs", ())
+    ):
         from databricks.labs.gbx.engine import run
 
-        if level == "L3" and run.unavailable_reason():
+        if run.unavailable_reason():
             pytest.skip(run.unavailable_reason())
-    fn = manifest.load().functions[sql_name]
     spark = request.getfixturevalue("jvm_spark" if level == "L1" else "spark")
     if level == "L0" and sql_name in product_stand_ins.WORKSPACE_ONLY:
         pytest.skip(

@@ -106,7 +106,7 @@ The Rust form runs at the cost of moving the rows, so these ratios are a lower b
 A Unity Catalog function runs on a SQL warehouse or any compute that reads the catalog. The [Unity Catalog functions](./uc-functions) page lists the functions and how to install them.
 
 - **Without the JAR.** Each function is a Unity Catalog Python function.
-- **With the JAR.** The BNG scalars that need no GDAL run as Unity Catalog Scala functions when the install folder holds the JAR of this wheel.
+- **With the JAR.** `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid` run as Unity Catalog Scala functions when the install folder holds the JAR of this wheel. They are verified on a SQL warehouse.
 
 A Scala function that needs GDAL is not proven on Unity Catalog. GeoBrix does not offer GDAL raster functions on Unity Catalog with the JAR.
 

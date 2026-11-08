@@ -345,13 +345,15 @@ The result is sized before the surface is built. A triangulation can have at mos
 
 ## Python and Scala handlers
 
-Three functions can run as UC Scala functions: `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` run as [SQL functions](#functions-that-run-as-sql) instead.
+Three functions can run as UC Scala functions: `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid`. They run on the JVM and need no GDAL. `gbx_bng_eastnorthasbng` and `gbx_bng_cellarea` also have a Scala form, but the install always creates them as [SQL functions](#functions-that-run-as-sql), with or without the JAR, because the SQL form is faster.
 
 The install makes them Scala functions when the install folder also holds `geobrix-<version>-jar-with-dependencies.jar` of the wheel's version. Without that JAR, or with `only=` that selects none of them, they are Python functions. The names, signatures and answers are the same.
 
 <CodeFromTest code={ucExamples} language="python" functionName="preview_install_with_jar" source="docs/tests/python/api/uc_functions_examples.py" testFile="docs/tests/python/api/test_uc_functions_examples.py" />
 
 The install uses that exact JAR, even when the folder holds other files. It refuses a folder that holds other GeoBrix JARs and not that one, and it names the JAR to stage. Pass `jar=` to use a JAR in another Volume folder. It must be a Volume path that ends in `.jar`.
+
+Scala functions on UC have been run on a SQL warehouse only. They are not verified on Serverless notebooks or on standard clusters. To get Python functions there, keep the JAR out of the install folder.
 
 No raster function runs as a Scala function on UC. Raster functions run as Python functions.
 

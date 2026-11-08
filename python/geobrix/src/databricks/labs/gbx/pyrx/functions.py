@@ -4274,50 +4274,7 @@ class _RstCustomTessellateUDTF:
             return
 
 
-# --- Tier 1f: terrain UDFs (slope, aspect, hillshade) ----------------------
-def _slope_bytes(tile, unit, xscale, yscale, file_ref=None):
-    """Shared slope body: open the (virtual or materialized) tile, compute
-    slope, return the produced GTiff bytes."""
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    xs = None if xscale is None else float(xscale)
-    ys = None if yscale is None else float(yscale)
-    with ot._open(tile, file_ref=file_ref) as ds:
-        return terrain.slope(ds, unit=str(unit), xscale=xs, yscale=ys)
-
-
-@f.udf(V2_TILE_SCHEMA)
-def _slope_udf(tile, unit, xscale, yscale):
-    if _tile_is_empty(tile):
-        return None
-    new_bytes = _slope_bytes(tile, unit, xscale, yscale)
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
-@f.udf(V2_TILE_SCHEMA)
-def _slope_v2_udf(
-    tile, unit, xscale, yscale, virtualize_dir, virtualize_prefix, materialize
-):
-    # Force-output variant (Python API only): same slope math via shape_output.
-    if _tile_is_empty(tile):
-        return None
-    new_bytes = _slope_bytes(tile, unit, xscale, yscale)
-    return _shaped_result_row(
-        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
-    )
-
-
-@f.udf(V2_TILE_SCHEMA)
-def _uf_slope(tile, file_ref, unit, xscale, yscale):
-    if _tile_is_empty(tile):
-        return None
-    new_bytes = _slope_bytes(tile, unit, xscale, yscale, file_ref=file_ref)
-    if new_bytes is None:
-        return None
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
+# --- Tier 1f: terrain UDFs (aspect, hillshade) ----------------------
 def _aspect_bytes(tile, trigonometric, zero_for_flat, file_ref=None):
     from databricks.labs.gbx.pyrx import _env
 
@@ -4409,64 +4366,6 @@ def _uf_hillshade(tile, file_ref, azimuth, altitude, z_factor, xscale, yscale):
     if new_bytes is None:
         return None
     return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
-def _light_rst_slope(
-    tile: ColLike,
-    unit: ColLike = "degrees",
-    xscale: ColLike = None,
-    yscale: ColLike = None,
-    virtualize_dir: Optional[str] = None,
-    virtualize_prefix: Optional[str] = None,
-    materialize: Optional[bool] = None,
-) -> Column:
-    """The light Column composition of ``gbx_rst_slope`` (the bench's light form and the
-    light tests). The Python API is ``databricks.labs.gbx.rasterx.functions.rst_slope``.
-
-    Compute terrain slope from a single-band DEM tile (Horn's 3x3 method).
-
-    By default the horizontal scale is auto-derived from the raster CRS
-    (geographic grids use a latitude-based degree->metre ratio, projected
-    grids use linear units). Pass both ``xscale`` and ``yscale`` (vertical
-    units per horizontal unit) to override the auto scale.
-
-    Args:
-        tile:    Tile struct column containing a single-band DEM raster.
-        unit:    ``"degrees"`` (default) or ``"percent"``.
-        xscale:  Optional explicit horizontal scale override (with ``yscale``).
-        yscale:  Optional explicit vertical scale override (with ``xscale``).
-        virtualize_dir:    Force-output (light-tier, Python API only): write the
-            computed slope to a durable path and return a light virtual tile.
-        virtualize_prefix: Optional filename prefix for ``virtualize_dir``.
-        materialize:       Force-output: ``True`` ensures raster bytes. Mutually
-            exclusive with ``virtualize_dir``.
-
-    Returns:
-        Single-band Float32 tile; nodata = -9999. When neither force-output param
-        is set the SQL registered signature is used unchanged.
-    """
-    force = _force_output_requested(virtualize_dir, virtualize_prefix, materialize)
-    if force:
-        # Validate the conflict eagerly (before building any Column) so the
-        # error surfaces without an active Spark session.
-        _validate_force_output(virtualize_dir, materialize)
-    unit_col = f.lit(unit) if isinstance(unit, str) else _col(unit)
-    xs_col = f.lit(None) if xscale is None else _col(xscale)
-    ys_col = f.lit(None) if yscale is None else _col(yscale)
-    if force:
-        return _slope_v2_udf(
-            _col(tile),
-            unit_col,
-            xs_col,
-            ys_col,
-            f.lit(virtualize_dir),
-            f.lit(virtualize_prefix),
-            f.lit(materialize),
-        )
-    from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
-
-    tc = _col(tile)
-    return _uf_slope(tc, file_ref_arg(tc), unit_col, xs_col, ys_col)
 
 
 # --- Tier 1g: terrain ruggedness UDFs (tri, tpi, roughness) -----------------

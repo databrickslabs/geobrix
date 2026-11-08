@@ -770,7 +770,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Slope.scala", _DEM_HELPER),
         core=True,
         core_fn=lambda ds, a: terrain.slope(ds, a["unit"]),
-        col_fn=lambda t, a: prx._light_rst_slope(t, a["unit"]),
+        col_fn=lambda t, a: rx.rst_slope(t, a["unit"]),
     ),
     "rst_ndvi": FnSpec(
         "rst_ndvi",

@@ -105,15 +105,21 @@ def test_accessor_on_a_virtual_tile_equals_its_bytes(tmp_path, name):
 
 
 def test_slope_shapes_follow_the_force_output_params(tmp_path):
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
+
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     tile = _virtual_tile(tmp_path)
-    auto = prx._slope_udf.func(tile, "degrees", None, None)
+    forced = engine_l3.forced_c0("gbx_rst_slope").func
+    auto = forced(tile, "degrees", None, None, None, None, None)
     with _serde.open_tile(bytes(auto["raster"])) as ds:
         assert ds.count == 1 and ds.dtypes[0] == "float32"
         direct = ds.read(1)
 
     # virtualize_dir: a bytes-free row over a provenance-named file that reads back as the auto result
     out_dir = str(tmp_path / "vout")
-    row = prx._slope_v2_udf.func(tile, "degrees", None, None, out_dir, "run1", None)
+    row = forced(tile, "degrees", None, None, out_dir, "run1", None)
     assert row["raster"] is None and row["path"].endswith(".tif")
     assert os.path.basename(row["path"]).startswith("run1_") and os.path.exists(
         row["path"]
@@ -122,9 +128,11 @@ def test_slope_shapes_follow_the_force_output_params(tmp_path):
         assert np.array_equal(ds.read(1), direct)
 
     # materialize=True forces bytes
-    row = prx._slope_v2_udf.func(tile, "degrees", None, None, None, None, True)
+    row = forced(tile, "degrees", None, None, None, None, True)
     assert row["raster"] is not None and row["path"] is None
 
+
+def test_slope_refuses_virtualize_dir_with_materialize():
     with pytest.raises(ValueError, match="mutually exclusive"):
         rx.rst_slope("tile", virtualize_dir="/x", materialize=True)
 
@@ -281,6 +289,10 @@ def _v2_df(spark, tmp_path):
 
 
 def test_column_api_on_a_virtual_df(spark, tmp_path):
+    from databricks.labs.gbx.engine import run as engine_run
+
+    if engine_run.unavailable_reason():  # slope runs on the GDAL spec engine alone
+        pytest.skip(engine_run.unavailable_reason())
     df = _v2_df(spark, tmp_path)
     assert df.select(rx.rst_width("tile").alias("w")).first()["w"] == 8
     out_dir = str(tmp_path / "col_vout")

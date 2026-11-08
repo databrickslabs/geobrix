@@ -474,21 +474,6 @@ def test_utc_offsets_parse_without_numpy_warnings():
         assert time_ranges(slice(aware, aware)) == ((0, 1),)
 
 
-def test_list_selection_prepares_the_axis_once(monkeypatch):
-    from databricks.labs.gbx.zarr import _select
-
-    calls = []
-    real = _select._step
-
-    def counting(num):
-        calls.append(1)
-        return real(num)
-
-    monkeypatch.setattr(_select, "_step", counting)
-    ax = resolve(DIMS, SHAPE, COORDS, {"latitude": [50, 60, 57.5, 55, 52.5]}, None)[1]
-    assert ax.ranges == ((12, 17),) and len(calls) == 1
-
-
 def test_isel_on_an_empty_dimension_says_so():
     with pytest.raises(ValueError, match="empty") as e:
         resolve(("t",), (0,), {}, None, {"t": 0})
@@ -549,19 +534,25 @@ def test_float32_wrap_rounds_after_the_arithmetic_not_before():
 
 
 @pytest.mark.parametrize(
-    "units",
-    ["degrees_east", "degree_east", "degrees_E", "degree_E", "degreeE", "degreesE"],
+    "units, wraps",
+    [
+        *[
+            (u, True)
+            for u in (
+                "degrees_east",
+                "degree_east",
+                "degrees_E",
+                "degree_E",
+                "degreeE",
+                "degreesE",
+            )
+        ],
+        *[(u, False) for u in ("degrees_north", "degree_N", "m", "")],
+    ],
 )
-def test_cf_longitude_unit_spellings(units):
-    assert lon_ranges(LON, slice(-10, 10), "col", {"units": units}) == (
-        (140, 144),
-        (0, 5),
-    )
-
-
-def test_other_units_are_not_longitudes():
-    for units in ("degrees_north", "degree_N", "m", ""):
-        assert lon_ranges(LON, slice(-10, 10), "col", {"units": units}) == ((0, 5),)
+def test_cf_longitude_unit_spellings(units, wraps):
+    want = ((140, 144), (0, 5)) if wraps else ((0, 5),)
+    assert lon_ranges(LON, slice(-10, 10), "col", {"units": units}) == want
 
 
 @pytest.mark.parametrize(

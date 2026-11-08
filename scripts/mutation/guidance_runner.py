@@ -216,7 +216,7 @@ def main(argv=None) -> int:
         # run.json), so the mutants are judged by the tests that can run. A selection that does not collect at all (a
         # missing test dependency, a conftest error) aborts mutmut's stats pass with nothing on its log: say why, and stop.
         pre = subprocess.run(
-            [str(py), "-m", "pytest", "--rootdir=.", "-q", "--color=no", "--tb=no", "-rfE", "-p", "no:randomly", *selection,
+            [str(py), "-m", "pytest", "--rootdir=.", "-q", "--color=no", "--tb=short", "-rfE", "-p", "no:randomly", *selection,
              "-p", gate.PLUGIN, "-p", KILLERS_PLUGIN, "-p", "no:cacheprovider", "-m", "not integration and not perf"],
             cwd=work, env=dict(env, GBX_MUT_KILLERS=os.devnull), capture_output=True, text=True,
         )

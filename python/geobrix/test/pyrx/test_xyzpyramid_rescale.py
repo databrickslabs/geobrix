@@ -7,8 +7,8 @@ positional parameter.  This test guards the complete SQL surface:
   - rescale='auto' and rescale='none' produce different PNG bytes on a uint16
     narrow-range source (contrast mapping differs).
 
-Pattern: same fixture construction as test_sql_registration._rgb_tile_view, but
-using a uint16 narrow-range raster so that auto vs none meaningfully diverge.
+Pattern: a three-band raster on a small grid, but a uint16 narrow-range one so that auto vs none
+meaningfully diverge.
 """
 
 import numpy as np

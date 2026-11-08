@@ -85,10 +85,10 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
     test("a generator error tile carries the cellid of the tile it failed on") {
         import com.databricks.labs.gbx.rasterx.functions._
         // Tessellate a real raster into tiles that have a cell id, then fail the next generator on them with
-        // an invalid `assignment` argument (raised inside the generator's guarded body).
+        // a NULL resolution (a bad row of data, answered inside the generator's guarded body).
         val tiles = validTile().select(rst_h3_tessellate(col("raster"), lit(1)).as("t")).limit(2)
         val rows = tiles
-            .select(col("t.cellid").as("in_cell"), rst_h3_tessellate(col("t"), lit(2), "no-such-assignment").as("e"))
+            .select(col("t.cellid").as("in_cell"), rst_h3_tessellate(col("t"), lit(null).cast("int")).as("e"))
             .select(
               col("in_cell"),
               col("e.cellid").as("out_cell"),
@@ -99,6 +99,50 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
         rows.foreach { r =>
             r.isNullAt(2) shouldBe false // the error row, not a tessellated tile
             r.getLong(1) shouldBe r.getLong(0)
+        }
+    }
+
+    /** The message chain of whatever `df.collect()` throws. */
+    private def raised(df: DataFrame): String = {
+        val ex = intercept[Throwable](df.collect())
+        LazyList.iterate(Option(ex))(_.flatMap(t => Option(t.getCause))).takeWhile(_.isDefined).flatMap(_.toSeq)
+            .map(t => String.valueOf(t.getMessage)).mkString(" | ")
+    }
+
+    test("a tessellate with an unknown assignment or coverage raises, naming the value, on every grid") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        val df = validTile()
+        val calls: Seq[(String, String, Column)] = Seq(
+          ("h3", "assignment", rst_h3_tessellate(col("raster"), 3, "sideways")),
+          ("h3", "coverage", rst_h3_tessellate(col("raster"), 3, "centroid", "sideways")),
+          ("quadbin", "assignment", rst_quadbin_tessellate(col("raster"), 5, "sideways")),
+          ("quadbin", "coverage", rst_quadbin_tessellate(col("raster"), 5, "centroid", "sideways")),
+          ("custom", "assignment", rst_custom_tessellate(col("raster"), customGrid, 2, "sideways")),
+          ("custom", "coverage", rst_custom_tessellate(col("raster"), customGrid, 2, "centroid", "sideways"))
+        )
+        calls.foreach { case (grid, arg, c) =>
+            withClue(s"$grid $arg: ") {
+                val msg = raised(df.select(c.as("t")))
+                msg should include(s"$arg must be one of")
+                msg should include("'sideways'")
+            }
+        }
+    }
+
+    test("a tessellate with a NULL resolution is the row's error tile, not resolution 0") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        val nullRes = lit(null).cast("int")
+        val gens: Seq[(String, Column)] = Seq(
+          "h3" -> rst_h3_tessellate(col("raster"), nullRes),
+          "quadbin" -> rst_quadbin_tessellate(col("raster"), nullRes),
+          "custom" -> rst_custom_tessellate(col("raster"), customGrid, nullRes)
+        )
+        gens.foreach { case (grid, c) =>
+            val rows = validTile().select(c.as("t")).select(col("t.metadata").getItem("error_message").as("err")).collect()
+            withClue(s"$grid: ") {
+                rows.length shouldBe 1
+                rows.head.isNullAt(0) shouldBe false
+            }
         }
     }
 

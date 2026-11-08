@@ -153,15 +153,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
         cid: {"L1": _GEN_L1}
         for cid in (
-            "bng_tess_bad_res",
-            "bng_tess_bad_assignment",
-            "cg_tess_bad_assignment",
-            "cg_tess_null_res",
-            "h3_tess_null_res",
-            "qb_tess_null_res",
-            "h3_tess_bad_assignment",
-            "h3_tess_bad_coverage",
-            "qb_tess_bad_assignment",
             "maketiles_null_size",
             "overlap_all",
             "overlap_zero_window",

@@ -44,23 +44,17 @@ case class RST_Custom_Tessellate(
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
         // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
         val rawTile = tile.eval(input).asInstanceOf[InternalRow]
+        // A word outside the allowed ones is a mistake in the call: it raises, naming the value, before any tile is read.
+        RasterTessellate.requireWords("gbx_rst_custom_tessellate", assignmentExpr.eval(input), coverageExpr.eval(input))
         RST_ErrorHandler.safeEval(
           () => {
               val conf = exprConfExpr.eval(input).asInstanceOf[UTF8String]
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val gridSys = Custom_GridSpec.systemFromRow(gridExpr.eval(input).asInstanceOf[InternalRow])
-              val resolution = resolutionExpr.eval(input).asInstanceOf[Int]
+              val resolution = RasterTessellate.resolutionOf("gbx_rst_custom_tessellate", resolutionExpr.eval(input))
               val assignment = assignmentExpr.eval(input).asInstanceOf[UTF8String].toString
               val coverage   = coverageExpr.eval(input).asInstanceOf[UTF8String].toString
-              require(
-                RasterTessellate.Assignments.contains(assignment),
-                s"gbx_rst_custom_tessellate assignment must be one of ${RasterTessellate.Assignments.mkString(", ")}; got '$assignment'"
-              )
-              require(
-                RasterTessellate.Coverages.contains(coverage),
-                s"gbx_rst_custom_tessellate coverage must be one of ${RasterTessellate.Coverages.mkString(", ")}; got '$coverage'"
-              )
               val (_, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
               val iter = RasterTessellate.tessellateCustomIter(gridSys, ds, mtd, resolution, assignment, coverage)
               RST_ExpressionUtil.addCleanupListener(iter)

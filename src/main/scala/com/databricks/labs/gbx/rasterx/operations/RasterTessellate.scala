@@ -28,6 +28,27 @@ object RasterTessellate {
       * cells that received ≥1 pixel centroid (centroid). */
     val Coverages: Set[String] = Set("sparse", "complete")
 
+    /** The assignment and coverage a tessellate generator was called with, checked before any tile is read. A word
+      * outside [[Assignments]] / [[Coverages]] is a mistake in the call, not a bad row of data, so it raises (naming
+      * the value) rather than becoming the row's error tile, as on the lightweight level. A NULL word is left to the
+      * row's own handling. */
+    def requireWords(fn: String, assignment: Any, coverage: Any): Unit = {
+        if (assignment != null) {
+            val a = assignment.toString
+            require(Assignments.contains(a), s"$fn assignment must be one of ${Assignments.mkString(", ")}; got '$a'")
+        }
+        if (coverage != null) {
+            val c = coverage.toString
+            require(Coverages.contains(c), s"$fn coverage must be one of ${Coverages.mkString(", ")}; got '$c'")
+        }
+    }
+
+    /** The resolution argument of a tessellate generator: a NULL is data (the row's error tile), never resolution 0. */
+    def resolutionOf(fn: String, value: Any): Int = {
+        require(value != null, s"$fn: resolution must not be NULL")
+        value.asInstanceOf[Int]
+    }
+
     /**
       * Covering keep-test shared by all three grids (H3, quadbin, BNG): a cell is emitted iff its geometry
       * has POSITIVE-AREA overlap with the raster footprint ([[footprint]]) — mere boundary touch (a shared

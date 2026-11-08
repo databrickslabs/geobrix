@@ -30,14 +30,14 @@ L1_TILE_FNS = [f for f in FNS if _takes_tile(f) and _first_available(f) == "L1"]
 
 def test_there_are_jvm_first_tile_functions_to_hold():
     """The set is derived, not listed; this keeps the checks below from passing on an empty one."""
-    # color_relief, frombands, mapalgebra and slope, and the 21 accessors that return one value
-    assert len(L1_TILE_FNS) >= 25, [f.sql_name for f in L1_TILE_FNS]
+    # color_relief, frombands, and the 21 accessors that return one value
+    assert len(L1_TILE_FNS) >= 23, [f.sql_name for f in L1_TILE_FNS]
 
 
 @pytest.mark.parametrize("fn", L1_TILE_FNS, ids=lambda f: f.sql_name)
 def test_a_tile_function_served_from_the_jvm_has_a_virtual_dispatch(fn):
     """The manifest row says the function takes a virtual tile, so the manager installs the dispatch wrapper under its
-    SQL name (`jvm.install_l1` and `install_l1_engine` build it only for such a row; any other is a bare companion).
+    SQL name (`jvm.install_l1` builds it only for such a row; any other is a bare companion).
     """
     assert fn.accepts_virtual_tile, (
         f"{fn.sql_name} is served from the JVM first and has no virtual dispatch: a virtual tile raises "

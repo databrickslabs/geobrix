@@ -63,16 +63,14 @@ def _rows():
                 fn.sql_name, "L0", "-", "sql", id=f"{fn.sql_name}-L0-sql"
             )
         l1 = fn.levels.get("L1", {})
-        for variant in (["-"] if "companion" in l1 else []) + (
-            ["engine"] if l1.get("engine") else []
-        ):
+        if "companion" in l1:
             yield pytest.param(
                 fn.sql_name,
                 "L1",
-                variant,
+                "-",
                 "sql",
                 marks=pytest.mark.integration,
-                id=f"{fn.sql_name}-L1{variant}-sql",
+                id=f"{fn.sql_name}-L1--sql",
             )
         if (
             "companion" in l1
@@ -137,10 +135,7 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
         if level == "L3" and run.unavailable_reason():
             pytest.skip(run.unavailable_reason())
     fn = manifest.load().functions[sql_name]
-    jvm = level == "L1" or variant.startswith("engine")
-    spark = request.getfixturevalue("jvm_spark" if jvm else "spark")
-    if (level, variant) == ("L1", "engine"):
-        _require_pinned_jvm_gdal(spark)
+    spark = request.getfixturevalue("jvm_spark" if level == "L1" else "spark")
     if level == "L0" and sql_name in product_stand_ins.WORKSPACE_ONLY:
         pytest.skip(
             f"{sql_name} {product_stand_ins.WORKSPACE_ONLY[sql_name]}: judged on the workspace"
@@ -154,18 +149,6 @@ def test_family_oracle(request, tmp_path, sql_name, level, variant, api):
             )
         return
     _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api)
-
-
-def _require_pinned_jvm_gdal(spark):
-    """The L1 engine needs the JVM on the manifest's GDAL pin; elsewhere its rows skip with that reason."""
-    pin = manifest.load().gdal.pin
-    caps = capabilities.detect(spark, need_jvm=True)
-    if caps.jvm_gdal != pin:
-        pytest.skip(
-            f"PRECONDITION MISSING: the JVM runs GDAL {caps.jvm_gdal or caps.gdal_reason}, not {pin}; it needs "
-            "GBX_NATIVE_ROOT set to a payload whose bundled _jar is this session's JAR (gbx:test:parity refreshes "
-            "the payload's _jar from the staged JAR; by hand, copy the JAR into its _jar/)"
-        )
 
 
 def _test_family_oracle(spark, request, tmp_path, fn, sql_name, level, variant, api):
@@ -269,50 +252,17 @@ def test_detect_sees_the_jar_and_gdal(jvm_spark):
 
 # --- The GDAL spec engine's level-specific rows (folded in from the spike's own file) -----------------------------
 # The rows of SPEC_SE (and the engine rows of SPEC_DEM and MVP_S) run above, at every level, in `test_family_oracle`.
-# These are what a table row cannot say: L1 against L3 on one input, a grid registered after the JVM's GDAL began, the
-# analysis-time refusal of a literal, the read cap, and the bytes rule. The L3 engine needs the env wheel payload's
-# osgeo (the container with GBX_NATIVE_ROOT); the L1 engine, the staged JAR on a JVM running the payload's GDAL.
+# These are what a table row cannot say: the two light forms on one input, the read cap, and the bytes rule. The
+# engine has no JVM level; it needs the env wheel payload's osgeo (the container with GBX_NATIVE_ROOT).
 MAN = manifest.load()
-LEVELS = [("L1", "engine"), ("L3", "engine-c0"), ("L3", "engine-c1")]
+LEVELS = [("L3", "engine-c0"), ("L3", "engine-c1")]
 
 
-def _engine_session(request, level):
+def _engine_session(request):
     why = engine_run.unavailable_reason()
     if why:
         pytest.skip(why)
-    if level == "L3":
-        return request.getfixturevalue("spark")
-    spark = request.getfixturevalue("jvm_spark")
-    _require_pinned_jvm_gdal(spark)
-    return spark
-
-
-@pytest.mark.integration
-def test_mapalgebra_on_its_heavy_companion_behind_the_tiles_wrapper(request, tmp_path):
-    """L1 without the engine (as where the JVM runs another GDAL): mapalgebra runs on its RST_MapAlgebra companion
-    behind the tiles dispatch wrapper. An array of materialized tiles goes to the companion, an array of virtual
-    tiles to the light kernel the wrapper names, and each gives the tile."""
-    from rasterio.io import MemoryFile
-
-    spark = _engine_session(request, "L1")
-    fn = MAN.functions["gbx_rst_mapalgebra"]
-    register(spark, only=[fn.sql_name], _levels={fn.sql_name: ("L1", "-")})
-    pair = oracles._se_build("se_pair")
-    virtual = []
-    for i, t in enumerate(pair):
-        f = tmp_path / f"t{i}.tif"
-        f.write_bytes(t["raster"])
-        virtual.append(oracles._tile(path=str(f)))
-    spec = '{"calc": "(A - B) / (A + B)", "A_index": 0, "B_index": 1}'
-    schema = f"tiles {oracles._ddl_type(pair, fn.params[0])}, spec string"
-    df = spark.createDataFrame([(pair, spec), (virtual, spec)], schema)
-    outs = [
-        r["out"] for r in df.selectExpr(f"{fn.sql_name}(tiles, spec) AS out").collect()
-    ]
-    for out in outs:
-        assert out is not None and out["raster"] is not None, out
-        with MemoryFile(bytes(out["raster"])) as mf, mf.open() as ds:
-            assert (ds.width, ds.height) == (64, 48)
+    return request.getfixturevalue("spark")
 
 
 # One success row per function: the same input through every engine level.
@@ -330,12 +280,11 @@ SAME_PIXELS = [
 
 
 @pytest.mark.integration
-def test_l1_and_l3_give_the_same_pixels(request, tmp_path):
-    """L1 equals L3 (c0 and c1) pixel for pixel, NoData included; the bytes are equal too (same argv, same GDAL)."""
+def test_the_light_forms_give_the_same_pixels(request, tmp_path):
+    """c1 equals c0 pixel for pixel, NoData included; the bytes are equal too (same argv, same GDAL)."""
     import numpy as np
 
-    _engine_session(request, "L1")
-    spark = request.getfixturevalue("jvm_spark")
+    spark = _engine_session(request)
     cases = [c for c in oracles.SPEC_SE + oracles.MVP_S if c.cid in SAME_PIXELS]
     outs = {}
     for level, variant in LEVELS:
@@ -356,7 +305,7 @@ def test_l1_and_l3_give_the_same_pixels(request, tmp_path):
             outs[(case.cid, level, variant)] = r["out"]
     differ = []
     for case in cases:
-        base = outs[(case.cid, "L1", "engine")]
+        base = outs[(case.cid, *LEVELS[0])]
         for level, variant in LEVELS[1:]:
             other = outs[(case.cid, level, variant)]
             a = oracles._masked_band(base["raster"])
@@ -379,109 +328,13 @@ def test_l1_and_l3_give_the_same_pixels(request, tmp_path):
     assert differ == []
 
 
-@pytest.mark.integration
-def test_a_registered_grid_reaches_l1_after_an_earlier_gdal_init(request, tmp_path):
-    """A target CRS whose grid is only in a registered directory: L1 gives L3's tile, byte for byte, though the JVM's
-    GDAL was initialized (by the capability probe) before the grid was registered."""
-    import shutil
-    import uuid
-    from pathlib import Path
-
-    from databricks.labs.gbx import crs_grids
-    from databricks.labs.gbx.core import proj_grids
-    from databricks.labs.gbx.manager import levels
-
-    grid = (
-        Path(__file__).resolve().parents[4]
-        / "sample-data/Volumes/main/geobrix_samples/geobrix-examples/proj-grids/synthetic.gsb"
-    )
-    if not grid.is_file():
-        pytest.skip("PRECONDITION MISSING: the synthetic.gsb fixture; this row not run")
-    # Every precondition skips with its reason: the L3 engine (the payload's osgeo), the staged JAR in this session,
-    # then (in _session) the JVM on the pinned GDAL and (below) the L1 engine itself.
-    why = engine_run.unavailable_reason()
-    if why:
-        pytest.skip(f"PRECONDITION MISSING: the L3 engine: {why}; this row not run")
-    staged = sorted(
-        (Path(__file__).resolve().parents[2] / "lib").glob(
-            "geobrix-*-jar-with-dependencies.jar"
-        )
-    )
-    if not staged or str(staged[-1]) not in request.getfixturevalue("spark").conf.get(
-        "spark.jars", ""
-    ):
-        pytest.skip(
-            "PRECONDITION MISSING: the staged JAR in this session (gbx-test-parity.sh); this row not run"
-        )
-    # the probe in _session initializes the JVM's GDAL, with no grid registered yet
-    _engine_session(request, "L1")
-    spark = request.getfixturevalue("jvm_spark")
-    fn = MAN.functions["gbx_rst_transformcrs"]
-    why = levels.engine_unavailable(fn, "L1", capabilities.detect(spark, need_jvm=True))
-    if why:
-        pytest.skip(f"PRECONDITION MISSING: the L1 engine: {why}; this row not run")
-    name = f"gbx_se_{uuid.uuid4().hex}.gsb"  # a name PROJ has never looked up in either process
-    (tmp_path / "grids").mkdir()
-    shutil.copy(grid, tmp_path / "grids" / name)
-    # tile_4326 lies inside the grid's box (50..53 N, 1 W..1 E)
-    case = oracles.Case(
-        "se_tcrs_registered_grid",
-        fn.sql_name,
-        (
-            oracles.Build("tile_4326"),
-            f"+proj=longlat +ellps=GRS80 +nadgrids={name} +no_defs +type=crs",
-        ),
-        "tile_props",
-        None,
-        ("session",),
-    )
-    saved = proj_grids.get_registered_dirs()
-    crs_grids.register_proj_grids(spark, str(tmp_path / "grids"))
-    outs = {}
-    try:
-        rows = oracles._argument_rows(case, str(tmp_path))
-        schema = ", ".join(
-            f"c{i} {oracles._ddl_type(v, fn.params[i])}" for i, v in enumerate(rows[0])
-        )
-        spark.createDataFrame([tuple(rows[0])], schema).createOrReplaceTempView(
-            "_gbx_grid"
-        )
-        for level, variant in (("L1", "engine"), ("L3", "engine-c0")):
-            register(spark, only=[fn.sql_name], _levels={fn.sql_name: (level, variant)})
-            (r,) = spark.sql(
-                f"SELECT {fn.sql_name}(c0, c1) AS out FROM _gbx_grid"
-            ).collect()
-            outs[level] = r["out"]
-    finally:
-        crs_grids.register_proj_grids(spark, list(saved), replace=True)
-    for level in outs:
-        assert (
-            outs[level]["raster"] is not None
-        ), f"{level}: {dict(outs[level]['metadata'])}"
-    assert bytes(outs["L1"]["raster"]) == bytes(outs["L3"]["raster"])
-
-
-@pytest.mark.integration
-def test_l1_refuses_a_literal_it_cannot_bind_when_the_query_is_analyzed(request):
-    """The JVM engine binds literal arguments once, at analysis: an unknown unit fails the query before it runs."""
-    spark = _engine_session(request, "L1")
-    register(spark, only=["gbx_rst_slope"], _levels={"gbx_rst_slope": ("L1", "engine")})
-    spark.createDataFrame(
-        [(None,)], f"tile {manifest.TILE_SQL}"
-    ).createOrReplaceTempView("_gbx_lit")
-    with pytest.raises(Exception, match="radians"):
-        spark.sql(
-            "SELECT gbx__l1_rst_slope(tile, 'radians') FROM _gbx_lit"
-        )  # analyzed, never run
-
-
 def test_a_virtual_tile_over_the_read_cap_is_refused_from_its_header(
     request, tmp_path, monkeypatch
 ):
     """The read cap (the driver's, captured when the engine registers) is applied to a virtual tile's decoded window
     from its header, before its pixels are read: over it, an error tile with a Fix, not a failed query.
     """
-    spark = _engine_session(request, "L3")
+    spark = _engine_session(request)
     monkeypatch.setenv(
         "GBX_STREAM_MAX_BYTES", "1024"
     )  # the 64 x 64 Float32 DEM is 16 KiB decoded

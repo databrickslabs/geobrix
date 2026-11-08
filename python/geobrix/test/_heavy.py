@@ -85,19 +85,12 @@ def heavy_register(spark, prefixes):
 
     installed = set(install_jvm_scalars(spark, prefixes))
     names = [n for n in manager.names_at_level(prefixes, "L1") if n not in installed]
-    if not light_stack_available():
-        # an engine-only L1 row (no companion) installs its row-wise light side beside the JVM engine, which imports
-        # the light packages: without them the name stays unregistered and its test skips (see `light_stack_available`)
-        from databricks.labs.gbx import manifest
-
-        fns = manifest.load().functions
-        names = [n for n in names if "companion" in fns[n].levels["L1"]]
     return manager.register_family(spark, prefixes, only=names, level="L1")
 
 
 def light_stack_available():
     """Whether the light packages (pandas, rasterio) import here. The heavyweight CI env does not have them: a test of
-    a function whose only heavy form needs them (an engine-only L1 row, or a function with no L1 row) skips there
+    a function whose only form needs them (a function with no L1 row) skips there
     with ``pytest.mark.skipif(not light_stack_available(), ...)``.
     """
     try:

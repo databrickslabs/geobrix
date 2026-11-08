@@ -36,15 +36,6 @@ why = "Installs a JVM companion expression under its SQL name through the py4j g
 
 [[site]]
 path = "manager/jvm.py"
-symbol = "install_l1_engine"
-api = ["_jvm", "_jsparkSession"]
-computes = ["dedicated"]
-gate = "refusal"
-gate_detail = "manager/levels.py _jvm_unavailable refuses level L1 on a Connect session before this runs, and the whole body is inside try/except that returns a fallback reason"
-why = "Installs the JVM form of a GDAL spec engine function through the py4j gateway"
-
-[[site]]
-path = "manager/jvm.py"
 symbol = "install_companion"
 api = ["_jvm", "_jsparkSession"]
 computes = ["dedicated"]

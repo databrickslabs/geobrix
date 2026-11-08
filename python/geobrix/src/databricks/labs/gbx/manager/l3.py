@@ -202,10 +202,8 @@ def _takes_its_defaults(fn, spec, built=None) -> bool:
     return True
 
 
-def register_l3_engine(
-    spark, fn, form: str = "engine", name: Optional[str] = None
-) -> str:
-    """Register `fn`'s GDAL spec engine UDFs under `name` (default its SQL name), each carrying the driver's
+def register_l3_engine(spark, fn, form: str = "engine") -> str:
+    """Register `fn`'s GDAL spec engine UDFs under its SQL name, each carrying the driver's
     remote-path switch to the workers; returns the form used.
 
     ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
@@ -223,7 +221,7 @@ def register_l3_engine(
     cap = report_detected_cap(
         spark
     )  # the connect-aware read cap, which a worker cannot measure itself
-    name = name or fn.sql_name
+    name = fn.sql_name
     if form == levels.ENGINE:
         form = levels.engine_form(fn)
     wrapped = form == "engine-c1" or (

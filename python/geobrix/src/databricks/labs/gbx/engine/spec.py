@@ -1,7 +1,7 @@
 """The engine's rules: what a spec may say, what a value may be, and how a call fails.
 
 Pure Python. The engine core applies ``guard_tokens`` to every argv it runs, so a manifest typo or a forged call
-hits the same rules a spec does. Mirrored by the JVM's ``GdalSpecArgv``.
+hits the same rules a spec does.
 """
 
 from __future__ import annotations

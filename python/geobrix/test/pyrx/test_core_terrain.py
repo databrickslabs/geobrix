@@ -399,7 +399,7 @@ def test_slope_refuses_a_unit_that_is_not_degrees_or_percent(unit):
 
 @pytest.mark.parametrize("unit", ["Percent", "PERCENT", " percent "])
 def test_slope_unit_is_read_as_the_spec_engines_enum_binder_reads_it(unit):
-    """The binder lower-cases AND strips a choice (argv.py, GdalSpecArgv.scala), so the core does the same."""
+    """The binder lower-cases AND strips a choice (argv.py), so the core does the same."""
     with _serde.open_tile(_dem(np.arange(16.0).reshape(4, 4))) as ds:
         want = terrain.slope(ds, unit="percent")
         got = terrain.slope(ds, unit=unit)

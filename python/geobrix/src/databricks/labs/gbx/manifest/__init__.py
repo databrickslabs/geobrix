@@ -23,11 +23,11 @@ SCHEMA_VERSION = 2
 # The closed vocabulary of keys a function's per-level spec may carry. A mistyped key
 # would be read with `.get` and silently drop a guard, so a contract test rejects any key
 # outside this table; add a key here in the same change that first uses it.
-# `engine` marks a level that runs the row's `gdal` block on the GDAL spec engine where that engine can serve,
-# and its own implementation (the other keys) elsewhere.
+# `engine` marks a light (L3) level that runs the row's `gdal` block on the GDAL spec engine where that engine can
+# serve, and its own implementation (the other keys) elsewhere. The engine has no JVM level (L1).
 LEVEL_KEYS = {
     "L0": frozenset({"sql", "sql_helpers"}),
-    "L1": frozenset({"companion", "needs_gdal", "session_returns", "engine"}),
+    "L1": frozenset({"companion", "needs_gdal", "session_returns"}),
     "L3": frozenset(
         {
             "register",
@@ -79,7 +79,7 @@ LEVEL_REQUIRED = {
 }
 # Levels whose spec must carry at least one of these keys.
 LEVEL_REQUIRED_ANY = {
-    "L1": frozenset({"companion", "engine"}),
+    "L1": frozenset({"companion"}),
     "L4": frozenset({"handler", "tvf_over", "sql", "stub"}),
 }
 
@@ -429,7 +429,8 @@ class GdalSection:
     allowed_drivers: Tuple[str, ...] = ()
     refused_drivers: Tuple[str, ...] = ()
     # `bytes`: the allowed drivers the spec engine opens a materialized tile's bytes with (bytes without the TIFF
-    # magic, translated to GeoTIFF before the run; engine/run.py and the JVM's GdalSpecEngine read this one list). A
+    # magic, translated to GeoTIFF before the run; engine/run.py and the JVM's tile-bytes reader, `TileBytes`, read
+    # this one list). A
     # tile's bytes have no directory of their own, so the class is the drivers whose dataset is the bytes alone: no
     # name, href or URL read from the data is opened or fetched, and no header or data file beside it is needed
     # (the sidecars GDAL may look for, .aux.xml, .msk, .ovr or a world file, would sit in the call's /vsimem prefix,

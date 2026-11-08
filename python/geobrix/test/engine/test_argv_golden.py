@@ -1,6 +1,6 @@
 """(spec, bound values, input properties) -> the exact argv, and the write profile's creation options.
 
-The fixture is the engine contract on both tiers: GdalSpecSmokeTest (Scala) reads the same file. Pure Python
+The fixture is the engine contract (the engine has no JVM level). Pure Python
 plus the canonical CRS resolver (rasterio): every row runs on the host.
 """
 
@@ -64,8 +64,8 @@ def test_a_null_required_value_is_a_null_result():
 
 
 @pytest.mark.parametrize("case", GOLDEN["zstd_knob"], ids=lambda c: repr(c["knob"]))
-def test_the_level_knob_reads_as_on_the_jvm(case, monkeypatch):
-    """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder (both tiers)."""
+def test_the_level_knob_reads_as_the_size_ladder_defines_it(case, monkeypatch):
+    """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder."""
     import warnings
 
     from databricks.labs.gbx.pyrx.core.compression import auto_level
@@ -99,8 +99,8 @@ def test_literal_arguments_are_bound_once(monkeypatch):
 
 
 def test_the_engine_settings_table_is_the_golden_one():
-    """The engine's GDAL settings, applied thread-local per call on both tiers: the golden table, which the
-    JVM's GdalSpecEngine reads too (GdalSpecSmokeTest). Removing a setting from either table fails here.
+    """The engine's GDAL settings, applied thread-local per call: the golden table. Removing a setting from
+    either table fails here.
     """
     from databricks.labs.gbx.engine import run
 

@@ -437,10 +437,7 @@ def _install(spark, fn, choice: Choice, caps, forced: bool, lines) -> Choice:
     if level == "L1":
         from databricks.labs.gbx.manager import jvm
 
-        install = jvm.install_l1
-        if choice.variant == levels.ENGINE or "companion" not in spec:
-            install = jvm.install_l1_engine
-        why = install(spark, fn, caps)
+        why = jvm.install_l1(spark, fn, caps)
         if why is None:
             for r in reasons:
                 lines.append((fn.sql_name, f"{r}; using {levels.NAMES[level]}"))

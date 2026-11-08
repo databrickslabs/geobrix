@@ -1,14 +1,13 @@
 """The engine leaves nothing behind: 1,000-tile passes on local[8] leave /vsimem/gbx-spec empty in every worker,
-and once the workers are warm more passes do not grow their memory; the JVM engine on eight threads leaves its /vsimem empty and does not
-crash. Needs the payload's osgeo (the container with GBX_NATIVE_ROOT); the JVM row also the staged JAR on the
-payload's GDAL.
+and once the workers are warm more passes do not grow their memory. Needs the payload's osgeo (the container with
+GBX_NATIVE_ROOT).
 """
 
 import os
 
 import pytest
 
-from databricks.labs.gbx import manifest, register
+from databricks.labs.gbx import register
 from databricks.labs.gbx.engine import run
 from databricks.labs.gbx.manifest import TILE_SQL
 
@@ -112,19 +111,3 @@ def test_a_thousand_tiles_through_c1_leave_no_vsimem_file_and_flat_workers(
         max(r for _, r in later.values()) - max(r for _, r in warm.values())
     ) // 1024
     assert grown <= 40, f"the workers' peak RSS grew {grown} MiB over 5,000 more tiles"
-
-
-@pytest.mark.integration
-def test_the_jvm_engine_on_eight_threads_leaves_no_vsimem_file(spark8, tiles):
-    from databricks.labs.gbx.manager import capabilities
-
-    caps = capabilities.detect(spark8, need_jvm=True)
-    if caps.jvm_gdal != manifest.load().gdal.pin:
-        pytest.skip(
-            f"PRECONDITION MISSING: the JVM runs GDAL {caps.jvm_gdal or caps.jar_reason}, not "
-            f"{manifest.load().gdal.pin}"
-        )
-    for _ in range(2):
-        assert _count(spark8, tiles, "L1", "engine") == (N, N)
-    left = spark8._jvm.org.gdal.gdal.gdal.ReadDirRecursive("/vsimem/gbx-spec")
-    assert left is None or left.size() == 0

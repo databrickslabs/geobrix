@@ -76,9 +76,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # default, unmeasured). Neither keeps a JVM level.
     "gbx_rst_rasterize": ("L3",),
     "gbx_rst_dtmfromgeoms": ("L3",),
-    # The GDAL spec engine's rows. Slope and mapalgebra are light: the engine's Catalyst level (L1) took 6.19 s against
-    # the light engine's 5.90 s (slope) and 15.17 s against 13.16 s (mapalgebra) at 16x tiles (dedicated, DBR 19), nowhere
-    # near the 1.2x line, so neither is served by the JVM. Their light level is the engine alone (no numpy form).
+    # The GDAL spec engine's rows are light, with no JVM level. The engine's Catalyst level took 6.19 s against the light
+    # engine's 5.90 s (slope) and 15.17 s against 13.16 s (mapalgebra) at 16x tiles (dedicated, DBR 19), nowhere near the
+    # 1.2x line. For transformcrs it passed 1.2x at 16x only, and returned NULL error tiles under load where the light
+    # forms returned none. The JVM expressions are deleted. The light level is the engine alone (no numpy form).
     "gbx_rst_slope": ("L3",),
     "gbx_rst_mapalgebra": ("L3",),
     # The file functions: color_relief has only a pure-core timing (default, unmeasured: highest available).
@@ -215,31 +216,12 @@ class Choice:
 def engine_unavailable(fn, level: str, caps: Capabilities) -> Optional[str]:
     """None when `level` can run `fn`'s `gdal` block on the GDAL spec engine here; else why not.
 
-    L1 needs the JVM's GDAL at the manifest's pin (the release ``KernelGdal.probe`` reports); L3 needs this
-    process's ``osgeo`` to be rasterio's GDAL at the pin (``engine.run.unavailable_reason``).
+    The engine is a light level (L3): it needs this process's ``osgeo`` to be rasterio's GDAL at the pin
+    (``engine.run.unavailable_reason``). It has no JVM level.
     """
     spec = fn.levels.get(level) or {}
     if fn.gdal is None or not spec.get("engine"):
         return f"{fn.sql_name} has no GDAL spec engine form at {level}"
-    if level == "L1":
-        why = _jvm_unavailable(fn, level, spec, caps)
-        if why:
-            return why
-        if fn.accepts_virtual_tile and not caps.sql_functions:
-            return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
-        if fn.accepts_virtual_tile:
-            # the wrapper sends virtual tiles to the light engine (its c0 UDF), which must run in this process
-            from databricks.labs.gbx.engine import run
-
-            why = run.unavailable_reason()
-            if why:
-                return f"{fn.sql_name} sends virtual tiles to the light GDAL spec engine, which cannot run here ({why})"
-        pin = manifest.load().gdal.pin
-        if caps.jvm_gdal != pin:
-            return f"the JVM's GDAL is {caps.jvm_gdal or 'unknown'}; the GDAL spec engine needs {pin}"
-        # Registered PROJ grids reach the engine: every GDALManager.init puts a configuration's grid directories that
-        # are not yet on PROJ's search path there, also after an earlier init (the capability probe's) without them.
-        return None
     if level == "L3":
         from databricks.labs.gbx.engine import run
 
@@ -286,8 +268,6 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
         return f"{fn.sql_name} has no {level} implementation"
     if spec.get("engine") and engine_unavailable(fn, level, caps) is None:
         return None
-    if level == "L1" and "companion" not in spec:  # the engine form is the only one
-        return engine_unavailable(fn, level, caps)
     if level == "L1":
         why = _jvm_unavailable(fn, level, spec, caps)
         if why:

@@ -113,26 +113,6 @@ def dispatch_ddl(fn, l1_name: str, l3_name: str) -> str:
     return sqlwrap.tile_dispatch(fn, l1_name + "({tile}{rest})", l3_name)
 
 
-def install_l1_engine(spark, fn, caps) -> Optional[str]:
-    """Install `fn`'s GDAL spec engine expression (``GdalSpecExpr``, read from the JAR's copy of the manifest).
-    A row that takes virtual tiles gets it under its private name, the engine's row-wise light UDF beside it, and
-    the dispatch wrapper under the SQL name."""
-    try:
-        _point_jvm_at_payload(spark)
-        _pass_read_cap(spark)
-        inst = spark._jvm.com.databricks.labs.gbx.kernels.L1Installer
-        target = _priv(fn, "L1") if fn.accepts_virtual_tile else fn.sql_name
-        r = str(inst.installSpec(spark._jsparkSession, target, fn.sql_name))
-        if r != "ok" or not fn.accepts_virtual_tile:
-            return None if r == "ok" else r
-        light = _priv(fn, "L3")
-        l3.register_l3_engine(spark, fn, "engine-c0", name=light)
-        _create_wrapper(spark, fn, dispatch_ddl(fn, target, light))
-        return None
-    except Exception as exc:  # noqa: BLE001 - any failure is a fallback reason
-        return f"{fn.sql_name}: heavy engine install failed ({type(exc).__name__}: {str(exc)[:160]})"
-
-
 def install_companion(spark, fqn: str, name: str) -> Optional[str]:
     """Install the Catalyst companion `fqn` under the session name `name` (its own SQL name, or the private
     `gbx__l1_<x>`), with no dispatch wrapper in front of it. None when it is installed, else one line saying why

@@ -224,7 +224,8 @@ def _l1_shape_ok(fn):
             "no-gdal",
             dict(jar=OK_JAR, jar_reason="", gdal_reason="GDAL natives not loadable"),
         ),
-        # A dedicated JVM on another GDAL than the pin: no engine at L1, the row's own L1 where it has one.
+        # A dedicated JVM on another GDAL than the pin: the row's own L1 companion is unaffected (the pin is the GDAL spec
+        # engine's, which has no JVM level).
         ("other-jvm-gdal", dict(jar=OK_JAR, jar_reason="", jvm_gdal="3.11.4")),
         # A row with no per-name order takes its family's: a family that prefers light selects L3 with no
         # reasons, even on a dedicated cluster where L1 is available.
@@ -238,8 +239,8 @@ def test_level_selection_contract(fn, case, monkeypatch):
     if name == "family-l3":
         monkeypatch.delitem(levels.PREFERENCE, fn.sql_name, raising=False)
         monkeypatch.setitem(levels.FAMILY_PREFERENCE, fn.family, ("L3",))
-    # an env wheel: this process runs the light engine (the L1 engine sends virtual tiles to it, and a row whose only
-    # light form is the engine needs it at L3). Where it cannot run is its own test.
+    # an env wheel: this process runs the light engine (a row whose only light form is the engine needs it at L3).
+    # Where it cannot run is its own test.
     from databricks.labs.gbx.engine import run
 
     monkeypatch.setattr(run, "unavailable_reason", lambda: None)
@@ -263,9 +264,8 @@ def test_level_selection_contract(fn, case, monkeypatch):
     if name == "no-gdal" and fn.levels.get("L1", {}).get("needs_gdal"):
         assert choice.level == "L3"
     if name == "other-jvm-gdal" and pref[0] == "L1":
-        own_l1 = "companion" in fn.levels["L1"]
-        assert (choice.level == "L1") == (_l1_shape_ok(fn) and own_l1)
-        assert choice.variant != levels.ENGINE or choice.level != "L1"
+        assert (choice.level == "L1") == _l1_shape_ok(fn)
+        assert choice.variant == "-"
 
 
 # Functions whose preferred levels may return different types (none today).
@@ -351,9 +351,11 @@ def test_the_array_family_keeps_the_unmeasured_rows_as_they_were_and_the_engine_
     assert "L1" in fb.levels and levels.order(fb) == ("L1", "L3")
     assert levels.select(fb, _caps(jar=OK_JAR)).level == "L1"
     assert levels.order(MAN.functions["gbx_rst_merge"]) == ("L3",)
-    # the engine's Catalyst level measured 1.0x to 1.15x of the light engine at 16x tiles: light only
-    assert levels.order(MAN.functions["gbx_rst_mapalgebra"]) == ("L3",)
-    assert levels.order(MAN.functions["gbx_rst_slope"]) == ("L3",)
+    # the engine's Catalyst level measured 1.0x to 1.15x of the light engine at 16x tiles (and returned error tiles
+    # under load for transformcrs): it was removed, so the engine rows have no JVM level
+    for name in ("gbx_rst_mapalgebra", "gbx_rst_slope", "gbx_rst_transformcrs"):
+        assert levels.order(MAN.functions[name]) == ("L3",)
+        assert "L1" not in MAN.functions[name].levels
 
 
 # A value of one of these types cannot sit under `explode` or `inline`, where a SQL dispatch wrapper is refused.
@@ -536,48 +538,6 @@ def test_an_engine_only_light_level_says_why_when_the_engine_cannot_run(
         levels.select(fn, _caps(), override=("L3", "-"))
     monkeypatch.setattr(run, "unavailable_reason", lambda: None)
     assert levels.select(fn, _caps(), override=("L3", "-")).variant == levels.ENGINE
-
-
-def test_l1_engine_needs_the_light_engine_for_its_virtual_tiles(monkeypatch):
-    """L1's engine sends virtual tiles to the light engine (the c0 UDF beside it): where this process cannot run
-    that (no payload osgeo), the L1 engine is unavailable, with the light engine's reason, not a runtime failure.
-    """
-    from databricks.labs.gbx.engine import run
-
-    fn = MAN.functions["gbx_rst_transformcrs"]
-    assert fn.accepts_virtual_tile
-    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
-    monkeypatch.setattr(run, "unavailable_reason", lambda: None)
-    assert levels.engine_unavailable(fn, "L1", dedicated) is None
-    monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo here")
-    why = levels.engine_unavailable(fn, "L1", dedicated)
-    assert why and "no osgeo here" in why and "virtual" in why
-    # transformcrs has no light form besides the engine, so with no engine here nothing serves it
-    with pytest.raises(levels.NoLevelAvailable, match="no osgeo here"):
-        levels.select(fn, dedicated)
-
-
-def test_the_l1_engine_keeps_l1_while_proj_grids_are_registered(tmp_path, monkeypatch):
-    """The JVM engine reads registered PROJ grids: every GDALManager.init adds a configuration's grid directories to
-    PROJ's search path, also after an earlier init without them (GDALManagerProjGridsSpec holds that).
-    """
-    from databricks.labs.gbx.core import proj_grids
-    from databricks.labs.gbx.engine import run
-
-    monkeypatch.setattr(
-        run, "unavailable_reason", lambda: None
-    )  # the L1 engine's virtual-tile side runs here
-    fn = MAN.functions["gbx_rst_transformcrs"]
-    saved = proj_grids.get_registered_dirs()
-    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
-    assert levels.select(fn, dedicated, prefer="L1").variant == levels.ENGINE
-    proj_grids.set_registered_dirs(str(tmp_path), replace=True)
-    try:
-        choice = levels.select(fn, dedicated, prefer="L1")
-        why = levels.engine_unavailable(fn, "L1", dedicated)
-    finally:
-        proj_grids.set_registered_dirs(saved, replace=True)
-    assert (choice.level, choice.variant) == ("L1", levels.ENGINE) and why is None
 
 
 def test_tile_reference_compares_a_grid_one_pixel_off_by_pixels():

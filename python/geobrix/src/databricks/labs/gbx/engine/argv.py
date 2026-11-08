@@ -1,6 +1,6 @@
 """Binders and the argv: (a row's spec, the call's values, its input rasters) -> the tokens GDAL parses.
 
-Mirrored by the JVM's ``GdalSpecArgv``; ``test/engine/fixtures/argv_golden.json`` holds both to the same tokens.
+``test/engine/fixtures/argv_golden.json`` pins the tokens.
 The order is fixed: the inputs, ``--input-format``, the spec's arguments in template order, then the output, its
 format and creation options, ``--num-threads`` where the algorithm has it, and ``--quiet``. Every token is
 ``--name=value`` or a bare ``--name``, so a value can never be read as a flag or as a pipeline step.
@@ -79,7 +79,7 @@ class _Calc:
 
 
 def fmt_double(x: float) -> str:
-    """A double as both tiers print it: the shortest round-trip digits, plain notation, no trailing zeros."""
+    """A double as the engine prints it: the shortest round-trip digits, plain notation, no trailing zeros."""
     if x == 0:
         return "0"
     return format(Decimal(repr(float(x))).normalize(), "f")
@@ -138,7 +138,7 @@ def _bind_value(fn, arg, value) -> Optional[str]:
 
 @functools.lru_cache(maxsize=1)
 def _osgeo():
-    """osgeo (GDAL's own CRS parser, the JVM's too), or None where this process has no osgeo."""
+    """osgeo (GDAL's own CRS parser), or None where this process has no osgeo."""
     from databricks.labs.gbx import _osgeo as osgeo
 
     try:
@@ -155,12 +155,12 @@ CRS_BUILD_FIX = (
 
 @functools.lru_cache(maxsize=256)
 def canonical_crs(text: str) -> str:
-    """The one form a target CRS takes in the argv, on both tiers: ``AUTHORITY:CODE`` when the parsed CRS carries
+    """The one form a target CRS takes in the argv: ``AUTHORITY:CODE`` when the parsed CRS carries
     that authority node exactly (no identification, no fuzzy match), else its WKT.
 
     The value must be a kind ``core.crs.crs_text_kind`` accepts (never a file, a URL or a grid named by path), and
     it is parsed by OSR with file and network access off, then exported by OSR: the calls the JVM's
-    ``SpatialRefOps.resolveCrs`` / ``crsToCanonical`` make on the same GDAL, so both tiers bind the same text.
+    ``SpatialRefOps.resolveCrs`` / ``crsToCanonical`` make on the same GDAL, so the heavy and light functions bind the same text.
     The parse is judged as the JVM judges it, with osr's exceptions off: a failing return, or a failure GDAL
     reports during it (PROJ cannot build the CRS, e.g. a required grid it cannot find, which would otherwise
     leave a reprojection without its datum shift), refuses the value. Without osgeo (a host that cannot run the

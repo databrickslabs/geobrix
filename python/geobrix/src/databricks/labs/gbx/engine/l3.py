@@ -9,8 +9,7 @@
   ``struct<raster, error, command>`` (no MAP field, so neither pandas nor Arrow has to carry one); the SQL wrapper
   the manager installs (``sqlwrap.engine_dispatch``) builds the tile, and sends virtual tiles to c0.
 
-Both run ``engine.run`` on each row: the same argv, the same GDAL, the same error map as the JVM's
-``GdalSpecExpr``. pyrx Serverless rules hold: no ``spark.conf``, ``_jvm`` or ``.rdd`` here.
+Both run ``engine.run`` on each row: the same argv, the same GDAL, the same error map. pyrx Serverless rules hold: no ``spark.conf``, ``_jvm`` or ``.rdd`` here.
 """
 
 from __future__ import annotations

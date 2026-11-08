@@ -1,4 +1,4 @@
-"""One engine call on ``osgeo`` (the light tier); the JVM's ``GdalSpecEngine`` makes the same call.
+"""One engine call on ``osgeo`` (the light tier).
 
 1. The input bytes are written to ``/vsimem/gbx-spec/<uuid>/in<i>.tif`` and their headers read (size, bands, type,
    CRS); each tile must be within the read cap and the call within the decoded budget. Bytes without the GeoTIFF
@@ -12,8 +12,7 @@
 3. Every file under the call's prefix is removed, whatever happened.
 
 ``osgeo`` comes only from the shared-GDAL helper (``_osgeo.bindings``), which refuses an ``osgeo`` that is not
-rasterio's GDAL. Every GDAL call is judged on its return value with GDAL's exceptions off, after ``ErrorReset``,
-exactly as the JVM's binding is, so one argv has one outcome on both tiers:
+rasterio's GDAL. Every GDAL call is judged on its return value with GDAL's exceptions off, after ``ErrorReset``:
 - GDAL's run failing is a data error (an error tile with GDAL's message, its ``/vsimem`` names shown as
   ``<input>``/``<output>``);
 - GDAL refusing the argv is a data error when the call bound a ``bad: data`` value (that value is the cause),
@@ -47,13 +46,12 @@ _TIFF_MAGIC = (
     b"II+\x00",
     b"MM\x00+",
 )  # TIFF and BigTIFF, both byte orders
-# The engine's GDAL settings, set thread-local for each call on both tiers (the JVM's GdalSpecEngine applies the
-# same table), so they never change the user's process: one thread per call (a Spark task is one core), no Python
+# The engine's GDAL settings, set thread-local for each call, so they never change the user's process: one thread per call (a Spark task is one core), no Python
 # in a VRT pixel function, and no VRT raw band (it reads a file's bytes as pixels without a driver, which a driver
 # policy cannot judge). Process-wide settings stay as the process has them: the raster block cache size (GDALManager's 512 MB on the
 # JVM, GDAL's default in Python), GDAL_PAM_ENABLED (on: a tile's NoData may live in its .aux.xml; the engine's own
 # sidecars are under the call's prefix and go with it) and GDAL_SKIP, which only acts when drivers register (the
-# policy deregisters the refused drivers instead). Pinned by a golden row, read by both suites.
+# policy deregisters the refused drivers instead). Pinned by a golden row.
 ENGINE_SETTINGS = {
     "GDAL_NUM_THREADS": "1",
     "GDAL_VRT_ENABLE_PYTHON": "NO",
@@ -134,7 +132,7 @@ def engine_settings():
 @contextlib.contextmanager
 def _gdal_status():
     """GDAL's exceptions off and its error state clear: the caller reads each call's return value and then
-    ``GetLastErrorMsg()``, as the JVM does."""
+    ``GetLastErrorMsg()``."""
     gdal = _gdal()
     with gdal.ExceptionMgr(useExceptions=False):
         gdal.ErrorReset()
@@ -244,7 +242,7 @@ def _bytes_source(
     under the light tier's bytes rule (``_gdal_policy.open_bytes``): a driver that can name other files (a VRT, a
     label format: the manifest's ``bytes_refused_light`` class) is named from the bytes and never opened, and any
     other driver of `drivers` (the allowed ones less that class: netCDF, HFA, ...) reads them. Only the header is read.
-    The JVM's GdalSpecEngine applies the same rule (through ``TileBytes``).
+    The JVM's ``TileBytes`` applies the same rule to the heavy functions that read tile bytes.
     """
     mode = apply_driver_policy()["mode"]
     refused = _gdal_policy._class_of_bytes(data[:4096], mode)
@@ -265,7 +263,7 @@ def _bytes_source(
 
 def _to_gtiff(gdal, sql_name: str, src: str, dst: str, drivers: Sequence[str]) -> None:
     """Translate `src` (raster bytes in another driver) to the GeoTIFF `dst`, then remove `src`: the engine's
-    algorithms read GeoTIFF inputs. The JVM's GdalSpecEngine makes the same calls."""
+    algorithms read GeoTIFF inputs."""
     gdal.ErrorReset()
     ds = gdal.OpenEx(
         src, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=list(drivers)

@@ -233,7 +233,7 @@ def test_the_bytes_class_holds_no_driver_that_names_other_files():
 @pytest.mark.parametrize("fn", ENGINE_FNS, ids=lambda f: f.sql_name)
 def test_every_gdal_block_validates(fn):
     spec.validate(fn, MAN.gdal)
-    assert "engine" in fn.levels["L1"] and "engine" in fn.levels["L3"]
+    assert "engine" in fn.levels["L3"] and "L1" not in fn.levels
 
 
 def _row(**over):

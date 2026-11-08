@@ -1,5 +1,5 @@
 {
-  "_doc": "The GDAL spec engine's argv for (manifest spec, bound values, input properties), on both tiers. test_argv_golden.py (Python) and GdalSpecSmokeTest (Scala) read this file; a change here is a change of the engine contract. `inputs` are (width, height, bands, GDAL type) of each input raster. GBX_ZSTD_LEVEL must be unset, except in the `zstd_knob` rows, which set it.",
+  "_doc": "The GDAL spec engine's argv for (manifest spec, bound values, input properties). test_argv_golden.py reads this file; a change here is a change of the engine contract. `inputs` are (width, height, bands, GDAL type) of each input raster. GBX_ZSTD_LEVEL must be unset, except in the `zstd_knob` rows, which set it.",
   "argv": [
     {"id": "slope_default", "fn": "gbx_rst_slope",
      "values": {"unit": "degrees", "xscale": null, "yscale": null},

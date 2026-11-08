@@ -55,7 +55,7 @@ The list is `EXCLUDES` in `scripts/snapshot/snapshot.py`. It covers run state th
 
 The real `examples/tests/databricks_cluster_config.env` is never in the zip because it holds tokens. Instead, each `run` writes `examples/tests/databricks_cluster_config.nonsecret.env` (gitignored) just before the secret scan, and that copy goes in.
 
-- It is the real file with every secret line removed: a key named like `*_TOKEN`, `*_SECRET`, or `*_PASSWORD` with a real value, and any line, commented or not, whose text looks like a token or JWT. Its header lists the dropped key names, never the values.
+- It is the real file with every secret line removed. That means any key named like `*_TOKEN`, `*_SECRET`, or `*_PASSWORD` with a real value. It also means any line, commented or not, whose text looks like a token or JWT. Its header lists the dropped key names, never the values.
 - Workspace values (profile, cluster and warehouse IDs, Volume paths) are kept. The file only lives in the private snapshot.
 - On `restore`, if the restored tree has no real config, it is rebuilt as the example's defaults with the snapshot's values laid over them. The command then names the dropped keys to re-enter. Tokens normally come from the profile in `~/.databrickscfg`. An existing real config is never overwritten.
 

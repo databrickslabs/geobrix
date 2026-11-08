@@ -455,3 +455,46 @@ def test_a_mutant_no_test_ran_gives_the_slim_run_no_credit():
     v = gate.judge(old, slim, {})
     assert v["rows"]["all"]["slim_kills_of_those"] == 17 and not v["pass"]  # 85%, not 100%
     assert gate.judge(slim, slim, {})["rows"]["all"]["old_killed"] == 17  # and an old run gets none either
+
+
+# ---------------------------------------------------------------------------------- timeouts and an invalid run
+
+
+def test_a_timeout_still_counts_as_a_kill_and_is_counted_per_module():
+    old = _codes({("_a", "f", i): (-24 if i < 2 else 1) for i in range(40)} | {("_b", "g", i): 1 for i in range(40)})
+    v = gate.judge(old, dict(old), {})
+    assert v["pass"] and v["rows"]["all"]["old_killed"] == 80
+    assert v["modules"]["_a"]["timeouts_old"] == 2 and v["modules"]["_a"]["timeouts_slim"] == 2
+    assert v["modules"]["_b"]["timeouts_old"] == 0
+    assert "t/o" in gate.format_report("unit", v, {"mode": "full"})
+
+
+def test_a_run_where_over_a_fifth_of_the_mutants_timed_out_is_invalid_not_a_pass():
+    old = _codes({("_a", f"f{j}", i): (-24 if (i + j) % 3 == 0 else 1) for j in range(5) for i in range(20)})  # a third
+    v = gate.judge(old, dict(old), {})
+    assert not v["pass"] and v["invalid"]
+    msg = next(f for f in v["failures"] if "INVALID" in f)
+    assert "Fix:" in msg and "fewer workers" in msg and "timed out" in msg
+
+
+def test_the_timeouts_of_the_slim_pass_alone_can_invalidate_the_run():
+    old = _codes({("_a", f"f{j}", i): 1 for j in range(5) for i in range(20)})
+    slim = {k: -24 for k in old}  # every slim mutant "killed" by the clock
+    v = gate.judge(old, slim, {})
+    assert not v["pass"] and v["invalid"] and "slim" in next(f for f in v["failures"] if "INVALID" in f)
+
+
+def test_a_module_that_mostly_timed_out_is_invalid_but_a_tiny_one_is_not_judged_on_it():
+    base = {("_big", "f", i): 1 for i in range(100)}
+    six = _codes(base | {("_hang", "g", i): (-24 if i < 4 else 1) for i in range(6)})  # 4 of 6: over half
+    v = gate.judge(six, dict(six), {})
+    assert v["invalid"] and any("_hang" in f for f in v["failures"] if "INVALID" in f)
+    two = _codes(base | {("_tiny", "g", i): -24 for i in range(2)})  # 2 of 2, but too few to judge
+    v = gate.judge(two, dict(two), {})
+    assert not v.get("invalid") and v["pass"]
+
+
+def test_a_normal_run_is_not_invalid():
+    old = _codes({("_a", "f", i): (-24 if i == 0 else 1) for i in range(50)})
+    v = gate.judge(old, dict(old), {})
+    assert v["pass"] and not v["invalid"]

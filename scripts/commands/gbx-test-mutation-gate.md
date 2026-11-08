@@ -66,6 +66,7 @@ In both modes:
 
 - If the old run killed no mutant, the command stops: "old run killed nothing: the old selection did not run". A test file that cannot collect in the throwaway copy causes this. Mutmut's stats phase aborts and every mutant stays unchecked. It used to read as a pass.
 - If mutmut stops before running tests in either run (`failed to collect stats`, `Failed to run clean test`, `Stopping early ...`), the command names the log and stops.
+- A pass where more than 20% of the judged mutants timed out is an invalid run, a FAIL. So is a module of 5 or more mutants where more than half did. A timeout still counts as a kill. The cause is an overloaded host or hung tests. The message says to rerun with fewer workers. The report lists timeouts per module and pass.
 - A verdict over an empty kill set is a FAIL. In sample-first mode, an old pass that kills none of the sample stops the same way.
 
 ## Limits

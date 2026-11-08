@@ -38,6 +38,9 @@ MUTMUT_PIN = "mutmut==3.8.0"
 PYTEST_PIN = "pytest==9.1.1"  # mutmut 3.8.0 crashes under pytest 9.2.0 (no Function._nodeid)
 THRESHOLD = 95.0  # percent of the old kills the slim run must keep
 MODULE_DROP = 5.0  # points a module's kill rate may fall
+TIMEOUT_SHARE = 0.20  # a pass in which more than this share of the judged mutants timed out proves nothing
+TIMEOUT_MODULE_SHARE = 0.50  # nor does a module (of at least TIMEOUT_MODULE_MIN mutants) where more than this share did
+TIMEOUT_MODULE_MIN = 5
 SAMPLE_SIZES = (50, 100)
 SAMPLE_FIRST, SAMPLE_EXTENDED = SAMPLE_SIZES  # sample-first mode: judge on 50 mutants, on 100 after any loss
 SAMPLE_SEED = 31
@@ -121,6 +124,10 @@ def detected(code) -> bool:
     return code not in NOT_KILLS
 
 
+def timed_out(code) -> bool:
+    return code in TIMEOUT_CODES
+
+
 def mutant_module(key: str) -> str:
     return key.rsplit(".", 1)[0].split(".")[-1]
 
@@ -160,6 +167,21 @@ def kept(old: dict, new: dict, universe=None):
     return K, {k for k in K if detected(new.get(k))}
 
 
+def invalid_timeouts(total: int, modules: dict) -> list:
+    """A timeout counts as a kill (mutmut's convention), so a pass where most mutants 'died' by the clock proves
+    nothing: the host was overloaded or the tests hang. Name each pass and module where that happened."""
+    fix = "Fix: the host was overloaded or the tests hang; rerun with fewer workers (--max-children or GBX_MUTATION_MAX_WORKERS), ideally when the host is quiet."
+    out = []
+    for label, key in (("old", "timeouts_old"), ("slim", "timeouts_slim")):
+        n = sum(m[key] for m in modules.values())
+        if total and n > TIMEOUT_SHARE * total:
+            out.append(f"INVALID run: {n} of {total} mutants timed out in the {label} pass (> {TIMEOUT_SHARE:.0%}). {fix}")
+        for name, m in modules.items():
+            if m["mutants"] >= TIMEOUT_MODULE_MIN and m[key] > TIMEOUT_MODULE_SHARE * m["mutants"]:
+                out.append(f"INVALID run: {m[key]} of {m['mutants']} {name} mutants timed out in the {label} pass (> {TIMEOUT_MODULE_SHARE:.0%}). {fix}")
+    return out
+
+
 def judge(old: dict, new: dict, samples: dict, all_label: str = "all") -> dict:
     """The verdict. `samples` is {name: [mutant keys]}; the row over every mutant of `old` is named `all_label`."""
     rows = {}
@@ -174,29 +196,36 @@ def judge(old: dict, new: dict, samples: dict, all_label: str = "all") -> dict:
             "lost": sorted(K - ok),
         }
     modules = {}
-    by = collections.defaultdict(lambda: [0, 0, 0])
+    by = collections.defaultdict(lambda: [0, 0, 0, 0, 0])
     for k in old:
         m = mutant_module(k)
         by[m][0] += 1
         by[m][1] += detected(old[k])
         by[m][2] += detected(new.get(k))
-    for m, (n, o, s) in sorted(by.items()):
-        modules[m] = {"mutants": n, "old_pct": 100.0 * o / n, "slim_pct": 100.0 * s / n, "delta": 100.0 * (s - o) / n}
+        by[m][3] += timed_out(old[k])
+        by[m][4] += timed_out(new.get(k))
+    for m, (n, o, s, to, ts) in sorted(by.items()):
+        modules[m] = {
+            "mutants": n, "old_pct": 100.0 * o / n, "slim_pct": 100.0 * s / n, "delta": 100.0 * (s - o) / n,
+            "timeouts_old": to, "timeouts_slim": ts,
+        }
     failures = []
     if not rows[all_label]["old_killed"]:
         failures.append("the old run killed nothing: there is nothing to compare the slim run with")
     failures += [f"{n} keeps {r['pct']:.1f}% (< {THRESHOLD:.0f}%)" for n, r in rows.items() if r["pct"] < THRESHOLD]
     failures += [f"module {m} falls {-v['delta']:.1f} points (> {MODULE_DROP:.0f})" for m, v in modules.items() if v["delta"] < -MODULE_DROP]
-    return {"pass": not failures, "failures": failures, "rows": rows, "modules": modules}
+    invalid = invalid_timeouts(len(old), modules)
+    failures += invalid
+    return {"pass": not failures, "invalid": bool(invalid), "failures": failures, "rows": rows, "modules": modules}
 
 
 def format_report(family: str, v: dict, extra: dict) -> str:
-    lines = [f"mutation gate: {family}: {'PASS' if v['pass'] else 'FAIL'}"]
+    lines = [f"mutation gate: {family}: {'PASS' if v['pass'] else 'FAIL (invalid run: too many timeouts)' if v.get('invalid') else 'FAIL'}"]
     for name, r in v["rows"].items():
         lines.append(f"  {name:9s} |K_slim n K| / |K| = {r['slim_kills_of_those']}/{r['old_killed']} = {r['pct']:.1f}%  (lost {len(r['lost'])})")
-    lines.append("  module           mutants  old%   slim%  delta")
+    lines.append("  module           mutants  old%   slim%  delta  t/o old  t/o slim")
     for m, x in v["modules"].items():
-        lines.append(f"  {m:15s} {x['mutants']:7d} {x['old_pct']:6.1f} {x['slim_pct']:6.1f} {x['delta']:+6.1f}")
+        lines.append(f"  {m:15s} {x['mutants']:7d} {x['old_pct']:6.1f} {x['slim_pct']:6.1f} {x['delta']:+6.1f} {x['timeouts_old']:8d} {x['timeouts_slim']:9d}")
     for f in v["failures"]:
         lines.append(f"  FAIL: {f}")
     for k, val in extra.items():

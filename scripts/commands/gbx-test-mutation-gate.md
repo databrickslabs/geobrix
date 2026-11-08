@@ -47,7 +47,8 @@ With `--full`:
 
 In both modes:
 
-- A mutant is killed when its test run exits non-zero (a failure, a timeout or a crash).
+- A mutant is killed when its test run fails, times out or crashes.
+- A mutant that no test ran against (mutmut exit 5 or 33), or that was skipped or interrupted, is not killed.
 - The kill set `K` is what the old run kills. A mutant the slim run did not generate counts as not killed.
 - The exit code is 0 for PASS and 1 for FAIL.
 

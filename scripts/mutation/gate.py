@@ -111,9 +111,14 @@ def pyspark_importers(files: list) -> list:
 # ---------------------------------------------------------------------------------------------- the maths
 
 
+NOT_KILLS = (0, None, 2, 5, 33, 34, 35, 37)  # survived, unchecked, interrupted, no tests (pytest 5, mutmut 33), skipped, suspicious, type-check
+TIMEOUT_CODES = (-24, 24, 36, 152, 255)  # mutmut's "timeout" statuses (SIGXCPU, wall limit)
+
+
 def detected(code) -> bool:
-    """mutmut's exit code: 1 a test failed, -24 timeout, -11 segfault count as killed; 0 survived; None unchecked."""
-    return code not in (0, None)
+    """mutmut's exit code: 1 or 3 (a test failed), a timeout (-24), a segfault (-11) or any other crash is a kill.
+    Survived (0), unchecked (None), interrupted, skipped and 'no tests ran' (5, 33) are not: no test saw the mutant."""
+    return code not in NOT_KILLS
 
 
 def mutant_module(key: str) -> str:

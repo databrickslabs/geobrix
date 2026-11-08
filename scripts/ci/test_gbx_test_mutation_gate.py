@@ -431,3 +431,27 @@ def test_the_plan_names_the_mode_and_full_restores_every_mutant():
     assert plan()["mode"].startswith("sample-first (50 mutants")
     assert plan("--full")["mode"].startswith("full")
     assert "--full" in _sh("--help").stdout
+
+
+# ----------------------------------------------------------------------------------------- what counts as a kill
+
+
+@pytest.mark.parametrize("code", [1, 3, -24, 24, 36, 152, 255, -11, -9, -6])
+def test_a_failure_a_timeout_or_a_crash_is_a_kill(code):
+    assert gate.detected(code)
+
+
+@pytest.mark.parametrize("code", [0, None, 2, 5, 33, 34, 35, 37])
+def test_a_survivor_or_a_mutant_no_test_ran_is_not_a_kill(code):
+    """33 and 5 mean no test ran against the mutant (mutmut's 'no tests'); 2 was interrupted, 34 skipped."""
+    assert not gate.detected(code)
+
+
+def test_a_mutant_no_test_ran_gives_the_slim_run_no_credit():
+    old = _codes({("_m", "f", i): 1 for i in range(20)})
+    slim = dict(old)
+    for k in list(old)[:3]:
+        slim[k] = gate.NO_TESTS  # mutmut found no test for these in the slim run
+    v = gate.judge(old, slim, {})
+    assert v["rows"]["all"]["slim_kills_of_those"] == 17 and not v["pass"]  # 85%, not 100%
+    assert gate.judge(slim, slim, {})["rows"]["all"]["old_killed"] == 17  # and an old run gets none either

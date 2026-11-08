@@ -18,6 +18,7 @@ Check that a slimmer test selection still catches what the old one catches. It m
 - `--seed <n>` — sample seed. Default: 31.
 - `--full` — run every mutant in the old and the slim pass. Default: only a sample (see The verdict).
 - `--old-codes <file>` — reuse the `K_old.json` of an earlier run, so the next slim candidate costs one run, not two. Every run writes `K_old.fingerprint` beside it (the kernel modules, the old selection and the old test files); a reuse whose fingerprint differs is refused with a `Fix:`. A kill set from before fingerprints is accepted unchecked.
+- `--no-cache` — neither read nor write the cache of old kill sets (see Old kill set cache).
 - `--old-ref <git-ref>` — run the old selection on the tests and the source as they were at that ref, not on the current tree. The oracle rows live in the source, so the old run sees the old rows too. Use it when the fold edits or deletes files in place. The old versions come back, deleted files too, and `conftest.py` and helpers as they were. Files added since are absent from the old run. The slim run uses the current tree. The kernel modules must be the same at the ref and in the tree, or the command refuses. With `--old-codes` too, the kill set must have been made from the same ref (its fingerprint says which). That is how a second slim candidate of an in-place fold reuses the first run.
 - `--keep-work` — keep the throwaway copy (a private `mktemp`-style dir under `/private/tmp`, mode 0700).
 - `--plan` — print the plan and stop. Nothing runs.
@@ -61,6 +62,14 @@ In both modes:
 - `lost.json` — the old kills the slim run lost.
 - `verdict.json`, `report.txt` — the numbers and the verdict.
 - `mutmut_old.log`, `mutmut_slim.log` — the raw runs, one section per mutmut call.
+
+## Old kill set cache
+
+- The old pass is the same for every slim candidate of a fold, so its kills are cached in `~/.cache/geobrix/mutation-kills/<key>.json`. `GBX_MUTATION_KILLS` moves it.
+- The key covers the kernel modules, the old selection, the old test files (or the `--old-ref` sha), `--oracle-tables` and the pinned mutmut. Without `--old-ref` it also covers the `src` files and the test helpers (conftests and the like) of the tree.
+- A hit skips the old pass. The report says so. An entry made from another fingerprint, or an unreadable one, is a miss.
+- A sample-first run caches the universe and the sampled kills. A later run that needs more mutants (the 100-sample) runs only those. A `--full` run caches every kill and serves later full and sample-first runs.
+- `--old-codes <file>` overrides the cache. A run with it does not touch the cache.
 
 ## Worker budget
 

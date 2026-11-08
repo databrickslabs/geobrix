@@ -659,3 +659,139 @@ def test_plan_shows_the_host_budget_and_max_children_is_optional():
     assert plan["workers"]["max_children"] is None and plan["workers"]["host_capacity"] >= 1
     res = _sh(*base, "--max-children", "3")
     assert json.loads(res.stdout[res.stdout.index("{"):])["workers"]["max_children"] == 3
+
+
+# ------------------------------------------------------------------------------------------ the old kills, cached
+
+
+def test_the_cache_key_follows_what_the_old_kills_depend_on():
+    k = lambda fp="f", tables="T", ref=None, tree="t": gate.cache_key(fp, tables, ref, tree)  # noqa: E731
+    assert k() == k()
+    assert len({k(), k(fp="g"), k(tables="U"), k(tree="u")}) == 4
+    assert k(ref="abc", tree="t") == k(ref="abc", tree="u")  # at a ref the tree does not matter: the ref holds the files
+    assert k(ref="abc") != k(ref=None)  # (the ref is in the fingerprint; the tree joins the key only without one)
+
+
+def test_the_tree_hash_sees_src_and_test_helpers_but_not_test_files(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "test").mkdir()
+    (tmp_path / "src" / "a.py").write_text("X = 1\n")
+    (tmp_path / "test" / "conftest.py").write_text("Y = 1\n")
+    (tmp_path / "test" / "test_a.py").write_text("def test_a(): pass\n")
+    h0 = gate.tree_state_hash(tmp_path)
+    (tmp_path / "test" / "test_a.py").write_text("def test_a(): assert 1\n")
+    assert gate.tree_state_hash(tmp_path) == h0  # the old test files are in the fingerprint, not here
+    (tmp_path / "test" / "conftest.py").write_text("Y = 2\n")
+    h1 = gate.tree_state_hash(tmp_path)
+    (tmp_path / "src" / "a.py").write_text("X = 2\n")
+    assert len({h0, h1, gate.tree_state_hash(tmp_path)}) == 3
+
+
+def test_a_cached_entry_is_reused_only_for_its_own_fingerprint(tmp_path):
+    codes = {f"{P}._a.x_f__mutmut_1": 1}
+    path = gate.cache_store("key", "fp1", [*codes, f"{P}._a.x_f__mutmut_2"], codes, False, tmp_path)
+    assert path.parent == tmp_path and not list(tmp_path.glob(".*.tmp"))
+    entry = gate.cache_load("key", "fp1", tmp_path)
+    assert entry["codes"] == codes and len(entry["universe"]) == 2 and entry["full"] is False
+    assert gate.cache_load("key", "fp2", tmp_path) is None  # another fingerprint: a miss, never an answer
+    assert gate.cache_load("nope", "fp1", tmp_path) is None
+    path.write_text("{not json")
+    assert gate.cache_load("key", "fp1", tmp_path) is None
+    path.write_text(json.dumps({"version": 0, "fingerprint": "fp1", "codes": {}, "universe": []}))
+    assert gate.cache_load("key", "fp1", tmp_path) is None
+
+
+def test_the_cache_dir_is_per_user_and_movable(monkeypatch, tmp_path):
+    monkeypatch.delenv("GBX_MUTATION_KILLS", raising=False)
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+    assert gate.kills_dir() == tmp_path / "geobrix" / "mutation-kills"
+    monkeypatch.setenv("GBX_MUTATION_KILLS", str(tmp_path / "k"))
+    assert gate.kills_dir() == tmp_path / "k"
+
+
+class _Side:
+    """A stand-in for a Side that counts its passes."""
+
+    def __init__(self, keys, codes):
+        self.keys, self._codes, self.generated, self.ran = sorted(keys), codes, 0, []
+
+    def generate(self):
+        self.generated += 1
+        return self.keys
+
+    def run(self, names):
+        if not self.generated:  # the real Side generates before it runs a name
+            self.generate()
+        self.ran.append(list(names))
+        return {n: self._codes[n] for n in names if n in self._codes}
+
+    def run_all(self):
+        self.ran.append("all")
+        return dict(self._codes)
+
+
+def _args(tmp_path, **kw):
+    return type("A", (), dict({"family": "t", "seed": 31, "old_codes": None, "full": False}, **kw))()
+
+
+def _run_sampled(tmp_path, old, slim, cache_dir, fp="fp"):
+    old_side, slim_side = _Side(old, old), _Side(slim, slim)
+    cache = gate.OldCache("k", fp, cache_dir)
+    rc = gate.gate_sample_first(_args(tmp_path), out=tmp_path, old_side=old_side, slim_side=slim_side, old_known={},
+                                fingerprint=fp, warn=[], t0=0.0, cache=cache)
+    return rc, old_side, slim_side
+
+
+def test_a_second_gate_of_the_same_old_selection_skips_the_old_pass(tmp_path):
+    old = _universe()
+    rc, old_side, _ = _run_sampled(tmp_path, old, dict(old), tmp_path / "cache")
+    assert rc == 0 and old_side.generated == 1 and [len(r) for r in old_side.ran] == [50]
+    rc, old_side, slim_side = _run_sampled(tmp_path, old, dict(old), tmp_path / "cache")  # another slim candidate
+    assert rc == 0 and old_side.generated == 0 and old_side.ran == []  # nothing of the old pass ran
+    assert len(slim_side.ran[0]) == 50
+
+
+def test_an_extension_after_a_cache_hit_runs_only_the_missing_old_mutants(tmp_path):
+    old = _universe()
+    _run_sampled(tmp_path, old, dict(old), tmp_path / "cache")  # caches the 50
+    slim = dict(old)
+    slim[gate.sample(old, 50, 31)[0]] = 0  # the next candidate loses one
+    rc, old_side, _ = _run_sampled(tmp_path, old, slim, tmp_path / "cache")
+    assert old_side.generated == 1 and [len(r) for r in old_side.ran] == [50]  # the second 50 only
+    assert gate.cache_load("k", "fp", tmp_path / "cache")["codes"].keys() >= set(gate.sample(old, 100, 31))
+
+
+def test_a_changed_fingerprint_does_not_hit(tmp_path):
+    old = _universe()
+    _run_sampled(tmp_path, old, dict(old), tmp_path / "cache", fp="one")
+    _, old_side, _ = _run_sampled(tmp_path, old, dict(old), tmp_path / "cache", fp="two")
+    assert old_side.generated == 1  # a miss: the entry belongs to fingerprint "one"
+
+
+def test_a_full_run_hits_only_a_full_entry(tmp_path):
+    old = _universe(n_each=3)
+    cdir = tmp_path / "cache"
+
+    def full(fp="fp"):
+        old_side, slim_side = _Side(old, old), _Side(old, old)
+        rc = gate.gate_full(_args(tmp_path, full=True), out=tmp_path, old_side=old_side, slim_side=slim_side, old_known={},
+                            fingerprint=fp, warn=[], t0=0.0, cache=gate.OldCache("k", fp, cdir))
+        return rc, old_side
+
+    _run_sampled(tmp_path, old, dict(old), cdir)  # a sampled entry
+    rc, old_side = full()
+    assert rc == 0 and old_side.ran == ["all"]  # not enough: the old pass ran everything
+    assert gate.cache_load("k", "fp", cdir)["full"] is True
+    rc, old_side = full()
+    assert old_side.ran == []  # now a full entry serves the next full run
+    _, old_side, _ = _run_sampled(tmp_path, old, dict(old), cdir)
+    assert old_side.generated == 0  # and a sample-first run too
+    assert (tmp_path / "K_old.mode").read_text().strip() in ("full", "sample 50")
+
+
+def test_old_codes_and_no_cache_never_touch_the_cache(tmp_path):
+    base = ["--family", "unit", "--modules", "pygx/_bng", "--tests", "test/pygx/test_bng_batched_walk.py",
+            "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
+    assert "--no-cache" in _sh("--help").stdout
+    res = _sh(*base, "--no-cache")
+    assert res.returncode == 0, res.stderr

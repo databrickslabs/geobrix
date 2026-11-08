@@ -21,6 +21,7 @@ show_help() {
     echo -e "  ${GREEN}--max-children <n>${NC}     Most mutmut workers this gate may use (default: its share of the host budget)"
     echo -e "  ${GREEN}--seed <n>${NC}             Sample seed (default 31)"
     echo -e "  ${GREEN}--full${NC}                 Run every mutant in both passes (default: a sample of 50, 100 after a loss)"
+    echo -e "  ${GREEN}--no-cache${NC}             Do not read or write the host's cache of old kill sets"
     echo -e "  ${GREEN}--old-codes <file>${NC}     Reuse the K_old.json of an earlier run instead of running the old tests again"
     echo -e "  ${GREEN}--old-ref <git-ref>${NC}    Run the old tests as they were at this ref (for a fold that edits or deletes test files in place)"
     echo -e "  ${GREEN}--keep-work${NC}            Keep the throwaway copy under /private/tmp (debugging)"
@@ -51,7 +52,7 @@ while [[ $# -gt 0 ]]; do
             PASSTHROUGH+=("$1" "$2")
             shift 2
             ;;
-        --keep-work|--plan|--full)
+        --keep-work|--plan|--full|--no-cache)
             PASSTHROUGH+=("$1")
             shift
             ;;

@@ -328,6 +328,68 @@ def check_fingerprint(codes_file: Path, fp: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------------------------- the old kill sets, cached
+
+
+CACHE_VERSION = 1
+
+
+def kills_dir() -> Path:
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return Path(os.environ.get("GBX_MUTATION_KILLS") or cache / "geobrix" / "mutation-kills")
+
+
+def tree_state_hash(pkg: Path = None) -> str:
+    """The src files and the test helpers (conftests and the like) of the current tree. A run at the current tree
+    reads all of them, whatever its fingerprint names; a run at a ref reads them from the ref instead."""
+    pkg = pkg or PKG_ROOT
+    h = hashlib.sha1()
+    files = sorted(
+        [*(pkg / "src").rglob("*.py"), *(f for f in (pkg / "test").rglob("*.py") if not f.name.startswith("test_"))]
+    )
+    for f in files:
+        if "__pycache__" not in f.parts:
+            h.update(f.relative_to(pkg).as_posix().encode() + b"\0" + f.read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def cache_key(fingerprint: str, oracle_tables: str, ref_sha, tree: str = "") -> str:
+    """What a cached old kill set depends on: the fingerprint (kernels, old selection, old tests or the ref), the
+    oracle tables the run selected, mutmut's version, and, with no ref, the rest of the current tree."""
+    h = hashlib.sha1()
+    for part in (str(CACHE_VERSION), MUTMUT_PIN, fingerprint, oracle_tables or "", "" if ref_sha else tree):
+        h.update(part.encode() + b"\0")
+    return h.hexdigest()
+
+
+def cache_load(key: str, fingerprint: str, directory=None):
+    """The cached old kills for `key`, or None. An entry that is unreadable or was made from another fingerprint
+    is a miss, never an answer."""
+    path = (directory or kills_dir()) / f"{key}.json"
+    try:
+        entry = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(entry, dict) or entry.get("version") != CACHE_VERSION or entry.get("fingerprint") != fingerprint:
+        return None
+    if not isinstance(entry.get("codes"), dict) or not isinstance(entry.get("universe"), list):
+        return None
+    return entry
+
+
+def cache_store(key: str, fingerprint: str, universe, codes: dict, full: bool, directory=None) -> Path:
+    """Write the old kills atomically. `universe` is every mutant the old run generates, `codes` the exit codes
+    known so far (the sampled mutants, or all of them when `full`)."""
+    directory = directory or kills_dir()
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / f"{key}.json"
+    tmp = directory / f".{key}.{os.getpid()}.tmp"
+    entry = {"version": CACHE_VERSION, "fingerprint": fingerprint, "full": full, "universe": sorted(universe), "codes": codes}
+    tmp.write_text(json.dumps(entry, sort_keys=True))
+    os.replace(tmp, path)
+    return path
+
+
 # ---------------------------------------------------------------------------------------------- the host's worker budget
 
 
@@ -735,6 +797,8 @@ def parse(argv):
                         f"extended to {SAMPLE_EXTENDED} when the slim run loses a kill)")
     p.add_argument("--old-codes", help="reuse the K_old.json of an earlier run instead of running the old tests again "
                    "(for the next slim candidate of the same fold: the kernel modules and the old tests must be unchanged)")
+    p.add_argument("--no-cache", action="store_true",
+                   help="neither read nor write the host's cache of old kill sets (~/.cache/geobrix/mutation-kills)")
     p.add_argument("--old-ref", help="git ref holding the old state: a fold that edits or deletes test files in place is gated against "
                    "their contents at that ref (the kernel modules must not have changed since). With --old-codes, the kill set must "
                    "have been made from that ref")
@@ -824,17 +888,45 @@ def main(argv=None) -> int:
         old_known = json.loads(Path(args.old_codes).read_text()) if args.old_codes else {}
         if args.old_codes:
             print(f"[old] {len(old_known)} mutants reused from {args.old_codes}", flush=True)
+        cache = None
+        if not (args.old_codes or args.no_cache):
+            cache = OldCache(cache_key(fingerprint, args.oracle_tables, ref_sha, "" if ref_sha else tree_state_hash()), fingerprint)
         run = gate_full if args.full else gate_sample_first
-        return run(args, out=out, old_side=old_side, slim_side=slim_side, old_known=old_known, fingerprint=fingerprint, warn=warn, t0=t0)
+        return run(args, out=out, old_side=old_side, slim_side=slim_side, old_known=old_known, fingerprint=fingerprint, warn=warn, t0=t0, cache=cache)
     finally:
         old_side.close()
         slim_side.close()
         budget.unregister()
 
 
-def gate_full(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0) -> int:
+class OldCache:
+    """The host's cached old kills for one (fingerprint, oracle tables, tree) key."""
+
+    def __init__(self, key: str, fingerprint: str, directory=None):
+        self.key, self.fingerprint, self.dir = key, fingerprint, directory
+        self.entry = cache_load(key, fingerprint, directory)
+
+    @property
+    def path(self) -> Path:
+        return (self.dir or kills_dir()) / f"{self.key}.json"
+
+    def store(self, universe, codes: dict, full: bool) -> None:
+        self.entry = {"universe": sorted(universe), "codes": dict(codes), "full": full}
+        try:
+            cache_store(self.key, self.fingerprint, universe, codes, full, self.dir)
+        except OSError as e:  # a cache that cannot be written costs time, never a verdict
+            print(f"WARNING: old kill set not cached ({e})", flush=True)
+
+
+def gate_full(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0, cache=None) -> int:
     """Every mutant of the old run, in both passes."""
-    old = old_known or old_side.run_all()
+    if cache and cache.entry and cache.entry["full"]:
+        old = dict(cache.entry["codes"])
+        print(f"[old] {len(old)} mutants from the cache {cache.path} (the old pass is skipped)", flush=True)
+    else:
+        old = old_known or old_side.run_all()
+        if cache and not args.old_codes:
+            cache.store(old_side.keys, old, full=True)
     require_old_kills(old)
     if not args.old_codes:  # keep the slow old run if the slim run cannot start
         (out / "K_old.json").write_text(json.dumps(old, indent=0, sort_keys=True))
@@ -852,14 +944,24 @@ def gate_full(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t
     return 0 if verdict["pass"] else 1
 
 
-def gate_sample_first(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0) -> int:
+def gate_sample_first(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0, cache=None) -> int:
     """A stratified sample of the old run's mutants, in both passes; 100 when the slim run loses a kill."""
-    universe = sorted(old_known) if args.old_codes else old_side.generate()
+    full_cached = False
+    if cache and cache.entry:
+        universe, full_cached = cache.entry["universe"], cache.entry["full"]
+        old_known.update(cache.entry["codes"])
+        print(f"[old] {len(old_known)} mutants of {len(universe)} from the cache {cache.path}", flush=True)
+    else:
+        universe = sorted(old_known) if args.old_codes else old_side.generate()
+        if cache:
+            cache.store(universe, old_known, full=False)
 
     def old_for(names):
         missing = [n for n in names if n not in old_known]
         if missing and not args.old_codes:
             old_known.update(old_side.run(missing))
+            if cache:
+                cache.store(universe, old_known, full=full_cached)
         return {n: old_known[n] for n in names if n in old_known}
 
     res = sampled_gate(universe, old_for, slim_side.run, args.seed)

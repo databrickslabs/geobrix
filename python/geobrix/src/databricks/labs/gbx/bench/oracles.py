@@ -5094,11 +5094,62 @@ def _scalar_call_of_series_udf(func):
     return call
 
 
+def _sql_default(text):
+    """A parameter's SQL default (`'degrees'`, `0.5`, `true`, `NULL`) as a Python value; None when it has none."""
+    import ast
+
+    if text is None or str(text).strip().upper() == "NULL":
+        return None
+    t = str(text).strip()
+    if t.lower() in ("true", "false"):
+        return t.lower() == "true"
+    try:
+        return ast.literal_eval(t)
+    except (ValueError, SyntaxError):
+        return None
+
+
+def _with_sql_defaults(fn, func, call):
+    """`call` with the trailing optional arguments filled from the manifest's SQL defaults, as the CREATE FUNCTION
+    wrapper does for a session: a row that leaves them out calls the plain function with the defaults a query gets.
+    """
+    import inspect
+
+    try:
+        positional = [
+            p
+            for p in inspect.signature(func).parameters.values()
+            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+    except (TypeError, ValueError):
+        return call
+    n = min(len(positional), fn.max_args)
+    defaults = [_sql_default(p.default) for p in fn.params]
+
+    def padded(*args):
+        return call(*args, *defaults[len(args) : n])
+
+    return padded
+
+
+def _plain_call_of_udf(fn, udf):
+    """The plain Python call of a registered UDF object (a pandas UDF one value at a time), or None."""
+    func = getattr(udf, "func", None)
+    if func is not None and getattr(udf, "evalType", None) == _PANDAS_SCALAR_UDF:
+        return _with_sql_defaults(fn, func, _scalar_call_of_series_udf(func))
+    if func is not None and getattr(udf, "evalType", None) == _ROW_UDF:
+        return _with_sql_defaults(
+            fn, func, func
+        )  # a row-at-a-time UDF is its plain function
+    return None
+
+
 def l3_callable(fn):
     """The plain Python function behind a scalar's session form, or None when it has none (a UDTF, a grouped
     aggregate). A ``callable`` form is the function itself; a ``udf`` form built by a factory has a plain
-    ``_udf_<name>`` beside the factory; a pandas UDF (the ``c0`` variant) is called through its ``func``, one
-    value at a time."""
+    ``_udf_<name>`` beside the factory, or else is the function the factory builds; a pandas UDF (the ``c0``
+    variant) is called through its ``func``, one value at a time. Optional arguments a row leaves out take the
+    manifest's SQL defaults."""
     from databricks.labs.gbx import manifest
 
     l3 = fn.levels.get("L3", {})
@@ -5106,15 +5157,19 @@ def l3_callable(fn):
         return manifest.resolve_ref(l3["callable"])
     if "factory" in l3 and fn.kind == "scalar":
         module = l3["factory"].split(":")[0]
-        return manifest.resolve_ref(f"{module}:_udf_{fn.sql_name[len('gbx_'):]}")
+        try:
+            return manifest.resolve_ref(f"{module}:_udf_{fn.sql_name[len('gbx_'):]}")
+        except AttributeError:
+            from databricks.labs.gbx.manager.l3 import _factory_args
+
+            kind = l3.get("factory_args")
+            built = manifest.resolve_ref(l3["factory"])(
+                *(_factory_args(kind) if kind else ())
+            )
+            return _plain_call_of_udf(fn, built)
     c0 = (l3.get("variants") or {}).get("c0")
     if c0 and fn.kind == "scalar":
-        udf = manifest.resolve_ref(c0)
-        func = getattr(udf, "func", None)
-        if func is not None and getattr(udf, "evalType", None) == _PANDAS_SCALAR_UDF:
-            return _scalar_call_of_series_udf(func)
-        if func is not None and getattr(udf, "evalType", None) == _ROW_UDF:
-            return func  # a row-at-a-time UDF is its plain function
+        return _plain_call_of_udf(fn, manifest.resolve_ref(c0))
     return None
 
 
@@ -5132,6 +5187,8 @@ def run_l3_callables(cases, tmpdir: Optional[str] = None):
         call = l3_callable(fn)
         if "session" not in case.surfaces or case.sql is not None or call is None:
             continue
+        if case.cid in READ_CAP_ROWS:
+            continue  # the decoded-size gate needs the session's read cap, which a plain call does not carry
         try:
             rows = _argument_rows(case, tmpdir)
             outs = [call(*r) for r in rows]

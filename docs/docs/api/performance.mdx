@@ -42,13 +42,14 @@ The light level runs every function on every compute. It is the default for the 
 | Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The only form. The JVM form was faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the light time at 4x and 16x rows). Such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to light is refused, so the JVM form could not be the default. It is no longer shipped. |
 | Band math and spectral indices | NumPy in the worker | 3.1x to 3.9x faster than the JVM form |
 | Warps and resampling | rasterio | 2.1x to 4.7x faster than the JVM form |
-| Terrain (slope, aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
+| Terrain (aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
+| `gbx_rst_slope`, `gbx_rst_mapalgebra`, `gbx_rst_transformcrs` | GDAL algorithm in the worker | The JVM form took 0.97x to 1.15x the time at 4x and 16x rows for slope and map algebra. For `gbx_rst_transformcrs` it took 0.99x and 0.78x, but returned NULL tiles under load where the lightweight forms returned none. It is no longer shipped |
 | Edits on virtual tiles | Header only, no pixel read | 1.1x to 12.5x faster than on a materialized tile |
 | Grouped raster aggregates | Grouped-aggregate UDF | See [Aggregates by compute](#aggregates-by-compute) |
 | Vector tiles (`gbx_st_asmvt`) | mapbox-vector-tile | 1.7x to 2.9x faster than the former JVM aggregate, which is no longer shipped |
 | PMTiles archive aggregate | Grouped-aggregate UDF | About 1.07x the JVM time, inside run-to-run noise |
 | Quadbin and custom grid | Python cell math | At parity with the JVM form, 0.9x to 1.3x |
-| `gbx_rst_binpoints`, `gbx_rst_cog_convert`, `gbx_rst_align_to`, `gbx_rst_transformcrs` | Python | The JVM form took 1.1x to 1.9x the time at 4x and 16x rows, and is no longer shipped |
+| `gbx_rst_binpoints`, `gbx_rst_cog_convert`, `gbx_rst_align_to` | Python | The JVM form took 1.1x to 1.9x the time at 4x and 16x rows, and is no longer shipped |
 | `gbx_rst_gridfrompoints` | Python | The JVM form took 1.8x and 1.9x the time at 4x and 16x rows, and is no longer shipped |
 | `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions | Python | The JVM form took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows (131.56 s against 122.16 s, and 576.44 s against 387.95 s), and is no longer shipped. For many tiles per key, `combine_by_key` took 261.07 s at 16x rows |
 | `gbx_rst_bng_tessellate` | Python | The JVM form took 0.97x and 1.03x the time at 4x and 16x rows (1591.42 s against 1540.71 s at 16x), a tie, and is no longer shipped |

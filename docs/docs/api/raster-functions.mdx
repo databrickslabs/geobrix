@@ -5565,7 +5565,7 @@ The largest minus the smallest value in the 3×3 window around each pixel.
 {/* END GENERATED gbx_rst_slope */}
 
 :::note Implementation
-Powered by **NumPy** — a reimplementation of GDAL `gdaldem`. Results are close but not bit-identical. Edge pixels are filled by replicating the border (gdaldem leaves them NoData), and NoData cells are not excluded from the 3×3 window.
+Runs GDAL's own `raster slope` algorithm with Horn's method, on every compute. Edge pixels are NoData.
 :::
 
 :::note Python-only keywords

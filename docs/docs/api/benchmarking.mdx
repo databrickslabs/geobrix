@@ -184,7 +184,9 @@ Each row compares the JVM (heavy) form with the best lightweight form of the sam
 | `gbx_rst_binpoints` | 1.85 | 1.68 | Heavy form removed |
 | `gbx_rst_cog_convert` | 1.25 | 1.46 | Heavy form removed |
 | `gbx_rst_align_to` | 1.61 | not run | Heavy form removed |
-| `gbx_rst_transformcrs` | 1.08 | 1.58 | Heavy form removed |
+| `gbx_rst_slope` | 0.97 | 1.05 | Heavy form removed |
+| `gbx_rst_mapalgebra` | 1.05 | 1.15 | Heavy form removed |
+| `gbx_rst_transformcrs` | 0.99 | 0.78 | Heavy form removed (it returned NULL tiles for some of 4000 tiles under load; the lightweight forms returned none) |
 | `gbx_rst_combineavg` and the six other `gbx_rst_combine*` functions (three iterations, `gbx_rst_combineavg` measured) | 1.08 | 1.49 | Heavy form removed |
 | `gbx_rst_bng_tessellate` | 0.97 | 1.03 | Heavy form removed (a tie, under the 1.2x bar) |
 

@@ -155,8 +155,12 @@ def test_plot_point_cloud_static_when_embed_zero():
     assert isinstance(out, matplotlib.figure.Figure)
 
 
-def test_plot_point_cloud_html_outside_notebook():
+def test_plot_point_cloud_html_outside_notebook(monkeypatch):
     from databricks.labs.gbx import vizx as vz
+    from databricks.labs.gbx.vizx import _interactive as itx
+
+    # Run inside a notebook (a Databricks job), displayHTML is found: say there is none, so the HTML string comes back.
+    monkeypatch.setattr(itx, "_notebook_display_html", lambda: None)
 
     df = pd.DataFrame(
         {

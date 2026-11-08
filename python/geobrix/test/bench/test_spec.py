@@ -298,7 +298,7 @@ def test_both_modes_select_each_fn_in_its_declared_mode():
 
 def test_family_arguments_match_the_heavy_defaults():
     a = {n: s.REGISTRY[n].args for n in s.REGISTRY}
-    assert a["rst_band"] is not None and s.REGISTRY["rst_band"].min_bands == 2
+    assert s.REGISTRY["rst_band"].min_bands == 2
     for n in ("rst_evi", "rst_savi", "rst_index"):
         assert s.REGISTRY[n].min_bands == 2, n
     for n, keys in {

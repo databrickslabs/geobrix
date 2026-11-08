@@ -198,46 +198,36 @@ def _read_all(rdr):
     return tbl.to_pydict()
 
 
-def test_vector_gbx_access_managed_rejected(tmp_path):
-    """DataSource reader is FUSE-only; access='managed' points the caller at the
-    function-layer vector_file_read (mirrors the FUSE-only writer's rejection)."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-    with pytest.raises(ValueError, match="vector_file_read"):
-        VectorGbxReader({"path": p, "access": "managed"})
+def _fuse_only(mode):
+    return rf"access='{mode}' is not supported on the df\.read\.format\('\w+'\) reader \(FUSE-only, session-less on Spark Connect\)\. Use the function-layer API instead: from databricks\.labs\.gbx\.vectorx\.file_read import vector_file_read\."
 
 
-def test_vector_gbx_access_external_rejected(tmp_path):
-    """DataSource reader is FUSE-only; access='external' points the caller at the
-    function-layer vector_file_read."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-    with pytest.raises(ValueError, match="vector_file_read"):
-        VectorGbxReader({"path": p, "access": "external"})
-
-
-def test_vector_gbx_access_auto_reads_fuse(tmp_path):
-    """access='auto' reads correctly (unchanged FUSE behavior)."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    rows = _read_all(VectorGbxReader({"path": p, "access": "auto"}))
-
-    assert sorted(rows["id"]) == [1, 2]
+# access -> the pattern of the sentence it is refused with, or None when it reads the two features
+ACCESS = {
+    "auto": None,
+    "fuse": None,
+    "managed": _fuse_only("managed"),
+    "external": _fuse_only("external"),
+    "bogus": r"\w+ 'access' option must be 'auto', 'fuse', 'managed', or 'external'; got 'bogus'",
+}
 
 
-def test_vector_gbx_access_fuse_reads_fuse(tmp_path):
-    """'fuse' is an explicit synonym for the default FUSE read."""
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
+@pytest.mark.parametrize("reader", ["VectorGbxReader", "_GeoJSONReader"])
+@pytest.mark.parametrize("access,refused", ACCESS.items(), ids=ACCESS.keys())
+def test_the_reader_is_fuse_only_and_refuses_the_function_layer_modes(
+    tmp_path, reader, access, refused
+):
+    """The reader takes 'auto' and its synonym 'fuse' and reads; 'managed' and 'external' are refused at
+    construction, whatever the runtime, with a pointer to vector_file_read; any other word is refused.
+    """
+    from databricks.labs.gbx.ds import vector
 
-    p = _gj_file_path(str(tmp_path))
-
-    rows = _read_all(VectorGbxReader({"path": p, "access": "fuse"}))
-
-    assert sorted(rows["id"]) == [1, 2]
+    cls, p = getattr(vector, reader), _gj_file_path(str(tmp_path))
+    if refused:
+        with pytest.raises(ValueError, match=refused):
+            cls({"path": p, "access": access})
+    else:
+        assert sorted(_read_all(cls({"path": p, "access": access}))["id"]) == [1, 2]
 
 
 def test_members_generic_read_excludes_shapefile_sidecars(tmp_path):
@@ -328,93 +318,6 @@ def test_vector_reader_restages_a_source_replaced_in_place(tmp_path):
     assert count() == 5
     write(3, 5)
     assert count() == 3
-
-
-def test_vector_access_invalid_option_raises():
-    """An unrecognized 'access' option raises ValueError at __init__ time."""
-    import tempfile
-
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    with tempfile.NamedTemporaryFile(suffix=".geojson", delete=False) as f:
-        f.write(b'{"type":"FeatureCollection","features":[]}')
-        tmppath = f.name
-
-    try:
-        with pytest.raises(ValueError, match="access.*option must be"):
-            VectorGbxReader({"path": tmppath, "access": "bogus"})
-    finally:
-        os.unlink(tmppath)
-
-
-# ---------------------------------------------------------------------------
-# IMPORTANT-1: driver-side capability probe — read() must NOT re-probe tier
-# ---------------------------------------------------------------------------
-
-
-def test_vector_read_does_not_reprobe_file_access_tier(tmp_path):
-    """read() works correctly: access='managed' rejects at __init__ time.
-
-    access='managed'/'external' raise at __init__ with a pointer
-    to vector_file_read.  The FUSE path (access='auto') must still read data
-    normally.  This is the regression guard that the full read path works.
-    """
-    import pyarrow as pa
-
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    # access='managed' must raise — reject at construction time.
-    with pytest.raises(ValueError, match="vector_file_read"):
-        VectorGbxReader({"path": p, "access": "managed"})
-
-    # FUSE path (auto) must still work end-to-end.
-    rdr = VectorGbxReader({"path": p, "access": "auto"})
-    parts = rdr.partitions()
-    batches = [b for part in parts for b in rdr.read(part)]
-    tbl = pa.Table.from_batches(batches)
-    assert tbl.num_rows == 2
-
-
-def test_vector_auto_access_fuse_runtime_reads_correctly(tmp_path):
-    """access='auto' reads data correctly (no error).
-
-    No tier probe is made in __init__, so no mock is needed.
-    """
-    from databricks.labs.gbx.ds.vector import VectorGbxReader
-
-    p = _gj_file_path(str(tmp_path))
-
-    # Must not raise — auto mode, no probe in __init__.
-    rdr = VectorGbxReader({"path": p, "access": "auto"})
-    rows = _read_all(rdr)
-
-    assert sorted(rows["id"]) == [1, 2]
-
-
-# ---------------------------------------------------------------------------
-# No-reprobe + managed/external rejection regression guards
-# ---------------------------------------------------------------------------
-
-
-def test_vector_reader_managed_external_rejected_unconditionally(tmp_path):
-    """access='managed'/'external' must ALWAYS raise with a pointer to vector_file_read.
-
-    The DataSource reader is declared FUSE-only.  The rejection is
-    unconditional — it does not matter what tier the runtime is, nor whether a
-    SparkSession is present.  The old test (no_false_break_on_connect) asserted
-    that managed/external did NOT raise; that behavior is now intentionally changed.
-    """
-    from databricks.labs.gbx.ds import vector as vec
-
-    p = str(tmp_path / "pts.geojson")
-    (tmp_path / "pts.geojson").write_bytes(
-        b'{"type":"FeatureCollection","features":[]}'
-    )
-
-    with pytest.raises(ValueError, match="vector_file_read"):
-        vec._GeoJSONReader({"path": p, "access": "managed"})
 
 
 # ---------------------------------------------------------------------------

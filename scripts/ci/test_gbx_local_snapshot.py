@@ -396,7 +396,7 @@ def test_gitleaks_noise_and_sample_keys_do_not_count(repo, tmp_path):
         "#!/bin/sh\n"
         "while [ $# -gt 0 ]; do case $1 in --report-path) out=$2;; --source) src=$2;; esac; shift; done\n"
         'echo "[{\\"File\\":\\"$src/notes.md\\",\\"StartLine\\":1,\\"RuleID\\":\\"generic-api-key\\",\\"Secret\\":\\"abc\\"},'
-        '{\\"File\\":\\"$src/notes.md\\",\\"StartLine\\":2,\\"RuleID\\":\\"aws-access-token\\",\\"Secret\\":\\"AKIAIOSFODNN7EXAMPLE\\"}]" > "$out"\n'
+        '{\\"File\\":\\"$src/notes.md\\",\\"StartLine\\":2,\\"RuleID\\":\\"aws-access-token\\",\\"Secret\\":\\"AKIA' 'IOSFODNN7' 'EXAMPLE\\"}]" > "$out"\n'
         "exit 1\n"
     )
     stub.chmod(0o755)

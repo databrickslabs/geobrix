@@ -34,29 +34,6 @@ def _mock_stats(w, m, ms=200.0):
     }
 
 
-def _tile_df(spark, n: int):
-    """Return an n-row DataFrame with a nullable binary 'tile' column.
-
-    Used by the mocked read_file_table; the rst_avg mock replaces the UDF with
-    F.lit(1.0) so the actual column value is irrelevant.
-    """
-    return spark.range(n).select(
-        _F.lit(None).cast("binary").alias("tile"),
-    )
-
-
-def _mock_stats(w, m, ms=200.0):
-    return {
-        "iter_median_ms": ms,
-        "iter_min_ms": ms * 0.9,
-        "iter_p90_ms": ms * 1.1,
-        "iter_total_wall_clock_ms": ms * 2,
-        "avg_wall_clock_ms": ms,
-        "warmup_iters": w,
-        "measured_iters": m,
-    }
-
-
 def _patch_common(monkeypatch, spark, n, ms=200.0, parts=2):
     monkeypatch.setattr(
         "databricks.labs.gbx.bench.readers.measure_parallelism",
@@ -102,7 +79,9 @@ _BOTH = ["spark-path", "spark-path-skip-order"]
         ("external", True, ["spark-path-skip-order"]),
     ],
 )
-def test_mode_rows_per_skip_ordering(spark, monkeypatch, file_mode, skip_ordering, modes):
+def test_mode_rows_per_skip_ordering(
+    spark, monkeypatch, file_mode, skip_ordering, modes
+):
     """skip_ordering=None emits the auto and skip-order rows; True/False emit the one."""
     _patch_common(monkeypatch, spark, n=4)
     rows = _sweep(spark, file_mode, skip_ordering=skip_ordering)

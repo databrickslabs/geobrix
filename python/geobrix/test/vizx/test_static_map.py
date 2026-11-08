@@ -411,12 +411,20 @@ def test_contextily_add_basemap_accepts_headers():
     parameter did not yet exist.
     """
     contextily = pytest.importorskip("contextily")
+    from importlib.metadata import PackageNotFoundError
     from importlib.metadata import version as dist_version
 
-    cx_version = dist_version(
-        "contextily"
-    )  # newer contextily releases carry no module-level __version__
-    ver = tuple(int(x) for x in cx_version.split(".")[:2])
+    from packaging.version import Version
+
+    try:  # newer contextily releases carry no module-level __version__
+        cx_version = dist_version("contextily")
+    except PackageNotFoundError:
+        pytest.skip(
+            "contextily imports but has no distribution metadata to read its version from"
+        )
+    ver = Version(cx_version).release[
+        :2
+    ]  # a release candidate or dev version still has its release numbers
     if ver < (1, 7):
         pytest.skip(
             f"contextily {cx_version} < 1.7 — headers= not yet present; "

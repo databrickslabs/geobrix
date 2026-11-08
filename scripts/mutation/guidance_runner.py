@@ -195,6 +195,22 @@ def main(argv=None) -> int:
         print(f"[MUTATION {args.family}] {len(modules)} module(s), tests {selection}, {args.max_workers} workers, "
               f"caps: wall {args.wall_cap_min:g} min, setup {args.setup_cap_min:g} min, stall {args.stall_min:g} min", flush=True)
 
+        # A collect pass first: a test file that cannot import (a missing test dependency, a conftest error) aborts
+        # mutmut's stats pass with nothing on its log, and costs the cluster start for nothing. Say why, and stop.
+        pre = subprocess.run(
+            [str(py), "-m", "pytest", "--rootdir=.", "--collect-only", "-q", "-p", "no:randomly", *selection,
+             "-p", gate.PLUGIN, "-p", KILLERS_PLUGIN, "-p", "no:cacheprovider", "-m", "not integration and not perf"],
+            cwd=work, env=env, capture_output=True, text=True,
+        )
+        (out / "preflight.txt").write_text(pre.stdout + "\n--- stderr ---\n" + pre.stderr)
+        tail = "\n".join((pre.stdout + pre.stderr).strip().splitlines()[-12:])
+        if pre.returncode != 0:
+            print(f"[MUTATION {args.family}] PRECONDITION MISSING: the selected tests do not collect in the copy "
+                  f"(pytest rc {pre.returncode}); mutation not run. Last lines:\n{tail}", flush=True)
+            beat.stop("failed")
+            return 2
+        print(f"[MUTATION {args.family}] collect pass ok: {tail.splitlines()[-1] if tail else ''}", flush=True)
+
         log = open(out / "mutmut.log", "w")
         proc = subprocess.Popen([str(mutmut_exe), "run", "--max-children", str(args.max_workers)],
                                 cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT)

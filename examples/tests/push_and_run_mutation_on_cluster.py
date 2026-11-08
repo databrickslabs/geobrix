@@ -61,7 +61,7 @@ SPARK_VERSION = "19.x-scala2.13"
 SUBSET = ("python/geobrix/src", "python/geobrix/test", "python/geobrix/pyproject.toml", "scripts/mutation")
 MUTMUT_PIN = "mutmut==3.8.0"  # the pins the gate holds; scripts/mutation/gate.py is the source, test_gate_pins_match checks
 PYTEST_PIN = "pytest==9.1.1"
-EXIT_FAILED, EXIT_USAGE, EXIT_NO_START = 1, 2, 4
+EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_CAPPED = 1, 2, 4, 5
 POLL_S = 10
 STATUS_EVERY_S = 300
 
@@ -273,6 +273,8 @@ if os.path.exists(out + "/rows.jsonl"):
     print("rows written to", CFG["table"], ":", result["rows"], flush=True)
 else:
     print("no rows.jsonl: the runner did not finish its first pass (see mutmut.log in", CFG["out_dir"], ")", flush=True)
+if rc not in (0, 3):  # 3: a cap stopped the mutants; the rows so far are written
+    raise RuntimeError(f"guidance runner failed (rc {rc}); see preflight.txt and mutmut.log in " + CFG["out_dir"])
 dbutils.notebook.exit(json.dumps(result))
 '''
 
@@ -459,6 +461,9 @@ def launch(a, plan: dict) -> int:
                 out = w.jobs.get_run_output(w.jobs.get_run(job_run).tasks[0].run_id)
                 if out.notebook_output and out.notebook_output.result:
                     print("Notebook output:", out.notebook_output.result)
+                    if json.loads(out.notebook_output.result).get("rc") == 3:
+                        print("A cap stopped the mutants before all were tried: the rows are partial (status 'unchecked').", file=sys.stderr)
+                        rc = EXIT_CAPPED
             except Exception:  # noqa: BLE001
                 pass
     finally:

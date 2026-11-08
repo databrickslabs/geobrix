@@ -499,73 +499,69 @@ def _gdb_with(tmp_path, field, value, options=None, name="t.gdb"):
     return _write_gdb(tmp_path / name, schema, [rows], options)
 
 
-def test_target_version_auto_with_only_strings_writes_no_client_stamp(tmp_path):
-    out = _write_gdb(tmp_path / "s.gdb", _schema(_NAME), [_pts(2)])
-    assert not _stamped_for_pro_3_2(out)
+_BIG = 2**53 + 1
+_TS = datetime.datetime(2020, 1, 2, 3, 4, 5)
+_ALL = {"targetArcGisVersion": "ALL"}
+_PRO = {"targetArcGisVersion": "ARCGIS_PRO_3_2_OR_LATER"}
+
+# name -> (column type, value, writer options, stamped for Pro 3.2, dtype read back, esri timestamp-with-offset field)
+# A long, a date or a timestamp needs a client of ArcGIS Pro 3.2 or later ("auto" and the Pro target say so);
+# the "ALL" target writes for every client: a long becomes a float64 and a timestamp a date-time without offset.
+TARGET_VERSION = {
+    "auto_long": (LongType(), _BIG, {}, True, "int64", None),
+    "auto_date": (DateType(), datetime.date(2020, 1, 2), {}, True, None, None),
+    "auto_timestamp": (TimestampType(), _TS, {}, True, None, True),
+    "auto_timestamp_ntz": (TimestampNTZType(), _TS, {}, True, None, None),
+    "auto_upper_case": (
+        LongType(),
+        5,
+        {"targetArcGisVersion": "AUTO"},
+        True,
+        None,
+        None,
+    ),
+    "all_long": (LongType(), _BIG, _ALL, False, "float64", None),
+    "all_timestamp": (TimestampType(), _TS, _ALL, False, None, False),
+    "all_lower_case": (
+        LongType(),
+        5,
+        {"targetArcGisVersion": "all"},
+        False,
+        None,
+        None,
+    ),
+    "all_mixed_case": (
+        LongType(),
+        5,
+        {"targetArcGisVersion": "All"},
+        False,
+        None,
+        None,
+    ),
+    "pro_3_2_without_a_trigger_column": (StringType(), "a", _PRO, True, None, None),
+    "auto_strings_only": (StringType(), "a", {}, False, None, None),
+}
 
 
 @pytest.mark.parametrize(
-    "field,value",
-    [
-        (LongType(), 2**53 + 1),
-        (DateType(), datetime.date(2020, 1, 2)),
-        (TimestampType(), datetime.datetime(2020, 1, 2, 3, 4, 5)),
-        (TimestampNTZType(), datetime.datetime(2020, 1, 2, 3, 4, 5)),
-    ],
-    ids=["long", "date", "timestamp", "timestamp_ntz"],
+    "field,value,opts,stamped,dtype,offset",
+    TARGET_VERSION.values(),
+    ids=TARGET_VERSION.keys(),
 )
-def test_target_version_auto_stamps_for_long_date_and_timestamp(tmp_path, field, value):
-    out = _gdb_with(tmp_path, field, value)
-    assert _stamped_for_pro_3_2(out)
-
-
-def test_target_version_auto_keeps_a_long_exact(tmp_path):
-    out = _gdb_with(tmp_path, LongType(), 2**53 + 1)
-    info = pyogrio.read_info(out)
-    assert dict(zip(info["fields"], info["dtypes"]))["v"] == "int64"
-    assert pyogrio.read_dataframe(out)["v"].tolist() == [2**53 + 1]
-
-
-def test_target_version_all_writes_a_long_as_float64_without_the_stamp(tmp_path):
-    out = _gdb_with(tmp_path, LongType(), 2**53 + 1, {"targetArcGisVersion": "ALL"})
-    info = pyogrio.read_info(out)
-    assert dict(zip(info["fields"], info["dtypes"]))["v"] == "float64"
-    assert not _stamped_for_pro_3_2(out)
-
-
-def test_target_version_all_makes_a_timestamp_a_date_time_without_offset(tmp_path):
-    """Without the Pro 3.2 target a timestamp is an Esri date-time field, which has no
-    offset; the Pro 3.2 target writes a timestamp-with-offset field."""
-    ts = datetime.datetime(2020, 1, 2, 3, 4, 5)
-    plain = _gdb_with(
-        tmp_path, TimestampType(), ts, {"targetArcGisVersion": "ALL"}, "a.gdb"
-    )
-    pro = _gdb_with(tmp_path, TimestampType(), ts, name="b.gdb")
-    assert b"esriFieldTypeTimestampOffset" not in _all_gdbtable_bytes(plain)
-    assert b"esriFieldTypeTimestampOffset" in _all_gdbtable_bytes(pro)
-
-
-def test_target_version_pro_3_2_stamps_even_without_a_trigger_column(tmp_path):
-    out = _write_gdb(
-        tmp_path / "p.gdb",
-        _schema(_NAME),
-        [_pts(2)],
-        {"targetArcGisVersion": "ARCGIS_PRO_3_2_OR_LATER"},
-    )
-    assert _stamped_for_pro_3_2(out)
-
-
-@pytest.mark.parametrize("value", ["all", "All", "ALL"])
-def test_target_version_all_is_case_insensitive(tmp_path, value):
-    out = _gdb_with(
-        tmp_path, LongType(), 5, {"targetArcGisVersion": value}, f"{value}.gdb"
-    )
-    assert not _stamped_for_pro_3_2(out)
-
-
-def test_target_version_auto_is_case_insensitive(tmp_path):
-    out = _gdb_with(tmp_path, LongType(), 5, {"targetArcGisVersion": "AUTO"})
-    assert _stamped_for_pro_3_2(out)
+def test_target_version_decides_the_client_stamp_and_the_field_types(
+    tmp_path, field, value, opts, stamped, dtype, offset
+):
+    out = _gdb_with(tmp_path, field, value, opts)
+    assert _stamped_for_pro_3_2(out) is stamped
+    if dtype:
+        assert (
+            dict(zip((i := pyogrio.read_info(out))["fields"], i["dtypes"]))["v"]
+            == dtype
+        )
+    if dtype == "int64":
+        assert pyogrio.read_dataframe(out)["v"].tolist() == [_BIG]
+    if offset is not None:
+        assert (b"esriFieldTypeTimestampOffset" in _all_gdbtable_bytes(out)) is offset
 
 
 def test_target_version_auto_ignores_an_objectid_column(tmp_path):

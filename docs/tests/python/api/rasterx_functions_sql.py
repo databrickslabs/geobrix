@@ -2902,9 +2902,9 @@ rst_histogram_sql_example_output = """
 
 
 def rst_threshold_sql_example():
-    """Binarise a raster: (pixel > value) -> 1, else 0."""
+    """Keep the pixels above a value and set the others to NoData."""
     return """
--- Mark all pixels above 100 m as 1, others as 0.
+-- Keep the pixels above 100 m, set the others to NoData.
 SELECT gbx_rst_threshold(tile, '>', 100.0) AS mask FROM rasters;
 """
 

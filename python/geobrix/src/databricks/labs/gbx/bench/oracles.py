@@ -2785,14 +2785,14 @@ def _calc_inputs(tile, indexes):
     return [m.data.astype("float64") for m in bands], mask
 
 
-def _ref_index(formula):
-    """rst_index: `formula` over the bands the map names (red, nir)."""
+def _ref_index(formula, names=("red", "nir")):
+    """rst_index: `formula` over the bands the map names (`names`, in the order the formula takes them)."""
 
     def ref(args):
         import numpy as np
 
         band_map = {k.lower(): v for k, v in dict(args[2]).items()}
-        arrays, mask = _calc_inputs(args[0], [band_map["red"], band_map["nir"]])
+        arrays, mask = _calc_inputs(args[0], [band_map[n] for n in names])
         with np.errstate(divide="ignore", invalid="ignore"):
             out = formula(*arrays)
         return out, mask | ~np.isfinite(out)
@@ -2801,8 +2801,11 @@ def _ref_index(formula):
 
 
 def _ref_threshold(args):
-    """rst_threshold: the pixels that satisfy the comparison keep their value, the rest are NoData."""
+    """rst_threshold: in every band, the pixels that satisfy the comparison keep their value, the rest are NoData
+    (a NoData input pixel stays NoData)."""
     import operator
+
+    import numpy as np
 
     ops = {
         ">": operator.gt,
@@ -2812,9 +2815,16 @@ def _ref_threshold(args):
         "==": operator.eq,
         "!=": operator.ne,
     }
-    (band,), mask = _calc_inputs(args[0], [1])
-    keep = ops[args[1]](band, float(args[2]))
-    return band, mask | ~keep
+    with _ref_dataset(args) as ds:
+        count = ds.count
+    values, masks = [], []
+    for i in range(1, count + 1):
+        (band,), mask = _calc_inputs(args[0], [i])
+        with np.errstate(invalid="ignore"):
+            keep = ops[args[1]](band, float(args[2]))
+        values.append(band)
+        masks.append(mask | ~keep)
+    return np.stack(values), np.stack(masks)
 
 
 def _ref_chm(args):
@@ -3436,6 +3446,10 @@ _REFS = {
     "index_msavi": _ref_index(
         lambda r, n: (2 * n + 1 - ((2 * n + 1) ** 2 - 8 * (n - r)) ** 0.5) / 2
     ),
+    "index_gndvi": _ref_index(lambda g, n: (n - g) / (n + g), ("green", "nir")),
+    "index_ndvi_re": _ref_index(lambda e, n: (n - e) / (n + e), ("red_edge", "nir")),
+    "index_ndmi": _ref_index(lambda n, s: (n - s) / (n + s), ("nir", "swir")),
+    "index_ndsi": _ref_index(lambda g, s: (g - s) / (g + s), ("green", "swir")),
     "threshold": _ref_threshold,
 }
 # Byte output (hillshade) is rounded by GDAL, not by the reference: one grey level either way.

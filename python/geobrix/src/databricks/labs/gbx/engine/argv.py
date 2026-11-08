@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from databricks.labs.gbx import manifest
 from databricks.labs.gbx.engine.spec import (
+    PLACEHOLDER,
     THREADED,
     DataError,
     ParamError,
@@ -267,6 +268,72 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
     return _Calc(expr, tuple((v, i) for v, (i, _) in sorted(resolved.items())))
 
 
+def _band(fn, param, v, props: RasterProps) -> int:
+    """A band number of the input: a whole number from 1 to its band count."""
+    n = int(v)
+    if n != float(v) or n < 1:
+        raise ParamError(f"{fn.sql_name}: {param}={v} is not a band number (1 or more)")
+    if n > props.bands:
+        raise ParamError(
+            f"{fn.sql_name}: {param}={v} is out of range: the raster has {props.bands} band(s)"
+        )
+    return n
+
+
+def _formula_binding(fn, arg, values, inputs: Sequence[RasterProps]) -> Optional[_Calc]:
+    """A fixed formula with the call's band numbers, constants and operator written into it, over input A.
+
+    ``calc_formula``: the arg's template, each ``{param}`` replaced by the call's value (an INT param is a band
+    number, written ``A[n]`` where the template says so; a DOUBLE a finite number; a STRING one of the arg's ``map``
+    words). ``calc_named``: the formula the ``from`` param names, with each of its band names replaced by ``A[n]``
+    from the band map the ``and`` param holds. Only these values reach the expression, so no caller text does. None
+    when a placeholder value is NULL: the arg's null rule then applies.
+    """
+    params = {p.name: p for p in fn.params}
+    if arg.type == "calc_named":
+        if _is_null(values.get(arg.source)):
+            return None
+        name = str(values.get(arg.source)).strip().lower()
+        if name not in arg.formulas:
+            known = ", ".join(sorted(arg.formulas))
+            raise ParamError(
+                f"{fn.sql_name}: {arg.source} '{values.get(arg.source)}' is not one of {known}"
+            )
+        template, bands = arg.formulas[name]
+        if _is_null(values.get(arg.and_)):
+            return None
+        bmap = {str(k).lower(): v for k, v in dict(values.get(arg.and_)).items()}
+        subs = {}
+        for b in bands:
+            if b not in bmap:
+                have = ", ".join(sorted(bmap))
+                raise ParamError(
+                    f"{fn.sql_name}: the formula '{name}' needs the band '{b}' in {arg.and_}; got {have or 'none'}"
+                )
+            subs[b] = f"A[{_band(fn, f'{arg.and_}[{b}]', bmap[b], inputs[0])}]"
+    else:
+        template, subs = arg.formula, {}
+        for p in sorted(set(PLACEHOLDER.findall(template))):
+            v, t = values.get(p), params[p].session[0]
+            if _is_null(v):
+                return None
+            if t == "INT":
+                subs[p] = str(_band(fn, p, v, inputs[0]))
+            elif t == "DOUBLE":
+                if not math.isfinite(float(v)):
+                    raise ParamError(f"{fn.sql_name}: {p} must be finite (got {v})")
+                subs[p] = fmt_double(float(v))
+            else:  # a STRING: one of the arg's words
+                if str(v) not in arg.map:
+                    allowed = ", ".join(f"'{k}'" for k in arg.map)
+                    raise ParamError(
+                        f"{fn.sql_name}: {p} must be one of {allowed} (got '{v}')"
+                    )
+                subs[p] = arg.map[str(v)]
+    expr = PLACEHOLDER.sub(lambda m: subs[m.group(1)], template)
+    return _Calc(expr, (("A", 0),))
+
+
 def data_bound(fn, values: Mapping[str, Any]) -> bool:
     """True when this call binds a value to a ``bad: data`` argument: GDAL refusing the argv is then that value's
     fault, a data error (an error tile), not a parameter error."""
@@ -298,6 +365,16 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
                 tokens.append(f"--{a.arg}")
             elif a.const is not False:
                 tokens.append(f"--{a.arg}={_fmt_const(a.const)}")
+            continue
+        if a.type in ("calc_formula", "calc_named"):
+            calc = _formula_binding(fn, a, values, inputs)
+            if calc is None:
+                if a.null == "raise":
+                    raise ParamError(
+                        f"{fn.sql_name}: {a.source} and the other values of the formula must not be NULL"
+                    )
+                return None
+            tokens += [f"--{a.arg}={calc.expr}", "--dialect=muparser"]
             continue
         v = values.get(a.source)
         partner = by_arg[a.with_] if a.with_ else None

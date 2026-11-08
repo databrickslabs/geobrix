@@ -36,7 +36,6 @@ from databricks.labs.gbx.pyrx.core import (
     features,
     focal,
     gridagg,
-    indices,
     mapalgebra,
     ops,
     resample,
@@ -806,7 +805,9 @@ REGISTRY: Dict[str, FnSpec] = {
         min_bands=2,
         sources=_INDICES_LIGHT + (_HEAVY + "RST_NDVI.scala",),
         core=True,
-        core_fn=lambda ds, a: indices.ndvi(ds, a["red_band"], a["nir_band"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_ndvi", {"red_idx": a["red_band"], "nir_idx": a["nir_band"]}
+        )(ds),
         col_fn=lambda t, a: rx.rst_ndvi(t, a["red_band"], a["nir_band"]),
     ),
     "rst_transform": FnSpec(
@@ -963,7 +964,9 @@ REGISTRY: Dict[str, FnSpec] = {
         min_bands=2,
         sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NDWI.scala",),
         core=True,
-        core_fn=lambda ds, a: indices.ndwi(ds, a["green_idx"], a["nir_idx"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_ndwi", {"green_idx": a["green_idx"], "nir_idx": a["nir_idx"]}
+        )(ds),
         col_fn=lambda t, a: rx.rst_ndwi(t, a["green_idx"], a["nir_idx"]),
     ),
     "rst_nbr": FnSpec(
@@ -975,7 +978,9 @@ REGISTRY: Dict[str, FnSpec] = {
         min_bands=2,
         sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NBR.scala",),
         core=True,
-        core_fn=lambda ds, a: indices.nbr(ds, a["nir_idx"], a["swir_idx"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_nbr", {"nir_idx": a["nir_idx"], "swir_idx": a["swir_idx"]}
+        )(ds),
         col_fn=lambda t, a: rx.rst_nbr(t, a["nir_idx"], a["swir_idx"]),
     ),
     # --- warp (bytes; warp.py) ---
@@ -1413,7 +1418,9 @@ REGISTRY: Dict[str, FnSpec] = {
         "edit",
         _BOTH,
         {"op": ">", "value": 0.5},
-        core_fn=lambda ds, a: edit.threshold(ds, a["op"], a["value"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_threshold", {"op": a["op"], "value": a["value"]}
+        )(ds),
         col_fn=lambda t, a: rx.rst_threshold(t, a["op"], a["value"]),
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Threshold.scala",),
         core=False,
@@ -1671,16 +1678,18 @@ REGISTRY: Dict[str, FnSpec] = {
             "g": 2.5,
         },
         min_bands=2,
-        core_fn=lambda ds, a: indices.evi(
-            ds,
-            a["red_idx"],
-            a["nir_idx"],
-            a["blue_idx"],
-            l=a["l"],
-            c1=a["c1"],
-            c2=a["c2"],
-            g=a["g"],
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_evi",
+            {
+                "red_idx": a["red_idx"],
+                "nir_idx": a["nir_idx"],
+                "blue_idx": a["blue_idx"],
+                "l": a["l"],
+                "c1": a["c1"],
+                "c2": a["c2"],
+                "g": a["g"],
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_evi(
             t,
             a["red_idx"],
@@ -1701,7 +1710,10 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"red_idx": 1, "nir_idx": 2, "l": 0.5},
         min_bands=2,
-        core_fn=lambda ds, a: indices.savi(ds, a["red_idx"], a["nir_idx"], l=a["l"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_savi",
+            {"red_idx": a["red_idx"], "nir_idx": a["nir_idx"], "l": a["l"]},
+        )(ds),
         col_fn=lambda t, a: rx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
         sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_SAVI.scala",),
         core=False,
@@ -1717,7 +1729,10 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"index_name": _INDEX_NAME, "band_map": _INDEX_BAND_MAP},
         min_bands=2,
-        core_fn=lambda ds, a: indices.index(ds, _INDEX_NAME, _INDEX_BAND_MAP),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_index",
+            {"formula_name": _INDEX_NAME, "band_map": _INDEX_BAND_MAP},
+        )(ds),
         col_fn=lambda t, a: rx.rst_index(
             t,
             _INDEX_NAME,

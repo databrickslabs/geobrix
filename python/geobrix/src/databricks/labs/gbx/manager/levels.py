@@ -193,11 +193,27 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # The DEM functions took the row-wise form in the local pass (1024 px tiles, median of 3 runs, 384 tiles, c0 against c1):
 # aspect 9.4 s against 11.5 s, hillshade 3.4 against 4.9, TRI 6.3 against 8.0, TPI 5.3 against 8.5, roughness 5.2
 # against 7.4. Local ratios are provisional until the cluster pass.
+# The band-math functions took the row-wise form in the local pass (512 px four-band tiles, median of 3 runs, 384 tiles,
+# c0 against c1): NDVI 3.5 s against 5.2, NDWI 3.4 against 4.7, NBR 3.8 against 5.4, SAVI 4.2 against 5.7, EVI 3.9
+# against 5.0, rst_index 3.6 against 5.0, threshold 7.5 against 9.1.
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
         f"gbx_rst_{n}": "engine-c0"
-        for n in ("aspect", "hillshade", "tri", "tpi", "roughness")
+        for n in (
+            "aspect",
+            "hillshade",
+            "tri",
+            "tpi",
+            "roughness",
+            "ndvi",
+            "ndwi",
+            "nbr",
+            "savi",
+            "evi",
+            "index",
+            "threshold",
+        )
     },
 }
 

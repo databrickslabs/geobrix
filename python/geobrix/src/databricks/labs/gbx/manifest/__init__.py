@@ -86,7 +86,19 @@ LEVEL_REQUIRED_ANY = {
 # The closed vocabulary of a row's `gdal` block (the GDAL spec engine's spec): what `parse_gdal_spec` accepts.
 GDAL_KEYS = frozenset({"alg", "in", "out", "write", "args", "needs_crs", "gdal_min"})
 GDAL_ARG_KEYS = frozenset(
-    {"arg", "const", "from", "type", "map", "null", "with", "bad"}
+    {
+        "arg",
+        "const",
+        "from",
+        "type",
+        "map",
+        "null",
+        "with",
+        "bad",
+        "formula",
+        "formulas",
+        "and",
+    }
 )
 GDAL_IN_KINDS = frozenset({"raster", "rasters", "text"})
 GDAL_OUT_KINDS = frozenset({"raster", "features", "json"})
@@ -100,6 +112,8 @@ GDAL_BINDERS = frozenset(
         "geom_wkt",
         "double_list",
         "calc_envelope",
+        "calc_formula",
+        "calc_named",
         "text_vsimem",
         "observer_xy",
         "size_from_factor",
@@ -241,6 +255,12 @@ class GdalArg:
     null: str = "null_result"
     with_: Optional[str] = None
     bad: str = "raise"
+    # `calc_formula`: a muparser template whose `{param}` placeholders take the call's values. `calc_named`: `formulas`
+    # maps a lower-case name (the value of `source`) to (template, band names), each `{band}` written as `A[n]` from
+    # the band map the param `and` holds.
+    formula: Optional[str] = None
+    formulas: Mapping[str, Tuple[str, Tuple[str, ...]]] = MappingProxyType({})
+    and_: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -494,6 +514,14 @@ def _parse_gdal_arg(raw: Mapping) -> GdalArg:
         )
     if "from" in raw:
         _one_of(raw.get("type"), GDAL_BINDERS, f"binder of {name!r}")
+    kind = raw.get("type")
+    if (kind == "calc_formula") != isinstance(raw.get("formula"), str) or (
+        kind == "calc_named"
+    ) != (bool(raw.get("formulas")) and isinstance(raw.get("and"), str)):
+        raise ValueError(
+            f"gdal spec: argument {name!r}: calc_formula takes a formula, calc_named takes formulas and and, and "
+            "no other binder takes any of them"
+        )
     return GdalArg(
         arg=name,
         const=raw.get("const"),
@@ -505,6 +533,14 @@ def _parse_gdal_arg(raw: Mapping) -> GdalArg:
         ),
         with_=raw.get("with"),
         bad=_one_of(raw.get("bad", "raise"), GDAL_BAD, f"bad rule of {name!r}"),
+        formula=raw.get("formula"),
+        formulas=MappingProxyType(
+            {
+                str(k): (str(v[0]), tuple(str(b) for b in v[1]))
+                for k, v in dict(raw.get("formulas", {})).items()
+            }
+        ),
+        and_=raw.get("and"),
     )
 
 

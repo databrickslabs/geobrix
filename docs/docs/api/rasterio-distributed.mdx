@@ -45,7 +45,8 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **Resample** | `rst_resample` | rasterio |
 | **Merge** | `rst_merge`, `rst_merge_agg` | rasterio + NumPy |
 | **COG conversion** | `rst_cog_convert` | rasterio (GDAL's COG driver) |
-| **Band math / spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_derivedband`, `rst_derivedband_agg`, `rst_combineavg`, `rst_combineavg_agg` | NumPy + numexpr |
+| **Spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_threshold` | GDAL `raster calc` |
+| **Band math** | `rst_derivedband`, `rst_derivedband_agg`, `rst_combineavg`, `rst_combineavg_agg` | NumPy |
 | **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | NumPy |
 | **Color relief** | `rst_color_relief` | NumPy (see [Known divergences](#known-behavior-divergences)) |
 | **Rasterize / polygonize** | `rst_rasterize`, `rst_polygonize`, `rst_h3_rasterize_agg` | rasterio + shapely |
@@ -149,7 +150,7 @@ Both operations mask the raster to the provided geometry. The third argument to 
   {rioDist}
 </CodeFromTest>
 
-The test asserts `np.allclose` between the rasterio-computed NDVI array and the pyrx-computed result. NDVI is pure NumPy arithmetic on rasterio-read band arrays — the two sides agree to within floating-point tolerance.
+The test asserts `np.allclose` between the rasterio-computed NDVI array and the pyrx-computed result. The rasterio side is NumPy arithmetic on band arrays. The pyrx side runs GDAL's `raster calc`. The two agree to within floating-point tolerance.
 
 ---
 

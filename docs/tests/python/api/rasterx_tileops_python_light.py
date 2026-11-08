@@ -610,14 +610,14 @@ rst_setsrid_python_example_output = """
 
 
 # ---------------------------------------------------------------------------
-# rst_threshold — binarize a raster: pixels matching op/value → 1, others → 0
+# rst_threshold — keep the pixels that match op/value, set the others to NoData
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0, all pixels are 0)
-# Output: tile struct (returns the binary mask tile)
+# Output: tile struct (Float32, NoData -9999)
 # ---------------------------------------------------------------------------
 
 
 def rst_threshold_python_example(spark):
-    """Binarize a raster tile using a threshold condition using the light pyrx tier."""
+    """Keep the pixels above a threshold and set the others to NoData."""
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
     from pyspark.sql import functions as f  # noqa: PLC0415
 
@@ -634,7 +634,7 @@ rst_threshold_python_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(binary mask tile; pixels > 0.0 → 1, others → 0; light tier returns a materialized v2 Tile)
+(pixels > 0.0 keep their value, others are NoData -9999; returns a materialized v2 Tile)
 """
 
 

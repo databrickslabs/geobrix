@@ -1413,7 +1413,8 @@ def rst_threshold_grouped(
     """Partition-scoped rst_threshold via the grouped executor (FILE pixel fast path).
 
     Applies a pixel threshold to every tile in *df*, setting pixels that do not
-    satisfy ``pixel <op> value`` to NoData.  Pixel reads are routed through
+    satisfy ``pixel <op> value`` to NoData (-9999, Float32; the GDAL spec engine's
+    ``raster calc``, as ``gbx_rst_threshold``).  Pixel reads are routed through
     ``grouped_tile_map`` with ``view="pixels"``; source opens are amortized per
     partition.
 
@@ -1423,19 +1424,11 @@ def rst_threshold_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import edit
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _op = str(op)
-    _val = float(value)
-
-    def _core(ds, cellid):
-        new_bytes = edit.threshold(ds, _op, _val)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core("gbx_rst_threshold", {"op": str(op), "value": float(value)})
 
     return grouped_tile_map(
         df,

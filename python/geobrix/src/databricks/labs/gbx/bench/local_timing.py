@@ -160,6 +160,29 @@ SETS: Dict[str, SetSpec] = {
             "gbx_rst_roughness",
         )
     },
+    # the band-math functions, each over replicated 512 px four-band tiles with its two light UDFs and a floor
+    **{
+        "SE-"
+        + fn[len("gbx_rst_") :]: SetSpec(
+            mvp="SE",
+            forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+            reference="engine-c0@mem",
+            ns=(24, 96, 384),
+            fn=fn,
+            peer_exempt=(
+                "engine-c1@mem",
+            ),  # the batch UDF behind the wrapper: recorded, not a peer
+        )
+        for fn in (
+            "gbx_rst_ndvi",
+            "gbx_rst_ndwi",
+            "gbx_rst_nbr",
+            "gbx_rst_savi",
+            "gbx_rst_evi",
+            "gbx_rst_index",
+            "gbx_rst_threshold",
+        )
+    },
     "SE-transformcrs": SetSpec(
         mvp="SE",
         forms=(

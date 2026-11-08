@@ -6,9 +6,13 @@ hits the same rules a spec does.
 
 from __future__ import annotations
 
+import re
 from typing import Optional, Sequence
 
 from databricks.labs.gbx.manifest import GdalSection, GdalSpec
+
+# A `{param}` placeholder of a `calc_formula` template.
+PLACEHOLDER = re.compile(r"\{([a-z_][a-z0-9_]*)\}")
 
 # The argv tokens the engine writes itself; no spec and no caller sets them.
 ENGINE_ARGS = frozenset(
@@ -84,6 +88,24 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
         if a.source is not None and a.source not in params:
             raise SpecError(
                 f"{name}: '{a.arg}' binds '{a.source}', which is not a parameter"
+            )
+        if a.formula is not None:
+            for ph in sorted(set(PLACEHOLDER.findall(a.formula))):
+                if ph not in params:
+                    raise SpecError(
+                        f"{name}: the formula of '{a.arg}' has {{{ph}}}, which is not a parameter"
+                    )
+        for fname, (template, bands) in a.formulas.items():
+            if (
+                set(PLACEHOLDER.findall(template)) != set(bands)
+                or fname != fname.lower()
+            ):
+                raise SpecError(
+                    f"{name}: the formula '{fname}' of '{a.arg}' must be named in lower case and use exactly its bands"
+                )
+        if a.and_ is not None and a.and_ not in params:
+            raise SpecError(
+                f"{name}: '{a.arg}' reads '{a.and_}' (and), which is not a parameter"
             )
         if a.with_ is not None:
             other = by_arg.get(a.with_)

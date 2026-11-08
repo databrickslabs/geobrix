@@ -4613,7 +4613,7 @@ _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands with real pixe
 {/* END GENERATED gbx_rst_mapalgebra */}
 
 :::note Implementation
-Powered by **NumExpr**. Bands map to `A`, `B`, `C`, … and the `calc` expression is evaluated with NumExpr (no `gdal_calc` NumPy builtins); single-band Float32 output.
+Runs GDAL's own `raster calc` with its muparser grammar, on every compute. Bands map to `A`, `B`, `C`, …; the output is single-band Float32 with NoData -9999.
 :::
 
 :::note Python-only keywords
@@ -4638,10 +4638,10 @@ Map algebra expression (e.g. `A - B`).
 
 Both `A` and `B` read raster `0` (the one tile in the array), with `A` = band 4 and `B` = band 3 — the direct equivalent of `gdal_calc -A in.tif --A_band=4 -B in.tif --B_band=3 --calc="(A - B) / (A + B)"`. A variable with no `*_index`/`*_band` keeps the default (its ordinal raster, band 1). **This works at every level.**
 
-The only `gdal_calc` envelope key the Python level does **not** support is `extra_options`. These raw CLI flags have no NumExpr equivalent. The Python level raises a clear error rather than dropping them silently. The JVM level honors `extra_options` as well.
+The envelope does not take `extra_options` (raw `gdal_calc` flags) or `dialect`. Either key raises an error that names it.
 
-:::caution Expression language differs by engine
-The **envelope** is portable, but the **calc expression language is not fully portable**. Each level uses a different evaluator. The JVM level shells out to GDAL's `gdal_calc` (NumPy expression syntax). The Python level evaluates with [NumExpr](https://numexpr.readthedocs.io/). They agree on ordinary arithmetic and comparisons (`A * 2`, `(A - B) / (A + B)`, `A > 0`), so those expressions run **unchanged at every level**. They diverge on function spellings — e.g. `gdal_calc` accepts NumPy calls like `numpy.where(A > 0, A, 0)`, whereas NumExpr wants `where(A > 0, A, 0)`. Keep expressions to basic arithmetic so they run at every level. For the JVM level's full syntax and options, see the GDAL raster calculator reference: [gdal_raster_calc](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
+:::note Expression grammar
+Every expression uses GDAL's muparser grammar, for example `(A - B) / (A + B)`, `A > 0 ? A : 0` and `max(A, B)`. NumPy spellings such as `numpy.where` are not accepted. See the GDAL [raster calculator reference](https://gdal.org/en/stable/programs/gdal_raster_calc.html#gdal-raster-calc).
 :::
 
 <FunctionExamples
@@ -6180,7 +6180,7 @@ Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a w
 The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Keep the pixels for which `pixel op value` holds, with their original values, and set the others to NoData. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. A source without NoData gets the data type's fallback value, such as 65535 for `UInt16`.
+Keep the pixels for which `pixel op value` holds, with their original values, and set the others to NoData. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. The result is Float32 with NoData -9999 in every band, whatever the source type.
 
 <FunctionExamples
   name="rst_threshold"

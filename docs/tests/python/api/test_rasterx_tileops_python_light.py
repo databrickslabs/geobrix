@@ -164,7 +164,7 @@ def test_rst_setsrid_python_example(spark):
 
 
 def test_rst_threshold_python_example(spark):
-    """rst_threshold returns a materialized tile (binary mask)."""
+    """rst_threshold returns a materialized tile (the passing pixels, others NoData)."""
     assert tileops_examples is not None
     result = tileops_examples.rst_threshold_python_example(spark)
     _assert_materialized_tile(result, "rst_threshold")

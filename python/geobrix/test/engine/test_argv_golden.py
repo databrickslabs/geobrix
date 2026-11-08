@@ -90,6 +90,33 @@ def test_a_null_required_value_is_a_null_result():
     )
 
 
+@pytest.mark.parametrize(
+    "fn, values",
+    [
+        ("gbx_rst_ndvi", {"red_idx": 3, "nir_idx": None}),
+        ("gbx_rst_savi", {"red_idx": 3, "nir_idx": 4, "l": None}),
+        ("gbx_rst_threshold", {"op": None, "value": 1.0}),
+        ("gbx_rst_index", {"formula_name": None, "band_map": {"red": 3, "nir": 4}}),
+        ("gbx_rst_index", {"formula_name": "ndvi", "band_map": None}),
+    ],
+)
+def test_a_null_value_of_a_formula_is_a_null_result(fn, values):
+    """A NULL band, constant, operator, index name or band map gives a NULL result, never a stand-in."""
+    assert (
+        argv.build(MAN.functions[fn], values, [argv.RasterProps(64, 48, 4, "Float32")])
+        is None
+    )
+
+
+def test_only_the_binders_values_reach_a_formula():
+    """A threshold operator is one of the closed list; text that would extend the expression is refused."""
+    fn = MAN.functions["gbx_rst_threshold"]
+    props = [argv.RasterProps(64, 48, 1, "Float32")]
+    for op in (">; 1", "> 0 ? A : 1 #", "A"):
+        with pytest.raises(spec.ParamError):
+            argv.build(fn, {"op": op, "value": 1.0}, props)
+
+
 @pytest.mark.parametrize("case", GOLDEN["zstd_knob"], ids=lambda c: repr(c["knob"]))
 def test_the_level_knob_reads_as_the_size_ladder_defines_it(case, monkeypatch):
     """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder."""

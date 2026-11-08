@@ -1868,25 +1868,26 @@ def release_cached_inputs(spark) -> None:
     _CACHED_INPUTS.clear()
 
 
-def _se_dems_replicated(size: int):
-    """`size` px DEM tiles, n rows: four distinct tiles built once on the client and replicated on the executors, then
-    cached (the rows are not rebuilt by each timed query, and no client cap applies to n). The cache lasts one rung:
-    `release_cached_inputs` frees it.
+def _se_dems_replicated(size: int, tile_of=None, label: str = "dem"):
+    """`size` px tiles (DEMs, or what `tile_of(size, seed)` builds), n rows: four distinct tiles built once on the client
+    and replicated on the executors, then cached (the rows are not rebuilt by each timed query, and no client cap applies
+    to n). The cache lasts one rung: `release_cached_inputs` frees it.
     """
+    tile_of = tile_of or _se_dem_tile
 
     def build(spark, n, corpus, schema):
         from pyspark.sql import functions as F
 
         from databricks.labs.gbx.manifest import TILE_SQL
 
-        name = f"mvp_in_se_dem{size}_mem_v{RECIPE_VERSION}_{n}"
+        name = f"mvp_in_se_{label}{size}_mem_v{RECIPE_VERSION}_{n}"
         if schema is None and spark.catalog.tableExists(name):
             return name
         four = client_dataframe(
             spark,
-            [(i, _se_dem_tile(size, i)) for i in range(4)],
+            [(i, tile_of(size, i)) for i in range(4)],
             f"idx int, tile {TILE_SQL}",
-            what=f"se_dem_{size} tiles",
+            what=f"se_{label}_{size} tiles",
         )
 
         def rows():
@@ -2234,6 +2235,63 @@ for _fn, _call in _SE_DEM_CALLS.items():
             "L3",
             "floor-c0@mem",
             "se_dem_1024_mem",
+            _SE_FLOOR_C0,
+            setup="setup_se_floor",
+            register=False,
+        )
+    ]
+
+
+# The band-math functions (the spectral indices and threshold) on the same shape as the DEM functions: 512 px tiles of
+# four Float32 bands (red, near infrared, green, shortwave infrared) with NoData holes, replicated on the executors, each
+# function with the engine's row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a floor.
+def _se_calc_tile(size: int, seed: int) -> dict:
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracles
+
+    rng = np.random.default_rng(100 + seed)
+    bands = np.stack(
+        [
+            base + rng.normal(0.0, 2.0, (size, size))
+            for base in (60.0, 140.0, 80.0, 110.0)
+        ]
+    )
+    bands[0, ::97, ::89] = -9999.0  # NoData holes
+    bands[1, ::83, ::101] = -9999.0
+    return oracles._tile(oracles._gtiff(bands, "EPSG:3857"))
+
+
+INPUTS["se_calc_512_mem"] = _se_dems_replicated(512, _se_calc_tile, "calc")
+BASE_ROWS["se_calc_512_mem"] = 16
+
+_SE_CALC_CALLS = {
+    "gbx_rst_ndvi": "{fn}(tile, 1, 2)",
+    "gbx_rst_ndwi": "{fn}(tile, 3, 2)",
+    "gbx_rst_nbr": "{fn}(tile, 2, 4)",
+    "gbx_rst_savi": "{fn}(tile, 1, 2, 0.5)",
+    "gbx_rst_evi": "{fn}(tile, 1, 2, 3, 1.0, 6.0, 7.5, 2.5)",
+    "gbx_rst_index": "{fn}(tile, 'ndvi', map('red', 1, 'nir', 2))",
+    "gbx_rst_threshold": "{fn}(tile, '>=', 100.0)",
+}
+SE_CALC_FUNCTIONS = tuple(_SE_CALC_CALLS)
+for _fn, _call in _SE_CALC_CALLS.items():
+    FORMS["SE"] += [
+        _se(
+            _fn,
+            "L3",
+            f"{v}@mem",
+            "se_calc_512_mem",
+            _SE_FP.format(call=_call),
+            vsql=_SE_VFP.format(call=_call, col="tile.raster", k=8),
+        )
+        for v in ("engine-c0", "engine-c1")
+    ] + [
+        _se(
+            _fn,
+            "L3",
+            "floor-c0@mem",
+            "se_calc_512_mem",
             _SE_FLOOR_C0,
             setup="setup_se_floor",
             register=False,

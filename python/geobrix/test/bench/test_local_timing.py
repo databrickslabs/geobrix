@@ -112,7 +112,21 @@ def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_reference_and_t96_o
 
 
 _SE_DEM_SETS = tuple(
-    f"SE-{n}" for n in ("aspect", "hillshade", "tri", "tpi", "roughness")
+    f"SE-{n}"
+    for n in (
+        "aspect",
+        "hillshade",
+        "tri",
+        "tpi",
+        "roughness",
+        "ndvi",
+        "ndwi",
+        "nbr",
+        "savi",
+        "evi",
+        "index",
+        "threshold",
+    )
 )
 
 

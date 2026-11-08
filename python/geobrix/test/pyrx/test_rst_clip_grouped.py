@@ -358,15 +358,18 @@ def test_rst_resample_to_res_grouped_parity(spark, raster_bytes):
 
 
 def test_rst_threshold_grouped_parity(spark, raster_bytes):
-    """rst_threshold_grouped pixel-equals _uf_threshold (> 5.0)."""
-    from databricks.labs.gbx.pyrx.functions import _uf_threshold
+    """rst_threshold_grouped pixel-equals the engine's row-wise threshold (> 5.0)."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
     from databricks.labs.gbx.rasterx.helpers import rst_threshold_grouped
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_threshold_grouped(df, ">", 5.0, out_col="out"))
     s_bytes = _read_scalar(
         df,
-        _uf_threshold(F.col("tile"), F.lit(None), F.lit(">"), F.lit(5.0)),
+        engine_l3.c0("gbx_rst_threshold")(F.col("tile"), F.lit(">"), F.lit(5.0)),
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_threshold_grouped")
 

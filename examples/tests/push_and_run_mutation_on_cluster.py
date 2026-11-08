@@ -275,7 +275,8 @@ import guidance_rows
 
 out = root + "/out"
 shutil.rmtree(CFG["out_dir"], ignore_errors=True)
-shutil.copytree(out, CFG["out_dir"])  # rows.jsonl, run.json, killers.jsonl, K.json, mutmut.log ... to the Volume
+if os.path.isdir(out):  # the runner stops before it makes the folder when a module, test or mutmut is missing
+    shutil.copytree(out, CFG["out_dir"])  # rows.jsonl, run.json, killers.jsonl, K.json, mutmut.log ... to the Volume
 result = {"rc": rc, "rows": 0}
 if os.path.exists(out + "/rows.jsonl"):
     rows = guidance_rows.read_jsonl(out + "/rows.jsonl")
@@ -454,7 +455,8 @@ def launch(a, plan: dict) -> int:
                     lease = stack.enter_context(lease_pool_cluster(w, a, plan, volroot=volroot, me=me))
                 except _cluster_pool.PoolError as exc:
                     print(f"ERROR: {exc}", file=sys.stderr)
-                    return EXIT_USAGE
+                    rc = EXIT_USAGE  # the finally block reads rc: no notebook was uploaded to keep
+                    return rc
                 plan["node_type"] = w.clusters.get(lease.cluster_id).node_type_id or plan["node_type"]
                 plan["cores"] = cores_of(plan["node_type"]) or "?"
             w.workspace.mkdirs(str(Path(nb_path).parent))

@@ -26,7 +26,7 @@ The container has no `LANG`/`LC_ALL`. That would leave the JVM's file-name encod
 
 ## The native payload
 
-Set `GBX_NATIVE_ROOT` in the calling shell to run the test JVM on a native payload, for example `GBX_NATIVE_ROOT=build/env-wheel/env6/payload` (from `gbx:build:wheel --env 6`). The command passes it into the container as its `/root/geobrix` path (a path under this checkout, relative or absolute). Any other absolute path is taken as a container path. `GDALManager` loads that payload's GDAL JNI instead of the system one. Suites that need the manifest's pinned GDAL (the spec engine runs in `GdalSpecSmokeTest`) cancel with a `PRECONDITION MISSING` line without it. Unset, nothing is passed.
+Set `GBX_NATIVE_ROOT` in the calling shell to run the test JVM on a native payload, for example `GBX_NATIVE_ROOT=build/env-wheel/env6/payload` (from `gbx:build:wheel --env 6`). The command passes it into the container as its `/root/geobrix` path (a path under this checkout, relative or absolute). Any other absolute path is taken as a container path. `GDALManager` loads that payload's GDAL JNI instead of the system one. Unset, nothing is passed.
 
 ## Spark version builds
 

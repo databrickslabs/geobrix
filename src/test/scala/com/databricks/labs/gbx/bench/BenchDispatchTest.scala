@@ -61,7 +61,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_buildoverviews left with its companion (light measured 2.2x faster): 85 - 1 = 84.
     // rst_percentile_stretch left with its companion (its JVM form took another percentile rule than light, unmeasured): 84 - 1 = 83.
     // rst_filter left with its companion (its JVM form left a different NoData mask than light, unmeasured): 83 - 1 = 82.
-    assert(BenchDispatch.all.size == 82)
+    // rst_slope left with its companion (the GDAL spec engine's JVM form measured no faster than light): 82 - 1 = 81.
+    assert(BenchDispatch.all.size == 81)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -104,7 +105,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_proximity") == "analysis")
     assert(BenchDispatch.minBands("rst_width") == 1)
     assert(BenchDispatch.category("rst_resample") == "resample")
-    assert(BenchDispatch.category("rst_slope") == "terrain")
+    assert(BenchDispatch.category("rst_aspect") == "terrain")
     assert(BenchDispatch.category("rst_srid") == "accessor")
     // CRS-string ops: rst_crs is an accessor (like rst_srid); rst_setcrs is an edit/relabel (like rst_setsrid).
     assert(BenchDispatch.category("rst_crs") == "accessor")
@@ -141,7 +142,7 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
   test("pureCore runs an accessor and a terrain op, returning a fingerprint") {
     val wfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_width", ds, Map.empty))
     assert(wfp.get("kind").asText() == "scalar")
-    val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_slope", ds, Map.empty))
+    val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_aspect", ds, Map.empty))
     assert(sfp.get("kind").asText() == "raster")
   }
 

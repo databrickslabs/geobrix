@@ -96,7 +96,7 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         val set = sc.parallelize(1 to n, n).map { _ => TileBytes.useReadCap(Some(512L)); TileBytes.readCap }.collect()
         assert(set.forall(_ == 512L))
         val later = sc.parallelize(1 to n, n).map(_ => TileBytes.readCap).collect()
-        assert(later.forall(_ == com.databricks.labs.gbx.kernels.spec.GdalSpecEngine.DecodedBudget), later.distinct.toSeq)
+        assert(later.forall(_ == TileBytes.DecodedBudget), later.distinct.toSeq)
     }
 
     test("a zipped tile reports its driver from the path its read uses") {

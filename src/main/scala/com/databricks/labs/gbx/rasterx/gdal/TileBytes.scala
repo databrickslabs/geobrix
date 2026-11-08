@@ -1,7 +1,6 @@
 package com.databricks.labs.gbx.rasterx.gdal
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.kernels.spec.{GdalSpecEngine, GdalSpecs}
 import org.gdal.gdal.{Dataset, TranslateOptions, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 
@@ -28,9 +27,12 @@ final class TileBytesRefused(msg: String) extends RuntimeException(msg)
   * The read cap is the decoded size, in bytes, one tile may have here: the session's [[ReadCapKey]] (the Python
   * manager sets it from the light tier's budget), passed to each task with its `ExpressionConfig`
   * ([[useReadCap]], called by `RST_ExpressionUtil.init`); a caller with no configuration (a Java UDF) gets the classic
-  * budget, [[GdalSpecEngine.DecodedBudget]].
+  * budget, [[DecodedBudget]].
   */
 object TileBytes {
+
+    /** The decoded bytes one call may hold on a classic JVM (`pyrx.core.budget`'s classic budget). */
+    val DecodedBudget: Long = 1536L * 1024 * 1024
 
     /** The session configuration key of the read cap, in bytes. */
     val ReadCapKey = "spark.databricks.labs.gbx.read_cap"
@@ -50,7 +52,7 @@ object TileBytes {
     }
 
     def readCap: Long =
-        Option(cap.get).filter(_._1 == attempt).map(_._2).getOrElse(GdalSpecEngine.DecodedBudget)
+        Option(cap.get).filter(_._1 == attempt).map(_._2).getOrElse(DecodedBudget)
 
     private val Fix =
         "Fix: store the tile as a GeoTIFF, or pass a VRT as a virtual tile (a path), which the virtual-tile policy judges"
@@ -97,7 +99,7 @@ object TileBytes {
     private[gbx] def refusedClassOf(
         path: String,
         bytes: Array[Byte],
-        names: Seq[String] = GdalSpecs.section.bytesRefusedLight
+        names: Seq[String] = RasterDrivers.classes.bytesRefusedLight
     ): Option[String] = {
         if (names.isEmpty || BinaryMagics.exists(startsWith(bytes, _))) return None
         val identified = Option(
@@ -113,7 +115,7 @@ object TileBytes {
     }
 
     /** The text a tile's bytes in a `driver` that can name other files are refused with (no subject): the one phrase
-      * of the rule, which a caller with its own subject (the spec engine's "input 0") prefixes. */
+      * of the rule, which a caller with its own subject prefixes. */
     private[gbx] def refusedPhrase(driver: String): String =
         s"is a $driver raster, a format that can name other files, which GeoBrix does not open from tile bytes. $Fix"
 
@@ -122,9 +124,9 @@ object TileBytes {
 
     /** The drivers an open of tile bytes may use: the manifest's allowed drivers less the refused class. */
     private[gdal] def openDrivers: java.util.Vector[String] = {
-        val section = GdalSpecs.section
-        val refused = section.bytesRefusedLight.toSet
-        new java.util.Vector[String](section.allowedDrivers.filterNot(refused).asJava)
+        val classes = RasterDrivers.classes
+        val refused = classes.bytesRefusedLight.toSet
+        new java.util.Vector[String](classes.allowed.filterNot(refused).asJava)
     }
 
     /** The decoded size of `ds` (each band at its own type), from its header. */
@@ -182,14 +184,14 @@ object TileBytes {
       * GeoTIFF it was translated to, so the result is written as GeoTIFF too. */
     def metadataAfterRead(metadata: Map[String, String], ds: Dataset): Map[String, String] =
         metadata.get("driver") match {
-            case Some(d) if ds != null && !GdalSpecs.section.bytesDrivers.contains(d) &&
+            case Some(d) if ds != null && !RasterDrivers.classes.bytes.contains(d) &&
                     ds.GetDriver().getShortName == "GTiff" => metadata + ("driver" -> "GTiff")
             case _ => metadata
         }
 
     /** True when `ds`'s driver reads the bytes alone (the manifest's `bytes` class); any other is translated. */
     private[gdal] def selfContained(ds: Dataset): Boolean =
-        GdalSpecs.section.bytesDrivers.contains(ds.GetDriver().getShortName)
+        RasterDrivers.classes.bytes.contains(ds.GetDriver().getShortName)
 
     /** `ds` translated to the GeoTIFF `dst` in `/vsimem` (`-of GTiff`, nothing else), opened read-only; the caller
       * releases both (releasing the result unlinks `dst`). */

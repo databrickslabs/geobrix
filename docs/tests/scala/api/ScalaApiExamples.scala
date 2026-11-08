@@ -1262,26 +1262,6 @@ result.show(truncate = false)
   // Terrain Analysis Functions
   // ============================================================================
 
-  val rst_slope_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_slope(col("tile"), lit("degrees"), lit(1.0), lit(1.0)).alias("slope"))
-result.show(truncate = false)
-""".trim
-
-  val rst_slope_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|slope                                                      |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(slope in degrees; auto-scaled from raster CRS units)
-""".trim
-
   val rst_aspect_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

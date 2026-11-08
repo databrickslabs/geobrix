@@ -114,7 +114,7 @@ object BenchDispatch {
 
   private val cats: Map[String, String] = Map(
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
-    "rst_slope" -> TER, "rst_aspect" -> TER, "rst_hillshade" -> TER,
+    "rst_aspect" -> TER, "rst_hillshade" -> TER,
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
     "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
     "rst_transform" -> WARP, "rst_to_webmercator" -> WARP,
@@ -411,7 +411,6 @@ object BenchDispatch {
     case "rst_width"      => BenchFingerprint.ofScalar(RST_Width.execute(ds))
     case "rst_height"     => BenchFingerprint.ofScalar(RST_Height.execute(ds))
     case "rst_numbands"   => BenchFingerprint.ofScalar(RST_NumBands.execute(ds))
-    case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "xscale", Double.NaN), argD(a, "yscale", Double.NaN)))
     case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))
     case "rst_hillshade"  => fpDerived(RST_Hillshade.execute(ds, argD(a, "azimuth", 315.0), argD(a, "altitude", 45.0), argD(a, "z_factor", 1.0)))
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
@@ -867,7 +866,6 @@ object BenchDispatch {
       case "rst_width"      => rst_width(tile)
       case "rst_height"     => rst_height(tile)
       case "rst_numbands"   => rst_numbands(tile)
-      case "rst_slope"      => rst_slope(tile, argS(a, "unit", "degrees"))
       case "rst_aspect"     => rst_aspect(tile)
       case "rst_hillshade"  => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.dem.RST_Hillshade.name, Seq(tile, org.apache.spark.sql.functions.lit(315.0), org.apache.spark.sql.functions.lit(45.0), org.apache.spark.sql.functions.lit(1.0)))
       case "rst_tri"        => rst_tri(tile)

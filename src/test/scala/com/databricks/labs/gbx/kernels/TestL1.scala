@@ -72,7 +72,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.dem.RST_ColorRelief",
         "com.databricks.labs.gbx.rasterx.expressions.dem.RST_Hillshade",
         "com.databricks.labs.gbx.rasterx.expressions.dem.RST_Roughness",
-        "com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope",
         "com.databricks.labs.gbx.rasterx.expressions.dem.RST_TPI",
         "com.databricks.labs.gbx.rasterx.expressions.dem.RST_TRI",
         "com.databricks.labs.gbx.rasterx.expressions.spectral.RST_EVI",

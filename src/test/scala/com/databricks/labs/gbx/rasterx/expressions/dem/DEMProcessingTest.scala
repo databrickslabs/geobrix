@@ -24,7 +24,6 @@ import java.nio.file.Files
 class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
 
     private var demDs: Dataset = _
-    private var geoDemDs: Dataset = _
     private var resultsBuf: List[Dataset] = List.empty
 
     override def beforeAll(): Unit = {
@@ -34,13 +33,11 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
         import com.databricks.labs.gbx.util.NodeFilePathUtil
         Files.createDirectories(NodeFilePathUtil.rootPath)
         demDs = buildSyntheticDEM(width = 100, height = 100)
-        geoDemDs = buildGeographicDEM(width = 100, height = 100)
     }
 
     override def afterAll(): Unit = {
         resultsBuf.foreach { d => try d.delete() catch { case _: Throwable => () } }
         if (demDs != null) demDs.delete()
-        if (geoDemDs != null) geoDemDs.delete()
     }
 
     /** Helper: track result Datasets so we can release them in afterAll. */
@@ -60,38 +57,6 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
         ds.SetGeoTransform(Array(500000.0, 1.0, 0.0, 5000000.0, 0.0, -1.0))
         val band = ds.GetRasterBand(1)
         // Ramp: each column gets value = column index (0 .. width-1).
-        val buf = new Array[Float](width * height)
-        var r = 0
-        while (r < height) {
-            var c = 0
-            while (c < width) {
-                buf(r * width + c) = c.toFloat
-                c += 1
-            }
-            r += 1
-        }
-        band.WriteRaster(0, 0, width, height, buf)
-        band.FlushCache()
-        ds.FlushCache()
-        ds
-    }
-
-    /** Build a 100x100 Float32 DEM in a GEOGRAPHIC CRS (EPSG:4326).
-     *
-     *  Same west-to-east elevation ramp (0 .. width-1 m) but the pixel size is
-     *  ~0.001 degrees (≈111 m at the equator) rather than 1 m. On a geographic
-     *  raster, `gdaldem slope` must auto-derive a degree→metre scale (GDAL 3.11+)
-     *  or the slope saturates at ~90 deg.
-     */
-    private def buildGeographicDEM(width: Int, height: Int): Dataset = {
-        val memDriver = gdal.GetDriverByName("GTiff")
-        val path = s"/vsimem/dem_geo_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
-        val ds = memDriver.Create(path, width, height, 1, gdalconstConstants.GDT_Float32)
-        // EPSG:4326 — geographic, units degrees.
-        ds.SetProjection(srsWkt(4326))
-        // Origin at lon=0, lat=0; ~0.001 deg pixel size (≈111 m at equator).
-        ds.SetGeoTransform(Array(0.0, 0.001, 0.0, 0.0, 0.0, -0.001))
-        val band = ds.GetRasterBand(1)
         val buf = new Array[Float](width * height)
         var r = 0
         while (r < height) {
@@ -153,81 +118,6 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
     // ------------------------------------------------------------------
     // One happy-path test per expression (Task 4 budget: 7 tests)
     // ------------------------------------------------------------------
-
-    test("RST_Slope.execute returns ~45 deg slope across the 1-m-per-pixel east-ramp (isotropic 1.0/1.0)") {
-        val (out, _) = track(RST_Slope.execute(demDs, "degrees", 1.0, 1.0))
-        out should not be null
-        // Tolerance is broad - the center cell of a 1m/m gradient should be ~45 deg.
-        val sl = centerPixel(out)
-        sl should (be > 30.0 and be < 60.0)
-    }
-
-    /** Extract the default xscale/yscale literals the builder injects when the caller
-     *  omits them (1-arg form). Both must be NaN (GDAL-normal auto-scale).
-     */
-    private def builderDefaultScales(): (Double, Double) = {
-        val tile = org.apache.spark.sql.catalyst.expressions.Literal(null, org.apache.spark.sql.types.BinaryType)
-        val expr = RST_Slope.builder()(Seq(tile)).asInstanceOf[RST_Slope]
-        val xs = expr.xscaleExpr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Literal].value
-            .asInstanceOf[Double]
-        val ys = expr.yscaleExpr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Literal].value
-            .asInstanceOf[Double]
-        (xs, ys)
-    }
-
-    test("RST_Slope default (no explicit xscale/yscale) injects NaN sentinels so -xscale/-yscale are omitted") {
-        // GDAL-normal default: the 1-arg/2-arg builder must inject (NaN, NaN), not
-        // 1.0. NaN sentinels cause omission of -xscale/-yscale, letting GDAL 3.11
-        // auto-derive the CRS scale.
-        val (xs, ys) = builderDefaultScales()
-        xs.isNaN shouldBe true
-        ys.isNaN shouldBe true
-    }
-
-    test("RST_Slope auto-scales a geographic (EPSG:4326) DEM but saturates with explicit xscale=1.0/yscale=1.0") {
-        // Drive the SAME paths the SQL/Column API drives: the default (NaN/NaN)
-        // vs an explicit (1.0, 1.0). On a geographic raster, NaN/NaN omits
-        // -xscale/-yscale so GDAL auto-derives the scale, while 1.0/1.0 treats
-        // ~0.001 deg spacing as metres and saturates near vertical.
-        val (xs, ys) = builderDefaultScales()
-        val (auto, _) = track(RST_Slope.execute(geoDemDs, "degrees", xs, ys))
-        val (saturated, _) = track(RST_Slope.execute(geoDemDs, "degrees", 1.0, 1.0))
-        auto should not be null
-        saturated should not be null
-        val autoSl = centerPixel(auto)
-        val satSl = centerPixel(saturated)
-        // Saturated (-xscale 1.0 -yscale 1.0) is pinned near vertical; auto is well below it.
-        satSl should be > 80.0
-        autoSl should be < 80.0
-        satSl should be > (autoSl + 1.0)
-    }
-
-    test("RST_Slope anisotropic xscale: doubling xscale halves perceived gradient in X axis") {
-        // The test DEM is a west-to-east ramp (all gradient is in X). Doubling xscale
-        // tells GDAL each pixel spans 2 m in X instead of 1 m, halving the perceived
-        // slope steepness in that direction. Verify the result differs from xscale=1.0.
-        val (iso, _) = track(RST_Slope.execute(demDs, "degrees", 1.0, 1.0))
-        val (aniso, _) = track(RST_Slope.execute(demDs, "degrees", 2.0, 1.0))
-        iso should not be null
-        aniso should not be null
-        val isoSl = centerPixel(iso)
-        val anisoSl = centerPixel(aniso)
-        // xscale=2.0 makes the pixel 2x wider in X, so the slope angle decreases.
-        math.abs(isoSl - anisoSl) should be > 0.1
-        anisoSl should be < isoSl
-    }
-
-    test("RST_Slope builder rejects arity-3 (xscale without yscale)") {
-        val tile = org.apache.spark.sql.catalyst.expressions.Literal(null, org.apache.spark.sql.types.BinaryType)
-        val unit = org.apache.spark.sql.catalyst.expressions.Literal(
-            org.apache.spark.unsafe.types.UTF8String.fromString("degrees"),
-            org.apache.spark.sql.types.StringType
-        )
-        val scale = org.apache.spark.sql.catalyst.expressions.Literal(1.0, org.apache.spark.sql.types.DoubleType)
-        an[IllegalArgumentException] should be thrownBy {
-            RST_Slope.builder()(Seq(tile, unit, scale))
-        }
-    }
 
     test("RST_Aspect.execute returns ~270 deg (west-facing) for a west-to-east ramp") {
         // A west-to-east-rising ramp slopes UP to the east; gdaldem reports the

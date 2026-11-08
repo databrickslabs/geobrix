@@ -13,7 +13,7 @@ The register `gbx/_compat/classic_only.toml` lists every shipped site that is al
   the JAR). Each must resolve to a real definition.
 
 A forbidden API outside the register fails with file:line, and a register entry that matches no code fails as stale.
-`bench/` is a developer harness run from a checkout; it is not shipped as the product and is out of scope.
+`bench/` ships in the wheel as a developer harness; product code never imports it, so it is out of scope.
 """
 
 import ast
@@ -25,7 +25,7 @@ import databricks.labs.gbx as gbx
 
 _PKG = Path(gbx.__file__).resolve().parent
 _REGISTER = _PKG / "_compat" / "classic_only.toml"
-_DEV_ONLY = ("bench",)  # not shipped as the product: a checkout's harness
+_DEV_ONLY = ("bench",)  # ships in the wheel as a developer harness; product code never imports it
 # The Serverless product core: no entry of the register may sit here, whatever its gate.
 _CORE = ("pyrx", "pyvx", "ds", "engine")
 

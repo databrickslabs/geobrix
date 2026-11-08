@@ -6234,7 +6234,7 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
 ### rst_contour
 
 {/* BEGIN GENERATED gbx_rst_contour: edit manifest/functions.json, then run gbx:manifest:gen */}
-<Surfaces session uc python scala />
+<Surfaces session uc python />
 
 | Surface | Call | Returns |
 |---|---|---|
@@ -6252,16 +6252,15 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
 {/* END GENERATED gbx_rst_contour */}
 
 :::note Implementation
-Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geom_wkb, value)>` of contour LineStrings (in the raster CRS) at each fixed `level`, or at `base + k*interval` across the data range when `levels` is empty; NoData is masked before tracing. The marching-squares line geometry differs slightly from the JVM level's GDAL contours.
+Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geom_wkb, value)>` of contour LineStrings (in the raster CRS) at each fixed `level`, or at `base + k*interval` across the data range when `levels` is empty. NoData is masked before tracing.
 :::
 
-Generate contour LineString features via `gdal.ContourGenerateEx`. Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values, or pass `array()` and set `interval` (>0) for equal-step contours at `base + n*interval`. Returns `ARRAY<struct(geom_wkb BINARY, value DOUBLE)>` — one entry per contour line in the source raster's CRS.
+Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values. Or pass `array()` and set `interval` (above 0) for equal-step contours at `base + n*interval`. Each entry is one contour line in the source raster's CRS. From Scala, call it with `call_function("gbx_rst_contour", ...)`.
 
 <FunctionExamples
   name="rst_contour"
   sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
   python={rasterxTerrainLightCode} pythonSource="docs/tests/python/api/rasterx_terrain_python_light.py"
-  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
 

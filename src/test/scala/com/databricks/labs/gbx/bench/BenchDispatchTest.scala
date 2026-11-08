@@ -62,7 +62,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // rst_percentile_stretch left with its companion (its JVM form took another percentile rule than light, unmeasured): 84 - 1 = 83.
     // rst_filter left with its companion (its JVM form left a different NoData mask than light, unmeasured): 83 - 1 = 82.
     // rst_slope left with its companion (the GDAL spec engine's JVM form measured no faster than light): 82 - 1 = 81.
-    assert(BenchDispatch.all.size == 81)
+    // rst_ndvi, ndwi, nbr, evi, savi, index, threshold, mapalgebra and chm (their light level is the GDAL engine) and
+    // rst_contour (it runs the lightweight level only) left with their companions: 81 - 10 = 71.
+    assert(BenchDispatch.all.size == 71)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -94,14 +96,10 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
     assert(BenchDispatch.category("rst_h3_tessellate_centroid") == "dggs")
     assert(BenchDispatch.inputKind("rst_h3_tessellate_centroid") == "tile")
-    assert(BenchDispatch.category("rst_contour") == "vector")
     assert(BenchDispatch.category("rst_polygonize") == "vector")
     assert(BenchDispatch.category("rst_xyzpyramid") == "format")
     assert(BenchDispatch.category("rst_separatebands") == "format")
-    assert(BenchDispatch.minBands("rst_ndvi") == 2)
     assert(BenchDispatch.minBands("rst_band") == 2)
-    assert(BenchDispatch.minBands("rst_evi") == 2)
-    assert(BenchDispatch.minBands("rst_index") == 2)
     assert(BenchDispatch.category("rst_proximity") == "analysis")
     assert(BenchDispatch.minBands("rst_width") == 1)
     assert(BenchDispatch.category("rst_resample") == "resample")

@@ -9,13 +9,12 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.Files
 
-/** Direct-execute tests for the 4 analysis expressions (cog_convert, proximity,
- *  contour, viewshed).
+/** Direct-execute tests for the analysis expressions (proximity, viewshed).
  *
  *  Each test builds a tiny synthetic raster with a property the corresponding
  *  GDAL primitive must respect, invokes `execute(...)` directly (no Spark),
  *  and asserts on raw pixel / feature values. Goal: 1 happy-path test per
- *  function, total ~4 tests, < 2 min wall-clock.
+ *  function, total ~2 tests, < 2 min wall-clock.
  */
 class AnalysisTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -115,38 +114,6 @@ class AnalysisTest extends AnyFunSuite with BeforeAndAfterAll {
             val far = pixel(out, 0, 0)
             far should be > 10.0
             far shouldBe (math.sqrt(200.0) +- 0.5)
-        } finally {
-            src.delete()
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // RST_Contour
-    // ------------------------------------------------------------------
-
-    test("RST_Contour generates LineString features at requested levels for a linear gradient") {
-        // 101x10 raster — column-ramp value 0..100; row repeats.
-        // Use a EPSG:4326-aligned grid so the layer's CRS is well-defined.
-        val src = buildRaster(101, 10, (c, _) => c.toDouble)
-        try {
-            // interval = 10 -> contours at 10, 20, ..., 90 (90/100 levels above base 0).
-            val result = RST_Contour.execute(src, Array.empty[Double], 10.0, 0.0, "elev")
-            result should not be null
-            val n = result.numElements()
-            // At least 9 contour features (one per 10/20/.../90 isovalue).
-            n should be >= 9
-            // Collect distinct values; expect them to span [10, 90].
-            val values = (0 until n).map(i => result.getStruct(i, 2).getDouble(1)).toSet
-            val minV = values.min
-            val maxV = values.max
-            minV should be <= 10.0
-            maxV should be >= 90.0 - 1e-6
-            // Every feature has non-empty WKB.
-            (0 until n).foreach { i =>
-                val wkb = result.getStruct(i, 2).getBinary(0)
-                wkb should not be null
-                wkb.length should be > 0
-            }
         } finally {
             src.delete()
         }

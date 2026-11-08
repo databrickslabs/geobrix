@@ -10,15 +10,13 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.{Files, Paths}
 import java.util.UUID
-import scala.jdk.CollectionConverters.CollectionHasAsScala
 
 /**
- * Advanced tests for RST_DerivedBand and RST_MapAlgebra operations.
+ * Advanced tests for RST_DerivedBand and the per-band combine operations.
  * 
  * These tests validate:
  * - Complex Python functions with numpy operations
  * - Multi-band derived band processing
- * - Advanced map algebra with multiple inputs
  * - NoData handling in complex operations
  * - Error handling for invalid inputs
  * - Performance with different data types
@@ -283,131 +281,5 @@ def multiband_average(in_ar, out_ar, xoff, yoff, xsize, ysize, raster_xsize, ras
         avgDs.GetRasterYSize shouldBe ds1.GetRasterYSize
 
         RasterDriver.releaseDataset(avgDs)
-    }
-
-    // ====================================================================
-    // RST_MapAlgebra Advanced Tests (8 tests)
-    // ====================================================================
-
-    test("RST_MapAlgebra should compute NDVI with multi-band input") {
-        val outputPath = s"/tmp/mapalgebra_ndvi_${UUID.randomUUID()}.tif"
-        // NDVI = (NIR - Red) / (NIR + Red)
-        // Using bands 1 (Red) and 2 (NIR) from multi-band dataset
-        val spec = """{"calc": "(B-A)/(B+A)", "A_index": 0, "A_band": 1, "B_index": 0, "B_band": 2}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(multiBandDs), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should handle complex mathematical expressions") {
-        val outputPath = s"/tmp/mapalgebra_complex_${UUID.randomUUID()}.tif"
-        // Complex expression: Ratio with scaling (A*2 + B) / (A + B + 1)
-        val spec = """{"calc": "(A*2+B)/(A+B+1)", "A_index": 0, "A_band": 1, "B_index": 0, "B_band": 2}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(multiBandDs), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should support conditional operations") {
-        val outputPath = s"/tmp/mapalgebra_conditional_${UUID.randomUUID()}.tif"
-        // Conditional masking: Set values < 50 to 0, keep others
-        val spec = """{"calc": "A*(A>=50)", "A_index": 0, "A_band": 1}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(multiBandDs), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should compute multi-input weighted average") {
-        val outputPath = s"/tmp/mapalgebra_weighted_${UUID.randomUUID()}.tif"
-        // Simple average of 3 bands: (A + B + C) / 3
-        val spec = """{"calc": "(A+B+C)/3", "A_index": 0, "A_band": 1, "B_index": 0, "B_band": 2, "C_index": 0, "C_band": 3}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(multiBandDs), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should compute Enhanced Vegetation Index (EVI)") {
-        val outputPath = s"/tmp/mapalgebra_evi_${UUID.randomUUID()}.tif"
-        // EVI = 2.5 * ((NIR - Red) / (NIR + 6*Red - 7.5*Blue + 1))
-        // Using bands from multi-band dataset: Band 1=Red, Band 2=NIR, Band 3=Blue
-        val spec = """{"calc": "2.5*((B-A)/(B+6*A-7.5*C+1))", "A_index": 0, "A_band": 1, "B_index": 0, "B_band": 2, "C_index": 0, "C_band": 3}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(multiBandDs), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should handle logarithmic transformations") {
-        val outputPath = s"/tmp/mapalgebra_log_${UUID.randomUUID()}.tif"
-        // Log transformation with safety: log(A + 1) to avoid log(0)
-        val spec = """{"calc": "log(A+1)", "A_index": 0}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(ds1), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should compute normalized difference indices") {
-        val outputPath = s"/tmp/mapalgebra_normalized_${UUID.randomUUID()}.tif"
-        // Generic normalized difference: (A - B) / (A + B + epsilon)
-        val spec = """{"calc": "(A-B)/(A+B+0.0001)", "A_index": 0, "B_index": 1}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(ds1, ds2), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
-    test("RST_MapAlgebra should handle power operations and scaling") {
-        val outputPath = s"/tmp/mapalgebra_power_${UUID.randomUUID()}.tif"
-        // Power operation with scaling: (A / 255)^2 * 255
-        val spec = """{"calc": "(A/255)**2*255", "A_index": 0}"""
-        
-        val (resultDs, _) = RST_MapAlgebra.execute(Seq(ds1), Map.empty, spec)
-        
-        resultDs should not be null
-        resultDs.GetRasterCount shouldBe 1
-        
-        val tmpFiles = resultDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(resultDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
     }
 }

@@ -42,8 +42,7 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
 
     /** Single-band Float32 raster of size width x height with `valueFn(col, row)` per pixel.
       *
-      * Persists to a local path (not `/vsimem/`) so tests that go through
-      * `RST_MapAlgebra` (which shells out to gdal_calc.py) can read the file.
+      * Persists to a local path (not `/vsimem/`) so tests that shell out to a GDAL command can read the file.
       */
     private def buildRaster(
         width: Int, height: Int,
@@ -198,20 +197,6 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         try {
             an[IllegalArgumentException] should be thrownBy
                 RST_SetSrid.execute(src, Map.empty, 99999999)
-        } finally {
-            src.delete()
-        }
-    }
-
-    test("RST_Threshold('>', 5.0) over a 0..10 ramp produces 0 for v<=5, 1 for v>5") {
-        // 11x1 raster with values 0..10.
-        val src = buildRaster(11, 1, (c, _) => c.toFloat)
-        try {
-            val (out, _) = track(RST_Threshold.execute(src, ">", 5.0))
-            out should not be null
-            // Col 0..5 -> 0; col 6..10 -> 1.
-            (0 to 5).foreach(c => pixel(out, c, 0) shouldBe 0.0 +- 1e-6)
-            (6 to 10).foreach(c => pixel(out, c, 0) shouldBe 1.0 +- 1e-6)
         } finally {
             src.delete()
         }

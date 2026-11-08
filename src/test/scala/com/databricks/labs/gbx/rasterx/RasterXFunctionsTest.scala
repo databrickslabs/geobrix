@@ -179,11 +179,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_mapalgebra should accept tiles and expression") {
-        val result = functions.rst_mapalgebra(col("tiles"), col("expr"))
-        result should not be null
-    }
-
     test("rst_merge should accept tiles") {
         val result = functions.rst_merge(col("tiles"))
         result should not be null
@@ -232,7 +227,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         // string scalars
         functions.rst_asformat(col("tile"), "GTiff") should not be null
         functions.rst_updatetype(col("tile"), "Float32") should not be null
-        functions.rst_mapalgebra(col("tiles"), "{\"calc\": \"A+2*A\"}") should not be null
         // double scalars
         functions.rst_worldtorastercoordx(col("tile"), 1.0, 2.0) should not be null
     }

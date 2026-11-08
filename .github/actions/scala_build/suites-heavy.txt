@@ -11,13 +11,9 @@
 # suite under src/test/scala is either matched by an entry or excluded here, and that every entry
 # matches a suite.
 #
-# excluded: com.databricks.labs.gbx.rasterx.RST_ChmRegistrationTest
-# excluded: com.databricks.labs.gbx.rasterx.expressions.RST_ChmTest
-# excluded: com.databricks.labs.gbx.rasterx.expressions.spectral.SpectralIndicesTest
 # excluded: com.databricks.labs.gbx.rasterx.expressions.vector.RST_PolygonizeTest
 # excluded: com.databricks.labs.gbx.rasterx.gdal.DirectReaderTest
 # excluded: com.databricks.labs.gbx.rasterx.operations.GDALRasterizeTest
-# excluded: com.databricks.labs.gbx.rasterx.operator.GDALCalcTest
 # excluded: com.databricks.labs.gbx.vectorx.mvt.MvtPyramidBuilderTest
 #
 # SparkAdaptersTest lives outside com.databricks.labs.gbx, so the old default wildcard skipped it.

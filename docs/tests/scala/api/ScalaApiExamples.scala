@@ -1382,26 +1382,6 @@ result.show(truncate = false)
 (distance in pixels to nearest non-NoData, capped at 100)
 """.trim
 
-  val rst_contour_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val dem = spark.table("dem_rasters")
-val result = dem.select(rx.rst_contour(col("tile"), array(), lit(50.0), lit(0.0), lit("elev")).alias("contours"))
-result.show(truncate = false)
-""".trim
-
-  val rst_contour_scala_example_output: String =
-    """
-+--------------------------------------+
-|contours                              |
-+--------------------------------------+
-|[{[BINARY], 100.0}, {[BINARY], 200.0}]|
-+--------------------------------------+
-(array of contour features: LineString + elevation value)
-""".trim
-
   // ========================================================================
   // Coordinate Transforms & Tiling
   // ========================================================================

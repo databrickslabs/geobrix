@@ -2,7 +2,6 @@ package com.databricks.labs.gbx.bench
 
 import com.databricks.labs.gbx.rasterx.expressions.RST_IsEmpty
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
-import com.databricks.labs.gbx.rasterx.expressions.RST_NDVI
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
@@ -13,26 +12,21 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_Clip
 import com.databricks.labs.gbx.rasterx.expressions.RST_Convolve
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
 import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
-import com.databricks.labs.gbx.rasterx.expressions.RST_MapAlgebra
 import com.databricks.labs.gbx.rasterx.expressions.RST_Merge
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Contour
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize
 import com.databricks.labs.gbx.rasterx.expressions.{RST_BinPoints, RST_BinPointsAgg}
-import com.databricks.labs.gbx.rasterx.expressions.RST_Chm
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
-import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_FillNodata
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_Resample
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToRes
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToSize
@@ -59,33 +53,24 @@ object BenchDispatch {
   private def argD(a: Map[String, String], k: String, d: Double) = a.get(k).map(_.toDouble).getOrElse(d)
   private def argI(a: Map[String, String], k: String, d: Int) = a.get(k).map(_.toInt).getOrElse(d)
   private def argB(a: Map[String, String], k: String, d: Boolean) = a.get(k).map(_.toBoolean).getOrElse(d)
-  // ARRAY<DOUBLE> arg (e.g. contour levels) ridden as a comma/space-separated
+  // ARRAY<DOUBLE> arg (e.g. isoband breaks) ridden as a comma/space-separated
   // string in the stringly-typed bench args map; falls back to `d` when absent.
   private def argDoubleArray(a: Map[String, String], k: String, d: Array[Double]): Array[Double] =
     a.get(k).map(_.split("[,\\s]+").filter(_.nonEmpty).map(_.trim.toDouble)).getOrElse(d)
 
   private val ACC = "accessor"; private val TER = "terrain"
-  private val BM = "band-math"; private val WARP = "warp"
+  private val WARP = "warp"
   private val EDIT = "edit"; private val FEAT = "features"
   private val FOCAL = "focal"; private val FMT = "format"; private val RES = "resample"
   private val ANALYSIS = "analysis"; private val DGGS = "dggs"
   private val VECTOR = "vector"
 
-  // Functions that need a >=2-band source even though they are not band-math
-  // (rst_band selects band 2; rst_evi/savi/index read a second band on the
-  // 2-band corpus).
-  private val multiBand: Set[String] = Set("rst_band", "rst_evi", "rst_savi", "rst_index")
+  // Functions that need a >=2-band source (rst_band selects band 2 on the 2-band corpus).
+  private val multiBand: Set[String] = Set("rst_band")
 
   // --- complex-arg constants, hardcoded identically to the pyrx side ---
-  // The band-map, the map-algebra expression, and the derived-band pixel function
-  // cannot ride the stringly-typed bench args map, so they are fixed here exactly
-  // as in spec.py (same policy as the convolve kernel).
-  private val indexName = "ndvi"
-  private val indexBandMap: Map[String, Int] = Map("red" -> 1, "nir" -> 2)
-  // RST_MapAlgebra.execute takes a JSON spec (rasters A-Z + "calc"), NOT a bare
-  // gdal_calc expression. With no explicit A_index the single input binds to A,
-  // so {"calc":"A*2"} is the heavy-side equivalent of the pyrx "A*2" expression.
-  private val mapAlgebraExpr = """{"calc":"A*2"}"""
+  // The derived-band pixel function cannot ride the stringly-typed bench args map,
+  // so it is fixed here exactly as in spec.py (same policy as the convolve kernel).
   private val derivedBandFuncName = "mean_bands"
   private val derivedBandPyFunc =
     "import numpy as np\n" +
@@ -116,7 +101,6 @@ object BenchDispatch {
     "rst_width" -> ACC, "rst_height" -> ACC, "rst_numbands" -> ACC,
     "rst_aspect" -> TER, "rst_hillshade" -> TER,
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
-    "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
     "rst_transform" -> WARP, "rst_to_webmercator" -> WARP,
     // scalar accessors
     "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
@@ -133,14 +117,13 @@ object BenchDispatch {
     "rst_boundingbox" -> ACC, "rst_summary" -> ACC,
     // (the accessors and statistics that return an array, a map or a struct have no heavyweight level)
     // tile-out transforms with scalar / fixed args
-    "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
+    "rst_band" -> EDIT, "rst_initnodata" -> EDIT,
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
     "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT,
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
-    "rst_evi" -> BM, "rst_savi" -> BM, "rst_index" -> BM,
-    "rst_mapalgebra" -> FMT, "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
+    "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
     "rst_clip" -> EDIT, "rst_color_relief" -> TER, "rst_viewshed" -> ANALYSIS,
     // bucket C, group C1 (readers) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
@@ -170,11 +153,10 @@ object BenchDispatch {
     // like rst_h3_rasterize_agg -- see gridAggregate). quadbin streams LONG cell
     // ids; BNG streams STRING cell ids and burns onto a 27700-native grid.
     "rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS,
-    // bucket B, group B-vec: vector-out fns (contour LINES, polygonize POLYGONS)
-    "rst_contour" -> VECTOR, "rst_polygonize" -> VECTOR,
-    // LiDAR functions: isoband is geometry/vector; chm is tile-array format.
+    // bucket B, group B-vec: vector-out fns (polygonize POLYGONS)
+    "rst_polygonize" -> VECTOR,
+    // LiDAR function: isoband is geometry/vector.
     "rst_isoband" -> VECTOR,
-    "rst_chm" -> FMT,
     // bucket A: the 7 *_agg aggregators (Spark groupBy aggregate harness). The 4
     // tile aggregators reduce a group of tiles -> one tile (format); the 3 geometry
     // aggregators reduce a group of (geom, value) rows -> one tile (vector bridge).
@@ -207,7 +189,7 @@ object BenchDispatch {
   // synthesizes the multi-tile input from the corpus tile and writes it ONCE
   // (write-once-read-both); the heavy runner reads the SAME synthesized files.
   private val tileArrayInput: Set[String] = Set(
-    "rst_frombands", "rst_merge", "rst_chm")
+    "rst_frombands", "rst_merge")
   // bucket D: geometry-in fns are handed the open tile PLUS the tile's
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
@@ -373,11 +355,9 @@ object BenchDispatch {
     if (fn == "h3_cellfill") h3RasterizeCells() else quadbinRasterizeCells()
 
   // bench.synth recipe name for a tile_array fn (mirrors spec.synth_recipe).
-  // rst_chm uses "combineavg" (two aligned DSM/DEM copies).
   def synthRecipe(fn: String): String = fn match {
     case "rst_frombands"     => "frombands"
     case "rst_merge"         => "merge"
-    case "rst_chm"           => "combineavg"
     case other               => throw new IllegalArgumentException(s"no synth recipe for: $other")
   }
 
@@ -394,7 +374,7 @@ object BenchDispatch {
 
   def all: Seq[String] = cats.keys.toSeq.sorted
   def category(fn: String): String = cats(fn)
-  def minBands(fn: String): Int = if (cats(fn) == BM || multiBand.contains(fn)) 2 else 1
+  def minBands(fn: String): Int = if (multiBand.contains(fn)) 2 else 1
 
   // Fixed 3x3 normalised mean kernel for rst_convolve — must match the
   // _CONVOLVE_KERNEL hardcoded on the pyrx side (1/9 in every cell).
@@ -416,9 +396,6 @@ object BenchDispatch {
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
     case "rst_tpi"        => fpDerived(RST_TPI.execute(ds))
     case "rst_roughness"  => fpDerived(RST_Roughness.execute(ds))
-    case "rst_ndvi"       => fpDerived(RST_NDVI.execute(ds, argI(a, "red_band", 1), argI(a, "nir_band", 2), Map.empty))
-    case "rst_ndwi"       => fpDerived(RST_NDWI.execute(ds, argI(a, "green_idx", 1), argI(a, "nir_idx", 2)))
-    case "rst_nbr"        => fpDerived(RST_NBR.execute(ds, argI(a, "nir_idx", 1), argI(a, "swir_idx", 2)))
     case "rst_transform"  => fpDerived(RST_Transform.execute(ds, Map.empty, argI(a, "target_srid", 3857)))
     case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
     // scalar accessors
@@ -463,7 +440,6 @@ object BenchDispatch {
     // tile-out transforms with scalar / fixed args: all produce a raster
     // tile -> fpDerived raster fingerprint (same path as terrain).
     case "rst_band"        => fpDerived(RST_Band.execute(ds, Map.empty, argI(a, "band_index", 2)))
-    case "rst_threshold"   => fpDerived(RST_Threshold.execute(ds, argS(a, "op", ">"), argD(a, "value", 0.5)))
     case "rst_initnodata"  => fpDerived(RST_InitNoData.execute(ds, Map.empty))
     case "rst_setsrid"     => fpDerived(RST_SetSrid.execute(ds, Map.empty, argI(a, "srid", 4326)))
     // rst_setcrs: string-CRS relabel (int-cast rule); no reproject, pixels unchanged.
@@ -496,16 +472,6 @@ object BenchDispatch {
     // SIX are full raster comparisons (same algorithm + CRS-independent
     // args); FOUR are timing-only (no in-extent geometry across the multi-CRS
     // corpus, and/or divergent interpolation/scan engines).
-    case "rst_evi" =>
-      fpDerived(RST_EVI.execute(ds, argI(a, "red_idx", 1), argI(a, "nir_idx", 2),
-        argI(a, "blue_idx", 1), argD(a, "l", 1.0), argD(a, "c1", 6.0),
-        argD(a, "c2", 7.5), argD(a, "g", 2.5)))
-    case "rst_savi" =>
-      fpDerived(RST_SAVI.execute(ds, argI(a, "red_idx", 1), argI(a, "nir_idx", 2), argD(a, "l", 0.5)))
-    case "rst_index" =>
-      fpDerived(RST_Index.execute(ds, indexName, indexBandMap))
-    case "rst_mapalgebra" =>
-      fpDerived(RST_MapAlgebra.execute(Seq(ds), Map.empty, mapAlgebraExpr))
     case "rst_derivedband" =>
       fpDerived(RST_DerivedBand.execute(Seq(ds), Map.empty, derivedBandPyFunc, derivedBandFuncName))
     case "rst_proximity" =>
@@ -603,18 +569,12 @@ object BenchDispatch {
         if (resDs != null) RasterDriver.releaseDataset(resDs)
       }
       BenchFingerprint.ofDggsGridIds(ids.toSeq)
-    // bucket B, group B-vec: vector-out fns. RST_Contour / RST_Polygonize each
-    // return an ArrayData of struct(geom_wkb BINARY, value DOUBLE); fpVector
-    // decodes the WKB -> JTS and fingerprints (feature count + total measure
-    // [line length for contour lines, polygon area for polygonize] + agg over
-    // the per-feature value). The heavy runner passes an EMPTY args map, so the
+    // bucket B, group B-vec: vector-out fns. RST_Polygonize returns an ArrayData
+    // of struct(geom_wkb BINARY, value DOUBLE); fpVector decodes the WKB -> JTS and
+    // fingerprints (feature count + total measure [polygon area] + agg over the
+    // per-feature value). The heavy runner passes an EMPTY args map, so the
     // defaults here ARE the cross-engine-compared values and MUST match the pyrx
-    // spec: contour FIXED_LEVELS [0.2, 0.4, 0.6, 0.8] (interval/base unused with
-    // non-empty levels), attr_field "elev"; polygonize band 1, connectedness 4.
-    case "rst_contour" =>
-      fpVector(RST_Contour.execute(
-        ds, argDoubleArray(a, "levels", Array(0.2, 0.4, 0.6, 0.8)),
-        argD(a, "interval", 0.0), argD(a, "base", 0.0), argS(a, "attr_field", "elev")))
+    // spec: polygonize band 1, connectedness 4.
     case "rst_polygonize" =>
       fpVector(RST_Polygonize.execute(
         ds, argI(a, "band", 1), argI(a, "connectedness", 4)))
@@ -763,15 +723,6 @@ object BenchDispatch {
       case "rst_merge" =>
         val (out, _) = RST_Merge.execute(dss, Map.empty[String, String])
         try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-      // rst_chm: compute CHM from DSM + DEM tiles (or DSM alone if only one input).
-      case "rst_chm" =>
-        if (dss.length == 0) BenchFingerprint.empty
-        else {
-          val dsmDs = dss(0)
-          val demDs = if (dss.length > 1) dss(1) else dss(0)
-          val (out, _) = RST_Chm.execute(dsmDs, demDs, Map.empty[String, String])
-          try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
-        }
       case other => throw new IllegalArgumentException(s"unknown bench tile_array fn: $other")
     }
   }
@@ -871,9 +822,6 @@ object BenchDispatch {
       case "rst_tri"        => rst_tri(tile)
       case "rst_tpi"        => rst_tpi(tile)
       case "rst_roughness"  => rst_roughness(tile)
-      case "rst_ndvi"       => ColumnAdapter(RST_NDVI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "red_band", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_band", 2))))
-      case "rst_ndwi"       => ColumnAdapter(RST_NDWI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "green_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2))))
-      case "rst_nbr"        => ColumnAdapter(RST_NBR.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "swir_idx", 2))))
       case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
       // scalar accessors
@@ -903,7 +851,6 @@ object BenchDispatch {
       case "rst_summary"       => rst_summary(tile)
       // tile-out transforms with scalar / fixed args
       case "rst_band"        => rst_band(tile, argI(a, "band_index", 2))
-      case "rst_threshold"   => ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold.name, Seq(tile, org.apache.spark.sql.functions.lit(argS(a, "op", ">")), org.apache.spark.sql.functions.lit(argD(a, "value", 0.5))))
       case "rst_initnodata"  => rst_initnodata(tile)
       case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
       case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
@@ -925,23 +872,7 @@ object BenchDispatch {
       case "rst_resample_to_res" =>
         rst_resample_to_res(tile, argD(a, "x_res", 5.0),
           argD(a, "y_res", 5.0), argS(a, "algorithm", "bilinear"))
-      // tile-out transforms with geometry / expression / band-map / function args
-      // The full-comparison six run in spark-path; the timing-only four
-      // are pure-core-only and their column form is here only to keep the match
-      // exhaustive (the spark-path runner filters by modes).
-      case "rst_evi" =>
-        ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.spectral.RST_EVI.name, Seq(tile,
-          org.apache.spark.sql.functions.lit(argI(a, "red_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2)), org.apache.spark.sql.functions.lit(argI(a, "blue_idx", 1)),
-          org.apache.spark.sql.functions.lit(argD(a, "l", 1.0)), org.apache.spark.sql.functions.lit(argD(a, "c1", 6.0)), org.apache.spark.sql.functions.lit(argD(a, "c2", 7.5)), org.apache.spark.sql.functions.lit(argD(a, "g", 2.5))))
-      case "rst_savi" =>
-        ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.spectral.RST_SAVI.name, Seq(tile, org.apache.spark.sql.functions.lit(argI(a, "red_idx", 1)), org.apache.spark.sql.functions.lit(argI(a, "nir_idx", 2)), org.apache.spark.sql.functions.lit(argD(a, "l", 0.5))))
-      case "rst_index" =>
-        import org.apache.spark.sql.functions.{lit, map => sqlMap}
-        val bandMapCol = sqlMap(indexBandMap.toSeq.flatMap { case (k, v) => Seq(lit(k), lit(v)) }: _*)
-        ColumnAdapter(com.databricks.labs.gbx.rasterx.expressions.spectral.RST_Index.name, Seq(tile, org.apache.spark.sql.functions.lit(indexName), bandMapCol))
-      case "rst_mapalgebra" =>
-        import org.apache.spark.sql.functions.array
-        rst_mapalgebra(array(tile), mapAlgebraExpr)
+      // tile-out transforms with geometry / function args
       case "rst_derivedband" =>
         rst_derivedband(tile, derivedBandPyFunc, derivedBandFuncName)
       case "rst_proximity" =>
@@ -971,13 +902,6 @@ object BenchDispatch {
       // files the pure-core path reads). Each binding takes a single array column.
       case "rst_frombands"     => rst_frombands(tile)
       case "rst_merge"        => rst_merge(tile)
-      // rst_chm: compute CHM from DSM + DEM (ARRAY form takes two tiles [DSM, DEM] or one tile used twice).
-      case "rst_chm" =>
-        import org.apache.spark.sql.functions.{element_at, when, size}
-        // Extract DSM from arr[0] and DEM from arr[1] (or arr[0] if only one tile).
-        val dsmTile = element_at(tile, 1)
-        val demTile = when(size(tile) > 1, element_at(tile, 2)).otherwise(dsmTile)
-        ColumnAdapter(RST_Chm.name, Seq(dsmTile, demTile))
       // bucket C, group C4: tiling fns -> ARRAY column (spark-path is timing-only,
       // not fingerprint-compared, so the args only need to be valid). maketiles takes
       // an MB budget, matching the sizeInMB BalancedSubdivision the pure-core path uses.
@@ -995,12 +919,7 @@ object BenchDispatch {
       case "rst_quadbin_tessellate"        => rst_quadbin_tessellate(tile, argI(a, "resolution", 15))
       // bucket B, group B-vec: vector-out fns -> ARRAY<struct> column (spark-path
       // is timing-only, not fingerprint-compared, so the args only need to be
-      // valid). contour rides FIXED_LEVELS [0.2, 0.4, 0.6, 0.8] as an
-      // ARRAY<DOUBLE> column; polygonize rides band 1 + connectedness 4.
-      case "rst_contour" =>
-        val levels = argDoubleArray(a, "levels", Array(0.2, 0.4, 0.6, 0.8))
-        rst_contour(tile, org.apache.spark.sql.functions.array(
-          levels.map(org.apache.spark.sql.functions.lit): _*))
+      // valid). polygonize rides band 1 + connectedness 4.
       case "rst_polygonize" =>
         org.apache.spark.sql.functions.call_function("gbx_rst_polygonize", tile, org.apache.spark.sql.functions.lit(argI(a, "band", 1)),
           org.apache.spark.sql.functions.lit(argI(a, "connectedness", 4)))

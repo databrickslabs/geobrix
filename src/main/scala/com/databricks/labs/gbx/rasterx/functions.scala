@@ -9,7 +9,6 @@ import com.databricks.labs.gbx.rasterx.expressions.generators._
 import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.expressions.pixel._
 import com.databricks.labs.gbx.rasterx.expressions.resample._
-import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
@@ -245,7 +244,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
     def rst_initnodata(tile: Column): Column = ColumnAdapter(RST_InitNoData.name, Seq(tile))
     def rst_isempty(tile: Column): Column = ColumnAdapter(RST_IsEmpty.name, Seq(tile))
-    def rst_mapalgebra(tiles: Column, expression: Column): Column = ColumnAdapter(RST_MapAlgebra.name, Seq(tiles, expression))
     def rst_merge(tiles: Column): Column = ColumnAdapter(RST_Merge.name, Seq(tiles))
     def rst_rastertoworldcoordx(tile: Column, x: Column, y: Column): Column =
         ColumnAdapter(RST_RasterToWorldCoordX.name, Seq(tile, x, y))
@@ -288,7 +286,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String, coverage: String): Column =
         rst_custom_tessellate(tile, grid, lit(resolution), assignment, coverage)
     def rst_asformat(tile: Column, newFormat: String): Column = rst_asformat(tile, lit(newFormat))
-    def rst_mapalgebra(tiles: Column, expression: String): Column = rst_mapalgebra(tiles, lit(expression))
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordx(tile, lit(x), lit(y))
     def rst_rastertoworldcoordy(tile: Column, x: Int, y: Int): Column =
@@ -433,7 +430,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_band(tile: Column, bandIndex: Int): Column =
         rst_band(tile, lit(bandIndex))
 
-    // Analysis (proximity / contour / viewshed) — Column form + scalar overloads
+    // Analysis (proximity / viewshed) — Column form + scalar overloads
     // NaN (not null) is the "unlimited" sentinel for max_distance: a null primitive-Double literal is
     // force-null-checked by Spark's Invoke and short-circuits the whole result to null before eval
     // runs (this silently broke rst_proximity(tile)). eval maps NaN -> None. target_values stays a
@@ -453,16 +450,5 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_proximity(
         tile: Column, targetValues: Column, distUnits: Column, maxDistance: Column
     ): Column = ColumnAdapter(RST_Proximity.name, Seq(tile, targetValues, distUnits, maxDistance))
-
-    def rst_contour(tile: Column, levels: Column): Column =
-        ColumnAdapter(RST_Contour.name, Seq(tile, levels, lit(0.0), lit(0.0), lit("elev")))
-    def rst_contour(tile: Column, levels: Column, interval: Column): Column =
-        ColumnAdapter(RST_Contour.name, Seq(tile, levels, interval, lit(0.0), lit("elev")))
-    def rst_contour(
-        tile: Column, levels: Column, interval: Column, base: Column
-    ): Column = ColumnAdapter(RST_Contour.name, Seq(tile, levels, interval, base, lit("elev")))
-    def rst_contour(
-        tile: Column, levels: Column, interval: Column, base: Column, attrField: Column
-    ): Column = ColumnAdapter(RST_Contour.name, Seq(tile, levels, interval, base, attrField))
 
 }

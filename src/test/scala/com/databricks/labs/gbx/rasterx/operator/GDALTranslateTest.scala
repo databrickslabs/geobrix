@@ -387,7 +387,7 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("appendOptions derives predictor from the --type=<X> equals form (gdal_calc) (#82)") {
-        // The repo's gdal_calc callers (SpectralIndexSpec, RST_Threshold) emit the equals
+        // gdal_calc callers emit the equals
         // form "--type=Float32", not the space form. Exact-token matching missed it, so the
         // gdal_calc path fell back to the input band types. Here a Byte output on a Float
         // input must still yield PREDICTOR=1 (not 3) via the "--type=Byte" token.

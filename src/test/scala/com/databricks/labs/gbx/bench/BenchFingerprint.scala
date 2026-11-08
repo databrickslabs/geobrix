@@ -197,7 +197,7 @@ object BenchFingerprint {
     mapper.writeValueAsString(n)
   }
 
-  /** Fingerprint a vector-feature output (bucket B vector fns: contour, polygonize).
+  /** Fingerprint a vector-feature output (bucket B vector fns: polygonize).
     *
     * Mirrors python `fingerprint_vector`: `features` is a set of `(geometry, attr)`
     * pairs. Records the feature COUNT, the total `measure` (JTS `getLength` for line

@@ -39,7 +39,7 @@ case class RST_Isoband(
     // Pin breaks to ARRAY<DOUBLE> so ImplicitCastInputTypes coerces SQL literals
     // (Spark 4.0 infers array(0.0, 50.0, …) as ARRAY<DECIMAL>, not ARRAY<DOUBLE>;
     // without this override, breaksData.toDoubleArray() throws ClassCastException at
-    // runtime and RST_ErrorHandler silently returns null).  Mirrors RST_Contour.
+    // runtime and RST_ErrorHandler silently returns null).  Mirrors the other vector expressions.
     override def inputTypes: Seq[DataType] =
         Seq(tile.dataType, ArrayType(DoubleType), StringType)
 

@@ -9,7 +9,6 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
 import java.nio.file.{Files, Paths}
-import scala.jdk.CollectionConverters.CollectionHasAsScala
 
 class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -96,17 +95,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         isEmpty shouldBe false
     }
 
-    test("RST_MapAlgebra should apply map algebra expression to raster") {
-        val (mappedDs, _) = RST_MapAlgebra.execute(Seq(ds, ds, ds), Map.empty, "{\"calc\": \"A+B/C\"}")
-        mappedDs should not be null
-        mappedDs.getRasterCount shouldBe ds.getRasterCount
-        mappedDs.getRasterXSize shouldBe ds.getRasterXSize
-        mappedDs.getRasterYSize shouldBe ds.getRasterYSize
-        val tmpFiles = mappedDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(mappedDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
-    }
-
     test("RST_Merge should merge multiple rasters") {
         val (mergedDs, _) = RST_Merge.execute(Array(ds, ds, ds), Map.empty)
         mergedDs should not be null
@@ -114,17 +102,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         mergedDs.getRasterXSize should be >= ds.getRasterXSize
         mergedDs.getRasterYSize should be >= ds.getRasterYSize
         RasterDriver.releaseDataset(mergedDs)
-    }
-
-    test("RST_NDVI should compute NDVI from raster") {
-        val (ndviDs, _) = RST_NDVI.execute(ds, 1, 1, Map.empty)
-        ndviDs should not be null
-        ndviDs.getRasterCount shouldBe 1
-        ndviDs.getRasterXSize shouldBe ds.getRasterXSize
-        ndviDs.getRasterYSize shouldBe ds.getRasterYSize
-        val tmpFiles = ndviDs.GetFileList().asScala.toSeq.map(_.toString)
-        RasterDriver.releaseDataset(ndviDs)
-        tmpFiles.foreach(f => Files.deleteIfExists(Paths.get(f)))
     }
 
     test("RST_RasterToWorldCoordX should convert raster to world X coordinate") {

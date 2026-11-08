@@ -36,7 +36,6 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
               rst_derivedband(col("clipped"), pyfunc, "myfunc"),
               rst_initnodata(col("clipped")), //lit(-28672.0)),
               rst_isempty(col("clipped")),
-              rst_mapalgebra(array(col("clipped")), lit("{\"calc\": \"A+2*A\"}")),
               rst_merge(array(col("clipped"), col("clipped"))),
               rst_rastertoworldcoordx(col("clipped"), lit(10), lit(10)),
               rst_rastertoworldcoordy(col("clipped"), lit(10), lit(10)),

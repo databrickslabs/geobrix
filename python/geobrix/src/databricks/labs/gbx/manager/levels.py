@@ -87,10 +87,11 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (light measured
     # 2.2x faster, so it has no JVM level) take the family order, light.
     "gbx_rst_color_relief": ("L1", "L3"),
-    # contour (0.10x at 4x rows) and isoband (0.39x and 0.42x at 4x and 16x rows) are faster on the JVM, and they pass the
+    # contour (0.10x at 4x rows) and isoband (0.39x and 0.42x at 4x and 16x rows) were faster on the JVM, and they pass the
     # 1.2x line, but a virtual tile at L1 raises VirtualTileException, and a virtual tile is the light default input. A SQL
     # wrapper that would send it to light cannot sit under explode (UNSUPPORTED_SQL_UDF_USAGE in Generate). Light first until
-    # the JVM level reads a virtual tile; the L1 blocks stay for a forced L1.
+    # the JVM level reads a virtual tile; the isoband L1 block stays for a forced L1. The contour JVM expression is deleted
+    # (the user ruled light only), so contour has the light level alone.
     "gbx_rst_contour": ("L3",),
     "gbx_rst_isoband": ("L3",),
     # The array merge: the JVM level refuses a group over the memory budget with an error tile (its merge holds the group),

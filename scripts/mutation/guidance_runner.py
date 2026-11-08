@@ -17,6 +17,7 @@ import argparse
 import concurrent.futures
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -84,6 +85,19 @@ def plan(args, modules, selection) -> dict:
         "caps": {"wall_min": args.wall_cap_min, "setup_min": args.setup_cap_min, "stall_min": args.stall_min},
         "mutmut_section": guidance_section(modules, selection, args),
     }
+
+
+_SHORT_SUMMARY = re.compile(r"^(?:FAILED|ERROR) (\S+::[^\[\s]+(?:\[.*?\](?=(?: - |$)))?)")
+
+
+def baseline_failed_ids(text: str) -> list:
+    """Node ids of the tests pytest's short summary (-rfE) lists as FAILED or ERROR (a parameter id may hold ' - ')."""
+    ids = []
+    for ln in text.splitlines():
+        m = _SHORT_SUMMARY.match(ln)
+        if m and m.group(1) not in ids:
+            ids.append(m.group(1))
+    return ids
 
 
 def counts_of(codes: dict, modules: list) -> dict:
@@ -197,21 +211,29 @@ def main(argv=None) -> int:
         print(f"[MUTATION {args.family}] {len(modules)} module(s), tests {selection}, {args.max_workers} workers, "
               f"caps: wall {args.wall_cap_min:g} min, setup {args.setup_cap_min:g} min, stall {args.stall_min:g} min", flush=True)
 
-        # A collect pass first: a test file that cannot import (a missing test dependency, a conftest error) aborts
-        # mutmut's stats pass with nothing on its log, and costs the cluster start for nothing. Say why, and stop.
+        # A baseline pass first, with no mutant. mutmut needs a green clean run, and a node is not the host: a test that
+        # needs a data fixture or a service the node lacks fails there. Those tests are deselected (and listed in
+        # run.json), so the mutants are judged by the tests that can run. A selection that does not collect at all (a
+        # missing test dependency, a conftest error) aborts mutmut's stats pass with nothing on its log: say why, and stop.
         pre = subprocess.run(
-            [str(py), "-m", "pytest", "--rootdir=.", "--collect-only", "-q", "-p", "no:randomly", *selection,
+            [str(py), "-m", "pytest", "--rootdir=.", "-q", "--color=no", "--tb=no", "-rfE", "-p", "no:randomly", *selection,
              "-p", gate.PLUGIN, "-p", KILLERS_PLUGIN, "-p", "no:cacheprovider", "-m", "not integration and not perf"],
-            cwd=work, env=env, capture_output=True, text=True,
+            cwd=work, env=dict(env, GBX_MUT_KILLERS=os.devnull), capture_output=True, text=True,
         )
         (out / "preflight.txt").write_text(pre.stdout + "\n--- stderr ---\n" + pre.stderr)
         tail = "\n".join((pre.stdout + pre.stderr).strip().splitlines()[-12:])
-        if pre.returncode != 0:
-            print(f"[MUTATION {args.family}] PRECONDITION MISSING: the selected tests do not collect in the copy "
+        if pre.returncode not in (0, 1):
+            print(f"[MUTATION {args.family}] PRECONDITION MISSING: the selected tests do not run in the copy "
                   f"(pytest rc {pre.returncode}); mutation not run. Last lines:\n{tail}", flush=True)
             beat.stop("failed")
             return 2
-        print(f"[MUTATION {args.family}] collect pass ok: {tail.splitlines()[-1] if tail else ''}", flush=True)
+        baseline_failures = baseline_failed_ids(pre.stdout)
+        if baseline_failures:
+            selection = selection + [f"--deselect={nid}" for nid in baseline_failures]
+            (work / "pyproject.toml").write_text((gate.PKG_ROOT / "pyproject.toml").read_text() + guidance_section(modules, selection, args))
+            print(f"[MUTATION {args.family}] baseline: {len(baseline_failures)} test(s) fail with no mutant on this node and are deselected: "
+                  + "; ".join(baseline_failures[:5]) + (" ..." if len(baseline_failures) > 5 else ""), flush=True)
+        print(f"[MUTATION {args.family}] baseline pass ok: {tail.splitlines()[-1] if tail else ''}", flush=True)
 
         log = open(out / "mutmut.log", "w")
         proc = subprocess.Popen([str(mutmut_exe), "run", "--max-children", str(args.max_workers)],
@@ -292,7 +314,7 @@ def main(argv=None) -> int:
         (out / "survivors.json").write_text(json.dumps(survivors, indent=0))
         counts = counts_of(codes, short)
         meta = dict(run, modules=short, cores=os.cpu_count(), max_workers=args.max_workers, wall_s=round(time.time() - t0),
-                    mutants=len(codes), counts=counts, stopped=stopped, mutmut_rc=rc,
+                    mutants=len(codes), counts=counts, stopped=stopped, mutmut_rc=rc, baseline_failures=baseline_failures,
                     kill_rate={m: rows_mod.kill_rate(c) for m, c in counts.items()}, pins=[gate.MUTMUT_PIN, gate.PYTEST_PIN])
         (out / "run.json").write_text(json.dumps(meta, indent=1))
         print(f"[MUTATION {args.family}] done in {meta['wall_s']}s: {len(codes)} mutants. "

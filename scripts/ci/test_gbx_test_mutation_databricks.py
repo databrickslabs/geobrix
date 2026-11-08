@@ -218,3 +218,9 @@ def test_the_runner_section_adds_the_killers_plugin_and_the_timeouts():
     args = guid.parse(["--family", "f", "--modules", "pyvx/_validity", "--tests", "test/pyvx", "--run-id", "r", "--out-dir", "/tmp/o"])
     sec = guid.guidance_section(["src/databricks/labs/gbx/pyvx/_validity.py"], ["test/pyvx"], args)
     assert "gbx_mut_killers" in sec and "gbx_mut_tier0" in sec and "timeout_multiplier = 5.0" in sec and "mutate_only_covered_lines = true" in sec
+
+
+def test_baseline_failures_are_read_from_the_short_summary():
+    guid = _load("guidance_runner3", MUT / "guidance_runner.py")
+    text = "....\nFAILED test/a.py::t[x - y] - assert 1\nERROR test/b.py::u - boom\nFAILED test/a.py::t[x - y] - dup\nFAILED test/c.py::v[a] - x[0]\n1 failed"
+    assert guid.baseline_failed_ids(text) == ["test/a.py::t[x - y]", "test/b.py::u", "test/c.py::v[a]"]

@@ -134,12 +134,12 @@ why = "Pushes the registered PROJ grid directories to the JVM's grid registry wh
 
 [[site]]
 path = "rasterx/sfm.py"
-symbol = "run_sfm"
-api = ["conf.set"]
+symbol = "_batch_of_one"
+api = ["conf.set", "conf.unset"]
 computes = ["dedicated", "standard", "serverless"]
 gate = "guarded"
-gate_detail = "try/except: a session that refuses the conf (Serverless) goes on with its default batch size"
-why = "Asks for one image per Arrow batch in the structure-from-motion feature extraction"
+gate_detail = "try/except around the set: a session that refuses the conf (Serverless) goes on with its default batch size and prints one line saying so; on a session that takes it, the previous value is put back in finally"
+why = "Asks for one image per Arrow batch while the structure-from-motion pipeline runs, then restores the session's setting"
 
 # --- Unity Catalog functions on the JAR --------------------------------------------------------------------------
 

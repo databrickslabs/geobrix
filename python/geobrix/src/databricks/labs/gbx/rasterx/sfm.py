@@ -5,6 +5,8 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
+import contextlib
+import functools
 import json
 import shutil
 import sqlite3 as _sq
@@ -465,6 +467,46 @@ def _gps_from_master(db):
     return _o
 
 
+_ARROW_BATCH_KEY = "spark.sql.execution.arrow.maxRecordsPerBatch"
+
+
+@contextlib.contextmanager
+def _batch_of_one(spark):
+    """One image per `mapInPandas` Arrow batch while the body runs, so a Python worker holds at most a single
+    image's pycolmap working set (per-task RAM ~1-2 GB). The session's own setting is put back afterwards,
+    also when the body raises. A session that refuses the setting (Spark Connect / Serverless) goes on with its
+    default batch size, and says so."""
+    try:
+        old = spark.conf.get(_ARROW_BATCH_KEY, None)
+        spark.conf.set(_ARROW_BATCH_KEY, "1")
+    except Exception:  # noqa: BLE001 - Connect refuses a runtime conf set
+        print(
+            f"[sfm] could not set {_ARROW_BATCH_KEY}=1 on this session; extraction uses the default batch size "
+            "(more images per batch, so more memory per task)"
+        )
+        yield
+        return
+    try:
+        yield
+    finally:
+        if old is None:
+            spark.conf.unset(_ARROW_BATCH_KEY)
+        else:
+            spark.conf.set(_ARROW_BATCH_KEY, old)
+
+
+def _one_image_per_batch(fn):
+    """Run ``fn(spark, ...)`` inside `_batch_of_one`."""
+
+    @functools.wraps(fn)
+    def wrapper(spark, *args, **kwargs):
+        with _batch_of_one(spark):
+            return fn(spark, *args, **kwargs)
+
+    return wrapper
+
+
+@_one_image_per_batch
 def run_sfm(  # noqa: C901
     spark,
     df_qc,
@@ -526,13 +568,6 @@ def run_sfm(  # noqa: C901
     _sfx = f"_{group_key}" if group_key else ""
 
     num_partitions = df_qc.count()
-    # Memory-safe (Serverless): one image per mapInPandas Arrow batch, so a Python
-    # worker holds at most a single image’s pycolmap working set (per-task RAM ~1-2 GB).
-    # SIFT params/quality unchanged. Guarded per the Serverless spark.conf convention.
-    try:
-        spark.conf.set("spark.sql.execution.arrow.maxRecordsPerBatch", "1")
-    except Exception:
-        pass
     t0 = time.perf_counter()
 
     # ── Stage 1: Distributed feature extraction ───────────────────────────

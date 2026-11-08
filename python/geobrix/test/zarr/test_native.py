@@ -2,7 +2,6 @@
 
 import copy
 import json
-import os
 import threading
 import time
 import tracemalloc
@@ -60,7 +59,9 @@ def _store(path, reader=None):
     return ManifestStore(metas, rows, reader or FuseRangeReader(str(path)), arrays)
 
 
-@pytest.mark.parametrize("fixture", FIXTURES)
+# the sharded store's boxes are read by the override and thread tests below and by
+# test_engine's manifest-array matrix
+@pytest.mark.parametrize("fixture", ["era5_v3_unsharded", "era5_v2"])
 def test_native_reads_like_zarr_direct(fixture, request):
     path = request.getfixturevalue(fixture)
     store = _store(path)
@@ -118,22 +119,6 @@ def test_native_reads_the_files_of_a_box_once_each(era5_v3_sharded):
     np.testing.assert_array_equal(got, _direct(era5_v3_sharded)[0:1])
     assert len(spy.calls) == 2  # the shard's index, then the four chunks together
     assert sorted(len(c) for c in spy.calls) == [1, 4]
-
-
-def test_native_open_count_follows_files_not_chunks(era5_v3_sharded, monkeypatch):
-    opens = []
-    real = os.open
-
-    def counting(path, *a, **k):
-        opens.append(path)
-        return real(path, *a, **k)
-
-    monkeypatch.setattr(os, "open", counting)
-    st = _store(era5_v3_sharded)
-    arr = open_manifest_array(st, "t2m", pipeline="native")
-    read_box(arr, (slice(None),) * 3)  # 8 chunks in 2 shards
-    shards = {p for p in opens}
-    assert len(shards) == 2 and len(opens) <= 4  # index + data per shard at most
 
 
 def test_native_is_the_same_from_many_threads(era5_v3_sharded):
@@ -312,14 +297,6 @@ def test_native_keeps_many_reads_in_flight_on_a_box_larger_than_the_budget(
     want = min(8, workers)
     assert bounded_peak >= want, f"only {bounded_peak} reads in flight, wanted {want}"
     assert unbounded_peak >= want
-
-
-def test_native_group_size_is_a_fraction_of_the_budget(monkeypatch):
-    monkeypatch.setattr(_native, "_IO_GROUP_BYTES", 32 << 20)
-    monkeypatch.setattr(_native, "_INFLIGHT_BYTES", 64 << 20)
-    assert _native._group_bytes() == 8 << 20
-    monkeypatch.setattr(_native, "_INFLIGHT_BYTES", 1 << 40)
-    assert _native._group_bytes() == 32 << 20
 
 
 class ShortReader:

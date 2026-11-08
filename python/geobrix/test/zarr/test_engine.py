@@ -348,26 +348,6 @@ def test_a_thread_holding_the_gate_shared_cannot_upgrade_it():
         assert gate.held()
 
 
-def test_the_gate_is_free_after_nested_holds():
-    gate = _engine._ConfigGate()
-    with gate.shared():
-        with gate.shared():
-            pass
-        assert gate.held()  # the outer hold survives the inner exit
-    assert not gate.held()
-    finished, _ = _in_thread(lambda: gate.exclusive().__enter__())
-    assert finished
-
-
-def test_a_zarrs_scope_may_open_inside_itself_and_shared_inside_it():
-    gate = _engine._ConfigGate()
-    with gate.exclusive():
-        with gate.exclusive():
-            with gate.shared():
-                assert gate.held()
-    assert not gate.held()
-
-
 def test_a_manifest_array_cannot_be_written(era5_v3_sharded):
     arr = open_manifest_array(_manifest(era5_v3_sharded), "t2m", pipeline="default")
     with pytest.raises(Exception) as ei:

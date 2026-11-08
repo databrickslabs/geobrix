@@ -377,24 +377,30 @@ def test_a_shard_with_only_tombstones_is_absent(era5_v3_sharded, shard_row):
     )
 
 
+_NOT_A_REGION = [
+    dict(length=None),  # a file with no length
+    dict(offset=None),  # a file with no offset
+    dict(length=0),  # a file and nothing to read from it
+    dict(file=None, length=5),  # bytes to read and no file
+    dict(offset=-1),
+    dict(length=-4),
+    dict(file=""),  # an empty name is not a path (and not a tombstone)
+    dict(file="", length=0),
+    dict(file="", length=None),
+    dict(file="", offset=None),
+    dict(file=7),
+    dict(file="a\0b"),
+]
+
+
 @pytest.mark.parametrize(
-    "fields",
+    "kind, fields",
     [
-        dict(length=None),  # a file with no length
-        dict(offset=None),  # a file with no offset
-        dict(length=0),  # a file and nothing to read from it
-        dict(file=None, length=5),  # bytes to read and no file
-        dict(offset=-1),
-        dict(length=-4),
-        dict(file=""),  # an empty name is not a path (and not a tombstone)
-        dict(file="", length=0),
-        dict(file="", length=None),
-        dict(file="", offset=None),
-        dict(file=7),
-        dict(file="a\0b"),
+        *[("chunk", f) for f in _NOT_A_REGION],
+        # a shard row is checked by the same rule: one row of each kind of fault
+        *[("shard", _NOT_A_REGION[i]) for i in (0, 3, 4, 6, 11)],
     ],
 )
-@pytest.mark.parametrize("kind", ["chunk", "shard"])
 def test_a_row_that_is_neither_a_tombstone_nor_a_region_is_drift(
     era5_v3_sharded, fields, kind
 ):

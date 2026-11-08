@@ -550,3 +550,40 @@ def test_affected_diffs_from_the_merge_base_so_the_base_side_is_not_counted(tmp_
     (tmp_path / "theirs.txt").write_text("t")  # the base moves on after the branch left it
     git("add", "."), git("commit", "-q", "-m", "theirs")
     assert ts.changed_files(tmp_path, "main", "feature") == ["mine.txt"]
+
+
+def _cell_source(shards):
+    plan = _plan(_args(), ts.select(shards, "ds"), wheel=Path("/x/geobrix-0.6.0+env6-py3-none-any.whl"))
+    return launcher.run_source(plan)
+
+
+def test_the_overlay_removes_modules_the_commit_deleted_and_keeps_the_payload(shards, tmp_path):
+    src = _cell_source(shards)
+    start, end = src.index("inst, src_pkg ="), src.index("sys.path.insert(0, pkg)")
+    snippet = textwrap.dedent(src[start:end])
+    # the sitecustomize lines sit between the overlay and the path insert: keep only the overlay's own lines
+    snippet = snippet[: snippet.index("# A test that starts")] if "# A test that starts" in snippet else snippet
+    sitedir, pkg = tmp_path / "site", tmp_path / "repo"
+    inst = sitedir / "databricks/labs/gbx"
+    (inst / "_vendor/x86_64").mkdir(parents=True)
+    (inst / "_vendor/x86_64/rasterio.py").write_text("payload")
+    (inst / "old_module.py").write_text("deleted at the commit")
+    (inst / "ds").mkdir()
+    (inst / "ds/gone.py").write_text("gone")
+    (inst / "_build_info.py").write_text("GIT_SHA = 'x'")
+    (inst / "keep.py").write_text("old")
+    srcdir = pkg / "src/databricks/labs/gbx"
+    (srcdir / "ds").mkdir(parents=True)
+    (srcdir / "keep.py").write_text("new")
+    ns = {"os": __import__("os"), "shutil": __import__("shutil"), "sitedir": str(sitedir), "pkg": str(pkg)}
+    exec(compile(snippet, "overlay", "exec"), ns)  # noqa: S102
+    assert not (inst / "old_module.py").exists() and not (inst / "ds/gone.py").exists()
+    assert (inst / "_vendor/x86_64/rasterio.py").read_text() == "payload" and (inst / "_build_info.py").exists()
+    assert (inst / "keep.py").read_text() == "new"
+
+
+def test_a_shard_leaves_its_log_and_a_locked_heartbeat_while_it_runs(shards):
+    src = _cell_source(shards)
+    for needle in ("beat_lock = threading.Lock()", "def keep_log()", "pytest_runtest_logstart", "keep_log()"):
+        assert needle in src
+    compile(src, "runner", "exec")

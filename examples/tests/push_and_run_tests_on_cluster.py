@@ -299,7 +299,15 @@ HB = STAGE + "/hb/" + SLUG + ".json"
 import _gbx_native_path
 sitedir = os.path.dirname(os.path.abspath(_gbx_native_path.__file__))
 print("native payload active:", _gbx_native_path.ACTIVE, "| sitedir", sitedir, flush=True)
-shutil.copytree(pkg + "/src/databricks/labs/gbx", sitedir + "/databricks/labs/gbx", dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
+inst, src_pkg = sitedir + "/databricks/labs/gbx", pkg + "/src/databricks/labs/gbx"
+for dp, dn, fn in os.walk(inst):  # a module the commit deleted or renamed must not stay importable from the wheel's copy
+    rel = os.path.relpath(dp, inst)
+    if rel.split(os.sep)[0] in ("_vendor", "__pycache__"):
+        continue
+    for f in fn:
+        if f.endswith(".py") and f != "_build_info.py" and not os.path.exists(os.path.join(src_pkg, rel, f)):
+            os.remove(os.path.join(dp, f))
+shutil.copytree(src_pkg, inst, dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
 # A test that starts a Python subprocess gets a plain interpreter that, like this session, never reads the wheel's .pth:
 # a sitecustomize on PYTHONPATH does what the .pth does there.
 os.makedirs(root + "/sc", exist_ok=True)
@@ -330,15 +338,27 @@ sys.stdout = Tee(sys.stdout, log)
 sys.stderr = Tee(sys.stderr, log)  # a usage error of pytest is only on stderr
 
 state = {"passed": 0, "failed": 0, "errors": 0, "skipped": 0, "total": 0, "last": "", "last_t": time.time(), "reason": "", "done": False}
+beat_lock = threading.Lock()  # the watchdog thread and the pytest hooks both beat: one write at a time
 def beat():
-    d = dict(state, ts=time.time(), elapsed_s=round(time.time() - t0), shard=S["name"])
-    tmp = root + "/hb.json"
-    json.dump(d, open(tmp, "w"))
-    shutil.copy(tmp, HB)
+    with beat_lock:
+        d = dict(state, ts=time.time(), elapsed_s=round(time.time() - t0), shard=S["name"])
+        tmp = root + "/hb.json"
+        json.dump(d, open(tmp, "w"))
+        shutil.copy(tmp, HB)
+
+def keep_log():  # what the shard has printed so far reaches the Volume, so a killed or cancelled shard leaves its log
+    try:
+        log.flush()
+        shutil.copy(root + "/out/pytest.log", OUT + "/pytest.log")
+    except OSError:
+        pass
 
 class Counter:
     def pytest_collection_finish(self, session):
         state["total"] = len(session.items); state["last_t"] = time.time(); beat()
+    def pytest_runtest_logstart(self, nodeid, location):
+        state["last_t"] = time.time()  # a test that starts counts as progress; only a test that outlasts stall_min is a stall
+
     def pytest_runtest_logreport(self, report):
         if report.when == "call":
             state["passed" if report.passed else "failed" if report.failed else "skipped"] += 1
@@ -353,9 +373,13 @@ class Counter:
             beat()
 
 def watchdog():
+    n = 0
     while not state["done"]:
         time.sleep(15)
         beat()
+        n += 1
+        if n %% 4 == 0:
+            keep_log()
         why = ""
         if time.time() - t0 > CAPS["shard_min"] * 60:
             why = "shard cap %%g min" %% CAPS["shard_min"]
@@ -365,7 +389,7 @@ def watchdog():
             state["reason"] = why
             print("\\nWATCHDOG: " + why + "; stacks follow", flush=True)
             faulthandler.dump_traceback(file=log, all_threads=True); log.flush()
-            beat()
+            beat(); keep_log()
             _thread.interrupt_main()
             time.sleep(90)
             if not state["done"]:

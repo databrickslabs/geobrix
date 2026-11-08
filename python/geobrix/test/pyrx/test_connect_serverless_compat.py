@@ -25,7 +25,9 @@ import databricks.labs.gbx as gbx
 
 _PKG = Path(gbx.__file__).resolve().parent
 _REGISTER = _PKG / "_compat" / "classic_only.toml"
-_DEV_ONLY = ("bench",)  # ships in the wheel as a developer harness; product code never imports it
+_DEV_ONLY = (
+    "bench",
+)  # ships in the wheel as a developer harness; product code never imports it
 # The Serverless product core: no entry of the register may sit here, whatever its gate.
 _CORE = ("pyrx", "pyvx", "ds", "engine")
 

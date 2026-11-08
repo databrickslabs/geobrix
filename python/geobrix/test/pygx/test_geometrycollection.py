@@ -8,6 +8,7 @@ h3 GC support is tested via the _h3.geom_expand API (h3 is light-only for
 geom-aware kring/kloop).
 """
 
+import pytest
 from shapely import to_wkb
 from shapely.geometry import (
     GeometryCollection,
@@ -219,3 +220,14 @@ def test_h3_reads_mixed_dimension_text_like_the_rest():
     cells = _h3.geom_expand("ring", mixed, _H3_RES, 0, "boundary-in", "coveras")
     assert cells, "mixed-dimension text must not read as no geometry"
     assert cells == _h3_ring(_H3_LINE)
+
+
+def test_h3_refuses_a_geometry_whose_srid_is_not_lonlat():
+    """h3: EWKT in a projected CRS must not be read as lon/lat; the error names the SRID and the fix."""
+    ewkt = "SRID=27700;POINT (530000 180000)"
+    with pytest.raises(ValueError, match=r"SRID 27700.*Fix:"):
+        _h3.geom_expand("ring", ewkt, _H3_RES, 0, "boundary-in", "coveras")
+    ok = _h3.geom_expand(
+        "ring", "SRID=4326;POINT (-122.4 37.8)", _H3_RES, 0, "boundary-in", "coveras"
+    )
+    assert ok

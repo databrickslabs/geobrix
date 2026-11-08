@@ -19,6 +19,7 @@ fed to the shared ``_dilate`` engine. h3 uses (lat, lng) order; shapely uses
 """
 
 import h3
+from shapely import get_srid
 from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon
 
 from databricks.labs.gbx.pygx import _dilate
@@ -35,7 +36,15 @@ def _parse_geom(g):
     Goes through the shared ``parse_geom`` so mixed-dimension text reads as it does for every other function.
     """
     geom = parse_geom(g)
-    return None if (geom is None or geom.is_empty) else geom
+    if geom is None or geom.is_empty:
+        return None
+    srid = get_srid(geom)
+    if srid not in (0, 4326):
+        raise ValueError(
+            f"h3 needs geometry in SRID 4326 (longitude/latitude); got SRID {srid}. "
+            "Fix: reproject it first, for example with st_transformcrs(geom, 'EPSG:4326')."
+        )
+    return geom
 
 
 def _latlng_ring(coords):

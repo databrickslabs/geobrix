@@ -1032,6 +1032,7 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
     last_say = 0.0
     over: Dict[str, str] = {}
     last_beat: Dict[str, float] = {}
+    changed: Dict[str, dict] = {}
     rc = 0
     while len(over) < len(runs):
         time.sleep(POLL_S)
@@ -1071,15 +1072,27 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
                 _cancel(w, rid)
                 rc = rc or EXIT_NO_START
             elif beats and running:
-                stale = [b for b in beats.values() if not b.get("done") and time.time() - b.get("ts", 0) > 600]
-                live = [b for b in beats.values() if not b.get("done") and time.time() - b.get("ts", 0) <= 600]
-                if stale and not live and len(stale) >= len(running):
-                    print(f"Every running shard of {pool} has a heartbeat older than 10 min: a stuck run. Cancelling run {rid}.", file=sys.stderr)
+                if run_is_stuck([t.task_key[2:] for t in running], beats, changed.setdefault(pool, {}), now, (c["stall_min"] + 5) * 60.0):
+                    print(f"Every running shard of {pool} has a heartbeat that has not moved for {c['stall_min'] + 5:g} min: a stuck run. Cancelling run {rid}.", file=sys.stderr)
                     _cancel(w, rid)
                     rc = rc or EXIT_STALLED
         if say:
             last_say = now
     return rc
+
+
+def run_is_stuck(running: List[str], beats: Dict[str, dict], changed: Dict[str, tuple], now: float, limit_s: float) -> bool:
+    """True when every shard running now has a heartbeat that stopped moving for ``limit_s`` seconds, on the launcher's clock (the
+    node's clock is not compared). A shard with no heartbeat yet is starting (it installs and unpacks first), and the heartbeat of
+    a shard that is not running (one the watchdog killed, one that finished) says nothing, so neither makes a run look stuck
+    or healthy by itself. ``changed`` keeps, per shard, the last beat seen and when it changed."""
+    for slug, b in beats.items():
+        prev = changed.get(slug)
+        if prev is None or prev[0] != b.get("ts"):
+            changed[slug] = (b.get("ts"), now)
+    if not running or any(slug not in beats for slug in running):
+        return False
+    return all(not beats[slug].get("done") and now - changed[slug][1] > limit_s for slug in running)
 
 
 def cancel_unfinished(w, runs: Dict[str, int], finished: set) -> List[int]:

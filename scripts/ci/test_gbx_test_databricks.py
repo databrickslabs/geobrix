@@ -587,3 +587,24 @@ def test_a_shard_leaves_its_log_and_a_locked_heartbeat_while_it_runs(shards):
     for needle in ("beat_lock = threading.Lock()", "def keep_log()", "pytest_runtest_logstart", "keep_log()"):
         assert needle in src
     compile(src, "runner", "exec")
+
+
+def test_a_run_is_stuck_only_when_every_running_shard_has_stopped_beating():
+    stuck = launcher.run_is_stuck
+    changed = {}
+    beats = {"a": {"ts": 1.0}, "b": {"ts": 1.0}}
+    assert not stuck(["a", "b"], beats, changed, 0.0, 900.0), "first sight: the clock starts now"
+    assert stuck(["a", "b"], beats, changed, 1000.0, 900.0)
+    beats["b"] = {"ts": 2.0}  # b beat again
+    assert not stuck(["a", "b"], beats, changed, 1100.0, 900.0)
+    assert not stuck([], beats, changed, 9999.0, 900.0), "nothing running is not stuck"
+
+
+def test_a_shard_that_has_not_started_or_one_that_died_earlier_does_not_decide():
+    changed = {}
+    beats = {"killed": {"ts": 1.0}, "live": {"ts": 1.0}}
+    launcher.run_is_stuck(["live"], beats, changed, 0.0, 900.0)
+    assert not launcher.run_is_stuck(["live", "next"], beats, changed, 5000.0, 900.0), "next is installing: no heartbeat yet"
+    assert launcher.run_is_stuck(["live"], beats, changed, 5000.0, 900.0), "the killed shard's old beat is not counted in either direction"
+    beats["live"]["done"] = True
+    assert not launcher.run_is_stuck(["live"], beats, changed, 9000.0, 900.0), "a finished shard is not a hung one"

@@ -832,3 +832,7 @@ def test_mutant_timeout_is_an_option_of_the_command_and_the_plan(tmp_path):
     assert plan["mutant_timeout"] == 30.0 and "timeout_constant = 6.0" in plan["mutmut"]
     res = _sh(*base, "--mutant-timeout", "0")
     assert res.returncode != 0 and "Fix:" in res.stderr
+
+
+def test_the_command_script_is_valid_bash():
+    assert subprocess.run(["bash", "-n", str(CMD)], capture_output=True, text=True).returncode == 0

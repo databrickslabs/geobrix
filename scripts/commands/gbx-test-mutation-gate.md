@@ -88,6 +88,7 @@ In both modes:
 
 ## Limits
 
+- A selection whose mutants all hang in mutmut's forked workers (the `ds/lidar` quarantine tests do) ends as an invalid run, never as a number. `process_isolation = "forkserver"` aborts on this host.
 - Tier 0 only. Tests that use the `spark`, `jvm_spark`, `spark_connect_local`, `spark_session` or `spark_delta` fixture are skipped. The command warns when a selected file imports `pyspark` at module level.
 - Rows of an oracle table reach the kernels only through the `test_family_oracle_l3_callables` and `test_family_oracle_uc_handlers` legs. A table module opts its scalars into the first with `L3_CALLABLE = True`.
 - A venv holds `mutmut==3.8.0` and `pytest==9.1.1`. It lives in `~/.cache/geobrix/mutation-venv` (`XDG_CACHE_HOME` is honoured); `GBX_MUTATION_VENV` moves it. mutmut 3.8.0 crashes under pytest 9.2.0.

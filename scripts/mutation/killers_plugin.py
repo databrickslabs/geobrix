@@ -26,7 +26,10 @@ def pytest_runtest_logreport(report):
         return
     if mutant in _NOT_A_MUTANT:
         return
-    line = json.dumps({"mutant": mutant, "test": report.nodeid, "when": report.when}) + "\n"
+    line = (
+        json.dumps({"mutant": mutant, "test": report.nodeid, "when": report.when})
+        + "\n"
+    )
     fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
     try:
         os.write(fd, line.encode())

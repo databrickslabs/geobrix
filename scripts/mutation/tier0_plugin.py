@@ -20,4 +20,6 @@ SPARK_FIXTURES = {
 def pytest_runtest_setup(item):
     needed = SPARK_FIXTURES & set(getattr(item, "fixturenames", ()))
     if needed:
-        pytest.skip("Tier 0: no Spark under the mutation gate (%s)" % ", ".join(sorted(needed)))
+        pytest.skip(
+            "Tier 0: no Spark under the mutation gate (%s)" % ", ".join(sorted(needed))
+        )

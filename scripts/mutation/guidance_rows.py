@@ -57,7 +57,9 @@ def status_of(code: Optional[int]) -> str:
         return "unchecked"
     if code in (33, 5, 34):
         return "absent"
-    return "killed" if code else "survived"  # an unlisted non-zero exit is a failed run: a kill
+    return (
+        "killed" if code else "survived"
+    )  # an unlisted non-zero exit is a failed run: a kill
 
 
 def function_of(key: str) -> str:
@@ -127,13 +129,17 @@ def kill_rate(counts: Dict[str, int]) -> Optional[float]:
 
 
 def per_module(rows: List[dict]) -> Dict[str, Dict[str, int]]:
-    out: Dict[str, Dict[str, int]] = collections.defaultdict(lambda: {s: 0 for s in STATUSES})
+    out: Dict[str, Dict[str, int]] = collections.defaultdict(
+        lambda: {s: 0 for s in STATUSES}
+    )
     for r in rows:
         out[r["module"]][r["status"]] += 1
     return dict(sorted(out.items()))
 
 
-def summary_md(rows: List[dict], run: dict, trend: Optional[Dict[str, float]] = None) -> str:
+def summary_md(
+    rows: List[dict], run: dict, trend: Optional[Dict[str, float]] = None
+) -> str:
     """The run's summary.md: a line per module, the survivors grouped by function, the tests that killed the most.
 
     `trend` is {module: kill rate of the run before} (the table's previous run), shown as a delta when given.
@@ -161,14 +167,20 @@ def summary_md(rows: List[dict], run: dict, trend: Optional[Dict[str, float]] = 
         extra = ""
         if trend:
             prev = trend.get(m)
-            extra = " " + ("new |" if prev is None or kr is None else f"{kr - prev:+.1f} |")
+            extra = " " + (
+                "new |" if prev is None or kr is None else f"{kr - prev:+.1f} |"
+            )
         lines.append(
             f"| {m} | {sum(c.values())} | {c['killed']} | {c['survived']} | {c['timeout']} | {c['segfault']} | {c['absent']} | {c['unchecked']} | {cell} |"
             + extra
         )
     tot = {s: sum(c[s] for c in mods.values()) for s in STATUSES}
     kr = kill_rate(tot)
-    lines += ["", f"All modules: {len(rows)} mutants, kill rate {'n/a' if kr is None else f'{kr:.1f}%'}.", ""]
+    lines += [
+        "",
+        f"All modules: {len(rows)} mutants, kill rate {'n/a' if kr is None else f'{kr:.1f}%'}.",
+        "",
+    ]
 
     lines += ["## Survivors by function", ""]
     surv = collections.defaultdict(list)
@@ -177,7 +189,9 @@ def summary_md(rows: List[dict], run: dict, trend: Optional[Dict[str, float]] = 
             surv[(r["module"], r["function"])].append(r)
     if not surv:
         lines.append("None.")
-    for (m, fn), rs in sorted(surv.items(), key=lambda kv: (kv[0][0], -len(kv[1]), kv[0][1])):
+    for (m, fn), rs in sorted(
+        surv.items(), key=lambda kv: (kv[0][0], -len(kv[1]), kv[0][1])
+    ):
         lines.append(f"- `{m}` `{fn}`: {len(rs)} survivor(s)")
         for r in rs:
             idx = re.search(r"__mutmut_(\d+)$", r["mutant"])
@@ -186,7 +200,9 @@ def summary_md(rows: List[dict], run: dict, trend: Optional[Dict[str, float]] = 
                 for ln in r["diff"].strip().splitlines():
                     if ln.startswith(("+", "-")) and not ln.startswith(("+++", "---")):
                         lines.append(f"    {ln}")
-    absent = collections.Counter((r["module"], r["function"]) for r in rows if r["status"] == "absent")
+    absent = collections.Counter(
+        (r["module"], r["function"]) for r in rows if r["status"] == "absent"
+    )
     lines += ["", "## Functions no selected test reaches", ""]
     if not absent:
         lines.append("None.")
@@ -194,7 +210,11 @@ def summary_md(rows: List[dict], run: dict, trend: Optional[Dict[str, float]] = 
         lines.append(f"- `{m}` `{fn}`: {n} mutant(s)")
 
     kills = collections.Counter(r["killing_test"] for r in rows if r["killing_test"])
-    lines += ["", "## Tests that killed the most mutants (first failing test of each)", ""]
+    lines += [
+        "",
+        "## Tests that killed the most mutants (first failing test of each)",
+        "",
+    ]
     if not kills:
         lines.append("No killing test was recorded.")
     for t, n in kills.most_common(15):
@@ -254,13 +274,18 @@ def write_delta(spark, rows: List[dict], table: str) -> int:
     data = [tuple(cell(n, t, r.get(n)) for n, t in COLUMNS) for r in rows]
     ddl = ", ".join(f"{n} {t}" for n, t in COLUMNS)
     df = spark.createDataFrame(data, schema=ddl)
-    df.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(table)
+    df.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(
+        table
+    )
     return len(data)
 
 
-def previous_rates(spark, table: str, family: str, run_id: str, tests: str = "") -> Dict[str, float]:
+def previous_rates(
+    spark, table: str, family: str, run_id: str, tests: str = ""
+) -> Dict[str, float]:
     """{module: kill rate of the latest earlier run of the family that has the module, with the same tests when given};
-    {} when there is none. (Rates under other tests say nothing about this selection.)"""
+    {} when there is none. (Rates under other tests say nothing about this selection.)
+    """
     try:
         got = spark.sql(
             f"SELECT module, run_id, MAX(run_ts) AS ts, "
@@ -268,13 +293,14 @@ def previous_rates(spark, table: str, family: str, run_id: str, tests: str = "")
             f"SUM(CASE WHEN status = 'survived' THEN 1 ELSE 0 END) AS s "
             f"FROM {table} WHERE family = '{family.replace(chr(39), '')}' AND run_id <> '{run_id.replace(chr(39), '')}' "
             + (f"AND tests = '{tests.replace(chr(39), '')}' " if tests else "")
-            +
-            f"GROUP BY module, run_id"
+            + "GROUP BY module, run_id"
         ).collect()
     except Exception:  # noqa: BLE001 - no table yet, or no access: no trend
         return {}
     best: Dict[str, tuple] = {}
     for r in got:
-        if (r["d"] + r["s"]) and (r["module"] not in best or r["ts"] > best[r["module"]][0]):
+        if (r["d"] + r["s"]) and (
+            r["module"] not in best or r["ts"] > best[r["module"]][0]
+        ):
             best[r["module"]] = (r["ts"], 100.0 * r["d"] / (r["d"] + r["s"]))
     return {m: v[1] for m, v in best.items()}

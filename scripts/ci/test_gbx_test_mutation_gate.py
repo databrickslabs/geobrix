@@ -936,6 +936,10 @@ def test_the_cache_key_follows_what_the_old_kills_depend_on():
     assert k(ref="abc") != k(
         ref=None
     )  # (the ref is in the fingerprint; the tree joins the key only without one)
+    # a timeout counts as a kill, so a kill set made under another mutant timeout is another entry
+    assert gate.cache_key("f", "T", None, "t", 10) != gate.cache_key(
+        "f", "T", None, "t", 30
+    )
 
 
 def test_the_tree_hash_sees_src_and_test_helpers_but_not_test_files(tmp_path):

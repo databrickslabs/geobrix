@@ -471,9 +471,16 @@ def tree_state_hash(pkg: Path = None) -> str:
     return h.hexdigest()
 
 
-def cache_key(fingerprint: str, oracle_tables: str, ref_sha, tree: str = "") -> str:
+def cache_key(
+    fingerprint: str,
+    oracle_tables: str,
+    ref_sha,
+    tree: str = "",
+    mutant_timeout: float = 10.0,
+) -> str:
     """What a cached old kill set depends on: the fingerprint (kernels, old selection, old tests or the ref), the
-    oracle tables the run selected, mutmut's version, and, with no ref, the rest of the current tree.
+    oracle tables the run selected, mutmut's version, the mutant timeout (a timeout counts as a kill) and, with no
+    ref, the rest of the current tree.
     """
     h = hashlib.sha1()
     for part in (
@@ -482,6 +489,7 @@ def cache_key(fingerprint: str, oracle_tables: str, ref_sha, tree: str = "") -> 
         fingerprint,
         oracle_tables or "",
         "" if ref_sha else tree,
+        repr(float(mutant_timeout)),
     ):
         h.update(part.encode() + b"\0")
     return h.hexdigest()
@@ -1274,6 +1282,7 @@ def main(argv=None) -> int:
                     args.oracle_tables,
                     ref_sha,
                     "" if ref_sha else tree_state_hash(),
+                    args.mutant_timeout,
                 ),
                 fingerprint,
             )

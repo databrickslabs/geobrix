@@ -53,6 +53,28 @@ from databricks.labs.gbx.pyvx import functions as pyvx
 from databricks.labs.gbx.rasterx import functions as rx
 from databricks.labs.gbx.vectorx import functions as vx
 
+
+def _engine_core(sql_name: str, values: dict) -> Callable:
+    """The pure-core body of an engine-only row: the GDAL spec engine on the open dataset's GeoTIFF bytes,
+    returning the result raster's bytes (what ``col_fn`` runs, minus Spark). Raises the engine's reason when
+    it has no raster."""
+
+    def _core(ds):
+        from databricks.labs.gbx import manifest
+        from databricks.labs.gbx.engine import run
+
+        res = run.run(
+            manifest.load().functions[sql_name],
+            [prx._dataset_to_gtiff_bytes(ds)],
+            dict(values),
+        )
+        if res.raster is None:
+            raise RuntimeError(res.error)
+        return res.raster
+
+    return _core
+
+
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
 # (Python core_fn + col_fn) and in the Scala BenchDispatch case so the two engines
 # convolve with the same coefficients; the bench args carry only `kernel_size` for
@@ -770,7 +792,9 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_TERRAIN_LIGHT,
         heavy=False,  # no heavyweight level: the GDAL spec engine's JVM form measured no faster than light
         core=True,
-        core_fn=lambda ds, a: terrain.slope(ds, a["unit"]),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_slope", {"unit": a["unit"], "xscale": None, "yscale": None}
+        )(ds),
         col_fn=lambda t, a: rx.rst_slope(t, a["unit"]),
     ),
     "rst_ndvi": FnSpec(

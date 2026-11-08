@@ -501,7 +501,7 @@ def test_seconds_measured_at_eight_slots_are_brought_to_the_slots_of_the_plan():
 
 
 def test_the_tarball_carries_the_ci_workflow_the_scripts_shard_parses():
-    assert ".github" in launcher.SUBSET
+    assert ".github" in launcher.SUBSET and "src/test/scala" in launcher.SUBSET, "the heavy tests read TestL1.scala"
     listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", ".github/workflows/build_main.yml"], cwd=REPO_ROOT, capture_output=True, text=True).stdout
     assert ".github/workflows/build_main.yml" in listed, "the file the guards read is in the tree the subset archives"
 

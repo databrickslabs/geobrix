@@ -2,6 +2,9 @@
 
 - c0 (``c0(sql_name)``): an Arrow-optimized row-wise UDF over the whole tile (or array of tiles) and the other
   arguments, returning a tile. It takes virtual tiles (materialized through ``open_tile``) and materialized ones.
+  With ``file_ref=True`` it takes a FILE reference as its second argument (one per tile for an array input).
+- forced_c0 (``forced_c0(sql_name)``): the Python API's force-output form of c0: the same engine run, its tile
+  shaped by the force-output keywords (``virtualize_dir``, ``virtualize_prefix``, ``materialize``).
 - c1 (``c1(sql_name)``): a batch UDF over the raster bytes and the other arguments, returning
   ``struct<raster, error, command>`` (no MAP field, so neither pandas nor Arrow has to carry one); the SQL wrapper
   the manager installs (``sqlwrap.engine_dispatch``) builds the tile, and sends virtual tiles to c0.
@@ -62,10 +65,11 @@ _chain_text = (
 )  # the shared mapping (engine and light tier read one chain)
 
 
-def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
+def _virtual_raster(fn, tile, read_cap: Optional[int], file_ref=None) -> bytes:
     """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
     read cap, judged from the header before any pixel is read. Any failure is a DataError (an error tile).
+    ``file_ref`` is the tile's FILE reference: a read through it is not staged through the path as well.
     """
     from databricks.labs.gbx.pyrx.core import open_tile as ot
     from databricks.labs.gbx.zarr import _tiles as zarr_tiles
@@ -79,10 +83,10 @@ def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
                 # the path GDAL opens, resolved once as every light read resolves it (the remote-path gate, the
                 # dbfs:/ and file:/ spellings, /Volumes staging); the policy and the reads below judge that path
                 vt = dataclasses.replace(
-                    vt, path=ot._resolve_local_or_windowed(vt, None, stack)
+                    vt, path=ot._resolve_local_or_windowed(vt, file_ref, stack)
                 )
                 run.virtual_source(fn.sql_name, vt.path)
-            return _read_virtual(fn, vt, read_cap)
+            return _read_virtual(fn, vt, read_cap, file_ref)
     except (MemoryError, RecursionError):
         raise
     except _gdal_policy.RemotePathError as exc:
@@ -108,7 +112,7 @@ def _virtual_raster(fn, tile, read_cap: Optional[int]) -> bytes:
         ) from None
 
 
-def _read_virtual(fn, vt, read_cap: Optional[int]) -> bytes:
+def _read_virtual(fn, vt, read_cap: Optional[int], file_ref=None) -> bytes:
     """The window of a virtual tile whose path is resolved, as GeoTIFF bytes, under this compute's read cap."""
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
     from databricks.labs.gbx.engine.argv import _ITEMSIZE
@@ -116,7 +120,7 @@ def _read_virtual(fn, vt, read_cap: Optional[int]) -> bytes:
     from databricks.labs.gbx.pyrx.core import open_tile as ot
 
     with run.engine_settings():
-        with ot.open_header(vt) as h:
+        with ot.open_header(vt, file_ref=file_ref) as h:
             dtype = str(h.dtypes[0])
             size = (
                 h.width
@@ -129,7 +133,7 @@ def _read_virtual(fn, vt, read_cap: Optional[int]) -> bytes:
                 f"{fn.sql_name}: the virtual tile is {size // 2**20} MiB decoded, over this compute's read "
                 "cap. Fix: retile it first (gbx_rst_retile) so each tile is smaller"
             )
-        with ot._open(vt) as ds:
+        with ot._open(vt, file_ref=file_ref) as ds:
             return prx._dataset_to_gtiff_bytes(ds)
 
 
@@ -150,10 +154,11 @@ _GDAL_TYPE = {
 }
 
 
-def _inputs(fn, first, read_cap: Optional[int] = None):
+def _inputs(fn, first, read_cap: Optional[int] = None, file_refs=None):
     """(rasters, passthrough, cellid): the rasters to run on, or (None, what to return as it is, None) for a
     NULL, empty or error input (an error tile comes out unchanged; NULL and an empty tile give NULL). A virtual
-    tile is read by ``_virtual_raster`` (DataError when it is refused or unreadable).
+    tile is read by ``_virtual_raster`` (DataError when it is refused or unreadable). ``file_refs`` is one FILE
+    reference, or for an array input a list with one per tile.
     """
     tiles = [first] if fn.gdal.inputs[0][1] == "raster" else list(first or ())
     if first is None or not tiles:
@@ -165,11 +170,12 @@ def _inputs(fn, first, read_cap: Optional[int] = None):
         if t is None or tile_checks.is_empty(t):
             return None, None, None
     rasters = []
-    for t in tiles:
+    for i, t in enumerate(tiles):
         d = t.asDict() if hasattr(t, "asDict") else dict(t)
         raw = d.get("raster")
+        ref = file_refs[i] if isinstance(file_refs, (list, tuple)) else file_refs
         rasters.append(
-            bytes(raw) if raw is not None else _virtual_raster(fn, t, read_cap)
+            bytes(raw) if raw is not None else _virtual_raster(fn, t, read_cap, ref)
         )
     return rasters, None, tile_checks.cellid(tiles[0])
 
@@ -206,11 +212,14 @@ def c0(
     fn_ref: Optional[str] = None,
     read_cap: Optional[int] = None,
     section_ref: Optional[str] = None,
+    file_ref: bool = False,
 ):
     """The row-wise engine UDF of `sql_name`: (tile or tiles, the other arguments...) -> tile. Registered on its
     own (no SQL wrapper), it is called with the arguments the caller wrote: the rest take the manifest's
     defaults. `read_cap` is the decoded size a virtual tile may have here (the driver's connect-aware cap,
-    ``ds.file_gbx.report_detected_cap``); a worker cannot measure it itself."""
+    ``ds.file_gbx.report_detected_cap``); a worker cannot measure it itself. With `file_ref` the UDF takes
+    ``(first, file_ref, <every other param>)``: the FILE reference of the tile (an array of them, one per tile,
+    for a `rasters` input), so a FILE-backed virtual tile is read through it."""
     fn = _function(sql_name, fn_ref)
     names = [p.name for p in fn.params[1:]]
     defaults = [_sql_default(p.default) for p in fn.params[1:]]
@@ -218,9 +227,12 @@ def c0(
     @F.udf(V2_TILE_SCHEMA, useArrow=True)
     def _c0(first, *args):
         _setup(grid_dirs)
+        refs = None
+        if file_ref:
+            refs, args = args[0], args[1:]
         values = dict(zip(names, list(args) + defaults[len(args) :]))
         try:
-            rasters, passthrough, cellid = _inputs(fn, first, read_cap)
+            rasters, passthrough, cellid = _inputs(fn, first, read_cap, refs)
         except run.DataError as exc:
             return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
         if rasters is None:
@@ -228,6 +240,38 @@ def c0(
         return _tile(run.run(fn, rasters, values, _section(section_ref)), cellid)
 
     return _c0
+
+
+def forced_c0(
+    sql_name: str,
+    grid_dirs: Tuple[str, ...] = (),
+    read_cap: Optional[int] = None,
+):
+    """The Python API's force-output form of an engine row: the engine's result, shaped by the light tier's
+    force-output keywords, so every engine row keeps them. The UDF takes ``(first, <every other param>,
+    virtualize_dir, virtualize_prefix, materialize)`` and returns a tile."""
+    fn = _function(sql_name, None)
+    names = [p.name for p in fn.params[1:]]
+
+    @F.udf(V2_TILE_SCHEMA, useArrow=True)
+    def _forced(first, *rest):
+        _setup(grid_dirs)
+        args, (vdir, vprefix, mat) = rest[:-3], rest[-3:]
+        values = dict(zip(names, args))
+        try:
+            rasters, passthrough, cellid = _inputs(fn, first, read_cap)
+        except run.DataError as exc:
+            return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
+        if rasters is None:
+            return passthrough
+        res = run.run(fn, rasters, values)
+        if res is not None and res.raster is not None:
+            from databricks.labs.gbx.pyrx import functions as prx
+
+            return prx._shaped_result_row(res.raster, cellid, vdir, vprefix, mat)
+        return _tile(res, cellid)
+
+    return _forced
 
 
 def _cellid_of(fn, first) -> int:

@@ -141,7 +141,17 @@ def force_output(
     _validate_force_output(virtualize_dir, materialize)
     fn = _fn(sql_name)
     impl = manifest.resolve_ref(fn.python.extra_impl)
-    if fn.python.extra_factory_args:
+    if fn.python.extra_factory_args == "engine":
+        # an engine row: the force-output UDF of the GDAL spec engine, built for this row with the driver's PROJ
+        # grid directories and its connect-aware read cap (a worker cannot measure either)
+        from databricks.labs.gbx.manager.l3 import _factory_args
+
+        impl = impl(
+            fn.sql_name,
+            *_factory_args("proj_grid_dirs"),
+            *_factory_args("read_cap", _active()),
+        )
+    elif fn.python.extra_factory_args:
         from databricks.labs.gbx.manager.l3 import _factory_args
 
         impl = impl(*_factory_args(fn.python.extra_factory_args))

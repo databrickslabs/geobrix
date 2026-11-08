@@ -278,15 +278,18 @@ def test_rst_to_webmercator_grouped_parity(spark, raster_bytes):
 
 
 def test_rst_transformcrs_grouped_parity(spark, raster_bytes):
-    """rst_transformcrs_grouped pixel-equals _uf_transformcrs for EPSG:3857."""
-    from databricks.labs.gbx.pyrx.functions import _uf_transformcrs
+    """rst_transformcrs_grouped pixel-equals the engine's row-wise transformcrs for EPSG:3857."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
     from databricks.labs.gbx.rasterx.helpers import rst_transformcrs_grouped
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     df = _parity_df(spark, raster_bytes)
     g_bytes = _read_grouped(rst_transformcrs_grouped(df, "EPSG:3857", out_col="out"))
     s_bytes = _read_scalar(
         df,
-        _uf_transformcrs(F.col("tile"), F.lit(None), F.lit("EPSG:3857")),
+        engine_l3.c0("gbx_rst_transformcrs")(F.col("tile"), F.lit("EPSG:3857")),
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_transformcrs_grouped")
 
@@ -389,17 +392,20 @@ def test_rst_updatetype_grouped_parity(spark, raster_bytes):
 
 
 def test_rst_slope_grouped_parity(spark):
-    """rst_slope_grouped pixel-equals _uf_slope on a projected DEM tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_slope
+    """rst_slope_grouped pixel-equals the engine's row-wise slope on a projected DEM tile."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
     from databricks.labs.gbx.rasterx.helpers import rst_slope_grouped
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     dem_bytes = _make_dem_bytes()
     df = _parity_df(spark, dem_bytes)
     g_bytes = _read_grouped(rst_slope_grouped(df, "degrees", out_col="out"))
     s_bytes = _read_scalar(
         df,
-        _uf_slope(
-            F.col("tile"), F.lit(None), F.lit("degrees"), F.lit(None), F.lit(None)
+        engine_l3.c0("gbx_rst_slope")(
+            F.col("tile"), F.lit("degrees"), F.lit(None), F.lit(None)
         ),
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_slope_grouped")

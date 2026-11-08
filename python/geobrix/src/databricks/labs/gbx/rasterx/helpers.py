@@ -1261,18 +1261,11 @@ def rst_transformcrs_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import warp
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _crs = str(crs_value)
-
-    def _core(ds, cellid):
-        new_bytes = warp.reproject_to_crs(ds, _crs)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core("gbx_rst_transformcrs", {"target_crs": str(crs_value)})
 
     return grouped_tile_map(
         df,
@@ -1515,20 +1508,18 @@ def rst_slope_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import terrain
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _unit = str(unit)
-    _xs = None if xscale is None else float(xscale)
-    _ys = None if yscale is None else float(yscale)
-
-    def _core(ds, cellid):
-        new_bytes = terrain.slope(ds, unit=_unit, xscale=_xs, yscale=_ys)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core(
+        "gbx_rst_slope",
+        {
+            "unit": str(unit),
+            "xscale": None if xscale is None else float(xscale),
+            "yscale": None if yscale is None else float(yscale),
+        },
+    )
 
     return grouped_tile_map(
         df,

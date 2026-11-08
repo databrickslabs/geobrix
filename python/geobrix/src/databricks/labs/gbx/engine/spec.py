@@ -91,7 +91,8 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
             )
         if a.formula is not None:
             for ph in sorted(set(PLACEHOLDER.findall(a.formula))):
-                if ph not in params:
+                # `{nodata}` is the source's NoData value, written by the engine (a result of the source's type)
+                if ph not in params and ph != "nodata":
                     raise SpecError(
                         f"{name}: the formula of '{a.arg}' has {{{ph}}}, which is not a parameter"
                     )

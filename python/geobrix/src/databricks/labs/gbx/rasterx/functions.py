@@ -5630,8 +5630,9 @@ def rst_threshold(
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        A Float32 tile with the bands of the input; the pixels that fail the comparison,
-        and the NoData pixels, are NoData (-9999).
+        A tile with the type and band count of the input. The pixels that fail the
+        comparison are NoData: the source's NoData value, or its type's fallback when it
+        has none.
 
     SQL: ``gbx_rst_threshold(tile, [op], [value])``
     """

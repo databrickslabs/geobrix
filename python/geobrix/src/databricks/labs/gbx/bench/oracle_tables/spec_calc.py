@@ -67,6 +67,34 @@ def _calc_holes(tmpdir):
     return _tile(_gtiff(_holes(), "EPSG:3857"))
 
 
+def _typed(dtype, nodata, shift):
+    """Two bands of 6 x 8 in `dtype`, a NoData pixel in each when `nodata` is declared."""
+    import numpy as np
+
+    y, x = np.mgrid[0:6, 0:8]
+    bands = np.stack([(x * 7 + y * 3) % 40, (x * 5 + y) % 60]) + shift
+    if nodata is not None:
+        bands[0, 4, 5] = nodata
+        bands[1, 1, 6] = nodata
+    return bands.astype(dtype)
+
+
+@builder("calc_byte")
+def _calc_byte(tmpdir):
+    """Byte bands that declare NoData 255."""
+    return _tile(
+        _gtiff(_typed("uint8", 255, 0), "EPSG:3857", nodata=255, dtype="uint8")
+    )
+
+
+@builder("calc_int16")
+def _calc_int16(tmpdir):
+    """Int16 bands, some negative, that declare no NoData (the type's fallback, -32768, applies)."""
+    return _tile(
+        _gtiff(_typed("int16", None, -20), "EPSG:3857", nodata=None, dtype="int16")
+    )
+
+
 def _calc_file(tmpdir):
     import os
 
@@ -202,6 +230,13 @@ _engine_rows = (
     Case("index_holes_ndsi", IDX, (HOLES, "ndsi", {"green": 3, "swir": 4}), "ref", "index_ndsi", ONLY),
     Case("threshold_holes", THR, (HOLES, ">=", 12.0), "ref", "threshold", ONLY),
     Case("threshold_holes_eq", THR, (HOLES, "==", 0.0), "ref", "threshold", ONLY),
+    # the result keeps the source's type and NoData, or the type's fallback when it declares none
+    Case("threshold_byte", THR, (Build("calc_byte"), "<", 10.0), "ref", "threshold", ONLY),
+    Case("threshold_byte_type", THR, (Build("calc_byte"), "<", 10.0), "tile_meta",
+         {"dtype": "uint8", "nodata": 255.0, "count": 2}, ONLY),
+    Case("threshold_int16", THR, (Build("calc_int16"), "!=", 0.0), "ref", "threshold", ONLY),
+    Case("threshold_int16_type", THR, (Build("calc_int16"), "!=", 0.0), "tile_meta",
+         {"dtype": "int16", "nodata": -32768.0, "count": 2}, ONLY),
     Case("ndvi_virtual_file", NDVI, (FILE, 1, 2), "ref", "ndvi", ONLY),
     Case("ndvi_virtual_vrt", NDVI, (VRT, 1, 2), "ref", "ndvi", ONLY),
     Case("threshold_virtual_vrt", THR, (VRT, "<=", 33.0), "ref", "threshold", ONLY),

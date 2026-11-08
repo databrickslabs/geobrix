@@ -612,7 +612,7 @@ rst_setsrid_python_example_output = """
 # ---------------------------------------------------------------------------
 # rst_threshold — keep the pixels that match op/value, set the others to NoData
 # Fixture: SINGLE-BAND (nyc_sentinel2_red.tif — nodata=0.0, all pixels are 0)
-# Output: tile struct (Float32, NoData -9999)
+# Output: tile struct (the source's type and NoData)
 # ---------------------------------------------------------------------------
 
 
@@ -634,7 +634,7 @@ rst_threshold_python_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(pixels > 0.0 keep their value, others are NoData -9999; returns a materialized v2 Tile)
+(pixels > 0.0 keep their value, others are NoData; returns a materialized v2 Tile)
 """
 
 

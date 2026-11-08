@@ -220,6 +220,7 @@ def _props(
             ds.RasterYSize,
             ds.RasterCount,
             gdal.GetDataTypeName(band.DataType),
+            band.GetNoDataValue(),
         )
     finally:
         ds = None

@@ -25,7 +25,8 @@ def _no_level_knob(monkeypatch):
 
 
 def _props(case):
-    return [argv.RasterProps(w, h, b, t) for w, h, b, t in case["inputs"]]
+    # (width, height, bands, GDAL type) and, optionally, band 1's declared NoData value
+    return [argv.RasterProps(*props) for props in case["inputs"]]
 
 
 @pytest.mark.parametrize("case", GOLDEN["argv"], ids=lambda c: c["id"])

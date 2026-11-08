@@ -69,6 +69,9 @@ class RasterProps:
     height: int
     bands: int
     dtype: str  # GDAL type name
+    nodata: Optional[float] = (
+        None  # band 1's declared NoData value, None when it declares none
+    )
 
 
 @dataclass(frozen=True)
@@ -84,6 +87,33 @@ def fmt_double(x: float) -> str:
     if x == 0:
         return "0"
     return format(Decimal(repr(float(x))).normalize(), "f")
+
+
+# The NoData value a source of a type gets when it declares none (``pyrx.core._nodata.fallback_nodata``, by GDAL type).
+_NUMPY_OF = {
+    "Byte": "uint8",
+    "UInt16": "uint16",
+    "Int16": "int16",
+    "UInt32": "uint32",
+    "Int32": "int32",
+    "Float32": "float32",
+    "Float64": "float64",
+}
+
+
+def source_nodata(props: "RasterProps") -> float:
+    """The NoData value of a result that keeps the source's type: the source's declared value, else its type's
+    fallback (0 for Byte, 65535 for UInt16, the type's minimum for the signed and float types).
+    """
+    if props.nodata is not None:
+        return props.nodata
+    from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
+
+    return fallback_nodata(_NUMPY_OF.get(props.dtype, "uint8"))
+
+
+def _nodata_text(x: float) -> str:
+    return "nan" if math.isnan(x) else fmt_double(x)
 
 
 def _fmt_const(v: Any) -> str:
@@ -312,8 +342,8 @@ def _formula_binding(fn, arg, values, inputs: Sequence[RasterProps]) -> Optional
                 )
             subs[b] = f"A[{_band(fn, f'{arg.and_}[{b}]', bmap[b], inputs[0])}]"
     else:
-        template, subs = arg.formula, {}
-        for p in sorted(set(PLACEHOLDER.findall(template))):
+        template, subs = arg.formula, {"nodata": _nodata_text(source_nodata(inputs[0]))}
+        for p in sorted(set(PLACEHOLDER.findall(template)) - {"nodata"}):
             v, t = values.get(p), params[p].session[0]
             if _is_null(v):
                 return None
@@ -361,7 +391,15 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
     tokens: List[str] = []
     for a in block.args:
         if a.source is None:
-            if a.const is True:
+            if a.const == "input" and a.arg in ("output-data-type", "nodata"):
+                # a result that keeps the source's band type and NoData value
+                first = inputs[0]
+                tokens.append(
+                    f"--{a.arg}={first.dtype}"
+                    if a.arg == "output-data-type"
+                    else f"--{a.arg}={_nodata_text(source_nodata(first))}"
+                )
+            elif a.const is True:
                 tokens.append(f"--{a.arg}")
             elif a.const is not False:
                 tokens.append(f"--{a.arg}={_fmt_const(a.const)}")

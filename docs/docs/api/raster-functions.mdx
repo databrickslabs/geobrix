@@ -6180,7 +6180,7 @@ Stamp a SRID (`>= 0`; an EPSG or ESRI code) onto a raster that lacks (or has a w
 The Python function accepts three optional keyword arguments that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
-Keep the pixels for which `pixel op value` holds, with their original values, and set the others to NoData. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. The result is Float32 with NoData -9999 in every band, whatever the source type.
+Keep the pixels for which `pixel op value` holds, with their original values, and set the others to NoData. `op` is one of `>`, `>=`, `<`, `<=`, `==`, `!=`. The result keeps the source type and band count. A source without NoData gets the data type's fallback value, such as 65535 for `UInt16`.
 
 <FunctionExamples
   name="rst_threshold"

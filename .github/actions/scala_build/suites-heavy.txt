@@ -41,6 +41,7 @@ com.databricks.labs.gbx.rasterx.expressions.RST_AccessorsExecuteTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AdvancedOperationsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AggEvalTest
 com.databricks.labs.gbx.rasterx.expressions.RST_AggregationsTest
+com.databricks.labs.gbx.rasterx.expressions.RST_AsFormatArgumentsTest
 com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsAggTest
 com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsTest
 com.databricks.labs.gbx.rasterx.operations.RasterAlignmentTest

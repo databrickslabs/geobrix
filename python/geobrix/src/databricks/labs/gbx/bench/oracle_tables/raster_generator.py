@@ -273,6 +273,8 @@ _SESSION_ROWS = (
     ),
     Case("qb_tess_null", QBT, (None, 10), "no_rows", None, ONLY),
     Case("qb_tess_null_res", QBT, (RAMP4326, None), "error_tile", None, ONLY),
+    Case("qb_tess_error_tile", QBT, (ERR, 10), "error_tile", UPSTREAM_ERROR, ONLY),
+    Case("qb_tess_corrupt", QBT, (CORRUPT, 10), "error_tile", None, ONLY),
     # ---------------------------------------------------------------------------------------------- BNG
     Case(
         "bng_tess_1km",
@@ -325,6 +327,8 @@ _SESSION_ROWS = (
     ),
     Case("bng_tess_null", BNGT, (None, 3), "no_rows", None, ONLY),
     Case("bng_tess_null_res", BNGT, (RAMPBNG, None), "error_tile", None, ONLY),
+    Case("bng_tess_error_tile", BNGT, (ERR, 3), "error_tile", UPSTREAM_ERROR, ONLY),
+    Case("bng_tess_corrupt", BNGT, (CORRUPT, 3), "error_tile", None, ONLY),
     # ---------------------------------------------------------------------------------------------- custom grid
     Case(
         "cg_tess_res0",
@@ -369,6 +373,8 @@ _SESSION_ROWS = (
     Case("cg_tess_null", CGT, (None, G, 0), "no_rows", None, ONLY),
     Case("cg_tess_null_res", CGT, (RAMPBNG, G, None), "error_tile", None, ONLY),
     Case("cg_tess_null_grid", CGT, (RAMPBNG, None, 0), "error_tile", None, ONLY),
+    Case("cg_tess_error_tile", CGT, (ERR, G, 0), "error_tile", UPSTREAM_ERROR, ONLY),
+    Case("cg_tess_corrupt", CGT, (CORRUPT, G, 0), "error_tile", None, ONLY),
 )
 
 

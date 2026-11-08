@@ -842,6 +842,15 @@ _TE: Tuple[Case, ...] = (
         {"count": 25, "core": 4, "core_chips": 1.0e6},
         geom_srid=27700,
     ),
+    # The resolution may be named by its cell size: "1km" is resolution 3 (a Python str is the size, not a column name).
+    Case(
+        "te_named_res",
+        TE,
+        (OFFSET, "1km"),
+        "cells",
+        {"cells": _SIX, "core": 0},
+        geom_srid=27700,
+    ),
     Case("te_null", TE, (None, 3), "no_rows"),
     # A NULL keep_core_geom is the default, false: an optional argument given as NULL is not a NULL result.
     Case(

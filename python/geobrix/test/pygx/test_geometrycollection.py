@@ -211,3 +211,11 @@ def test_h3_gc_with_empty_member_skips_empty_includes_live():
     gc_cells = _h3_ring(gc)
     assert live_cells, "h3 live point should cover its containing cell (precondition)"
     assert live_cells <= gc_cells, "h3 GC dropped the live member beside the empty one"
+
+
+def test_h3_reads_mixed_dimension_text_like_the_rest():
+    """h3: text with a Z on one vertex only reads as it does everywhere else (3D, NaN Z) and covers the same cells."""
+    mixed = "LINESTRING Z (-122.405 37.80 5, -122.395 37.80)"
+    cells = _h3.geom_expand("ring", mixed, _H3_RES, 0, "boundary-in", "coveras")
+    assert cells, "mixed-dimension text must not read as no geometry"
+    assert cells == _h3_ring(_H3_LINE)

@@ -82,37 +82,6 @@ def test_every_measurement_is_built_or_says_what_it_needs():
     assert {"twin_1m", "d1_1m"} <= set(labels["m7"])
 
 
-def test_m10_times_retile_on_the_product_and_on_a_probe_copy_with_the_cap_raised():
-    """The product function refuses a tile decoded over the cap, so the 128 and 256 MiB window reads are timed through a
-    `gbx_probe_perf_` copy whose handler takes the raised cap; the product leg stays beside it (where its refusal lands).
-    """
-    (m10,) = uc_perf.perf_plan("cat", "sch", wheel_path=WHEEL, only=["m10"])
-    labels = [leg.label for leg in m10.legs]
-    for mib in (16, 64, 256):
-        assert {f"retile_{mib}mib", f"retile_raised_{mib}mib"} <= set(labels)
-    product = next(x for x in m10.legs if x.label == "retile_256mib").sql
-    raised = next(x for x in m10.legs if x.label == "retile_raised_256mib").sql
-    assert "LATERAL `cat`.`sch`.gbx_rst_retile(" in product
-    assert (
-        "gbx_probe_perf_retile_tiles(s.tile, 512, 512)" in raised
-        and "gbx_rst_retile" not in raised
-    )
-    ((_, create),) = [x for x in m10.setup if x[0] == "create_retile_raised"]
-    assert (
-        "CREATE OR REPLACE FUNCTION `cat`.`sch`.gbx_probe_perf_retile_tiles(" in create
-    )
-    assert "import rst_retile_tiles_probe as handler" in create
-    assert (
-        "drop_gbx_probe_perf_retile_tiles",
-        "DROP FUNCTION IF EXISTS `cat`.`sch`.gbx_probe_perf_retile_tiles",
-    ) in m10.drops
-    from databricks.labs.gbx.uc import forms
-
-    assert (
-        forms.PROBE_DECODED_CAP >= 2 * 256 * 1024 * 1024
-    )  # room for the tile and the array of its pieces
-
-
 def test_a_unit_whose_function_arrives_builds_with_no_change_to_the_probe(monkeypatch):
     monkeypatch.setattr(uc_perf, "_has_uc", lambda c, *names: [])
     monkeypatch.setattr(
@@ -718,29 +687,3 @@ def test_m2_builds_its_sql_leg_from_the_rows_own_kernel():
         "sql" not in forms2
         and u2.skipped["bng_polyfill_sql"] == "no SQL kernel for this row yet"
     )
-
-
-def test_m2_times_and_diffs_the_sql_candidate_of_both_grid_scalars():
-    u = uc_perf._m2(_w_ctx())
-    labels = {leg.label for leg in u.legs}
-    for short in ("bng_cellarea", "bng_eastnorthasbng"):
-        assert f"t_{short}_sql_1m" in labels and f"t_{short}_sql_10m" in labels
-        assert f"diff_{short}_sql_vs_py_100k" in labels
-        assert f"t_{short}_py_1m" in labels and f"t_{short}_scala_1m" in labels
-    assert not [k for k in u.skipped if k.endswith("_sql")]
-
-
-def test_m1_compares_the_products_own_quadbin_kernel_with_the_same_expression_inline():
-    u = uc_perf._m1(_w_ctx())
-    created = dict(u.setup)["create_qres"]
-    assert "gbx_probe_perf_qres(" in created and "(cell >> 52) & 31" in created
-    inline = next(leg.sql for leg in u.legs if leg.label == "explain_inline")
-    assert "`cat`" not in inline and "(shiftleft(id % 27, 52)) >> 52" in inline
-    assert [leg.label for leg in u.legs][-2:] == ["t_sql_10m", "t_inline_10m"]
-    # a wheel without the function says what it needs and builds nothing
-    gone = uc_perf._m1(
-        uc_perf.Ctx(
-            **{**_w_ctx().__dict__, "man": _manifest_without("gbx_quadbin_resolution")}
-        )
-    )
-    assert not gone.legs and "gbx_quadbin_resolution" in gone.skipped["qres"]

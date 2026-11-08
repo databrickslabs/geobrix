@@ -54,6 +54,7 @@ case class Custom_GeometryKRing(
         val coverage = if (cvRaw == null) GeomDilation.DEFAULT_COVERAGE else cvRaw.asInstanceOf[UTF8String].toString
 
         GeomDilation.requireMode(mode) // PARAMETER: an unknown mode raises, never a NULL
+        GeomDilation.requireCoverage(coverage) // PARAMETER: so does an unknown coverage
         GridErrorHandler.safeEval[ArrayData](null) {
             val geom = Custom_PointAsCell.decodeGeom(geomVal)
             // a geometry that is not finite has no cells

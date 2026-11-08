@@ -501,6 +501,10 @@ object GeomDilation {
     case other => throw new IllegalArgumentException(s"k must be a whole number; got '$other'")
   }
 
+  /** Refuse a negative ring distance (a parameter error, raised before any per-row data guard). */
+  def requireK(k: Int): Unit =
+    if (k < 0) throw new IllegalArgumentException(s"k must be >= 0; got $k")
+
   /** Refuse a mode that is not one of MODES (a parameter error, raised before any per-row data guard). */
   def requireMode(mode: String): Unit =
     if (!MODES.contains(mode))

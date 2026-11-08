@@ -45,6 +45,7 @@ object BNG_GeometryKRing extends WithExpressionInfo {
 
     def eval(geom: Array[Byte], res: Int, k: Int, mode: UTF8String, coverage: UTF8String): ArrayData = {
         GeomDilation.requireMode(modeStr(mode)) // PARAMETER: an unknown mode raises, never a NULL
+        GeomDilation.requireCoverage(coverageStr(coverage)) // PARAMETER: so does an unknown coverage
         Coerce.bngResolution(Int.box(res), digitStrings = false) // PARAMETER: so does a resolution BNG does not define
         GridErrorHandler.safeEval[ArrayData](null) {
             val geometry = JTS.fromWKB(geom)
@@ -54,6 +55,7 @@ object BNG_GeometryKRing extends WithExpressionInfo {
 
     def eval(geom: UTF8String, res: Int, k: Int, mode: UTF8String, coverage: UTF8String): ArrayData = {
         GeomDilation.requireMode(modeStr(mode)) // PARAMETER: an unknown mode raises, never a NULL
+        GeomDilation.requireCoverage(coverageStr(coverage)) // PARAMETER: so does an unknown coverage
         Coerce.bngResolution(Int.box(res), digitStrings = false) // PARAMETER: so does a resolution BNG does not define
         GridErrorHandler.safeEval[ArrayData](null) {
             val geometry = JTS.fromWKT(geom.toString)

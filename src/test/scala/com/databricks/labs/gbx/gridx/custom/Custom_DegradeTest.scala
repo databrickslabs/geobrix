@@ -6,7 +6,8 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
-import org.apache.spark.sql.types.{BinaryType, IntegerType, LongType}
+import org.apache.spark.sql.types.{BinaryType, IntegerType, LongType, StringType}
+import org.apache.spark.unsafe.types.UTF8String
 
 /** Covers the param/data split:
   *   - PARAMETER (resolution, k, grid-spec) -> always raises even through expression .eval()
@@ -118,4 +119,44 @@ class Custom_DegradeTest extends PlanTest with SilentSparkSession {
         assert(result != null)
     }
 
+
+    // ─────────────────────────────────────────────────────────────────
+    // Ring/loop arguments: a negative k and an unknown coverage raise through .eval() (parameter), never a NULL
+    // ─────────────────────────────────────────────────────────────────
+    private def cellLit(): Literal = {
+        val cell = CustomGridSystem(GridConf(0L, 100L, 0L, 100L, 2, 10, 10)).pointToCellIdOrNull(5.0, 5.0, 0)
+        Literal(cell.longValue, LongType)
+    }
+
+    test("Custom_KRing.eval raises for a negative k, naming it (expression-level parameter check)") {
+        val e = intercept[IllegalArgumentException](Custom_KRing(cellLit(), buildGridLit(), Literal(-1, IntegerType)).eval(InternalRow.empty))
+        assert(e.getMessage.contains("k"))
+        assert(e.getMessage.contains("-1"))
+    }
+
+    test("Custom_KLoop.eval raises for a negative k, naming it (expression-level parameter check)") {
+        val e = intercept[IllegalArgumentException](Custom_KLoop(cellLit(), buildGridLit(), Literal(-1, IntegerType)).eval(InternalRow.empty))
+        assert(e.getMessage.contains("k"))
+        assert(e.getMessage.contains("-1"))
+    }
+
+    private def str(s: String) = Literal.create(UTF8String.fromString(s), StringType)
+    private val ringGeom = Literal.create(JTS.toWKB(JTS.fromWKT("POLYGON ((10 10, 30 10, 30 30, 10 30, 10 10))")), BinaryType)
+
+    test("Custom_GeometryKRing.eval raises for an unknown coverage, naming it (expression-level parameter check)") {
+        val expr = Custom_GeometryKRing(ringGeom, buildGridLit(), Literal(0, IntegerType), Literal(1, IntegerType), str("boundary-out"), str("sideways"))
+        val e = intercept[IllegalArgumentException](expr.eval(InternalRow.empty))
+        assert(e.getMessage.contains("sideways"))
+    }
+
+    test("Custom_GeometryKRing.eval still answers for a known coverage") {
+        val expr = Custom_GeometryKRing(ringGeom, buildGridLit(), Literal(0, IntegerType), Literal(1, IntegerType), str("boundary-out"), str("polyfill"))
+        assert(expr.eval(InternalRow.empty) != null)
+    }
+
+    test("Custom_GeometryKLoop.eval raises for an unknown coverage, naming it (expression-level parameter check)") {
+        val expr = Custom_GeometryKLoop(ringGeom, buildGridLit(), Literal(0, IntegerType), Literal(1, IntegerType), str("boundary-out"), str("sideways"))
+        val e = intercept[IllegalArgumentException](expr.eval(InternalRow.empty))
+        assert(e.getMessage.contains("sideways"))
+    }
 }

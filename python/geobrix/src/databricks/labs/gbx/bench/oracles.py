@@ -232,22 +232,6 @@ HEAVY_PENDING.update(
     }
 )
 
-# Parameters the JVM checks inside `safeEval`, where the lightweight level raises. An unknown `coverage` of a geometry ring
-# (BNG, custom grid; the mode is checked outside `safeEval` and raises on both) and a negative `k` of a custom-grid ring or
-# loop are an error caught as a NULL result there (measured through the JAR).
-_PARAM_IN_SAFEEVAL_L1 = "the JVM checks this parameter inside safeEval, so a bad value is a NULL result; the lightweight level raises, naming the value"
-HEAVY_PENDING.update(
-    {
-        cid: {"L1": _PARAM_IN_SAFEEVAL_L1}
-        for cid in (
-            "bng_geomkring_bad_coverage",
-            "cg_geomkring_bad_coverage",
-            "cg_kring_negative_k",
-            "cg_kloop_negative_k",
-        )
-    }
-)
-
 # Two shapes the lightweight level takes and the JVM level does not (measured through the JAR).
 HEAVY_PENDING.update(
     {

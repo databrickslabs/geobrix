@@ -865,6 +865,7 @@ Every grid function follows one contract for its resolution and its input.
 - **The custom-grid functions treat NULL, text and bad modes alike.** A NULL resolution or `k` gives NULL. A text resolution works. An unknown dilation mode raises.
 - **The geometry explodes follow the rules of their array functions.** An unknown mode or an undefined resolution raises. A non-finite point or unreadable geometry gives no rows. The BNG and custom explodes raise for an unknown `coverage` before they run, and read a `BIGINT` `k`. A `k` past INT raises.
 - **`gbx_rst_bng_tessellate` raises for a resolution BNG does not define.**
+- **A bad `coverage` and a negative `k` now raise on the JAR level too.** `gbx_bng_geomkring`, `gbx_bng_geomkloop`, `gbx_custom_geomkring` and `gbx_custom_geomkloop` raise for an unknown `coverage`, and `gbx_custom_kring`, `gbx_custom_kloop` raise for a `k` below 0, each naming the value. Before, the JAR level returned NULL where the lightweight level raised. `gbx_bng_tessellate` also raises for an integer resolution BNG does not define.
 - **The TIN generators and `gbx_st_asmvt_pyramid` give no rows for a NULL required argument.** They failed the query before.
 
 ### Exact cell ids (fix) {#exact-cell-ids}

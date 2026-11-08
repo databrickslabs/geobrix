@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
+import com.databricks.labs.gbx.kernels.Coerce
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -54,11 +55,15 @@ object BNG_Tessellate extends WithExpressionInfo {
         ArrayData.toArrayData(rows)
     }
 
-    def eval(wkt: UTF8String, resolution: Int, keepCoreGeom: Boolean): ArrayData =
-        GridErrorHandler.safeEval[ArrayData](null)(toRows(executeWKT(wkt.toString, resolution, keepCoreGeom)))
+    def eval(wkt: UTF8String, resolution: Int, keepCoreGeom: Boolean): ArrayData = {
+        val res = Coerce.bngResolution(Int.box(resolution), digitStrings = false) // PARAMETER: a resolution BNG does not define raises
+        GridErrorHandler.safeEval[ArrayData](null)(toRows(executeWKT(wkt.toString, res, keepCoreGeom)))
+    }
 
-    def eval(wkb: Array[Byte], resolution: Int, keepCoreGeom: Boolean): ArrayData =
-        GridErrorHandler.safeEval[ArrayData](null)(toRows(executeWKB(wkb, resolution, keepCoreGeom)))
+    def eval(wkb: Array[Byte], resolution: Int, keepCoreGeom: Boolean): ArrayData = {
+        val res = Coerce.bngResolution(Int.box(resolution), digitStrings = false) // PARAMETER: a resolution BNG does not define raises
+        GridErrorHandler.safeEval[ArrayData](null)(toRows(executeWKB(wkb, res, keepCoreGeom)))
+    }
 
     def eval(wkt: UTF8String, resolution: UTF8String, keepCoreGeom: Boolean): ArrayData = {
         val res = BNG.resolutionMap(resolution.toString) // PARAMETER: raises on bad resolution

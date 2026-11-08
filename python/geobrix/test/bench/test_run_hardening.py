@@ -677,8 +677,10 @@ def test_the_probe_runs_only_the_forms_levels_forms_selects(
 
 
 def test_a_levels_forms_name_that_matches_no_variant_is_reported():
-    assert preflight.unknown_form_names("SE", ("today@256", "today@1024")) == []
-    assert preflight.unknown_form_names("SE", ("today@256", "tday@256")) == ["tday@256"]
+    assert preflight.unknown_form_names("SE", ("floor-c0@256", "floor-c0@1024")) == []
+    assert preflight.unknown_form_names("SE", ("floor-c0@256", "flor-c0@256")) == [
+        "flor-c0@256"
+    ]
     assert preflight.unknown_form_names("SE", ()) == []
     assert preflight.unknown_form_names("IO", ("b", "d-py", "nope")) == ["nope"]
 

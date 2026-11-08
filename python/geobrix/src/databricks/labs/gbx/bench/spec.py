@@ -767,7 +767,8 @@ REGISTRY: Dict[str, FnSpec] = {
         "terrain",
         _BOTH,
         {"unit": "degrees"},
-        sources=_TERRAIN_LIGHT + (_HEAVY + "dem/RST_Slope.scala", _DEM_HELPER),
+        sources=_TERRAIN_LIGHT,
+        heavy=False,  # no heavyweight level: the GDAL spec engine's JVM form measured no faster than light
         core=True,
         core_fn=lambda ds, a: terrain.slope(ds, a["unit"]),
         col_fn=lambda t, a: rx.rst_slope(t, a["unit"]),

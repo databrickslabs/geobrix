@@ -1,5 +1,6 @@
-"""The SE forms of the L1 viability pass: slope, transformcrs and map algebra, each at the engine's JVM level, its light
-row-wise and batch UDFs, today's light implementation and a floor, on one input that scales past the client cap.
+"""The SE forms at scale: slope, transformcrs and map algebra, each with the engine's light row-wise and batch UDFs and
+a floor (and today's light implementation where one remains), on one input that scales past the client cap. The engine
+has no JVM level, so no form of the set is L1.
 """
 
 import pytest
@@ -15,10 +16,8 @@ PASS = {
 }
 NEEDED = (
     {  # (level, variant label without the input tag) every function has on its input
-        ("L1", "engine"),
         ("L3", "engine-c0"),
         ("L3", "engine-c1"),
-        ("L3", "today"),
         ("L3", "floor-c0"),
     }
 )
@@ -56,15 +55,20 @@ def test_the_levels_are_compared_by_decoded_pixels_not_encoding_length(fn, inp):
             assert f.vsql.format(src="t", uc="")  # braces balanced, only {src} left
 
 
-def test_the_l1_forms_run_on_dedicated_compute_only():
-    for fn, inp in PASS.items():
-        for f in _on(fn, inp):
-            assert (f.computes == ("dedicated",)) == (f.level == "L1")
+def test_the_engine_has_no_jvm_form():
+    assert [f for f in lf.FORMS["SE"] if f.level == "L1"] == []
+    assert not [
+        f
+        for f in lf.FORMS["SE"]
+        if f.variant.startswith("today") and f.fn == "gbx_rst_slope"
+    ]
 
 
 def test_no_input_of_the_pass_is_built_on_the_client_at_16x():
     assert (
-        preflight.client_cap_problems("SE", (4, 16), forms=("engine@mem", "engine@mat"))
+        preflight.client_cap_problems(
+            "SE", (4, 16), forms=("engine-c0@mem", "engine-c0@mat")
+        )
         == []
     )
     assert (

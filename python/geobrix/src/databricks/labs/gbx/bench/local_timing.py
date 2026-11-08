@@ -117,7 +117,7 @@ SETS: Dict[str, SetSpec] = {
     # disk (the cost over the floor is noise)
     "SE": SetSpec(
         mvp="SE",
-        forms=("engine@mem", "engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
         reference="engine-c0@mem",
         ns=(24, 96, 384),
         fn="gbx_rst_slope",
@@ -125,13 +125,11 @@ SETS: Dict[str, SetSpec] = {
             "engine-c1@mem",
         ),  # the batch UDF behind the wrapper: recorded, not a peer
     ),
-    # the engine's other two spike functions, for the L1 viability pass: map algebra over 512 px pairs replicated in
-    # memory and transformcrs over the corpus tiles, each at the engine's L1, its two light UDFs, today's light form and
-    # a floor (the engine's shell cost)
+    # the engine's other two functions: map algebra over 512 px pairs replicated in memory and transformcrs over the
+    # corpus tiles, each with its two light UDFs, today's light form and a floor (the engine's shell cost)
     "SE-mapalgebra": SetSpec(
         mvp="SE",
         forms=(
-            "engine@mem",
             "engine-c0@mem",
             "engine-c1@mem",
             "today@mem",
@@ -145,7 +143,6 @@ SETS: Dict[str, SetSpec] = {
     "SE-transformcrs": SetSpec(
         mvp="SE",
         forms=(
-            "engine@mat",
             "engine-c0@mat",
             "engine-c1@mat",
             "today@mat",

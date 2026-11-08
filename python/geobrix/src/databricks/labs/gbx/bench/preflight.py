@@ -92,8 +92,7 @@ def _jvm_sql_standins(forms) -> list:
     """One L3 stand-in per distinct (function, SQL) of the SQL forms at a JVM level.
 
     No stand-in for a form with its own `setup` (it registers JVM names, the JAR), nor for a function whose JVM level
-    returns another shape than the light one (`session_returns`: a `tile` column, not the tile fields). A function
-    on the GDAL spec engine gets the engine stand-in: its JVM form takes the spec the engine takes.
+    returns another shape than the light one (`session_returns`: a `tile` column, not the tile fields).
     """
     from databricks.labs.gbx import manifest
 
@@ -111,12 +110,11 @@ def _jvm_sql_standins(forms) -> list:
             and (f.fn, f.sql) not in seen
         ):
             seen.add((f.fn, f.sql))
-            engine = fn is not None and fn.levels.get("L3", {}).get("engine")
             out.append(
                 dataclasses.replace(
                     f,
                     level="L3",
-                    variant="engine-c0" if engine else "c0",
+                    variant="c0",
                     computes=("dedicated", "standard", "serverless"),
                 )
             )

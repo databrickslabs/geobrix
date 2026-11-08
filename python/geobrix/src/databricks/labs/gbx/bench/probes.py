@@ -2000,9 +2000,7 @@ def _forms_at(fn, level: str) -> list:
             forms += ["engine-c0", "engine-c1"]
         return forms
     if level == "L1":
-        return (["-"] if "companion" in spec else []) + (
-            ["engine"] if spec.get("engine") else []
-        )
+        return ["-"] if "companion" in spec else []
     return ["-"]
 
 

@@ -20,7 +20,7 @@ from databricks.labs.gbx.bench import levels_family as fam
 from databricks.labs.gbx.bench import levels_forms as lf
 from databricks.labs.gbx.bench import results
 
-from .levels_helpers import RST, B, run_s
+from .levels_helpers import run_s
 
 LINUX = pytest.mark.skipif(
     not sys.platform.startswith("linux"), reason="reads /proc/self/clear_refs"
@@ -35,13 +35,21 @@ def test_jvm_forms_without_the_jar_are_na_by_design(spark_session_local, tmp_pat
     if capabilities.detect(spark, need_jvm=True).jar is not None:
         pytest.skip("this session carries the geobrix JAR")
     rows = run_s(spark, tmp_path, scales=(1,), base_rows=100, only_levels=("L1", "L2"))
-    # the BNG scalar has no JVM form left (its L1 and L2 measured slower than light): nothing of it is asked for
-    assert [r for r in rows if r.fn == B] == []
-    # transformcrs keeps its L1 (the GDAL engine); it has no L2
-    rst = [r for r in rows if r.fn == RST]
-    assert rst and {r.level for r in rst} == {"L1"}
-    assert {r.status for r in rst} == {"na_by_design"}
-    assert all("no geobrix JAR" in r.note for r in rst)
+    # the BNG scalar has no JVM form left (its L1 and L2 measured slower than light): nothing of it is asked for, and
+    # the transformcrs of the S set is the GDAL spec engine's, which has no JVM level either
+    assert rows == []
+    # a vector scalar that keeps its Catalyst companion at L1 has no L2
+    vec = run_s(
+        spark,
+        tmp_path,
+        scales=(1,),
+        base_rows=100,
+        mvp="vector-scalar",
+        only_levels=("L1", "L2"),
+    )
+    assert vec and {r.level for r in vec} == {"L1"}
+    assert {r.status for r in vec} == {"na_by_design"}
+    assert all("no geobrix JAR" in r.note for r in vec)
 
 
 def test_the_dsm_tiles_are_copied_into_place_and_a_half_written_one_is_rewritten(

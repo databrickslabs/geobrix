@@ -1114,16 +1114,6 @@ FORMS: Dict[str, List[Form]] = {
             uc=True,
             computes=("serverless", "dedicated"),
         ),
-        _f("L1", "-", T, "tiles_mat", _TCRS, computes=("dedicated",), vsql=_TCRS_V),
-        _f(
-            "L1",
-            "dispatch-virtual",
-            T,
-            "tiles_virt",
-            _TCRS,
-            computes=("dedicated",),
-            vsql=_TCRS_V,
-        ),
         _f("L3", "-", T, "tiles_mat", _TCRS, vsql=_TCRS_V),
         _f("L3", "virtual", T, "tiles_virt", _TCRS, vsql=_TCRS_V),
         _f("L3", "-", M, "invalid_polys", _MV),
@@ -1789,13 +1779,12 @@ FORMS["A"] = (
 )
 
 
-# --- SE, the GDAL spec engine: each of its functions on the engine and on its own implementation --------------------
+# --- SE, the GDAL spec engine: each of its functions on the engine's two light forms and a floor -----------------------------------
 #
 # Inputs: DEM tiles (one band, Float32, EPSG:3857) of 256, 512 and 1024 pixels for slope and the floor; pairs of
 # them for map algebra; the corpus tiles for transformcrs (as the S forms). The floor is the engine running
 # `raster select --band=1`: the per-row cost of the engine itself (the /vsimem write, the header read, the
-# algorithm, one GTiff encode), with next to no raster work. The forms of today's implementations go under private
-# names, so a later engine registration never measures them by mistake.
+# algorithm, one GTiff encode), with next to no raster work. The engine has no JVM level.
 
 _SE_SIZES = (256, 512, 1024)
 BASE_ROWS.update(
@@ -2028,37 +2017,12 @@ def setup_se_floor(spark):
     )
 
 
-def setup_se_slope_today(spark):
-    """Today's slope: the Catalyst RST_Slope under its private name, the light numpy UDF under a bench name."""
-    from databricks.labs.gbx.manager import jvm
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    spark.udf.register("gbx_bench_slope_l3_today", prx._slope_udf)
-    why = jvm.install_private_l1(
-        spark,
-        "com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope",
-        "gbx__l1_rst_slope",
-    )
-    if why:
-        raise RuntimeError(why)
-
-
-def setup_se_slope_light_today(spark):
-    from databricks.labs.gbx.pyrx import functions as prx
-
-    spark.udf.register("gbx_bench_slope_l3_today", prx._slope_udf)
-
-
 _SE_FP = (
     "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
     "FROM (SELECT {call} AS t FROM {{src}})"
 )
 _SE_SLOPE = _SE_FP.format(
     call="{fn}(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))"
-)
-_SE_SLOPE_L1_TODAY = _SE_FP.format(call="gbx__l1_rst_slope(tile, 'degrees')")
-_SE_SLOPE_L3_TODAY = _SE_FP.format(
-    call="gbx_bench_slope_l3_today(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))"
 )
 _SE_FLOOR_C0 = _SE_FP.format(call="gbx_bench_floor_c0(tile)")
 _SE_FLOOR_C1 = (
@@ -2092,36 +2056,10 @@ def _se(
 
 
 _SL, _MALG = "gbx_rst_slope", "gbx_rst_mapalgebra"
-_DED = ("dedicated",)
-# Today's forms first: they live under private names that the engine registrations after them do not replace.
-# A label `<variant>@<size>` registers `<variant>` (see levels._run_one) and names the tile size.
+# A label `<variant>@<size>` registers `<variant>` (see levels._run_one) and names the tile size. The engine has no
+# JVM level, so every form is light: its two UDFs, today's light form where one still measures something, and a floor.
 FORMS["SE"] = (
     [
-        _se(
-            _SL,
-            "L1",
-            f"today@{s}",
-            f"se_dem_{s}",
-            _SE_SLOPE_L1_TODAY,
-            setup="setup_se_slope_today",
-            register=False,
-            computes=_DED,
-        )
-        for s in _SE_SIZES
-    ]
-    + [
-        _se(
-            _SL,
-            "L3",
-            f"today@{s}",
-            f"se_dem_{s}",
-            _SE_SLOPE_L3_TODAY,
-            setup="setup_se_slope_light_today",
-            register=False,
-        )
-        for s in _SE_SIZES
-    ]
-    + [
         _se(
             _SL,
             "L3",
@@ -2146,25 +2084,16 @@ FORMS["SE"] = (
         for s in _SE_SIZES
     ]
     + [
-        _se(_SL, "L1", f"engine@{s}", f"se_dem_{s}", _SE_SLOPE, computes=_DED)
-        for s in _SE_SIZES
-    ]
-    + [
         _se(_SL, "L3", f"{v}@{s}", f"se_dem_{s}", _SE_SLOPE)
         for v in ("engine-c0", "engine-c1")
         for s in _SE_SIZES
     ]
     + [
-        _se(T, "L1", "-", "tiles_mat", _SE_TCRS, computes=_DED),
         _se(T, "L3", "-", "tiles_mat", _SE_TCRS),
-        _se(T, "L1", "engine", "tiles_mat", _SE_TCRS, computes=_DED),
         _se(T, "L3", "engine-c0", "tiles_mat", _SE_TCRS),
         _se(T, "L3", "engine-c1", "tiles_mat", _SE_TCRS),
-        _se(T, "L1", "engine", "tiles_virt", _SE_TCRS, computes=_DED),
         _se(T, "L3", "engine-c1", "tiles_virt", _SE_TCRS),
-        _se(_MALG, "L1", "-", "se_pair_512", _SE_MA_TODAY, computes=_DED),
         _se(_MALG, "L3", "-", "se_pair_512", _SE_MA_TODAY),
-        _se(_MALG, "L1", "engine", "se_pair_512", _SE_MA_ENGINE, computes=_DED),
         _se(_MALG, "L3", "engine-c0", "se_pair_512", _SE_MA_ENGINE),
         _se(_MALG, "L3", "engine-c1", "se_pair_512", _SE_MA_ENGINE),
     ]
@@ -2174,7 +2103,6 @@ FORMS["SE"] = (
 # tiles of real work per size, so the per-tile cost shows above Spark's fixed query cost; tiles built on the client stop
 # at the client cap (16 of this size) and the corpus tiles (4 bands, 16 MiB) make the pass a measure of disk reads.
 FORMS["SE"] += [
-    _se(_SL, "L1", "engine@mem", "se_dem_1024_mem", _SE_SLOPE, computes=_DED),
     _se(_SL, "L3", "engine-c0@mem", "se_dem_1024_mem", _SE_SLOPE),
     _se(_SL, "L3", "engine-c1@mem", "se_dem_1024_mem", _SE_SLOPE),
     _se(
@@ -2188,9 +2116,9 @@ FORMS["SE"] += [
     ),
 ]
 
-# The L1 viability pass (does the engine's JVM level beat its light level by 1.2x at 4x or 16x): each of the three spike
-# functions on one input that scales without the client cap, at the engine's L1, its light row-wise UDF (c0), its batch
-# UDF behind the wrapper (c1, recorded only), today's light implementation and a floor, every one with a value-level
+# The light forms of the three engine functions at scale: each on one input that scales without the client cap, with its
+# row-wise UDF (c0), its batch UDF behind the wrapper (c1), today's light implementation (where one remains) and a
+# floor, every one with a value-level
 # fingerprint so the levels are compared by the pixels they return. Slope reads the replicated 1024 px tiles
 # (`@mem`), transformcrs the corpus tiles (`@mat`), map algebra the replicated 512 px pairs (`@mem`).
 _SE_VFP = (
@@ -2199,11 +2127,6 @@ _SE_VFP = (
 )
 _SE_SLOPE_V = _SE_VFP.format(
     call="{fn}(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))",
-    col="tile.raster",
-    k=8,
-)
-_SE_SLOPE_TODAY_V = _SE_VFP.format(
-    call="gbx_bench_slope_l3_today(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))",
     col="tile.raster",
     k=8,
 )
@@ -2233,33 +2156,12 @@ _SE_FLOOR_PAIR = _SE_FP.format(call="gbx_bench_floor_c0(tiles[0])")
 FORMS["SE"] = [
     (
         dataclasses.replace(f, vsql=_SE_SLOPE_V.replace("{fn}", f.fn))
-        if f.fn == _SL and f.variant in ("engine@mem", "engine-c0@mem", "engine-c1@mem")
+        if f.fn == _SL and f.variant in ("engine-c0@mem", "engine-c1@mem")
         else f
     )
     for f in FORMS["SE"]
 ]
 FORMS["SE"] += [
-    _se(
-        _SL,
-        "L3",
-        "today@mem",
-        "se_dem_1024_mem",
-        _SE_SLOPE_L3_TODAY,
-        setup="setup_se_slope_light_today",
-        register=False,
-        vsql=_SE_SLOPE_TODAY_V,
-    ),
-    _se(
-        T,
-        "L1",
-        "engine@mat",
-        "tiles_mat",
-        _SE_TCRS,
-        computes=_DED,
-        vsql=_SE_TCRS_V,
-        nullsql=_SE_TCRS_NULLS,
-        allows_null=True,
-    ),
     _se(
         T,
         "L3",
@@ -2299,15 +2201,6 @@ FORMS["SE"] += [
         setup="setup_se_floor",
         register=False,
     ),
-    _se(
-        _MALG,
-        "L1",
-        "engine@mem",
-        "se_pair_512_mem",
-        _SE_MA_ENGINE,
-        computes=_DED,
-        vsql=_SE_MA_V,
-    ),
     _se(_MALG, "L3", "engine-c0@mem", "se_pair_512_mem", _SE_MA_ENGINE, vsql=_SE_MA_V),
     _se(_MALG, "L3", "engine-c1@mem", "se_pair_512_mem", _SE_MA_ENGINE, vsql=_SE_MA_V),
     _se(
@@ -2330,22 +2223,12 @@ FORMS["SE"] += [
 ]
 
 # The query floor: one 256 px tile per variant, so what the form costs is Spark's query, the worker start and the first
-# row, not the per-tile work. A fixed cost an engine form pays and today's light form does not shows here first.
+# row, not the per-tile work.
 BASE_ROWS["se_dem_256_one"] = 1
 INPUTS["se_dem_256_one"] = _se_dems(256)
 FORMS["SE"] += [
     _se(_SL, "L3", f"{v}@query-floor", "se_dem_256_one", _SE_SLOPE)
     for v in ("engine-c0", "engine-c1")
-] + [
-    _se(
-        _SL,
-        "L3",
-        "today@query-floor",
-        "se_dem_256_one",
-        _SE_SLOPE_L3_TODAY,
-        setup="setup_se_slope_light_today",
-        register=False,
-    )
 ]
 
 

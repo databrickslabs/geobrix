@@ -15,6 +15,7 @@ Check that a slimmer test selection still catches what the old one catches. It m
 - `--oracle-tables <T1,T2>` — sets `GBX_ORACLE_TABLES` for the family harness. Default: all tables.
 - `--out <dir>` — output dir. Default: `test-logs/mutation-gate/<family>`.
 - `--max-children <n>` — the most mutmut workers this gate may use. Default: its share of the host budget (see Worker budget).
+- `--mutant-timeout <s>` — seconds a mutant may run beyond 5 times the time of the tests that reach it. Default: 10. A hung mutant is killed after that and counts as killed.
 - `--seed <n>` — sample seed. Default: 31.
 - `--full` — run every mutant in the old and the slim pass. Default: only a sample (see The verdict).
 - `--old-codes <file>` — reuse the `K_old.json` of an earlier run, so the next slim candidate costs one run, not two. Every run writes `K_old.fingerprint` beside it (the kernel modules, the old selection and the old test files); a reuse whose fingerprint differs is refused with a `Fix:`. A kill set from before fingerprints is accepted unchecked.

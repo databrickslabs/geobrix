@@ -795,3 +795,40 @@ def test_old_codes_and_no_cache_never_touch_the_cache(tmp_path):
     assert "--no-cache" in _sh("--help").stdout
     res = _sh(*base, "--no-cache")
     assert res.returncode == 0, res.stderr
+
+
+# ------------------------------------------------------------------------------------- the per-mutant timeout cap
+
+
+def test_the_timeout_config_caps_a_mutant_at_five_times_its_tests_plus_ten_seconds():
+    section = gate.mutmut_section(["m.py"], ["test/x"])
+    assert "timeout_multiplier = 5.0" in section and "timeout_constant = 2.0" in section
+    assert gate.timeout_limit(0.0) == 10.0  # never under the floor
+    assert gate.timeout_limit(3.0) == 25.0  # 5 x 3 s + 10 s
+    assert "timeout_constant = 4.0" in gate.mutmut_section(["m.py"], ["test/x"], mutant_timeout=20.0)
+    assert gate.timeout_limit(3.0, 20.0) == 35.0
+
+
+def test_mutmut_reads_the_timeout_from_the_generated_config(tmp_path):
+    py = gate.mutmut_venv() / "bin" / "python"
+    if not py.exists():
+        pytest.skip("the mutation venv is not built yet")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "pyproject.toml").write_text(gate.mutmut_section(["src/m.py"], ["test/x"], mutant_timeout=15.0))
+    code = "import mutmut.configuration as c; k = c.config(); print(k.timeout_multiplier, k.timeout_constant)"
+    res = subprocess.run([str(py), "-c", code], cwd=tmp_path, capture_output=True, text=True)
+    assert res.stdout.split() == ["5.0", "3.0"], res.stderr
+
+
+def test_mutant_timeout_is_an_option_of_the_command_and_the_plan(tmp_path):
+    base = ["--family", "unit", "--modules", "pygx/_bng", "--tests", "test/pygx/test_bng_batched_walk.py",
+            "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
+    assert "--mutant-timeout" in _sh("--help").stdout
+    res = _sh(*base)
+    plan = json.loads(res.stdout[res.stdout.index("{"):])
+    assert plan["mutant_timeout"] == 10.0 and "timeout_constant = 2.0" in plan["mutmut"]
+    res = _sh(*base, "--mutant-timeout", "30")
+    plan = json.loads(res.stdout[res.stdout.index("{"):])
+    assert plan["mutant_timeout"] == 30.0 and "timeout_constant = 6.0" in plan["mutmut"]
+    res = _sh(*base, "--mutant-timeout", "0")
+    assert res.returncode != 0 and "Fix:" in res.stderr

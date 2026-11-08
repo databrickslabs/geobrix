@@ -608,7 +608,16 @@ def build_work_dir(work: Path) -> None:
     shutil.copy(Path(__file__).with_name("tier0_plugin.py"), work / "_gbx" / f"{PLUGIN}.py")
 
 
-def mutmut_section(modules: list, selection: list) -> str:
+TIMEOUT_MULTIPLIER = 5.0  # a mutant may run this many times the time of the tests that reach it, plus the floor
+MUTANT_TIMEOUT = 10.0  # seconds: the floor, so a hung mutant is killed after about 5 x its tests + 10 s
+
+
+def timeout_limit(tests_s: float, floor_s: float = MUTANT_TIMEOUT) -> float:
+    """The wall time mutmut gives a mutant whose tests take `tests_s`: (tests + constant) x multiplier."""
+    return (tests_s + floor_s / TIMEOUT_MULTIPLIER) * TIMEOUT_MULTIPLIER
+
+
+def mutmut_section(modules: list, selection: list, mutant_timeout: float = MUTANT_TIMEOUT) -> str:
     sel = ["-p", PLUGIN, "-p", "no:cacheprovider", "-m", "not integration and not perf"]
     return (
         "\n[tool.mutmut]\n"
@@ -617,6 +626,8 @@ def mutmut_section(modules: list, selection: list) -> str:
         f"pytest_add_cli_args_test_selection = {json.dumps(selection)}\n"
         'also_copy = ["src/", "test/"]\n'
         "mutate_only_covered_lines = true\n"
+        f"timeout_multiplier = {TIMEOUT_MULTIPLIER}\n"
+        f"timeout_constant = {mutant_timeout / TIMEOUT_MULTIPLIER}\n"
     )
 
 
@@ -703,7 +714,7 @@ class Side:
     def _prepare(self) -> None:
         work = self.open()
         base = (PKG_ROOT / "pyproject.toml").read_text()
-        (work / "pyproject.toml").write_text(base + mutmut_section(self.modules, self.selection))
+        (work / "pyproject.toml").write_text(base + mutmut_section(self.modules, self.selection, getattr(self.args, "mutant_timeout", MUTANT_TIMEOUT)))
         shutil.rmtree(work / "mutants", ignore_errors=True)
 
     def _invoke(self, names, what: str, bound=None) -> int:
@@ -791,6 +802,9 @@ def parse(argv):
     p.add_argument("--oracle-tables", default="", help="GBX_ORACLE_TABLES for the family harness, e.g. GRID_SCALAR,GRID_ARRAY")
     p.add_argument("--max-children", type=int, default=None,
                    help="most mutmut workers this gate may use (default: its share of the host budget, GBX_MUTATION_MAX_WORKERS)")
+    p.add_argument("--mutant-timeout", type=float, default=MUTANT_TIMEOUT,
+                   help="seconds a mutant may run beyond 5 x the time of the tests that reach it, then mutmut kills it "
+                        "(counted as killed). Default 10: a hung mutant frees its worker after about max(10 s, 5 x the tests)")
     p.add_argument("--seed", type=int, default=SAMPLE_SEED)
     p.add_argument("--full", action="store_true",
                    help=f"run every mutant in the old and the slim pass (the default is a stratified sample of {SAMPLE_FIRST}, "
@@ -868,12 +882,14 @@ def main(argv=None) -> int:
     if args.old_codes:
         check_fingerprint(Path(args.old_codes), fingerprint)
         check_codes_mode(Path(args.old_codes), args.full)
+    if args.mutant_timeout <= 0:
+        sys.exit("--mutant-timeout must be above 0 seconds. Fix: pass the seconds a mutant may run beyond 5 x its tests (default 10).")
     mode = "full (every mutant)" if args.full else f"sample-first ({SAMPLE_FIRST} mutants, {SAMPLE_EXTENDED} after a loss)"
     if args.plan:
         print(json.dumps({"work": str(work), "out": str(out), "modules": modules, "old": old_sel, "slim": slim_sel,
                           "venv": str(mutmut_venv()), "host_venv": str(host_venv()), "oracle_tables": args.oracle_tables,
-                          "old_codes": args.old_codes, "old_ref": ref_sha, "mode": mode,
-                          "workers": {"host_capacity": worker_capacity(), "max_children": args.max_children, "slots": str(slots_dir())}, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
+                          "old_codes": args.old_codes, "old_ref": ref_sha, "mode": mode, "mutant_timeout": args.mutant_timeout,
+                          "workers": {"host_capacity": worker_capacity(), "max_children": args.max_children, "slots": str(slots_dir())}, "mutmut": mutmut_section(modules, old_sel, args.mutant_timeout)}, indent=2))
         return 0
 
     out.mkdir(parents=True, exist_ok=True)

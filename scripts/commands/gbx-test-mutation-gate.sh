@@ -19,6 +19,7 @@ show_help() {
     echo -e "  ${GREEN}--oracle-tables <T1,T2>${NC} GBX_ORACLE_TABLES for the family harness (default: all)"
     echo -e "  ${GREEN}--out <dir>${NC}            Output dir (default test-logs/mutation-gate/<family>)"
     echo -e "  ${GREEN}--max-children <n>${NC}     Most mutmut workers this gate may use (default: its share of the host budget)"
+    echo -e "  ${GREEN}--mutant-timeout <s>${NC}   Seconds a mutant may run beyond 5 x its tests before mutmut kills it (default 10)"
     echo -e "  ${GREEN}--seed <n>${NC}             Sample seed (default 31)"
     echo -e "  ${GREEN}--full${NC}                 Run every mutant in both passes (default: a sample of 50, 100 after a loss)"
     echo -e "  ${GREEN}--no-cache${NC}             Do not read or write the host's cache of old kill sets"
@@ -47,7 +48,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --family|--modules|--tests|--slim-tests|--oracle-tables|--out|--max-children|--seed|--old-codes|--old-ref)
+        --family|--modules|--tests|--slim-tests|--oracle-tables|--out|--max-children|--mutant-timeout|--seed|--old-codes|--old-ref)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASSTHROUGH+=("$1" "$2")
             shift 2

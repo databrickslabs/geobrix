@@ -547,6 +547,7 @@ def command_repo(repo):
         "scripts/commands/common.sh",
         "scripts/commands/gbx-local-snapshot.sh",
         "scripts/snapshot/snapshot.py",
+        "scripts/snapshot/drive_upload.py",
     ):
         dst = repo.root / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -684,3 +685,827 @@ def test_restore_never_overwrites_an_existing_real_config(repo, tmp_path):
     write(tree, REAL_CFG, "CLUSTER_ID=mine\n")
     snap.restore_cluster_config(tree)
     assert (tree / REAL_CFG).read_text() == "CLUSTER_ID=mine\n"
+
+
+# --- Drive upload and prune (a fake Drive: no network, no gcloud) ------------------------------------
+import hashlib  # noqa: E402
+import json  # noqa: E402
+import re  # noqa: E402
+import urllib.parse  # noqa: E402
+
+drive = snap.drive_module()
+FOLDER = "fakeFolderId0001"
+PRIVATE_PERM = {"type": "user", "role": "owner", "emailAddress": "me@example.com"}
+TEAM_PERMS = (
+    {"type": "domain", "role": "reader", "domain": "example.com"},
+    {"type": "user", "role": "writer", "emailAddress": "colleague@example.com"},
+)
+ZIP_NAME = "geobrix-snapshot-20261108T120000Z-main-abc1234.zip"
+
+
+@pytest.fixture(autouse=True)
+def _no_network_no_gcloud(monkeypatch):
+    """Every test here must use the fake: a real request or a gcloud call fails the test."""
+
+    def boom(*args, **kwargs):
+        raise AssertionError("a test reached the network or gcloud")
+
+    monkeypatch.setattr(drive.urllib.request, "build_opener", boom)
+    monkeypatch.setattr(drive.GcloudToken, "get", boom)
+
+
+class FakeToken:
+    """Hands out its tokens in order; a refresh moves to the next one."""
+
+    def __init__(self, *tokens):
+        self.tokens, self.i, self.refreshes = list(tokens) or ["tok-new"], 0, 0
+
+    def get(self, refresh=False):
+        if refresh:
+            self.refreshes += 1
+            self.i = min(self.i + 1, len(self.tokens) - 1)
+        return self.tokens[self.i]
+
+
+class FakeDrive:
+    """An in-memory Drive v3 for the calls drive_upload makes. Used as the client's transport."""
+
+    def __init__(self):
+        self.files, self.sessions, self.calls, self.seq = {}, {}, [], 0
+        self.valid = {"tok-new"}
+        self.fail_chunks = set()  # 0-based chunk PUTs that answer 503 and store nothing
+        self.corrupt_md5 = (
+            False  # Drive reports a checksum that is not the bytes' checksum
+        )
+        self.list_status = 200
+        self.chunk_puts = 0
+        self.perms = [
+            PRIVATE_PERM
+        ]  # permissions.list on the folder: private unless a test shares it
+        self.perms_status = 200
+        self.folder_shared = False
+        self.files[FOLDER] = self._record(
+            FOLDER, "Snapshots", b"", True, drive.FOLDER_MIME, []
+        )
+
+    @staticmethod
+    def _record(fid, name, data, owned, mime, parents, created="2026-01-01T00:00:00Z"):
+        return {
+            "id": fid,
+            "name": name,
+            "data": data,
+            "owned": owned,
+            "mimeType": mime,
+            "parents": parents,
+            "created": created,
+            "trashed": False,
+        }
+
+    def add(
+        self,
+        name,
+        data=b"zip",
+        owned=True,
+        created="2026-01-01T00:00:00Z",
+        mime="application/zip",
+        parents=None,
+    ):
+        self.seq += 1
+        fid = "fakeFile%06d" % self.seq
+        self.files[fid] = self._record(
+            fid, name, data, owned, mime, parents or [FOLDER], created
+        )
+        return fid
+
+    def share(self, *extra):
+        """Open the folder to others (the owner stays in the list)."""
+        self.perms = [PRIVATE_PERM] + list(extra or TEAM_PERMS)
+        self.folder_shared = True
+
+    def live(self):
+        return {
+            f["name"]
+            for f in self.files.values()
+            if f["id"] != FOLDER and not f["trashed"]
+        }
+
+    def methods(self, *names):
+        return [c for c in self.calls if c[0] in names]
+
+    def _meta(self, f):
+        md5 = "0" * 32 if self.corrupt_md5 else hashlib.md5(f["data"]).hexdigest()
+        return {
+            "id": f["id"],
+            "name": f["name"],
+            "size": str(len(f["data"])),
+            "md5Checksum": md5,
+            "createdTime": f["created"],
+            "mimeType": f["mimeType"],
+            "ownedByMe": f["owned"],
+        }
+
+    @staticmethod
+    def _json(status, obj):
+        return drive.Response(status, {}, json.dumps(obj).encode())
+
+    def __call__(self, method, url, headers, body):
+        u = urllib.parse.urlparse(url)
+        q = dict(urllib.parse.parse_qsl(u.query))
+        self.calls.append((method, u.path, q, dict(headers)))
+        if "upload_id" in q:  # a resumable session URL carries its own authority
+            return self._chunk(headers, body, q["upload_id"])
+        if headers.get("Authorization") not in ["Bearer " + t for t in self.valid]:
+            return self._json(401, {"error": {"message": "invalid credentials"}})
+        if method == "POST":
+            sid = "s%d" % len(self.sessions)
+            self.sessions[sid] = {
+                "meta": json.loads(body),
+                "data": bytearray(),
+                "size": int(headers["X-Upload-Content-Length"]),
+            }
+            loc = (
+                "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id="
+                + sid
+            )
+            return drive.Response(200, {"location": loc}, b"{}")
+        if method == "GET" and u.path.endswith("/drive/v3/files"):
+            return self._list(q)
+        if method == "GET" and u.path.endswith("/permissions"):
+            if self.perms_status != 200:
+                return self._json(self.perms_status, {"error": {"message": "no"}})
+            assert u.path.split("/")[-2] == FOLDER, "permissions of something else"
+            assert (
+                q["fields"]
+                == "nextPageToken,permissions(type,role,emailAddress,domain)"
+            )
+            return self._json(200, {"permissions": self.perms})
+        f = self.files.get(u.path.rsplit("/", 1)[1])
+        if f is None:
+            return self._json(404, {"error": {"message": "not found"}})
+        if method == "GET" and q.get("alt") == "media":
+            a, b = re.match(r"bytes=(\d+)-(\d+)", headers["Range"]).groups()
+            return drive.Response(206, {}, f["data"][int(a) : int(b) + 1])
+        if method == "GET":
+            out = self._meta(f)
+            if f["id"] == FOLDER:
+                out["capabilities"] = {"canAddChildren": True}
+                out["shared"] = self.folder_shared
+            return self._json(200, out)
+        if method == "PATCH":
+            assert json.loads(body) == {"trashed": True}
+            f["trashed"] = True
+            return self._json(200, {"id": f["id"], "trashed": True})
+        if method == "DELETE":
+            del self.files[f["id"]]
+            return drive.Response(204, {}, b"")
+        raise AssertionError("unexpected request %s %s" % (method, u.path))
+
+    def _list(self, q):
+        if self.list_status != 200:
+            return self._json(self.list_status, {"error": {"message": "boom"}})
+        parent = re.match(r"'([^']+)' in parents", q["q"]).group(1)
+        items = sorted(
+            (
+                f
+                for f in self.files.values()
+                if parent in f["parents"] and not f["trashed"]
+            ),
+            key=lambda f: f["id"],
+        )
+        start = int(q.get("pageToken", "0"))
+        out = {
+            "files": [self._meta(f) for f in items[start : start + 2]]
+        }  # two per page
+        if start + 2 < len(items):
+            out["nextPageToken"] = str(start + 2)
+        return self._json(200, out)
+
+    def _chunk(self, headers, body, sid):
+        s = self.sessions[sid]
+        crange = headers["Content-Range"]
+        if not crange.startswith("bytes */"):  # a real chunk, not a status query
+            n, self.chunk_puts = self.chunk_puts, self.chunk_puts + 1
+            if n in self.fail_chunks:
+                return self._json(503, {"error": {"message": "try later"}})
+            assert int(re.match(r"bytes (\d+)-", crange).group(1)) == len(
+                s["data"]
+            ), "out of order"
+            s["data"].extend(body)
+        got = len(s["data"])
+        if got == s["size"]:
+            if "id" not in s:
+                s["id"] = self.add(
+                    s["meta"]["name"], bytes(s["data"]), parents=s["meta"]["parents"]
+                )
+            return self._json(200, self._meta(self.files[s["id"]]))
+        return drive.Response(
+            308, {"range": "bytes=0-%d" % (got - 1)} if got else {}, b""
+        )
+
+
+def make_client(drv, token=None, say=None, **kw):
+    kw.setdefault("sleep", lambda s: None)
+    kw.setdefault(
+        "chunk_bytes", 256 * 1024
+    )  # small, so a 600 KB zip takes three chunks
+    return drive.DriveClient(
+        token or FakeToken("tok-new"), transport=drv, say=say or (lambda m: None), **kw
+    )
+
+
+def make_produced(tmp_path, size=600_000, name=ZIP_NAME):
+    p = tmp_path / name
+    p.write_bytes((b"snapshot-bytes-" * (size // 15 + 1))[:size])
+    return drive.Produced.after_scan(p, [], [], [], True, snap.SNAPSHOT_RE)
+
+
+def use_fake_drive(repo, drv, token=None):
+    repo.mp.setattr(
+        snap,
+        "make_drive_client",
+        lambda cfg: make_client(
+            drv, token=token, say=snap.say, allow_shared=cfg.allow_shared
+        ),
+    )
+    repo.mp.setenv("GBX_SNAPSHOT_DRIVE_FOLDER_ID", FOLDER)
+
+
+def clean_gitleaks(repo, tmp_path):
+    stub = tmp_path / "gitleaks-clean"
+    stub.write_text("#!/bin/sh\nexit 0\n")
+    stub.chmod(0o755)
+    repo.mp.setenv("GBX_SNAPSHOT_GITLEAKS", str(stub))
+
+
+# -- upload --
+def test_upload_sends_the_zip_in_chunks_and_checks_drives_checksum(tmp_path):
+    drv, lines = FakeDrive(), []
+    client = make_client(drv, say=lines.append, quota_project="quota-test-proj")
+    produced = make_produced(tmp_path)
+    client.upload(produced, FOLDER, snap.SNAPSHOT_RE)
+    (stored,) = [f for f in drv.files.values() if f["name"] == ZIP_NAME]
+    assert stored["data"] == produced.path.read_bytes() and stored["parents"] == [
+        FOLDER
+    ]
+    chunks = [
+        c
+        for c in drv.methods("PUT")
+        if not c[3]["Content-Range"].startswith("bytes */")
+    ]
+    assert len(chunks) == 3
+    # the session URL is the credential for chunks: no bearer token, no quota project on them
+    assert all(
+        "Authorization" not in c[3] and "x-goog-user-project" not in c[3]
+        for c in chunks
+    )
+    start = drv.methods("POST")[0]
+    assert start[3]["x-goog-user-project"] == "quota-test-proj"
+    assert any("md5 and size match" in m for m in lines)
+
+
+def test_a_checksum_mismatch_fails_the_upload_and_removes_the_bad_copy(tmp_path):
+    drv = FakeDrive()
+    drv.corrupt_md5 = True
+    with pytest.raises(drive.VerifyError):
+        make_client(drv).upload(make_produced(tmp_path), FOLDER, snap.SNAPSHOT_RE)
+    assert drv.live() == set() and len(drv.methods("DELETE")) == 1
+
+
+def test_a_401_refreshes_the_token_once_and_the_token_is_never_printed(tmp_path):
+    drv, lines = FakeDrive(), []
+    token = FakeToken("tok-old", "tok-new")
+    make_client(drv, token=token, say=lines.append).upload(
+        make_produced(tmp_path), FOLDER, snap.SNAPSHOT_RE
+    )
+    assert token.refreshes == 1 and ZIP_NAME in drv.live()
+    assert not any("tok-" in m for m in lines)
+
+
+def test_a_token_that_stays_invalid_stops_after_one_refresh():
+    drv = FakeDrive()
+    drv.valid = {"never"}
+    token = FakeToken("a", "b")
+    with pytest.raises(drive.DriveError, match="401"):
+        make_client(drv, token=token).list_folder(FOLDER)
+    assert token.refreshes == 1
+
+
+def test_a_failed_chunk_resumes_from_what_drive_holds(tmp_path):
+    drv = FakeDrive()
+    drv.fail_chunks = {1}
+    produced = make_produced(tmp_path)
+    make_client(drv).upload(produced, FOLDER, snap.SNAPSHOT_RE)
+    (stored,) = [f for f in drv.files.values() if f["name"] == ZIP_NAME]
+    assert stored["data"] == produced.path.read_bytes()
+    queries = [
+        c for c in drv.methods("PUT") if c[3]["Content-Range"].startswith("bytes */")
+    ]
+    assert len(queries) == 1
+
+
+def test_the_time_cap_stops_a_stuck_request(monkeypatch):
+    monkeypatch.setattr(drive.random, "random", lambda: 0.0)
+    drv, now = FakeDrive(), [0.0]
+    drv.list_status = 503
+    client = make_client(
+        drv,
+        clock=lambda: now[0],
+        sleep=lambda s: now.__setitem__(0, now[0] + s),
+        total_seconds=20,
+    )
+    with pytest.raises(drive.DriveTimeout):
+        client.list_folder(FOLDER)
+
+
+def test_nothing_but_a_clean_scan_can_make_an_uploadable_zip(tmp_path):
+    p = tmp_path / ZIP_NAME
+    p.write_bytes(b"z")
+    ok = dict(
+        findings=[],
+        zip_findings=[],
+        allowed_paths=[],
+        gitleaks_ran=True,
+        name_re=snap.SNAPSHOT_RE,
+    )
+    assert drive.Produced.after_scan(p, **ok).md5
+    for bad in (
+        dict(findings=[object()]),
+        dict(zip_findings=[object()]),
+        dict(allowed_paths=["x/y"]),
+        dict(gitleaks_ran=False),
+    ):
+        with pytest.raises(drive.UploadRefused):
+            drive.Produced.after_scan(p, **dict(ok, **bad))
+    with pytest.raises(drive.UploadRefused):
+        drive.Produced(p, 1, "0" * 32)  # no building one by hand
+    other = tmp_path / "notes.zip"
+    other.write_bytes(b"z")
+    with pytest.raises(drive.UploadRefused):
+        drive.Produced.after_scan(other, **ok)  # not named like a snapshot
+
+
+# -- prune --
+def test_prune_keeps_the_newest_n_by_name_and_touches_nothing_else():
+    drv = FakeDrive()
+    for i in range(
+        1, 7
+    ):  # Drive's own dates run backwards on purpose: the name decides
+        drv.add(
+            "geobrix-snapshot-2026110%dT120000Z-main-abc1234.zip" % i,
+            created="2026-12-%02dT00:00:00Z" % (10 - i),
+        )
+    others = [
+        "notes.zip",
+        "geobrix-snapshot-notes.zip",
+        "geobrix-snapshot-20261101T120000Z-main.zip",
+        "geobrix-snapshot-20261102T120000Z-main-abc1234.zip.bak",
+        "geobrix-snapshot-20260101T000000Z-main-abc1234.zip",  # matches, but not yours
+    ]
+    for name in others:
+        drv.add(name, owned=not name.startswith("geobrix-snapshot-2026010"))
+    drv.add(
+        "geobrix-snapshot-20261105T000000Z-x-abc1234.zip", mime=drive.FOLDER_MIME
+    )  # a folder
+    res = make_client(drv).prune(FOLDER, 3, snap.SNAPSHOT_RE)
+    assert {f["name"] for f in res.trashed} == {
+        "geobrix-snapshot-2026110%dT120000Z-main-abc1234.zip" % i for i in (1, 2, 3)
+    }
+    assert set(others) <= drv.live() and len(res.foreign) == 1
+    assert drv.methods("DELETE") == [] and len(drv.methods("PATCH")) == 3
+
+
+def test_prune_dry_run_changes_nothing():
+    drv, lines = FakeDrive(), []
+    for i in range(1, 6):
+        drv.add("geobrix-snapshot-2026110%dT120000Z-main-abc1234.zip" % i)
+    res = make_client(drv, say=lines.append).prune(
+        FOLDER, 2, snap.SNAPSHOT_RE, dry_run=True
+    )
+    assert len(res.trashed) == 3 and len(drv.live()) == 5
+    assert (
+        drv.methods("PATCH", "DELETE") == []
+        and sum("would trash" in m for m in lines) == 3
+    )
+
+
+def test_prune_refuses_a_folder_with_no_snapshot_in_it():
+    drv = FakeDrive()
+    drv.add("report.pdf")
+    drv.add("geobrix-snapshot-notes.zip")
+    with pytest.raises(drive.PruneRefused):
+        make_client(drv).prune(FOLDER, 3, snap.SNAPSHOT_RE)
+    assert drv.methods("PATCH", "DELETE") == []
+
+
+def test_prune_removes_nothing_when_the_listing_fails():
+    drv = FakeDrive()
+    for i in range(1, 6):
+        drv.add("geobrix-snapshot-2026110%dT120000Z-main-abc1234.zip" % i)
+    drv.list_status = 500
+    with pytest.raises(drive.DriveError):
+        make_client(drv).prune(FOLDER, 2, snap.SNAPSHOT_RE)
+    assert drv.methods("PATCH", "DELETE") == [] and len(drv.live()) == 5
+
+
+def test_prune_of_an_empty_folder_is_a_no_op_and_the_new_upload_must_be_kept():
+    assert make_client(FakeDrive()).prune(FOLDER, 3, snap.SNAPSHOT_RE).trashed == []
+    listing = [
+        {
+            "id": "fakeFile000001",
+            "name": "geobrix-snapshot-20261101T120000Z-main-abc1234.zip",
+            "ownedByMe": True,
+        },
+        {
+            "id": "fakeFile000002",
+            "name": "geobrix-snapshot-20261102T120000Z-main-abc1234.zip",
+            "ownedByMe": True,
+        },
+    ]
+    with pytest.raises(
+        drive.PruneRefused
+    ):  # the id to protect is not among the newest 1
+        drive.plan_prune(listing, 1, snap.SNAPSHOT_RE, protect_ids=["fakeFile000001"])
+
+
+def test_a_prune_trashes_at_most_the_cap_oldest_first():
+    drv = FakeDrive()
+    for d in range(1, 31):
+        drv.add("geobrix-snapshot-202611%02dT120000Z-main-abc1234.zip" % d)
+    res = make_client(drv).prune(FOLDER, 3, snap.SNAPSHOT_RE)
+    assert (
+        len(res.trashed) == drive.MAX_TRASHED_PER_RUN == 25 and len(res.deferred) == 2
+    )
+    assert "geobrix-snapshot-20261101T120000Z-main-abc1234.zip" not in drv.live()
+    assert "geobrix-snapshot-20261127T120000Z-main-abc1234.zip" in drv.live()
+
+
+# -- download --
+def test_download_is_ranged_and_checked_against_drives_checksum(tmp_path):
+    drv = FakeDrive()
+    data = bytes(range(256)) * 3000  # 768000 bytes: three ranges
+    fid = drv.add(ZIP_NAME, data)
+    meta = drv._meta(drv.files[fid])
+    make_client(drv).download(meta, tmp_path / ZIP_NAME)
+    assert (tmp_path / ZIP_NAME).read_bytes() == data
+    drv.corrupt_md5 = True
+    with pytest.raises(drive.VerifyError):
+        make_client(drv).download(drv._meta(drv.files[fid]), tmp_path / "again.zip")
+    assert not (tmp_path / "again.zip").exists() and not list(tmp_path.glob("*.part"))
+
+
+# -- the command, with the fake Drive standing in for the real one --
+def test_run_uploads_the_zip_it_just_wrote_then_prunes_drive(repo, tmp_path, capsys):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    for d in range(1, 5):
+        drv.add("geobrix-snapshot-2026010%dT000000Z-main-abc1234.zip" % d)
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--upload") == 0
+    local, out = repo.newest_zip(), capsys.readouterr().out
+    assert (
+        len(drv.live()) == 3 and local.name in drv.live()
+    )  # four old + one new, keep 3
+    (stored,) = [f for f in drv.files.values() if f["name"] == local.name]
+    assert stored["data"] == local.read_bytes()
+    assert "RESULT ok" in out and "drive=uploaded,trashed=2" in out
+    assert FOLDER not in out and "tok-" not in out
+
+
+def test_the_upload_is_off_unless_asked_for(repo, tmp_path):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    use_fake_drive(repo, drv)
+    assert repo.run("run") == 0 and drv.calls == []
+    repo.mp.setenv(
+        "GBX_SNAPSHOT_UPLOAD", "1"
+    )  # the setting turns it on without the flag
+    assert repo.run("run") == 0 and len(drv.methods("POST")) == 1
+
+
+def test_a_secret_stops_the_run_before_any_drive_call(repo, tmp_path):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    use_fake_drive(repo, drv)
+    write(repo.root, ".superpowers/notes.md", fake("ghp_", "a1B2" * 9))
+    assert repo.run("run", "--upload") == snap.EXIT_REFUSED
+    assert drv.calls == [] and snap.snapshots(repo.dest) == []
+
+
+def test_no_clean_gitleaks_pass_means_no_upload_but_the_local_zip_stays(repo, capsys):
+    drv = FakeDrive()  # the fixture points GBX_SNAPSHOT_GITLEAKS at nothing
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--upload") == snap.EXIT_DRIVE
+    out = capsys.readouterr().out
+    assert drv.calls == [] and len(snap.snapshots(repo.dest)) == 1
+    assert "gitleaks did not run cleanly" in out and "RESULT drive-failed" in out
+
+
+def test_a_waived_scan_finding_blocks_the_upload_not_the_local_zip(repo, tmp_path):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    use_fake_drive(repo, drv)
+    write(repo.root, "examples/tests/cluster.env", fake("ghp_", "a1B2" * 9))
+    repo.mp.setenv("GBX_SNAPSHOT_SCAN_ALLOW", "examples/tests/cluster.env")
+    assert repo.run("run", "--upload") == snap.EXIT_DRIVE
+    assert drv.calls == [] and len(snap.snapshots(repo.dest)) == 1
+
+
+def test_a_failed_checksum_exits_drive_failed_and_never_prunes(repo, tmp_path, capsys):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    drv.corrupt_md5 = True
+    for d in range(1, 5):
+        drv.add("geobrix-snapshot-2026010%dT000000Z-main-abc1234.zip" % d)
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--upload") == snap.EXIT_DRIVE
+    assert (
+        drv.methods("PATCH") == [] and len(drv.live()) == 4
+    )  # the bad upload is gone, nothing else
+    assert "RESULT drive-failed" in capsys.readouterr().out
+
+
+def test_upload_dry_run_only_reads_and_says_what_a_prune_would_do(repo, capsys):
+    drv = FakeDrive()
+    for d in range(1, 5):
+        drv.add("geobrix-snapshot-2026010%dT000000Z-main-abc1234.zip" % d)
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--dry-run", "--upload") == 0
+    out = capsys.readouterr().out
+    assert {c[0] for c in drv.calls} == {"GET"} and snap.snapshots(repo.dest) == []
+    assert out.count("\n    would trash ") == 2
+    assert "shared with: no one (private)" in out and "guard: ok" in out
+    assert "throttle: no upload recorded" in out
+    assert "'Snapshots'" in out and FOLDER not in out
+
+
+# -- the folder must be private --
+def test_a_shared_folder_is_refused_before_any_upload_and_the_message_names_the_sharing(
+    repo, tmp_path, capsys
+):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    drv.share()
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--upload") == snap.EXIT_DRIVE
+    out = capsys.readouterr().out
+    assert (
+        drv.methods("POST", "PUT", "PATCH", "DELETE") == []
+    )  # nothing left, nothing removed
+    assert len(snap.snapshots(repo.dest)) == 1 and "RESULT drive-failed" in out
+    assert "everyone at domain example.com (reader)" in out
+    assert "user c***@example.com (writer)" in out and "colleague" not in out
+    assert (
+        "Fix: make the folder private" in out
+        and "GBX_SNAPSHOT_DRIVE_ALLOW_SHARED=1" in out
+    )
+    assert FOLDER not in out
+    assert not (repo.dest / snap.UPLOAD_STAMP).exists()  # a refusal is not an upload
+
+
+def test_prune_refuses_a_shared_folder_too_even_as_a_dry_run(repo, capsys):
+    drv = FakeDrive()
+    drv.share()
+    for d in range(1, 5):
+        drv.add("geobrix-snapshot-2026010%dT000000Z-main-abc1234.zip" % d)
+    use_fake_drive(repo, drv)
+    for args in (
+        ["prune", "--drive", "--keep", "1"],
+        ["prune", "--drive", "--dry-run"],
+    ):
+        assert repo.run(*args) == snap.EXIT_DRIVE
+    assert "not private" in capsys.readouterr().out
+    assert drv.methods("PATCH", "DELETE") == [] and len(drv.live()) == 4
+
+
+def test_what_counts_as_other_access():
+    owned = {"ownedByMe": True}
+    assert drive.other_access(owned, [PRIVATE_PERM]) == []
+    assert drive.other_access(owned, []) == []
+    anyone = {"type": "anyone", "role": "reader"}
+    assert drive.other_access(owned, [PRIVATE_PERM, anyone]) == [
+        "ANYONE WITH THE LINK (reader)"
+    ]
+    group = {"type": "group", "role": "writer", "emailAddress": "team@example.com"}
+    assert drive.other_access(owned, [group]) == ["group t***@example.com (writer)"]
+    assert drive.other_access(
+        {"ownedByMe": False}, [PRIVATE_PERM]
+    )  # someone else's folder
+    assert drive.other_access({}, [PRIVATE_PERM])  # ownership unknown: not private
+    assert drive.other_access(
+        dict(owned, shared=True), [PRIVATE_PERM]
+    )  # flag says shared
+    assert drive.mask_email("colleague@example.com") == "c***@example.com"
+
+
+def test_an_unreadable_permission_list_is_a_refusal_unless_sharing_is_accepted(
+    tmp_path,
+):
+    drv = FakeDrive()
+    drv.perms_status = 403
+    with pytest.raises(drive.SharedFolderRefused, match="cannot be confirmed private"):
+        make_client(drv).upload(make_produced(tmp_path), FOLDER, snap.SNAPSHOT_RE)
+    assert drv.methods("POST") == []
+    make_client(drv, allow_shared=True).upload(
+        make_produced(tmp_path), FOLDER, snap.SNAPSHOT_RE
+    )
+    assert ZIP_NAME in drv.live()
+
+
+def test_allow_shared_accepts_a_shared_folder_and_says_so(repo, tmp_path, capsys):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    drv.share()
+    use_fake_drive(repo, drv)
+    repo.mp.setenv("GBX_SNAPSHOT_DRIVE_ALLOW_SHARED", "1")
+    assert repo.run("run", "--upload") == 0
+    out = capsys.readouterr().out
+    assert repo.newest_zip().name in drv.live() and "drive=uploaded" in out
+    assert (
+        "accepted by GBX_SNAPSHOT_DRIVE_ALLOW_SHARED" in out and "colleague" not in out
+    )
+
+
+def test_dry_run_reports_the_sharing_and_whether_the_guard_would_refuse(repo, capsys):
+    drv = FakeDrive()
+    drv.share()
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--dry-run", "--upload") == snap.EXIT_DRIVE
+    out = capsys.readouterr().out
+    assert (
+        "everyone at domain example.com (reader)" in out and "c***@example.com" in out
+    )
+    assert (
+        "guard: WOULD REFUSE (exit 4)" in out and "Fix: make the folder private" in out
+    )
+    assert {c[0] for c in drv.calls} == {"GET"}  # reads only, even when it would refuse
+    repo.mp.setenv("GBX_SNAPSHOT_DRIVE_ALLOW_SHARED", "1")
+    assert repo.run("run", "--dry-run", "--upload") == 0
+    assert "guard: the folder is shared; accepted" in capsys.readouterr().out
+
+
+# -- the upload throttle --
+def set_last_upload(repo, minutes_ago):
+    import time
+
+    repo.dest.mkdir(parents=True, exist_ok=True)
+    (repo.dest / snap.UPLOAD_STAMP).write_text(
+        "%.0f\n" % (time.time() - minutes_ago * 60)
+    )
+
+
+def test_a_hook_started_upload_inside_the_interval_is_skipped_but_the_snapshot_runs(
+    repo, tmp_path, capsys
+):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    use_fake_drive(repo, drv)
+    repo.mp.setenv("GBX_SNAPSHOT_UPLOAD", "1")  # the setting, as the push hook uses it
+    # nothing recorded yet: this one uploads and records the time
+    assert repo.run("run") == 0
+    assert len(drv.methods("POST")) == 1 and (repo.dest / snap.UPLOAD_STAMP).is_file()
+    capsys.readouterr()
+    set_last_upload(repo, 10)
+    calls = len(drv.calls)
+    assert repo.run("run") == 0
+    out = capsys.readouterr().out
+    assert len(drv.calls) == calls  # the Drive step was skipped: no request at all
+    assert out.count("drive: skipping the upload") == 1 and "10 min ago" in out
+    assert "RESULT ok" in out and "drive=throttled" in out
+    assert "wrote geobrix-snapshot-" in out  # the local snapshot still ran
+    set_last_upload(repo, 61)  # past the interval: uploads again
+    assert repo.run("run") == 0 and len(drv.methods("POST")) == 2
+
+
+def test_the_interval_is_a_setting_and_zero_turns_the_throttle_off(repo, tmp_path):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    use_fake_drive(repo, drv)
+    repo.mp.setenv("GBX_SNAPSHOT_UPLOAD", "1")
+    set_last_upload(repo, 10)
+    repo.mp.setenv("GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN", "5")
+    assert repo.run("run") == 0 and len(drv.methods("POST")) == 1  # 10 min > 5 min
+    set_last_upload(repo, 1)
+    repo.mp.setenv("GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN", "0")
+    assert repo.run("run") == 0 and len(drv.methods("POST")) == 2
+
+
+def test_a_manual_upload_ignores_the_throttle_unless_asked_to_respect_it(
+    repo, tmp_path, capsys
+):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    use_fake_drive(repo, drv)
+    set_last_upload(repo, 1)
+    assert repo.run("run", "--upload", "--respect-throttle") == 0
+    assert drv.methods("POST") == [] and "drive=throttled" in capsys.readouterr().out
+    assert repo.run("run", "--upload") == 0  # explicit: uploads anyway
+    assert len(drv.methods("POST")) == 1
+
+
+def test_a_failed_or_refused_upload_does_not_start_the_throttle(repo, tmp_path):
+    clean_gitleaks(repo, tmp_path)
+    drv = FakeDrive()
+    drv.corrupt_md5 = True
+    use_fake_drive(repo, drv)
+    assert repo.run("run", "--upload") == snap.EXIT_DRIVE
+    assert not (repo.dest / snap.UPLOAD_STAMP).exists()
+
+
+def test_an_unreadable_or_future_stamp_does_not_block_an_upload(repo):
+    repo.dest.mkdir(parents=True)
+    cfg = snap.Config(repo.root)
+    (repo.dest / snap.UPLOAD_STAMP).write_text("not a number")
+    assert snap.upload_throttled(cfg) is None
+    set_last_upload(repo, -120)  # a clock that ran backwards
+    assert snap.upload_throttled(cfg) is None
+    set_last_upload(repo, 3)
+    assert snap.upload_throttled(cfg) is not None
+
+
+def test_missing_drive_settings_fail_cleanly_without_a_request(repo, capsys):
+    drv = FakeDrive()
+    repo.mp.setattr(snap, "make_drive_client", lambda cfg: make_client(drv))
+    assert repo.run("run", "--upload") == snap.EXIT_DRIVE
+    assert drv.calls == [] and len(snap.snapshots(repo.dest)) == 1
+    assert "GBX_SNAPSHOT_DRIVE_FOLDER_ID is not set" in capsys.readouterr().out
+
+
+def test_list_prune_and_restore_work_from_drive(repo, tmp_path, capsys):
+    assert repo.run("run") == 0
+    local = repo.newest_zip()
+    drv = FakeDrive()
+    drv.add(local.name, local.read_bytes())
+    drv.add("geobrix-snapshot-20260101T000000Z-main-abc1234.zip", owned=False)
+    use_fake_drive(repo, drv)
+    assert repo.run("list", "--drive") == 0
+    out = capsys.readouterr().out
+    assert local.name in out and "not yours" in out
+    target = tmp_path / "restored"
+    assert repo.run("restore", "--from-drive", local.name, str(target)) == 0
+    assert (target / "worktree" / "README.md").read_text() == "hi"
+    foreign = "geobrix-snapshot-20260101T000000Z-main-abc1234.zip"
+    assert repo.run("restore", "--from-drive", foreign, str(tmp_path / "other")) == 2
+    assert repo.run("prune", "--drive", "--keep", "1", "--dry-run") == 0
+    assert drv.methods("PATCH", "DELETE") == []
+
+
+def test_the_command_passes_drive_options_through_and_stops_without_a_folder(
+    command_repo,
+):
+    for args in (
+        ["--upload", "--dry-run"],
+        ["prune", "--drive", "--dry-run"],
+        ["list", "--drive"],
+    ):
+        res = run_cmd(command_repo, *args)
+        assert res.returncode == snap.EXIT_DRIVE, res.stdout + res.stderr
+        assert "GBX_SNAPSHOT_DRIVE_FOLDER_ID is not set" in res.stdout
+
+
+# -- settings and hygiene --
+def test_drive_settings_default_off_and_are_validated(tmp_path):
+    cfg = snap.Config(tmp_path, env={})
+    assert cfg.upload is False and cfg.drive_keep == 3 and cfg.drive_folder_id == ""
+    assert cfg.allow_shared is False and cfg.upload_min_interval_min == 60
+    on = snap.Config(
+        tmp_path,
+        env={
+            "GBX_SNAPSHOT_UPLOAD": "1",
+            "GBX_SNAPSHOT_DRIVE_KEEP": "5",
+            "GBX_SNAPSHOT_DRIVE_FOLDER_ID": FOLDER,
+            "GBX_SNAPSHOT_DRIVE_ALLOW_SHARED": "1",
+            "GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN": "0",
+        },
+    )
+    assert on.upload and on.drive_keep == 5 and on.drive_folder_id == FOLDER
+    assert on.allow_shared and on.upload_min_interval_min == 0
+    # the real client is built from the settings (building it makes no request)
+    assert snap.make_drive_client(on).allow_shared is True
+    assert snap.make_drive_client(cfg).allow_shared is False
+    with pytest.raises(SystemExit):
+        snap.Config(tmp_path, env={"GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN": "-1"})
+    assert drive.config_problems("short", "") and drive.config_problems(
+        FOLDER, "Bad Project!"
+    )
+    assert (
+        drive.config_problems(FOLDER, "my-quota-project1") == []
+        and drive.config_problems(FOLDER, "") == []
+    )
+
+
+def test_errors_never_carry_a_token_the_folder_id_or_the_quota_project():
+    text = "Bearer abc.def ya29.abcDEF-123 in %s under quota-test-proj" % FOLDER
+    out = drive.redact(text, [FOLDER, "quota-test-proj"])
+    assert not any(s in out for s in ("abc.def", "ya29", FOLDER, "quota-test-proj"))
+
+
+def test_the_drive_module_carries_no_ids_or_internal_names():
+    src = (REPO_ROOT / "scripts" / "snapshot" / "drive_upload.py").read_text()
+    assert "databricks" not in src.lower() and "gcp-dev" not in src
+    assert not re.search(
+        r"[\"'](?=[A-Za-z_-]*\d)[A-Za-z0-9_-]{25,}[\"']", src
+    )  # no id-shaped literal
+    top_level = (REPO_ROOT / "scripts" / "snapshot" / "snapshot.py").read_text()
+    assert not re.search(
+        r"^(import|from)\s+drive_upload", top_level, re.M
+    )  # loaded lazily only

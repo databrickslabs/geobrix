@@ -6,7 +6,8 @@ Stdlib only and Python 3.8+: it runs on the host, outside the dev container.
 A snapshot is the working tree (untracked and gitignored files too, such as local planning
 notes and editor settings), minus run state that can be rebuilt (see EXCLUDES), plus a git
 bundle of the commits no remote has yet and the repository's local git settings. It is written
-to a local folder; nothing here touches the network.
+to a local folder. Nothing touches the network unless you turn on the Drive upload (--upload or
+GBX_SNAPSHOT_UPLOAD=1, default off); that code lives in drive_upload.py and is loaded only then.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from __future__ import annotations
 import argparse
 import fcntl
 import fnmatch
+import importlib.util
 import json
 import os
 import re
@@ -104,6 +106,12 @@ CONFIG_KEYS = (
     "GBX_SNAPSHOT_MAX_FILE_MB",
     "GBX_SNAPSHOT_GITLEAKS",
     "GBX_SNAPSHOT_SCAN_ALLOW",
+    "GBX_SNAPSHOT_UPLOAD",
+    "GBX_SNAPSHOT_DRIVE_FOLDER_ID",
+    "GBX_SNAPSHOT_DRIVE_KEEP",
+    "GBX_SNAPSHOT_GCP_QUOTA_PROJECT",
+    "GBX_SNAPSHOT_DRIVE_ALLOW_SHARED",
+    "GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN",
 )
 # gitleaks rules left out of the verdict: entropy guesses that flag run ids and heartbeat fields in
 # local logs. The token-shaped rules (keys, JWTs, cloud and vendor tokens) all stay on.
@@ -113,6 +121,7 @@ HOOK_END = "# <<< gbx-local-snapshot <<<"
 SCAN_MAX_BYTES = 20 * 1024 * 1024
 
 EXIT_REFUSED = 3  # the secret scan found something
+EXIT_DRIVE = 4  # the local snapshot is fine; the Drive step failed or was refused
 EXIT_BUSY = 75  # another snapshot is running (the repository's lock convention)
 
 
@@ -151,6 +160,22 @@ class Config:
             for g in values.get("GBX_SNAPSHOT_SCAN_ALLOW", "").split(",")
             if g.strip()
         ]
+        # Drive upload: off unless asked for. The folder id and quota project are read here and
+        # never printed or logged; they live only in the untracked .gbx-local.env or the environment.
+        self.upload = self._flag(values, "GBX_SNAPSHOT_UPLOAD")
+        self.drive_folder_id = values.get("GBX_SNAPSHOT_DRIVE_FOLDER_ID", "")
+        self.drive_keep = self._int(values, "GBX_SNAPSHOT_DRIVE_KEEP", 3, minimum=1)
+        self.quota_project = values.get("GBX_SNAPSHOT_GCP_QUOTA_PROJECT", "")
+        # The Drive folder must be private (only its owner) unless this is set. An upload that the
+        # setting (not --upload) turned on, as from the push hook, runs at most once per interval.
+        self.allow_shared = self._flag(values, "GBX_SNAPSHOT_DRIVE_ALLOW_SHARED")
+        self.upload_min_interval_min = self._int(
+            values, "GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN", 60, minimum=0
+        )
+
+    @staticmethod
+    def _flag(values: Dict[str, str], key: str) -> bool:
+        return values.get(key, "").lower() in ("1", "true", "yes", "on")
 
     @staticmethod
     def _int(values: Dict[str, str], key: str, default: int, minimum: int) -> int:
@@ -507,11 +532,19 @@ def run_gitleaks(
     return findings, None
 
 
+class ScanFacts:
+    """What the scan did beyond its findings; a Drive upload needs a complete, unwaived scan."""
+
+    def __init__(self, allowed: List[str], gitleaks_ran: bool):
+        self.allowed, self.gitleaks_ran = allowed, gitleaks_ran
+
+
 def scan_secrets(
     plan: Plan, meta: List[Tuple[Path, str]], cfg: Config, workdir: Path
-) -> Tuple[List[Finding], List[str]]:
+) -> Tuple[List[Finding], List[str], ScanFacts]:
     findings: List[Finding] = []
     notes: List[str] = []
+    gitleaks_ran = False
     for path, name, _ in plan.files:
         findings += scan_file(path, name)
     for path, name in meta:
@@ -525,6 +558,8 @@ def scan_secrets(
         findings += more
         if err:
             notes.append(err + " (the built-in scan still ran)")
+        else:
+            gitleaks_ran = True
     else:
         notes.append("gitleaks not found: built-in token scan only")
     seen = set()
@@ -540,7 +575,32 @@ def scan_secrets(
         notes.append(
             "secret scan skipped findings in %s (GBX_SNAPSHOT_SCAN_ALLOW)" % path
         )
-    return unique, notes
+    return unique, notes, ScanFacts(sorted(allowed), gitleaks_ran)
+
+
+def rescan_zip(zip_path: Path) -> List[Finding]:
+    """Scan the bytes inside the finished zip with the built-in patterns. The files can change
+    between the scan and the write; this checks what will actually leave the machine."""
+    plain, _ = _compile(SECRET_PATTERNS)
+    meta, _ = _compile(SECRET_PATTERNS + GITMETA_PATTERNS)
+    out: List[Finding] = []
+    with zipfile.ZipFile(str(zip_path)) as zf:
+        for info in zf.infolist():
+            if info.file_size == 0 or info.file_size > SCAN_MAX_BYTES:
+                continue
+            if stat.S_ISLNK((info.external_attr >> 16) & 0xFFFF):
+                continue
+            data = zf.read(info)
+            if b"\0" in data[:8192]:
+                continue
+            rx = meta if info.filename.startswith(GITMETA + "/") else plain
+            for m in rx.finditer(data):
+                out.append(
+                    Finding(
+                        info.filename, data.count(b"\n", 0, m.start()) + 1, "rescan"
+                    )
+                )
+    return out
 
 
 # --- the cluster config, minus its secrets ---------------------------------------------------------
@@ -755,6 +815,298 @@ def human(n: float) -> str:
     return "%.1f GB" % n
 
 
+# --- Drive (off unless asked for) ------------------------------------------------------------------
+DRIVE_MODULE = "gbx_snapshot_drive"
+
+
+def drive_module():
+    """Load drive_upload.py from beside this file. Called only when a Drive step is requested, so
+    a plain snapshot never imports the network code."""
+    if DRIVE_MODULE not in sys.modules:
+        path = Path(__file__).with_name("drive_upload.py")
+        spec = importlib.util.spec_from_file_location(DRIVE_MODULE, str(path))
+        mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
+        sys.modules[DRIVE_MODULE] = mod
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return sys.modules[DRIVE_MODULE]
+
+
+def make_drive_client(cfg: Config):
+    """The real client. The tests replace this function with one backed by a fake Drive."""
+    drive = drive_module()
+    return drive.DriveClient(
+        drive.GcloudToken(),
+        quota_project=cfg.quota_project,
+        say=say,
+        private=[cfg.drive_folder_id],
+        allow_shared=cfg.allow_shared,
+    )
+
+
+# The last verified upload, as epoch seconds, kept beside the lock in the snapshot folder.
+UPLOAD_STAMP = ".last-drive-upload"
+
+
+def minutes_since_upload(cfg: Config) -> Optional[float]:
+    """Minutes since the last verified Drive upload; None if none, unreadable, or in the future."""
+    try:
+        then = float((cfg.dest / UPLOAD_STAMP).read_text().strip())
+    except (OSError, ValueError):
+        return None
+    age = (time.time() - then) / 60.0
+    return age if age >= 0 else None
+
+
+def record_upload(cfg: Config) -> None:
+    """Note a verified upload. Best effort: a failed write only means the next run is not throttled."""
+    try:
+        tmp = cfg.dest / (UPLOAD_STAMP + ".tmp")
+        tmp.write_text("%.0f\n" % time.time())
+        os.replace(str(tmp), str(cfg.dest / UPLOAD_STAMP))
+    except OSError as exc:
+        say("drive: could not record the upload time (%s)" % exc.__class__.__name__)
+
+
+def upload_throttled(cfg: Config) -> Optional[float]:
+    """Minutes since the last upload if that is inside the interval (so skip), else None."""
+    if cfg.upload_min_interval_min <= 0:
+        return None
+    age = minutes_since_upload(cfg)
+    return age if age is not None and age < cfg.upload_min_interval_min else None
+
+
+def drive_problem(cfg: Config) -> Optional[str]:
+    problems = drive_module().config_problems(cfg.drive_folder_id, cfg.quota_project)
+    return "; ".join(problems) or None
+
+
+def drive_failure(cfg: Config, exc: Exception) -> str:
+    """One printable line for a failed Drive step: no token, no folder id, no quota project."""
+    drive = drive_module()
+    if isinstance(exc, drive.DriveError):
+        return drive.redact(str(exc), [cfg.drive_folder_id, cfg.quota_project])
+    return "unexpected %s" % type(exc).__name__
+
+
+def drive_upload_step(
+    cfg: Config, out: Path, findings: List[Finding], facts: ScanFacts
+) -> Tuple[int, str]:
+    """Upload the zip run just wrote, verify it, then prune the Drive folder.
+    Returns (exit code, short text for the RESULT line). Never raises."""
+    drive = drive_module()
+    problem = drive_problem(cfg)
+    if problem:
+        say("drive: not uploading: " + problem)
+        return EXIT_DRIVE, "not-configured"
+    try:
+        produced = drive.Produced.after_scan(
+            out,
+            findings,
+            rescan_zip(out),
+            facts.allowed,
+            facts.gitleaks_ran,
+            SNAPSHOT_RE,
+        )
+        client = make_drive_client(cfg)
+        say("drive: uploading %s (%s)" % (out.name, human(produced.size)))
+        info = client.upload(produced, cfg.drive_folder_id, SNAPSHOT_RE)
+    except Exception as exc:  # a Drive failure must never break the push
+        say("drive: FAILED: " + drive_failure(cfg, exc))
+        return EXIT_DRIVE, (
+            "refused" if isinstance(exc, drive.UploadRefused) else "failed"
+        )
+    say("drive: uploaded %s" % out.name)
+    record_upload(cfg)
+    try:
+        res = client.prune(
+            cfg.drive_folder_id, cfg.drive_keep, SNAPSHOT_RE, protect_ids=[info["id"]]
+        )
+    except Exception as exc:
+        say("drive: uploaded, but the prune did not run: " + drive_failure(cfg, exc))
+        return EXIT_DRIVE, "uploaded,prune-failed"
+    if res.deferred:
+        say(
+            "drive: %d older snapshot(s) remain; the next run continues"
+            % len(res.deferred)
+        )
+    return 0, "uploaded,trashed=%d" % len(res.trashed)
+
+
+def drive_dry_check(cfg: Config) -> int:
+    """--upload --dry-run: read-only checks of the Drive settings, folder, and what a prune would do."""
+    drive = drive_module()
+    say("Drive upload (dry run: reads only; nothing is uploaded, trashed, or deleted):")
+    problem = drive_problem(cfg)
+    if problem:
+        say("  not ready: " + problem)
+        return EXIT_DRIVE
+    say(
+        "  gitleaks: %s"
+        % (
+            "found"
+            if find_gitleaks(cfg.gitleaks)
+            else "NOT found: an upload is refused until it is"
+        )
+    )
+    say("  quota project: %s" % ("set" if cfg.quota_project else "not set"))
+    age = minutes_since_upload(cfg)
+    if cfg.upload_min_interval_min <= 0:
+        say("  throttle: off (GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN=0)")
+    elif age is None:
+        say("  throttle: no upload recorded; the next hook-started upload would run")
+    else:
+        wait = cfg.upload_min_interval_min - age
+        say(
+            "  throttle: last upload %.0f min ago, interval %d min; the next hook-started "
+            "upload would %s"
+            % (
+                age,
+                cfg.upload_min_interval_min,
+                "be skipped for %.0f more min" % wait if wait > 0 else "run",
+            )
+        )
+    say(
+        "  an explicit --upload ignores the throttle (add --respect-throttle to keep it)"
+    )
+    refused = False
+    try:
+        client = make_drive_client(cfg)
+        folder = client.get_folder(cfg.drive_folder_id)
+        can_add = folder.get("capabilities", {}).get("canAddChildren", False)
+        say(
+            "  folder: %r   you can add files: %s"
+            % (folder.get("name"), "yes" if can_add else "NO")
+        )
+        try:
+            others = drive.other_access(
+                folder, client.list_permissions(cfg.drive_folder_id)
+            )
+        except drive.DriveTimeout:
+            raise
+        except drive.DriveError as exc:
+            others = ["its sharing could not be read (%s)" % drive_failure(cfg, exc)]
+        say("  shared with: " + ("; ".join(others) if others else "no one (private)"))
+        if not others:
+            say("  guard: ok, the folder is private")
+        elif cfg.allow_shared:
+            say(
+                "  guard: the folder is shared; accepted by GBX_SNAPSHOT_DRIVE_ALLOW_SHARED"
+            )
+        else:
+            refused = True
+            say("  guard: WOULD REFUSE (exit %d). %s" % (EXIT_DRIVE, drive.SHARED_FIX))
+        listing = client.list_folder(cfg.drive_folder_id)
+        owned, foreign = drive.snapshot_files(listing, SNAPSHOT_RE)
+        say(
+            "  in the folder: %d snapshot(s) of yours, %d snapshot-named file(s) not yours, %d item(s) in all"
+            % (len(owned), len(foreign), len(listing))
+        )
+        drive.plan_prune(
+            listing, cfg.drive_keep, SNAPSHOT_RE
+        )  # raises if the prune would refuse
+        stale = owned[
+            cfg.drive_keep - 1 :
+        ]  # the new upload takes one of the kept places
+        say(
+            "  after the next upload (keep %d): would trash %d"
+            % (cfg.drive_keep, len(stale))
+        )
+        for f in stale:
+            say("    would trash %s" % f["name"])
+    except Exception as exc:
+        say("  FAILED: " + drive_failure(cfg, exc))
+        return EXIT_DRIVE
+    return EXIT_DRIVE if refused else 0
+
+
+def drive_list(cfg: Config) -> int:
+    drive = drive_module()
+    problem = drive_problem(cfg)
+    if problem:
+        say("drive: " + problem)
+        return EXIT_DRIVE
+    try:
+        listing = make_drive_client(cfg).list_folder(cfg.drive_folder_id)
+    except Exception as exc:
+        say("drive: FAILED: " + drive_failure(cfg, exc))
+        return EXIT_DRIVE
+    owned, foreign = drive.snapshot_files(listing, SNAPSHOT_RE)
+    if not owned and not foreign:
+        say("no snapshots in the Drive folder")
+    for f in owned:
+        say("%-70s %10s" % (f["name"], human(int(f.get("size", 0)))))
+    for f in foreign:
+        say(
+            "%-70s %10s  (not yours; never pruned or restored)"
+            % (f["name"], human(int(f.get("size", 0))))
+        )
+    return 0
+
+
+def drive_prune(cfg: Config, keep: int, dry_run: bool) -> int:
+    problem = drive_problem(cfg)
+    if problem:
+        say("drive: " + problem)
+        return EXIT_DRIVE
+    try:
+        res = make_drive_client(cfg).prune(
+            cfg.drive_folder_id, keep, SNAPSHOT_RE, dry_run=dry_run
+        )
+    except Exception as exc:
+        say("drive: nothing removed: " + drive_failure(cfg, exc))
+        return EXIT_DRIVE
+    say(
+        "%skept %d, %s %d"
+        % (
+            "dry run: " if dry_run else "",
+            len(res.kept),
+            "would trash" if dry_run else "trashed",
+            len(res.trashed),
+        )
+    )
+    if res.deferred:
+        say("%d older snapshot(s) remain; run again to continue" % len(res.deferred))
+    if res.foreign:
+        say(
+            "%d snapshot-named file(s) not owned by you were left alone"
+            % len(res.foreign)
+        )
+    return 0
+
+
+def drive_restore(cfg: Config, name: str, target: Path) -> int:
+    drive = drive_module()
+    if not SNAPSHOT_RE.fullmatch(name):
+        say("not a snapshot name: %s" % name)
+        return 2
+    problem = drive_problem(cfg)
+    if problem:
+        say("drive: " + problem)
+        return EXIT_DRIVE
+    if target.exists() and any(target.iterdir()):
+        say("%s is not empty; restore into a new or empty directory" % target)
+        return 2
+    try:
+        client = make_drive_client(cfg)
+        owned, _ = drive.snapshot_files(
+            client.list_folder(cfg.drive_folder_id), SNAPSHOT_RE
+        )
+        match = [f for f in owned if f["name"] == name]
+        if not match:
+            say("no snapshot of yours named %s in the Drive folder" % name)
+            return 2
+        cfg.dest.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".restore-", dir=str(cfg.dest)) as tmp:
+            zip_path = Path(tmp) / name
+            say("downloading %s (%s)" % (name, human(int(match[0].get("size", 0)))))
+            client.download(match[0], zip_path)
+            say("downloaded; md5 matches Drive")
+            return cmd_restore(cfg, str(zip_path), target)
+    except Exception as exc:
+        say("drive: FAILED: " + drive_failure(cfg, exc))
+        return EXIT_DRIVE
+
+
 # --- commands --------------------------------------------------------------------------------------
 def report_plan(plan: Plan, est: Optional[int]) -> None:
     say("Include (working tree, top level, uncompressed):")
@@ -777,7 +1129,7 @@ def report_plan(plan: Plan, est: Optional[int]) -> None:
             say("  %s  %s" % (rel, human(size)))
 
 
-def cmd_dry_run(root: Path, cfg: Config) -> int:
+def cmd_dry_run(root: Path, cfg: Config, check_drive: bool = False) -> int:
     plan = collect(root, cfg.max_file_bytes)
     report_plan(plan, estimate_zip_bytes(plan))
     meta = git_meta_files(root)
@@ -791,10 +1143,18 @@ def cmd_dry_run(root: Path, cfg: Config) -> int:
         )
     )
     say("Destination: %s   keep newest %d" % (cfg.dest, cfg.keep))
+    if check_drive:
+        return drive_dry_check(cfg)
+    if cfg.upload:
+        say(
+            "Drive upload: on (GBX_SNAPSHOT_UPLOAD); add --upload to this --dry-run to check the folder (reads only)"
+        )
     return 0
 
 
-def cmd_run(root: Path, cfg: Config) -> int:
+def cmd_run(
+    root: Path, cfg: Config, upload: bool = False, throttle: bool = False
+) -> int:
     started = time.time()
     cfg.dest.mkdir(parents=True, exist_ok=True)
     lock = open(str(cfg.dest / ".snapshot.lock"), "w")
@@ -827,7 +1187,7 @@ def cmd_run(root: Path, cfg: Config) -> int:
             bundle = None
         else:
             say("bundle: %s" % human(bundle.stat().st_size))  # type: ignore[union-attr]
-        findings, notes = scan_secrets(plan, meta, cfg, work)
+        findings, notes, facts = scan_secrets(plan, meta, cfg, work)
         for n in notes:
             say("  note: " + n)
         if findings:
@@ -866,11 +1226,29 @@ def cmd_run(root: Path, cfg: Config) -> int:
     )
     for p in removed:
         say("pruned %s" % p.name)
-    say("RESULT ok %s %s %.0fs" % (out.name, human(out.stat().st_size), secs))
+    drive_code, drive_text = 0, ""
+    age = upload_throttled(cfg) if upload and throttle else None
+    if age is not None:  # the local snapshot is done; only the upload is skipped
+        say(
+            "drive: skipping the upload: the last one was %.0f min ago "
+            "(GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN=%d); run with --upload to force one"
+            % (age, cfg.upload_min_interval_min)
+        )
+        drive_text = "throttled"
+    elif upload:  # only a zip written just now, and only past the clean scan above
+        drive_code, drive_text = drive_upload_step(cfg, out, findings, facts)
+        secs = time.time() - started
+    result = "%s %s %.0fs" % (out.name, human(out.stat().st_size), secs)
+    if drive_code:
+        say("RESULT drive-failed %s drive=%s" % (result, drive_text))
+        return drive_code
+    say("RESULT ok %s%s" % (result, " drive=" + drive_text if drive_text else ""))
     return 0
 
 
-def cmd_list(cfg: Config) -> int:
+def cmd_list(cfg: Config, drive: bool = False) -> int:
+    if drive:
+        return drive_list(cfg)
     found = snapshots(cfg.dest)
     if not found:
         say("no snapshots in %s" % cfg.dest)
@@ -880,7 +1258,11 @@ def cmd_list(cfg: Config) -> int:
     return 0
 
 
-def cmd_prune(cfg: Config, keep: int) -> int:
+def cmd_prune(
+    cfg: Config, keep: int, drive: bool = False, dry_run: bool = False
+) -> int:
+    if drive:
+        return drive_prune(cfg, keep, dry_run)
     removed = prune(cfg.dest, keep)
     for p in removed:
         say("pruned %s" % p.name)
@@ -888,7 +1270,9 @@ def cmd_prune(cfg: Config, keep: int) -> int:
     return 0
 
 
-def cmd_restore(cfg: Config, name: str, target: Path) -> int:
+def cmd_restore(cfg: Config, name: str, target: Path, from_drive: bool = False) -> int:
+    if from_drive:
+        return drive_restore(cfg, name, target)
     src = Path(name)
     if not src.is_file():
         src = cfg.dest / name
@@ -1096,12 +1480,40 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="report what would be included, write nothing",
     )
-    sub.add_parser("list", help="list snapshots")
+    run.add_argument(
+        "--upload",
+        action="store_true",
+        help="after the local write, upload the zip to Google Drive (or GBX_SNAPSHOT_UPLOAD=1); "
+        "with --dry-run, check the Drive folder (reads only). Ignores the upload throttle",
+    )
+    run.add_argument(
+        "--respect-throttle",
+        action="store_true",
+        help="with --upload: skip the upload if one was made within "
+        "GBX_SNAPSHOT_UPLOAD_MIN_INTERVAL_MIN",
+    )
+    ls = sub.add_parser("list", help="list snapshots")
+    ls.add_argument(
+        "--drive", action="store_true", help="list the Drive folder instead"
+    )
     pr = sub.add_parser("prune", help="delete snapshots beyond the newest N")
     pr.add_argument(
-        "--keep", type=int, help="how many to keep (default GBX_SNAPSHOT_KEEP)"
+        "--keep",
+        type=int,
+        help="how many to keep (default GBX_SNAPSHOT_KEEP, or GBX_SNAPSHOT_DRIVE_KEEP with --drive)",
+    )
+    pr.add_argument(
+        "--drive", action="store_true", help="prune the Drive folder (to its trash)"
+    )
+    pr.add_argument(
+        "--dry-run", action="store_true", help="with --drive: print, remove nothing"
     )
     rs = sub.add_parser("restore", help="unpack a snapshot into an empty directory")
+    rs.add_argument(
+        "--from-drive",
+        action="store_true",
+        help="download the named snapshot from the Drive folder first",
+    )
     rs.add_argument("name")
     rs.add_argument("dir")
     sub.add_parser("status", help="show the last run")
@@ -1113,20 +1525,27 @@ def main(argv: Optional[List[str]] = None) -> int:
     cfg = Config(root)
     cmd = args.cmd or "run"
     if cmd == "run":
-        return (
-            cmd_dry_run(root, cfg)
-            if getattr(args, "dry_run", False)
-            else cmd_run(root, cfg)
+        if getattr(args, "dry_run", False):
+            return cmd_dry_run(root, cfg, check_drive=getattr(args, "upload", False))
+        explicit = getattr(args, "upload", False)  # asked for on the command line
+        return cmd_run(
+            root,
+            cfg,
+            upload=explicit or cfg.upload,
+            throttle=getattr(args, "respect_throttle", False) or not explicit,
         )
     if cmd == "list":
-        return cmd_list(cfg)
+        return cmd_list(cfg, drive=args.drive)
     if cmd == "prune":
-        keep = args.keep if args.keep is not None else cfg.keep
+        if args.dry_run and not args.drive:
+            raise SystemExit("prune --dry-run needs --drive")
+        default = cfg.drive_keep if args.drive else cfg.keep
+        keep = args.keep if args.keep is not None else default
         if keep < 1:
             raise SystemExit("--keep must be at least 1")
-        return cmd_prune(cfg, keep)
+        return cmd_prune(cfg, keep, drive=args.drive, dry_run=args.dry_run)
     if cmd == "restore":
-        return cmd_restore(cfg, args.name, Path(args.dir))
+        return cmd_restore(cfg, args.name, Path(args.dir), from_drive=args.from_drive)
     if cmd == "status":
         return cmd_status(root, cfg)
     if cmd == "install-hook":

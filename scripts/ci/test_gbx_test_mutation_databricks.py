@@ -237,3 +237,23 @@ def test_baseline_failures_are_read_from_the_short_summary():
     guid = _load("guidance_runner3", MUT / "guidance_runner.py")
     text = "....\nFAILED test/a.py::t[x - y] - assert 1\nERROR test/b.py::u - boom\nFAILED test/a.py::t[x - y] - dup\nFAILED test/c.py::v[a] - x[0]\n1 failed"
     assert guid.baseline_failed_ids(text) == ["test/a.py::t[x - y]", "test/b.py::u", "test/c.py::v[a]"]
+
+
+def test_the_trend_compares_only_runs_with_the_same_tests():
+    class Row(dict):
+        pass
+
+    class Spark:
+        def __init__(self):
+            self.sql_seen = []
+
+        def sql(self, q):
+            self.sql_seen.append(q)
+            return types_namespace([Row(module="m", run_id="old", ts="2026-11-07", d=3, s=1), Row(module="m", run_id="older", ts="2026-11-01", d=1, s=1)])
+
+    def types_namespace(rows):
+        return type("R", (), {"collect": lambda self: rows})()
+
+    spark = Spark()
+    assert rows_mod.previous_rates(spark, "c.s.t", "pyvx", "new", "test/pyvx") == {"m": 75.0}
+    assert "AND tests = 'test/pyvx'" in spark.sql_seen[0] and "run_id <> 'new'" in spark.sql_seen[0]

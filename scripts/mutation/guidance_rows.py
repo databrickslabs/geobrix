@@ -258,14 +258,17 @@ def write_delta(spark, rows: List[dict], table: str) -> int:
     return len(data)
 
 
-def previous_rates(spark, table: str, family: str, run_id: str) -> Dict[str, float]:
-    """{module: kill rate of the latest earlier run of the family that has the module}; {} when there is none."""
+def previous_rates(spark, table: str, family: str, run_id: str, tests: str = "") -> Dict[str, float]:
+    """{module: kill rate of the latest earlier run of the family that has the module, with the same tests when given};
+    {} when there is none. (Rates under other tests say nothing about this selection.)"""
     try:
         got = spark.sql(
             f"SELECT module, run_id, MAX(run_ts) AS ts, "
             f"SUM(CASE WHEN status IN ('killed','timeout','segfault') THEN 1 ELSE 0 END) AS d, "
             f"SUM(CASE WHEN status = 'survived' THEN 1 ELSE 0 END) AS s "
             f"FROM {table} WHERE family = '{family.replace(chr(39), '')}' AND run_id <> '{run_id.replace(chr(39), '')}' "
+            + (f"AND tests = '{tests.replace(chr(39), '')}' " if tests else "")
+            +
             f"GROUP BY module, run_id"
         ).collect()
     except Exception:  # noqa: BLE001 - no table yet, or no access: no trend

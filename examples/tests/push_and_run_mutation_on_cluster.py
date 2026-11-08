@@ -279,7 +279,7 @@ shutil.copytree(out, CFG["out_dir"])  # rows.jsonl, run.json, killers.jsonl, K.j
 result = {"rc": rc, "rows": 0}
 if os.path.exists(out + "/rows.jsonl"):
     rows = guidance_rows.read_jsonl(out + "/rows.jsonl")
-    trend = guidance_rows.previous_rates(spark, CFG["table"], CFG["family"], CFG["run_id"])
+    trend = guidance_rows.previous_rates(spark, CFG["table"], CFG["family"], CFG["run_id"], CFG["tests"])
     json.dump(trend, open(CFG["out_dir"] + "/trend.json", "w"))
     result["rows"] = guidance_rows.write_delta(spark, rows, CFG["table"])
     result["kill_rate"] = json.load(open(out + "/run.json")).get("kill_rate")

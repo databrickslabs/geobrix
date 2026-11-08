@@ -116,6 +116,25 @@ Install the JAR only when you want the JVM level on a dedicated cluster. The whe
 
 For measured differences between levels, see [Performance & Benchmarking](./performance).
 
+## What needs dedicated compute {#dedicated-compute}
+
+Almost everything runs on every compute through the wheel. These features need more:
+
+| Feature | Dedicated cluster | Standard access mode | Serverless | SQL warehouse |
+|---|---|---|---|---|
+| Every function at its Python level (L3), readers and writers | Yes | Yes | Yes | No (use UC functions) |
+| The JVM level (L1) and the [Scala surface](./language-bindings) | Yes, with the JAR | No. GeoBrix runs the Python level and says why | No | No |
+| [UC functions](./uc-functions) | Yes | Yes | Yes | Yes |
+| The Scala form of the three UC grid functions that have one | Yes | Yes | Yes | Yes |
+| `gbx_rst_merge_tvf` and `gbx_rst_bng_rasterize_tvf` (`TABLE(...) PARTITION BY`) | Yes | Yes | No. Use `gbx_rst_merge_agg` and `gbx_rst_bng_rasterize_agg` | No |
+| Zarr `access="direct"` | Yes | No | No | No |
+| TIN `conforming` mode | Yes, with the JAR | No | No | No |
+
+- **JAR on standard access mode.** The JAR is a cluster library only when a metastore admin has allowed its path. Even then GeoBrix uses the Python level. A Serverless session never loads the JAR.
+- **UC Scala functions.** `gbx.uc.install` makes `gbx_bng_kring`, `gbx_bng_aswkb` and `gbx_bng_centroid` Scala functions when the install folder holds the JAR of the wheel's version. Without it they are Python functions with the same answers. See [Unity Catalog functions](./uc-functions#python-and-scala-handlers).
+- **Zarr `access="auto"`** reads and writes through the Volume mount where direct access is not available. Only an explicit `"direct"` raises, with a fix.
+- A refusal names the compute that can run the feature, and a fix.
+
 ## Virtual tiles and the JVM level {#light-heavy-bridge}
 
 A virtual tile has no raster bytes. It holds a path and a window, and a Python worker reads it lazily. A materialized tile carries the encoded raster in its `raster` field. See [Virtual tiles](./virtual-tiles).

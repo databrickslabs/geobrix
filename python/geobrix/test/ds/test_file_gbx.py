@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import warnings as _warnings_mod
 from unittest.mock import MagicMock, patch
 
@@ -18,425 +19,149 @@ from pyspark.sql.types import (
 from databricks.labs.gbx.ds import file_gbx
 
 # ---------------------------------------------------------------------------
-# Tier detection tests
+# Tier detection
 # ---------------------------------------------------------------------------
 
-
-def test_file_access_tier_with_no_spark():
-    """When spark is None and cannot be obtained, falls back to FUSE."""
-    with patch("databricks.labs.gbx.ds.file_gbx.SparkSession") as mock_session_class:
-        mock_session_class.getActiveSession.return_value = None
-        mock_session_class.builder.getOrCreate.side_effect = RuntimeError("No spark")
-        tier = file_gbx.file_access_tier(None)
-    assert tier == "fuse"
+UNRESOLVED = "UNRESOLVED_ROUTINE: function read_files not found"
+PATH_NOT_FOUND = "PATH_NOT_FOUND: path /Volumes/__gbx_probe__/__none__ does not exist"
 
 
-def test_file_access_tier_read_files_supported():
-    """When read_files(format=>'file') succeeds, tier is 'read_files'."""
-    mock_spark = MagicMock()
-    mock_spark.sql.return_value.collect.return_value = []
-
-    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier") as mock_detect:
-        mock_detect.return_value = "read_files"
-        tier = file_gbx.file_access_tier(mock_spark)
-
-    assert tier == "read_files"
+def _probe(outcome):
+    """What one probe query does when collected: "ok" returns, otherwise it raises that error."""
+    collect = (
+        MagicMock(return_value=[])
+        if outcome == "ok"
+        else MagicMock(side_effect=Exception(outcome))
+    )
+    return MagicMock(collect=collect)
 
 
-def test_file_access_tier_list_files_supported():
-    """When read_files fails but list_files succeeds, tier is 'list_files'."""
-    mock_spark = MagicMock()
-
-    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier") as mock_detect:
-        mock_detect.return_value = "list_files"
-        tier = file_gbx.file_access_tier(mock_spark)
-
-    assert tier == "list_files"
-
-
-def test_file_access_tier_fuse_fallback():
-    """When both FILE probes fail, tier is 'fuse'."""
-    mock_spark = MagicMock()
-
-    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier") as mock_detect:
-        mock_detect.return_value = "fuse"
-        tier = file_gbx.file_access_tier(mock_spark)
-
-    assert tier == "fuse"
+# (read_files probe, list_files probe) -> tier. A PATH_NOT_FOUND proves the function RAN, so it exists
+# (once it was swallowed as "unavailable" and the tier fell through); only an unresolved routine falls through.
+TIERS = {
+    "read_files_runs": (["ok"], "read_files"),
+    "read_files_path_not_found_proves_it_exists": ([PATH_NOT_FOUND], "read_files"),
+    "list_files_when_read_files_is_unresolved": ([UNRESOLVED, "ok"], "list_files"),
+    "list_files_path_not_found_proves_it_exists": (
+        [UNRESOLVED, PATH_NOT_FOUND],
+        "list_files",
+    ),
+    "fuse_when_both_are_unresolved": ([UNRESOLVED, UNRESOLVED], "fuse"),
+}
 
 
-def test_file_access_tier_memoized():
-    """Tier detection is memoized per SparkSession object."""
-    mock_spark = MagicMock()
-    call_count = 0
+@pytest.mark.parametrize("probes,tier", TIERS.values(), ids=TIERS.keys())
+def test_the_tier_follows_which_file_probes_exist(probes, tier):
+    spark = MagicMock()
+    spark.sql.side_effect = [_probe(o) for o in probes]
+    assert file_gbx._detect_tier(spark) == tier
+    first = spark.sql.call_args_list[0][0][0]
+    assert "read_files" in first and "format => 'file'" in first
 
-    def mock_detect(spark):
-        nonlocal call_count
-        call_count += 1
-        return "read_files"
 
-    # Clear the cache to ensure a clean test
+def test_a_session_less_runtime_is_fuse():
+    with patch("databricks.labs.gbx.ds.file_gbx.SparkSession") as session:
+        session.getActiveSession.return_value = None
+        session.builder.getOrCreate.side_effect = RuntimeError("No spark")
+        assert file_gbx.file_access_tier(None) == "fuse"
+
+
+def test_the_tier_is_detected_once_per_session():
+    spark, calls = MagicMock(), []
     file_gbx._TIER_CACHE.clear()
-
-    with patch("databricks.labs.gbx.ds.file_gbx._detect_tier", side_effect=mock_detect):
-        tier1 = file_gbx.file_access_tier(mock_spark)
-        tier2 = file_gbx.file_access_tier(mock_spark)
-
-    assert tier1 == tier2 == "read_files"
-    assert call_count == 1  # Only called once, result was memoized
-
-
-def test_detect_tier_read_files_probe_success():
-    """_detect_tier probes read_files first and succeeds."""
-    mock_spark = MagicMock()
-    mock_spark.sql.return_value.collect.return_value = []
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    assert tier == "read_files"
-    # Verify sql was called with the read_files probe
-    assert mock_spark.sql.called
-    call_args = mock_spark.sql.call_args[0][0]
-    assert "read_files" in call_args
-    assert "format => 'file'" in call_args
+    with patch(
+        "databricks.labs.gbx.ds.file_gbx._detect_tier",
+        side_effect=lambda s: calls.append(s) or "read_files",
+    ):
+        assert (
+            file_gbx.file_access_tier(spark)
+            == file_gbx.file_access_tier(spark)
+            == "read_files"
+        )
+    assert len(calls) == 1
 
 
-def test_detect_tier_read_files_fails_list_files_succeeds():
-    """_detect_tier falls through to list_files when read_files is unavailable (UNRESOLVED_ROUTINE)."""
-    mock_spark = MagicMock()
-    # First call (read_files) raises UNRESOLVED_ROUTINE, second call (list_files) succeeds
-    mock_spark.sql.side_effect = [
-        MagicMock(
-            collect=MagicMock(
-                side_effect=Exception(
-                    "UNRESOLVED_ROUTINE: function read_files not found"
-                )
-            )
+# an error message -> whether it says the routine itself is unavailable (not that a path or a read went wrong)
+ROUTINE_ERRORS = [
+    (Exception("UNRESOLVED_ROUTINE: function read_files not found"), True),
+    (Exception("UNRESOLVABLE_ROUTINE: routine not found"), True),
+    (Exception("PARSE_SYNTAX_ERROR: unexpected token 'read_files'"), True),
+    (Exception("UNSUPPORTED: function not available"), True),
+    (Exception("cannot resolve function read_files"), True),
+    (Exception("Undefined function: read_files"), True),
+    (Exception("function read_files does not exist"), True),
+    # local/OSS Spark has no read_files / list_files TVFs: the tier must fall through to FUSE
+    (
+        Exception(
+            "[UNRESOLVABLE_TABLE_VALUED_FUNCTION] Could not resolve `read_files` to a table-valued function."
         ),
-        MagicMock(collect=MagicMock(return_value=[])),
-    ]
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    assert tier == "list_files"
-
-
-def test_detect_tier_both_file_probes_fail_falls_back_to_fuse():
-    """_detect_tier falls through to FUSE when both FILE probes are unavailable (UNRESOLVED_ROUTINE)."""
-    mock_spark = MagicMock()
-    # Both calls raise UNRESOLVED_ROUTINE (routine unavailable)
-    unresolved = Exception("UNRESOLVED_ROUTINE: function read_files not found")
-    mock_spark.sql.side_effect = [
-        MagicMock(collect=MagicMock(side_effect=unresolved)),
-        MagicMock(collect=MagicMock(side_effect=unresolved)),
-    ]
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    assert tier == "fuse"
+        True,
+    ),
+    (Exception("PATH_NOT_FOUND: path does not exist"), False),
+    (FileNotFoundError("file not found"), False),
+    (IOError("I/O error reading file"), False),
+    (PermissionError("access denied"), False),
+    (Exception("some other runtime error"), False),
+]
 
 
-# Regression tests for the capability-detection bug
-# https://github.com/databrickslabs/geobrix/issues/XXX
-# Bug: PATH_NOT_FOUND proves the function EXISTS, but was treated as "unavailable"
-
-
-def test_detect_tier_path_not_found_proves_read_files_available():
-    """REGRESSION: PATH_NOT_FOUND on read_files probe proves function exists → return 'read_files'.
-
-    Bug: Previously, a bare except Exception would swallow PATH_NOT_FOUND and fall through to list_files.
-    Fix: PATH_NOT_FOUND (or any error proving the function RAN) → function IS available.
-    """
-    mock_spark = MagicMock()
-    # Simulate: read_files raises PATH_NOT_FOUND (path doesn't exist, but function exists)
-    path_not_found_exc = Exception(
-        "PATH_NOT_FOUND: path /Volumes/__gbx_probe__/__none__ does not exist"
-    )
-    mock_spark.sql.side_effect = path_not_found_exc
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    # The fix: PATH_NOT_FOUND proves read_files EXISTS → return "read_files", not "fuse"
-    assert tier == "read_files"
-
-
-def test_detect_tier_unresolved_routine_falls_through_to_list_files():
-    """When read_files is truly unavailable (UNRESOLVED_ROUTINE), fall through to list_files."""
-    mock_spark = MagicMock()
-    unresolved_exc = Exception("UNRESOLVED_ROUTINE: function read_files not found")
-    list_files_success = MagicMock(collect=MagicMock(return_value=[]))
-
-    # First call (read_files) raises UNRESOLVED_ROUTINE, second (list_files) succeeds
-    mock_spark.sql.side_effect = [
-        MagicMock(collect=MagicMock(side_effect=unresolved_exc)),
-        list_files_success,
-    ]
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    assert tier == "list_files"
-
-
-def test_detect_tier_list_files_path_not_found_proves_available():
-    """When read_files is unavailable but list_files raises PATH_NOT_FOUND → list_files IS available."""
-    mock_spark = MagicMock()
-    unresolved_read = Exception("UNRESOLVED_ROUTINE: read_files not found")
-    path_not_found_list = Exception(
-        "PATH_NOT_FOUND: /Volumes/__gbx_probe__/__none__ not found"
-    )
-
-    mock_spark.sql.side_effect = [
-        MagicMock(collect=MagicMock(side_effect=unresolved_read)),
-        MagicMock(collect=MagicMock(side_effect=path_not_found_list)),
-    ]
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    # PATH_NOT_FOUND on list_files proves it EXISTS → return "list_files", not "fuse"
-    assert tier == "list_files"
-
-
-def test_detect_tier_both_unresolved_falls_back_to_fuse():
-    """When both read_files and list_files are UNRESOLVED_ROUTINE → fall back to FUSE."""
-    mock_spark = MagicMock()
-    unresolved = Exception("UNRESOLVED_ROUTINE: function not found")
-
-    mock_spark.sql.side_effect = [
-        MagicMock(collect=MagicMock(side_effect=unresolved)),
-        MagicMock(collect=MagicMock(side_effect=unresolved)),
-    ]
-
-    tier = file_gbx._detect_tier(mock_spark)
-
-    assert tier == "fuse"
-
-
-def test_is_routine_unavailable_detects_unresolved_routine():
-    """_is_routine_unavailable returns True for UNRESOLVED_ROUTINE-style errors."""
-    exc_unresolved = Exception("UNRESOLVED_ROUTINE: function read_files not found")
-    assert file_gbx._is_routine_unavailable(exc_unresolved)
-
-    exc_unresolvable = Exception("UNRESOLVABLE_ROUTINE: routine not found")
-    assert file_gbx._is_routine_unavailable(exc_unresolvable)
-
-    exc_parse = Exception("PARSE_SYNTAX_ERROR: unexpected token 'read_files'")
-    assert file_gbx._is_routine_unavailable(exc_parse)
-
-    exc_unsupported = Exception("UNSUPPORTED: function not available")
-    assert file_gbx._is_routine_unavailable(exc_unsupported)
-
-    exc_cannot_resolve = Exception("cannot resolve function read_files")
-    assert file_gbx._is_routine_unavailable(exc_cannot_resolve)
-
-    exc_undefined_func = Exception("Undefined function: read_files")
-    assert file_gbx._is_routine_unavailable(exc_undefined_func)
-
-    exc_not_found = Exception("function read_files does not exist")
-    assert file_gbx._is_routine_unavailable(exc_not_found)
-
-    # UNRESOLVABLE_TABLE_VALUED_FUNCTION: emitted by local/OSS Spark when
-    # read_files / list_files SQL TVFs are not registered.  Must be recognised
-    # so file_access_tier falls through to FUSE instead of wrongly reporting
-    # "read_files" tier available.
-    exc_tvf = Exception(
-        "[UNRESOLVABLE_TABLE_VALUED_FUNCTION] Could not resolve `read_files` "
-        "to a table-valued function."
-    )
-    assert file_gbx._is_routine_unavailable(exc_tvf)
-
-
-def test_is_routine_unavailable_returns_false_for_path_errors():
-    """_is_routine_unavailable returns False for PATH_NOT_FOUND and other data/IO errors."""
-    exc_path_not_found = Exception("PATH_NOT_FOUND: path does not exist")
-    assert not file_gbx._is_routine_unavailable(exc_path_not_found)
-
-    exc_file_not_found = FileNotFoundError("file not found")
-    assert not file_gbx._is_routine_unavailable(exc_file_not_found)
-
-    exc_io_error = IOError("I/O error reading file")
-    assert not file_gbx._is_routine_unavailable(exc_io_error)
-
-    exc_permission = PermissionError("access denied")
-    assert not file_gbx._is_routine_unavailable(exc_permission)
-
-    exc_generic = Exception("some other runtime error")
-    assert not file_gbx._is_routine_unavailable(exc_generic)
+@pytest.mark.parametrize(
+    "err,unavailable", ROUTINE_ERRORS, ids=[str(e)[:40] for e, _ in ROUTINE_ERRORS]
+)
+def test_which_errors_say_the_routine_is_unavailable(err, unavailable):
+    assert file_gbx._is_routine_unavailable(err) is unavailable
 
 
 # ---------------------------------------------------------------------------
-# Access resolution (NO-GATING rule) tests
+# Access resolution: 'auto' takes the tier there is; an explicit FILE mode needs one
 # ---------------------------------------------------------------------------
 
-
-def test_resolve_access_auto_mode_downgrades_silently_to_read_files():
-    """Auto mode returns the available tier without error."""
-    tier = "read_files"
-    result = file_gbx.resolve_access("auto", tier=tier)
-    assert result == "read_files"
-
-
-def test_resolve_access_auto_mode_downgrades_silently_to_list_files():
-    """Auto mode returns list_files tier."""
-    tier = "list_files"
-    result = file_gbx.resolve_access("auto", tier=tier)
-    assert result == "list_files"
+# (mode, tier) -> the access, or the words of the refusal
+ACCESS = {
+    **{f"auto_{t}": ("auto", t, t) for t in ("read_files", "list_files", "fuse")},
+    "managed_read_files": ("managed", "read_files", "managed"),
+    "managed_list_files": ("managed", "list_files", "managed"),
+    "external_read_files": ("external", "read_files", "external"),
+    "managed_fuse_refused": ("managed", "fuse", ValueError),
+    "external_fuse_refused": ("external", "fuse", ValueError),
+    "unknown_mode_refused": ("invalid_mode", "read_files", ValueError),
+}
 
 
-def test_resolve_access_auto_mode_downgrades_silently_to_fuse():
-    """Auto mode returns FUSE tier when FILE is unavailable."""
-    tier = "fuse"
-    result = file_gbx.resolve_access("auto", tier=tier)
-    assert result == "fuse"
+@pytest.mark.parametrize("mode,tier,want", ACCESS.values(), ids=ACCESS.keys())
+def test_resolve_access(mode, tier, want):
+    if want is ValueError:
+        with pytest.raises(ValueError) as ei:
+            file_gbx.resolve_access(mode, tier=tier)
+        msg = str(ei.value)
+        if mode == "invalid_mode":
+            assert "Unknown access mode" in msg
+        else:
+            assert (
+                f"{mode} FILE" in msg
+                and "not available" in msg
+                and "tier='fuse'" in msg
+            )
+            assert (
+                "13.3 LTS" in msg or "18 LTS" in msg
+            ) and "Upgrade your cluster" in msg
+    else:
+        assert file_gbx.resolve_access(mode, tier=tier) == want
 
 
-def test_resolve_access_managed_succeeds_when_read_files_available():
-    """Explicit managed FILE mode succeeds when read_files is available."""
-    result = file_gbx.resolve_access("managed", tier="read_files")
-    assert result == "managed"
+def test_resolve_access_detects_the_tier_of_the_session_when_it_is_not_given():
+    spark = MagicMock()
+    with patch(
+        "databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="read_files"
+    ) as detect:
+        assert file_gbx.resolve_access("auto", spark=spark) == "read_files"
+    detect.assert_called_once_with(spark)
 
 
-def test_resolve_access_managed_succeeds_when_list_files_available():
-    """Explicit managed FILE mode succeeds when list_files is available."""
-    result = file_gbx.resolve_access("managed", tier="list_files")
-    assert result == "managed"
-
-
-def test_resolve_access_external_succeeds_when_read_files_available():
-    """Explicit external FILE mode succeeds when read_files is available."""
-    result = file_gbx.resolve_access("external", tier="read_files")
-    assert result == "external"
-
-
-def test_resolve_access_managed_raises_on_fuse_tier():
-    """Explicit managed FILE mode raises clear error when FILE unavailable."""
-    with pytest.raises(ValueError) as exc_info:
-        file_gbx.resolve_access("managed", tier="fuse")
-
-    error_msg = str(exc_info.value)
-    assert "managed FILE" in error_msg
-    assert "not available" in error_msg
-    assert "tier='fuse'" in error_msg
-    assert "13.3 LTS" in error_msg or "18 LTS" in error_msg
-    assert "Upgrade your cluster" in error_msg or "DBR" in error_msg
-
-
-def test_resolve_access_external_raises_on_fuse_tier():
-    """Explicit external FILE mode raises clear error when FILE unavailable."""
-    with pytest.raises(ValueError) as exc_info:
-        file_gbx.resolve_access("external", tier="fuse")
-
-    error_msg = str(exc_info.value)
-    assert "external FILE" in error_msg
-    assert "not available" in error_msg
-
-
-def test_resolve_access_invalid_mode_raises():
-    """Invalid access mode raises ValueError."""
-    with pytest.raises(ValueError) as exc_info:
-        file_gbx.resolve_access("invalid_mode", tier="read_files")
-
-    assert "Unknown access mode" in str(exc_info.value)
-
-
-def test_resolve_access_detects_tier_when_not_provided():
-    """resolve_access detects tier if not explicitly provided."""
-    mock_spark = MagicMock()
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
-        mock_detect.return_value = "read_files"
-        result = file_gbx.resolve_access("auto", spark=mock_spark)
-
-    assert result == "read_files"
-    mock_detect.assert_called_once_with(mock_spark)
-
-
-# ---------------------------------------------------------------------------
-# Backward compatibility: re-exports from _listing
-# ---------------------------------------------------------------------------
-
-
-def test_reexport_to_local_path():
-    """to_local_path is re-exported from _listing."""
-    from databricks.labs.gbx.ds import file_gbx
-
-    # Verify it's accessible from file_gbx
-    assert hasattr(file_gbx, "to_local_path")
-    # Verify it's callable
-    result = file_gbx.to_local_path("file:/tmp/x")
-    assert result == "/tmp/x"
-
-
-def test_reexport_to_spark_uri():
-    """to_spark_uri is re-exported from _listing."""
-    from databricks.labs.gbx.ds import file_gbx
-
-    assert hasattr(file_gbx, "to_spark_uri")
-    result = file_gbx.to_spark_uri("/Volumes/cat/schema/vol/file.tif")
-    assert result.startswith("dbfs:")
-
-
-def test_reexport_list_files():
-    """list_files is re-exported from _listing."""
-    from databricks.labs.gbx.ds import file_gbx
-
-    assert hasattr(file_gbx, "list_files")
+def test_the_listing_helpers_are_reachable_from_file_gbx():
+    assert file_gbx.to_local_path("file:/tmp/x") == "/tmp/x"
+    assert file_gbx.to_spark_uri("/Volumes/cat/schema/vol/file.tif").startswith("dbfs:")
     assert callable(file_gbx.list_files)
-
-
-def test_reexport_retry_transient():
-    """_retry_transient is re-exported from _listing."""
-    from databricks.labs.gbx.ds import file_gbx
-
-    assert hasattr(file_gbx, "_retry_transient")
-    assert callable(file_gbx._retry_transient)
-
-
-def test_existing_listing_importers_still_work():
-    """Existing direct imports from _listing still work (backward compat)."""
-    # This test verifies the import path doesn't break
-    from databricks.labs.gbx.ds._listing import to_local_path, to_spark_uri
-
-    assert callable(to_local_path)
-    assert callable(to_spark_uri)
-
-
-# ---------------------------------------------------------------------------
-# Integration tests
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_access_full_flow_auto_with_file_available():
-    """Full flow: auto mode with FILE available."""
-    mock_spark = MagicMock()
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
-        mock_detect.return_value = "read_files"
-        result = file_gbx.resolve_access("auto", spark=mock_spark)
-
-    assert result == "read_files"
-
-
-def test_resolve_access_full_flow_managed_with_file_available():
-    """Full flow: explicit managed FILE with FILE available."""
-    mock_spark = MagicMock()
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
-        mock_detect.return_value = "list_files"
-        result = file_gbx.resolve_access("managed", spark=mock_spark)
-
-    assert result == "managed"
-
-
-def test_resolve_access_full_flow_managed_with_no_file():
-    """Full flow: explicit managed FILE with FILE unavailable."""
-    mock_spark = MagicMock()
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_detect:
-        mock_detect.return_value = "fuse"
-        with pytest.raises(ValueError) as exc_info:
-            file_gbx.resolve_access("managed", spark=mock_spark)
-
-    assert "managed FILE" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1512,143 +1237,59 @@ def test_ingest_files_raises_when_write_primitive_unavailable():
     assert "open_for_write" in err
 
 
-def test_ingest_files_builds_read_files_insert_sql():
-    """ingest_files emits CREATE IF NOT EXISTS + INSERT with read_files(format=>'file')."""
+def _ingest_sql(src="/Volumes/cat/s/v/src", **kw):
+    """The statements ingest_files sends, with the write primitive present."""
     captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
+    spark = MagicMock()
+    spark.sql.side_effect = captured.append
+    with patch("databricks.labs.gbx.ds.file_gbx.file_supported", return_value=True):
         file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/v/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-            layout="order",
+            spark, src, "cat.sch.dst", filespace="/Volumes/cat/s/v", **kw
         )
-
-    insert_sqls = [s for s in captured if s.strip().upper().startswith("INSERT")]
-    assert insert_sqls, f"No INSERT captured; got: {captured}"
-    insert = insert_sqls[0]
-    assert "read_files(" in insert
-    assert "format => 'file'" in insert
-    assert "recursiveFileLookup => true" in insert
-    assert "_metadata.file_path AS path" in insert
-    assert "file AS tile_file" in insert
-    assert "ORDER BY path" in insert
-
-    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
-    assert create_sqls, f"No CREATE TABLE captured; got: {captured}"
-    create = create_sqls[0]
-    assert "IF NOT EXISTS" in create.upper()
-    assert "FILE MANAGED" in create
-    assert "PARTITIONED BY" not in create
+    return captured
 
 
-def test_ingest_files_order_by_in_insert():
-    """ingest_files with layout='order' emits ORDER BY path in the INSERT."""
-    captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
-        file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/v/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-            layout="order",
-        )
-
-    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
-    assert "ORDER BY path" in insert
+# ingest_files options -> (in the INSERT, not in the INSERT, in the CREATE, not in the CREATE, a DROP is sent)
+INGEST = {
+    "default_is_a_recursive_read_files_into_a_managed_file_column": (
+        {"layout": "order"},
+        ["read_files(", "format => 'file'", "recursiveFileLookup => true", "_metadata.file_path AS path", "file AS tile_file", "ORDER BY path"], [],
+        ["IF NOT EXISTS", "FILE MANAGED"], ["PARTITIONED BY"], False,
+    ),
+    "plain_layout_has_no_order_by": ({"layout": "plain"}, [], ["ORDER BY"], [], [], False),
+    "non_recursive": ({"recursive": False}, ["recursiveFileLookup => false"], ["recursiveFileLookup => true"], [], [], False),
+    "custom_file_column": ({"file_col": "my_file"}, ["file AS my_file"], [], ["my_file FILE MANAGED"], [], False),
+    "overwrite_drops_and_recreates": ({"overwrite": True}, [], [], ["CREATE TABLE"], ["IF NOT EXISTS"], True),
+}  # fmt: skip
 
 
-def test_ingest_files_no_order_by_for_plain_layout():
-    """ingest_files with layout='plain' does NOT emit ORDER BY in the INSERT."""
-    captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
-        file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/v/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-            layout="plain",
-        )
-
-    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
-    assert "ORDER BY" not in insert
-
-
-def test_ingest_files_escapes_single_quotes_in_src():
-    """ingest_files doubles single quotes in the src path to prevent SQL injection."""
-    captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
-        file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/o'reilly/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-        )
-
-    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
-    assert "o''reilly" in insert
-    assert "o'reilly" not in insert.replace("o''reilly", "")
+@pytest.mark.parametrize(
+    "opts,in_insert,not_insert,in_create,not_create,drops",
+    INGEST.values(),
+    ids=INGEST.keys(),
+)
+def test_ingest_files_sends_a_create_and_a_read_files_insert(
+    opts, in_insert, not_insert, in_create, not_create, drops
+):
+    sql = _ingest_sql(**opts)
+    insert = next(s for s in sql if s.strip().upper().startswith("INSERT"))
+    create = next(s for s in sql if "CREATE TABLE" in s.upper())
+    assert all(p in insert for p in in_insert) and not any(
+        p in insert for p in not_insert
+    ), insert
+    assert all(p.upper() in create.upper() for p in in_create) and not any(
+        p.upper() in create.upper() for p in not_create
+    ), create
+    assert any("DROP TABLE" in s.upper() for s in sql) is drops
 
 
-def test_ingest_files_overwrite_drops_and_recreates():
-    """ingest_files with overwrite=True emits DROP TABLE IF EXISTS + CREATE TABLE."""
-    captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
-        file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/v/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-            overwrite=True,
-        )
-
-    drop_sqls = [s for s in captured if "DROP TABLE" in s.upper()]
-    assert drop_sqls, "Expected DROP TABLE IF EXISTS; none captured"
-    create_sqls = [s for s in captured if "CREATE TABLE" in s.upper()]
-    assert create_sqls
-    # When overwrite=True, CREATE TABLE must NOT include IF NOT EXISTS
-    create = create_sqls[0]
-    assert "IF NOT EXISTS" not in create.upper()
-
-
-def test_ingest_files_non_recursive():
-    """ingest_files with recursive=False emits recursiveFileLookup => false."""
-    captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
-        file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/v/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-            recursive=False,
-        )
-
-    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
-    assert "recursiveFileLookup => false" in insert
+def test_ingest_files_doubles_a_single_quote_in_the_source_path():
+    insert = next(
+        s
+        for s in _ingest_sql("/Volumes/cat/s/o'reilly/src")
+        if s.strip().upper().startswith("INSERT")
+    )
+    assert "o''reilly" in insert and "o'reilly" not in insert.replace("o''reilly", "")
 
 
 def test_ingest_files_invalid_layout_raises():
@@ -1668,99 +1309,78 @@ def test_ingest_files_invalid_layout_raises():
     mock_spark.sql.assert_not_called()
 
 
-def test_ingest_files_custom_file_col():
-    """ingest_files uses the specified file_col name in the INSERT."""
-    captured = []
-    mock_spark = MagicMock()
-    mock_spark.sql.side_effect = lambda sql: captured.append(sql)
-
-    with patch("databricks.labs.gbx.ds.file_gbx.file_supported") as mock_fs:
-        mock_fs.return_value = True
-        file_gbx.ingest_files(
-            mock_spark,
-            "/Volumes/cat/s/v/src",
-            "cat.sch.dst",
-            filespace="/Volumes/cat/s/v",
-            file_col="my_file",
-        )
-
-    insert = next(s for s in captured if s.strip().upper().startswith("INSERT"))
-    assert "file AS my_file" in insert
-    create = next(s for s in captured if "CREATE TABLE" in s.upper())
-    assert "my_file FILE MANAGED" in create
-
-
 # ---------------------------------------------------------------------------
 # enumerate_files positive filter (extensions / path_glob_filter)
 # ---------------------------------------------------------------------------
 
 
-def test_enumerate_files_extensions_filter_fuse():
-    """extensions=('.tif',) returns only .tif files on the FUSE tier."""
-    import os as os_module
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tif1 = os_module.path.join(tmpdir, "a.tif")
-        tif2 = os_module.path.join(tmpdir, "b.TIF")  # uppercase — case-insensitive
-        nc = os_module.path.join(tmpdir, "data.nc")
-        txt = os_module.path.join(tmpdir, "readme.txt")
-
-        for p in (tif1, tif2, nc, txt):
-            with open(p, "w") as f:
-                f.write("x")
-
-        mock_spark = MagicMock()
-        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-            mock_tier.return_value = "fuse"
-            result = file_gbx.enumerate_files(
-                tmpdir, extensions=(".tif",), spark=mock_spark
-            )
-
-    basenames = {os_module.path.basename(r["path"]) for r in result}
-    # Both .tif and .TIF must be returned (case-insensitive)
-    assert "a.tif" in basenames
-    assert "b.TIF" in basenames
-    # Other extensions must be excluded
-    assert "data.nc" not in basenames
-    assert "readme.txt" not in basenames
-    assert len(result) == 2
+def _fuse_names(tmp_path, files, **kw):
+    for name in files:
+        (tmp_path / name).write_text("x")
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value="fuse"):
+        got = file_gbx.enumerate_files(str(tmp_path), spark=MagicMock(), **kw)
+    return sorted(os.path.basename(r["path"]) for r in got)
 
 
-def test_enumerate_files_path_glob_filter_niche_case():
-    """path_glob_filter='[!.]*' + include_hidden=True: includes _data.tif, excludes .crc."""
-    import os as os_module
-    import tempfile
+# files, enumerate_files filter options -> the names listed (FUSE tier). Matching ignores case, a character class
+# can leave dot files out, and a "_" is a literal underscore (as in fnmatch), not SQL LIKE's any-one-character.
+FUSE_FILTERS = {
+    "extensions_ignore_case": (["a.tif", "b.TIF", "data.nc", "readme.txt"], {"extensions": (".tif",)}, ["a.tif", "b.TIF"]),
+    "glob_ignores_case": (["scene.tif", "scene.nc"], {"path_glob_filter": "*.TIF"}, ["scene.tif"]),
+    "char_class_leaves_out_dot_files": (
+        ["_data.tif", ".crc", ".DS_Store", "normal.txt"], {"include_hidden": True, "path_glob_filter": "[!.]*"}, ["_data.tif", "normal.txt"],
+    ),
+    "underscore_is_literal": (["ndvi_2023.tif", "ndvi2023.tif", "landsat.tif"], {"path_glob_filter": "ndvi_*.tif"}, ["ndvi_2023.tif"]),
+    "question_mark_is_one_character": (["tile1.tif", "tile12.tif"], {"path_glob_filter": "tile?.tif"}, ["tile1.tif"]),
+}  # fmt: skip
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        underscore = os_module.path.join(tmpdir, "_data.tif")
-        dot_crc = os_module.path.join(tmpdir, ".crc")
-        dot_ds = os_module.path.join(tmpdir, ".DS_Store")
-        normal = os_module.path.join(tmpdir, "normal.txt")
 
-        for p in (underscore, dot_crc, dot_ds, normal):
-            with open(p, "w") as f:
-                f.write("x")
+@pytest.mark.parametrize(
+    "files,opts,want", FUSE_FILTERS.values(), ids=FUSE_FILTERS.keys()
+)
+def test_enumerate_files_filters_by_name_on_the_fuse_tier(tmp_path, files, opts, want):
+    assert _fuse_names(tmp_path, files, **opts) == want
 
-        mock_spark = MagicMock()
-        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-            mock_tier.return_value = "fuse"
-            result = file_gbx.enumerate_files(
-                tmpdir,
-                include_hidden=True,
-                path_glob_filter="[!.]*",
-                spark=mock_spark,
-            )
 
-    basenames = {os_module.path.basename(r["path"]) for r in result}
-    # Underscore file starts with _, not . → included
-    assert "_data.tif" in basenames
-    # Normal file → included
-    assert "normal.txt" in basenames
-    # Dot-named files → excluded by [!.]* filter
-    assert ".crc" not in basenames
-    assert ".DS_Store" not in basenames
-    assert len(result) == 2
+# filter options -> the pieces of the basename predicate the SQL tiers (read_files, list_files) put in the query
+SQL_FILTERS = {
+    "extension_is_a_like": ({"extensions": (".tif",)}, ["LIKE", "%.tif"], []),
+    "extensions_are_or_ed": (
+        {"extensions": (".tif", ".nc")},
+        ["OR", "%.tif", "%.nc"],
+        [],
+    ),
+    "character_class_is_an_rlike": (
+        {"path_glob_filter": "[!.]*"},
+        ["RLIKE", "[^.]"],
+        [],
+    ),
+    # LIKE reads "_" as any one character: the pattern must be a regex, not "ndvi_%.tif"
+    "underscore_is_an_rlike": (
+        {"path_glob_filter": "ndvi_*.tif"},
+        ["RLIKE"],
+        ["ndvi_%.tif", "LOWER("],
+    ),
+    "question_mark_is_an_rlike": (
+        {"path_glob_filter": "tile?.tif"},
+        ["RLIKE", "tile."],
+        [],
+    ),
+}
+
+
+@pytest.mark.parametrize("tier", ["read_files", "list_files"])
+@pytest.mark.parametrize("opts,has,lacks", SQL_FILTERS.values(), ids=SQL_FILTERS.keys())
+def test_enumerate_files_filters_by_name_in_the_sql_of_the_file_tiers(
+    tmp_path, tier, opts, has, lacks
+):
+    spark = MagicMock()
+    with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier", return_value=tier):
+        file_gbx.enumerate_files(str(tmp_path), spark=spark, **opts)
+    sql = spark.sql.call_args[0][0]
+    assert all(part in sql for part in has) and not any(
+        part in sql for part in lacks
+    ), sql
 
 
 def test_enumerate_files_both_extensions_and_path_glob_filter_raises():
@@ -1852,144 +1472,6 @@ def test_enumerate_files_path_glob_filter_rlike_in_sql():
     assert "RLIKE" in sql
     # The regex must exclude leading-dot files — [^.] in the generated regex
     assert "[^.]" in sql
-
-
-def test_build_glob_filter_extensions():
-    """_build_glob_filter compiles extensions to glob patterns."""
-    patterns = file_gbx._build_glob_filter((".tif", ".NC"), None)
-    assert patterns == ["*.tif", "*.nc"]
-
-
-def test_build_glob_filter_path_glob_filter():
-    """_build_glob_filter passes path_glob_filter through as a single-element list."""
-    patterns = file_gbx._build_glob_filter(None, "[!.]*")
-    assert patterns == ["[!.]*"]
-
-
-def test_build_glob_filter_none():
-    """_build_glob_filter returns None when both params are None."""
-    assert file_gbx._build_glob_filter(None, None) is None
-
-
-def test_build_glob_filter_both_raises():
-    """_build_glob_filter raises ValueError if both params are given."""
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        file_gbx._build_glob_filter((".tif",), "*.tif")
-
-
-def test_fuse_matches_filter_case_insensitive():
-    """_fuse_matches_filter is case-insensitive."""
-    assert file_gbx._fuse_matches_filter("scene.TIF", ["*.tif"])
-    assert file_gbx._fuse_matches_filter("scene.tif", ["*.TIF"])
-    assert not file_gbx._fuse_matches_filter("scene.nc", ["*.tif"])
-
-
-def test_fuse_matches_filter_glob_character_class():
-    """_fuse_matches_filter handles [!.] character class correctly."""
-    assert file_gbx._fuse_matches_filter("_data.tif", ["[!.]*"])
-    assert file_gbx._fuse_matches_filter("normal.txt", ["[!.]*"])
-    assert not file_gbx._fuse_matches_filter(".crc", ["[!.]*"])
-    assert not file_gbx._fuse_matches_filter(".DS_Store", ["[!.]*"])
-
-
-def test_glob_to_sql_basename_predicate_simple():
-    """Simple *.ext glob compiles to a LIKE predicate (no backslash issues)."""
-    pred = file_gbx._glob_to_sql_basename_predicate(["*.tif"], "file_name")
-    assert "LIKE" in pred
-    assert "%.tif" in pred
-    assert "file_name" in pred
-
-
-def test_glob_to_sql_basename_predicate_char_class():
-    """Character-class glob compiles to an RLIKE predicate with [^.]."""
-    pred = file_gbx._glob_to_sql_basename_predicate(["[!.]*"], "basename")
-    assert "RLIKE" in pred
-    assert "[^.]" in pred
-
-
-def test_glob_to_sql_basename_predicate_multiple():
-    """Multiple patterns are OR-ed in the predicate."""
-    pred = file_gbx._glob_to_sql_basename_predicate(["*.tif", "*.nc"], "file_name")
-    assert "OR" in pred
-    assert "%.tif" in pred
-    assert "%.nc" in pred
-
-
-def test_glob_to_sql_basename_predicate_underscore_routes_to_rlike():
-    """Pattern with _ routes to RLIKE (not bare LIKE) to avoid SQL wildcard divergence.
-
-    SQL LIKE treats _ as 'any single character', while fnmatch treats it as a
-    literal underscore.  A pattern like ndvi_*.tif must produce RLIKE so that
-    ndvi2023.tif (no underscore) is NOT matched.
-    """
-    pred = file_gbx._glob_to_sql_basename_predicate(["ndvi_*.tif"], "file_name")
-    assert "RLIKE" in pred
-    # Must NOT be a bare LIKE (note: RLIKE contains "LIKE" as a substring —
-    # check that the predicate is not using SQL LIKE by verifying no "LOWER(" wrapper,
-    # which is the pattern used by the bare-LIKE branch).
-    assert "LOWER(" not in pred
-
-
-def test_enumerate_files_underscore_pattern_fuse_parity():
-    """path_glob_filter='ndvi_*.tif' treats _ as literal: ndvi_2023.tif matches,
-    ndvi2023.tif does NOT, and the SQL tiers emit an RLIKE (not a bare LIKE).
-    """
-    import os as os_module
-    import tempfile
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        match_file = os_module.path.join(tmpdir, "ndvi_2023.tif")
-        no_match = os_module.path.join(tmpdir, "ndvi2023.tif")
-        other = os_module.path.join(tmpdir, "landsat.tif")
-
-        for p in (match_file, no_match, other):
-            with open(p, "w") as f:
-                f.write("x")
-
-        # FUSE end-to-end: _ is literal
-        mock_spark = MagicMock()
-        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-            mock_tier.return_value = "fuse"
-            result = file_gbx.enumerate_files(
-                tmpdir, path_glob_filter="ndvi_*.tif", spark=mock_spark
-            )
-
-        basenames = {os_module.path.basename(r["path"]) for r in result}
-        assert "ndvi_2023.tif" in basenames
-        assert "ndvi2023.tif" not in basenames  # no literal _
-        assert "landsat.tif" not in basenames
-
-        # read_files tier: SQL must use RLIKE (not bare LIKE with _ wildcard)
-        mock_spark2 = MagicMock()
-        mock_spark2.sql.return_value = MagicMock()
-        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-            mock_tier.return_value = "read_files"
-            file_gbx.enumerate_files(
-                tmpdir, path_glob_filter="ndvi_*.tif", spark=mock_spark2
-            )
-        sql_rf = mock_spark2.sql.call_args[0][0]
-        assert "RLIKE" in sql_rf
-        assert "ndvi_%.tif" not in sql_rf  # must NOT use LIKE with bare _
-
-        # list_files tier: same
-        mock_spark3 = MagicMock()
-        mock_spark3.sql.return_value = MagicMock()
-        with patch("databricks.labs.gbx.ds.file_gbx.file_access_tier") as mock_tier:
-            mock_tier.return_value = "list_files"
-            file_gbx.enumerate_files(
-                tmpdir, path_glob_filter="ndvi_*.tif", spark=mock_spark3
-            )
-        sql_lf = mock_spark3.sql.call_args[0][0]
-        assert "RLIKE" in sql_lf
-        assert "ndvi_%.tif" not in sql_lf
-
-
-def test_glob_to_sql_basename_predicate_question_mark_routes_to_rlike():
-    """? pattern routes to RLIKE and the generated regex contains a bare dot."""
-    pred = file_gbx._glob_to_sql_basename_predicate(["tile?.tif"], "file_name")
-    assert "RLIKE" in pred
-    # The ? in tile? becomes . in the regex — verify a dot is present in the regex fragment
-    assert "tile." in pred
 
 
 # ---------------------------------------------------------------------------

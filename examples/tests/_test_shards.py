@@ -207,8 +207,9 @@ def select(shards: List[Shard], spec: str, changed: Optional[Iterable[str]] = No
 
 
 def changed_files(root: Path, base: str, sha: str) -> List[str]:
-    """Files changed between ``base`` and ``sha`` (what the run tests)."""
-    res = subprocess.run(["git", "diff", "--name-only", base, sha], cwd=root, capture_output=True, text=True, check=True)
+    """Files ``sha`` changed since it left ``base`` (a three-dot diff, from their merge base): what a push of ``sha`` adds. A
+    two-dot diff would also list what ``base`` gained meanwhile, files this branch never touched."""
+    res = subprocess.run(["git", "diff", "--name-only", f"{base}...{sha}"], cwd=root, capture_output=True, text=True, check=True)
     return [ln for ln in res.stdout.splitlines() if ln.strip()]
 
 

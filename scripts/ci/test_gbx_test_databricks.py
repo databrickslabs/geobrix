@@ -523,3 +523,19 @@ def test_a_launch_that_ends_well_cancels_nothing():
         pass
     assert w.cancelled == []
     assert launcher.cancel_unfinished(w, {"a": 1, "b": 2}, set()) == [1, 2] and w.cancelled == [1, 2]
+
+
+def test_affected_diffs_from_the_merge_base_so_the_base_side_is_not_counted(tmp_path):
+    def git(*args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=tmp_path, check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    (tmp_path / "a.txt").write_text("a")
+    git("add", "."), git("commit", "-q", "-m", "a")
+    git("checkout", "-q", "-b", "feature")
+    (tmp_path / "mine.txt").write_text("m")
+    git("add", "."), git("commit", "-q", "-m", "mine")
+    git("checkout", "-q", "main")
+    (tmp_path / "theirs.txt").write_text("t")  # the base moves on after the branch left it
+    git("add", "."), git("commit", "-q", "-m", "theirs")
+    assert ts.changed_files(tmp_path, "main", "feature") == ["mine.txt"]

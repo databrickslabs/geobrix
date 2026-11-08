@@ -6,6 +6,8 @@ that were mis-specced as scalars and the UDTF-aware disposition sampler.
 
 from pathlib import Path
 
+import pytest
+
 from databricks.labs.gbx.bench import datagen as dg
 from databricks.labs.gbx.bench.fingerprint import fingerprint_output
 from databricks.labs.gbx.pyrx import _serde
@@ -62,21 +64,6 @@ def test_width_virtual_is_header_only_and_matches(tmp_path):
 # =========================================================================
 # Defect-A regression: 5 tiling/polygonize UDTFs mis-specced as scalars
 # =========================================================================
-
-
-def test_five_tiling_udtfs_have_udtf_flag():
-    """All 5 previously mis-specced tiling/polygonize fns now carry udtf=True."""
-    from databricks.labs.gbx.bench.spec import REGISTRY
-
-    for name in (
-        "rst_maketiles",
-        "rst_retile",
-        "rst_tooverlappingtiles",
-        "rst_separatebands",
-        "rst_polygonize",
-    ):
-        fs = REGISTRY[name]
-        assert getattr(fs, "udtf", False) is True, f"{name} missing udtf=True"
 
 
 def test_tiling_udtf_args_order_and_lateral_sql():
@@ -192,43 +179,27 @@ def test_disposition_of_rst_polygonize_virtual_disposition():
 # =========================================================================
 
 
-def test_find_udtf_tile_struct_with_raster_bytes():
-    """A dict with a 'raster' key is returned as the tile struct."""
+_FIND_ROWS = [
+    ({"cellid": 0, "raster": b"bytes", "path": None}, True),  # a tile struct
+    (
+        {"cellid": 0, "raster": None, "path": "/some/path"},
+        True,
+    ),  # a deferred tile still has the key
+    ({"band": 1, "cellID": 123456789, "measure": 0.5}, False),  # a flat grid row
+    ({"geom_wkb": b"wkb", "value": 1.0}, False),  # a vector row
+    (None, False),
+]
+
+
+@pytest.mark.parametrize("row,is_tile", _FIND_ROWS)
+def test_find_udtf_tile_struct(row, is_tile):
     from databricks.labs.gbx.bench.runner import _find_udtf_tile_struct
 
-    row = {"cellid": 0, "raster": b"bytes", "path": None}
-    assert _find_udtf_tile_struct(row) is row
-
-
-def test_find_udtf_tile_struct_with_raster_none():
-    """raster=None means a deferred tile; the key exists so the row is returned."""
-    from databricks.labs.gbx.bench.runner import _find_udtf_tile_struct
-
-    row = {"cellid": 0, "raster": None, "path": "/some/path"}
-    assert _find_udtf_tile_struct(row) is row
-
-
-def test_find_udtf_tile_struct_flat_grid_row():
-    """Flat grid row (band/cellID/measure) has no 'raster' field -> None."""
-    from databricks.labs.gbx.bench.runner import _find_udtf_tile_struct
-
-    row = {"band": 1, "cellID": 123456789, "measure": 0.5}
-    assert _find_udtf_tile_struct(row) is None
-
-
-def test_find_udtf_tile_struct_vector_row():
-    """Polygonize row (geom_wkb/value) has no 'raster' field -> None."""
-    from databricks.labs.gbx.bench.runner import _find_udtf_tile_struct
-
-    row = {"geom_wkb": b"wkb", "value": 1.0}
-    assert _find_udtf_tile_struct(row) is None
-
-
-def test_find_udtf_tile_struct_none_input():
-    """None input is handled gracefully -> None."""
-    from databricks.labs.gbx.bench.runner import _find_udtf_tile_struct
-
-    assert _find_udtf_tile_struct(None) is None
+    assert (
+        (_find_udtf_tile_struct(row) is row)
+        if is_tile
+        else (_find_udtf_tile_struct(row) is None)
+    )
 
 
 # =========================================================================

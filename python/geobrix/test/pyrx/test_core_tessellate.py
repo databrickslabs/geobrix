@@ -1,261 +1,257 @@
-"""Pure-function tests for H3 raster tessellation (rst_h3_tessellate).
+"""Light raster tessellation (`iter_tessellate`): one table of (grid x assignment x coverage x data) rows.
 
-Also contains Spark-based FILE-aware UDTF guard tests for all three tessellate
-generators (H3, Quadbin, BNG): file_ref=NULL (FILE unavailable on local[2])
-must yield the same output as before the file_ref parameter was added.
+Each row tessellates a small raster on one grid and judges the chips against definitions the function does not use:
+
+* a valid pixel belongs to the cell its centre is in (the grid library's own point lookup);
+* the cells a raster overlaps are the cells whose square or hexagon shares POSITIVE AREA with its extent, found by
+  walking the cells near the extent and taking each polygon from the grid library (an edge-only touch is not an overlap);
+* `centroid` + `sparse` emits the cells holding a valid pixel centre, each with exactly the pixels there;
+  `centroid` + `complete` and `covering` + `complete` emit every overlapping cell, empty ones included;
+  `covering` + `sparse` drops the cells whose chip holds no valid pixel.
+
+Per grid the table has the raster and resolution it runs on: H3 and quadbin on a 4326 raster over London, BNG on a
+1 km-misaligned EPSG:27700 window (the buffer-before-polyfill trap: boundary cells whose centre is outside the window),
+and the custom grid on a CRS-less raster with bounds 0..200. The raster is run valid and as all NoData.
+The footprint helpers, chip windows, NoData and alpha handling are in the other tessellate test files.
 """
 
 import h3
+import numpy as np
 import pytest
-from rasterio.features import geometry_mask
-from shapely.geometry import Polygon
+import rasterio
+from rasterio.io import MemoryFile
+from shapely.geometry import box
 
+from databricks.labs.gbx.pygx import _bng
 from databricks.labs.gbx.pyrx import _serde
-from databricks.labs.gbx.pyrx.core import tessellate
-from databricks.labs.gbx.rasterx import functions as rx
+from databricks.labs.gbx.pyrx.core import tessellate as T
 
-from .conftest import make_geotiff_bytes
+from . import _grid_defs as gd
+from ._grid_defs import CUSTOM_CONF, GRIDS
 
-# ---------------------------------------------------------------------------
-# Fixture helpers for Spark-based UDTF tests
-# ---------------------------------------------------------------------------
-
-
-def _h3_tile_df(spark):
-    """One-row DataFrame with an 8×8 EPSG:4326 materialized tile."""
-    from pyspark.sql import functions as f
-
-    raster = make_geotiff_bytes(width=8, height=8, epsg=4326)
-    df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+# grid -> (crs, bounds of the raster, pixels a side, resolution, step of the walk over the extent)
+ROWS = {
+    "h3": ("EPSG:4326", (-0.12, 51.20, 0.20, 51.52), 64, 7, 0.004),
+    "quadbin": ("EPSG:4326", (-0.12, 51.20, 0.20, 51.52), 64, 12, 0.02),
+    "bng": ("EPSG:27700", (529500, 179500, 531500, 181500), 32, 3, 400),
+    "custom": (None, (0, 0, 200, 200), 32, 1, 40),
+}
 
 
-def _bng_tile_df(spark):
-    """One-row DataFrame with a small EPSG:27700 (BNG) materialized tile."""
-    import numpy as np
-    from pyspark.sql import functions as f
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
-
-    data = np.arange(16 * 16, dtype="float32").reshape(16, 16)
-    profile = dict(
-        driver="GTiff",
-        width=16,
-        height=16,
-        count=1,
-        dtype="float32",
-        crs="EPSG:27700",
-        transform=from_origin(530000, 180016, 1, 1),
-        nodata=-9999.0,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data, 1)
-        raster = mf.read()
-    df = spark.createDataFrame([(raster,)], ["raster"])
-    return df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+def _gtiff(crs, bounds, size, empty):
+    holes = [(1, r, c) for r in range(size) for c in range(size)] if empty else []
+    return gd.gtiff(crs, bounds, size, holes=holes)
 
 
-def _src_bounds():
-    # make_geotiff_bytes origin (10.0, 50.0), 0.5 deg pixels.
-    with _serde.open_tile(make_geotiff_bytes(width=8, height=8, epsg=4326)) as ds:
-        return ds.bounds
+def _overlapping_cells(grid):
+    _, bounds, _, res, step = ROWS[grid]
+    return gd.overlapping_cells(grid, res, bounds, step)
 
 
-def test_tessellate_returns_nonempty_array():
-    with _serde.open_tile(make_geotiff_bytes(width=8, height=8, epsg=4326)) as ds:
-        tiles = tessellate.tessellate_h3(ds, 4)
-    assert len(tiles) > 0
-    # each entry is (cellid_int, raster_bytes)
-    for cellid, raster in tiles:
-        assert isinstance(cellid, int)
-        assert isinstance(raster, (bytes, bytearray))
+def _pixel_cells(grid, data, bounds):
+    return {
+        c: sum(v)
+        for c, v in gd.pixel_values_by_cell(grid, ROWS[grid][3], data, bounds).items()
+    }
 
 
-def test_tessellate_cellids_are_valid_h3():
-    with _serde.open_tile(make_geotiff_bytes(width=8, height=8, epsg=4326)) as ds:
-        tiles = tessellate.tessellate_h3(ds, 4)
-    for cellid, _ in tiles:
-        assert h3.is_valid_cell(h3.int_to_str(cellid))
+def _run(grid, mode, coverage, empty):
+    crs, bounds, size, res, _ = ROWS[grid]
+    raw = _gtiff(crs, bounds, size, empty)
+    kwargs = {"conf": CUSTOM_CONF} if grid == "custom" else {}
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        data = ds.read()
+        chips = list(
+            T.iter_tessellate(ds, res, grid, mode=mode, coverage=coverage, **kwargs)
+        )
+    return data, chips
 
 
-def test_tessellate_clipped_tiles_within_source_extent():
-    src = _src_bounds()
-    with _serde.open_tile(make_geotiff_bytes(width=8, height=8, epsg=4326)) as ds:
-        tiles = tessellate.tessellate_h3(ds, 4)
-    assert tiles
-    for _, raster in tiles:
-        with _serde.open_tile(raster) as o:
-            b = o.bounds
-            # clipped tile must lie (approximately) within the source extent
-            assert b.left >= src.left - 1e-6
-            assert b.right <= src.right + 1e-6
-            assert b.bottom >= src.bottom - 1e-6
-            assert b.top <= src.top + 1e-6
+def _chip_sum_and_count(raster):
+    with _serde.open_tile(raster) as chip:
+        band = chip.read(1, masked=True)
+        return (float(band.sum()) if band.count() else 0.0), int(band.count()), chip
 
 
-def test_tessellate_resolution_out_of_range_raises():
-    with _serde.open_tile(make_geotiff_bytes(width=8, height=8, epsg=4326)) as ds:
-        with pytest.raises(ValueError):
-            tessellate.tessellate_h3(ds, 16)
-        with pytest.raises(ValueError):
-            tessellate.tessellate_h3(ds, -1)
+@pytest.mark.parametrize("empty", [False, True], ids=["valid", "all_nodata"])
+@pytest.mark.parametrize("coverage", ["sparse", "complete"])
+@pytest.mark.parametrize("grid", GRIDS)
+def test_centroid_assigns_each_valid_pixel_to_the_cell_its_centre_is_in(
+    grid, coverage, empty
+):
+    data, chips = _run(grid, "centroid", coverage, empty)
+    ids = [c for c, _ in chips]
+    assert len(ids) == len(set(ids))
+    want = _pixel_cells(grid, data, ROWS[grid][1])
+    got = {c: _chip_sum_and_count(r)[0] for c, r in chips}
+    if coverage == "sparse":
+        assert set(got) == set(want)
+    else:
+        assert set(got) == set(want) | _overlapping_cells(grid)
+    for cell, total in got.items():
+        assert total == pytest.approx(want.get(cell, 0.0)), cell
 
 
-def _cell_covers_any_pixel(ds, cellid):
-    """True iff the H3 cell hexagon covers >=1 source pixel (all-touched)."""
-    u = cellid + 2**64 if cellid < 0 else cellid
-    boundary = h3.cell_to_boundary(h3.int_to_str(u))  # (lat, lng)
-    poly = Polygon([(lng, lat) for lat, lng in boundary])
-    cover = geometry_mask(
-        [poly],
-        out_shape=(ds.height, ds.width),
-        transform=ds.transform,
-        invert=True,
-        all_touched=True,
-    )
-    return bool(cover.any())
-
-
-def test_tessellate_drops_zero_coverage_fringe_cells():
-    # polygon_to_cells_experimental(contain="overlap") returns exactly the cells
-    # whose hexagon intersects the bbox, so no zero-coverage fringe cells can
-    # appear.  This test confirms that invariant holds end-to-end.
-    src = make_geotiff_bytes(width=4, height=4, epsg=4326)
-    with _serde.open_tile(src) as ds:
-        tiles = tessellate.tessellate_h3(ds, 3)
-        # Every returned cell must genuinely cover at least one source pixel.
-        zero = [cid for cid, _ in tiles if not _cell_covers_any_pixel(ds, cid)]
-    assert not zero, f"tessellate returned zero-coverage fringe cells: {zero}"
-
-
-def _raster_with_interior_hole(nodata=-9999.0):
-    """9x9 EPSG:4326 raster, all pixels = 42.0 except a 3x3 interior NoData block."""
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
-
-    data = np.full((9, 9), 42.0, dtype="float32")
-    data[3:6, 3:6] = nodata
-    profile = dict(
-        driver="GTiff",
-        width=9,
-        height=9,
-        count=1,
-        dtype="float32",
-        crs="EPSG:4326",
-        transform=from_origin(10.0, 50.0, 0.05, 0.05),
-        nodata=nodata,
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data, 1)
-        return mf.read()
-
-
-def test_covering_emits_all_nodata_cells_that_reduce_to_null():
-    # Contract (issue #59, emit + NULL): covering mode emits a chip for every
-    # overlapping cell, INCLUDING cells that clip to entirely NoData; reducing
-    # such a chip yields None (SQL NULL), never NaN. Data-bearing cells keep a
-    # real value. A cell is dropped only on true geometric non-overlap.
-    from databricks.labs.gbx.pyrx.core import accessors
-
-    src = _raster_with_interior_hole()
-    empty_seen = data_seen = 0
-    with _serde.open_tile(src) as ds:
-        chips = tessellate.tessellate_h3(ds, 7)
-    assert chips, "covering must emit at least one chip"
-    for _cellid, raster in chips:
-        with _serde.open_tile(raster) as chip:
-            pc = accessors.pixelcount(chip)[0]
-            mx = accessors.maximum(chip)[0]
-        if pc == 0:
-            empty_seen += 1
-            assert mx is None, f"all-nodata chip must reduce to None, got {mx!r}"
+@pytest.mark.parametrize("empty", [False, True], ids=["valid", "all_nodata"])
+@pytest.mark.parametrize("coverage", [None, "complete", "sparse"])
+@pytest.mark.parametrize("grid", GRIDS)
+def test_covering_emits_every_cell_with_positive_overlap(grid, coverage, empty):
+    data, chips = _run(grid, "covering", coverage, empty)
+    ids = [c for c, _ in chips]
+    assert len(ids) == len(set(ids))
+    overlapping = _overlapping_cells(grid)
+    if coverage == "sparse":
+        # a cell is dropped when its chip has no valid pixel; with data every overlapping cell holds one
+        assert set(ids) == (set() if empty else overlapping)
+    else:
+        assert (
+            set(ids) == overlapping
+        ), f"missing {sorted(overlapping - set(ids))[:3]}, extra {sorted(set(ids) - overlapping)[:3]}"
+    extent = box(*ROWS[grid][1])
+    for cell, raster in chips:
+        total, valid, chip = _chip_sum_and_count(raster)
+        assert chip.width > 0 and chip.height > 0
+        assert valid == 0 if empty else (valid > 0 or coverage != "sparse")
+        # a chip lies within the raster extent, and within its cell's square or hexagon
+        assert (
+            box(*chip.bounds)
+            .difference(extent.buffer(1e-6 * max(extent.bounds[2:])))
+            .area
+            == 0
+        )
+        if grid == "bng":
+            assert _bng.format(_bng.parse(cell)) == cell
         else:
-            data_seen += 1
-            assert mx is not None and mx == 42.0
-    # The hole must actually produce >=1 all-nodata cell, else the test proves nothing.
-    assert empty_seen > 0, "interior hole should yield >=1 all-nodata covering cell"
-    assert data_seen > 0
+            assert isinstance(cell, int)
+    if grid == "h3":
+        assert all(h3.is_valid_cell(h3.int_to_str(c)) for c in ids)
 
 
-def test_tessellate_reprojects_cell_for_non_4326_raster():
-    # a UTM raster (EPSG:32633) should still tessellate by reprojecting the
-    # cell polygons from 4326 into the raster CRS.
-    import numpy as np
-    from rasterio.io import MemoryFile
-    from rasterio.transform import from_origin
+def test_a_cell_that_touches_the_grid_aligned_extent_only_on_its_edge_is_not_emitted():
+    # 2 km x 2 km window on the 1 km grid: four whole cells; the cell west of it shares only the line x = 529000
+    res = _bng.get_resolution("1km")
+    raw = _gtiff("EPSG:27700", (529000, 179000, 531000, 181000), 32, False)
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        ids = {c for c, _ in T.iter_tessellate(ds, "1km", "bng", mode="covering")}
+    west = _bng.format(_bng.point_to_cell_id(528500, 179500, res))
+    assert len(ids) == 4 and west not in ids
 
-    data = np.arange(16 * 16, dtype="float32").reshape(16, 16)
-    profile = dict(
+
+def test_a_4326_raster_over_great_britain_is_warped_to_27700_for_the_bng_grid():
+    raw = _gtiff("EPSG:4326", (-0.12, 51.36, 0.20, 51.52), 64, False)
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        chips = list(T.iter_tessellate(ds, "1km", "bng", mode="centroid"))
+    assert chips
+    for cell, raster in chips:
+        with _serde.open_tile(raster) as chip:
+            assert chip.crs.to_epsg() == 27700
+            assert chip.count == 1 and _bng.format(_bng.parse(cell)) == cell
+
+
+@pytest.mark.parametrize("grid", GRIDS)
+def test_a_mode_that_is_not_covering_or_centroid_raises(grid):
+    crs, bounds, size, res, _ = ROWS[grid]
+    kwargs = {"conf": CUSTOM_CONF} if grid == "custom" else {}
+    with MemoryFile(_gtiff(crs, bounds, size, False)) as mf, mf.open() as ds:
+        with pytest.raises(
+            ValueError, match="mode must be one of covering, centroid; got 'bad'"
+        ):
+            list(T.iter_tessellate(ds, res, grid, mode="bad", **kwargs))
+        with pytest.raises(
+            ValueError, match="coverage must be one of sparse, complete; got 'bad'"
+        ):
+            list(
+                T.iter_tessellate(
+                    ds, res, grid, mode="centroid", coverage="bad", **kwargs
+                )
+            )
+
+
+def test_a_grid_that_is_not_h3_quadbin_bng_or_custom_raises():
+    with MemoryFile(_gtiff(*ROWS["h3"][:3], False)) as mf, mf.open() as ds:
+        with pytest.raises(ValueError, match="grid must be one of"):
+            list(T.iter_tessellate(ds, 9, "xyz"))
+
+
+@pytest.mark.parametrize("res", [-1, 16])
+def test_an_h3_resolution_outside_0_to_15_raises(res):
+    with MemoryFile(_gtiff(*ROWS["h3"][:3], False)) as mf, mf.open() as ds:
+        with pytest.raises(ValueError):
+            T.tessellate_h3(ds, res)
+
+
+def test_covering_chips_of_a_source_without_nodata_mark_the_fill_as_nodata():
+    """Covering chips of a source without NoData carry the dtype fallback (65535).
+
+    The clip fill outside each hexagon is then NoData, not valid zero pixels: every
+    valid chip pixel is a source pixel with the source's value, and the source's
+    real zero rows stay valid.
+    """
+    size = 64
+    data = (np.arange(size * size, dtype="uint32") % 4000 + 1).astype("uint16")
+    data = data.reshape(size, size)
+    data[:4, :] = 0
+    prof = dict(
         driver="GTiff",
-        width=16,
-        height=16,
+        height=size,
+        width=size,
         count=1,
-        dtype="float32",
-        crs="EPSG:32633",
-        transform=from_origin(500000, 5400000, 1000, 1000),
-        nodata=-9999.0,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(-0.1, 51.5, 0.002, 0.002),
     )
     with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
+        with mf.open(**prof) as dst:
             dst.write(data, 1)
-        src = mf.read()
-    with _serde.open_tile(src) as ds:
-        tiles = tessellate.tessellate_h3(ds, 6)
-    assert len(tiles) > 0
-    for cellid, raster in tiles:
-        assert h3.is_valid_cell(h3.int_to_str(cellid))
-        with _serde.open_tile(raster) as o:
-            assert o.crs.to_epsg() == 32633
+        with mf.open() as ds:
+            inv = ~ds.transform
+            chips = list(
+                T.iter_tessellate(ds, 7, "h3", mode="covering", coverage="complete")
+            )
+    assert len(chips) > 1
+    filled = zeros = 0
+    for _, chip in chips:
+        with _serde.open_tile(chip) as c:
+            assert c.nodata == 65535.0
+            valid = c.read_masks(1) != 0
+            filled += int((~valid).sum())
+            rows, cols = np.nonzero(valid)
+            xs, ys = c.transform * (cols + 0.5, rows + 0.5)
+            sc, sr = inv * (xs, ys)
+            sr, sc = np.floor(sr).astype(int), np.floor(sc).astype(int)
+            assert ((sr >= 0) & (sr < size) & (sc >= 0) & (sc < size)).all()
+            values = c.read(1)[rows, cols]
+            assert (values == data[sr, sc]).all(), "a fill pixel reads as valid data"
+            zeros += int((values == 0).sum())
+    assert filled > 0, "fixture must clip some pixels outside a hexagon"
+    assert zeros >= 4 * size, "the real zero rows must stay valid"
 
 
-# ---------------------------------------------------------------------------
-# FILE-aware UDTF guard tests: file_ref=NULL (FILE unavailable on local[2]).
-# Confirms that the new file_ref eval parameter is a transparent FUSE fallback
-# — output is unchanged vs. pre-refactor when FILE is not available.
-# The FILE stream fast path is exercised on-cluster.
-# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("mode", [None, "covering", "centroid"])
+@pytest.mark.parametrize("grid", ["h3", "quadbin", "bng"])
+def test_the_per_grid_iterator_is_the_generic_one_with_its_grid_and_covering_by_default(
+    grid, mode
+):
+    crs, bounds, size, res, _ = ROWS[grid]
+    wrapper = getattr(T, f"iter_tessellate_{grid}")
+    kwargs = {} if mode is None else {"mode": mode}
+    with MemoryFile(_gtiff(crs, bounds, size, False)) as mf, mf.open() as ds:
+        got = list(wrapper(ds, res, **kwargs))
+        want = list(T.iter_tessellate(ds, res, grid, mode=mode or "covering"))
+    assert got == want and got
 
 
-def test_rst_h3_tessellate_file_unavailable_unchanged(spark):
-    """H3 tessellate UDTF: file_ref=NULL → same non-zero chip count as before."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    df = _h3_tile_df(spark)
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df.createOrReplaceTempView("_t7_h3tess")
-    n = spark.sql(
-        "SELECT count(*) AS n FROM _t7_h3tess, "
-        "LATERAL gbx_rst_h3_tessellate(tile, 4) t"
-    ).first()["n"]
-    assert n > 0
+def test_tessellate_h3_lists_the_covering_chips():
+    crs, bounds, size, res, _ = ROWS["h3"]
+    with MemoryFile(_gtiff(crs, bounds, size, False)) as mf, mf.open() as ds:
+        got = T.tessellate_h3(ds, res)
+        want = list(T.iter_tessellate(ds, res, "h3", mode="covering"))
+    assert isinstance(got, list) and got == want and got
 
 
-def test_rst_quadbin_tessellate_file_unavailable_unchanged(spark):
-    """Quadbin tessellate UDTF: file_ref=NULL → same non-zero chip count."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    df = _h3_tile_df(spark)
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df.createOrReplaceTempView("_t7_qbtess")
-    n = spark.sql(
-        "SELECT count(*) AS n FROM _t7_qbtess, "
-        "LATERAL gbx_rst_quadbin_tessellate(tile, 12) t"
-    ).first()["n"]
-    assert n > 0
-
-
-def test_rst_bng_tessellate_file_unavailable_unchanged(spark):
-    """BNG tessellate UDTF: file_ref=NULL → same non-zero chip count."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    df = _bng_tile_df(spark)
-    gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    df.createOrReplaceTempView("_t7_bngtess")
-    n = spark.sql(
-        "SELECT count(*) AS n FROM _t7_bngtess, "
-        "LATERAL gbx_rst_bng_tessellate(tile, 6) t"
-    ).first()["n"]
-    assert n > 0
+@pytest.mark.parametrize("res", [3, "1km"])
+def test_the_bng_iterator_takes_an_index_or_a_name_for_the_resolution(res):
+    crs, bounds, size, _, _ = ROWS["bng"]
+    with MemoryFile(_gtiff(crs, bounds, size, False)) as mf, mf.open() as ds:
+        ids = {c for c, _ in T.iter_tessellate_bng(ds, res)}
+    assert ids == _overlapping_cells("bng")

@@ -266,6 +266,12 @@ def test_reproject_identity_returns_the_source_and_a_codeless_crs_still_warps(tm
 # ---------------------------------------------------------------------------
 # Spark Column API on a v2-schema DataFrame
 # ---------------------------------------------------------------------------
+def _slope_array_from_row(row):
+    """Open a (v1 or v2) tile row and return band-1 slope array."""
+    with ot._open(row) as ds:
+        return ds.read(1)
+
+
 def _v2_df(spark, tmp_path):
     from pyspark.sql.types import StructField, StructType
 

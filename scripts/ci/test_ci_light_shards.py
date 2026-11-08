@@ -99,22 +99,14 @@ def _all_light_files():
 
 
 def _oracle_tables():
-    """Every oracle table test_family_cross_tier.py runs: stable functions whose table has no cross-tier file of its own."""
-    own = ast.literal_eval(
-        next(
-            n.value
-            for n in ast.parse((PKG / FAMILY).read_text()).body
-            if isinstance(n, ast.Assign)
-            and any(getattr(t, "id", "") == "_OWN_FILES" for t in n.targets)
-        )
-    )
+    """Every oracle table test_family_cross_tier.py runs: the table of every stable function."""
     sys.path.insert(0, str(PKG / "src"))
     from databricks.labs.gbx import manifest
 
     tables = {
         f.oracle
         for f in manifest.load().functions.values()
-        if f.status == "stable" and f.oracle not in own
+        if f.status == "stable"
     }
     # the helpers table has rows of rasterx.helpers and no manifest function
     return tables | {"MVP_H"}

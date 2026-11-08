@@ -76,9 +76,11 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # default, unmeasured). Neither keeps a JVM level.
     "gbx_rst_rasterize": ("L3",),
     "gbx_rst_dtmfromgeoms": ("L3",),
-    # The GDAL spec engine's rows: each level runs the engine where it can, its own implementation elsewhere.
-    "gbx_rst_slope": ("L1", "L3"),
-    "gbx_rst_mapalgebra": ("L1", "L3"),
+    # The GDAL spec engine's rows. Slope and mapalgebra are light: the engine's Catalyst level (L1) took 6.19 s against
+    # the light engine's 5.90 s (slope) and 15.17 s against 13.16 s (mapalgebra) at 16x tiles (dedicated, DBR 19), nowhere
+    # near the 1.2x line, so neither is served by the JVM. Their light level is the engine alone (no numpy form).
+    "gbx_rst_slope": ("L3",),
+    "gbx_rst_mapalgebra": ("L3",),
     # The file functions: color_relief has only a pure-core timing (default, unmeasured: highest available).
     # cog_convert (its JVM level measured 1.25x and 1.46x slower than light at 4x and 16x rows, so it has none),
     # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (light measured
@@ -183,6 +185,16 @@ NAMES = {
 # engine's row-wise UDF alone ("engine-c0") or its batch UDF behind the wrapper ("engine-c1", the default).
 ENGINE = "engine"
 ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
+# The light form each engine row measured fastest, where it is not the default (the batch form behind the wrapper).
+# Mapalgebra: the row-wise form took 13.16 s against 13.48 s for the batch form at 16x tiles (dedicated, DBR 19).
+# Slope (5.90 s batch against 6.07 s row-wise) and transformcrs (75.6 s batch against 104.0 s row-wise at 4x) take the
+# default.
+ENGINE_L3_FORM: Dict[str, str] = {"gbx_rst_mapalgebra": "engine-c0"}
+
+
+def engine_form(fn) -> str:
+    """The variant of the engine's light level that serves `fn` when no form is forced."""
+    return ENGINE_L3_FORM.get(fn.sql_name, ENGINE)
 
 
 class NoLevelAvailable(RuntimeError):
@@ -255,6 +267,18 @@ def no_sql_functions(fn) -> str:
     return f"{fn.sql_name} needs a SQL function wrapper, and SQL functions are unavailable here"
 
 
+# An L3 spec with one of these keys has a light form of its own; without one the engine is its only light form.
+_L3_OTHER_FORMS = frozenset({"variants", "factory", "callable", "udtf", "file_ref"})
+
+
+def engine_only(fn, level: str) -> bool:
+    """True when the GDAL spec engine is the only form `fn` has at the light level."""
+    spec = fn.levels.get(level) or {}
+    return (
+        level == "L3" and bool(spec.get("engine")) and not (_L3_OTHER_FORMS & set(spec))
+    )
+
+
 def available(fn, level: str, caps: Capabilities) -> Optional[str]:
     """None when `level` can serve `fn` with its full session signature here; else the reason."""
     spec = fn.levels.get(level)
@@ -280,6 +304,10 @@ def available(fn, level: str, caps: Capabilities) -> Optional[str]:
     if level == "L0":  # a temporary SQL function: nothing to import, no JVM
         return None if caps.sql_functions else no_sql_functions(fn)
     if level == "L3":
+        if engine_only(fn, level):
+            return engine_unavailable(
+                fn, level, caps
+            )  # the engine is this row's only light form
         missing = [
             m for m in spec.get("needs", ()) if importlib.util.find_spec(m) is None
         ]
@@ -308,6 +336,14 @@ def select(
     ``fn`` has a row there; unlike ``override`` it is not forced, so an unavailable level falls back to the next.
     """
     if override is not None:
+        if override == ("L3", "-") and engine_only(fn, "L3"):
+            # a pin to the light level of a row whose only light form is the engine: that form, or why not
+            why = engine_unavailable(fn, "L3", caps)
+            if why:
+                raise NoLevelAvailable(
+                    fn.sql_name, (f"geobrix: {NAMES['L3']} unavailable: {why}",)
+                )
+            return Choice("L3", ENGINE, ())
         return Choice(override[0], override[1], ())
     order_ = order(fn)
     if prefer in fn.levels:

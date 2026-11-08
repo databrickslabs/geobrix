@@ -136,7 +136,10 @@ def register_l3(spark, fn, variant: str, name: Optional[str] = None) -> None:
             )
         reg.udtf.register(name, table_fn)
     else:
-        raise ValueError(f"{fn.sql_name}: unknown L3 registration")
+        raise ValueError(
+            f"{fn.sql_name}: its light level is the GDAL spec engine alone, which this process cannot run "
+            "(register it at L3 through the engine, or install the geobrix env wheel)"
+        )
     if target != name:
         from databricks.labs.gbx.manager import jvm, sqlwrap
 
@@ -207,12 +210,13 @@ def register_l3_engine(
 
     ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
     behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
-    default anywhere else, Spark Connect included): the row-wise UDF alone.
+    default anywhere else, Spark Connect included): the row-wise UDF alone. The default is the form the row
+    measured fastest (``levels.engine_form``).
     """
     from databricks.labs.gbx import _gdal_policy
     from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.engine import l3 as engine_l3
-    from databricks.labs.gbx.manager import capabilities, jvm, sqlwrap
+    from databricks.labs.gbx.manager import capabilities, jvm, levels, sqlwrap
 
     reg = _gdal_policy.carrying_session(spark)  # its UDFs carry the driver's switch
     grid = _factory_args("proj_grid_dirs")[0]
@@ -220,6 +224,8 @@ def register_l3_engine(
         spark
     )  # the connect-aware read cap, which a worker cannot measure itself
     name = name or fn.sql_name
+    if form == levels.ENGINE:
+        form = levels.engine_form(fn)
     wrapped = form == "engine-c1" or (
         form == "engine"
         and not capabilities.is_connect(spark)

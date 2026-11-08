@@ -10,12 +10,12 @@ def _exists(spark, name):
 def test_only_subset_registers_just_those(spark):
     from databricks.labs.gbx import manager as gbx_manager
 
-    for n in ("gbx_rst_slope", "gbx_rst_clip"):
+    for n in ("gbx_rst_aspect", "gbx_rst_clip"):
         spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {n}")
     gbx_manager.register_family(
-        spark, ("gbx_rst_", "gbx_pmtiles_"), only=["rst_slope"], level="L3"
+        spark, ("gbx_rst_", "gbx_pmtiles_"), only=["rst_aspect"], level="L3"
     )
-    assert _exists(spark, "gbx_rst_slope")
+    assert _exists(spark, "gbx_rst_aspect")
     assert not _exists(spark, "gbx_rst_clip")
 
 
@@ -63,5 +63,5 @@ def test_only_none_registers_full_set(spark):
     from databricks.labs.gbx import manager as gbx_manager
 
     gbx_manager.register_family(spark, ("gbx_rst_", "gbx_pmtiles_"), level="L3")
-    for n in ("gbx_rst_width", "gbx_rst_slope", "gbx_rst_retile", "gbx_pmtiles_agg"):
+    for n in ("gbx_rst_width", "gbx_rst_aspect", "gbx_rst_retile", "gbx_pmtiles_agg"):
         assert _exists(spark, n)

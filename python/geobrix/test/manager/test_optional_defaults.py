@@ -7,6 +7,7 @@ import pytest
 from databricks.labs.gbx import manifest, register
 from databricks.labs.gbx.bench import oracles
 from databricks.labs.gbx.engine import run
+from databricks.labs.gbx.manager import levels
 from databricks.labs.gbx.manifest import sql_type
 
 MAN = manifest.load()
@@ -16,9 +17,11 @@ WITH_OPTIONALS = sorted(
 
 
 def _forms(fn):
-    """The L3 forms a session can land on: the light kernel alone, and the GDAL engine's two UDFs."""
-    forms = [("L3", "-")]
-    if manifest.load().functions[fn].gdal is not None:
+    """The L3 forms a session can land on: the light kernel, and the GDAL engine's two UDFs (a row whose only light
+    form is the engine has no light kernel)."""
+    row = manifest.load().functions[fn]
+    forms = [] if levels.engine_only(row, "L3") else [("L3", "-")]
+    if row.gdal is not None:
         forms += [("L3", "engine-c0"), ("L3", "engine-c1")]
     return forms
 
@@ -50,9 +53,12 @@ def test_a_row_is_callable_with_its_required_arguments_only(
     _required_args_only(spark, MAN.functions[sql_name]).collect()
 
 
-def test_slope_with_only_a_tile_runs_without_the_engine(spark, tmp_path):
+@pytest.mark.parametrize("variant", ["engine-c0", "engine-c1"])
+def test_slope_with_only_a_tile_runs_on_the_engine(spark, tmp_path, variant):
     """The reported defect: `SELECT gbx_rst_slope(tile)` raised TypeError (unit, xscale, yscale missing)."""
-    register(spark, only=["gbx_rst_slope"], _levels={"gbx_rst_slope": ("L3", "-")})
+    if run.unavailable_reason():
+        pytest.skip(run.unavailable_reason())
+    register(spark, only=["gbx_rst_slope"], _levels={"gbx_rst_slope": ("L3", variant)})
     tile = oracles._build("dem_3857", str(tmp_path))
     spark.createDataFrame(
         [(tile,)], f"tile {manifest.TILE_SQL}"

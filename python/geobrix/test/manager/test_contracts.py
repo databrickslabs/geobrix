@@ -238,12 +238,11 @@ def test_level_selection_contract(fn, case, monkeypatch):
     if name == "family-l3":
         monkeypatch.delitem(levels.PREFERENCE, fn.sql_name, raising=False)
         monkeypatch.setitem(levels.FAMILY_PREFERENCE, fn.family, ("L3",))
-    if (
-        name == "dedicated"
-    ):  # an env wheel: this process runs the light engine the L1 engine sends virtual tiles to
-        from databricks.labs.gbx.engine import run
+    # an env wheel: this process runs the light engine (the L1 engine sends virtual tiles to it, and a row whose only
+    # light form is the engine needs it at L3). Where it cannot run is its own test.
+    from databricks.labs.gbx.engine import run
 
-        monkeypatch.setattr(run, "unavailable_reason", lambda: None)
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)
     choice = levels.select(fn, _caps(**kw))
     pref = [lv for lv in levels.order(fn) if lv in fn.levels]
     if name == "family-l3":
@@ -346,13 +345,15 @@ def test_a_function_whose_jvm_level_was_removed_has_only_light(name):
     assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
 
 
-def test_the_array_family_keeps_the_unmeasured_and_the_engine_rows_as_they_were():
+def test_the_array_family_keeps_the_unmeasured_rows_as_they_were_and_the_engine_rows_are_light():
     # unmeasured: the family order, JVM first with the JAR
     fb = MAN.functions["gbx_rst_frombands"]
     assert "L1" in fb.levels and levels.order(fb) == ("L1", "L3")
     assert levels.select(fb, _caps(jar=OK_JAR)).level == "L1"
     assert levels.order(MAN.functions["gbx_rst_merge"]) == ("L3",)
-    assert levels.order(MAN.functions["gbx_rst_mapalgebra"]) == ("L1", "L3")
+    # the engine's Catalyst level measured 1.0x to 1.15x of the light engine at 16x tiles: light only
+    assert levels.order(MAN.functions["gbx_rst_mapalgebra"]) == ("L3",)
+    assert levels.order(MAN.functions["gbx_rst_slope"]) == ("L3",)
 
 
 # A value of one of these types cannot sit under `explode` or `inline`, where a SQL dispatch wrapper is refused.
@@ -424,7 +425,10 @@ def test_no_array_map_or_struct_function_of_the_accessors_and_statistics_is_jvm_
 @pytest.mark.parametrize(
     "fn", [f for f in FNS if "L1" in f.levels], ids=lambda f: f.sql_name
 )
-def test_override_is_honoured(fn):
+def test_override_is_honoured(fn, monkeypatch):
+    from databricks.labs.gbx.engine import run
+
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)  # the env wheel
     assert levels.select(fn, _caps()).level != "L1"  # no JAR: the default is light
     assert levels.select(fn, _caps(), override=("L1", "-")).level == "L1"
 
@@ -457,32 +461,44 @@ class _Session:
 
 
 @pytest.mark.parametrize(
-    "engine,connect,want",
+    "sql_name,connect,want",
     [
-        (True, True, "engine-c0"),  # Connect: the row-wise UDF alone
+        ("gbx_rst_slope", True, "engine-c0"),  # Connect: the row-wise UDF alone
         (
-            True,
+            "gbx_rst_slope",
             False,
             "engine-c1",
         ),  # classic with SQL functions: the batch UDF behind the wrapper
-        (False, True, "fallback"),  # no engine here: the light kernel, and why
+        (
+            "gbx_rst_transformcrs",
+            False,
+            "engine-c1",
+        ),  # measured: the batch form
+        (
+            "gbx_rst_mapalgebra",
+            False,
+            "engine-c0",
+        ),  # measured: the row-wise form, though SQL functions work
     ],
-    ids=["engine-connect", "engine-classic", "no-engine"],
+    ids=[
+        "slope-connect",
+        "slope-classic",
+        "transformcrs-classic",
+        "mapalgebra-classic",
+    ],
 )
-def test_an_unforced_engine_row_installs_the_engine_or_says_why_not(
-    monkeypatch, capsys, engine, connect, want
+def test_an_unforced_engine_row_installs_the_form_it_measured_fastest(
+    monkeypatch, sql_name, connect, want
 ):
-    """The default (not forced) light install of a row with a ``gdal`` block: the engine where it runs, as c0 on
-    Connect and as c1 on a classic session; else the light kernel, with the reason said once.
+    """The default (not forced) light install of a row whose only light form is the engine: c0 on Connect, else
+    the form the level table records for the row (c1 behind the wrapper by default, c0 for map algebra).
     """
     from databricks.labs.gbx import manager
     from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.manager import jvm
 
-    fn = MAN.functions["gbx_rst_slope"]
-    monkeypatch.setattr(
-        levels, "engine_unavailable", lambda f, lv, c: None if engine else "no payload"
-    )
+    fn = MAN.functions[sql_name]
+    monkeypatch.setattr(levels, "engine_unavailable", lambda f, lv, c: None)
     monkeypatch.setattr(caps_mod, "is_connect", lambda s: connect)
     monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
     monkeypatch.setattr(file_gbx, "report_detected_cap", lambda s=None: 1 << 26)
@@ -492,22 +508,34 @@ def test_an_unforced_engine_row_installs_the_engine_or_says_why_not(
         spark, fn, levels.Choice("L3", "-", ()), _caps(), forced=False, lines=lines
     )
     said = "\n".join(line for _, line in lines)
-    if want == "fallback":
-        assert choice.variant not in levels.ENGINE_L3
-        assert spark.registered == [
-            "gbx__l3d_rst_slope"
-        ]  # the light kernel, behind the wrapper that carries the defaults
-        assert (
-            f"{fn.sql_name} runs without the GDAL spec engine at light (no payload)"
-            in said
-        )
-        return
     assert choice.variant == want and "runs without" not in said
     if want == "engine-c0":
         assert spark.registered == [fn.sql_name]
     else:
         assert spark.registered == [jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")]
         assert any(fn.sql_name in s for s in spark.statements), spark.statements
+
+
+@pytest.mark.parametrize(
+    "sql_name", ["gbx_rst_slope", "gbx_rst_mapalgebra", "gbx_rst_transformcrs"]
+)
+def test_an_engine_only_light_level_says_why_when_the_engine_cannot_run(
+    monkeypatch, sql_name
+):
+    """These rows have no light form besides the engine: where it cannot run, the level is unavailable with the
+    engine's reason (selected, or pinned to L3), never a quiet fallback to another implementation.
+    """
+    from databricks.labs.gbx.engine import run
+
+    monkeypatch.setattr(run, "unavailable_reason", lambda: "no payload osgeo here")
+    fn = MAN.functions[sql_name]
+    assert levels.engine_only(fn, "L3")
+    with pytest.raises(levels.NoLevelAvailable, match="no payload osgeo here"):
+        levels.select(fn, _caps())
+    with pytest.raises(levels.NoLevelAvailable, match="no payload osgeo here"):
+        levels.select(fn, _caps(), override=("L3", "-"))
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)
+    assert levels.select(fn, _caps(), override=("L3", "-")).variant == levels.ENGINE
 
 
 def test_l1_engine_needs_the_light_engine_for_its_virtual_tiles(monkeypatch):
@@ -524,7 +552,9 @@ def test_l1_engine_needs_the_light_engine_for_its_virtual_tiles(monkeypatch):
     monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo here")
     why = levels.engine_unavailable(fn, "L1", dedicated)
     assert why and "no osgeo here" in why and "virtual" in why
-    assert levels.select(fn, dedicated).variant != levels.ENGINE
+    # transformcrs has no light form besides the engine, so with no engine here nothing serves it
+    with pytest.raises(levels.NoLevelAvailable, match="no osgeo here"):
+        levels.select(fn, dedicated)
 
 
 def test_the_l1_engine_keeps_l1_while_proj_grids_are_registered(tmp_path, monkeypatch):
@@ -695,8 +725,16 @@ def test_connect_session_never_touches_the_jvm(
     assert all(
         any(f"TEMPORARY FUNCTION {n}(" in t for t in stub.sql_text) for n in l0
     ), "an L0 name was reported without its SQL statement"
-    # every manifest name, and the light data sources
-    assert set(out) == set(MAN.functions)
+    # every manifest name, and the light data sources; a row whose only light form is the GDAL spec engine is
+    # reported unregistered where this process cannot run it
+    from databricks.labs.gbx.engine import run
+
+    no_engine = (
+        {n for n, f in MAN.functions.items() if levels.engine_only(f, "L3")}
+        if run.unavailable_reason()
+        else set()
+    )
+    assert set(out) == set(MAN.functions) - no_engine
     assert "raster_gbx" in stub.sources
     assert stub.touched == []  # _jvm/_jsc/sparkContext/conf.set never accessed
     printed = capsys.readouterr().out.splitlines()
@@ -1959,16 +1997,15 @@ def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):
     from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.manager import l3
 
-    fn = MAN.functions["gbx_rst_slope"]
-    l3_spec = dict(fn.levels["L3"], file_ref=fn.levels["L3"]["variants"]["c0"])
-    row = dataclasses.replace(fn, levels={**fn.levels, "L3": l3_spec})
+    fn = MAN.functions["gbx_rst_aspect"]
+    assert "file_ref" in fn.levels["L3"]
     monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
     monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
     spark = _Session()
-    l3.register_l3(spark, row, "c0")
-    assert spark.registered == ["gbx__l3f_rst_slope"]
+    l3.register_l3(spark, fn, "c0")
+    assert spark.registered == ["gbx__l3f_rst_aspect"]
     assert any(
-        "gbx__l3f_rst_slope(tile, NULL, " in s and s.startswith("CREATE")
+        "gbx__l3f_rst_aspect(tile, NULL, " in s and s.startswith("CREATE")
         for s in spark.statements
     ), spark.statements
 
@@ -2880,9 +2917,14 @@ def test_session_read_cap_falls_back_to_the_classic_budget_for_a_bad_value():
     assert session_read_cap(named) == 4096
 
 
-def test_transformcrs_is_light_on_a_dedicated_cluster_with_the_jvm_available():
+def test_transformcrs_is_light_on_a_dedicated_cluster_with_the_jvm_available(
+    monkeypatch,
+):
     """Light measured faster than the JVM level of `gbx_rst_transformcrs`, so its order omits L1 on purpose: a
     dedicated cluster with the JVM available still selects L3."""
+    from databricks.labs.gbx.engine import run
+
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)  # the env wheel
     fn = MAN.functions["gbx_rst_transformcrs"]
     assert levels.PREFERENCE["gbx_rst_transformcrs"] == ("L3",)
     dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)

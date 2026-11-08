@@ -8,6 +8,7 @@ run; without one, a temp view. The seeds are fixed, so a form sees the same rows
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import inspect
 import os
@@ -1922,6 +1923,51 @@ INPUTS["se_dem_1024_mem"] = _se_dems_replicated(1024)
 BASE_ROWS["se_dem_1024_mem"] = 16
 
 
+def _se_pairs_replicated(size: int):
+    """`size` px tile pairs, n rows: four distinct pairs built once on the client and replicated on the executors, then
+    cached like `_se_dems_replicated` (no client cap applies to n; `release_cached_inputs` frees the cache).
+    """
+
+    def build(spark, n, corpus, schema):
+        from pyspark.sql import functions as F
+
+        from databricks.labs.gbx.manifest import TILE_SQL
+
+        name = f"mvp_in_se_pair{size}_mem_v{RECIPE_VERSION}_{n}"
+        if schema is None and spark.catalog.tableExists(name):
+            return name
+        tiles = [_se_dem_tile(size, s) for s in range(4)]
+        four = client_dataframe(
+            spark,
+            [(i, [tiles[i], tiles[(i + 1) % 4]]) for i in range(4)],
+            f"idx int, tiles array<{TILE_SQL}>",
+            what=f"se_pair_{size} tile pairs",
+        )
+
+        def rows():
+            df = (
+                spark.range(n)
+                .select((F.col("id") % 4).cast("int").alias("idx"))
+                .join(F.broadcast(four), "idx")
+                .select("tiles")
+                .repartition(8)
+            )
+            if schema is None:
+                df = df.cache()
+                df.count()
+                _CACHED_INPUTS[name] = df
+            return df
+
+        return _table(spark, schema, name, rows)
+
+    return build
+
+
+# Map algebra over 512 px pairs replicated on the executors: 128 pairs at 1x, 512 at 4x, 2048 at 16x.
+INPUTS["se_pair_512_mem"] = _se_pairs_replicated(512)
+BASE_ROWS["se_pair_512_mem"] = 128
+
+
 def _se_floor_function():
     """The floor's spec: `raster select --band=1` on slope's signature (a bench spec, not a SQL function)."""
     import dataclasses
@@ -2023,12 +2069,11 @@ _SE_FLOOR_C1 = (
 _SE_TCRS = _SE_FP.format(call="{fn}(tile, 'EPSG:3857')")
 # The call is inserted as it is; the run formats the query with {src}, so the JSON braces are doubled once.
 _SE_MA_TODAY = _SE_FP.format(call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""")
-_SE_MA_ENGINE = _SE_FP.format(
-    call="""{fn}(tiles, '{{"calc": "norm_diff", "dialect": "builtin"}}')"""
-)
+# The engine evaluates GDAL's muparser grammar alone (no dialect key), the same expression today's form takes.
+_SE_MA_ENGINE = _SE_MA_TODAY
 
 
-def _se(fn, level, variant, inp, sql, *, setup="", register=True, **kw):
+def _se(fn, level, variant, inp, sql, *, setup="", register=True, vsql="", **kw):
     return Form(
         "SE",
         fn,
@@ -2038,6 +2083,7 @@ def _se(fn, level, variant, inp, sql, *, setup="", register=True, **kw):
         sql.replace("{fn}", fn),
         setup=("databricks.labs.gbx.bench.levels_forms:" + setup) if setup else "",
         register=register,
+        vsql=vsql.replace("{fn}", fn),
         **kw,
     )
 
@@ -2134,6 +2180,112 @@ FORMS["SE"] += [
         "floor-c0@mem",
         "se_dem_1024_mem",
         _SE_FLOOR_C0,
+        setup="setup_se_floor",
+        register=False,
+    ),
+]
+
+# The L1 viability pass (does the engine's JVM level beat its light level by 1.2x at 4x or 16x): each of the three spike
+# functions on one input that scales without the client cap, at the engine's L1, its light row-wise UDF (c0), its batch
+# UDF behind the wrapper (c1, recorded only), today's light implementation and a floor, every one with a value-level
+# fingerprint so the levels are compared by the pixels they return. Slope reads the replicated 1024 px tiles
+# (`@mem`), transformcrs the corpus tiles (`@mat`), map algebra the replicated 512 px pairs (`@mem`).
+_SE_VFP = (
+    "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {call} AS t FROM (SELECT * FROM {{src}} ORDER BY xxhash64({col}) LIMIT {k}))"
+)
+_SE_SLOPE_V = _SE_VFP.format(
+    call="{fn}(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))",
+    col="tile.raster",
+    k=8,
+)
+_SE_SLOPE_TODAY_V = _SE_VFP.format(
+    call="gbx_bench_slope_l3_today(tile, 'degrees', CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))",
+    col="tile.raster",
+    k=8,
+)
+_SE_TCRS_V = (
+    "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM "
+    "(SELECT * FROM {src} ORDER BY tile.path, xxhash64(tile.raster) LIMIT 64))"
+)
+_SE_MA_V = _SE_VFP.format(
+    call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""",
+    col="tiles[0].raster",
+    k=8,
+)
+_SE_MA_TODAY_V = _SE_VFP.format(
+    call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""",
+    col="tiles[0].raster",
+    k=8,
+)
+_SE_FLOOR_PAIR = _SE_FP.format(call="gbx_bench_floor_c0(tiles[0])")
+# The slope forms of the local pass carry the value fingerprint too.
+FORMS["SE"] = [
+    (
+        dataclasses.replace(f, vsql=_SE_SLOPE_V.replace("{fn}", f.fn))
+        if f.fn == _SL and f.variant in ("engine@mem", "engine-c0@mem", "engine-c1@mem")
+        else f
+    )
+    for f in FORMS["SE"]
+]
+FORMS["SE"] += [
+    _se(
+        _SL,
+        "L3",
+        "today@mem",
+        "se_dem_1024_mem",
+        _SE_SLOPE_L3_TODAY,
+        setup="setup_se_slope_light_today",
+        register=False,
+        vsql=_SE_SLOPE_TODAY_V,
+    ),
+    _se(
+        T,
+        "L1",
+        "engine@mat",
+        "tiles_mat",
+        _SE_TCRS,
+        computes=_DED,
+        vsql=_SE_TCRS_V,
+    ),
+    _se(T, "L3", "engine-c0@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V),
+    _se(T, "L3", "engine-c1@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V),
+    _se(T, "L3", "today@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V),
+    _se(
+        T,
+        "L3",
+        "floor-c0@mat",
+        "tiles_mat",
+        _SE_FLOOR_C0,
+        setup="setup_se_floor",
+        register=False,
+    ),
+    _se(
+        _MALG,
+        "L1",
+        "engine@mem",
+        "se_pair_512_mem",
+        _SE_MA_ENGINE,
+        computes=_DED,
+        vsql=_SE_MA_V,
+    ),
+    _se(_MALG, "L3", "engine-c0@mem", "se_pair_512_mem", _SE_MA_ENGINE, vsql=_SE_MA_V),
+    _se(_MALG, "L3", "engine-c1@mem", "se_pair_512_mem", _SE_MA_ENGINE, vsql=_SE_MA_V),
+    _se(
+        _MALG,
+        "L3",
+        "today@mem",
+        "se_pair_512_mem",
+        _SE_MA_TODAY,
+        vsql=_SE_MA_TODAY_V,
+    ),
+    _se(
+        _MALG,
+        "L3",
+        "floor-c0@mem",
+        "se_pair_512_mem",
+        _SE_FLOOR_PAIR,
         setup="setup_se_floor",
         register=False,
     ),

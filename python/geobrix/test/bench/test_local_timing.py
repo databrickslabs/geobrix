@@ -115,17 +115,20 @@ def test_every_form_of_the_se_set_exists_for_its_function():
     """A renamed variant would time nothing and still pass: each name of the set picks exactly one form."""
     from databricks.labs.gbx.bench import levels_forms as lf
 
-    spec = lt.SETS["SE"]
-    for variant in spec.forms:
-        picked = [f for f in lf.FORMS["SE"] if f.variant == variant and f.fn == spec.fn]
-        assert len(picked) == 1, variant
+    for name in ("SE", "SE-mapalgebra", "SE-transformcrs"):
+        spec = lt.SETS[name]
+        for variant in spec.forms:
+            picked = [
+                f for f in lf.FORMS["SE"] if f.variant == variant and f.fn == spec.fn
+            ]
+            assert len(picked) == 1, (name, variant)
 
 
 def test_only_the_known_sets_are_implemented(capsys):
     # the letter sets, and one set per multi-level function family of the manifest
-    assert {"IO", "S", "SE"} <= set(lt.SETS)
+    assert {"IO", "S", "SE", "SE-mapalgebra", "SE-transformcrs"} <= set(lt.SETS)
     # a second function of a family has a set of its own, named `<family>-<function>`
-    assert set(lt.SETS) - {"IO", "S", "SE"} - {
+    assert set(lt.SETS) - {"IO", "S", "SE", "SE-mapalgebra", "SE-transformcrs"} - {
         "raster-vectorize-contour",
     } == {
         f.family

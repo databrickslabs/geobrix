@@ -121,6 +121,49 @@ SETS: Dict[str, SetSpec] = {
         reference="engine-c0@mem",
         ns=(24, 96, 384),
         fn="gbx_rst_slope",
+        peer_exempt=(
+            "engine-c1@mem",
+        ),  # the batch UDF behind the wrapper: recorded, not a peer
+    ),
+    # the engine's other two spike functions, for the L1 viability pass: map algebra over 512 px pairs replicated in
+    # memory and transformcrs over the corpus tiles, each at the engine's L1, its two light UDFs, today's light form and
+    # a floor (the engine's shell cost)
+    "SE-mapalgebra": SetSpec(
+        mvp="SE",
+        forms=(
+            "engine@mem",
+            "engine-c0@mem",
+            "engine-c1@mem",
+            "today@mem",
+            "floor-c0@mem",
+        ),
+        reference="engine-c0@mem",
+        ns=(32, 128, 512),
+        fn="gbx_rst_mapalgebra",
+        peer_exempt=("today@mem", "engine-c1@mem"),  # slower by design, not peers
+    ),
+    "SE-transformcrs": SetSpec(
+        mvp="SE",
+        forms=(
+            "engine@mat",
+            "engine-c0@mat",
+            "engine-c1@mat",
+            "today@mat",
+            "floor-c0@mat",
+        ),
+        reference="engine-c0@mat",
+        ns=(
+            4,
+            8,
+            16,
+        ),  # 4-band corpus tiles of 16 MiB: 32 or more can overflow a local[8] heap
+        fn="gbx_rst_transformcrs",
+        peer_exempt=(
+            "today@mat",
+            "engine-c1@mat",
+        ),  # different cost by design, not peers
+        corpus_src="/Volumes/main/default/bench-corpus/rows",
+        corpus_dir="/tmp/gbx-local-timing/IO",
     ),
 }
 

@@ -201,9 +201,6 @@ HEAVY_PENDING.update(
 
 HEAVY_PENDING.update(
     {
-        "tcrs_mixed_empty": {
-            "L1": "the JVM hands an EMPTY point to the projection as a point at NaN, which the projection refuses, and answers NULL for the whole collection; the lightweight level reprojects it"
-        },
         "tri_multipoint_element": {
             "L1": "the JVM triangulates the points of an array and takes a MULTIPOINT element as no point; the lightweight level flattens it"
         },

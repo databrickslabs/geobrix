@@ -783,4 +783,57 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(zs(1).isNaN)
     }
 
+    // ------------------------------------------------------------------
+    // EMPTY components: left EMPTY, never handed to the projection
+    // ------------------------------------------------------------------
+
+    private val emptyMember = UTF8String.fromString(
+        "SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT EMPTY)")
+    private val emptyNested = UTF8String.fromString(
+        "SRID=4326;GEOMETRYCOLLECTION (POINT (15 51), GEOMETRYCOLLECTION (POINT EMPTY, LINESTRING (15 51, 16 52)))")
+
+    test("ST_TransformCrs.evalSql: a collection with an EMPTY point reprojects the rest and keeps the EMPTY one") {
+        val out = ST_TransformCrs.evalSql(emptyMember, UTF8String.fromString("EPSG:32633"))
+        assert(out != null, "an EMPTY member must not make the whole collection NULL")
+        val g = JTS.fromWKB(out)
+        g.getSRID shouldBe 32633
+        g.getNumGeometries shouldBe 2
+        val p0 = g.getGeometryN(0)
+        p0.getCoordinate.x shouldBe (500000.0 +- 1e-3)
+        p0.getCoordinate.z shouldBe (5.0 +- 1e-9)
+        val p1 = g.getGeometryN(1)
+        p1.getGeometryType shouldBe "Point"
+        assert(p1.isEmpty)
+    }
+
+    test("ST_TransformCrs.evalSql: an EMPTY point nested in a collection stays EMPTY") {
+        val out = ST_TransformCrs.evalSql(emptyNested, UTF8String.fromString("EPSG:32633"))
+        assert(out != null)
+        val g = JTS.fromWKB(out)
+        val inner = g.getGeometryN(1)
+        inner.getNumGeometries shouldBe 2
+        inner.getGeometryN(0).getGeometryType shouldBe "Point"
+        assert(inner.getGeometryN(0).isEmpty)
+        inner.getGeometryN(1).getCoordinates.head.x shouldBe (500000.0 +- 1e-3)
+    }
+
+    test("ST_TransformCrs.evalSql: a bare EMPTY geometry stays EMPTY with the target SRID") {
+        val out = ST_TransformCrs.evalSql(
+            UTF8String.fromString("SRID=4326;POINT EMPTY"), UTF8String.fromString("EPSG:32633"))
+        assert(out != null)
+        val g = JTS.fromWKB(out)
+        assert(g.isEmpty)
+        g.getSRID shouldBe 32633
+    }
+
+    test("ST_SetCrs.evalSql / ST_Crs: a collection with an EMPTY point keeps both members") {
+        ST_Crs.eval(emptyMember).toString shouldBe "EPSG:4326"
+        val out = ST_SetCrs.evalSql(emptyMember, UTF8String.fromString("EPSG:32633"))
+        assert(out != null)
+        val g = JTS.fromWKB(out)
+        g.getSRID shouldBe 32633
+        g.getNumGeometries shouldBe 2
+        assert(g.getGeometryN(1).isEmpty)
+    }
+
 }

@@ -14,7 +14,10 @@ import org.gdal.ogr.{Geometry => OGRGeometry}
 import org.gdal.osr.CoordinateTransformation
 import org.locationtech.jts.geom.impl.CoordinateArraySequence
 import org.locationtech.jts.geom.util.GeometryEditor
-import org.locationtech.jts.geom.{Coordinate, CoordinateSequence, Geometry => JTSGeometry}
+import org.locationtech.jts.geom.{
+    Coordinate, CoordinateSequence, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
+    Polygon, Geometry => JTSGeometry
+}
 
 import scala.util.Try
 import scala.util.control.NonFatal
@@ -319,6 +322,11 @@ private[expressions] object TransformCrsCore {
     private[expressions] def transformWithCachedCT(
         g: JTSGeometry, ct: CoordinateTransformation
     ): JTSGeometry = {
+        if (g.isEmpty) return g.copy()
+        g match {
+            case c: GeometryCollection if hasEmptyPart(c) => return transformAroundEmpty(c, ct)
+            case _ =>
+        }
         val ogrGeom = OGRGeometry.CreateFromWkb(JTS.toWKBForOGR(g))  // safe for OGR: all-or-nothing Z
         try {
             ogrGeom.Transform(ct)
@@ -326,5 +334,31 @@ private[expressions] object TransformCrsCore {
         } finally {
             ogrGeom.delete()
         }
+    }
+
+    /** True when ``c`` holds an EMPTY geometry at any depth. */
+    private def hasEmptyPart(c: GeometryCollection): Boolean =
+        (0 until c.getNumGeometries).exists { i =>
+            c.getGeometryN(i) match {
+                case inner: GeometryCollection => inner.isEmpty || hasEmptyPart(inner)
+                case other => other.isEmpty
+            }
+        }
+
+    /** Reprojects the parts of a collection that hold coordinates and leaves an EMPTY part as the same
+      * EMPTY geometry. JTS writes an EMPTY point as a point at NaN, which OGR refuses, so an EMPTY part is
+      * never handed to it (otherwise the whole collection would read as NULL). The collection keeps its
+      * type and the order of its parts. */
+    private def transformAroundEmpty(c: GeometryCollection, ct: CoordinateTransformation): JTSGeometry = {
+        val parts = Array.tabulate(c.getNumGeometries)(i => transformWithCachedCT(c.getGeometryN(i), ct))
+        val gf = c.getFactory
+        val out = c match {
+            case _: MultiPoint => gf.createMultiPoint(parts.map(_.asInstanceOf[Point]))
+            case _: MultiLineString => gf.createMultiLineString(parts.map(_.asInstanceOf[LineString]))
+            case _: MultiPolygon => gf.createMultiPolygon(parts.map(_.asInstanceOf[Polygon]))
+            case _ => gf.createGeometryCollection(parts)
+        }
+        out.setSRID(c.getSRID)
+        out
     }
 }

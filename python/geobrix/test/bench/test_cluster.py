@@ -142,38 +142,6 @@ def test_the_spark_provenance_columns_round_trip_and_older_rows_read_empty(spark
     assert by_path[""]["env_spark_version"] == ""  # a row that did not record them
 
 
-def test_build_bench_notebook_cells():
-    cfg = dict(
-        wheel="/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl",
-        corpus="/Volumes/c/s/v/bench-corpus",
-        out_dir="/Volumes/c/s/v/bench-out/run1",
-        table="main.default.bench_results",
-        run_id="run1",
-        functions="rst_width,rst_slope",
-        modes="both",
-        row_counts="10,100",
-        warmup=2,
-        measured=5,
-        heavyweight=True,
-        lightweight=True,
-    )
-    nb = cl.build_bench_notebook(cfg)
-    src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    # Classic install cell is a two-step subprocess (force-reinstall geobrix CODE only via
-    # --no-deps, then a non-forced deps install) -- NOT the old single-%pip URL-reference form.
-    # See fix(bench): classic install force-reinstalls geobrix CODE only, not the closure.
-    assert "/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl" in src
-    assert "--force-reinstall" in src and "--no-deps" in src
-    # the env wheel's own deps, no light extra
-    assert "'geobrix @ file://' + WHL" in src
-    assert "light-dbr19" not in src and "light_dbr19" not in src
-    assert "HeavyBenchMain" in src and "_jvm" in src
-    assert "run_spark_path" in src or "run_pure_core" in src
-    assert "bench_results" in src
-    assert "dbutils.notebook.exit" in src
-    assert nb["nbformat"] == 4
-
-
 def test_run_heavy_runs_only_the_specs_marked_heavy():
     """The emitted run_heavy hands the JVM only the specs whose ``heavy`` flag is set."""
     assert "if mode in f.modes and f.heavy" in cl._HEAVY_HELPERS
@@ -184,50 +152,6 @@ def test_quadbin_grid_cell_has_no_heavyweight_leg():
     assert 'api="heavyweight"' not in cl._CELL_GRID_QUADBIN
     assert "HEAVYWEIGHT" not in cl._CELL_GRID_QUADBIN
     assert 'level="L1"' not in cl._CELL_GRID_QUADBIN
-
-
-def test_build_bench_notebook_lightweight_only_omits_heavyweight():
-    cfg = dict(
-        wheel="w.whl",
-        corpus="c",
-        out_dir="o",
-        table="t",
-        run_id="r",
-        functions="",
-        modes="both",
-        row_counts="10",
-        warmup=1,
-        measured=1,
-        heavyweight=False,
-        lightweight=True,
-    )
-    nb = cl.build_bench_notebook(cfg)
-    src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert "HeavyBenchMain" not in src  # heavyweight leg genuinely absent
-    assert (
-        "run_pure_core" in src or "run_spark_path" in src
-    )  # lightweight still present
-
-
-def test_build_bench_notebook_heavyweight_only_omits_lightweight():
-    cfg = dict(
-        wheel="w.whl",
-        corpus="c",
-        out_dir="o",
-        table="t",
-        run_id="r",
-        functions="",
-        modes="pure-core",
-        row_counts="10",
-        warmup=1,
-        measured=1,
-        heavyweight=True,
-        lightweight=False,
-    )
-    nb = cl.build_bench_notebook(cfg)
-    src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert "HeavyBenchMain" in src
-    assert "run_pure_core" not in src and "run_spark_path" not in src
 
 
 def _cfg(**kw):
@@ -249,6 +173,10 @@ def _cfg(**kw):
     return base
 
 
+def _all_source(nb):
+    return "\n".join("".join(c.get("source", [])) for c in nb["cells"])
+
+
 def _section_cells(nb):
     # The per-(tier x mode) section cells are the ones whose first line is the "# (x)" tag.
     return [
@@ -258,104 +186,99 @@ def _section_cells(nb):
     ]
 
 
-def test_build_bench_notebook_one_cell_per_section_in_order():
-    # both tiers + both modes -> 4 section cells in pure-core(light,heavy), spark(light,heavy)
-    # order, each calling show_section so its table+summary render when the cell finishes.
+def test_build_bench_notebook_install_setup_and_exit_cells():
+    """The classic install is a two-step subprocess (force-reinstall the geobrix CODE only via --no-deps, then a
+    non-forced deps install), not the old single %pip URL reference; the setup cell is collapsed and the install
+    cell is not."""
     nb = cl.build_bench_notebook(_cfg())
-    secs = _section_cells(nb)
-    assert len(secs) == 4
-    assert 'show_section("lightweight", "pure-core", run_light("pure-core"))' in secs[0]
-    assert 'show_section("heavyweight", "pure-core", run_heavy("pure-core"))' in secs[1]
+    src = _all_source(nb)
+    assert nb["nbformat"] == 4
+    assert "/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl" in src
+    assert "--force-reinstall" in src and "--no-deps" in src
     assert (
-        'show_section("lightweight", "spark-path", run_light("spark-path"))' in secs[2]
-    )
-    assert (
-        'show_section("heavyweight", "spark-path", run_heavy("spark-path"))' in secs[3]
-    )
-    # 1 install cell (the env wheel @ file:// -- no uninstall/restartPython dance) +
-    # setup + 4 sections + epilogue + exit (exit is its own cell so the compare
-    # summary render isn't truncated -- see build_bench_notebook)
-    assert len(nb["cells"]) == 8
-    src = "\n".join("".join(c["source"]) for c in nb["cells"])
-    assert "def show_section(" in src
+        "'geobrix @ file://' + WHL" in src
+    )  # the env wheel's own deps, no light extra
+    assert "light-dbr19" not in src and "light_dbr19" not in src
+    assert "HeavyBenchMain" in src and "_jvm" in src and "bench_results" in src
     assert "dbutils.notebook.exit" in src
-
-
-def test_build_bench_notebook_pure_core_only_has_no_spark_section():
-    nb = cl.build_bench_notebook(_cfg(modes="pure-core"))
-    secs = _section_cells(nb)
-    assert len(secs) == 2  # light pure-core, heavy pure-core
-    assert all("spark-path" not in s for s in secs)
-
-
-def test_build_bench_notebook_lightweight_both_modes_two_sections():
-    nb = cl.build_bench_notebook(_cfg(heavyweight=False))
-    secs = _section_cells(nb)
-    assert len(secs) == 2  # light pure-core, light spark-path
-    assert all("run_heavy" not in s for s in secs)
-    assert 'show_section("lightweight", "pure-core"' in secs[0]
-    assert 'show_section("lightweight", "spark-path"' in secs[1]
-
-
-def test_build_bench_notebook_resume_emits_function_granular_logic():
-    nb = cl.build_bench_notebook(_cfg(resume=True))
-    src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert "RESUME = True" in src
-    # function-granular resume: load done fns, run only the missing ones
-    assert "def _done_fns(" in src
-    assert "def _purge_errors(" in src
-    # run_light / run_heavy consult _done_fns (2 call sites + the def)
-    assert src.count("_done_fns(") >= 3
-    # resume keeps existing rows -> no truncate
-    assert "TRUNCATE_ALL = False" in src
-    assert "TRUNCATE = False" in src
-
-
-def test_build_bench_notebook_default_no_resume():
-    nb = cl.build_bench_notebook(_cfg())
-    src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert "RESUME = False" in src
-
-
-def test_build_bench_notebook_partition_size_threading():
-    # default -> PARTITION_SIZE = 0 (auto: n/(slots*4)); --override-partition-size flows through.
-    src_default = "\n".join(
-        "".join(c.get("source", [])) for c in cl.build_bench_notebook(_cfg())["cells"]
-    )
-    assert "PARTITION_SIZE = 0" in src_default
-    src_ov = "\n".join(
-        "".join(c.get("source", []))
-        for c in cl.build_bench_notebook(_cfg(partition_size=8))["cells"]
-    )
-    assert "PARTITION_SIZE = 8" in src_ov
-    assert "partition_size=PARTITION_SIZE" in src_ov
-
-
-def test_build_bench_notebook_fix_errors_default_and_override():
-    # Default: fix errors on resume (purge + re-run errored fns).
-    src_default = "\n".join(
-        "".join(c.get("source", []))
-        for c in cl.build_bench_notebook(_cfg(resume=True))["cells"]
-    )
-    assert "FIX_ERRORS = True" in src_default
-    # --no-fix-errors -> keep errored fns as-is.
-    src_no = "\n".join(
-        "".join(c.get("source", []))
-        for c in cl.build_bench_notebook(_cfg(resume=True, fix_errors=False))["cells"]
-    )
-    assert "FIX_ERRORS = False" in src_no
-
-
-def test_build_bench_notebook_setup_cell_collapsed():
-    # cells[1] (the big setup cell) is collapsed by default; the single install cell
-    # (the env wheel @ file://) and the section cells are not.
-    nb = cl.build_bench_notebook(_cfg())
     setup = nb["cells"][1]
-    assert "import json" in "".join(setup["source"])  # it's the assembled setup, sanity
+    assert "import json" in "".join(setup["source"])
     assert setup["metadata"].get("collapsed") is True
     assert setup["metadata"].get("jupyter", {}).get("source_hidden") is True
-    # install cell (cells[0]) stays expanded
     assert nb["cells"][0]["metadata"].get("collapsed") is not True
+
+
+@pytest.mark.parametrize(
+    "overrides,sections",
+    [
+        (
+            {},
+            [
+                ("lightweight", "pure-core"),
+                ("heavyweight", "pure-core"),
+                ("lightweight", "spark-path"),
+                ("heavyweight", "spark-path"),
+            ],
+        ),
+        (
+            {"modes": "pure-core"},
+            [("lightweight", "pure-core"), ("heavyweight", "pure-core")],
+        ),
+        (
+            {"heavyweight": False},
+            [("lightweight", "pure-core"), ("lightweight", "spark-path")],
+        ),
+        ({"lightweight": False, "modes": "pure-core"}, [("heavyweight", "pure-core")]),
+    ],
+)
+def test_build_bench_notebook_one_cell_per_tier_and_mode_in_order(overrides, sections):
+    """Each (tier, mode) is one section cell, in pure-core then spark-path order with light before heavy, calling
+    show_section so its table renders when the cell finishes; a tier that is off leaves no trace of it.
+    """
+    nb = cl.build_bench_notebook(_cfg(**overrides))
+    secs = _section_cells(nb)
+    assert len(secs) == len(sections)
+    for sec, (tier, mode) in zip(secs, sections):
+        runner = "run_light" if tier == "lightweight" else "run_heavy"
+        assert f'show_section("{tier}", "{mode}", {runner}("{mode}"))' in sec
+    src = _all_source(nb)
+    assert ("HeavyBenchMain" in src) == overrides.get("heavyweight", True)
+    assert ("run_pure_core" in src or "run_spark_path" in src) == overrides.get(
+        "lightweight", True
+    )
+    if not overrides:
+        assert len(nb["cells"]) == 8  # install + setup + 4 sections + epilogue + exit
+
+
+@pytest.mark.parametrize(
+    "overrides,present",
+    [
+        ({}, ["RESUME = False", "PARTITION_SIZE = 0"]),
+        (
+            {"resume": True},
+            [
+                "RESUME = True",
+                "def _done_fns(",
+                "def _purge_errors(",
+                "TRUNCATE_ALL = False",
+                "TRUNCATE = False",
+                "FIX_ERRORS = True",
+            ],
+        ),
+        ({"resume": True, "fix_errors": False}, ["FIX_ERRORS = False"]),
+        (
+            {"partition_size": 8},
+            ["PARTITION_SIZE = 8", "partition_size=PARTITION_SIZE"],
+        ),
+    ],
+)
+def test_build_bench_notebook_threads_the_run_options(overrides, present):
+    src = _all_source(cl.build_bench_notebook(_cfg(**overrides)))
+    assert all(p in src for p in present), [p for p in present if p not in src]
+    if overrides.get("resume"):
+        assert (
+            src.count("_done_fns(") >= 3
+        )  # the def and run_light / run_heavy consulting it
 
 
 def test_remap_heavy_iter_to_seconds():

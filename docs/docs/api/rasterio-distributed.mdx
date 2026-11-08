@@ -52,7 +52,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **Rasterize / polygonize** | `rst_rasterize`, `rst_polygonize`, `rst_h3_rasterize_agg` | rasterio + shapely |
 | **Focal / convolution** | `rst_filter`, `rst_convolve` | scipy.ndimage |
 | **Proximity** | `rst_proximity` | scipy |
-| **Contour** | `rst_contour` | scikit-image (see [Known divergences](#known-behavior-divergences)) |
+| **Contour** | `rst_contour` | scikit-image |
 | **Viewshed** | `rst_viewshed` | GDAL (`GDALViewshedGenerate`) |
 | **XYZ tiles** | `rst_tilexyz`, `rst_xyzpyramid` | rio-tiler + morecantile |
 | **Tiling / retile** | `rst_maketiles`, `rst_retile` | rasterio + NumPy |
@@ -176,7 +176,6 @@ Where the lightweight and heavyweight implementations use different underlying a
 |---|---|---|---|
 | `rst_color_relief` | `gdal.DEMProcessing` | NumPy `np.interp` | Color ramp interpolation can differ at boundary values; `default` keyword not available in `pyrx` |
 | `rst_resample` | GDAL resampler | rasterio resampler | NoData and boundary pixels can differ |
-| `rst_contour` | `gdal.ContourGenerateEx` | `skimage.find_contours` | Contour tracing algorithm differs; vertex positions near NoData may diverge |
 
 See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both implementations.
 

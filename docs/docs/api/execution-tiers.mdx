@@ -147,7 +147,7 @@ The JVM level reads bytes only. In SQL, GeoBrix routes the two kinds for you:
 
 The accessors and statistics that return an `ARRAY<...>`, a `MAP<...>` or a `STRUCT<...>` (`gbx_rst_avg`, `gbx_rst_georeference` and the like) have no JVM form and run at the Python level. Such a function can sit under `explode` or `inline`, where Spark refuses the SQL function that does the routing.
 
-A few functions run on the JVM level without that routing when you force L1 (`gbx_rst_contour`, `gbx_rst_isoband`). A virtual tile raises an error there. To use one, materialize the tile first: pass `materialize=True`, or write with a raster writer and read the output back. Every writer is a materialization boundary.
+One function runs on the JVM level without that routing when you force L1 (`gbx_rst_isoband`). A virtual tile raises an error there. To use one, materialize the tile first: pass `materialize=True`, or write with a raster writer and read the output back. Every writer is a materialization boundary.
 
 The Python tile functions take three optional keywords: `virtualize_dir`, `virtualize_prefix` and `materialize`. SQL has none of them. See the [force-output parameters](./raster-functions#virtual-tile-overrides).
 

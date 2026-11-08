@@ -447,15 +447,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_percentile_stretch(tile: Column, loPct: Double, hiPct: Double): Column =
         rst_percentile_stretch(tile, lit(loPct), lit(hiPct))
 
-    def rst_buildoverviews(tile: Column, levels: Column): Column =
-        ColumnAdapter(RST_BuildOverviews.name, Seq(tile, levels, lit("average")))
-    def rst_buildoverviews(tile: Column, levels: Column, resampling: Column): Column =
-        ColumnAdapter(RST_BuildOverviews.name, Seq(tile, levels, resampling))
-    def rst_buildoverviews(tile: Column, levels: Array[Int]): Column =
-        rst_buildoverviews(tile, lit(levels))
-    def rst_buildoverviews(tile: Column, levels: Array[Int], resampling: String): Column =
-        rst_buildoverviews(tile, lit(levels), lit(resampling))
-
     def rst_band(tile: Column, bandIndex: Column): Column =
         ColumnAdapter(RST_Band.name, Seq(tile, bandIndex))
     def rst_band(tile: Column, bandIndex: Int): Column =

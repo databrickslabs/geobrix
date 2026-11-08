@@ -86,7 +86,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToRes",
         "com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsAgg",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band",
-        "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_BuildOverviews",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_FillNodata",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_PercentileStretch",
         "com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid",

@@ -81,8 +81,8 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_mapalgebra": ("L1", "L3"),
     # The file functions: color_relief has only a pure-core timing (default, unmeasured: highest available).
     # cog_convert (its JVM level measured 1.25x and 1.46x slower than light at 4x and 16x rows, so it has none),
-    # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (2.2x light
-    # faster) take the family order, light.
+    # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (light measured
+    # 2.2x faster, so it has no JVM level) take the family order, light.
     "gbx_rst_color_relief": ("L1", "L3"),
     # contour (0.10x at 4x rows) and isoband (0.39x and 0.42x at 4x and 16x rows) are faster on the JVM, and they pass the
     # 1.2x line, but a virtual tile at L1 raises VirtualTileException, and a virtual tile is the light default input. A SQL

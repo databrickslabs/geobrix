@@ -334,6 +334,15 @@ def test_the_combine_functions_and_the_raster_bng_tessellate_have_no_jvm_level(n
     assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
 
 
+@pytest.mark.parametrize("name", ["gbx_rst_buildoverviews"])
+def test_a_function_whose_jvm_level_was_removed_has_only_light(name):
+    # buildoverviews: light measured 2.2x faster than the JVM level, which is removed
+    fn = MAN.functions[name]
+    assert not {"L1", "L2"} & set(fn.levels)
+    assert levels.order(fn) == ("L3",)
+    assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
+
+
 def test_the_array_family_keeps_the_unmeasured_and_the_engine_rows_as_they_were():
     # unmeasured: the family order, JVM first with the JAR
     fb = MAN.functions["gbx_rst_frombands"]

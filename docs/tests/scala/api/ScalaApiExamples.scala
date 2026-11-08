@@ -701,26 +701,6 @@ result.show()
 (single band extracted from the 3-band multiband fixture)
 """.trim
 
-  val rst_buildoverviews_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_buildoverviews(col("tile"), array(lit(2), lit(4))).alias("tile"))
-result.show()
-""".trim
-
-  val rst_buildoverviews_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(tile with internal overviews at levels [2, 4] embedded)
-""".trim
-
   val rst_convolve_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

@@ -217,19 +217,6 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("RST_BuildOverviews adds the requested number of overview levels") {
-        // 256x256 source so [2, 4, 8] overviews stay meaningful.
-        val src = buildRaster(256, 256, (c, r) => (c + r).toFloat)
-        try {
-            val (out, _) = track(RST_BuildOverviews.execute(src, Map.empty, Array(2, 4, 8), "average"))
-            out should not be null
-            val band = out.GetRasterBand(1)
-            band.GetOverviewCount shouldBe 3
-        } finally {
-            src.delete()
-        }
-    }
-
     test("RST_Band extracts a specific band from a multi-band raster") {
         val src = buildMultiBandRaster(10, 10)
         try {

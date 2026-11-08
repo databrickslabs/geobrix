@@ -19,7 +19,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_Merge
 import com.databricks.labs.gbx.rasterx.expressions.constructor.RST_FromBands
 import com.databricks.labs.gbx.rasterx.expressions.RST_UpdateType
 import com.databricks.labs.gbx.rasterx.expressions.accessors._
-import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_BuildOverviews
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Contour
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Proximity
 import com.databricks.labs.gbx.rasterx.expressions.analysis.RST_Viewshed
@@ -62,10 +61,6 @@ object BenchDispatch {
   private def argD(a: Map[String, String], k: String, d: Double) = a.get(k).map(_.toDouble).getOrElse(d)
   private def argI(a: Map[String, String], k: String, d: Int) = a.get(k).map(_.toInt).getOrElse(d)
   private def argB(a: Map[String, String], k: String, d: Boolean) = a.get(k).map(_.toBoolean).getOrElse(d)
-  // ARRAY<INT> arg (e.g. buildoverviews levels) ridden as a comma/space-separated
-  // string in the stringly-typed bench args map; falls back to `d` when absent.
-  private def argIntArray(a: Map[String, String], k: String, d: Array[Int]): Array[Int] =
-    a.get(k).map(_.split("[,\\s]+").filter(_.nonEmpty).map(_.trim.toInt)).getOrElse(d)
   // ARRAY<DOUBLE> arg (e.g. contour levels) ridden as a comma/space-separated
   // string in the stringly-typed bench args map; falls back to `d` when absent.
   private def argDoubleArray(a: Map[String, String], k: String, d: Array[Double]): Array[Double] =
@@ -150,11 +145,10 @@ object BenchDispatch {
     "rst_evi" -> BM, "rst_savi" -> BM, "rst_index" -> BM,
     "rst_mapalgebra" -> FMT, "rst_derivedband" -> FMT, "rst_proximity" -> ANALYSIS,
     "rst_clip" -> EDIT, "rst_color_relief" -> TER, "rst_viewshed" -> ANALYSIS,
-    // bucket C, group C1 (readers + buildoverviews) + C2 (subdataset fns).
+    // bucket C, group C1 (readers) + C2 (subdataset fns).
     // tryopen / subdatasets / getsubdataset are accessor-flavored; the readers
-    // and buildoverviews emit a tile -> format.
+    // emit a tile -> format. (buildoverviews has no heavyweight level: it measured slower than light.)
     "rst_tryopen" -> ACC, "rst_fromcontent" -> FMT,
-    "rst_buildoverviews" -> FMT,
     "rst_getsubdataset" -> ACC,
     // bucket C, group C3: multi-tile-input fns (consume an ARRAY of tiles) -> format.
     // (The combine family has no heavyweight level: it measured slower than light.)
@@ -552,12 +546,6 @@ object BenchDispatch {
         argD(a, "observer_height", 2.0), argD(a, "target_height", 1.6), None)
       RasterDriver.releaseDataset(res._1)
       BenchFingerprint.empty
-    // bucket C, group C1: rst_buildoverviews (tile-in). Internal overviews leave
-    // the base band unchanged, so the raster fingerprint (full-resolution band)
-    // is identical pre/post -> a full comparison.
-    case "rst_buildoverviews" =>
-      fpDerived(RST_BuildOverviews.execute(ds, Map.empty,
-        argIntArray(a, "levels", Array(2, 4)), argS(a, "resampling", "average")))
     // bucket C, group C2: the subdataset function (timing-only).
     // rst_getsubdataset on a plain GTiff: gdal.Open("GTiff:path:0") returns null
     // (no such subdataset). Guard the null so the timing call does not NPE; the
@@ -991,8 +979,6 @@ object BenchDispatch {
       case "rst_tryopen"     => rst_tryopen(tile)
       case "rst_fromcontent" =>
         rst_fromcontent(tile.getField("raster"), argS(a, "driver", "GTiff"))
-      case "rst_buildoverviews" =>
-        rst_buildoverviews(tile, argIntArray(a, "levels", Array(2, 4)), argS(a, "resampling", "average"))
       case "rst_getsubdataset" => rst_getsubdataset(tile, argS(a, "name", "0"))
       // bucket C, group C3: multi-tile fns. The `tile` Column passed here IS the
       // ARRAY<tile> column the runner built from the synthesized tiles (the same

@@ -1910,8 +1910,9 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: rx.rst_buildoverviews(
             t, F.array(*[F.lit(int(x)) for x in a["levels"]]), a["resampling"]
         ),
-        sources=_OPS_LIGHT + (_HEAVY + "pixel/RST_BuildOverviews.scala",),
+        sources=_OPS_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: it measured slower than light
         input_kind="tile",
     ),
     # --- bucket C, group C2: subdataset fns (timing-only) ---------------------

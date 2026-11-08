@@ -143,7 +143,6 @@ _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its
 _DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the source's data type, and a wrong function is not an error at the call (H20; companion deleted in the decision sweep)"
 # The L3-first web-tile and file functions keep their JVM companion for a restore on measured numbers; these rows are
 # where it differs from the contract, and the companions go in the decision sweep (Task 21) if no restore comes.
-_BUILDOVERVIEWS_L1 = "the JVM builds the overviews in a sidecar the tile bytes do not carry, and turns a bad resampling or level into an error tile, not a raised error; the companion is deleted in the decision sweep"
 _XYZ_ERROR_L1 = "the JVM answers a tile that is an error tile or cannot be read with one row whose bytes are NULL (a deliberate, auditable row); the contract is no rows; the companion is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
@@ -159,15 +158,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     **{
         cid: {"L1": _VIRTUAL_RAISES_L1}
         for cid in ("contour_virtual", "isoband_virtual")
-    },
-    **{
-        cid: {"L1": _BUILDOVERVIEWS_L1}
-        for cid in (
-            "buildoverviews_levels",
-            "buildoverviews_resampling",
-            "buildoverviews_bad_resampling",
-            "buildoverviews_bad_levels",
-        )
     },
     **{
         cid: {"L1": _XYZ_ERROR_L1}
@@ -222,9 +212,6 @@ HEAVY_PENDING.update(
         },
         "percentile_stretch_u16_lut": {
             "L1": "the JVM takes the nearest-rank percentile of a 16-bit band and rounds the rescale; the lightweight level interpolates the percentile and truncates, so one pixel is NoData on one level and not the other"
-        },
-        "buildoverviews_empty_levels": {
-            "L1": "the JVM answers an empty levels array with an error tile; the lightweight level raises the parameter error"
         },
         "filter_u8_alpha_mean_1": {
             "L1": "the JVM mean filter of a gray + alpha tile leaves a different NoData mask at the empty window than the lightweight level, which shows -9999 there as a pixel value"

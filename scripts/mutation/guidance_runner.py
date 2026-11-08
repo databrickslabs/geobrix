@@ -185,7 +185,9 @@ def main(argv=None) -> int:
         gate.build_work_dir(work)
         shutil.copy(HERE / "killers_plugin.py", work / "_gbx" / f"{KILLERS_PLUGIN}.py")
         (work / "pyproject.toml").write_text((gate.PKG_ROOT / "pyproject.toml").read_text() + guidance_section(modules, selection, args))
-        env = dict(os.environ, PYTHONPATH=str(work / "_gbx"), PYTHONDONTWRITEBYTECODE="1", TZ="UTC",
+        # the plugins first, then what the node already had (on Databricks pyspark comes from the runtime's own path)
+        py_path = os.pathsep.join(p for p in (str(work / "_gbx"), os.environ.get("PYTHONPATH", "")) if p)
+        env = dict(os.environ, PYTHONPATH=py_path, PYTHONDONTWRITEBYTECODE="1", TZ="UTC",
                    PYSPARK_PYTHON=str(py), GBX_MUT_KILLERS=str(out / "killers.jsonl"))
         if args.oracle_tables:
             env["GBX_ORACLE_TABLES"] = args.oracle_tables

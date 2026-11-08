@@ -247,8 +247,7 @@ cmd = [sys.executable, root + "/src/scripts/mutation/guidance_runner.py",
        "--progress-file", CFG["progress"]]
 if CFG.get("oracle_tables"):
     cmd += ["--oracle-tables", CFG["oracle_tables"]]
-env = dict(os.environ, PYTHONPATH="")  # the source tree is put on the path by the test config, not by the notebook
-proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env, cwd=root + "/src")
+proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, cwd=root + "/src")  # the notebook's own environment (pyspark comes from the runtime's PYTHONPATH)
 for line in proc.stdout:  # progress lines between and within the modules, as the runner prints them
     print(line, end="", flush=True)
 rc = proc.wait()

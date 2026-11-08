@@ -199,17 +199,10 @@ HEAVY_PENDING.update(
     }
 )
 
-# Two shapes the lightweight level takes and the JVM level does not (measured through the JAR).
-_NON_COLLECTION_MIXED_L1 = "the JVM reads a mixed-dimensionality text that is not a collection (a Z on one vertex only) as no geometry and answers NULL; the lightweight level normalizes it"
 HEAVY_PENDING.update(
     {
-        **{
-            f"{fn}_mixed_{shape}": {"L1": _NON_COLLECTION_MIXED_L1}
-            for fn in ("crs", "setcrs", "tcrs")
-            for shape in ("line", "multipoint")
-        },
         "tcrs_mixed_empty": {
-            "L1": "the JVM reads a collection that mixes a Z point and an EMPTY point as unreadable and answers NULL; the lightweight level reprojects it"
+            "L1": "the JVM hands an EMPTY point to the projection as a point at NaN, which the projection refuses, and answers NULL for the whole collection; the lightweight level reprojects it"
         },
         "tri_multipoint_element": {
             "L1": "the JVM triangulates the points of an array and takes a MULTIPOINT element as no point; the lightweight level flattens it"

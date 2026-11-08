@@ -715,7 +715,8 @@ U51 = (500000.0000000011, 5649824.888255088)
 U52 = (568649.7048951713, 5761510.316555307)
 MIXED = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"  # GEOS refuses this text as it stands
 MIXED_Z = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT Z (16 52 NaN))"
-MIXED_2D = f"GEOMETRYCOLLECTION (POINT ({U51[0]} {U51[1]}), POINT ({U52[0]} {U52[1]}))"
+# the Z a vertex has rides through the reprojection; the one it lacks stays NaN
+MIXED_UTM_Z = f"GEOMETRYCOLLECTION Z (POINT Z ({U51[0]} {U51[1]} 5), POINT Z ({U52[0]} {U52[1]} NaN))"
 MIXED_EMPTY = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT EMPTY)"
 MIXED_EMPTY_Z = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT Z EMPTY)"
 MIXED_ZM = "GEOMETRYCOLLECTION ZM (POINT ZM (15 51 5 99), POINT (16 52))"
@@ -885,7 +886,7 @@ VECTOR_SCALAR += (
         TCRS,
         (EW("LINESTRING Z (15 51 5, 16 52 NaN)"), "EPSG:32633"),
         "geom_srid",
-        (f"LINESTRING({U51[0]} {U51[1]}, {U52[0]} {U52[1]})", 32633),
+        (f"LINESTRING Z ({U51[0]} {U51[1]} 5, {U52[0]} {U52[1]} NaN)", 32633),
         SESSION,
     ),
     Case(
@@ -893,7 +894,7 @@ VECTOR_SCALAR += (
         TCRS,
         (Build("ewkb_partial_z_line"), "EPSG:32633"),
         "geom_srid",
-        (f"LINESTRING({U51[0]} {U51[1]}, {U52[0]} {U52[1]})", 32633),
+        (f"LINESTRING Z ({U51[0]} {U51[1]} 5, {U52[0]} {U52[1]} NaN)", 32633),
         SESSION,
     ),
     Case(
@@ -901,7 +902,7 @@ VECTOR_SCALAR += (
         TCRS,
         (EW(MIXED), "EPSG:32633"),
         "geom_srid",
-        (MIXED_2D, 32633),
+        (MIXED_UTM_Z, 32633),
         SESSION,
     ),
     Case(
@@ -917,7 +918,7 @@ VECTOR_SCALAR += (
         TCRS,
         (EW(MIXED_ZM), "EPSG:32633"),
         "geom_srid",
-        (MIXED_2D, 32633),
+        (MIXED_UTM_Z, 32633),
         SESSION,
     ),
     Case(
@@ -926,7 +927,7 @@ VECTOR_SCALAR += (
         (EW(MIXED_NESTED), "EPSG:32633"),
         "geom_srid",
         (
-            f"GEOMETRYCOLLECTION (POINT ({U51[0]} {U51[1]}), GEOMETRYCOLLECTION (POINT ({U52[0]} {U52[1]})))",
+            f"GEOMETRYCOLLECTION Z (POINT Z ({U51[0]} {U51[1]} 5), GEOMETRYCOLLECTION Z (POINT Z ({U52[0]} {U52[1]} NaN)))",
             32633,
         ),
         SESSION,
@@ -1106,9 +1107,8 @@ VECTOR_SCALAR += (
     ),
 )
 
-# --- Mixed dimensionality that is no collection: `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. The
-# lightweight level normalizes it (the absent Z is NaN), the JVM reads the text as no geometry and answers NULL
-# (HEAVY_PENDING).
+# --- Mixed dimensionality that is no collection: `LINESTRING Z (15 51 5, 16 52)` has a Z on one vertex only. Every level
+# keeps the Z that exists and marks the absent one NaN, through a reprojection too.
 MIXED_LINE = "LINESTRING Z (15 51 5, 16 52)"
 MIXED_MULTIPOINT = "MULTIPOINT Z ((15 51 5), (16 52))"
 for _name, _wkt, _z, _utm in (
@@ -1116,13 +1116,13 @@ for _name, _wkt, _z, _utm in (
         "line",
         MIXED_LINE,
         "LINESTRING Z (15 51 5, 16 52 NaN)",
-        f"LINESTRING ({U51[0]} {U51[1]}, {U52[0]} {U52[1]})",
+        f"LINESTRING Z ({U51[0]} {U51[1]} 5, {U52[0]} {U52[1]} NaN)",
     ),
     (
         "multipoint",
         MIXED_MULTIPOINT,
         "MULTIPOINT Z ((15 51 5), (16 52 NaN))",
-        f"MULTIPOINT (({U51[0]} {U51[1]}), ({U52[0]} {U52[1]}))",
+        f"MULTIPOINT Z (({U51[0]} {U51[1]} 5), ({U52[0]} {U52[1]} NaN))",
     ),
 ):
     VECTOR_SCALAR += (

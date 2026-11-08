@@ -530,17 +530,16 @@ All three have the same names and results at every level.
 | `target_crs` cannot be parsed | **raises** |
 | `gbx_st_setcrs` given a CRS with no integer authority code | **raises** |
 
-**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. For a geometry where only *some* vertices carry a Z, the current behavior differs between the two operations, because only one of them touches coordinates:
+**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. For a geometry where only *some* vertices carry a Z, such as `LINESTRING Z (15 51 5, 16 52)`, the rule is one: the Z values that exist are kept and the missing ones are `NaN`.
 
-- `gbx_st_transformcrs` reprojects it as **2D**. Reprojecting a missing Z propagates it into X and Y and destroys the horizontal position, so dropping the Z is what keeps every X/Y correct.
-- `gbx_st_setcrs` keeps the partial Z as-is, since stamping an SRID never moves coordinates.
+- `gbx_st_transformcrs` reprojects X and Y of every vertex and carries the Z through the transformation for the vertices that have one. The vertices without a Z stay `NaN` in the result, and their X and Y are still correct.
+- `gbx_st_setcrs` keeps the Z as-is, since stamping an SRID never moves coordinates.
 
-A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream. Every level behaves identically here, in every input encoding.
+A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream, and a Z that exists is never dropped. Every level behaves identically here, in every input encoding.
 
 :::caution Known limitations
 These apply in **every** input encoding and at every level — they are properties of the operations, not of how you pass the geometry.
 
-- **Chaining `setcrs` → `transformcrs` on a partial-Z geometry yields a 2D result**, for the reason described just above: the reproject drops a partial Z. So a geometry that entered the chain with some elevations leaves it with none.
 - **Reprojecting out and back is not bit-exact.** A round trip such as `EPSG:4326` → `EPSG:32633` → `EPSG:4326` returns `11.000000000000002` where it started at `11` — a floating-point artifact of the projection math, in the last decimal place or two. It does not compound meaningfully: further round trips stay in that same last-place range rather than drifting away. Compare reprojected coordinates with a tolerance, never for exact equality.
 - **`st_setcrs` relabels without reprojecting**, so stamping a CRS whose units do not match the coordinates leaves the geometry mislabelled. A later `st_transformcrs` then transforms from the wrong CRS. Projected metres tagged `EPSG:4326` come back as `Infinity` coordinates on the Python level. The JVM level raises a projection error. Use `st_transformcrs` when you want the coordinates moved.
 - **Coordinates outside the target CRS's valid domain** behave the same way — for example a latitude of `100`, which does not exist. The Python level returns `Infinity` coordinates; the JVM level raises a projection error. Filter to the target CRS's area of use before reprojecting if your input may contain out-of-range coordinates.

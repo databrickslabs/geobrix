@@ -331,9 +331,16 @@ def test_a_part_of_a_hashed_dir_splits_into_the_files_of_that_part_only(shards):
     assert sorted(f for p in ts.split_shard(pyrx, 2, REPO_ROOT, {}) for f in p.paths) == files
 
 
-def test_the_oracle_tables_of_one_file_cannot_be_split(shards):
+def test_the_oracle_tables_of_one_file_are_split_by_table_not_by_file(shards):
     fam = next(s for s in shards if s.name == "manager family 1/3")
-    assert ts.files_of(fam, REPO_ROOT) is None and ts.split_shard(fam, 4, REPO_ROOT, {}) == [fam]
+    assert ts.files_of(fam, REPO_ROOT) is None
+    parts = ts.split_shard(fam, 4, REPO_ROOT, {})
+    assert len(parts) == 4
+    tables = fam.oracle_tables.split(",")
+    got = [t for p in parts for t in p.oracle_tables.split(",")]
+    assert sorted(got) == sorted(tables), "every table in exactly one part"
+    assert all(p.paths == fam.paths and ts.shard_env(p)["GBX_ORACLE_TABLES"] for p in parts)
+    assert ts.split_shard(next(s for s in shards if s.name == "pyrx 1/2"), 1, REPO_ROOT, {})[0].name == "pyrx 1/2"
 
 
 def test_the_split_balances_by_the_measured_seconds_of_each_file(shards):
@@ -351,7 +358,8 @@ def test_auto_split_cuts_long_shards_to_about_the_target_and_leaves_short_ones(s
     light = ts.select(shards, "all-light")
     out = ts.auto_split(light, REPO_ROOT, {}, 6.0)
     assert len(out) > len(light)
-    assert all(s.est_min <= 6.0 * 1.6 or s.unsplittable or len(s.paths) == 1 for s in out), [(s.name, s.est_min) for s in out if s.est_min > 9.6]
+    assert all(s.est_min <= 6.0 * 1.6 or len(s.paths) == 1 for s in out), [(s.name, s.est_min) for s in out if s.est_min > 9.6]
+    assert not [s for s in out if s.name.startswith("manager family") and not s.name.endswith("]")], "the family oracle groups are cut as well"
     def all_files(items):
         return sorted(f for s in items for f in (ts.files_of(s, REPO_ROOT) or []))
 
@@ -368,15 +376,15 @@ def test_timings_decide_which_shards_are_long(shards):
 
 
 def test_slots_follow_the_cores_of_the_node():
-    assert ts.slots_for(32) == 8 and ts.slots_for(64) == 16 and ts.slots_for(2) == 1
+    assert ts.slots_for(32) == 4 and ts.slots_for(64) == 8 and ts.slots_for(2) == 1
 
 
 def test_the_plan_sizes_its_lanes_to_clusters_times_slots(shards):
     picked = ts.select(shards, "all-light")
     one = _plan(_args(), picked)["pools"]["gbx-test-1n"]
-    assert one["slots"] == 8 and len(one["lanes"]) == 8 and one["clusters"] == 1
-    two = _plan(_args("--clusters", "2", "--max-parallel", "4"), picked)["pools"]["gbx-test-1n"]
-    assert two["slots"] == 4 and two["clusters"] == 2 and len(two["lanes"]) == 8
+    assert one["slots"] == 4 and len(one["lanes"]) == 4 and one["clusters"] == 1
+    two = _plan(_args("--clusters", "3", "--max-parallel", "4"), picked)["pools"]["gbx-test-1n"]
+    assert two["slots"] == 4 and two["clusters"] == 3 and len(two["lanes"]) == 12
     assert one["longest_min"] <= one["expected_min"] <= one["serial_min"]
 
 
@@ -386,7 +394,7 @@ def test_relane_respreads_the_shards_over_the_clusters_that_were_free(shards):
     before = sorted(s for lane in plan["pools"]["gbx-test-1n"]["lanes"] for s in lane)
     launcher.relane(plan, "gbx-test-1n", a, 1, 16)  # only one cluster was free, a smaller node
     spec = plan["pools"]["gbx-test-1n"]
-    assert spec["clusters"] == 1 and spec["slots"] == 4 and len(spec["lanes"]) == 4
+    assert spec["clusters"] == 1 and spec["slots"] == 2 and len(spec["lanes"]) == 2
     assert sorted(s for lane in spec["lanes"] for s in lane) == before
 
 
@@ -416,3 +424,64 @@ def test_the_summary_says_the_speedup_over_a_serial_run():
     line = launcher.speedup_line({"wall_s": 600, "longest_s": 500, "serial_s": 3000})
     assert "1.2x the longest task" in line and "3000 s" in line and "speedup 5.0x" in line
     assert launcher.speedup_line({"wall_s": "-"}) == "wall - s"
+
+
+def test_the_target_gives_about_three_and_a_half_chunks_per_slot(shards):
+    light = ts.select(shards, "all-light")
+    for slots in (4, 12):
+        target = ts.auto_target_min(light, REPO_ROOT, {}, slots)
+        chunks = ts.auto_split(light, REPO_ROOT, {}, target)
+        assert slots * 2.5 <= len(chunks) <= slots * 5, (slots, target, len(chunks))
+    assert ts.auto_target_min(light, REPO_ROOT, {}, 1000) == 3.5, "never below what a task's fixed cost allows"
+    assert ts.auto_target_min(light[:1], REPO_ROOT, {}, 1) == round(light[0].expected_min / 3.5, 2)
+
+
+class _Task:
+    def __init__(self, key, start, end):
+        self.task_key, self.start_time, self.end_time = key, start * 1000, end * 1000
+
+
+class _Jobs:
+    def __init__(self, tasks):
+        self._t = tasks
+
+    def get_run(self, rid):
+        return type("R", (), {"tasks": self._t})()
+
+
+def test_pool_metrics_say_the_tail_and_the_idle_slot_time():
+    spec = {"lanes": [["a", "b"], ["c"]], "slots": 2}
+    tasks = [_Task("s_a", 1000, 1100), _Task("s_b", 1100, 1200), _Task("s_c", 1000, 1150)]
+    got = launcher.pool_metrics(type("W", (), {"jobs": _Jobs(tasks)})(), 1, spec)
+    assert got["chunks"] == 3 and got["task_longest_s"] == 150 and got["task_mean_s"] == 116
+    assert got["span_s"] == 200 and got["tail_s"] == 50 and got["ideal_s"] == 175
+    assert got["idle_slot_s"] == 2 * 200 - 350
+    text = "\n".join(launcher.schedule_lines(got))
+    assert "3 chunks on 2 lane(s)" in text and "tail" in text and "ideal" in text
+    assert launcher.pool_metrics(type("W", (), {"jobs": _Jobs([])})(), 1, spec) == {}
+
+
+def test_the_default_is_the_pre_push_pass_of_the_affected_shards():
+    assert launcher.parse([]).shards == "affected"
+    assert launcher.parse(["--shards", "all-light"]).shards == "all-light"
+
+
+def test_a_pre_push_pass_with_nothing_changed_runs_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(ts, "changed_files", lambda *a, **k: [])
+    assert launcher.main(["--explain-only"]) == 0
+    assert "nothing to run" in capsys.readouterr().out
+
+
+def test_a_plan_for_more_clusters_has_more_lanes_and_a_shorter_expected_wall(shards):
+    picked = ts.select(shards, "all-light")
+    chunks = ts.auto_split(picked, REPO_ROOT, {}, 5.0)
+    one = _plan(_args("--max-parallel", "4"), chunks)["pools"]["gbx-test-1n"]
+    three = _plan(_args("--max-parallel", "4", "--clusters", "3"), chunks)["pools"]["gbx-test-1n"]
+    assert len(three["lanes"]) == 3 * len(one["lanes"]) and three["expected_min"] < one["expected_min"] / 2
+
+
+def test_seconds_measured_at_eight_slots_are_brought_to_the_slots_of_the_plan():
+    assert ts.slowdown(2) == 1.0 and round(ts.slowdown(8), 1) == 2.4
+    got = ts.rescale_seconds({"a": 100.0}, 8, 4)
+    assert 45 < got["a"] < 55, "half of it: the slowdown of 8 slots over that of 4"
+    assert ts.rescale_seconds({"a": 100.0}, 4, 4) == {"a": 100.0}

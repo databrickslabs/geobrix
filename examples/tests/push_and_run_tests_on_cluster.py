@@ -26,7 +26,7 @@ failure. The exit code is non-zero when any shard failed, errored or did not fin
 Options:
   --profile <name>       Databricks profile (required; default DATABRICKS_CONFIG_PROFILE)
   --purpose "<why>"      REQUIRED on a launch (heads each runner notebook, rides on the run name)
-  --shards <spec>        all-light (default) | all-heavy | affected | shard names or groups ("pyrx", "zarr 2/4"), comma separated
+  --shards <spec>        affected (default, the pre-push pass) | all-light | all-heavy | shard names or groups ("pyrx", "zarr 2/4"), comma separated
   --base <rev>           `affected`: the files changed between this and --sha pick the shards (default origin/streamline/0.6.0)
   --sha <rev>            the commit to test (default HEAD)
   --wheel <path>         the env6 wheel (default dist/env6/); it carries dependencies and native payload, not the code under test
@@ -79,7 +79,7 @@ SPARK_VERSION = mut.SPARK_VERSION
 PYTEST_PIN = mut.PYTEST_PIN
 EXTRAS = "stac,vizx,zarr,databricks"  # the env wheel's feature extras the suites import
 # What the tests read besides python/geobrix: docs, examples, scripts and the Scala test resources the checks point at.
-SUBSET = ("python/geobrix", "scripts", "docs", "examples", "sample-data", "src/main")
+SUBSET = ("python/geobrix", "scripts", "docs", "examples", "sample-data", "src/main", "README.md")
 RESOURCES = "src/test/resources/binary"  # 117 MB of test rasters and NetCDF: staged once per content, not once per run
 DEPS_INPUTS = ("python/geobrix/pyproject.toml", "python/geobrix/envs", "scripts/native")  # a change here wants a new wheel
 EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_STALLED = 1, 2, 4, 3
@@ -95,15 +95,15 @@ def parse(argv):
     p = argparse.ArgumentParser(prog="push_and_run_tests_on_cluster.py", add_help=False)
     p.add_argument("--profile", default="")
     p.add_argument("--purpose", default="")
-    p.add_argument("--shards", default="all-light")
+    p.add_argument("--shards", default="affected")
     p.add_argument("--base", default="origin/streamline/0.6.0")
     p.add_argument("--sha", default="HEAD")
     p.add_argument("--wheel", default="")
     p.add_argument("--jar-path", default="")
-    p.add_argument("--max-parallel", type=int, default=0, help="shards side by side per cluster (default: the node's cores / 4)")
+    p.add_argument("--max-parallel", type=int, default=0, help="shards side by side per cluster (default: the node's cores / 8)")
     p.add_argument("--clusters", type=int, default=0, help="clusters to spread over (default: every cluster the pool has that is free)")
     p.add_argument("--split", default="auto", help="auto: cut shards longer than --target-min by file; off: CI's shards as they are")
-    p.add_argument("--target-min", type=float, default=6.0)
+    p.add_argument("--target-min", type=float, default=0.0, help="length a cut shard aims at (default: chosen so there are about 3.5 chunks per slot)")
     p.add_argument("--timings", default="test-logs/databricks-tests/timings.json")
     p.add_argument("--serverless", action="store_true")
     p.add_argument("--fresh-cluster", action="store_true")
@@ -133,7 +133,7 @@ def problems(a) -> list:
         out.append("--max-parallel and --clusters must not be negative")
     if a.split not in ("auto", "off"):
         out.append("--split is auto or off")
-    if a.target_min <= ts.FIXED_MIN * 2:
+    if a.target_min and a.target_min <= ts.FIXED_MIN * 2:
         out.append(f"--target-min must be well above the {ts.FIXED_MIN:g} min a task spends before its first test")
     for flag in ("shard_cap_min", "stall_min", "start_cap_min"):
         if getattr(a, flag) <= 0:
@@ -280,6 +280,8 @@ if PLAN.get("resources"):  # the test resources, shared by every run of the same
     with tarfile.open(root + "/res.tar.gz") as tf:
         tf.extractall(repo, filter="data")
 pkg = repo + "/python/geobrix"
+# some tests ask git for the checkout's root or HEAD: the tarball has no history, so give it a one-commit repository
+os.system("cd %%s && git init -q && git -c user.name=gbx -c user.email=gbx@example.com commit -q --allow-empty -m run >/dev/null 2>&1" %% repo)
 OUT = STAGE + "/out/" + SLUG
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(STAGE + "/hb", exist_ok=True)
@@ -441,6 +443,49 @@ def shard_verdict(res: Optional[dict], junit: Optional[dict]) -> str:
     return "ok"
 
 
+def pool_metrics(w, run_id: int, spec: dict) -> dict:
+    """What the schedule did, from the start and end of each task: the chunks and slots, the longest task against the mean,
+    when each lane ended (the tail is the last lane's end after the first lane's: slots that sat idle at the end), the
+    ideal wall (the sum of the tasks over the lanes) and the slot time left unused."""
+    try:
+        tasks = {t.task_key: t for t in (w.jobs.get_run(run_id).tasks or [])}
+    except Exception:  # noqa: BLE001
+        return {}
+    dur, lane_end, t_first = {}, [], None
+    for lane in spec["lanes"]:
+        ends = []
+        for slug in lane:
+            t = tasks.get(f"s_{slug}"[:100])
+            if t is None or not t.start_time or not t.end_time:
+                continue
+            dur[slug] = (t.end_time - t.start_time) / 1000.0
+            t_first = t.start_time if t_first is None else min(t_first, t.start_time)
+            ends.append(t.end_time)
+        if ends:
+            lane_end.append(max(ends))
+    if not dur or not lane_end:
+        return {}
+    lanes = len(spec["lanes"])
+    span = (max(lane_end) - t_first) / 1000.0
+    return {
+        "chunks": len(dur), "lanes": lanes, "slots": spec["slots"], "task_longest_s": int(max(dur.values())),
+        "task_mean_s": int(sum(dur.values()) / len(dur)), "task_sum_s": int(sum(dur.values())), "span_s": int(span),
+        "ideal_s": int(sum(dur.values()) / lanes), "tail_s": int((max(lane_end) - min(lane_end)) / 1000.0),
+        "idle_slot_s": int(max(0.0, lanes * span - sum(dur.values()))),
+    }
+
+
+def schedule_lines(info: dict) -> List[str]:
+    if "chunks" not in info:
+        return []
+    return [
+        f"  schedule: {info['chunks']} chunks on {info['lanes']} lane(s) ({info['slots']} slots per cluster); longest chunk {info['task_longest_s']} s, "
+        f"mean {info['task_mean_s']} s (longest/mean {info['task_longest_s'] / max(1, info['task_mean_s']):.1f}x)",
+        f"  first task to last end {info['span_s']} s; ideal (sum of tasks over the lanes) {info['ideal_s']} s; tail (last lane ended after the first) "
+        f"{info['tail_s']} s; idle slot time {info['idle_slot_s']} s",
+    ]
+
+
 def speedup_line(info: dict) -> str:
     """Wall time of the pool's job against the longest task and against running the tasks one after another."""
     wall, longest, serial = info.get("wall_s"), info.get("longest_s"), info.get("serial_s")
@@ -455,6 +500,7 @@ def summary_md(plan: dict, rows: List[dict], pool_info: dict) -> str:
            f"- purpose: {plan['purpose']}"]
     for pool, info in pool_info.items():
         out.append(f"- {pool}: cluster(s) {info.get('cluster_id', '-')} ({info.get('node_type', '-')}), job run {info.get('job_run', '-')}; {speedup_line(info)}")
+        out += [x.replace("  schedule", "  - schedule", 1).replace("  first task", "  - first task", 1) for x in schedule_lines(info)]
     if plan["jar"]:
         out.append(f"- JAR `{plan['jar']['name']}` sha1 {plan['jar'].get('sha1', '')[:12]} sha256 {plan['jar']['sha256'][:16]}")
     out += ["", "| shard | pool | verdict | passed | failed | errors | skipped | wall s | CI ~min |", "|---|---|---|---|---|---|---|---|---|"]
@@ -579,10 +625,17 @@ def main(argv=None) -> int:
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_USAGE
+    split_notes: List[str] = []
+    if not a.clusters and not (a.explain_only or a.serverless or a.fresh_cluster):
+        a.clusters = planned_clusters(a)
     timings = load_timings(REPO_ROOT / a.timings)
-    fsec = file_seconds_of(timings)
+    plan_slots = a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)
+    fsec = ts.rescale_seconds(file_seconds_of(timings), int(timings.get("slots") or plan_slots), plan_slots)  # as with this run's slots
     if a.split == "auto" and shards:
-        shards = ts.auto_split(shards, REPO_ROOT, fsec, a.target_min)
+        n_slots = (a.max_parallel or ts.slots_for(mut.cores_of(a.node_type) or 32)) * max(1, a.clusters)
+        target = a.target_min or ts.auto_target_min(shards, REPO_ROOT, fsec, n_slots)
+        shards = ts.auto_split(shards, REPO_ROOT, fsec, target)
+        split_notes.append(f"{len(shards)} chunks cut to about {target:g} min for {n_slots} slot(s) ({'timings of ' + str(timings.get('run')) if fsec else 'no timings yet: the CI minutes spread over each shard'})")
     elif shards:
         shards = [ts.Shard(**{**s.__dict__, "est_min": round(ts.estimate(s, REPO_ROOT, fsec), 2)}) for s in shards]
     if not shards:
@@ -592,7 +645,7 @@ def main(argv=None) -> int:
         print("ERROR: --serverless runs light shards only (the heavy shards need the JAR on a cluster)", file=sys.stderr)
         return EXIT_USAGE
     wheel = mut.find_wheel(a.wheel) if not a.explain_only or a.wheel or list(REPO_ROOT.glob("dist/env6/*.whl")) else None
-    notes = wheel_notes(wheel, sha) if wheel else ["no env6 wheel found in dist/env6/ (a launch needs one: gbx:build:wheel --env 6, or --wheel)"]
+    notes = split_notes + wheel_notes(wheel, sha) if wheel else split_notes + ["no env6 wheel found in dist/env6/ (a launch needs one: gbx:build:wheel --env 6, or --wheel)"]
     dirty = uncommitted()
     if dirty:
         notes.append(f"{len(dirty)} uncommitted path(s) under the staged subset are NOT in this run (it tests {sha[:10]}): "
@@ -620,6 +673,20 @@ def main(argv=None) -> int:
     if wheel is None:
         return EXIT_USAGE
     return launch(a, plan, shards)
+
+
+def planned_clusters(a) -> int:
+    """How many clusters the plan is cut for: the clusters the light pool has (the launch leases the free ones among them and
+    spreads the lanes again over what it got). One when the pool cannot be read."""
+    try:
+        from databricks.sdk import WorkspaceClient
+        import _cluster_pool as cp
+
+        w = WorkspaceClient(profile=a.profile or os.environ.get("DATABRICKS_CONFIG_PROFILE") or None)
+        return max(1, len(cp.members(w, a.pool_light)))
+    except Exception as exc:  # noqa: BLE001 - a plan for one cluster is a valid plan
+        print(f"  (could not count the clusters of pool {a.pool_light}: {type(exc).__name__}; planning for one)", file=sys.stderr)
+        return 1
 
 
 def _volroot() -> str:
@@ -788,8 +855,12 @@ def write_timings(path: Path, plan: dict, rows: List[dict], local_out: Path) -> 
         if isinstance(r["wall_s"], int):
             shards[r["name"]] = r["wall_s"]
     files = file_seconds_of(t)
+    slots = max((spec.get("slots", 1) for spec in plan.get("pools", {}).values()), default=1)
+    if (t.get("slots") or slots) != slots:  # files from runs at another slot count: bring the old ones to this run's
+        files = ts.rescale_seconds(files, int(t["slots"]), slots)
     files.update({k: round(v, 2) for k, v in run_sum.items()})
-    out = {"updated": time.strftime("%Y-%m-%d %H:%M:%S"), "run": plan["run_id"], "sha": plan["sha"][:10], "files": dict(sorted(files.items())), "shards": shards}
+    out = {"updated": time.strftime("%Y-%m-%d %H:%M:%S"), "run": plan["run_id"], "sha": plan["sha"][:10], "slots": slots,
+           "files": {k: round(v, 2) for k, v in sorted(files.items())}, "shards": shards}
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     Path(path).write_text(json.dumps(out, indent=1))
     print(f"Timings: {len(run_sum)} file(s) from this run, {len(files)} in {path}")
@@ -874,12 +945,15 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                 info["longest_s"] = max(walls) if walls else "-"
                 info["serial_s"] = sum(walls)
                 info["wall_s"] = int(time.monotonic() - t_submit[pool]) if pool in t_submit else "-"
+                info.update(pool_metrics(w, runs[pool], plan["pools"][pool]))
             write_timings(REPO_ROOT / a.timings, plan, rows, local_out)
             text = summary_md(plan, rows, pool_info)
             (local_out / "summary.md").write_text(text)
             print("\n" + table_text(rows))
             for pool, info in pool_info.items():
                 print(f"{pool}: {speedup_line(info)}")
+                for ln in schedule_lines(info):
+                    print(ln)
             for r in rows:
                 for n, m in r["failures"][:5]:
                     print(f"  FAIL [{r['name']}] {n}: {m}")

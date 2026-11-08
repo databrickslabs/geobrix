@@ -343,7 +343,10 @@ def file_minutes(files: List[str], file_seconds: Dict[str, float], default_s: fl
 
 
 def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
-    """Minutes the shard takes: the measured seconds of its files plus the fixed cost of a task; the table when nothing is known."""
+    """Minutes the shard takes: the measured seconds of its files plus the fixed cost of a task; the table when nothing is known.
+    An oracle-table shard runs one file for some of its tables, so the file's total says nothing about it: the table counts."""
+    if shard.oracle_tables:
+        return float(shard.est_min or shard.expected_min)
     files = files_of(shard, root)
     known = [f for f in (files or []) if f in file_seconds]
     if files and len(known) >= max(1, len(files) // 2):
@@ -351,9 +354,28 @@ def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
     return float(shard.expected_min)
 
 
+def split_tables(shard: Shard, k: int) -> List[Shard]:
+    """Cut an oracle-table shard (one test file, run once per table) into ``k`` shards of whole tables, equal in number: a
+    table takes about the same time as another, and the table list is CI's own."""
+    tables = [t for t in shard.oracle_tables.split(",") if t]
+    k = min(k, len(tables))
+    if k <= 1:
+        return [shard]
+    per_table = max((shard.expected_min - FIXED_MIN), 0.5) / len(tables)
+    parts = [tables[i::k] for i in range(k)]  # a round robin: neighbouring tables are often alike in size
+    return [
+        Shard(name=f"{shard.name} [{i}/{k}]", kind=shard.kind, paths=list(shard.paths), ignore=list(shard.ignore), part=shard.part,
+              oracle_tables=",".join(ts_), delta=shard.delta, pool=shard.pool, marker=shard.marker,
+              est_min=round(FIXED_MIN + per_table * len(ts_), 2), unsplittable=True)
+        for i, ts_ in enumerate(parts, 1)
+    ]
+
+
 def split_shard(shard: Shard, k: int, root: Path, file_seconds: Dict[str, float]) -> List[Shard]:
     """Cut ``shard`` into ``k`` shards of whole files, balanced by the measured seconds of each file (longest first onto the
     lightest part), so that no part is much longer than another. A shard that cannot be cut by file comes back as it is."""
+    if shard.oracle_tables:
+        return split_tables(shard, k)
     files = files_of(shard, root)
     if not files or k <= 1:
         return [shard]
@@ -381,7 +403,7 @@ def auto_split(shards: List[Shard], root: Path, file_seconds: Dict[str, float], 
     out: List[Shard] = []
     for s in shards:
         est = estimate(s, root, file_seconds)
-        if s.unsplittable or est <= target_min * 1.25:
+        if (s.unsplittable and not (s.oracle_tables and not s.name.endswith("]"))) or est <= target_min * 1.25:
             out.append(Shard(**{**s.__dict__, "est_min": round(est, 2)}))
             continue
         k = max(2, round((est - FIXED_MIN) / (target_min - FIXED_MIN)))
@@ -393,6 +415,34 @@ def pytest_file_args(shard: Shard) -> List[str]:
     return pytest_args(shard)
 
 
-def slots_for(cores: int, cores_per_task: int = 4) -> int:
-    """How many shards run side by side on a node: its cores over what one shard's pytest and Spark use."""
+# Measured on 2026-11-08 (all-light pilot, 8 tasks at once on one 32 vCPU node): a chunk took 1.6 to 3.4x as long as the same
+# kind of shard alone (2.4x on average), because the tasks share one Spark driver JVM and the node's cores. Slowdown grows about
+# in step with the tasks beyond 3 or 4, so 8 cores per task (4 slots on 32 vCPU) keeps it near 1.2x; more wall-clock speed comes
+# from more clusters, not more slots.
+CORES_PER_TASK = 8
+
+
+def slots_for(cores: int, cores_per_task: int = CORES_PER_TASK) -> int:
+    """How many shards run side by side on a node: its cores over what one shard's pytest and its share of Spark use."""
     return max(1, cores // max(1, cores_per_task))
+
+
+def auto_target_min(shards: List[Shard], root: Path, file_seconds: Dict[str, float], slots: int, chunks_per_slot: float = 3.5,
+                    lo: float = 3.5, hi: float = 10.0) -> float:
+    """The length to cut shards to so that there are about ``chunks_per_slot`` x ``slots`` chunks of the same length: a slot that
+    finishes early takes another, so the last chunk to start is a small one and the tail stays short. Kept above ``lo`` so a
+    task's fixed cost (FIXED_MIN) stays about a fifth of it at most."""
+    total = sum(estimate(s, root, file_seconds) for s in shards)
+    return round(min(hi, max(lo, total / max(1.0, slots * chunks_per_slot))), 2)
+
+
+def slowdown(slots: int) -> float:
+    """How much longer a chunk takes with ``slots`` chunks running on a node than alone (an estimate from the first pilot: 2.4x at
+    8 slots; about 1x up to 3 slots). The next runs' timings refine the file seconds, not this curve."""
+    return max(1.0, slots / 3.3)
+
+
+def rescale_seconds(file_seconds: Dict[str, float], measured_at_slots: int, plan_for_slots: int) -> Dict[str, float]:
+    """File seconds measured with ``measured_at_slots`` chunks per node, as they will be with ``plan_for_slots``."""
+    k = slowdown(plan_for_slots) / slowdown(max(1, measured_at_slots))
+    return {f: v * k for f, v in file_seconds.items()}

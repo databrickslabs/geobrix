@@ -411,10 +411,15 @@ def test_contextily_add_basemap_accepts_headers():
     parameter did not yet exist.
     """
     contextily = pytest.importorskip("contextily")
-    ver = tuple(int(x) for x in contextily.__version__.split(".")[:2])
+    from importlib.metadata import version as dist_version
+
+    cx_version = dist_version(
+        "contextily"
+    )  # newer contextily releases carry no module-level __version__
+    ver = tuple(int(x) for x in cx_version.split(".")[:2])
     if ver < (1, 7):
         pytest.skip(
-            f"contextily {contextily.__version__} < 1.7 — headers= not yet present; "
+            f"contextily {cx_version} < 1.7 — headers= not yet present; "
             "CI lock uses 1.7.1 which is the correct minimum."
         )
     sig = inspect.signature(contextily.add_basemap)

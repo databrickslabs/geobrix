@@ -1957,15 +1957,15 @@ def test_a_file_ref_row_registers_the_file_udf_behind_its_wrapper(monkeypatch):
     from databricks.labs.gbx.ds import file_gbx
     from databricks.labs.gbx.manager import l3
 
-    fn = MAN.functions["gbx_rst_aspect"]
+    fn = MAN.functions["gbx_rst_updatetype"]
     assert "file_ref" in fn.levels["L3"]
     monkeypatch.setattr(caps_mod, "_sql_functions", lambda s: True)
     monkeypatch.setattr(file_gbx, "file_supported", lambda spark=None: False)
     spark = _Session()
     l3.register_l3(spark, fn, "c0")
-    assert spark.registered == ["gbx__l3f_rst_aspect"]
+    assert spark.registered == ["gbx__l3f_rst_updatetype"]
     assert any(
-        "gbx__l3f_rst_aspect(tile, NULL, " in s and s.startswith("CREATE")
+        "gbx__l3f_rst_updatetype(tile, NULL, " in s and s.startswith("CREATE")
         for s in spark.statements
     ), spark.statements
 

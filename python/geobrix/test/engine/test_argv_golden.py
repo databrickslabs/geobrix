@@ -51,6 +51,33 @@ def test_a_refused_binding_names_the_value(case):
     assert case["names"] in str(exc.value) and fn.sql_name in str(exc.value)
 
 
+def test_a_byte_hillshade_is_written_striped_not_tiled_and_compressed():
+    """GDAL 3.13.3's `raster hillshade` leaves the NoData neighbours of a hole unmasked in a tiled, compressed Byte
+    GeoTIFF (see `engine_creation_options`): the hillshade output is striped, every other output keeps its tiling.
+    """
+    props = [argv.RasterProps(64, 48, 1, "Float32")]
+    values = {
+        "azimuth": 315.0,
+        "altitude": 45.0,
+        "z_factor": 1.0,
+        "xscale": None,
+        "yscale": None,
+    }
+    hill = argv.build(MAN.functions["gbx_rst_hillshade"], values, props)
+    assert "--creation-option=COMPRESS=ZSTD" in hill
+    assert not [
+        t
+        for t in hill
+        if t.startswith(("--creation-option=TILED", "--creation-option=BLOCK"))
+    ]
+    tri = argv.build(MAN.functions["gbx_rst_tri"], {}, props)
+    assert "--creation-option=TILED=YES" in tri
+    assert "TILED=YES" in engine_creation_options("Byte", 4096, 64, 48, "raster tri")
+    assert "TILED=YES" not in engine_creation_options(
+        "Byte", 4096, 64, 48, "raster hillshade"
+    )
+
+
 def test_a_null_required_value_is_a_null_result():
     fn = MAN.functions["gbx_rst_slope"]
     assert (

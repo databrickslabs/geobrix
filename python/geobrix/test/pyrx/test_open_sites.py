@@ -325,6 +325,13 @@ OPEN_SITES = {
     ),
     (
         "bench/oracles.py",
+        "gdal.DEMProcessing(",
+    ): (
+        1,
+        "the independent gdaldem slope reference reads the tile bytes the oracle wrote to a unique /vsimem name just above and unlinks both files after; no caller-supplied name is opened",
+    ),
+    (
+        "bench/oracles.py",
         "rasterio.shutil.copy(src, out, driver=_DEM_DRIVERS[name])",
     ): (
         1,

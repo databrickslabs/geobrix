@@ -233,7 +233,8 @@ def test_the_bytes_class_holds_no_driver_that_names_other_files():
 @pytest.mark.parametrize("fn", ENGINE_FNS, ids=lambda f: f.sql_name)
 def test_every_gdal_block_validates(fn):
     spec.validate(fn, MAN.gdal)
-    assert "engine" in fn.levels["L3"] and "L1" not in fn.levels
+    # the engine has no JVM level; an L1 entry that remains is the function's own Scala companion (until it is measured)
+    assert "engine" in fn.levels["L3"] and "engine" not in fn.levels.get("L1", {})
 
 
 def _row(**over):

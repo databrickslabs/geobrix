@@ -304,29 +304,41 @@ _GDAL_DTYPES = {
 }
 
 
+# The engine algorithm whose Byte output must not be written tiled and compressed (see engine_creation_options).
+HILLSHADE_ALG = "raster hillshade"
+
+
 def engine_creation_options(
-    gdal_dtype: str, decoded_bytes: int, width: int, height: int
+    gdal_dtype: str,
+    decoded_bytes: int,
+    width: int,
+    height: int,
+    alg: Optional[str] = None,
 ) -> list:
     """The `--creation-option` values of a GDAL spec engine output (the `tile` write profile), in order.
 
     The codec, level and predictor are ``creation_opts(dtype, decoded_bytes, "auto")`` (ZSTD on the size ladder,
-    the dtype's predictor); the tiling is the heavy tier's (``OperatorOptions.appendOptions``): 512-pixel blocks
-    capped to the raster, at least 64, floored to a multiple of 16, and BigTIFF when needed. The JVM's
-    ``OperatorOptions.engineCreationOptions`` gives the same list (one golden fixture holds both).
+    the dtype's predictor); the tiling is 512-pixel blocks capped to the raster, at least 64, floored to a multiple
+    of 16, and BigTIFF when needed.
+
+    GDAL 3.13.3 defect: ``raster hillshade`` (the regular variant, a Byte output) leaves the NoData neighbours of a
+    NoData cell unmasked, with computed values in them, when its output is a GeoTIFF that is both tiled and
+    compressed. It masks only the cells above and beside the hole, so about 9% of the NoData border of a DEM with
+    voids is wrong. A striped, compressed GeoTIFF (or a tiled, uncompressed one) masks every cell, so for that
+    algorithm the tiling options are left out.
     """
     opts = creation_opts(
         _GDAL_DTYPES.get(gdal_dtype, gdal_dtype.lower()), decoded_bytes, "auto"
     )
-    blk = max(64, min(512, int(width), int(height))) // 16 * 16
-    return [
+    out = [
         f"COMPRESS={opts['compress'].upper()}",
         f"PREDICTOR={opts['predictor']}",
         f"ZSTD_LEVEL={opts['zstd_level']}",
-        "TILED=YES",
-        f"BLOCKXSIZE={blk}",
-        f"BLOCKYSIZE={blk}",
-        "BIGTIFF=IF_SAFER",
     ]
+    if alg != HILLSHADE_ALG or gdal_dtype.lower() not in ("byte", "uint8"):
+        blk = max(64, min(512, int(width), int(height))) // 16 * 16
+        out += ["TILED=YES", f"BLOCKXSIZE={blk}", f"BLOCKYSIZE={blk}"]
+    return out + ["BIGTIFF=IF_SAFER"]
 
 
 def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:

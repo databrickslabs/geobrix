@@ -190,7 +190,16 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # Mapalgebra: the row-wise form took 13.16 s against 13.48 s for the batch form at 16x tiles (dedicated, DBR 19).
 # Slope (5.90 s batch against 6.07 s row-wise) and transformcrs (75.6 s batch against 104.0 s row-wise at 4x) take the
 # default.
-ENGINE_L3_FORM: Dict[str, str] = {"gbx_rst_mapalgebra": "engine-c0"}
+# The DEM functions took the row-wise form in the local pass (1024 px tiles, median of 3 runs, 384 tiles, c0 against c1):
+# aspect 9.4 s against 11.5 s, hillshade 3.4 against 4.9, TRI 6.3 against 8.0, TPI 5.3 against 8.5, roughness 5.2
+# against 7.4. Local ratios are provisional until the cluster pass.
+ENGINE_L3_FORM: Dict[str, str] = {
+    "gbx_rst_mapalgebra": "engine-c0",
+    **{
+        f"gbx_rst_{n}": "engine-c0"
+        for n in ("aspect", "hillshade", "tri", "tpi", "roughness")
+    },
+}
 
 
 def engine_form(fn) -> str:

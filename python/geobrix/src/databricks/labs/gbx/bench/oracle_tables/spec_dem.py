@@ -15,6 +15,7 @@ from databricks.labs.gbx.bench.oracles import (
     UPSTREAM_ERROR,
     Build,
     Case,
+    _dem_surface,
     _gtiff,
     _tile,
     builder,
@@ -26,6 +27,12 @@ CR = "gbx_rst_color_relief"
 DEM, PLANE, FLAT = Build("dem_3857"), Build("dem_plane_east"), Build("dem_flat")
 ERR, CORRUPT, VIRT = Build("tile_error"), Build("tile_corrupt"), Build("dem_file")
 ONLY = ("session",)
+MULTI, INT16, NOCRS, GEO = (
+    Build("dem_multiband"),
+    Build("dem_int16"),
+    Build("dem_nocrs"),
+    Build("dem_4326"),
+)
 
 
 @builder("dem_plane_east")
@@ -43,6 +50,39 @@ def _flat(tmpdir):
     import numpy as np
 
     return _tile(_gtiff(np.full((1, 16, 16), 5.0), "EPSG:3857"))
+
+
+@builder("dem_multiband")
+def _multiband(tmpdir):
+    """Three bands, band 1 the DEM surface: a DEM function reads band 1 only."""
+    import numpy as np
+
+    z = _dem_surface()
+    return _tile(_gtiff(np.stack([z, z * 2.0, z + 5.0]), "EPSG:3857"))
+
+
+@builder("dem_int16")
+def _int16(tmpdir):
+    """The surface rounded to Int16 with its hole at NoData -32768."""
+    import numpy as np
+
+    z = _dem_surface()
+    z = np.where(z == -9999.0, -32768.0, np.rint(z))
+    return _tile(_gtiff(z[np.newaxis], "EPSG:3857", nodata=-32768, dtype="int16"))
+
+
+@builder("dem_nocrs")
+def _nocrs(tmpdir):
+    """The surface on a 10 unit grid with no CRS: the horizontal and vertical units are taken as equal."""
+    return _tile(_gtiff(_dem_surface()[None], None))
+
+
+@builder("dem_4326")
+def _dem_4326(tmpdir):
+    """The surface on a 0.001 degree grid at 51.5 degrees north (EPSG:4326): GDAL derives the metres per degree."""
+    return _tile(
+        _gtiff(_dem_surface()[None], "EPSG:4326", origin=(-0.032, 51.532), px=0.001)
+    )
 
 
 @builder("dem_file")
@@ -183,6 +223,37 @@ _session_dem_rows = (
         "no_such_colors",
         ONLY,
     ),
+)
+
+# One DEM input path for every algorithm, as `gdal raster slope` reads it: band 1 of a multi-band tile, an Int16 DEM
+# whose NoData is -32768 (a Float32 output with the same mask), pixel units for a tile with no CRS, and GDAL's own
+# metres per degree for a tile in EPSG:4326. Slope's rows carry the four; the other functions repeat the two that do not
+# depend on a scale, and the scale-aware hillshade the CRS-less one.
+_DEM_ALGORITHMS = (
+    ("aspect", AS, (False, False)),
+    ("hillshade", HS, (315.0, 45.0, 1.0, None, None)),
+    ("tri", TRI, ()),
+    ("tpi", TPI, ()),
+    ("roughness", RGH, ()),
+)
+_session_dem_rows += (
+    Case("dem_multiband", SL, (MULTI, "degrees"), "ref", "slope", ONLY),
+    Case("dem_int16", SL, (INT16, "degrees"), "ref", "slope", ONLY),
+    Case("dem_nocrs", SL, (NOCRS, "degrees"), "ref", "slope", ONLY),
+    Case("dem_4326", SL, (GEO, "degrees"), "ref", "gdaldem_slope", ONLY),
+    Case("dem_4326_aspect", AS, (GEO, False, False), "ref", "aspect", ONLY),
+    Case(
+        "dem_nocrs_hillshade",
+        HS,
+        (NOCRS, 315.0, 45.0, 1.0, None, None),
+        "ref",
+        "hillshade",
+        ONLY,
+    ),
+) + tuple(
+    Case(f"dem_{kind}_{short}", fn, (inp, *extra), "ref", short, ONLY)
+    for kind, inp in (("multiband", MULTI), ("int16", INT16))
+    for short, fn, extra in _DEM_ALGORITHMS
 )
 
 # The contour lines: `vz_columns` (raster_vectorize.py) rises by one per pixel to the east, so the line of value v is

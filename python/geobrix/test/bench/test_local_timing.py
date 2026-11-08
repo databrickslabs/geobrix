@@ -111,11 +111,16 @@ def test_the_table_has_seconds_per_n_the_ratios_to_floor_and_reference_and_t96_o
     assert udf == ["udf", "1.5", "2.5", "7.0", "4.4", "1.0", "2.80"]
 
 
+_SE_DEM_SETS = tuple(
+    f"SE-{n}" for n in ("aspect", "hillshade", "tri", "tpi", "roughness")
+)
+
+
 def test_every_form_of_the_se_set_exists_for_its_function():
     """A renamed variant would time nothing and still pass: each name of the set picks exactly one form."""
     from databricks.labs.gbx.bench import levels_forms as lf
 
-    for name in ("SE", "SE-mapalgebra", "SE-transformcrs"):
+    for name in ("SE", "SE-mapalgebra", "SE-transformcrs", *_SE_DEM_SETS):
         spec = lt.SETS[name]
         for variant in spec.forms:
             picked = [
@@ -126,9 +131,18 @@ def test_every_form_of_the_se_set_exists_for_its_function():
 
 def test_only_the_known_sets_are_implemented(capsys):
     # the letter sets, and one set per multi-level function family of the manifest
-    assert {"IO", "S", "SE", "SE-mapalgebra", "SE-transformcrs"} <= set(lt.SETS)
+    assert {"IO", "S", "SE", "SE-mapalgebra", "SE-transformcrs", *_SE_DEM_SETS} <= set(
+        lt.SETS
+    )
     # a second function of a family has a set of its own, named `<family>-<function>`
-    assert set(lt.SETS) - {"IO", "S", "SE", "SE-mapalgebra", "SE-transformcrs"} - {
+    assert set(lt.SETS) - {
+        "IO",
+        "S",
+        "SE",
+        "SE-mapalgebra",
+        "SE-transformcrs",
+        *_SE_DEM_SETS,
+    } - {
         "raster-vectorize-contour",
     } == {
         f.family

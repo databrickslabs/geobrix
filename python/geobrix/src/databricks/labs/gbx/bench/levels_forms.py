@@ -2206,6 +2206,41 @@ FORMS["SE"] += [
 ]
 
 
+# The other DEM functions (aspect, hillshade, TRI, TPI, roughness) on the same input as slope's local pass: the replicated
+# 1024 px tiles, each with the engine's row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a floor, with the
+# value fingerprint. Each function's light form is the one of the two that measures faster.
+_SE_DEM_CALLS = {
+    "gbx_rst_aspect": "{fn}(tile, false, false)",
+    "gbx_rst_hillshade": "{fn}(tile, 315.0, 45.0, 1.0, CAST(NULL AS DOUBLE), CAST(NULL AS DOUBLE))",
+    "gbx_rst_tri": "{fn}(tile)",
+    "gbx_rst_tpi": "{fn}(tile)",
+    "gbx_rst_roughness": "{fn}(tile)",
+}
+SE_DEM_FUNCTIONS = tuple(_SE_DEM_CALLS)
+for _fn, _call in _SE_DEM_CALLS.items():
+    FORMS["SE"] += [
+        _se(
+            _fn,
+            "L3",
+            f"{v}@mem",
+            "se_dem_1024_mem",
+            _SE_FP.format(call=_call),
+            vsql=_SE_VFP.format(call=_call, col="tile.raster", k=8),
+        )
+        for v in ("engine-c0", "engine-c1")
+    ] + [
+        _se(
+            _fn,
+            "L3",
+            "floor-c0@mem",
+            "se_dem_1024_mem",
+            _SE_FLOOR_C0,
+            setup="setup_se_floor",
+            register=False,
+        )
+    ]
+
+
 # --- IO, the read paths: bytes-free reads with a Python decode against the reader with bytes ----------------------------
 #
 # The measured heavy read lead was the cost of moving decoded bytes into Python rows. Every read form reads the corpus

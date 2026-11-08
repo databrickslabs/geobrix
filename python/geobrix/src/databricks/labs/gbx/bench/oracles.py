@@ -1791,9 +1791,10 @@ def _gtiff(
     nodata=-9999.0,
     origin=(400000.0, 5760000.0),
     px=10.0,
+    dtype="float32",
 ) -> bytes:
-    """A float32 GeoTIFF of `bands` (a (count, h, w) array) on a `px` pixel grid (10 m) from the top-left corner
-    `origin`, in `crs_value` (None: no CRS)."""
+    """A GeoTIFF of `bands` (a (count, h, w) array) as `dtype` (float32) on a `px` pixel grid (10 m) from the
+    top-left corner `origin`, in `crs_value` (None: no CRS)."""
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
@@ -1806,16 +1807,16 @@ def _gtiff(
         width=w,
         height=h,
         count=count,
-        dtype="float32",
+        dtype=dtype,
         nodata=nodata,
         transform=from_origin(origin[0], origin[1], px, px),
-        **creation_opts("float32", compress="zstd"),
+        **creation_opts(dtype, compress="zstd"),
     )
     if crs_value:
         profile["crs"] = resolve_crs(crs_value)
     with MemoryFile() as mf:
         with mf.open(**profile) as ds:
-            ds.write(bands.astype("float32"))
+            ds.write(bands.astype(dtype))
         return mf.read()
 
 
@@ -2012,6 +2013,16 @@ def _vrt(source: str, python: bool = False) -> str:
     )
 
 
+def _dem_surface():
+    """The DEM oracle surface (64 x 64): smooth, with a 3 x 3 NoData hole (-9999) at rows 20-22, columns 30-32."""
+    import numpy as np
+
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+    z[20:23, 30:33] = -9999.0
+    return z
+
+
 def _se_build(name: str, tmpdir: Optional[str] = None):
     """The spec engine rows' fixtures (SPEC_SE)."""
     import numpy as np
@@ -2022,10 +2033,7 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
     a[5:8, 5:8] = -9999.0
     b[30:32, 40:44] = -9999.0
     if name == "dem_3857":  # a smooth surface with a 3 x 3 NoData hole
-        yy, xx = np.mgrid[0:64, 0:64].astype("float64")
-        z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
-        z[20:23, 30:33] = -9999.0
-        return _tile(_gtiff(z[np.newaxis], "EPSG:3857"))
+        return _tile(_gtiff(_dem_surface()[np.newaxis], "EPSG:3857"))
     if name == "tile_nocrs":  # a geotransform, but no CRS
         return _tile(_gtiff(a[np.newaxis], None))
     if name == "se_pair":
@@ -2644,6 +2652,36 @@ def _ref_slope(args):
     with _ref_dataset(args) as ds:
         ref = terrain.slope(ds, unit=unit, xscale=xs, yscale=ys)
     g = _masked_band(ref)
+    return g.data.astype("float64"), g.mask
+
+
+def _ref_gdaldem_slope(args):
+    """GDAL's own `gdal.DEMProcessing` slope (Horn, no edges), the `gdaldem` command line's scale handling, through
+    `osgeo`: independent of the engine's `raster slope` and of the numpy kernel. The source is the tile written under
+    a `/vsimem` name; the scale is GDAL's own (for a geographic CRS, its metres per degree).
+    """
+    import uuid
+
+    from databricks.labs.gbx import _osgeo
+
+    gdal = _osgeo.bindings("the gdaldem slope reference").gdal
+    stem = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}"
+    src, dst = f"{stem}_in.tif", f"{stem}_out.tif"
+    gdal.FileFromMemBuffer(src, _raster_of(args[0]))
+    try:
+        gdal.DEMProcessing(
+            dst, src, "slope", alg="Horn", computeEdges=False, slopeFormat="degree"
+        )
+        f = gdal.VSIFOpenL(dst, "rb")
+        gdal.VSIFSeekL(f, 0, 2)
+        size = gdal.VSIFTellL(f)
+        gdal.VSIFSeekL(f, 0, 0)
+        out = gdal.VSIFReadL(1, size, f)
+        gdal.VSIFCloseL(f)
+    finally:
+        gdal.Unlink(src)
+        gdal.Unlink(dst)
+    g = _masked_band(out)
     return g.data.astype("float64"), g.mask
 
 
@@ -3374,6 +3412,7 @@ _REFS = {
     "fillnodata": _ref_fillnodata,
     "clip_left_half": _ref_clip_columns(0, 32),
     "slope": _ref_slope,
+    "gdaldem_slope": _ref_gdaldem_slope,
     "chm": _ref_chm,
     "norm_diff": _ref_norm_diff,
     "times2": _ref_times2,

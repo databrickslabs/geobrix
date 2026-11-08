@@ -331,7 +331,9 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
     decoded = sum(
         r.width * r.height * r.bands * _ITEMSIZE.get(r.dtype, 8) for r in inputs
     )
-    creation = engine_creation_options(dtype, decoded, first.width, first.height)
+    creation = engine_creation_options(
+        dtype, decoded, first.width, first.height, block.alg
+    )
     return (
         ins
         + ["--input-format=GTiff"]

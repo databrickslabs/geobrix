@@ -139,6 +139,27 @@ SETS: Dict[str, SetSpec] = {
         fn="gbx_rst_mapalgebra",
         peer_exempt=("engine-c1@mem",),  # slower by design, not a peer
     ),
+    # the engine's DEM functions, each over the same replicated 1024 px tiles as slope, with its two light UDFs and a floor
+    **{
+        "SE-"
+        + fn[len("gbx_rst_") :]: SetSpec(
+            mvp="SE",
+            forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+            reference="engine-c0@mem",
+            ns=(24, 96, 384),
+            fn=fn,
+            peer_exempt=(
+                "engine-c1@mem",
+            ),  # the batch UDF behind the wrapper: recorded, not a peer
+        )
+        for fn in (
+            "gbx_rst_aspect",
+            "gbx_rst_hillshade",
+            "gbx_rst_tri",
+            "gbx_rst_tpi",
+            "gbx_rst_roughness",
+        )
+    },
     "SE-transformcrs": SetSpec(
         mvp="SE",
         forms=(

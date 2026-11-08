@@ -1,4 +1,4 @@
-"""The SE forms at scale: slope, transformcrs and map algebra, each with the engine's light row-wise and batch UDFs and
+"""The SE forms at scale: slope, aspect, hillshade, TRI, TPI, roughness, transformcrs and map algebra, each with the engine's light row-wise and batch UDFs and
 a floor, on one input that scales past the client cap. The engine
 has no JVM level, so no form of the set is L1.
 """
@@ -13,6 +13,7 @@ PASS = {
     "gbx_rst_slope": "se_dem_1024_mem",
     "gbx_rst_transformcrs": "tiles_mat",
     "gbx_rst_mapalgebra": "se_pair_512_mem",
+    **{fn: "se_dem_1024_mem" for fn in lf.SE_DEM_FUNCTIONS},
 }
 NEEDED = (
     {  # (level, variant label without the input tag) every function has on its input

@@ -43,6 +43,9 @@ from databricks.labs.gbx.bench.oracles import (
 )
 
 ONLY = ("session",)
+# scalars whose session rows also run on the plain Python function (what a mutation run can see); the ones left out
+# return a struct there, where the check reads a Row
+L3_CALLABLE_FNS = ("gbx_rst_binpoints_partial",)
 
 
 def _surfaces(fn):

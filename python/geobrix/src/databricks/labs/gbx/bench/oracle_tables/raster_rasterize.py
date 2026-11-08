@@ -21,6 +21,14 @@ RZ, GP, BP, DT = (
     "gbx_rst_dtmfromgeoms",
 )
 ONLY = ("session",)
+# scalars whose session rows also run on the plain Python function (what a mutation run can see); the ones left out
+# return a struct there, where the check reads a Row
+L3_CALLABLE_FNS = (
+    "gbx_rst_binpoints",
+    "gbx_rst_dtmfromgeoms",
+    "gbx_rst_gridfrompoints",
+    "gbx_rst_rasterize",
+)
 SQUARE_WKT = "POLYGON((2 2, 6 2, 6 6, 2 6, 2 2))"
 BOX = (0.0, 0.0, 10.0, 10.0)
 GRID_META = {"count": 1, "dtype": "float64", "nodata": -9999.0, "crs": "EPSG:3857"}

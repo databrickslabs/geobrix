@@ -20,6 +20,14 @@ from databricks.labs.gbx.bench.oracles import Build, Case, _gtiff, _tile, builde
 
 STATS = ("avg", "count", "max", "median", "min", "stddev", "sum", "variance")
 ONLY = ("session",)
+# scalars whose session rows also run on the plain Python function (what a mutation run can see); the ones left out
+# return a struct there, where the check reads a Row
+L3_CALLABLE_FNS = (
+    "gbx_rst_bng_rastertogrid_partial",
+    "gbx_rst_custom_rastertogrid_partial",
+    "gbx_rst_h3_rastertogrid_partial",
+    "gbx_rst_quadbin_rastertogrid_partial",
+)
 LL, BNG = Build("rtg_ll"), Build("rtg_bng")
 ERR, CORRUPT = Build("tile_error"), Build("tile_corrupt")
 

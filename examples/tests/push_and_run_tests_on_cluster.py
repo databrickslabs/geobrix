@@ -83,7 +83,7 @@ EXTRAS = "stac,vizx,zarr,databricks"  # the env wheel's feature extras the suite
 # What the tests read besides python/geobrix: the CI workflow and actions (the scripts/ci shard and its guards parse them), scripts,
 # docs, examples, sample data and the Scala sources (main, and the test sources the heavy tests read: TestL1.scala).
 SUBSET = (".github", "python/geobrix", "scripts", "docs", "examples", "sample-data", "src/main", "src/test/scala", "README.md")
-RESOURCES = "src/test/resources/binary"  # 117 MB of test rasters and NetCDF: staged once per content, not once per run
+RESOURCES = "src/test/resources"  # the test rasters, NetCDF and MODIS scenes the tests open: staged once per content, not once per run
 DEPS_INPUTS = ("python/geobrix/pyproject.toml", "python/geobrix/envs", "scripts/native")  # a change here wants a new wheel
 EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_STALLED = 1, 2, 4, 3
 POLL_S = 15

@@ -75,3 +75,13 @@ def test_no_input_of_the_pass_is_built_on_the_client_at_16x():
         )
         == []
     )
+
+
+def test_the_fingerprint_query_of_the_corpus_tiles_does_not_hash_every_tile():
+    """It runs after the timed iterations over 4000 tiles of 16 MiB: it may pick its 64 by path, not by their bytes."""
+    for f in _on("gbx_rst_transformcrs", "tiles_mat"):
+        if f.vsql:
+            assert "ORDER BY tile.path LIMIT 64" in f.vsql and "xxhash" not in f.vsql
+            assert (
+                f.allows_null
+            )  # a tile the corpus holds that a level cannot warp is a note, not a lost row

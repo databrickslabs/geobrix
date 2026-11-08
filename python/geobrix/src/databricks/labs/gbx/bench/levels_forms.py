@@ -2207,8 +2207,8 @@ _SE_SLOPE_TODAY_V = _SE_VFP.format(
 _SE_TCRS_V = (
     "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
     "FROM (SELECT {fn}(tile, 'EPSG:3857') AS t FROM "
-    "(SELECT * FROM {src} ORDER BY tile.path, xxhash64(tile.raster) LIMIT 64))"
-)
+    "(SELECT * FROM {src} ORDER BY tile.path LIMIT 64))"
+)  # by path only: ordering by a hash of every tile's bytes reads and sorts the whole table
 _SE_MA_V = _SE_VFP.format(
     call="""{fn}(tiles, '{{"calc": "(A - B) / (A + B)"}}')""",
     col="tiles[0].raster",
@@ -2248,10 +2248,27 @@ FORMS["SE"] += [
         _SE_TCRS,
         computes=_DED,
         vsql=_SE_TCRS_V,
+        allows_null=True,
     ),
-    _se(T, "L3", "engine-c0@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V),
-    _se(T, "L3", "engine-c1@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V),
-    _se(T, "L3", "today@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V),
+    _se(
+        T,
+        "L3",
+        "engine-c0@mat",
+        "tiles_mat",
+        _SE_TCRS,
+        vsql=_SE_TCRS_V,
+        allows_null=True,
+    ),
+    _se(
+        T,
+        "L3",
+        "engine-c1@mat",
+        "tiles_mat",
+        _SE_TCRS,
+        vsql=_SE_TCRS_V,
+        allows_null=True,
+    ),
+    _se(T, "L3", "today@mat", "tiles_mat", _SE_TCRS, vsql=_SE_TCRS_V, allows_null=True),
     _se(
         T,
         "L3",

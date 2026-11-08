@@ -23,7 +23,7 @@ Create an [Earthdata Login](https://urs.earthdata.nasa.gov/) account and token f
 :::
 
 :::note Prerequisites
-- GeoBrix installed (the env wheel for the runtime), and `earthaccess` as a separate step after it: `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` (the env wheels have no `[earthdata]` extra; installing `earthaccess` raises the runtime's `fsspec`). Off Databricks, the plain wheel's `pip install "geobrix[earthdata]"` installs it. See [Installation](../installation#whl-only).
+- GeoBrix installed (the env wheel for the runtime), and `earthaccess` as a separate step after it: `%pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` (the env wheels have no `[earthdata]` extra; installing `earthaccess` raises the runtime's `fsspec`). See [Installation](../installation#whl-only).
 - Unity Catalog Volume already exists at `/Volumes/{catalog}/{schema}/{volume}/...`
 - `EARTHDATA_TOKEN` set in the environment (see above) before calling `download()`
 :::

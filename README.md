@@ -59,7 +59,7 @@ GeoBrix supports the following Databricks Runtime releases:
 
 A **single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and GEOS. The plain wheel, `geobrix-<version>-py3-none-any.whl`, is for use off Databricks. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#whl-only) for the wheels and their extras.
+On Databricks, GeoBrix installs as the **env wheel** for the runtime, with no light extra to pick: `geobrix-<version>+env6-py3-none-any.whl` for Serverless environment 6 (recommended), DBR 19, SQL warehouses and UC functions; `geobrix-<version>+env5-py3-none-any.whl` for Serverless environment 5, DBR 17.3 / 18 and Lakeflow pipelines. Each carries its own GDAL, PROJ and GEOS. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation#whl-only) for the wheels and their extras.
 
 ## Quick start (lightweight)
 

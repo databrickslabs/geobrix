@@ -185,7 +185,6 @@ These changes affect callers that pass keywords or named arguments.
   - The env5 wheel's `[stac]` and `[vizx]` require 2.32.4 or later, below 2.33. Installing either upgrades `requests`.
   - Environment 6 and DBR 19 ship 2.32.5.
 - **The env wheels are about 90 to 115 MB.** The 0.5.x wheel was 1.1 MB. Each env wheel carries GDAL, PROJ, GEOS and the GeoBrix JAR.
-- **The plain wheel is for use off Databricks.** `geobrix-<version>-py3-none-any.whl` declares the Python library's base dependencies (floors only). `pip install geobrix` then works on a laptop or another Python, with PyPI's GDAL stack.
 
 ### The init-script install is removed (breaking) {#init-script}
 
@@ -939,7 +938,7 @@ Every grid function follows one contract for its resolution and its input.
   - In GeoBrix, a store's manifest is a Delta table.
   - A version of the store is a version of that table.
   - One Delta transaction is one store transaction.
-- **Requirements.** Zarr runs on Databricks Runtime 19 and Serverless environment 6, with no JAR. Install the env6 wheel with its `[zarr]` extra (off Databricks: `[zarr_dbr19]`). See [Dependencies](#dependencies) and [Zarr Stores](./api/zarr-stores).
+- **Requirements.** Zarr runs on Databricks Runtime 19 and Serverless environment 6, with no JAR. Install the env6 wheel with its `[zarr]` extra. See [Dependencies](#dependencies) and [Zarr Stores](./api/zarr-stores).
 - **`gbx_zarr_register` registers an existing store in place.** It lists a Zarr v2 or v3 store once and records every object in a manifest table. It does not copy or write to the store.
   - `writable=True` with an `overlay_root` sends writes to new files outside the store.
   - Several tables can register one store. Each is an independent branch with its own history, grants and overlay. Branches do not merge.
@@ -1037,7 +1036,7 @@ See [Databricks Container Service](./installation/dcs.mdx) and [Choose an instal
 
 ## Dependencies {#dependencies}
 
-- **Zarr extras (new).** On Databricks, install the env6 wheel with `[zarr]` (DBR 19, DBR 19 ML, Serverless environment 6). Off Databricks, install the plain wheel with `[zarr_dbr19]` (`[zarr_env6]` is the same set). DBR 17.3 / 18 and Serverless environment 5 are not supported.
+- **Zarr extras (new).** On Databricks, install the env6 wheel with `[zarr]` (DBR 19, DBR 19 ML, Serverless environment 6). DBR 17.3 / 18 and Serverless environment 5 are not supported.
   - The pins are `zarr>=3.4.1,<3.5`, `numcodecs>=0.17,<0.18`, `zarrs>=0.2.3,<0.3`, `tensorstore>=0.1.85,<0.2`, `obstore>=0.11,<0.13`, `ml_dtypes>=0.5,<1`, `msgspec>=0.19,<1` and `donfig>=0.8,<1`.
   - None is preinstalled on those runtimes. Installing the extra changes no package they provide.
   - GeoBrix reads cloud storage with `obstore` and adds no `fsspec`, `s3fs` or `gcsfs`.

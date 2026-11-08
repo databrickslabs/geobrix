@@ -145,9 +145,7 @@ capability, not something to invoke today.
 On Databricks the GeoSAM packages are a separate step after the env5 wheel, because the env wheels have no
 models extra. They are `torch==2.9.0` / `torchvision==0.24.0` (CUDA 12, the Serverless **GPU AI Runtime
 environment 5** base's pair), OpenCV 4.x, and `segment-geospatial`. The last one also installs PyPI's
-`rasterio` and `shapely` beside the wheel's own (a GeoBrix process uses the wheel's). Off
-Databricks, the plain wheel's `geobrix[models]` extra installs `segment-geospatial` with its own
-default torch/torchvision resolution. See [Geospatial Models
+`rasterio` and `shapely` beside the wheel's own (a GeoBrix process uses the wheel's). See [Geospatial Models
 overview](./overview#installation).
 
 ## See also

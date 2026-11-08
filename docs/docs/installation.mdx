@@ -67,7 +67,7 @@ family, and no light extra to pick:
 See [Env wheel](#whl-only) below for the install steps.
 
 :::note PySpark comes from the runtime
-On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark. Outside Databricks (for example a local Spark session), install `pyspark>=4.0.0` alongside GeoBrix.
+On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark.
 :::
 
 ## Env wheel {#whl-only}
@@ -99,16 +99,12 @@ required on Serverless.
 :::
 
 :::warning Install the env wheel for the runtime's family
-The env wheel of the other family refuses to import, naming the file to install. The **plain wheel**,
-`geobrix-<version>-py3-none-any.whl`, is for use **off Databricks**. Examples are a laptop, a
-non-Linux machine, another Python, or a GDAL you bring yourself. `pip install geobrix` gives a
-working install with PyPI's `rasterio`, `pyogrio`, `pyproj` and `shapely`. The plain wheel keeps the feature
-extras (`stac`, `vizx`, `zarr_dbr19`, `overture`, `earthdata`, …). On Databricks it would put a
-second GDAL stack beside the runtime's packages.
+The env wheel of the other family refuses to import, naming the file to install. Install the `+env6`
+wheel on Serverless environment 6 and DBR 19, and the `+env5` wheel on Serverless environment 5, DBR 17.3 and DBR 18.
 :::
 
 :::note Upgrading from GeoBrix 0.5.x?
-**GeoBrix 0.5.x** installed the plain wheel with a runtime extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]`, or their `_all` forms. In **0.6.0** those extras are gone: install the env wheel for the runtime instead, with no light extra. Replace `"geobrix[light_env6,vizx] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with `"geobrix[vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` (`+env5` for `light_env5` and `light_dbr17` / `light_dbr18`). An `_all` form becomes `[stac,vizx]`, and `[stac,vizx,zarr]` on the env6 wheel. An old install line fails at resolution (pip: `ResolutionImpossible`), naming the env wheel to install, rather than installing something else.
+**GeoBrix 0.5.x** installed with a runtime extra: `geobrix[light_env6]`, `[light_env5]`, `[light_dbr17]`, `[light_dbr18]` or `[light_dbr19]`, or their `_all` forms. In **0.6.0** those extras are gone: install the env wheel for the runtime instead, with no light extra. Replace `"geobrix[light_env6,vizx] @ file:///Volumes/…/geobrix-<version>-py3-none-any.whl"` with `"geobrix[vizx] @ file:///Volumes/…/geobrix-<version>+env6-py3-none-any.whl"` (`+env5` for `light_env5` and `light_dbr17` / `light_dbr18`). An `_all` form becomes `[stac,vizx]`, and `[stac,vizx,zarr]` on the env6 wheel. An old install line fails at resolution (pip: `ResolutionImpossible`), naming the env wheel to install, rather than installing something else.
 :::
 
 :::tip On Serverless, use environment 6

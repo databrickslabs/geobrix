@@ -13,10 +13,7 @@ A single GeoBrix analysis often produces several result layers at once. Examples
 The embed budget is small by default in a notebook (see the ladder below). When the total GeoJSON + PNG payload fits within it, `plot_interactive` embeds everything inline in the HTML string. It needs no tile server and no separate request. When it doesn't fit, the embed-size ladder picks the right path automatically. The runnable example below composites two vector layers; raster- and grid-layer usage is shown in the [Vector](./vizx-vector) and [Raster](./vizx-raster) references.
 
 :::note Opt-in extra
-The compositor requires the `[vizx]` extra. On Databricks, install it with the env wheel for your runtime, as [Installation](../installation#whl-only) describes. Off Databricks, use the plain wheel:
-```bash
-pip install "geobrix[vizx]"
-```
+The compositor requires the `[vizx]` extra. On Databricks, install it with the env wheel for your runtime, as [Installation](../installation#whl-only) describes.
 :::
 
 ## Layer types

@@ -2044,7 +2044,7 @@ Read a raster file by path into a tile.
 
 In Python, `rst_fromfile` returns a _virtual_ tile by default. It holds no bytes, points at `path` over the whole-file window and reads `width`, `height` and the CRS from the header. No pixel is read until a later function needs it, so it is the way to load large rasters lazily. Pass `materialize=True` to read the pixels now. There is no `virtualize_dir` or `virtualize_prefix` argument, because the source file is the durable store.
 
-The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function: it needs the Python level (the env wheel, or the plain wheel off Databricks) and has no Scala form. The JVM cannot read a UC Volume `/Volumes/...` path, because the credential lives in the Spark Python worker. A path that cannot be opened gives null.
+The SQL function `gbx_rst_fromfile` always reads the file's pixels and returns a tile that holds them, so every function accepts it. It is a Python function: it needs the Python level (the env wheel) and has no Scala form. The JVM cannot read a UC Volume `/Volumes/...` path, because the credential lives in the Spark Python worker. A path that cannot be opened gives null.
 
 :::note Remote paths
 A remote URL (`http(s)://`, `/vsicurl/`, ...) is data here. `rst_fromfile` refuses it at its first evaluation, with the location and a `Fix:`. Set `GBX_ALLOW_REMOTE_PATHS=true` in the driver's environment before `register()` and before the column is built to allow it (see [Security § 7](../security#7-raster-data-other-principals-can-write)).

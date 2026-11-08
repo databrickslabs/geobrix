@@ -94,26 +94,105 @@ def test_the_type_and_crs_come_from_the_first_non_null_geometry():
     assert infer([None, None], ["4326", "27700"]) == ("Unknown", None)
 
 
-def test_all_null_attr_column_writes_and_roundtrips(spark, tmp_path):
-    # End-to-end regression for a TIGER-style column (e.g. PLUS4L) that is null
-    # for every row: the geojsonl write must not raise the pyogrio FieldError.
-    from databricks.labs.gbx import manager as gbx_manager
+def _wkt_df(spark):
+    rows = [
+        ("a", "POINT (-73.9 40.7)", "4326", ""),
+        ("b", "POINT (-0.1 51.5)", "4326", ""),
+    ]
+    return spark.createDataFrame(
+        rows,
+        schema="name string, geom_0 string, geom_0_srid string, geom_0_srid_proj string",
+    )
 
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "nullattr")
+
+def _renamed_df(spark):
+    rows = [
+        ("a", bytearray(to_wkb(Point(-73.9, 40.7))), "4326", ""),
+        ("b", bytearray(to_wkb(Point(-0.1, 51.5))), "4326", ""),
+    ]
+    return spark.createDataFrame(
+        rows, schema="name string, the_geom binary, epsg string, p4 string"
+    )
+
+
+def _null_attr_df(spark):
+    # A TIGER-style column that is null for every row: pyogrio rejects an Arrow 'null' typed field.
     rows = [
         (str(i), None, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
         for i in range(4)
     ]
-    df = spark.createDataFrame(
+    return spark.createDataFrame(
         rows,
-        schema="name string, plus4 string, geom_0 binary, "
-        "geom_0_srid string, geom_0_srid_proj string",
-    ).repartition(2, F.col("geom_0"))
-    df.write.format("geojsonl_gbx").mode("overwrite").save(out)  # must not raise
+        schema="name string, plus4 string, geom_0 binary, geom_0_srid string, geom_0_srid_proj string",
+    )
 
+
+# name -> (frame, repartition column, partitions, writer options, shards expected or None when hashing may
+# leave a partition empty, names back)
+ROUND_TRIP = {
+    "one_shard_per_partition": (lambda s: _wkb_df(s, 6), "geom_0", 3, {}, 3, {str(i) for i in range(6)}),
+    "max_records_per_file_splits_a_partition": (
+        lambda s: _wkb_df(s, 10), "geom_0", 1, {"maxRecordsPerFile": "3"}, 4, {str(i) for i in range(10)},
+    ),
+    "wkt_input": (_wkt_df, "geom_0", 2, {}, None, {"a", "b"}),
+    "geomcol_sridcol_projcol_avoid_renaming": (
+        _renamed_df, "the_geom", 2, {"geomCol": "the_geom", "sridCol": "epsg", "projCol": "p4"}, None, {"a", "b"},
+    ),
+    "all_null_attribute_column": (_null_attr_df, "geom_0", 2, {}, None, {"0", "1", "2", "3"}),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    "make,col,parts,opts,shards,names", ROUND_TRIP.values(), ids=ROUND_TRIP.keys()
+)
+def test_geojsonl_writes_a_directory_of_shards_that_read_back(
+    spark, tmp_path, make, col, parts, opts, shards, names
+):
+    """One .geojsonl shard per non-empty partition (no driver merge), nothing else in the folder, and the
+    geojson_gbx directory reader returns every row with its geometry."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    out = str(tmp_path / "out")
+    w = (
+        make(spark)
+        .repartition(parts, F.col(col))
+        .write.format("geojsonl_gbx")
+        .mode("overwrite")
+    )
+    for k, v in opts.items():
+        w = w.option(k, v)
+    w.save(out)
+
+    assert os.path.isdir(out)
+    assert len(_shards(out)) == shards if shards else _shards(out)
+    assert set(os.listdir(out)) - {"_SUCCESS"} == set(_shards(out))
     back = spark.read.format("geojson_gbx").option("multi", "true").load(out)
-    assert back.count() == 4
+    assert {r["name"] for r in back.collect()} == names
+    gcol = [f.name for f in back.schema.fields if f.name.endswith("_srid")][0][:-5]
+    assert {
+        _from_wkb(bytes(r[gcol])).geom_type for r in back.select(gcol).collect()
+    } == {"Point"}
+
+
+def test_overwrite_clears_the_previous_shards_and_append_is_refused(spark, tmp_path):
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    out = str(tmp_path / "ow")
+    _wkb_df(spark, 8).repartition(4, F.col("geom_0")).write.format("geojsonl_gbx").mode(
+        "overwrite"
+    ).save(out)
+    first = set(_shards(out))
+    _wkb_df(spark, 2).repartition(1, F.col("geom_0")).write.format("geojsonl_gbx").mode(
+        "overwrite"
+    ).save(out)
+    assert first.isdisjoint(set(_shards(out))), "overwrite left stale shards behind"
+    assert (
+        spark.read.format("geojson_gbx").option("multi", "true").load(out).count() == 2
+    )
+    with pytest.raises(Exception, match="(?i)append"):
+        _wkb_df(spark, 4).write.format("geojsonl_gbx").mode("append").save(out)
 
 
 def test_copy_file_to_fuse_never_chmods(tmp_path, monkeypatch):
@@ -165,116 +244,6 @@ def test_writers_copy_to_volume_byte_only():
             assert bad not in src, f"{bad} in {cls.__name__} is not Volume-safe"
 
 
-def test_multi_file_one_shard_per_partition(spark, tmp_path):
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "shards")
-    df = _wkb_df(spark, 6).repartition(3, F.col("geom_0"))
-    nparts = df.rdd.getNumPartitions()
-    df.write.format("geojsonl_gbx").mode("overwrite").save(out)
-
-    # Output is a DIRECTORY with EXACTLY one .geojsonl shard per (non-empty) partition.
-    assert os.path.isdir(out)
-    shards = _shards(out)
-    assert (
-        len(shards) == nparts
-    ), f"expected exactly {nparts} shards (one per partition), got {len(shards)}: {shards}"
-
-    back = spark.read.format("geojson_gbx").option("multi", "true").load(out)
-    assert back.count() == 6
-    assert {r["name"] for r in back.collect()} == {str(i) for i in range(6)}
-    gcol = [f.name for f in back.schema.fields if f.name.endswith("_srid")][0][:-5]
-    geoms = {_from_wkb(bytes(r[gcol])).geom_type for r in back.select(gcol).collect()}
-    assert geoms == {"Point"}
-
-
-def test_max_records_per_file_splits_partition(spark, tmp_path):
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "split")
-    n, k = 10, 3  # ceil(10/3) == 4 shards
-    _wkb_df(spark, n).repartition(1, F.col("geom_0")).write.format("geojsonl_gbx").mode(
-        "overwrite"
-    ).option("maxRecordsPerFile", str(k)).save(out)
-
-    shards = _shards(out)
-    expected = -(-n // k)  # ceil
-    assert len(shards) == expected, f"expected {expected} shards, got {shards}"
-
-    back = spark.read.format("geojson_gbx").option("multi", "true").load(out)
-    assert back.count() == n
-
-
-def test_output_is_directory_not_single_file(spark, tmp_path):
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "dir")
-    _wkb_df(spark, 4).repartition(2, F.col("geom_0")).write.format("geojsonl_gbx").mode(
-        "overwrite"
-    ).save(out)
-    assert os.path.isdir(out)
-    assert not os.path.isfile(out)
-    # every published member is a shard (plus an optional _SUCCESS marker)
-    members = set(os.listdir(out)) - {"_SUCCESS"}
-    assert members and all(m.endswith((".geojsonl", ".geojsons")) for m in members)
-
-
-def test_wkt_input_roundtrips(spark, tmp_path):
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "wkt")
-    rows = [
-        ("a", "POINT (-73.9 40.7)", "4326", ""),
-        ("b", "POINT (-0.1 51.5)", "4326", ""),
-    ]
-    df = spark.createDataFrame(
-        rows,
-        schema="name string, geom_0 string, geom_0_srid string, geom_0_srid_proj string",
-    )
-    df.repartition(2, F.col("geom_0")).write.format("geojsonl_gbx").mode(
-        "overwrite"
-    ).save(out)
-    back = spark.read.format("geojson_gbx").option("multi", "true").load(out)
-    assert back.count() == 2
-    assert {r["name"] for r in back.collect()} == {"a", "b"}
-
-
-def test_overwrite_clears_previous_shards(spark, tmp_path):
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "ow")
-    _wkb_df(spark, 8).repartition(4, F.col("geom_0")).write.format("geojsonl_gbx").mode(
-        "overwrite"
-    ).save(out)
-    first = set(_shards(out))
-    # rewrite with fewer rows/partitions -> stale shards must be gone
-    _wkb_df(spark, 2).repartition(1, F.col("geom_0")).write.format("geojsonl_gbx").mode(
-        "overwrite"
-    ).save(out)
-    second = set(_shards(out))
-    assert first.isdisjoint(second), "overwrite left stale shards behind"
-    back = spark.read.format("geojson_gbx").option("multi", "true").load(out)
-    assert back.count() == 2
-
-
-def test_append_mode_rejected(spark, tmp_path):
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "exists")
-    _wkb_df(spark, 4).repartition(2, F.col("geom_0")).write.format("geojsonl_gbx").mode(
-        "overwrite"
-    ).save(out)
-    with pytest.raises(Exception) as ei:
-        _wkb_df(spark, 4).write.format("geojsonl_gbx").mode("append").save(out)
-    assert "append" in str(ei.value).lower()
-
-
 def test_serverless_safe_no_jvm_or_conf():
     """The writer code must not touch the JVM, sparkContext, spark.conf, or RDDs."""
     import inspect
@@ -284,30 +253,3 @@ def test_serverless_safe_no_jvm_or_conf():
     src = inspect.getsource(vector.GeoJSONLGbxWriter)
     for forbidden in ("_jvm", "sparkContext", "spark.conf.set", ".rdd"):
         assert forbidden not in src, f"{forbidden} found in GeoJSONLGbxWriter"
-
-
-def test_geomcol_sridcol_options_avoid_renaming(spark, tmp_path):
-    # A frame with non-convention column names writes via the geomCol/sridCol
-    # options without the user renaming anything.
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_sources(spark)
-    out = str(tmp_path / "renamed")
-    rows = [
-        ("a", bytearray(to_wkb(Point(-73.9, 40.7))), "4326", ""),
-        ("b", bytearray(to_wkb(Point(-0.1, 51.5))), "4326", ""),
-    ]
-    df = spark.createDataFrame(
-        rows, schema="name string, the_geom binary, epsg string, p4 string"
-    ).repartition(2, F.col("the_geom"))
-    (
-        df.write.format("geojsonl_gbx")
-        .mode("overwrite")
-        .option("geomCol", "the_geom")
-        .option("sridCol", "epsg")
-        .option("projCol", "p4")
-        .save(out)
-    )
-    back = spark.read.format("geojson_gbx").option("multi", "true").load(out)
-    assert back.count() == 2
-    assert {r["name"] for r in back.collect()} == {"a", "b"}

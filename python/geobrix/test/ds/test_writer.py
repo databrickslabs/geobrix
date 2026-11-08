@@ -3,6 +3,7 @@
 import os
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.transform import from_origin
 
@@ -225,3 +226,82 @@ def test_metadata_driver_cog_triggers_reencode(spark, tmp_path):
         arr, np.arange(12, dtype="float32").reshape(3, 4), rtol=1e-6
     )
     assert tags.get("RASTERX_CELL") == "-1"
+
+
+def _tile_frame(spark, src, shape):
+    """The same raster as a v1 tile, a v2 materialized tile, or a v2 virtual tile (no bytes)."""
+    from databricks.labs.gbx.ds.raster import (
+        _v2_tile_row,
+        reader_schema,
+        reader_schema_v2,
+    )
+
+    if shape == "v1":
+        row = ("s0", (-1, src.read_bytes(), {"driver": "GTiff"}))
+        return spark.createDataFrame([row], schema=reader_schema())
+    if shape == "v2":
+        tile = _v2_tile_row(
+            cellid=-1,
+            raster=src.read_bytes(),
+            path=str(src),
+            window=(0, 0, 4, 3),
+            metadata={"driver": "GTiff"},
+        )
+        return spark.createDataFrame([("s0", tile)], schema=reader_schema_v2())
+    df = spark.read.format("raster_gbx").option("virtualTiles", "true").load(str(src))
+    assert (
+        df.collect()[0]["tile"]["raster"] is None
+    ), "the rows must be bytes-free before the writer sees them"
+    return df
+
+
+@pytest.mark.parametrize("shape", ["v1", "v2", "virtual"])
+def test_the_writer_takes_a_v1_v2_or_virtual_tile_and_writes_the_pixels(
+    spark, tmp_path, shape
+):
+    src = tmp_path / "in.tif"
+    _write_sample(str(src))
+    spark.dataSource.register(RasterGbxDataSource)
+    spark.dataSource.register(GTiffGbxDataSource)
+    _tile_frame(spark, src, shape).write.format("gtiff_gbx").mode("overwrite").save(
+        str(tmp_path / "out")
+    )
+    written = [f for f in os.listdir(tmp_path / "out") if f.endswith(".tif")]
+    assert len(written) == 1
+    with rasterio.open(os.path.join(tmp_path / "out", written[0])) as ds:
+        np.testing.assert_allclose(
+            ds.read(1), np.arange(12, dtype="float32").reshape(3, 4), rtol=1e-6
+        )
+
+
+def test_assert_write_schema_takes_v1_and_v2_and_refuses_a_two_field_tile():
+    from pyspark.sql.types import (
+        BinaryType,
+        LongType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
+    from databricks.labs.gbx.ds.writer import assert_write_schema
+
+    assert_write_schema(reader_schema())
+    assert_write_schema(reader_schema_v2())
+    two_field_tile = StructType(
+        [
+            StructField("source", StringType(), nullable=False),
+            StructField(
+                "tile",
+                StructType(
+                    [
+                        StructField("cellid", LongType(), False),
+                        StructField("raster", BinaryType(), True),
+                    ]
+                ),
+                nullable=False,
+            ),
+        ]
+    )
+    with pytest.raises(ValueError):
+        assert_write_schema(two_field_tile)

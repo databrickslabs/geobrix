@@ -86,189 +86,85 @@ def _write_and_open(df, out_dir, format="gtiff_gbx", **opts):
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# The option table: (writer format, options, source codec) -> the codec of the file written
 # ---------------------------------------------------------------------------
 
+NONE = (None, Compression.none)
+Z, D = Compression.zstd, Compression.deflate
 
-def test_compress_auto_produces_zstd(spark_session, src_tif, tmp_path):
-    """compress='auto' (default) → ZSTD output."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "auto", compress="auto") as ds:
-        assert (
-            ds.compression == Compression.zstd
-        ), f"Expected zstd, got {ds.compression}"
-
-
-def test_compress_default_produces_zstd(spark_session, src_tif, tmp_path):
-    """No compress option at all should default to auto → ZSTD."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "default") as ds:
-        assert (
-            ds.compression == Compression.zstd
-        ), f"Expected zstd default, got {ds.compression}"
-
-
-def test_compress_deflate_with_level(spark_session, src_tif, tmp_path):
-    """compress='deflate' + compressLevel='9' → DEFLATE output."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(
-        df, tmp_path / "deflate", compress="deflate", compressLevel="9"
-    ) as ds:
-        assert (
-            ds.compression == Compression.deflate
-        ), f"Expected deflate, got {ds.compression}"
-
-
-def test_compress_none_produces_uncompressed(spark_session, src_tif, tmp_path):
-    """compress='none' → no compression."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "none", compress="none") as ds:
-        # rasterio reports None or Compression.none for uncompressed
-        assert ds.compression in (
-            None,
-            Compression.none,
-        ), f"Expected no compression, got {ds.compression}"
-
-
-def test_cog_compression_alias_maps_to_deflate(spark_session, src_tif, tmp_path):
-    """cogCompression='DEFLATE' (deprecated alias) → DEFLATE output."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "alias", cogCompression="DEFLATE") as ds:
-        assert (
-            ds.compression == Compression.deflate
-        ), f"cogCompression alias: expected deflate, got {ds.compression}"
-
-
-def test_compress_wins_over_cog_compression(spark_session, src_tif, tmp_path):
-    """When both compress and cogCompression set, compress wins."""
-    df = _read_df(spark_session, src_tif)
-    # compress='none' should win over cogCompression='deflate'
-    with _write_and_open(
-        df, tmp_path / "both", compress="none", cogCompression="deflate"
-    ) as ds:
-        assert ds.compression in (
-            None,
-            Compression.none,
-        ), f"compress should win over cogCompression, got {ds.compression}"
-
-
-def test_compress_auto_with_explicit_level_warns_or_uses_auto(
-    spark_session, src_tif, tmp_path
-):
-    """compress='auto' + explicit compressLevel → warns (possibly worker-side) + ZSTD output.
-
-    The warning fires in the write worker (DataSource V2 task), so it may not surface
-    on the driver side via pytest.warns.  We assert the output is ZSTD-compressed
-    (the correctness guarantee) and verify a UserWarning is raised somewhere in the
-    call by capturing warnings in the driver process.  Worker-side warnings that
-    the driver doesn't see are accepted — only the output codec assertion is hard.
-    """
-    import warnings
-
-    df = _read_df(spark_session, src_tif)
-    # Capture any driver-side warnings (the authority fires one when it sees
-    # compress='auto' with explicit level). Worker-side warnings won't be caught
-    # here (they're in a forked subprocess), but the output still uses auto-level.
-    with warnings.catch_warnings(record=True):
-        warnings.simplefilter("always")
-        with _write_and_open(
-            df, tmp_path / "auto_lvl", compress="auto", compressLevel="22"
-        ) as ds:
-            assert (
-                ds.compression == Compression.zstd
-            ), f"auto+explicit level: expected zstd output, got {ds.compression}"
-
-
-def test_compress_lzw(spark_session, src_tif, tmp_path):
-    """compress='lzw' → LZW output."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "lzw", compress="lzw") as ds:
-        assert ds.compression == Compression.lzw, f"Expected lzw, got {ds.compression}"
-
-
-# ---------------------------------------------------------------------------
-# cog_gbx writer (cog_compression alias + compress option)
-# ---------------------------------------------------------------------------
-
-
-def test_cog_gbx_compress_option(spark_session, src_tif, tmp_path):
-    """cog_gbx writer: compress='zstd' routes through the authority."""
-    df = _read_df(spark_session, src_tif, virtual=False)
-    with _write_and_open(
-        df, tmp_path / "cog_zstd", format="cog_gbx", compress="zstd"
-    ) as ds:
-        assert (
-            ds.compression == Compression.zstd
-        ), f"cog_gbx compress=zstd: expected zstd, got {ds.compression}"
-
-
-def test_cog_gbx_cog_compression_alias(spark_session, src_tif, tmp_path):
-    """cog_gbx writer: cogCompression alias still routes through the authority."""
-    df = _read_df(spark_session, src_tif, virtual=False)
-    # cogCompression='DEFLATE' should still produce deflate
-    with _write_and_open(
-        df, tmp_path / "cog_alias", format="cog_gbx", cogCompression="DEFLATE"
-    ) as ds:
-        assert (
-            ds.compression == Compression.deflate
-        ), f"cog_gbx cogCompression alias: expected deflate, got {ds.compression}"
-
-
-# ---------------------------------------------------------------------------
-# Issue 1 regression: COG auto should resolve to ZSTD, not DEFLATE
-# ---------------------------------------------------------------------------
-
-
-def test_raster_gbx_cog_auto_produces_zstd(spark_session, src_tif, tmp_path):
-    """raster_gbx writer cog=true + compress='auto' -> ZSTD COG (not DEFLATE).
-
-    ISSUE 1 regression: the COG branch previously resolved auto->'deflate';
-    the spec baseline is ZSTD everywhere.
-    """
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(
-        df,
-        tmp_path / "cog_auto_raster",
-        format="raster_gbx",
-        cog="true",
-        compress="auto",
-    ) as ds:
-        assert (
-            ds.compression == Compression.zstd
-        ), f"raster_gbx cog=true compress=auto: expected zstd, got {ds.compression}"
-
-
-def test_cog_gbx_auto_produces_zstd(spark_session, src_tif, tmp_path):
-    """cog_gbx writer + compress='auto' (default) -> ZSTD COG (not DEFLATE).
-
-    ISSUE 1 regression: _resolved_cog_compression() previously returned 'DEFLATE'
-    for auto; it should return 'ZSTD'.
-    """
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(df, tmp_path / "cog_gbx_auto") as _:
-        # cog_gbx default (no compress option) should produce ZSTD
-        pass  # covered by the explicit-auto test below
-
-
-def test_cog_gbx_auto_explicit_produces_zstd(spark_session, src_tif, tmp_path):
-    """cog_gbx writer compress='auto' explicit -> ZSTD output."""
-    df = _read_df(spark_session, src_tif)
-    with _write_and_open(
-        df, tmp_path / "cog_gbx_auto_explicit", format="cog_gbx", compress="auto"
-    ) as ds:
-        assert (
-            ds.compression == Compression.zstd
-        ), f"cog_gbx compress=auto: expected zstd, got {ds.compression}"
-
-
-# ---------------------------------------------------------------------------
-# Issue 2 regression: GTiff path should NOT re-encode already-ZSTD tiles
-# ---------------------------------------------------------------------------
+# What the file on disk must say. "zstd source" rows prove the codec comes from the options: a plain
+# source cannot tell the driver default, the source's codec and the requested one apart.
+CODEC_ROWS = {
+    "gtiff_default": ("gtiff_gbx", {}, "plain", (Z,)),
+    "gtiff_auto": ("gtiff_gbx", {"compress": "auto"}, "plain", (Z,)),
+    "gtiff_auto_with_a_level": (
+        "gtiff_gbx",
+        {"compress": "auto", "compressLevel": "22"},
+        "plain",
+        (Z,),
+    ),
+    "gtiff_deflate_level": (
+        "gtiff_gbx",
+        {"compress": "deflate", "compressLevel": "9"},
+        "plain",
+        (D,),
+    ),
+    "gtiff_lzw": ("gtiff_gbx", {"compress": "lzw"}, "plain", (Compression.lzw,)),
+    "gtiff_none": ("gtiff_gbx", {"compress": "none"}, "plain", NONE),
+    "gtiff_cog_compression_alias": (
+        "gtiff_gbx",
+        {"cogCompression": "DEFLATE"},
+        "plain",
+        (D,),
+    ),
+    "gtiff_compress_beats_the_alias": (
+        "gtiff_gbx",
+        {"compress": "none", "cogCompression": "deflate"},
+        "plain",
+        NONE,
+    ),
+    "gtiff_deflate_reencodes_a_zstd_source": (
+        "gtiff_gbx",
+        {"compress": "deflate"},
+        "zstd",
+        (D,),
+    ),
+    "cog_zstd": ("cog_gbx", {"compress": "zstd"}, "plain", (Z,)),
+    "cog_auto_is_zstd_not_deflate": ("cog_gbx", {"compress": "auto"}, "plain", (Z,)),
+    "cog_cog_compression_alias": (
+        "cog_gbx",
+        {"cogCompression": "DEFLATE"},
+        "plain",
+        (D,),
+    ),
+    "raster_cog_auto_is_zstd": (
+        "raster_gbx",
+        {"cog": "true", "compress": "auto"},
+        "plain",
+        (Z,),
+    ),
+    # The COG driver compresses with LZW when COMPRESS is absent: 'none' and 'raw' must say NONE.
+    "raster_cog_none": (
+        "raster_gbx",
+        {"cog": "true", "compress": "none"},
+        "zstd",
+        NONE,
+    ),
+    "raster_cog_raw": ("raster_gbx", {"cog": "true", "compress": "raw"}, "zstd", NONE),
+    "raster_cog_raw_by_alias": (
+        "raster_gbx",
+        {"cog": "true", "cogCompression": "raw"},
+        "zstd",
+        NONE,
+    ),
+    "cog_none": ("cog_gbx", {"compress": "none"}, "zstd", NONE),
+    "cog_raw": ("cog_gbx", {"compress": "raw"}, "zstd", NONE),
+}
 
 
 @pytest.fixture(scope="module")
 def src_zstd_tif(tmp_path_factory):
-    """Write a ZSTD-compressed GTiff to use as an already-compressed source."""
+    """A ZSTD-compressed GTiff: an already-compressed source."""
     p = tmp_path_factory.mktemp("src_zstd") / "tile_zstd.tif"
     profile = dict(
         driver="GTiff",
@@ -289,73 +185,29 @@ def src_zstd_tif(tmp_path_factory):
 
 
 @pytest.mark.parametrize(
-    "format,opts",
-    [
-        ("raster_gbx", {"cog": "true", "compress": "none"}),
-        ("raster_gbx", {"cog": "true", "compress": "raw"}),
-        ("raster_gbx", {"cog": "true", "cogCompression": "raw"}),
-        ("cog_gbx", {"compress": "none"}),
-        ("cog_gbx", {"compress": "raw"}),
-    ],
-    ids=lambda v: (
-        v if isinstance(v, str) else "-".join(f"{k}={x}" for k, x in v.items())
-    ),
+    "format,opts,source,want", CODEC_ROWS.values(), ids=CODEC_ROWS.keys()
 )
-def test_a_cog_written_with_no_codec_has_no_compression(
-    spark_session, src_zstd_tif, tmp_path, format, opts
+def test_the_codec_written_follows_the_options(
+    spark_session, src_tif, src_zstd_tif, tmp_path, format, opts, source, want
 ):
-    """The COG driver compresses with LZW when COMPRESS is absent: 'none' and 'raw' must say
-    NONE. The source is ZSTD, so neither the driver default nor the source's codec can pass.
-    """
-    df = _read_df(spark_session, src_zstd_tif)
+    df = _read_df(spark_session, src_zstd_tif if source == "zstd" else src_tif)
     with _write_and_open(df, tmp_path / "out", format=format, **opts) as ds:
-        assert ds.compression in (None, Compression.none), ds.compression
-        assert "COMPRESSION" not in ds.tags(ns="IMAGE_STRUCTURE")
+        assert ds.compression in want, ds.compression
+        if want == NONE:
+            assert "COMPRESSION" not in ds.tags(ns="IMAGE_STRUCTURE")
 
 
-def test_gtiff_auto_already_zstd_fast_path(spark_session, src_zstd_tif, tmp_path):
-    """GTiff compress='auto' on already-ZSTD input: output is ZSTD + bytes unchanged.
-
-    ISSUE 2: before the fix, _apply_compression re-encoded even tiles that were
-    already ZSTD-compressed. The fast-path skips the re-encode; output bytes
-    must be identical to input bytes.
-    """
-    df = _read_df(spark_session, src_zstd_tif)
-    # Read the input tile bytes so we can compare
-    out_dir = tmp_path / "gtiff_auto_zstd"
-    w = df.write.format("gtiff_gbx").mode("overwrite").option("compress", "auto")
-    w.save(str(out_dir))
-    tifs = [f for f in os.listdir(out_dir) if f.endswith(".tif")]
-    assert tifs, f"no .tif files in {out_dir}"
-    out_path = os.path.join(out_dir, tifs[0])
-    # Output must be ZSTD
-    with rasterio.open(out_path) as ds:
-        assert (
-            ds.compression == Compression.zstd
-        ), f"compress=auto on zstd input: expected zstd out, got {ds.compression}"
-    # Output bytes must match input tile bytes (fast-path: no re-encode).
-    # Read the tile bytes that the reader produced via raster_gbx, and compare
-    # against the on-disk output.  We verify the same pixel data is intact and
-    # compression is preserved (byte-identical check at the file level).
-    # Simplification: read the output back and check pixels match original.
-    with rasterio.open(src_zstd_tif) as src, rasterio.open(out_path) as out:
-        np.testing.assert_array_equal(
-            src.read(), out.read(), err_msg="fast-path output pixels differ from input"
-        )
-
-
-def test_gtiff_explicit_deflate_on_zstd_input_reencodes(
+def test_gtiff_auto_on_a_zstd_source_keeps_it_zstd_and_the_pixels(
     spark_session, src_zstd_tif, tmp_path
 ):
-    """GTiff compress='deflate' on ZSTD input: output IS deflate (re-encode enforced).
-
-    Explicit codec change must always re-encode regardless of input codec.
-    """
+    """The fast path leaves a tile that is already ZSTD alone: same codec, same pixels."""
     df = _read_df(spark_session, src_zstd_tif)
-    with _write_and_open(df, tmp_path / "deflate_from_zstd", compress="deflate") as ds:
-        assert (
-            ds.compression == Compression.deflate
-        ), f"explicit deflate on zstd input: expected deflate, got {ds.compression}"
+    with (
+        _write_and_open(df, tmp_path / "out", compress="auto") as out,
+        rasterio.open(src_zstd_tif) as src,
+    ):
+        assert out.compression == Compression.zstd
+        np.testing.assert_array_equal(src.read(), out.read())
 
 
 # ---------------------------------------------------------------------------

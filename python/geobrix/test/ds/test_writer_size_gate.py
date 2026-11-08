@@ -1,4 +1,10 @@
-"""RasterGbxWriter size-gate: small tiles materialise fully; large tiles stream block-wise.
+"""Writer size gates: a source over the executor cap is not read whole.
+
+RasterGbxWriter: small tiles materialise fully; large tiles stream block-wise.
+CogGbxWriter: a source over the cap is converted driver-side, one over the driver bound is refused.
+The decision itself (``materialize_decision``) is tested once in test/pyrx/test_materialize_decision.py;
+here are the writer-side routes it drives and, for the COG kind, its driver bound.
+
 
 Unit tests (no Spark, no JAR, no /Volumes data required):
 
@@ -15,15 +21,21 @@ Unit tests (no Spark, no JAR, no /Volumes data required):
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import Iterator
 from unittest.mock import patch
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+import databricks.labs.gbx.ds.cog_writer as _cw_mod
+import databricks.labs.gbx.ds.file_gbx as _fgbx
+from databricks.labs.gbx.ds.cog_writer import CogCommitMessage, CogGbxWriter
+from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
 from databricks.labs.gbx.ds.raster import reader_schema_v2
 from databricks.labs.gbx.ds.writer import RasterGbxWriter
 from databricks.labs.gbx.pyrx.core.open_tile import (
@@ -258,31 +270,6 @@ def test_large_tile_uses_windowed_path(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 4. Round-trip: write (large branch) then read back; correct pixels
-# ---------------------------------------------------------------------------
-
-
-def test_large_tile_round_trip(tmp_path, monkeypatch):
-    """Write via the windowed path and re-read; pixels must match the source."""
-    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1")
-
-    src = str(tmp_path / "in.tif")
-    _write_geotiff(src, width=16, height=12, count=2)  # 2-band raster
-    out_dir = str(tmp_path / "out_rt")
-
-    vt = _virtual_tile(src)
-    out_path = _write_one(out_dir, vt)
-
-    with rasterio.open(out_path) as ds:
-        actual = ds.read()
-    with rasterio.open(src) as orig:
-        expected = orig.read()
-
-    assert actual.shape == expected.shape, "shape mismatch after round-trip"
-    np.testing.assert_array_equal(actual, expected, err_msg="round-trip pixel mismatch")
-
-
-# ---------------------------------------------------------------------------
 # 5. Windowed path correctly applies pending band-select
 # ---------------------------------------------------------------------------
 
@@ -354,58 +341,6 @@ def test_large_tile_subwindow(tmp_path, monkeypatch):
             expected = ds.read(1)
 
     np.testing.assert_array_equal(actual, expected, err_msg="subwindow pixel mismatch")
-
-
-# ---------------------------------------------------------------------------
-# 7. Driver-captured cap passed into materialize_decision (not re-resolved)
-# ---------------------------------------------------------------------------
-
-
-def test_writer_captures_cap_in_init(tmp_path, monkeypatch):
-    """RasterGbxWriter captures the connect-aware cap in __init__ (runs on the
-    driver). The env override proves the capture reads the live cap at construction
-    time; the instance carries it to the pickled worker."""
-    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
-    schema = reader_schema_v2()
-    writer = RasterGbxWriter(str(tmp_path / "out"), schema, overwrite=True)
-    assert isinstance(writer._cap, int) and writer._cap > 0
-    assert writer._cap == 12345, "writer must capture the (env-overridden) cap"
-
-
-def test_writer_write_passes_cap_bytes_not_session(tmp_path, monkeypatch):
-    """write() passes cap_bytes=self._cap into materialize_decision — it must NOT
-    re-resolve the cap from a session on the worker (cap_bytes must be non-None)."""
-    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "654321")
-    src = str(tmp_path / "in.tif")
-    _write_geotiff(src)
-    out_dir = str(tmp_path / "out")
-    os.makedirs(out_dir)
-
-    schema = reader_schema_v2()
-    writer = RasterGbxWriter(out_dir, schema, overwrite=True)
-
-    import databricks.labs.gbx.ds.file_gbx as _fgbx
-
-    real = _fgbx.materialize_decision
-    seen: dict = {}
-
-    def _spy(size, kind, spark=None, cap_bytes=None):
-        seen["cap_bytes"] = cap_bytes
-        seen["kind"] = kind
-        return real(size, kind, spark=spark, cap_bytes=cap_bytes)
-
-    monkeypatch.setattr(_fgbx, "materialize_decision", _spy)
-
-    def _iter() -> Iterator[dict]:
-        yield _row(_virtual_tile(src))
-
-    writer.write(_iter())
-
-    assert (
-        seen.get("cap_bytes") is not None
-    ), "write() must pass a non-None cap_bytes (driver-captured), not re-resolve"
-    assert seen["cap_bytes"] == 654321
-    assert seen["kind"] == "write"
 
 
 # ---------------------------------------------------------------------------
@@ -510,3 +445,164 @@ def test_windowed_materialize_falls_back_for_warp(tmp_path):
     assert called["n"] == 1, "warp tile must fall back to materialize_to_bytes"
     with MemoryFile(out) as mf, mf.open() as ds:
         assert ds.crs.to_epsg() == 3857, "fall-back output must be the warped result"
+
+
+# ---------------------------------------------------------------------------
+# 7. Both writers carry the cap captured on the driver; a worker never asks a session
+# ---------------------------------------------------------------------------
+
+
+def _cog_writer(tmp_path, **kw):
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    schema = StructType([StructField("path", StringType(), False)])
+    return CogGbxWriter(
+        str(tmp_path / "cog_out"), schema, overwrite=True, cog_blocksize=256, **kw
+    )
+
+
+def _write_cog_src(path: str) -> None:
+    profile = dict(
+        driver="GTiff",
+        width=256,
+        height=256,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 60, 0.01, 0.01),
+    )
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(np.zeros((1, 256, 256), dtype="uint8"))
+
+
+@pytest.mark.parametrize("writer,kind", [("raster", "write"), ("cog", "cog_write")])
+def test_the_writer_captures_the_cap_on_the_driver_and_passes_it_to_the_decision(
+    tmp_path, monkeypatch, writer, kind
+):
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "31337")
+    src = str(tmp_path / "in.tif")
+    _write_geotiff(src) if writer == "raster" else _write_cog_src(src)
+    if writer == "raster":
+        os.makedirs(tmp_path / "out")
+        w = RasterGbxWriter(str(tmp_path / "out"), reader_schema_v2(), overwrite=True)
+        rows, module = iter([_row(_virtual_tile(src))]), _fgbx
+    else:
+        w, rows, module = _cog_writer(tmp_path), iter([{"path": src}]), _cw_mod
+    assert (
+        w._cap == 31337
+    ), "the cap is read when the writer is built, not on the worker"
+
+    real, seen = module.materialize_decision, {}
+
+    def _spy(size, kind, spark=None, cap_bytes=None):
+        seen.update(kind=kind, cap_bytes=cap_bytes)
+        return real(size, kind, spark=spark, cap_bytes=cap_bytes)
+
+    monkeypatch.setattr(module, "materialize_decision", _spy)
+    w.write(rows)
+    assert seen == {"kind": kind, "cap_bytes": 31337}
+
+
+# ---------------------------------------------------------------------------
+# 8. CogGbxWriter: the COG kind adds a driver bound between "stream" and "error"
+# ---------------------------------------------------------------------------
+
+# (size, executor cap, driver bound or None for the default, the route)
+COG_DECISION = [
+    (0, 1000, None, "stream"),
+    (1000, 1000, None, "stream"),
+    (1001, 1000, None, "driver"),
+    (1024**3, 1000, None, "driver"),
+    (5000, 100, 5000, "driver"),
+    (5001, 100, 5000, "error"),
+    (100 * 1024**3, 100, 5000, "error"),
+]
+
+
+@pytest.mark.parametrize("size,cap,bound,route", COG_DECISION)
+def test_the_cog_write_decision_has_a_driver_bound(
+    monkeypatch, size, cap, bound, route
+):
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", str(cap))
+    if bound is not None:
+        monkeypatch.setattr(_fgbx, "_COG_DRIVER_MAX_BYTES", bound)
+    assert materialize_decision(size, kind="cog_write") == route
+
+
+def test_a_source_of_unknown_size_streams():
+    assert materialize_decision(None, kind="cog_write") == "stream"
+
+
+def test_a_small_source_converts_on_the_executor(tmp_path):
+    src = tmp_path / "in" / "small.tif"
+    src.parent.mkdir()
+    _write_cog_src(str(src))
+    msg = _cog_writer(tmp_path).write(iter([{"path": str(src)}]))
+    assert isinstance(msg, CogCommitMessage)
+    assert (
+        msg.paths == [str(tmp_path / "cog_out" / "small.tif")]
+        and msg.pending_paths == []
+    ), "a small source is not deferred"
+
+
+def test_a_source_over_the_cap_is_deferred_to_the_driver_and_logged(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1")
+    src = tmp_path / "in" / "large.tif"
+    src.parent.mkdir()
+    _write_cog_src(str(src))
+    with patch.object(_cw_mod, "cog_convert_file", create=True) as convert:
+        with caplog.at_level(logging.INFO, logger="databricks.labs.gbx.ds.cog_writer"):
+            msg = _cog_writer(tmp_path).write(iter([{"path": str(src)}]))
+    convert.assert_not_called()
+    assert msg.paths == [] and msg.pending_paths == [str(src)]
+    assert any("auto-routing" in r.message for r in caplog.records), [
+        r.message for r in caplog.records
+    ]
+
+
+def test_a_source_beyond_the_driver_bound_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setattr(_fgbx, "_COG_DRIVER_MAX_BYTES", 1)
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "0")
+    src = tmp_path / "in" / "giant.tif"
+    src.parent.mkdir()
+    _write_cog_src(str(src))
+    with pytest.raises(StageTooLargeError):
+        _cog_writer(tmp_path).write(iter([{"path": str(src)}]))
+
+
+def test_driver_mode_gathers_every_path_whatever_its_size(tmp_path, monkeypatch):
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "1")
+    monkeypatch.setattr(_fgbx, "_COG_DRIVER_MAX_BYTES", 1)
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_cog_src(str(src))
+    msg = _cog_writer(tmp_path, driver_mode=True).write(iter([{"path": str(src)}]))
+    assert msg.paths == [str(src)] and msg.pending_paths == []
+
+
+@pytest.mark.parametrize("pending", [True, False])
+def test_commit_converts_the_deferred_sources_and_only_those(tmp_path, pending):
+    import databricks.labs.gbx.pyrx.core.preparer as _prep
+
+    src, calls = tmp_path / "scene.tif", []
+
+    def fake_prepare(sources, out_dir, **kwargs):
+        calls.append((list(sources), out_dir, kwargs))
+
+    msg = CogCommitMessage(
+        paths=["/fake/out.tif"], pending_paths=[str(src)] if pending else []
+    )
+    with patch.object(_prep, "prepare_cogs", side_effect=fake_prepare):
+        _cog_writer(tmp_path, driver_mode=False).commit([msg])
+    if not pending:
+        assert calls == []
+        return
+    ((sources, out_dir, kwargs),) = calls
+    assert (sources, out_dir) == ([str(src)], str(tmp_path / "cog_out"))
+    assert (kwargs["blocksize"], kwargs["resampling"], kwargs["compression"]) == (
+        256,
+        "AVERAGE",
+        "ZSTD",
+    )

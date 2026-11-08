@@ -724,4 +724,63 @@ class ST_CrsFamilyTest extends AnyFunSuite with BeforeAndAfterAll {
             ST_SetCrs.evalSql(ewkb(4326), UTF8String.fromString("+proj=merc +datum=WGS84"))
         }
     }
+
+    // ------------------------------------------------------------------
+    // Mixed-dimension text that is no collection: keep the Z that exists, NaN for the rest
+    // ------------------------------------------------------------------
+
+    private val mixedLine = UTF8String.fromString("SRID=4326;LINESTRING Z (15 51 5, 16 52)")
+    private val mixedMulti = UTF8String.fromString("SRID=4326;MULTIPOINT Z ((15 51 5), (16 52))")
+
+    private def zsOf(bytes: Array[Byte]): Array[Double] = JTS.fromWKB(bytes).getCoordinates.map(_.z)
+
+    test("ST_Crs: reads the CRS of mixed-dimension text") {
+        ST_Crs.eval(mixedLine).toString shouldBe "EPSG:4326"
+        ST_Crs.eval(mixedMulti).toString shouldBe "EPSG:4326"
+    }
+
+    test("ST_SetCrs.evalSql: mixed-dimension text keeps its Z and marks the missing one NaN") {
+        for (in <- Seq(mixedLine, mixedMulti)) {
+            val out = ST_SetCrs.evalSql(in, UTF8String.fromString("EPSG:32633"))
+            assert(out != null)
+            JTS.fromWKB(out).getSRID shouldBe 32633
+            val zs = zsOf(out)
+            zs(0) shouldBe 5.0
+            assert(zs(1).isNaN)
+        }
+    }
+
+    test("ST_TransformCrs.evalSql: mixed-dimension text moves X/Y, keeps the Z it has, NaN for the rest") {
+        for (in <- Seq(mixedLine, mixedMulti)) {
+            val out = ST_TransformCrs.evalSql(in, UTF8String.fromString("EPSG:32633"))
+            assert(out != null, "mixed-dimension text must not read as no geometry")
+            val g = JTS.fromWKB(out)
+            g.getSRID shouldBe 32633
+            val cs = g.getCoordinates
+            cs(0).x shouldBe (500000.0 +- 1e-3)
+            cs(0).y shouldBe (5649824.888 +- 1e-2)
+            cs(0).z shouldBe (5.0 +- 1e-9)
+            assert(!cs(1).x.isNaN && !cs(1).y.isNaN, "X/Y of the vertex without a Z must survive")
+            assert(cs(1).z.isNaN)
+        }
+    }
+
+    test("ST_TransformCrs.evalSql: a partial-Z binary geometry keeps the Z it has too") {
+        val ls = gf.createLineString(Array(new Coordinate(15.0, 51.0), new Coordinate(16.0, 52.0, 6.0)))
+        ls.setSRID(4326)
+        val out = ST_TransformCrs.evalSql(JTS.toEWKBAdaptive(ls), UTF8String.fromString("EPSG:32633"))
+        val zs = zsOf(out)
+        assert(zs(0).isNaN)
+        zs(1) shouldBe (6.0 +- 1e-9)
+    }
+
+    test("ST_TransformCrs.evalSql: a collection with a real Z and a missing one keeps the real Z") {
+        val out = ST_TransformCrs.evalSql(
+            UTF8String.fromString("SRID=4326;GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"),
+            UTF8String.fromString("EPSG:32633"))
+        val zs = zsOf(out)
+        zs(0) shouldBe 5.0
+        assert(zs(1).isNaN)
+    }
+
 }

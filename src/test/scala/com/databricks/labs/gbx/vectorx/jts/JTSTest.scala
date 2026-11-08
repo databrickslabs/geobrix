@@ -265,6 +265,33 @@ class JTSTest extends AnyFunSuite {
         geom.getSRID shouldBe 27700
     }
 
+    // ====== mixed-dimension text: keep the Z that exists, NaN for the rest ======
+
+    test("fromWKT keeps the Z a LINESTRING vertex has and marks the missing one NaN") {
+        val g = JTS.fromWKT("SRID=4326;LINESTRING Z (15 51 5, 16 52)")
+        g.getSRID shouldBe 4326
+        val zs = g.getCoordinates.map(_.z)
+        zs(0) shouldBe 5.0
+        zs(1).isNaN shouldBe true
+    }
+
+    test("fromWKT keeps the Z a MULTIPOINT member has and marks the missing one NaN") {
+        val zs = JTS.fromWKT("MULTIPOINT Z ((15 51 5), (16 52))").getCoordinates.map(_.z)
+        zs(0) shouldBe 5.0
+        zs(1).isNaN shouldBe true
+    }
+
+    test("fromWKT drops the measure of a mixed-dimension text and never invents a Z") {
+        val zs = JTS.fromWKT("LINESTRING ZM (15 51 5 99, 16 52)").getCoordinates.map(_.z)
+        zs(0) shouldBe 5.0
+        zs(1).isNaN shouldBe true
+    }
+
+    test("fromWKT leaves plain 2D text 2D and still refuses garbage") {
+        JTS.fromWKT("LINESTRING (15 51, 16 52)").getCoordinates.forall(_.z.isNaN) shouldBe true
+        assertThrows[org.locationtech.jts.io.ParseException] { JTS.fromWKT("LINESTRING Z (15 51 5, oops)") }
+    }
+
     test("fromWKT should leave SRID=0 for plain WKT") {
         val geom = JTS.fromWKT("POINT (1 2)")
         geom.getSRID shouldBe 0

@@ -12,7 +12,9 @@ import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.ogr.{Geometry => OGRGeometry}
 import org.gdal.osr.CoordinateTransformation
-import org.locationtech.jts.geom.{Geometry => JTSGeometry}
+import org.locationtech.jts.geom.impl.CoordinateArraySequence
+import org.locationtech.jts.geom.util.GeometryEditor
+import org.locationtech.jts.geom.{Coordinate, CoordinateSequence, Geometry => JTSGeometry}
 
 import scala.util.Try
 import scala.util.control.NonFatal
@@ -237,7 +239,7 @@ private[expressions] object TransformCrsCore {
         // ControlThrowable, which NonFatal excludes, so the early NullOut exits are unaffected.
         try {
             val plan = SpatialRefOps.transformPlan(srcInfo.canonical, dstInfo.canonical)
-            val gProj = if (plan.identity) g else transformWithCachedCT(g, plan.transformation)
+            val gProj = if (plan.identity) g else transformKeepingZ(g, plan.transformation)
 
             // Non-finite guard: mirrors light's _has_nonfinite_xy. Catches the case where the
             // transform *returns* a non-finite ordinate rather than throwing.
@@ -268,6 +270,40 @@ private[expressions] object TransformCrsCore {
         } catch {
             case NonFatal(_) => CrsOutcome.NullOut
         }
+    }
+
+    /** Reprojection that keeps every Z the geometry has.
+      *
+      * A geometry whose Z is uniform (all vertices or none) goes through [[transformWithCachedCT]]
+      * unchanged. A partial-Z geometry cannot go to OGR in 3D (OGR refuses a NaN Z), so X and Y of every
+      * vertex are reprojected without a Z, and the vertices that have a Z are then reprojected as 3D
+      * points to carry their Z through the transformation. A vertex without a Z stays NaN: a missing Z is
+      * never filled in, and a Z that exists is never dropped. The lightweight level follows the same rule. */
+    private[expressions] def transformKeepingZ(
+        g: JTSGeometry, ct: CoordinateTransformation
+    ): JTSGeometry = {
+        val gProj = transformWithCachedCT(g, ct)
+        val in = g.getCoordinates
+        val hasZ = in.map(c => java.lang.Double.isFinite(c.z))
+        if (!hasZ.exists(identity) || hasZ.forall(identity)) return gProj
+
+        val zOut = Array.fill(in.length)(Double.NaN)
+        val withZ = in.zip(hasZ).collect { case (c, true) => JTS.point(c.copy()) }
+        val moved = transformWithCachedCT(JTS.multiPoint(withZ.toArray[JTSGeometry]), ct)
+        val movedZ = moved.getCoordinates.map(_.z)
+        var k = 0
+        for (i <- in.indices if hasZ(i)) { zOut(i) = movedZ(k); k += 1 }
+
+        // The reprojected geometry is XY only: rebuild each sequence with the Z carried through, in the
+        // same vertex order the input was read in.
+        var next = 0
+        new GeometryEditor(gProj.getFactory).edit(gProj, new GeometryEditor.CoordinateSequenceOperation {
+            override def edit(seq: CoordinateSequence, geometry: JTSGeometry): CoordinateSequence = {
+                val cs = Array.tabulate(seq.size)(i => new Coordinate(seq.getX(i), seq.getY(i), zOut(next + i)))
+                next += seq.size
+                new CoordinateArraySequence(cs)
+            }
+        })
     }
 
     /** Z-aware OGR reprojection through a cache-owned CoordinateTransformation.

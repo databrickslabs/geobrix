@@ -5,7 +5,7 @@ import org.apache.spark.sql.types.{BinaryType, DataType, StringType}
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.util.AffineTransformation
 import org.locationtech.jts.geom._
-import org.locationtech.jts.io.{ByteOrderValues, WKBReader, WKBWriter, WKTReader, WKTWriter}
+import org.locationtech.jts.io.{ByteOrderValues, ParseException, WKBReader, WKBWriter, WKTReader, WKTWriter}
 import org.locationtech.jts.operation.union.UnaryUnionOp
 import org.locationtech.jts.simplify.DouglasPeuckerSimplifier
 
@@ -337,9 +337,62 @@ object JTS {
         val tid = Thread.currentThread().getId
         val reader = wtkReaders.getOrElseUpdate(tid, new WKTReader())
         val (srid, body) = splitEWKT(wkt)
-        val geom = reader.read(body)
+        val geom =
+            try reader.read(body)
+            catch {
+                case e: ParseException =>
+                    // A text whose parts disagree about dimensionality (a Z on one vertex only) is no
+                    // geometry to the reader. Read it as uniform 3D instead: the Z values that exist stay,
+                    // the missing ones are NaN. Text that is still unreadable raises the original error.
+                    val padded = padMixedDimension(body)
+                    if (padded == body) throw e
+                    try reader.read(padded)
+                    catch { case _: ParseException => throw e }
+            }
         if (srid > 0) geom.setSRID(srid)
         geom
+    }
+
+    private val wktOrdinate =
+        java.util.regex.Pattern.compile("[-+]?(?:\\d+\\.?\\d*|\\.\\d+)(?:[eE][-+]?\\d+)?|[-+]?nan|[-+]?inf(?:inity)?", java.util.regex.Pattern.CASE_INSENSITIVE)
+    private val wktDimTag = java.util.regex.Pattern.compile("\\s+\\b(?:ZM|Z|M)\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+    private val wktEmpty = java.util.regex.Pattern.compile("\\bEMPTY\\b", java.util.regex.Pattern.CASE_INSENSITIVE)
+
+    /** Rewrites a WKT body whose parts disagree about dimensionality to uniform 3D: every coordinate gets
+      * exactly three ordinates and every geometry is tagged `Z`.
+      *
+      * Only meaningful for a body the reader has refused: applied to clean 2D text it would turn a 2D
+      * geometry 3D, so [[fromWKT]] calls it after a failed read only. A missing Z becomes `NaN` (the
+      * absence of a Z, never a made-up elevation); a measure is dropped, as the readers are XYZ-only.
+      * Mirrors the lightweight level's normalisation so both levels read such text the same way. */
+    private[jts] def padMixedDimension(wkt: String): String = {
+        val out = new StringBuilder
+        val chunk = new StringBuilder
+        def flush(): Unit = {
+            if (chunk.nonEmpty) {
+                val text = chunk.toString()
+                val m = wktOrdinate.matcher(text)
+                val nums = mutable.ArrayBuffer.empty[String]
+                while (m.find()) nums += m.group()
+                if (nums.size < 2) {
+                    // a keyword chunk (POINT, GEOMETRYCOLLECTION, EMPTY ...): drop its tag, then tag it Z
+                    val bare = wktDimTag.matcher(text).replaceAll("")
+                    if (wktEmpty.matcher(bare).find()) out.append(wktEmpty.matcher(bare).replaceAll("Z EMPTY"))
+                    else if (bare.exists(_.isLetter)) out.append(bare.stripTrailing()).append(" Z ")
+                    else out.append(bare)
+                } else {
+                    val ords = nums.take(3) ++ Seq.fill(math.max(0, 3 - nums.size))("NaN")
+                    out.append(" ").append(ords.mkString(" ")).append(" ")
+                }
+                chunk.clear()
+            }
+        }
+        wkt.foreach { c =>
+            if (c == '(' || c == ')' || c == ',') { flush(); out.append(c) }
+            else chunk.append(c)
+        }
+        flush()
+        out.toString()
     }
 
     /** Splits an optional `SRID=<int>;` prefix off a WKT/EWKT string. Returns (srid, wkt-body).

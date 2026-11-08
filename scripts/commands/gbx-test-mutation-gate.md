@@ -16,7 +16,8 @@ Check that a slimmer test selection still catches what the old one catches. It m
 - `--out <dir>` — output dir. Default: `test-logs/mutation-gate/<family>`.
 - `--max-children <n>` — mutmut workers. Default: 10. Lower it when two gates run at once.
 - `--seed <n>` — sample seed. Default: 31.
-- `--old-codes <file>` — reuse the `K_old.json` of an earlier run, so the next slim candidate costs one run, not two. The kernel modules and the old tests must not have changed since.
+- `--old-codes <file>` — reuse the `K_old.json` of an earlier run, so the next slim candidate costs one run, not two. Every run writes `K_old.fingerprint` beside it (the kernel modules, the old selection and the old test files); a reuse whose fingerprint differs is refused with a `Fix:`. A kill set from before fingerprints is accepted unchecked.
+- `--old-ref <git-ref>` — run the old selection on the tests and the source as they were at that ref, not on the current tree. The oracle rows live in the source, so the old run sees the old rows too. Use it when the fold edits or deletes files in place: the old versions come back (deleted files too, and `conftest.py` and helpers as they were) and files added since are absent from the old run. The slim run uses the current tree. The kernel modules must be the same at the ref and in the tree, or the command refuses. With `--old-codes` too, the kill set must have been made from the same ref (its fingerprint says which); that is how a second slim candidate of an in-place fold reuses the first run.
 - `--keep-work` — keep the throwaway copy (a private `mktemp`-style dir under `/private/tmp`, mode 0700).
 - `--plan` — print the plan and stop. Nothing runs.
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path.
@@ -45,6 +46,12 @@ The command runs the old selection, then the slim one, over every mutant of the 
 - `lost.json` — the old kills the slim run lost.
 - `verdict.json`, `report.txt` — the numbers and the verdict.
 - `mutmut_old.log`, `mutmut_slim.log` — the raw runs.
+
+## Runs that prove nothing are refused
+
+- If the old run killed no mutant, the command stops: "old run killed nothing: the old selection did not run". This is what a test file that cannot collect in the throwaway copy causes (mutmut's stats phase aborts and every mutant stays unchecked), and it used to read as a pass.
+- If mutmut stops before running tests in either run (`failed to collect stats`, `Failed to run clean test`, `Stopping early ...`), the command names the log and stops.
+- A verdict over an empty kill set is a FAIL.
 
 ## Limits
 

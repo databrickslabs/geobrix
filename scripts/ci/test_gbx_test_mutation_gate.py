@@ -161,3 +161,132 @@ def test_a_venv_dir_another_user_could_have_planted_is_refused(tmp_path):
     link.symlink_to(ok)
     with pytest.raises(SystemExit):
         gate.require_private(link)
+
+
+# ------------------------------------------------------------------------- a run that proves nothing is refused
+
+
+@pytest.mark.parametrize("codes", [{}, _codes({("_bng", "f", 1): 0, ("_bng", "f", 2): None}), {"k": None}])
+def test_an_old_run_that_killed_nothing_is_refused(codes):
+    with pytest.raises(SystemExit) as exc:
+        gate.require_old_kills(codes)
+    msg = str(exc.value)
+    assert "killed nothing" in msg and "did not run" in msg and "Fix:" in msg
+
+
+def test_an_old_run_that_killed_something_is_accepted():
+    gate.require_old_kills(_codes({("_bng", "f", 1): 1, ("_bng", "f", 2): 0}))
+
+
+def test_a_verdict_over_an_empty_kill_set_is_a_fail_not_a_vacuous_pass():
+    old = _codes({("_bng", "f", i): 0 for i in range(10)})
+    v = gate.judge(old, dict(old), {"sample50": gate.sample(old, 50), "sample100": gate.sample(old, 100)})
+    assert not v["pass"] and any("killed nothing" in f for f in v["failures"])
+
+
+@pytest.mark.parametrize(
+    "text,reason",
+    [
+        ("... failed to collect stats. runner returned 2\n", "failed to collect stats"),
+        ("Failed to run clean test\n", "Failed to run clean test"),
+        ("Stopping early, because we could not find any test case for any mutant.", "Stopping early"),
+    ],
+)
+def test_a_mutmut_run_that_stopped_before_the_tests_is_named(text, reason):
+    assert reason in gate.aborted_reason(text)
+    assert gate.aborted_reason("1/5 mutants tested\n") is None
+
+
+# ---------------------------------------------------------------------------------- --old-ref and the saved kill set
+
+
+def _git(repo, *a):
+    subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *a], check=True, capture_output=True)
+
+
+@pytest.fixture
+def repo(tmp_path):
+    r = tmp_path / "repo"
+    t = r / "python" / "geobrix" / "test" / "pygx"
+    t.mkdir(parents=True)
+    (t / "test_a.py").write_text("OLD = 1\n")
+    (t / "test_gone.py").write_text("GONE = 1\n")
+    (r / "python" / "geobrix" / "src" / "databricks" / "labs" / "gbx" / "pygx").mkdir(parents=True)
+    (r / "python" / "geobrix" / "src" / "databricks" / "labs" / "gbx" / "pygx" / "_bng.py").write_text("X = 1\n")
+    _git(r, "init", "-q")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "old")
+    (t / "test_a.py").write_text("NEW = 1\n")  # edited in place
+    (t / "test_gone.py").unlink()  # deleted
+    (t / "test_new.py").write_text("NEW = 1\n")  # added
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "fold")
+    return r
+
+
+def test_the_old_tests_come_back_as_they_were_at_the_ref(repo, tmp_path):
+    dest = tmp_path / "old-test"
+    gate.export_ref_tests("HEAD~1", dest, repo)
+    assert (dest / "pygx" / "test_a.py").read_text() == "OLD = 1\n"
+    assert (dest / "pygx" / "test_gone.py").exists()
+    assert not (dest / "pygx" / "test_new.py").exists()  # the old selection never had it
+    src = tmp_path / "old-src"
+    gate.export_ref_dir("HEAD~1", "src", src, repo)
+    assert (src / "databricks" / "labs" / "gbx" / "pygx" / "_bng.py").read_text() == "X = 1\n"
+
+
+def test_a_selection_is_checked_against_the_ref_not_the_tree(repo):
+    assert gate.exists_at_ref("test/pygx/test_gone.py", "HEAD~1", repo)
+    assert not gate.exists_at_ref("test/pygx/test_gone.py", "HEAD", repo)
+    assert gate.exists_at_ref("test/pygx", "HEAD", repo)  # a directory
+    assert gate.exists_at_ref("test/pygx/test_a.py::test_x", "HEAD", repo)  # a node id is cut to its file
+
+
+def test_a_ref_that_does_not_resolve_is_refused_with_a_fix(repo):
+    assert len(gate.resolve_ref("HEAD~1", repo)) == 40
+    with pytest.raises(SystemExit) as exc:
+        gate.resolve_ref("no-such-ref", repo)
+    assert "Fix:" in str(exc.value)
+
+
+def test_a_kernel_module_edited_since_the_ref_is_refused(repo):
+    mod = "src/databricks/labs/gbx/pygx/_bng.py"
+    gate.require_unchanged_since("HEAD", [mod], repo)  # same content at the ref and in the tree
+    (repo / "python" / "geobrix" / mod).write_text("X = 2\n")
+    with pytest.raises(SystemExit) as exc:
+        gate.require_unchanged_since("HEAD", [mod], repo)
+    assert "Fix:" in str(exc.value) and "_bng.py" in str(exc.value)
+
+
+def test_old_ref_shows_in_the_plan_and_a_kill_set_from_another_ref_is_refused(tmp_path):
+    base = ["--family", "unit", "--modules", "pygx/_bng", "--tests", "test/pygx/test_bng_batched_walk.py",
+            "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
+    res = _sh(*base, "--old-ref", "HEAD")
+    assert res.returncode == 0, res.stderr
+    assert len(json.loads(res.stdout[res.stdout.index("{"):])["old_ref"]) == 40
+    assert _sh(*base, "--old-ref", "no-such-ref").returncode != 0
+    saved = tmp_path / "K_old.json"
+    saved.write_text("{}")
+    (tmp_path / "K_old.fingerprint").write_text("made-from-another-ref\n")
+    res = _sh(*base, "--old-ref", "HEAD", "--old-codes", str(saved))
+    assert res.returncode != 0 and "Fix:" in res.stderr
+    (tmp_path / "K_old.fingerprint").unlink()  # a kill set from before fingerprints: accepted
+    assert _sh(*base, "--old-ref", "HEAD", "--old-codes", str(saved)).returncode == 0
+
+
+def test_a_saved_kill_set_is_reused_only_for_the_same_kernels_and_old_tests(tmp_path):
+    mod = tmp_path / "_bng.py"
+    mod.write_text("X = 1\n")
+    t = tmp_path / "test_a.py"
+    t.write_text("def test_a(): pass\n")
+    fp = gate.old_fingerprint([mod], [t], None, ["test/pygx"])
+    saved = tmp_path / "K_old.json"
+    saved.write_text("{}")
+    gate.write_fingerprint(saved, fp)
+    gate.check_fingerprint(saved, fp)  # unchanged: fine
+    t.write_text("def test_a(): assert 1\n")  # an old test was edited since
+    with pytest.raises(SystemExit) as exc:
+        gate.check_fingerprint(saved, gate.old_fingerprint([mod], [t], None, ["test/pygx"]))
+    assert "Fix:" in str(exc.value)
+    saved.with_name("K_old.fingerprint").unlink()
+    gate.check_fingerprint(saved, fp)  # a kill set from before fingerprints: accepted, nothing to compare

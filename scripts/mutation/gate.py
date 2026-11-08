@@ -15,6 +15,8 @@ import argparse
 import ast
 import collections
 import glob
+import hashlib
+import io
 import json
 import os
 import random
@@ -24,6 +26,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 from pathlib import Path
@@ -171,7 +174,10 @@ def judge(old: dict, new: dict, samples: dict) -> dict:
         by[m][2] += detected(new.get(k))
     for m, (n, o, s) in sorted(by.items()):
         modules[m] = {"mutants": n, "old_pct": 100.0 * o / n, "slim_pct": 100.0 * s / n, "delta": 100.0 * (s - o) / n}
-    failures = [f"{n} keeps {r['pct']:.1f}% (< {THRESHOLD:.0f}%)" for n, r in rows.items() if r["pct"] < THRESHOLD]
+    failures = []
+    if not rows["all"]["old_killed"]:
+        failures.append("the old run killed nothing: there is nothing to compare the slim run with")
+    failures += [f"{n} keeps {r['pct']:.1f}% (< {THRESHOLD:.0f}%)" for n, r in rows.items() if r["pct"] < THRESHOLD]
     failures += [f"module {m} falls {-v['delta']:.1f} points (> {MODULE_DROP:.0f})" for m, v in modules.items() if v["delta"] < -MODULE_DROP]
     return {"pass": not failures, "failures": failures, "rows": rows, "modules": modules}
 
@@ -188,6 +194,100 @@ def format_report(family: str, v: dict, extra: dict) -> str:
     for k, val in extra.items():
         lines.append(f"  {k}: {val}")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------------------------- a run that proves nothing
+
+ABORT_MARKERS = (
+    "failed to collect stats",
+    "Failed to run clean test",
+    "Stopping early, because we could not find any test case",
+)
+
+
+def aborted_reason(log_text: str):
+    """The mutmut message that says it stopped before running the tests against any mutant, or None."""
+    return next((m for m in ABORT_MARKERS if m in log_text), None)
+
+
+def require_old_kills(old: dict) -> None:
+    """The old run is the yardstick. If it killed nothing, its tests did not run (a test file that fails to collect
+    in the throwaway copy aborts mutmut's stats phase, and every mutant then stays unchecked): refuse, never pass."""
+    if not any(detected(c) for c in old.values()):
+        sys.exit(
+            "old run killed nothing: the old selection did not run, so a pass would prove nothing. "
+            "Fix: read mutmut_old.log in the output dir for the first failure (a test that cannot collect or "
+            "that reads the repo tree breaks in the throwaway copy), drop that file from --tests, and run again."
+        )
+
+
+# ---------------------------------------------------------------------------------------------- the old tests at a ref
+
+
+def resolve_ref(ref: str, repo: Path = REPO_ROOT) -> str:
+    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"--old-ref {ref!r} is not a commit in this repository. Fix: pass a branch, tag or sha that holds the old tests (for example HEAD~1 or the commit before the fold).")
+    return r.stdout.strip()
+
+
+def exists_at_ref(arg: str, ref: str, repo: Path = REPO_ROOT) -> bool:
+    """Does a selection arg (a file, a directory or a node id; relative to python/geobrix) exist at the ref?"""
+    path = f"python/geobrix/{arg.split('::', 1)[0]}".rstrip("/")
+    return subprocess.run(["git", "-C", str(repo), "cat-file", "-e", f"{ref}:{path}"], capture_output=True).returncode == 0
+
+
+def export_ref_dir(ref: str, subdir: str, dest: Path, repo: Path = REPO_ROOT) -> None:
+    """python/geobrix/<subdir> (test or src) as it was at the ref, written to dest (which must not exist)."""
+    tar = subprocess.run(["git", "-C", str(repo), "archive", ref, f"python/geobrix/{subdir}"], capture_output=True, check=True).stdout
+    with tempfile.TemporaryDirectory(prefix="gbx-mut-ref-") as t:
+        with tarfile.open(fileobj=io.BytesIO(tar)) as tf:
+            tf.extractall(t, filter="data")
+        shutil.copytree(Path(t) / "python" / "geobrix" / subdir, dest, ignore=IGNORE_COPY)
+
+
+def export_ref_tests(ref: str, dest: Path, repo: Path = REPO_ROOT) -> None:
+    export_ref_dir(ref, "test", dest, repo)
+
+
+def require_unchanged_since(ref: str, modules: list, repo: Path = REPO_ROOT) -> None:
+    """The kernels are mutated from the current tree for both runs, so they must be what the old tests were
+    written against: a kernel edited since the ref would make the old kills mean something else."""
+    r = subprocess.run(["git", "-C", str(repo), "diff", "--name-only", ref, "--", *[f"python/geobrix/{m}" for m in modules]], capture_output=True, text=True, check=True)
+    if r.stdout.strip():
+        sys.exit(
+            f"kernel modules changed since {ref}: {', '.join(r.stdout.split())}. "
+            f"Fix: pass an --old-ref taken after the last kernel change (the fold itself must not edit the kernels), or gate without --old-ref."
+        )
+
+
+def old_fingerprint(module_files: list, test_files: list, ref_sha, old_sel: list) -> str:
+    """What a saved kill set depends on: the kernel modules, the old selection and the old test files."""
+    h = hashlib.sha1()
+    for part in (ref_sha or "", *old_sel):
+        h.update(part.encode() + b"\0")
+    for f in sorted([*module_files, *([] if ref_sha else test_files)]):
+        h.update(str(f).encode() + b"\0" + Path(f).read_bytes() + b"\0")
+    return h.hexdigest()
+
+
+def fingerprint_path(codes_file: Path) -> Path:
+    return Path(codes_file).with_name("K_old.fingerprint")
+
+
+def write_fingerprint(codes_file: Path, fp: str) -> None:
+    fingerprint_path(codes_file).write_text(fp + "\n")
+
+
+def check_fingerprint(codes_file: Path, fp: str) -> None:
+    """Refuse a saved kill set whose kernels or old tests changed since it was written. A set from before
+    fingerprints has nothing to compare and is accepted."""
+    p = fingerprint_path(codes_file)
+    if p.exists() and p.read_text().strip() != fp:
+        sys.exit(
+            f"{codes_file} was made from other kernel modules or old tests than these. "
+            f"Fix: run again without --old-codes (it writes a fresh K_old.json and K_old.fingerprint), then reuse that."
+        )
 
 
 # ---------------------------------------------------------------------------------------------- the work dir
@@ -303,6 +403,9 @@ def run_suite(label: str, work: Path, py: Path, modules: list, selection: list, 
             cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT,
         )
     codes = collect_codes(work)
+    reason = aborted_reason((log_dir / f"mutmut_{label}.log").read_text(errors="replace"))
+    if reason:
+        sys.exit(f"[{label}] mutmut stopped before it ran the tests ({reason!r}); the {label} selection did not run. Fix: read {log_dir}/mutmut_{label}.log for the first failure.")
     print(f"[{label}] {len(codes)} mutants in {time.time() - t0:.0f}s (mutmut rc {proc.returncode}); log {log_dir}/mutmut_{label}.log", flush=True)
     if not codes:
         sys.exit(f"[{label}] mutmut produced no mutants; see {log_dir}/mutmut_{label}.log")
@@ -324,6 +427,9 @@ def parse(argv):
     p.add_argument("--seed", type=int, default=SAMPLE_SEED)
     p.add_argument("--old-codes", help="reuse the K_old.json of an earlier run instead of running the old tests again "
                    "(for the next slim candidate of the same fold: the kernel modules and the old tests must be unchanged)")
+    p.add_argument("--old-ref", help="git ref holding the old state: a fold that edits or deletes test files in place is gated against "
+                   "their contents at that ref (the kernel modules must not have changed since). With --old-codes, the kill set must "
+                   "have been made from that ref")
     p.add_argument("--keep-work", action="store_true", help="keep the work dir (debugging)")
     p.add_argument("--plan", action="store_true", help="print the plan (work dir, config) and stop; runs nothing")
     return p.parse_args(argv)
@@ -342,22 +448,34 @@ def main(argv=None) -> int:
     prefix = f"gbx-mut-{args.family}-"
     work = tmp_root() / (prefix + "<random>")  # made by mkdtemp (mode 0700) when the run starts
 
+    ref_sha = resolve_ref(args.old_ref) if args.old_ref else None
+    if ref_sha:
+        require_unchanged_since(ref_sha, modules)
+
     warn = []
     for label, sel in (("old", old_sel), ("slim", slim_sel)):
-        files = selected_files(sel, PKG_ROOT)
-        absent = [a for a in sel if not a.startswith("-") and not (PKG_ROOT / a.split("::", 1)[0]).exists()]
+        at_ref = label == "old" and ref_sha
+        absent = [
+            a for a in sel
+            if not a.startswith("-") and not (exists_at_ref(a, ref_sha) if at_ref else (PKG_ROOT / a.split("::", 1)[0]).exists())
+        ]
         if absent:
-            sys.exit(f"{label} tests do not exist: {absent}")
-        for f in pyspark_importers(files):
+            sys.exit(f"{label} tests do not exist{f' at {args.old_ref}' if at_ref else ''}: {absent}")
+        if at_ref:
+            continue  # the files are read from the ref when the run starts
+        for f in pyspark_importers(selected_files(sel, PKG_ROOT)):
             warn.append(f"{label}: {f.relative_to(PKG_ROOT)} imports pyspark at module level (Tier 0 skips Spark fixtures only)")
     for w in warn:
         print("WARNING:", w, flush=True)
     if args.old_codes and not Path(args.old_codes).is_file():
         sys.exit(f"--old-codes {args.old_codes} is not a file. Fix: pass the K_old.json an earlier run wrote, or drop the option to run the old tests.")
+    fingerprint = old_fingerprint([PKG_ROOT / m for m in modules], selected_files(old_sel, PKG_ROOT) if not ref_sha else [], ref_sha, old_sel)
+    if args.old_codes:
+        check_fingerprint(Path(args.old_codes), fingerprint)
     if args.plan:
         print(json.dumps({"work": str(work), "out": str(out), "modules": modules, "old": old_sel, "slim": slim_sel,
                           "venv": str(mutmut_venv()), "host_venv": str(host_venv()), "oracle_tables": args.oracle_tables,
-                          "old_codes": args.old_codes, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
+                          "old_codes": args.old_codes, "old_ref": ref_sha, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
         return 0
 
     out.mkdir(parents=True, exist_ok=True)
@@ -370,13 +488,23 @@ def main(argv=None) -> int:
             old = json.loads(Path(args.old_codes).read_text())
             print(f"[old] {len(old)} mutants reused from {args.old_codes}", flush=True)
         else:
+            if ref_sha:  # the old state: tests and source (oracle rows included) as at the ref; the slim run gets the tree back below
+                for sub in ("test", "src"):
+                    shutil.rmtree(work / sub)
+                    export_ref_dir(ref_sha, sub, work / sub)
             old = run_suite("old", work, py, modules, old_sel, args, out)
+            if ref_sha:
+                for sub in ("test", "src"):
+                    shutil.rmtree(work / sub)
+                    shutil.copytree(PKG_ROOT / sub, work / sub, ignore=IGNORE_COPY)
+        require_old_kills(old)
         slim = run_suite("slim", work, py, modules, slim_sel, args, out)
         samples = {f"sample{n}": sample(old, n, args.seed) for n in SAMPLE_SIZES}
         verdict = judge(old, slim, samples)
         survivors = sorted(k for k in old if not detected(old[k]))
         for name, data in (("K_old", old), ("K_slim", slim), ("sample50", samples["sample50"]), ("sample100", samples["sample100"]), ("survivors_old", survivors)):
             (out / f"{name}.json").write_text(json.dumps(data, indent=0, sort_keys=isinstance(data, dict)))
+        write_fingerprint(out / "K_old.json", fingerprint)
         (out / "lost.json").write_text(json.dumps({n: r["lost"] for n, r in verdict["rows"].items()}, indent=1))
         report = format_report(args.family, verdict, {"wall_s": f"{time.time() - t0:.0f}", "out": str(out), "seed": args.seed, "warnings": len(warn)})
         (out / "report.txt").write_text(report + "\n")

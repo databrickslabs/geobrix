@@ -21,6 +21,7 @@ show_help() {
     echo -e "  ${GREEN}--max-children <n>${NC}     mutmut workers (default 10; lower it when two gates run at once)"
     echo -e "  ${GREEN}--seed <n>${NC}             Sample seed (default 31)"
     echo -e "  ${GREEN}--old-codes <file>${NC}     Reuse the K_old.json of an earlier run instead of running the old tests again"
+    echo -e "  ${GREEN}--old-ref <git-ref>${NC}    Run the old tests as they were at this ref (for a fold that edits or deletes test files in place)"
     echo -e "  ${GREEN}--keep-work${NC}            Keep the throwaway copy under /private/tmp (debugging)"
     echo -e "  ${GREEN}--plan${NC}                 Print the plan and stop; runs nothing"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -44,7 +45,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --family|--modules|--tests|--slim-tests|--oracle-tables|--out|--max-children|--seed|--old-codes)
+        --family|--modules|--tests|--slim-tests|--oracle-tables|--out|--max-children|--seed|--old-codes|--old-ref)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASSTHROUGH+=("$1" "$2")
             shift 2

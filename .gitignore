@@ -87,3 +87,6 @@ pip-index-fpr-salt.*
 # build/rs/dev-darwin/rs/, under /build/ above)
 /rust/gbxrs/target/
 /rust/gbxrs/dist/
+
+# mutmut output: the mutation gate runs in a private temp copy; never in the tree
+/mutants/

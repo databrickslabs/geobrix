@@ -55,7 +55,7 @@ The command runs the old selection, then the slim one, over every mutant of the 
 
 ## Limits
 
-- Tier 0 only. Tests that use the `spark`, `jvm_spark` or `spark_connect_local` fixture are skipped. The command warns when a selected file imports `pyspark` at module level.
+- Tier 0 only. Tests that use the `spark`, `jvm_spark`, `spark_connect_local`, `spark_session` or `spark_delta` fixture are skipped. The command warns when a selected file imports `pyspark` at module level.
 - Rows of an oracle table reach the kernels only through the `test_family_oracle_l3_callables` and `test_family_oracle_uc_handlers` legs. A table module opts its scalars into the first with `L3_CALLABLE = True`.
 - A venv holds `mutmut==3.8.0` and `pytest==9.1.1`. It lives in `~/.cache/geobrix/mutation-venv` (`XDG_CACHE_HOME` is honoured); `GBX_MUTATION_VENV` moves it. mutmut 3.8.0 crashes under pytest 9.2.0.
 - The command runs code from that venv, so it refuses one that is a link, is owned by another user, or is group- or world-writable. The message starts its fix with `Fix:`.

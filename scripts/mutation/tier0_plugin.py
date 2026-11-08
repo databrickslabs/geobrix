@@ -7,7 +7,13 @@ lists the transitive ones too.
 
 import pytest
 
-SPARK_FIXTURES = {"spark", "jvm_spark", "spark_connect_local", "spark_session"}
+SPARK_FIXTURES = {
+    "spark",
+    "jvm_spark",
+    "spark_connect_local",
+    "spark_session",
+    "spark_delta",
+}
 
 
 @pytest.hookimpl(tryfirst=True)

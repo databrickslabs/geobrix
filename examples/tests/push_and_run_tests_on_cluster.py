@@ -79,7 +79,9 @@ SPARK_VERSION = mut.SPARK_VERSION
 PYTEST_PIN = mut.PYTEST_PIN
 EXTRAS = "stac,vizx,zarr,databricks"  # the env wheel's feature extras the suites import
 # What the tests read besides python/geobrix: docs, examples, scripts and the Scala test resources the checks point at.
-SUBSET = ("python/geobrix", "scripts", "docs", "examples", "sample-data", "src/main", "README.md")
+# What the tests read besides python/geobrix: the CI workflow and actions (the scripts/ci shard and its guards parse them), scripts,
+# docs, examples, sample data and the Scala sources the manifest checks scan.
+SUBSET = (".github", "python/geobrix", "scripts", "docs", "examples", "sample-data", "src/main", "README.md")
 RESOURCES = "src/test/resources/binary"  # 117 MB of test rasters and NetCDF: staged once per content, not once per run
 DEPS_INPUTS = ("python/geobrix/pyproject.toml", "python/geobrix/envs", "scripts/native")  # a change here wants a new wheel
 EXIT_FAILED, EXIT_USAGE, EXIT_NO_START, EXIT_STALLED = 1, 2, 4, 3

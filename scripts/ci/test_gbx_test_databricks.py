@@ -485,3 +485,9 @@ def test_seconds_measured_at_eight_slots_are_brought_to_the_slots_of_the_plan():
     got = ts.rescale_seconds({"a": 100.0}, 8, 4)
     assert 45 < got["a"] < 55, "half of it: the slowdown of 8 slots over that of 4"
     assert ts.rescale_seconds({"a": 100.0}, 4, 4) == {"a": 100.0}
+
+
+def test_the_tarball_carries_the_ci_workflow_the_scripts_shard_parses():
+    assert ".github" in launcher.SUBSET
+    listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", ".github/workflows/build_main.yml"], cwd=REPO_ROOT, capture_output=True, text=True).stdout
+    assert ".github/workflows/build_main.yml" in listed, "the file the guards read is in the tree the subset archives"

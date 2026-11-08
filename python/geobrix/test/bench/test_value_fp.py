@@ -324,3 +324,32 @@ def test_a_step_after_the_timed_iterations_is_named_on_the_rung_and_the_heartbea
     ctx.heartbeat = types.SimpleNamespace(set_phase=seen.append)
     levels._say_phase(ctx, "value fingerprint")
     assert ctx.rung.phase == "value fingerprint" and seen == ["value fingerprint"]
+
+
+def test_the_steps_after_the_timed_iterations_compose_in_order(monkeypatch):
+    """`_after_timing` runs the value fingerprint (which replaces the length fingerprint) and then the NULL report,
+    names each step and the row write on the heartbeat, and runs a step only for a form that asks for it.
+    """
+    from databricks.labs.gbx.bench import levels
+
+    monkeypatch.setattr(
+        levels, "_value_fingerprint", lambda *a: ("v1:abc", ["len_fp=LEN"])
+    )
+    monkeypatch.setattr(levels, "_null_report", lambda *a: ["nulls=0"])
+    seen = []
+    ctx = _vfp_ctx(_Rows(row=(1, 1, 1)))
+    ctx.heartbeat = types.SimpleNamespace(set_phase=seen.append)
+
+    both = types.SimpleNamespace(vsql="SELECT 1", nullsql="SELECT 2")
+    fp, notes = levels._after_timing(ctx, both, "t", 10, 10, "LEN")
+    assert (fp, notes) == ("v1:abc", ["len_fp=LEN", "nulls=0"])
+    assert [p.split(" (")[0] for p in seen] == [
+        "value fingerprint",
+        "NULL-output report",
+        "row written",
+    ]
+
+    seen.clear()
+    neither = types.SimpleNamespace(vsql=None, nullsql=None)
+    assert levels._after_timing(ctx, neither, "t", 10, 10, "LEN") == ("LEN", [])
+    assert seen == ["row written"]

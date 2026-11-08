@@ -201,18 +201,10 @@ HEAVY_PENDING.update(
     }
 )
 
-# Two answers of the raster tile functions that the JVM level gives differently (measured through the JAR): the JVM
-# stretch takes the nearest-rank percentile of an 8-bit band and rounds the rescale where the lightweight level
-# interpolates the percentile and truncates (the float rows agree within a level, the 8-bit lookup rows by up to 1.24);
-# and the mean filter of a gray + alpha tile leaves the empty window's mask different from the lightweight level's.
+# An answer of a raster tile function that the JVM level gives differently (measured through the JAR): the mean filter
+# of a gray + alpha tile leaves the empty window's mask different from the lightweight level's.
 HEAVY_PENDING.update(
     {
-        "percentile_stretch_byte_lut": {
-            "L1": "the JVM takes the nearest-rank percentile of an 8-bit band and rounds the rescale; the lightweight level interpolates the percentile and truncates, so 8 pixels differ by up to 1.24 levels"
-        },
-        "percentile_stretch_u16_lut": {
-            "L1": "the JVM takes the nearest-rank percentile of a 16-bit band and rounds the rescale; the lightweight level interpolates the percentile and truncates, so one pixel is NoData on one level and not the other"
-        },
         "filter_u8_alpha_mean_1": {
             "L1": "the JVM mean filter of a gray + alpha tile leaves a different NoData mask at the empty window than the lightweight level, which shows -9999 there as a pixel value"
         },

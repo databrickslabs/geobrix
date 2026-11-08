@@ -107,6 +107,10 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_rst_combinemin": ("L3",),
     "gbx_rst_combinestddev": ("L3",),
     "gbx_rst_combinesum": ("L3",),
+    # percentile_stretch has no JVM level: it took the nearest-rank percentile and rounded the rescale where light
+    # interpolates and truncates (8 pixels of a test tile differed by up to 1.24 levels), it was never measured against
+    # light, and a decimated large-band percentile cannot be matched to the level. It takes the family order, light.
+    "gbx_rst_percentile_stretch": ("L3",),
     # The accessors that return one value (a number, a string or a polygon's WKB) are JVM first: reading a header is
     # 0.26x (boundingbox) and 0.18x (width) of the light time at 4x rows, and 0.24x for both at 16x (dedicated,
     # 1 + 4 x m5d.2xlarge, DBR 19, equal output). A value of this kind cannot sit under `explode`, so the SQL dispatch

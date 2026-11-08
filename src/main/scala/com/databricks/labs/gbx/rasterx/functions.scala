@@ -442,11 +442,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_setcrs(tile: Column, crs: String): Column =
         rst_setcrs(tile, lit(crs))
 
-    def rst_percentile_stretch(tile: Column, loPct: Column, hiPct: Column): Column =
-        ColumnAdapter(RST_PercentileStretch.name, Seq(tile, loPct, hiPct))
-    def rst_percentile_stretch(tile: Column, loPct: Double, hiPct: Double): Column =
-        rst_percentile_stretch(tile, lit(loPct), lit(hiPct))
-
     def rst_band(tile: Column, bandIndex: Column): Column =
         ColumnAdapter(RST_Band.name, Seq(tile, bandIndex))
     def rst_band(tile: Column, bandIndex: Int): Column =

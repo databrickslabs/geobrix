@@ -5,7 +5,7 @@ Every reader and operation below judges each band alone: a pixel is valid for a 
 mask says so (NoData, the raster's own mask band) and, for a raster with an alpha band, its alpha is above
 0, at any band count. Both tiers must aggregate, count, filter, vectorise and stretch the same pixels:
 the band statistics, the histogram, the focal filters and convolution,
-polygonize and isoband, the derived band, the percentile stretch and the tessellation chips.
+polygonize and isoband, the derived band and the tessellation chips.
 
 The helpers (Spark session with the JAR, the two tiers' row collectors) are those of
 ``test_parity_bng_quadbin_raster_grid.py``.
@@ -446,21 +446,3 @@ def test_derivedband_parity_is_invalid_where_the_input_is(spark_with_jar, name):
         datas["light"].astype("float64")[ok] == datas["heavy"].astype("float64")[ok]
     ).all()
     assert valids["light"].any() and not valids["light"].all()
-
-
-@pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "masked_rgb_nir"])
-def test_percentile_stretch_parity_over_the_pixels_valid_for_each_band(
-    spark_with_jar, name
-):
-    """The percentiles are over the pixels valid for the band and the pixels invalid for it are written 0,
-    in both tiers: the values agree everywhere, the hidden pixels included."""
-    # the 4x4 pattern: its valid values are 0 and 7 only, so both tiers' percentile rules (interpolated in
-    # light, the nearest rank in heavy) give the same 0 and 7
-    outs = _both_tiers(
-        spark_with_jar,
-        _raster_of(name),
-        lambda m, t: f.call_function(
-            "gbx_rst_percentile_stretch", t, f.lit(2.0), f.lit(98.0)
-        ),
-    )
-    assert (outs["light"]["data"] == outs["heavy"]["data"]).all()

@@ -334,9 +334,10 @@ def test_the_combine_functions_and_the_raster_bng_tessellate_have_no_jvm_level(n
     assert levels.select(fn, _caps(jar=OK_JAR)).level == "L3"
 
 
-@pytest.mark.parametrize("name", ["gbx_rst_buildoverviews"])
+@pytest.mark.parametrize("name", ["gbx_rst_buildoverviews", "gbx_rst_percentile_stretch"])
 def test_a_function_whose_jvm_level_was_removed_has_only_light(name):
-    # buildoverviews: light measured 2.2x faster than the JVM level, which is removed
+    # buildoverviews: light measured 2.2x faster than the JVM level, which is removed; percentile_stretch: the JVM
+    # level took another percentile rule and rescale than light (not measured, and not worth aligning)
     fn = MAN.functions[name]
     assert not {"L1", "L2"} & set(fn.levels)
     assert levels.order(fn) == ("L3",)

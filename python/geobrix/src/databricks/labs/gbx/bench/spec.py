@@ -1478,8 +1478,9 @@ REGISTRY: Dict[str, FnSpec] = {
         {"lo_pct": 2.0, "hi_pct": 98.0},
         core_fn=lambda ds, a: stretch.percentile_stretch(ds, a["lo_pct"], a["hi_pct"]),
         col_fn=lambda t, a: rx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
-        sources=_STRETCH_LIGHT + (_HEAVY + "pixel/RST_PercentileStretch.scala",),
+        sources=_STRETCH_LIGHT,
         core=False,
+        heavy=False,  # no heavyweight level: its percentile rule and rescale differed from light's
     ),
     # --- features (features.py) ---
     "rst_fillnodata": FnSpec(

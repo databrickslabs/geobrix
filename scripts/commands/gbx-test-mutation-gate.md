@@ -16,6 +16,7 @@ Check that a slimmer test selection still catches what the old one catches. It m
 - `--out <dir>` — output dir. Default: `test-logs/mutation-gate/<family>`.
 - `--max-children <n>` — mutmut workers. Default: 10. Lower it when two gates run at once.
 - `--seed <n>` — sample seed. Default: 31.
+- `--old-codes <file>` — reuse the `K_old.json` of an earlier run, so the next slim candidate costs one run, not two. The kernel modules and the old tests must not have changed since.
 - `--keep-work` — keep the throwaway copy (a private `mktemp`-style dir under `/private/tmp`, mode 0700).
 - `--plan` — print the plan and stop. Nothing runs.
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path.

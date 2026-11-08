@@ -20,13 +20,14 @@ show_help() {
     echo -e "  ${GREEN}--out <dir>${NC}            Output dir (default test-logs/mutation-gate/<family>)"
     echo -e "  ${GREEN}--max-children <n>${NC}     mutmut workers (default 10; lower it when two gates run at once)"
     echo -e "  ${GREEN}--seed <n>${NC}             Sample seed (default 31)"
+    echo -e "  ${GREEN}--old-codes <file>${NC}     Reuse the K_old.json of an earlier run instead of running the old tests again"
     echo -e "  ${GREEN}--keep-work${NC}            Keep the throwaway copy under /private/tmp (debugging)"
     echo -e "  ${GREEN}--plan${NC}                 Print the plan and stop; runs nothing"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
-    echo -e "  ${YELLOW}gbx:test:mutation-gate --family pygx --modules pygx/_bng,pygx/_quadbin --tests \"test/pygx/test_bng_codec.py\" --slim-tests \"test/manager/test_family_cross_tier.py::test_family_oracle_l3_callables\" --oracle-tables GRID_SCALAR${NC}"
+    echo -e "  ${YELLOW}gbx:test:mutation-gate --family pygx --modules pygx/_bng,pygx/_quadbin --tests \"test/pygx/test_bng_batched_walk.py\" --slim-tests \"test/manager/test_family_cross_tier.py::test_family_oracle_l3_callables\" --oracle-tables GRID_SCALAR${NC}"
     echo ""
 }
 
@@ -43,7 +44,7 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
-        --family|--modules|--tests|--slim-tests|--oracle-tables|--out|--max-children|--seed)
+        --family|--modules|--tests|--slim-tests|--oracle-tables|--out|--max-children|--seed|--old-codes)
             [[ $# -ge 2 ]] || { echo -e "${RED}Option $1 needs a value${NC}" >&2; exit 2; }
             PASSTHROUGH+=("$1" "$2")
             shift 2

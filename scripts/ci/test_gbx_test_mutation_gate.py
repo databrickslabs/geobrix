@@ -25,7 +25,7 @@ def _sh(*args):
 def test_help_exits_zero_and_names_every_option():
     res = _sh("--help")
     assert res.returncode == 0
-    for opt in ("--family", "--modules", "--tests", "--slim-tests", "--oracle-tables", "--out", "--plan", "--log"):
+    for opt in ("--family", "--modules", "--tests", "--slim-tests", "--oracle-tables", "--out", "--old-codes", "--plan", "--log"):
         assert opt in res.stdout
 
 
@@ -47,7 +47,7 @@ def test_the_command_has_its_registration_and_is_executable():
 def test_plan_resolves_modules_and_tests_and_runs_nothing(tmp_path):
     res = _sh(
         "--family", "unit", "--modules", "pygx/_bng,pygx._custom",
-        "--tests", "python/geobrix/test/pygx/test_bng_codec.py --ignore=python/geobrix/test/pygx/test_parity_bng.py",
+        "--tests", "python/geobrix/test/pygx/test_bng_batched_walk.py --ignore=python/geobrix/test/pygx/test_parity_bng.py",
         "--slim-tests", "test/manager/test_family_cross_tier.py::test_family_oracle_l3_callables",
         "--oracle-tables", "GRID_SCALAR", "--plan",
     )
@@ -57,16 +57,28 @@ def test_plan_resolves_modules_and_tests_and_runs_nothing(tmp_path):
         "src/databricks/labs/gbx/pygx/_bng.py",
         "src/databricks/labs/gbx/pygx/_custom.py",
     ]
-    assert plan["old"] == ["test/pygx/test_bng_codec.py", "--ignore=test/pygx/test_parity_bng.py"]
+    assert plan["old"] == ["test/pygx/test_bng_batched_walk.py", "--ignore=test/pygx/test_parity_bng.py"]
     assert plan["oracle_tables"] == "GRID_SCALAR"
     assert "/gbx-mut-unit-" in plan["work"] and "<random>" in plan["work"] and "mutate_only_covered_lines = true" in plan["mutmut"]
 
 
 def test_a_missing_module_or_test_is_refused():
-    base = ["--family", "unit", "--tests", "test/pygx/test_bng_codec.py", "--slim-tests", "test/pygx/test_bng_codec.py", "--plan"]
+    base = ["--family", "unit", "--tests", "test/pygx/test_bng_batched_walk.py", "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
     assert _sh("--modules", "pygx/_nope", *base).returncode != 0
-    res = _sh("--modules", "pygx/_bng", "--family", "unit", "--tests", "test/pygx/test_nope.py", "--slim-tests", "test/pygx/test_bng_codec.py", "--plan")
+    res = _sh("--modules", "pygx/_bng", "--family", "unit", "--tests", "test/pygx/test_nope.py", "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan")
     assert res.returncode != 0 and "do not exist" in res.stderr
+
+
+def test_old_codes_must_name_an_existing_file_and_shows_in_the_plan(tmp_path):
+    base = ["--family", "unit", "--modules", "pygx/_bng", "--tests", "test/pygx/test_bng_batched_walk.py",
+            "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
+    res = _sh(*base, "--old-codes", str(tmp_path / "nope.json"))
+    assert res.returncode != 0 and "Fix:" in res.stderr
+    saved = tmp_path / "K_old.json"
+    saved.write_text("{}")
+    res = _sh(*base, "--old-codes", str(saved))
+    assert res.returncode == 0, res.stderr
+    assert json.loads(res.stdout[res.stdout.index("{"):])["old_codes"] == str(saved)
 
 
 def test_a_module_level_pyspark_import_is_reported(tmp_path):

@@ -322,6 +322,8 @@ def parse(argv):
     p.add_argument("--oracle-tables", default="", help="GBX_ORACLE_TABLES for the family harness, e.g. GRID_SCALAR,GRID_ARRAY")
     p.add_argument("--max-children", type=int, default=10)
     p.add_argument("--seed", type=int, default=SAMPLE_SEED)
+    p.add_argument("--old-codes", help="reuse the K_old.json of an earlier run instead of running the old tests again "
+                   "(for the next slim candidate of the same fold: the kernel modules and the old tests must be unchanged)")
     p.add_argument("--keep-work", action="store_true", help="keep the work dir (debugging)")
     p.add_argument("--plan", action="store_true", help="print the plan (work dir, config) and stop; runs nothing")
     return p.parse_args(argv)
@@ -350,10 +352,12 @@ def main(argv=None) -> int:
             warn.append(f"{label}: {f.relative_to(PKG_ROOT)} imports pyspark at module level (Tier 0 skips Spark fixtures only)")
     for w in warn:
         print("WARNING:", w, flush=True)
+    if args.old_codes and not Path(args.old_codes).is_file():
+        sys.exit(f"--old-codes {args.old_codes} is not a file. Fix: pass the K_old.json an earlier run wrote, or drop the option to run the old tests.")
     if args.plan:
         print(json.dumps({"work": str(work), "out": str(out), "modules": modules, "old": old_sel, "slim": slim_sel,
                           "venv": str(mutmut_venv()), "host_venv": str(host_venv()), "oracle_tables": args.oracle_tables,
-                          "mutmut": mutmut_section(modules, old_sel)}, indent=2))
+                          "old_codes": args.old_codes, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
         return 0
 
     out.mkdir(parents=True, exist_ok=True)
@@ -362,7 +366,11 @@ def main(argv=None) -> int:
     try:
         build_work_dir(work)
         t0 = time.time()
-        old = run_suite("old", work, py, modules, old_sel, args, out)
+        if args.old_codes:
+            old = json.loads(Path(args.old_codes).read_text())
+            print(f"[old] {len(old)} mutants reused from {args.old_codes}", flush=True)
+        else:
+            old = run_suite("old", work, py, modules, old_sel, args, out)
         slim = run_suite("slim", work, py, modules, slim_sel, args, out)
         samples = {f"sample{n}": sample(old, n, args.seed) for n in SAMPLE_SIZES}
         verdict = judge(old, slim, samples)

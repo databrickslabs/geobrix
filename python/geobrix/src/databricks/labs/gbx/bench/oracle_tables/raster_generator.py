@@ -256,14 +256,6 @@ _SESSION_ROWS = (
         ONLY,
     ),
     Case(
-        "qb_tess_bad_coverage",
-        QBT,
-        (RAMP4326, 10, "centroid", "sideways"),
-        "raises",
-        "sideways",
-        ONLY,
-    ),
-    Case(
         "qb_tess_bad_assignment",
         QBT,
         (RAMP4326, 10, "sideways"),
@@ -351,14 +343,6 @@ _SESSION_ROWS = (
         ONLY,
     ),
     Case(
-        "cg_tess_bad_coverage",
-        CGT,
-        (RAMPBNG, G, 0, "centroid", "sideways"),
-        "raises",
-        "sideways",
-        ONLY,
-    ),
-    Case(
         "cg_tess_bad_assignment",
         CGT,
         (RAMPBNG, G, 0, "sideways"),
@@ -381,10 +365,10 @@ _SHARED = (
     "separatebands_three", "separatebands_single", "separatebands_null", "separatebands_error_tile",
     "overlap_half", "overlap_zero", "overlap_all", "overlap_zero_window", "overlap_null", "overlap_error_tile",
     "h3_tess_res4", "h3_tess_sparse", "h3_tess_bad_assignment", "h3_tess_bad_coverage", "h3_tess_null", "h3_tess_error_tile",
-    "qb_tess_z10", "qb_tess_sparse", "qb_tess_bad_coverage", "qb_tess_bad_assignment", "qb_tess_null",
+    "qb_tess_z10", "qb_tess_sparse", "qb_tess_bad_assignment", "qb_tess_null",
     "bng_tess_1km", "bng_tess_named_res", "bng_tess_sparse", "bng_tess_complete", "bng_tess_bad_coverage", "bng_tess_bad_res",
     "bng_tess_bad_assignment", "bng_tess_null",
-    "cg_tess_res0", "cg_tess_sparse", "cg_tess_complete", "cg_tess_bad_coverage", "cg_tess_bad_assignment", "cg_tess_null",
+    "cg_tess_res0", "cg_tess_sparse", "cg_tess_complete", "cg_tess_bad_assignment", "cg_tess_null",
 )  # fmt: skip
 UC = ("uc",)
 

@@ -39,7 +39,10 @@ PYTEST_PIN = "pytest==9.1.1"  # mutmut 3.8.0 crashes under pytest 9.2.0 (no Func
 THRESHOLD = 95.0  # percent of the old kills the slim run must keep
 MODULE_DROP = 5.0  # points a module's kill rate may fall
 SAMPLE_SIZES = (50, 100)
+SAMPLE_FIRST, SAMPLE_EXTENDED = SAMPLE_SIZES  # sample-first mode: judge on 50 mutants, on 100 after any loss
 SAMPLE_SEED = 31
+GENERATE_ONLY = "gbx-generate-only"  # names no mutant: mutmut generates the mutants and collects stats, then stops
+NO_TESTS = 33  # mutmut's exit code for a mutant no test reaches
 PLUGIN = "gbx_mut_tier0"
 
 
@@ -152,11 +155,11 @@ def kept(old: dict, new: dict, universe=None):
     return K, {k for k in K if detected(new.get(k))}
 
 
-def judge(old: dict, new: dict, samples: dict) -> dict:
-    """The verdict. `samples` is {name: [mutant keys]}."""
+def judge(old: dict, new: dict, samples: dict, all_label: str = "all") -> dict:
+    """The verdict. `samples` is {name: [mutant keys]}; the row over every mutant of `old` is named `all_label`."""
     rows = {}
-    for name, universe in (("sample50", samples.get("sample50")), ("sample100", samples.get("sample100")), ("all", None)):
-        if universe is None and name != "all":
+    for name, universe in (("sample50", samples.get("sample50")), ("sample100", samples.get("sample100")), (all_label, None)):
+        if universe is None and name != all_label:
             continue
         K, ok = kept(old, new, universe)
         rows[name] = {
@@ -175,7 +178,7 @@ def judge(old: dict, new: dict, samples: dict) -> dict:
     for m, (n, o, s) in sorted(by.items()):
         modules[m] = {"mutants": n, "old_pct": 100.0 * o / n, "slim_pct": 100.0 * s / n, "delta": 100.0 * (s - o) / n}
     failures = []
-    if not rows["all"]["old_killed"]:
+    if not rows[all_label]["old_killed"]:
         failures.append("the old run killed nothing: there is nothing to compare the slim run with")
     failures += [f"{n} keeps {r['pct']:.1f}% (< {THRESHOLD:.0f}%)" for n, r in rows.items() if r["pct"] < THRESHOLD]
     failures += [f"module {m} falls {-v['delta']:.1f} points (> {MODULE_DROP:.0f})" for m, v in modules.items() if v["delta"] < -MODULE_DROP]
@@ -388,28 +391,147 @@ def collect_codes(work: Path) -> dict:
     return codes
 
 
-def run_suite(label: str, work: Path, py: Path, modules: list, selection: list, args, log_dir: Path) -> dict:
-    base = (PKG_ROOT / "pyproject.toml").read_text()
-    (work / "pyproject.toml").write_text(base + mutmut_section(modules, selection))
-    shutil.rmtree(work / "mutants", ignore_errors=True)
-    env = dict(os.environ, PYTHONPATH=str(work / "_gbx"), PYTHONDONTWRITEBYTECODE="1", TZ="UTC")
-    if args.oracle_tables:
-        env["GBX_ORACLE_TABLES"] = args.oracle_tables
-    env["PYSPARK_PYTHON"] = str(py)
-    t0 = time.time()
-    with open(log_dir / f"mutmut_{label}.log", "w") as log:
-        proc = subprocess.run(
-            [str(py.parent / "mutmut"), "run", "--max-children", str(args.max_children)],
-            cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT,
-        )
-    codes = collect_codes(work)
-    reason = aborted_reason((log_dir / f"mutmut_{label}.log").read_text(errors="replace"))
-    if reason:
-        sys.exit(f"[{label}] mutmut stopped before it ran the tests ({reason!r}); the {label} selection did not run. Fix: read {log_dir}/mutmut_{label}.log for the first failure.")
-    print(f"[{label}] {len(codes)} mutants in {time.time() - t0:.0f}s (mutmut rc {proc.returncode}); log {log_dir}/mutmut_{label}.log", flush=True)
-    if not codes:
-        sys.exit(f"[{label}] mutmut produced no mutants; see {log_dir}/mutmut_{label}.log")
-    return codes
+def mangled_name(key: str) -> str:
+    """mutmut's key for a function's stats: the mutant name without its __mutmut_<n> suffix."""
+    return key.partition("__mutmut_")[0]
+
+
+def judge_sample(old: dict, slim: dict, names: list) -> dict:
+    """The verdict over the sampled mutants only. A sampled mutant the slim run did not generate is not killed."""
+    return judge({k: old.get(k) for k in names}, {k: slim[k] for k in names if k in slim}, {}, all_label=f"sample{len(names)}")
+
+
+def sampled_gate(universe, old_for, slim_for, seed: int = SAMPLE_SEED) -> dict:
+    """Sample-first: judge on a stratified sample of 50 mutants of the old run, and on 100 after any loss.
+
+    `universe` holds the mutants the old run generates. `old_for(names)` and `slim_for(names)` return {name: exit code}
+    for the names they ran (a name the slim run did not generate is left out: not killed). Only sampled mutants are
+    ever run. The 50-sample is the first half of the 100-sample, so the extension runs 50 more.
+    """
+    pool = dict.fromkeys(universe)
+    first = sample(pool, SAMPLE_FIRST, seed)
+    old = dict(old_for(first))
+    require_old_kills(old)
+    slim = dict(slim_for(first))
+    names, samples = first, {f"sample{len(first)}": first}
+    verdict = judge_sample(old, slim, names)
+    extended = False
+    if next(iter(verdict["rows"].values()))["lost"]:
+        bigger = sample(pool, SAMPLE_EXTENDED, seed)
+        if len(bigger) > len(first):
+            extra = [k for k in bigger if k not in old]
+            old.update(old_for(extra))
+            require_old_kills(old)
+            slim.update(slim_for(extra))
+            names, extended = bigger, True
+            samples[f"sample{len(bigger)}"] = bigger
+            verdict = judge_sample(old, slim, names)
+    return {
+        "verdict": verdict, "names": names, "samples": samples, "extended": extended,
+        "old": {k: old.get(k) for k in names}, "slim": {k: slim[k] for k in names if k in slim},
+    }
+
+
+class Side:
+    """One test selection's mutmut passes, in a work dir of its own.
+
+    `generate()` makes the mutants (mutmut also collects its stats then: one run of the selected tests) and stops;
+    `run(names)` runs only those mutants; `run_all()` runs every one. The mutants keep their exit codes across calls.
+    """
+
+    def __init__(self, label, py, modules, selection, args, out, ref_sha=None):
+        self.label, self.py, self.modules, self.selection = label, py, modules, selection
+        self.args, self.out, self.ref_sha = args, out, ref_sha
+        self.work = None
+        self.keys = None  # the mutants generated, sorted
+        self.tested = set()  # mangled names mutmut's stats tie to at least one test
+        self.codes = {}
+        self.log = out / f"mutmut_{label}.log"
+        self._logged = False
+
+    def open(self) -> Path:
+        """The throwaway copy. The old side of an in-place fold gets the tests and the source as they were at the ref."""
+        if self.work is None:
+            self.work = Path(tempfile.mkdtemp(prefix=f"gbx-mut-{self.args.family}-{self.label}-", dir=tmp_root()))
+            build_work_dir(self.work)
+            if self.ref_sha:
+                for sub in ("test", "src"):
+                    shutil.rmtree(self.work / sub)
+                    export_ref_dir(self.ref_sha, sub, self.work / sub)
+        return self.work
+
+    def close(self) -> None:
+        if self.work is not None and not self.args.keep_work:
+            shutil.rmtree(self.work, ignore_errors=True)
+
+    def _prepare(self) -> None:
+        work = self.open()
+        base = (PKG_ROOT / "pyproject.toml").read_text()
+        (work / "pyproject.toml").write_text(base + mutmut_section(self.modules, self.selection))
+        shutil.rmtree(work / "mutants", ignore_errors=True)
+
+    def _invoke(self, names, what: str) -> int:
+        """One `mutmut run` (every mutant when `names` is empty). Its output is appended to the label's log."""
+        work = self.open()
+        env = dict(os.environ, PYTHONPATH=str(work / "_gbx"), PYTHONDONTWRITEBYTECODE="1", TZ="UTC")
+        if self.args.oracle_tables:
+            env["GBX_ORACLE_TABLES"] = self.args.oracle_tables
+        env["PYSPARK_PYTHON"] = str(self.py)
+        cmd = [str(self.py.parent / "mutmut"), "run", "--max-children", str(self.args.max_children), *names]
+        with open(self.log, "a" if self._logged else "w") as log:
+            self._logged = True
+            log.write(f"=== {what}\n")
+            log.flush()
+            proc = subprocess.run(cmd, cwd=work, env=env, stdout=log, stderr=subprocess.STDOUT)
+        reason = aborted_reason(self.log.read_text(errors="replace"))
+        if reason:
+            sys.exit(f"[{self.label}] mutmut stopped before it ran the tests ({reason!r}); the {self.label} selection did not run. Fix: read {self.log} for the first failure.")
+        return proc.returncode
+
+    def generate(self) -> list:
+        """Make the mutants and collect stats; run none. mutmut stops on the one name that matches no mutant."""
+        if self.keys is not None:
+            return self.keys
+        t0 = time.time()
+        self._prepare()
+        self._invoke([GENERATE_ONLY], "generate the mutants")
+        codes = collect_codes(self.work)
+        if not codes:
+            sys.exit(f"[{self.label}] mutmut produced no mutants; see {self.log}")
+        self.keys = sorted(codes)
+        stats = self.work / "mutants" / "mutmut-stats.json"
+        self.tested = set(json.loads(stats.read_text()).get("tests_by_mangled_function_name", {})) if stats.exists() else set()
+        print(f"[{self.label}] {len(self.keys)} mutants generated in {time.time() - t0:.0f}s; log {self.log}", flush=True)
+        return self.keys
+
+    def run(self, names) -> dict:
+        """Run the named mutants and return {name: exit code} for those this side generated. A mutant no test
+        reaches gets mutmut's own no-tests code, as in a run of everything (a named run would crash on it)."""
+        keys = set(self.generate())
+        todo = [n for n in dict.fromkeys(names) if n in keys and n not in self.codes]
+        for n in todo:
+            if mangled_name(n) not in self.tested:
+                self.codes[n] = NO_TESTS
+        todo = [n for n in todo if n not in self.codes]
+        if todo:
+            t0 = time.time()
+            rc = self._invoke(todo, f"run {len(todo)} named mutants")
+            got = collect_codes(self.work)
+            self.codes.update({n: got.get(n) for n in todo})
+            print(f"[{self.label}] {len(todo)} mutants in {time.time() - t0:.0f}s (mutmut rc {rc}); log {self.log}", flush=True)
+        return {n: self.codes[n] for n in names if n in self.codes}
+
+    def run_all(self) -> dict:
+        """Run every mutant (--full)."""
+        t0 = time.time()
+        self._prepare()
+        rc = self._invoke([], "run every mutant")
+        codes = collect_codes(self.work)
+        print(f"[{self.label}] {len(codes)} mutants in {time.time() - t0:.0f}s (mutmut rc {rc}); log {self.log}", flush=True)
+        if not codes:
+            sys.exit(f"[{self.label}] mutmut produced no mutants; see {self.log}")
+        self.keys, self.codes = sorted(codes), codes
+        return codes
 
 
 # ---------------------------------------------------------------------------------------------- main
@@ -425,14 +547,41 @@ def parse(argv):
     p.add_argument("--oracle-tables", default="", help="GBX_ORACLE_TABLES for the family harness, e.g. GRID_SCALAR,GRID_ARRAY")
     p.add_argument("--max-children", type=int, default=10)
     p.add_argument("--seed", type=int, default=SAMPLE_SEED)
+    p.add_argument("--full", action="store_true",
+                   help=f"run every mutant in the old and the slim pass (the default is a stratified sample of {SAMPLE_FIRST}, "
+                        f"extended to {SAMPLE_EXTENDED} when the slim run loses a kill)")
     p.add_argument("--old-codes", help="reuse the K_old.json of an earlier run instead of running the old tests again "
                    "(for the next slim candidate of the same fold: the kernel modules and the old tests must be unchanged)")
     p.add_argument("--old-ref", help="git ref holding the old state: a fold that edits or deletes test files in place is gated against "
                    "their contents at that ref (the kernel modules must not have changed since). With --old-codes, the kill set must "
                    "have been made from that ref")
-    p.add_argument("--keep-work", action="store_true", help="keep the work dir (debugging)")
+    p.add_argument("--keep-work", action="store_true", help="keep the work dirs (debugging)")
     p.add_argument("--plan", action="store_true", help="print the plan (work dir, config) and stop; runs nothing")
     return p.parse_args(argv)
+
+
+def mode_file(codes_file: Path) -> Path:
+    return Path(codes_file).with_name("K_old.mode")
+
+
+def check_codes_mode(codes_file: Path, full: bool) -> None:
+    """A kill set from a sampled run holds the sample only: a full run on it would judge the sample and call it everything."""
+    p = mode_file(codes_file)
+    if full and p.exists() and p.read_text().strip() != "full":
+        sys.exit(
+            f"{codes_file} holds a sample of the old run's kills ({p.read_text().strip()}), not all of them. "
+            f"Fix: drop --full to gate on the sample, or run once with --full and no --old-codes to write a full kill set."
+        )
+
+
+def write_outputs(out: Path, family: str, verdict: dict, files: dict, extra: dict) -> str:
+    for name, data in files.items():
+        (out / f"{name}.json").write_text(json.dumps(data, indent=0, sort_keys=isinstance(data, dict)))
+    (out / "lost.json").write_text(json.dumps({n: r["lost"] for n, r in verdict["rows"].items()}, indent=1))
+    report = format_report(family, verdict, extra)
+    (out / "report.txt").write_text(report + "\n")
+    (out / "verdict.json").write_text(json.dumps(dict(verdict, mode=extra["mode"]), indent=1))
+    return report
 
 
 def main(argv=None) -> int:
@@ -445,8 +594,7 @@ def main(argv=None) -> int:
     out = Path(args.out) if args.out else REPO_ROOT / "test-logs" / "mutation-gate" / args.family
     if not out.is_absolute():
         out = REPO_ROOT / out
-    prefix = f"gbx-mut-{args.family}-"
-    work = tmp_root() / (prefix + "<random>")  # made by mkdtemp (mode 0700) when the run starts
+    work = tmp_root() / f"gbx-mut-{args.family}-<old|slim>-<random>"  # made by mkdtemp (mode 0700) when a pass starts
 
     ref_sha = resolve_ref(args.old_ref) if args.old_ref else None
     if ref_sha:
@@ -472,51 +620,74 @@ def main(argv=None) -> int:
     fingerprint = old_fingerprint([PKG_ROOT / m for m in modules], selected_files(old_sel, PKG_ROOT) if not ref_sha else [], ref_sha, old_sel)
     if args.old_codes:
         check_fingerprint(Path(args.old_codes), fingerprint)
+        check_codes_mode(Path(args.old_codes), args.full)
+    mode = "full (every mutant)" if args.full else f"sample-first ({SAMPLE_FIRST} mutants, {SAMPLE_EXTENDED} after a loss)"
     if args.plan:
         print(json.dumps({"work": str(work), "out": str(out), "modules": modules, "old": old_sel, "slim": slim_sel,
                           "venv": str(mutmut_venv()), "host_venv": str(host_venv()), "oracle_tables": args.oracle_tables,
-                          "old_codes": args.old_codes, "old_ref": ref_sha, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
+                          "old_codes": args.old_codes, "old_ref": ref_sha, "mode": mode, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
         return 0
 
     out.mkdir(parents=True, exist_ok=True)
     py = ensure_venv(mutmut_venv(), host_venv())
-    work = Path(tempfile.mkdtemp(prefix=prefix, dir=tmp_root()))
+    print(f"mode: {mode}", flush=True)
+    old_side = Side("old", py, modules, old_sel, args, out, ref_sha)
+    slim_side = Side("slim", py, modules, slim_sel, args, out)
+    t0 = time.time()
     try:
-        build_work_dir(work)
-        t0 = time.time()
+        old_known = json.loads(Path(args.old_codes).read_text()) if args.old_codes else {}
         if args.old_codes:
-            old = json.loads(Path(args.old_codes).read_text())
-            print(f"[old] {len(old)} mutants reused from {args.old_codes}", flush=True)
-        else:
-            if ref_sha:  # the old state: tests and source (oracle rows included) as at the ref; the slim run gets the tree back below
-                for sub in ("test", "src"):
-                    shutil.rmtree(work / sub)
-                    export_ref_dir(ref_sha, sub, work / sub)
-            old = run_suite("old", work, py, modules, old_sel, args, out)
-            if ref_sha:
-                for sub in ("test", "src"):
-                    shutil.rmtree(work / sub)
-                    shutil.copytree(PKG_ROOT / sub, work / sub, ignore=IGNORE_COPY)
-        require_old_kills(old)
-        if not args.old_codes:  # keep the slow old run if the slim run cannot start
-            (out / "K_old.json").write_text(json.dumps(old, indent=0, sort_keys=True))
-            write_fingerprint(out / "K_old.json", fingerprint)
-        slim = run_suite("slim", work, py, modules, slim_sel, args, out)
-        samples = {f"sample{n}": sample(old, n, args.seed) for n in SAMPLE_SIZES}
-        verdict = judge(old, slim, samples)
-        survivors = sorted(k for k in old if not detected(old[k]))
-        for name, data in (("K_old", old), ("K_slim", slim), ("sample50", samples["sample50"]), ("sample100", samples["sample100"]), ("survivors_old", survivors)):
-            (out / f"{name}.json").write_text(json.dumps(data, indent=0, sort_keys=isinstance(data, dict)))
-        write_fingerprint(out / "K_old.json", fingerprint)
-        (out / "lost.json").write_text(json.dumps({n: r["lost"] for n, r in verdict["rows"].items()}, indent=1))
-        report = format_report(args.family, verdict, {"wall_s": f"{time.time() - t0:.0f}", "out": str(out), "seed": args.seed, "warnings": len(warn)})
-        (out / "report.txt").write_text(report + "\n")
-        (out / "verdict.json").write_text(json.dumps({k: v for k, v in verdict.items()}, indent=1))
-        print(report)
-        return 0 if verdict["pass"] else 1
+            print(f"[old] {len(old_known)} mutants reused from {args.old_codes}", flush=True)
+        run = gate_full if args.full else gate_sample_first
+        return run(args, out=out, old_side=old_side, slim_side=slim_side, old_known=old_known, fingerprint=fingerprint, warn=warn, t0=t0)
     finally:
-        if not args.keep_work:
-            shutil.rmtree(work, ignore_errors=True)
+        old_side.close()
+        slim_side.close()
+
+
+def gate_full(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0) -> int:
+    """Every mutant of the old run, in both passes."""
+    old = old_known or old_side.run_all()
+    require_old_kills(old)
+    if not args.old_codes:  # keep the slow old run if the slim run cannot start
+        (out / "K_old.json").write_text(json.dumps(old, indent=0, sort_keys=True))
+        write_fingerprint(out / "K_old.json", fingerprint)
+        mode_file(out / "K_old.json").write_text("full\n")
+    slim = slim_side.run_all()
+    samples = {f"sample{n}": sample(old, n, args.seed) for n in SAMPLE_SIZES}
+    verdict = judge(old, slim, samples)
+    survivors = sorted(k for k in old if not detected(old[k]))
+    files = {"K_old": old, "K_slim": slim, "sample50": samples["sample50"], "sample100": samples["sample100"], "survivors_old": survivors}
+    report = write_outputs(out, args.family, verdict, files, {"mode": "full (every mutant)", "wall_s": f"{time.time() - t0:.0f}", "out": str(out), "seed": args.seed, "warnings": len(warn)})
+    write_fingerprint(out / "K_old.json", fingerprint)
+    mode_file(out / "K_old.json").write_text("full\n")
+    print(report)
+    return 0 if verdict["pass"] else 1
+
+
+def gate_sample_first(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0) -> int:
+    """A stratified sample of the old run's mutants, in both passes; 100 when the slim run loses a kill."""
+    universe = sorted(old_known) if args.old_codes else old_side.generate()
+
+    def old_for(names):
+        missing = [n for n in names if n not in old_known]
+        if missing and not args.old_codes:
+            old_known.update(old_side.run(missing))
+        return {n: old_known[n] for n in names if n in old_known}
+
+    res = sampled_gate(universe, old_for, slim_side.run, args.seed)
+    verdict, names = res["verdict"], res["names"]
+    mode = f"sample-first ({len(names)} of {len(universe)} mutants" + (f", extended from {SAMPLE_FIRST} after a loss)" if res["extended"] else ")")
+    survivors = sorted(k for k in res["old"] if not detected(res["old"][k]))
+    files = {"K_slim": res["slim"], **res["samples"], "survivors_old": survivors}
+    if not args.old_codes:  # the sample's old kills: a later run can reuse them with --old-codes
+        files["K_old"] = res["old"]
+    report = write_outputs(out, args.family, verdict, files, {"mode": mode, "wall_s": f"{time.time() - t0:.0f}", "out": str(out), "seed": args.seed, "warnings": len(warn)})
+    if not args.old_codes:
+        write_fingerprint(out / "K_old.json", fingerprint)
+        mode_file(out / "K_old.json").write_text(f"sample {len(names)}\n")
+    print(report)
+    return 0 if verdict["pass"] else 1
 
 
 if __name__ == "__main__":

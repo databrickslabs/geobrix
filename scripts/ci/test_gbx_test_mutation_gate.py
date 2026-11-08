@@ -290,3 +290,144 @@ def test_a_saved_kill_set_is_reused_only_for_the_same_kernels_and_old_tests(tmp_
     assert "Fix:" in str(exc.value)
     saved.with_name("K_old.fingerprint").unlink()
     gate.check_fingerprint(saved, fp)  # a kill set from before fingerprints: accepted, nothing to compare
+
+
+# ------------------------------------------------------------------------------------------------- sample-first
+
+
+def _universe(n_mod=4, n_fn=10, n_each=5):
+    return _codes({(f"_m{m}", f"f{f}", i): 1 for m in range(n_mod) for f in range(n_fn) for i in range(n_each)})
+
+
+def _fakes(old, slim, calls):
+    def old_for(names):
+        calls.append(("old", list(names)))
+        return {k: old[k] for k in names if k in old}
+
+    def slim_for(names):
+        calls.append(("slim", list(names)))
+        return {k: slim[k] for k in names if k in slim}
+
+    return old_for, slim_for
+
+
+def test_sample_first_runs_only_the_sample_and_stops_at_50_when_nothing_is_lost():
+    old = _universe()
+    calls = []
+    res = gate.sampled_gate(sorted(old), *_fakes(old, dict(old), calls), seed=31)
+    assert [(who, len(names)) for who, names in calls] == [("old", 50), ("slim", 50)]  # 200 mutants, 50 run per pass
+    assert res["verdict"]["pass"] and not res["extended"] and list(res["samples"]) == ["sample50"]
+    assert res["names"] == gate.sample(old, 50, 31)  # the same stratified sample as a full run draws
+
+
+def test_one_sampled_loss_extends_to_100_and_judges_on_100():
+    old = _universe()
+    first = gate.sample(old, 50, 31)
+    slim = dict(old)
+    slim[first[0]] = 0  # one of the 50 is lost: 98%, but any loss extends
+    calls = []
+    res = gate.sampled_gate(sorted(old), *_fakes(old, slim, calls), seed=31)
+    assert res["extended"] and list(res["samples"]) == ["sample50", "sample100"]
+    assert [(who, len(names)) for who, names in calls] == [("old", 50), ("slim", 50), ("old", 50), ("slim", 50)]
+    assert set(calls[2][1]).isdisjoint(first) and set(calls[2][1]) | set(first) == set(res["names"])  # 50 more, not 100 again
+    assert len(res["names"]) == 100 and res["verdict"]["pass"]  # 99/100 and every module within 5 points
+    assert list(res["verdict"]["rows"]) == ["sample100"]
+
+
+def test_the_extended_sample_can_still_fail():
+    old = _universe()
+    slim = dict(old)
+    for k in gate.sample(old, 100, 31)[:10]:
+        slim[k] = 0
+    res = gate.sampled_gate(sorted(old), *_fakes(old, slim, []), seed=31)
+    v = res["verdict"]
+    assert res["extended"] and not v["pass"] and any("sample100 keeps" in f for f in v["failures"])
+
+
+def test_a_small_universe_is_not_extended():
+    old = _codes({("_a", "f", i): 1 for i in range(30)})
+    slim = {k: (0 if i < 3 else 1) for i, k in enumerate(sorted(old))}  # 27/30 = 90%
+    res = gate.sampled_gate(sorted(old), *_fakes(old, slim, []), seed=31)
+    assert not res["extended"] and len(res["names"]) == 30 and not res["verdict"]["pass"]
+
+
+def test_a_sampled_mutant_the_slim_run_did_not_generate_is_not_killed():
+    old = _universe()
+    first = gate.sample(old, 50, 31)
+    slim = {k: v for k, v in old.items() if k not in first[:5]}  # the slim run never generated five of them
+    res = gate.sampled_gate(sorted(old), *_fakes(old, slim, []), seed=31)
+    assert res["extended"]  # 45/50 is a loss, and below 95%
+    assert not res["verdict"]["pass"] and all(k not in res["slim"] for k in first[:5])
+
+
+def test_an_old_pass_that_kills_nothing_of_the_sample_is_refused():
+    old = _codes({("_a", "f", i): 0 for i in range(80)})
+    with pytest.raises(SystemExit) as exc:
+        gate.sampled_gate(sorted(old), *_fakes(old, dict(old), []), seed=31)
+    assert "killed nothing" in str(exc.value) and "Fix:" in str(exc.value)
+
+
+def test_a_module_that_falls_in_the_sample_fails_the_gate():
+    old = _codes({("_big", "f", i): 1 for i in range(200)} | {("_small", f"g{j}", 0): 1 for j in range(6)})
+    sample50 = gate.sample(old, 50, 31)
+    small = [k for k in sample50 if "_small" in k]
+    assert small
+    slim = dict(old)
+    slim[small[0]] = 0  # 1 of the sampled _small mutants: a drop of more than 5 points, 98% overall
+    res = gate.sampled_gate(sorted(old), *_fakes(old, slim, []), seed=31)
+    assert not res["verdict"]["pass"] and any("module _small" in f for f in res["verdict"]["failures"])
+
+
+class _FakeSide(gate.Side):
+    """A Side whose mutmut is a stub: generate() reads canned keys, _invoke() records the names it was given."""
+
+    def __init__(self, keys, tested, exit_codes, tmp_path):
+        args = type("A", (), {"family": "t", "keep_work": True, "oracle_tables": "", "max_children": 2})()
+        super().__init__("old", None, [], [], args, tmp_path)
+        self._canned = (keys, tested, exit_codes)
+        self.invoked = []
+        self.work = tmp_path
+
+    def generate(self):
+        self.keys, self.tested = sorted(self._canned[0]), set(self._canned[1])
+        return self.keys
+
+    def _invoke(self, names, what):
+        self.invoked.append(list(names))
+        return 0
+
+
+def test_a_side_runs_the_named_mutants_only_and_handles_the_ones_without_tests(tmp_path, monkeypatch):
+    keys = [f"{P}._m.x_f__mutmut_{i}" for i in (1, 2, 3)] + [f"{P}._m.x_untested__mutmut_1"]
+    side = _FakeSide(keys, {f"{P}._m.x_f"}, None, tmp_path)
+    monkeypatch.setattr(gate, "collect_codes", lambda work: {k: 1 for k in keys})
+    got = side.run([keys[0], keys[1], keys[3], f"{P}._m.x_never_generated__mutmut_9"])
+    assert side.invoked == [[keys[0], keys[1]]]  # not the untested one (mutmut crashes on it), not the ungenerated one
+    assert got == {keys[0]: 1, keys[1]: 1, keys[3]: gate.NO_TESTS}  # the ungenerated one is absent: not killed
+    assert side.run([keys[0]]) == {keys[0]: 1} and len(side.invoked) == 1  # a mutant is run once
+
+
+def test_sampled_kill_sets_cannot_stand_in_for_a_full_run(tmp_path):
+    saved = tmp_path / "K_old.json"
+    saved.write_text("{}")
+    gate.check_codes_mode(saved, full=True)  # no mode file: from before sampling, accepted
+    gate.mode_file(saved).write_text("sample 50\n")
+    gate.check_codes_mode(saved, full=False)
+    with pytest.raises(SystemExit) as exc:
+        gate.check_codes_mode(saved, full=True)
+    assert "Fix:" in str(exc.value)
+    gate.mode_file(saved).write_text("full\n")
+    gate.check_codes_mode(saved, full=True)
+
+
+def test_the_plan_names_the_mode_and_full_restores_every_mutant():
+    base = ["--family", "unit", "--modules", "pygx/_bng", "--tests", "test/pygx/test_bng_batched_walk.py",
+            "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
+
+    def plan(*extra):
+        out = _sh(*base, *extra).stdout
+        return json.loads(out[out.index("{"):])
+
+    assert plan()["mode"].startswith("sample-first (50 mutants")
+    assert plan("--full")["mode"].startswith("full")
+    assert "--full" in _sh("--help").stdout

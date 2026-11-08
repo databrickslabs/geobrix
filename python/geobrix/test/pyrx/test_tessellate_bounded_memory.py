@@ -23,6 +23,9 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
 from .test_tessellate_centroid_window import _oracle_and_check, _raster
 
+# strip and memory bounds of the centroid assignment: a perf-set case, not a unit test
+pytestmark = pytest.mark.perf
+
 
 @pytest.mark.perf
 def test_centroid_assignment_memory_is_bounded():

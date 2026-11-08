@@ -25,6 +25,9 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx.pygx._custom import CustomGridConf
 from databricks.labs.gbx.pyrx.core.gridagg import raster_to_grid
 
+# result-neutrality of the covering fast path against the old path: a perf-set case, not a unit test
+pytestmark = pytest.mark.perf
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -489,8 +492,7 @@ def test_quadbin_covering_sum_nondeg_matches_analytics():
 def test_h3_covering_sum_unchanged_by_fast_path():
     """H3 covering sum is correct (old path, fast-path never fires for H3).
 
-    Uses the same all-in-one-cell fixture from test_gridagg_coverage_assignment.py
-    (2×1 raster at res=1, px=0.5 → all pixels in 1-2 coarse cells).
+    An all-in-one-cell fixture (a 3×2 raster at res=1, px=0.5 → all pixels in 1-2 coarse cells).
     Mass must be conserved: Σ(cell sums) ≈ Σ(pixel values).
     """
     data = np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype="float32")

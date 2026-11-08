@@ -146,6 +146,29 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
         }
     }
 
+    test("rst_tooverlappingtiles raises for a window below 1 pixel or an overlap outside 0 to below 100") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        val df = validTile()
+        raised(df.select(rst_tooverlappingtiles(col("raster"), 0, 32, 10).as("t"))) should include("tile_width must be 1 or more")
+        raised(df.select(rst_tooverlappingtiles(col("raster"), 32, 0, 10).as("t"))) should include("tile_height must be 1 or more")
+        raised(df.select(rst_tooverlappingtiles(col("raster"), 32, 32, 100).as("t"))) should include("overlap must be from 0 to below 100")
+        raised(df.select(rst_tooverlappingtiles(col("raster"), 32, 32, -1).as("t"))) should include("overlap must be from 0 to below 100")
+    }
+
+    test("rst_tooverlappingtiles and rst_maketiles with a NULL size are the row's error tile") {
+        import com.databricks.labs.gbx.rasterx.functions._
+        val nullInt = lit(null).cast("int")
+        val calls = Seq(
+          rst_tooverlappingtiles(col("raster"), nullInt, lit(32), lit(10)),
+          rst_maketiles(col("raster"), nullInt)
+        )
+        calls.foreach { c =>
+            val rows = validTile().select(c.as("t")).select(col("t.metadata").getItem("error_message").as("err")).collect()
+            rows.length shouldBe 1
+            rows.head.isNullAt(0) shouldBe false
+        }
+    }
+
     test("rst_xyzpyramid: a corrupt tile yields one row with a NULL tile (the pyramid struct cannot carry an error tile)") {
         import com.databricks.labs.gbx.rasterx.functions._
         val rows = corruptTile().select(rst_xyzpyramid(col("raster"), lit(0), lit(1)).as("t")).collect()

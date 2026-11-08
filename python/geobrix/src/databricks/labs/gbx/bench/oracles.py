@@ -145,19 +145,7 @@ _DERIVEDBAND_L1 = "the JVM derived band is a VRT pixel function run on read: the
 # where it differs from the contract, and the companions go in the decision sweep (Task 21) if no restore comes.
 _BUILDOVERVIEWS_L1 = "the JVM builds the overviews in a sidecar the tile bytes do not carry, and turns a bad resampling or level into an error tile, not a raised error; the companion is deleted in the decision sweep"
 _XYZ_ERROR_L1 = "the JVM answers a tile that is an error tile or cannot be read with one row whose bytes are NULL (a deliberate, auditable row); the contract is no rows; the companion is deleted in the decision sweep"
-# The JVM tile generators check their arguments inside safeEval: a bad word, window or overlap is an error tile, and
-# a NULL size or resolution carries on with the unsplit tile or every cell. Their output is one `tile` column, so the
-# manager does not select them; the companions go in the decision sweep (Task 21).
-_GEN_L1 = "the JVM tile generator checks its arguments inside safeEval (an error tile for a bad word, window or overlap; a NULL size goes on); it returns one tile column, is not selected, and is deleted in the decision sweep"
 HEAVY_PENDING: Dict[str, Dict[str, str]] = {
-    **{
-        cid: {"L1": _GEN_L1}
-        for cid in (
-            "maketiles_null_size",
-            "overlap_all",
-            "overlap_zero_window",
-        )
-    },
     **{
         cid: {"L1": _DERIVEDBAND_L1}
         for cid in (

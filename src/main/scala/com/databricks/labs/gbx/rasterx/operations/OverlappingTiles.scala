@@ -5,6 +5,26 @@ import org.gdal.gdal.Dataset
 /** Generates overlapping tile windows and retiles a raster with a given overlap percentage. */
 object OverlappingTiles {
 
+    /** The window and overlap of `gbx_rst_tooverlappingtiles`, checked before any tile is read. A window below one
+      * pixel or an overlap outside 0 to below 100 percent never advances through the raster: it is a mistake in the
+      * call, so it raises with a Fix (as the lightweight level does) and is never the row's error tile. A NULL is
+      * data, left to the row's error tile. */
+    def requireArguments(fn: String, tileWidth: Any, tileHeight: Any, overlap: Any): Unit = {
+        Seq("tile_width" -> tileWidth, "tile_height" -> tileHeight).foreach { case (name, v) =>
+            if (v != null) {
+                val n = v.asInstanceOf[Int]
+                require(n > 0, s"$fn: $name must be 1 or more pixels, got $n. Fix: pass a window of at least 1 pixel.")
+            }
+        }
+        if (overlap != null) {
+            val n = overlap.asInstanceOf[Int]
+            require(
+              n >= 0 && n < 100,
+              s"$fn: overlap must be from 0 to below 100 percent, got $n. Fix: pass the overlap as a percentage of the tile size."
+            )
+        }
+    }
+
     /** Returns (x, y, xSize, ySize) windows with step = tileSize - overlap. */
     def generateWindows(
         ds: Dataset,

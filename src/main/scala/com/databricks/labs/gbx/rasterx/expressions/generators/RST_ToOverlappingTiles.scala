@@ -36,13 +36,22 @@ case class RST_ToOverlappingTiles(
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
         // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
         val rawTile = tile.eval(input).asInstanceOf[InternalRow]
+        // A window or overlap that never advances is a mistake in the call: it raises before any tile is read.
+        OverlappingTiles.requireArguments(
+          RST_ToOverlappingTiles.name, tileWidthExpr.eval(input), tileHeightExpr.eval(input), overlapExpr.eval(input)
+        )
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
               RST_ExpressionUtil.init(exprConf)
-              val tileWidth = tileWidthExpr.eval(input).asInstanceOf[Int]
-              val tileHeight = tileHeightExpr.eval(input).asInstanceOf[Int]
-              val overlap = overlapExpr.eval(input).asInstanceOf[Int]
+              def intArg(name: String, e: Expression): Int = {
+                  val v = e.eval(input)
+                  require(v != null, s"${RST_ToOverlappingTiles.name}: $name must not be NULL")
+                  v.asInstanceOf[Int]
+              }
+              val tileWidth = intArg("tile_width", tileWidthExpr)
+              val tileHeight = intArg("tile_height", tileHeightExpr)
+              val overlap = intArg("overlap", overlapExpr)
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType, gated = false)
               val iter = OverlappingTiles.reTileIter(ds, mtd, tileWidth, tileHeight, overlap)
               RST_ExpressionUtil.addCleanupListener(iter)

@@ -57,7 +57,9 @@ case class RST_MakeTiles(
 
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType, gated = false)
 
-              val targetSize = sizeInMBExpr.eval(input).asInstanceOf[Int]
+              val sizeArg = sizeInMBExpr.eval(input)
+              require(sizeArg != null, "gbx_rst_maketiles: size_in_mb must not be NULL")
+              val targetSize = sizeArg.asInstanceOf[Int]
               val inputSize = RasterAccessors.memSize(ds)
 
               if (targetSize <= 0 && inputSize <= Integer.MAX_VALUE) {

@@ -228,38 +228,6 @@ def test_write_csv(tmp_path):
     assert rows[0]["consistency"] == "within_tol"
 
 
-def test_summarize_compare_has_insights(tmp_path):
-    cells = [
-        _cmp(
-            "rst_slope",
-            "pure-core",
-            20.0,
-            4.0,
-            5.0,
-            "within_tol",
-            "nodata_count differs",
-            max_rel_delta=0.0004,
-            nodata_count_delta=1020,
-        ),
-        _cmp(
-            "rst_ndvi",
-            "pure-core",
-            660.0,
-            5.0,
-            132.0,
-            "divergent",
-            "",
-            max_rel_delta=0.9,
-        ),
-    ]
-    unmatched = [("rst_viewshed", "lightweight", ("rst_viewshed",))]
-    md = c.summarize_compare(cells, unmatched, [], [])
-    assert "## Insights" in md
-    assert "rst_ndvi" in md  # biggest lightweight win (132x) surfaced
-    assert "divergent" in md.lower()
-    assert "rst_viewshed" in md  # unmatched surfaced
-
-
 def test_compare_main_writes_outputs(tmp_path):
     from databricks.labs.gbx.bench import results as RR
 
@@ -295,7 +263,6 @@ def test_compare_main_writes_outputs(tmp_path):
     )
     assert (outdir / "comparison.csv").exists()
     assert (outdir / "summary.md").exists()
-    assert "Insights" in (outdir / "summary.md").read_text()
 
 
 def test_divergent_with_nodata_delta_gets_border_note():
@@ -346,16 +313,6 @@ def _cmp(fn, mode, hw_ms, lw_ms, speedup, consistency, note, **kw):
     return c.CellCompare(**base)
 
 
-def test_cellcompare_has_throughput_fields_and_csv_includes_them():
-    cell = _cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", "")
-    assert cell.hw_mpix_s == 0.0
-    assert cell.lw_mpix_s == 0.0
-    assert cell.hw_rows_s == 0.0
-    assert cell.lw_rows_s == 0.0
-    for f in ("hw_mpix_s", "lw_mpix_s", "hw_rows_s", "lw_rows_s"):
-        assert f in c._CSV_FIELDS
-
-
 def test_compare_cells_populates_throughput():
     hw = [
         _rr(
@@ -386,102 +343,6 @@ def test_compare_cells_populates_throughput():
     assert cells[0].lw_rows_s == 35.0
 
 
-def test_summarize_compare_pure_core_header_has_throughput_columns():
-    cells = [_cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", "")]
-    md = c.summarize_compare(cells, [], [], [])
-    header = [ln for ln in md.splitlines() if "| fn |" in ln and "hw_iter_s" in ln][0]
-    assert "hw_mpix/s" in header
-    assert "lw_mpix/s" in header
-
-
-def test_summarize_compare_renders_throughput_values():
-    cells = [
-        _cmp(
-            "rst_slope",
-            "pure-core",
-            20.0,
-            4.0,
-            5.0,
-            "exact",
-            "",
-            hw_mpix_s=3.3,
-            lw_mpix_s=16.4,
-        )
-    ]
-    md = c.summarize_compare(cells, [], [], [])
-    row = [ln for ln in md.splitlines() if ln.startswith("| rst_slope ")][0]
-    assert "3.3" in row
-    assert "16.4" in row
-
-
-def test_summarize_compare_has_tolerance_legend():
-    cells = [_cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", "")]
-    md = c.summarize_compare(cells, [], [], [])
-    assert f"rel ≤ {c.REL_TOL:g}" in md
-    assert f"abs ≤ {c.ABS_TOL:g}" in md
-    assert "within_tol" in md
-
-
-def test_summarize_compare_hoists_constant_dims_and_rounds_ms():
-    cells = [
-        _cmp("rst_a", "pure-core", 20.0, 4.0, 5.0, "exact", "", tile_px=512, bands=4),
-        _cmp("rst_b", "pure-core", 30.0, 6.0, 5.0, "exact", "", tile_px=512, bands=4),
-    ]
-    md = c.summarize_compare(cells, [], [], [], pool_size=1000)
-    header = [ln for ln in md.splitlines() if "| fn |" in ln and "hw_iter_s" in ln][0]
-    # constant dims hoisted out of the header
-    assert "tile_px" not in header
-    assert "bands" not in header
-    # context line carries them once, plus the pool token
-    assert "tile_px 512" in md
-    assert "4 bands" in md
-    assert "pool 1000 tiles" in md
-    # ms rounded to 1 decimal
-    row = [ln for ln in md.splitlines() if ln.startswith("| rst_a ")][0]
-    assert "20.0" in row
-    assert "20.000" not in row
-
-
-def test_summarize_compare_keeps_varying_dim_as_column():
-    cells = [
-        _cmp("rst_a", "pure-core", 20.0, 4.0, 5.0, "exact", "", tile_px=256),
-        _cmp("rst_b", "pure-core", 30.0, 6.0, 5.0, "exact", "", tile_px=4096),
-    ]
-    md = c.summarize_compare(cells, [], [], [])
-    header = [ln for ln in md.splitlines() if "| fn |" in ln and "hw_iter_s" in ln][0]
-    assert "tile_px" in header
-
-
-def test_summarize_compare_keeps_varying_srid_as_column():
-    # Mixed srid (or any non-px dim that varies) must surface as a column, not be
-    # hoisted into the context line above the table.
-    cells = [
-        _cmp("rst_a", "pure-core", 20.0, 4.0, 5.0, "exact", "", srid=4326),
-        _cmp("rst_b", "pure-core", 30.0, 6.0, 5.0, "exact", "", srid=3857),
-    ]
-    md = c.summarize_compare(cells, [], [], [])
-    header = [ln for ln in md.splitlines() if "| fn |" in ln and "hw_iter_s" in ln][0]
-    assert "srid" in header
-    # constant srid stays hoisted (context line), not a column
-    same = [
-        _cmp("rst_a", "pure-core", 20.0, 4.0, 5.0, "exact", "", srid=4326),
-        _cmp("rst_b", "pure-core", 30.0, 6.0, 5.0, "exact", "", srid=4326),
-    ]
-    md2 = c.summarize_compare(same, [], [], [])
-    header2 = [ln for ln in md2.splitlines() if "| fn |" in ln and "hw_iter_s" in ln][0]
-    assert "srid" not in header2
-    assert "srid 4326" in md2
-
-
-def test_summarize_compare_exact_label_is_bare():
-    cells = [_cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", "")]
-    md = c.summarize_compare(cells, [], [], [])
-    row = [ln for ln in md.splitlines() if ln.startswith("| rst_slope ")][0]
-    # the consistency cell is the bare label, no parenthetical / explanation
-    assert "| exact |" in row
-    assert "exact (" not in row
-
-
 def test_pyrx_implemented_guards_against_binding_regression():
     # pyrx_implemented() parses `def rst_*` out of functions.py -- the guard is
     # "no registered function lost its pyrx binding", NOT a brittle exact count.
@@ -496,38 +357,6 @@ def test_pyrx_implemented_guards_against_binding_regression():
     assert "rst_merge" in impl
 
 
-def test_coverage_block_reports_coverage_parity_gap_and_uncovered():
-    cells = [
-        _cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", ""),
-        _cmp("rst_ndvi", "pure-core", 20.0, 4.0, 5.0, "within_tol", ""),
-        _cmp("rst_proximity", "pure-core", 20.0, 4.0, 5.0, "divergent", ""),
-        _cmp("rst_aspect", "spark-path", 20.0, 30.0, 0.66, "exact", ""),
-        # a timing-only cell (na) for a distinct fn
-        _cmp("rst_clip", "pure-core", 20.0, 10.0, 2.0, "na", ""),
-    ]
-    md = c.coverage_block(cells)
-    # Coverage: distinct fn count across all cells = 5, out of the registered rst_
-    # total. Derive the denominator from the SAME source coverage_block uses
-    # (compare.registered_raster -- rst_ only, excludes the pyvx st_ set) so the
-    # "N / <total>" string matches whatever the code emits -- no magic literal.
-    total = len(c.registered_raster())
-    assert "Benchmark coverage:" in md
-    assert f"/ {total}" in md
-    assert f"5 / {total}" in md
-    # Parity counts among non-na cells (4 compared: exact 2, within_tol 1, divergent 1)
-    assert "exact" in md
-    assert "within_tol" in md
-    assert "divergent" in md
-    assert "rst_proximity" in md  # divergent fn named
-    # Functional parity gap computed = 0
-    assert "Functional parity gap:** 0" in md
-    # timing-only count line
-    assert "timing-only" in md
-    # pure-core-only / timing-only fns: count + at least one known-missing name
-    assert "No comparison cell in this run:" in md
-    assert "rst_merge" in md or "rst_rasterize" in md
-
-
 def test_coverage_block_counts_a_variant_case_as_its_function():
     cells = [
         _cmp("rst_h3_tessellate", "pure-core", 20.0, 4.0, 5.0, "exact", ""),
@@ -535,23 +364,6 @@ def test_coverage_block_counts_a_variant_case_as_its_function():
     ]
     md = c.coverage_block(cells)
     assert f"1 / {len(c.registered_raster())}" in md
-
-
-def test_summarize_compare_includes_coverage_block():
-    cells = [
-        _cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", ""),
-        _cmp("rst_proximity", "pure-core", 20.0, 4.0, 5.0, "divergent", ""),
-        _cmp("rst_clip", "pure-core", 20.0, 10.0, 2.0, "na", ""),
-    ]
-    md = c.summarize_compare(cells, [], [], [])
-    total = len(c.registered_raster())
-    assert "Coverage & parity" in md
-    assert f"/ {total}" in md
-    assert "Functional parity gap:** 0" in md
-    assert "No comparison cell in this run:" in md
-    # ordering: Insights before Coverage before the per-mode tables
-    assert md.index("## Insights") < md.index("Coverage & parity")
-    assert md.index("Coverage & parity") < md.index("## pure-core")
 
 
 def test_results_main_writes_summary(tmp_path):

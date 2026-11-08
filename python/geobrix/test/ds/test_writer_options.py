@@ -118,7 +118,11 @@ REJECT = {
         "gridResolution is required when gridSystem='bng'; supply an integer resolution index (1-6) or a string key "
         "(e.g. '1km', '100m').".replace("(1-6)", "(1–6)"),
     ),
-    "bng_metres_as_int": ({"gridSystem": "bng", "gridResolution": "1000"}, "resolution"),
+    "bng_metres_as_int": (
+        {"gridSystem": "bng", "gridResolution": "1000"},
+        "BNG resolution index must be one of [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6] (1=100km..6=1m, "
+        "negatives=quadrants); got 1000. Metres-as-Int (e.g. 1000) is NOT a resolution.",
+    ),
     **{
         f"{g}_native_only_{o}": ({**base, o: v}, _ONLY_NONE.format(o, g))
         for g, base in (("quadbin", _QB), ("h3", _H3))

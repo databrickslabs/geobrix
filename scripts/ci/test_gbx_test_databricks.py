@@ -295,6 +295,8 @@ def test_verdicts():
     assert v({"rc": 1, "total": 10, "failed": 2, "errors": 0}, None) == "FAILED"
     assert v({"rc": 5, "total": 0}, None) == "EMPTY"
     assert v({"rc": 130, "total": 10, "failed": 0, "errors": 0, "reason": "shard cap 45 min"}, None) == "INCOMPLETE"
+    assert v({"rc": 2, "total": 0, "failed": 0, "errors": 0}, None) == "ERRORS", "a collection error is an error, not 'did not finish'"
+    assert v({"rc": 130, "total": 3, "failed": 0, "errors": 0}, None) == "INCOMPLETE"
 
 
 def test_the_summary_lists_the_table_the_failures_and_the_skips(tmp_path):
@@ -608,3 +610,12 @@ def test_a_shard_that_has_not_started_or_one_that_died_earlier_does_not_decide()
     assert launcher.run_is_stuck(["live"], beats, changed, 5000.0, 900.0), "the killed shard's old beat is not counted in either direction"
     beats["live"]["done"] = True
     assert not launcher.run_is_stuck(["live"], beats, changed, 9000.0, 900.0), "a finished shard is not a hung one"
+
+
+def test_a_split_part_that_holds_only_deselected_tests_does_not_fail_the_run():
+    part = dict(name="ds [3/3]", verdict="EMPTY")
+    whole = dict(name="ds", verdict="EMPTY")
+    assert not launcher.is_failure(part) and launcher.is_failure(whole)
+    assert not launcher.is_failure(dict(name="ds", verdict="ok"))
+    for v in ("FAILED", "ERRORS", "INCOMPLETE"):
+        assert launcher.is_failure(dict(name="ds [1/2]", verdict=v))

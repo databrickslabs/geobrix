@@ -460,16 +460,28 @@ def parse_junit(path: Path) -> dict:
 
 
 def shard_verdict(res: Optional[dict], junit: Optional[dict]) -> str:
-    """ok | FAILED | ERRORS | INCOMPLETE (no result: the shard never finished) | EMPTY (nothing collected)."""
+    """ok | FAILED | ERRORS (pytest stopped on a collection or usage error) | INCOMPLETE (no result, a watchdog stop or a
+    cancel: the shard did not finish) | EMPTY (nothing collected)."""
     if not res:
+        return "INCOMPLETE"
+    if res.get("reason") or res.get("rc") == 130:
         return "INCOMPLETE"
     if res.get("rc") == 5 or (res.get("rc") == 0 and not res.get("total")):
         return "EMPTY"
-    if res.get("rc") not in (0,) or res.get("reason"):
-        return "FAILED" if (res.get("failed") or (junit and junit["failed"])) else "INCOMPLETE" if res.get("reason") or res.get("rc") in (2, 130) else "ERRORS"
+    failed = res.get("failed") or (junit and junit["failed"])
+    if res.get("rc") != 0:
+        return "FAILED" if failed else "ERRORS"
     if res.get("errors") or res.get("failed"):
         return "FAILED"
     return "ok"
+
+
+def is_failure(row: dict) -> bool:
+    """Whether a shard's row fails the run. A part of a split shard that holds only tests the marker deselects (integration files)
+    collects nothing; CI's whole shard would pass, so that part does too. A whole shard that collects nothing still fails."""
+    if row["verdict"] == "ok":
+        return False
+    return not (row["verdict"] == "EMPTY" and row["name"].endswith("]"))
 
 
 def pool_metrics(w, run_id: int, spec: dict) -> dict:
@@ -1001,7 +1013,7 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
                     for n, m in r["failures"][:5]:
                         print(f"  FAIL [{r['name']}] {n}: {m}")
                 print(f"\nWrote {local_out / 'summary.md'}")
-                bad = [r for r in rows if r["verdict"] != "ok"]
+                bad = [r for r in rows if is_failure(r)]
                 if rc == 0 and bad:
                     rc = EXIT_FAILED
                 ok = rc == 0

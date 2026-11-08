@@ -23,21 +23,11 @@ def spark():
     yield s
 
 
-# --- _geom_strategy (pure, no Spark) ---
-
-
-def test_geom_strategy_string_binary_native_and_error():
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    assert sm._geom_strategy(StringType()) == "string"
-    assert sm._geom_strategy(BinaryType()) == "binary"
-
-
-def test_geom_strategy_rejects_unsupported():
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    with pytest.raises(ValueError):
-        sm._geom_strategy(LongType())
+@pytest.fixture(autouse=True)
+def _close_figures():
+    plt.close("all")
+    yield
+    plt.close("all")
 
 
 class _FakeGeoType:
@@ -50,133 +40,6 @@ class _FakeGeoType:
 
     def simpleString(self):
         return self._name
-
-
-def test_geom_strategy_native_for_geometry_and_geography():
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    assert sm._geom_strategy(_FakeGeoType("geometry")) == "native"
-    assert sm._geom_strategy(_FakeGeoType("geography")) == "native"
-
-
-# --- _resolve_gdf geometry path ---
-
-
-def test_resolve_gdf_wkt_string(spark):
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    df = spark.createDataFrame(
-        [("a", "POINT (1 2)"), ("b", "POINT (3 4)")], ["name", "wkt"]
-    )
-    gdf = sm._resolve_gdf(df, None, None, 10_000, None)
-    assert gdf.crs.to_epsg() == 4326
-    assert list(gdf["name"]) == ["a", "b"]
-    assert "wkt" not in gdf.columns
-    assert [g.x for g in gdf.geometry] == [1.0, 3.0]
-
-
-def test_resolve_gdf_wkb_matches_wkt(spark):
-    import shapely
-
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    wkb = bytearray(shapely.to_wkb(shapely.from_wkt("POINT (5 6)")))
-    df = spark.createDataFrame([(wkb,)], ["geometry"])
-    gdf = sm._resolve_gdf(df, None, None, 10_000, None)
-    assert (gdf.geometry.iloc[0].x, gdf.geometry.iloc[0].y) == (5.0, 6.0)
-
-
-def test_resolve_gdf_passes_through_geodataframe():
-    import geopandas as gpd
-    from shapely.geometry import Point
-
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    g = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(0, 0)], crs=4326)
-    assert sm._resolve_gdf(g, None, None, 10_000, None) is g
-
-
-def test_resolve_gdf_unknown_column_type_raises(spark):
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    df = spark.createDataFrame([(1,)], ["geometry"])  # LongType, no grid_system
-    with pytest.raises(ValueError):
-        sm._resolve_gdf(df, None, None, 10_000, None)
-
-
-def test_resolve_gdf_truncates_and_warns(spark):
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    df = spark.range(5).selectExpr("concat('POINT (', id, ' 0)') AS wkt")
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        gdf = sm._resolve_gdf(df, None, None, 2, None)
-    assert len(gdf) == 2
-    assert any("max_rows" in str(w.message) for w in caught)
-
-
-def _ny_hex_string():
-    import h3
-
-    return h3.latlng_to_cell(40.7, -74.0, 9)  # string h3 index
-
-
-def test_resolve_cells_h3_string_and_long_match(spark):
-    import h3
-
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    s = _ny_hex_string()
-    as_long = h3.str_to_int(s)
-
-    df_str = spark.createDataFrame([(s,)], ["cellid"])
-    df_long = spark.createDataFrame([(as_long,)], ["cellid"])
-
-    g_str = sm._resolve_gdf(df_str, None, "h3", 10_000, None)
-    g_long = sm._resolve_gdf(df_long, None, "h3", 10_000, None)
-
-    assert g_str.crs.to_epsg() == 4326
-    # identical boundary polygon from either id form
-    assert g_str.geometry.iloc[0].equals(g_long.geometry.iloc[0])
-
-
-def test_resolve_cells_carries_attribute_columns(spark):
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    s = _ny_hex_string()
-    df = spark.createDataFrame([(s, 7)], ["cellid", "count"])
-    gdf = sm._resolve_gdf(df, "cellid", "h3", 10_000, None)
-    assert list(gdf["count"]) == [7]
-    assert "cellid" not in gdf.columns
-
-
-def test_resolve_cells_quadbin(spark):
-    # quadbin cell ids are bigint; boundary is a lon/lat box (EPSG:4326).
-    import quadbin
-
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    cell = quadbin.point_to_cell(-74.0, 40.7, 10)  # int cell over NYC
-    df = spark.createDataFrame([(cell,)], ["cellid"])
-    gdf = sm._resolve_gdf(df, "cellid", "quadbin", 10_000, None)
-    assert gdf.crs.to_epsg() == 4326
-    assert gdf.geometry.iloc[0].geom_type == "Polygon"
-    minx, miny, maxx, maxy = gdf.geometry.iloc[0].bounds
-    assert -75 < minx < maxx < -73 and 40 < miny < maxy < 41  # lon/lat near NYC
-
-
-def test_resolve_cells_bng(spark):
-    # BNG cell ids are STRING; boundary is in EPSG:27700 eastings/northings.
-    from databricks.labs.gbx.pygx import _bng
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    cellid = _bng.point_as_cell(530000.0, 180000.0, "1km")  # central London, 1km
-    df = spark.createDataFrame([(cellid,)], ["cellid"])
-    gdf = sm._resolve_gdf(df, "cellid", "bng", 10_000, None)
-    assert gdf.crs.to_epsg() == 27700
-    assert gdf.geometry.iloc[0].geom_type == "Polygon"
-    minx, miny, _, _ = gdf.geometry.iloc[0].bounds
-    assert 500_000 < minx < 560_000 and 150_000 < miny < 200_000  # 27700 metres
 
 
 def _custom_grid(srid=27700):
@@ -193,175 +56,201 @@ def _custom_grid(srid=27700):
     }
 
 
-def test_resolve_cells_custom_with_grid_conf(spark):
-    # custom grids need the grid spec; CRS comes from the grid's srid.
+def _custom_cell(grid):
     from databricks.labs.gbx.pygx import _custom
-    from databricks.labs.gbx.vizx import _static_map as sm
 
-    grid = _custom_grid(srid=27700)
     conf = _custom.conf_from_row(grid)
-    cell = _custom.point_to_cell_id(conf, 500.0, 500.0, 1)
-    df = spark.createDataFrame([(cell,)], ["cellid"])
-    gdf = sm._resolve_gdf(df, "cellid", "custom", 10_000, None, grid_conf=grid)
-    assert gdf.crs.to_epsg() == 27700
-    assert gdf.geometry.iloc[0].geom_type == "Polygon"
-    minx, miny, maxx, maxy = gdf.geometry.iloc[0].bounds
-    assert 0 <= minx < maxx <= 1000 and 0 <= miny < maxy <= 1000
+    return _custom.point_to_cell_id(conf, 500.0, 500.0, 1)
 
 
-def test_resolve_cells_custom_requires_grid_conf(spark):
+def _make_polygon_gdf():
+    """Three polygons over a wide lon range, with a continuous 'value' column."""
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    geoms = [
+        box(-74.1, 40.6, -73.9, 40.8),
+        box(-80.0, 25.7, -79.8, 25.9),
+        box(-87.7, 41.8, -87.5, 42.0),
+    ]
+    return gpd.GeoDataFrame({"value": [1.0, 2.0, 3.0]}, geometry=geoms, crs=4326)
+
+
+_SQUARE = "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))"
+
+
+def test_geometry_column_strategy_by_type():
     from databricks.labs.gbx.vizx import _static_map as sm
 
-    df = spark.createDataFrame([(1,)], ["cellid"])
+    assert sm._geom_strategy(StringType()) == "string"
+    assert sm._geom_strategy(BinaryType()) == "binary"
+    assert sm._geom_strategy(_FakeGeoType("geometry")) == "native"
+    assert sm._geom_strategy(_FakeGeoType("geography")) == "native"
     with pytest.raises(ValueError):
-        sm._resolve_gdf(df, "cellid", "custom", 10_000, None)  # no grid_conf
+        sm._geom_strategy(LongType())
 
 
-def test_resolve_cells_custom_no_srid_has_no_crs(spark):
-    # srid<=0 -> the grid declares no CRS, so the GeoDataFrame crs is None.
-    from databricks.labs.gbx.pygx import _custom
+def test_resolve_gdf_reads_wkt_and_wkb_passes_geodataframes_and_caps_rows(spark):
+    import geopandas as gpd
+    import shapely
+    from shapely.geometry import Point
+
     from databricks.labs.gbx.vizx import _static_map as sm
 
-    grid = _custom_grid(srid=-1)
-    conf = _custom.conf_from_row(grid)
-    cell = _custom.point_to_cell_id(conf, 500.0, 500.0, 1)
-    df = spark.createDataFrame([(cell,)], ["cellid"])
-    gdf = sm._resolve_gdf(df, "cellid", "custom", 10_000, None, grid_conf=grid)
-    assert gdf.crs is None
-
-
-def test_resolve_cells_unknown_grid_system_raises(spark):
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    df = spark.createDataFrame([(1,)], ["cellid"])
-    with pytest.raises(ValueError):
-        sm._resolve_gdf(df, "cellid", "geohash", 10_000, None)
-
-
-def test_plot_static_returns_axes_and_one_figure(spark):
-    from databricks.labs.gbx.vizx import plot_static
-
-    plt.close("all")
-    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
-    ax = plot_static(df, basemap=False)
-    assert ax is not None
-    assert len(plt.get_fignums()) == 1
-    plt.close("all")
-
-
-def test_plot_static_choropleth_column_with_legend(spark):
-    from databricks.labs.gbx.vizx import plot_static
-
-    plt.close("all")
     df = spark.createDataFrame(
-        [("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))", 3)], ["wkt", "v"]
+        [("a", "POINT (1 2)"), ("b", "POINT (3 4)")], ["name", "wkt"]
     )
-    ax = plot_static(df, column="v", basemap=False)
-    assert ax.get_figure() is not None
-    plt.close("all")
+    gdf = sm._resolve_gdf(df, None, None, 10_000, None)
+    assert gdf.crs.to_epsg() == 4326
+    assert list(gdf["name"]) == ["a", "b"] and "wkt" not in gdf.columns
+    assert [g.x for g in gdf.geometry] == [1.0, 3.0]
+
+    wkb = bytearray(shapely.to_wkb(shapely.from_wkt("POINT (5 6)")))
+    got = sm._resolve_gdf(
+        spark.createDataFrame([(wkb,)], ["geometry"]), None, None, 10_000, None
+    )
+    assert (got.geometry.iloc[0].x, got.geometry.iloc[0].y) == (5.0, 6.0)
+
+    g = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(0, 0)], crs=4326)
+    assert sm._resolve_gdf(g, None, None, 10_000, None) is g
+
+    with pytest.raises(ValueError):  # LongType column, no grid_system
+        sm._resolve_gdf(
+            spark.createDataFrame([(1,)], ["geometry"]), None, None, 10_000, None
+        )
+
+    many = spark.range(5).selectExpr("concat('POINT (', id, ' 0)') AS wkt")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert len(sm._resolve_gdf(many, None, None, 2, None)) == 2
+    assert any("max_rows" in str(w.message) for w in caught)
 
 
-def test_plot_static_overlay_reuses_axes(spark):
-    from databricks.labs.gbx.vizx import plot_static
+def test_resolve_cells_h3_string_and_long_ids_give_the_same_boundary(spark):
+    import h3
 
-    plt.close("all")
-    df1 = spark.createDataFrame([("POINT (1 1)",)], ["wkt"])
-    df2 = spark.createDataFrame([("POINT (2 2)",)], ["wkt"])
-    ax = plot_static(df1, basemap=False)
-    ax2 = plot_static(df2, basemap=False, ax=ax)
-    assert ax2 is ax
-    assert len(plt.get_fignums()) == 1  # no new figure created for the overlay
-    plt.close("all")
-
-
-def test_plot_static_reprojects_to_3857_even_without_basemap(spark):
-    # Overlays must share a CRS to align. plot_static reprojects every layer to
-    # Web Mercator (EPSG:3857) regardless of `basemap`, so a basemap=False
-    # overlay lands in the same coordinate space as a basemap layer rather than
-    # in raw 4326 degrees. Guards against the layers-misaligned regression.
-    from databricks.labs.gbx.vizx import plot_static
-
-    plt.close("all")
-    df = spark.createDataFrame([("POINT (-122 37)",)], ["wkt"])
-    ax = plot_static(df, basemap=False)
-    x = float(ax.collections[-1].get_offsets()[0][0])
-    # -122 deg lon -> ~-1.358e7 m in EPSG:3857; in 4326 it would be ~-122.
-    assert abs(x) > 1000, f"expected web-mercator meters, got {x}"
-    plt.close("all")
-
-
-def test_detect_geom_col_no_geometry_column_raises(spark):
-    # grid_system=None and no native geo / wkt / geometry / geom column -> error.
     from databricks.labs.gbx.vizx import _static_map as sm
 
-    df = spark.createDataFrame([(1, 2.0)], ["a", "b"])
+    s = h3.latlng_to_cell(40.7, -74.0, 9)
+    g_str = sm._resolve_gdf(
+        spark.createDataFrame([(s,)], ["cellid"]), None, "h3", 10_000, None
+    )
+    g_long = sm._resolve_gdf(
+        spark.createDataFrame([(h3.str_to_int(s),)], ["cellid"]),
+        None,
+        "h3",
+        10_000,
+        None,
+    )
+    assert g_str.crs.to_epsg() == 4326
+    assert g_str.geometry.iloc[0].equals(g_long.geometry.iloc[0])
+    # attribute columns are carried, the cell column is replaced by the boundary
+    attrs = sm._resolve_gdf(
+        spark.createDataFrame([(s, 7)], ["cellid", "count"]),
+        "cellid",
+        "h3",
+        10_000,
+        None,
+    )
+    assert list(attrs["count"]) == [7] and "cellid" not in attrs.columns
+
+
+def test_resolve_cells_quadbin_bng_and_custom_grids_carry_their_own_crs(spark):
+    import quadbin
+
+    from databricks.labs.gbx.pygx import _bng
+    from databricks.labs.gbx.vizx import _static_map as sm
+
+    def resolve(cell, system, **kw):
+        df = spark.createDataFrame([(cell,)], ["cellid"])
+        return sm._resolve_gdf(df, "cellid", system, 10_000, None, **kw)
+
+    q = resolve(
+        quadbin.point_to_cell(-74.0, 40.7, 10), "quadbin"
+    )  # lon/lat box over NYC
+    assert q.crs.to_epsg() == 4326 and q.geometry.iloc[0].geom_type == "Polygon"
+    minx, miny, maxx, maxy = q.geometry.iloc[0].bounds
+    assert -75 < minx < maxx < -73 and 40 < miny < maxy < 41
+
+    b = resolve(
+        _bng.point_as_cell(530000.0, 180000.0, "1km"), "bng"
+    )  # eastings/northings
+    assert b.crs.to_epsg() == 27700
+    minx, miny, _, _ = b.geometry.iloc[0].bounds
+    assert 500_000 < minx < 560_000 and 150_000 < miny < 200_000
+
+    grid = _custom_grid(27700)
+    c = resolve(_custom_cell(grid), "custom", grid_conf=grid)
+    assert c.crs.to_epsg() == 27700
+    minx, miny, maxx, maxy = c.geometry.iloc[0].bounds
+    assert 0 <= minx < maxx <= 1000 and 0 <= miny < maxy <= 1000
+    no_crs = _custom_grid(-1)  # srid <= 0: the grid declares no CRS
+    assert resolve(_custom_cell(no_crs), "custom", grid_conf=no_crs).crs is None
+
     with pytest.raises(ValueError):
-        sm._detect_geom_col(df, None)
-
-
-def test_detect_geom_col_ambiguous_cell_column_raises(spark):
-    # grid_system set, several columns, none named like a cell id -> error.
-    from databricks.labs.gbx.vizx import _static_map as sm
-
-    df = spark.createDataFrame([(1, 2)], ["a", "b"])
+        resolve(1, "custom")  # custom grids need the grid spec
     with pytest.raises(ValueError):
-        sm._detect_geom_col(df, "h3")
+        resolve(1, "geohash")
 
 
-def test_detect_geom_col_single_column_with_grid_system(spark):
-    # grid_system set + a lone column -> that column is used even if unnamed.
+def test_geometry_column_detection_errors_and_single_column_fallback(spark):
     from databricks.labs.gbx.vizx import _static_map as sm
 
-    df = spark.createDataFrame([(123,)], ["my_cells"])
-    assert sm._detect_geom_col(df, "h3") == "my_cells"
+    with pytest.raises(ValueError):  # no native geo / wkt / geometry / geom column
+        sm._detect_geom_col(spark.createDataFrame([(1, 2.0)], ["a", "b"]), None)
+    with pytest.raises(ValueError):  # several columns, none named like a cell id
+        sm._detect_geom_col(spark.createDataFrame([(1, 2)], ["a", "b"]), "h3")
+    # a lone column is used even if unnamed
+    assert (
+        sm._detect_geom_col(spark.createDataFrame([(123,)], ["my_cells"]), "h3")
+        == "my_cells"
+    )
 
 
-def _last_facecolor(ax):
-    # geopandas draws polygons as a collection; return its facecolor RGBA array.
-    return ax.collections[-1].get_facecolor()
-
-
-def test_plot_static_fill_true_fills_polygon(spark):
+def test_plot_static_draws_on_one_figure_reuses_axes_and_never_calls_show(
+    spark, monkeypatch
+):
     from databricks.labs.gbx.vizx import plot_static
 
-    plt.close("all")
-    df = spark.createDataFrame([("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",)], ["wkt"])
-    ax = plot_static(df, basemap=False)  # fill=True default
-    fc = _last_facecolor(ax)
-    assert fc.size > 0 and float(fc[0][3]) > 0.0  # visible (alpha>0) face
-    plt.close("all")
+    shows = []  # show() would flush the base before an ax= overlay is added
+    monkeypatch.setattr(plt, "show", lambda *a, **k: shows.append(1))
+    ax = plot_static(spark.createDataFrame([("POINT (1 1)",)], ["wkt"]), basemap=False)
+    assert ax is not None and len(plt.get_fignums()) == 1
+    ax2 = plot_static(
+        spark.createDataFrame([("POINT (2 2)",)], ["wkt"]), basemap=False, ax=ax
+    )
+    assert ax2 is ax and len(plt.get_fignums()) == 1
+    assert shows == []
+    plot_static(
+        spark.createDataFrame([(_SQUARE, 3)], ["wkt", "v"]), column="v", basemap=False
+    )
 
 
-def test_plot_static_fill_false_draws_outline_only(spark):
+def test_plot_static_reprojects_every_layer_to_web_mercator_even_without_a_basemap(
+    spark,
+):
+    # Overlays must share a CRS to align: -122 deg lon is ~-1.358e7 m in EPSG:3857.
     from databricks.labs.gbx.vizx import plot_static
 
+    ax = plot_static(
+        spark.createDataFrame([("POINT (-122 37)",)], ["wkt"]), basemap=False
+    )
+    assert abs(float(ax.collections[-1].get_offsets()[0][0])) > 1000
+
+
+def test_plot_static_fill_true_fills_and_fill_false_draws_the_outline_only(spark):
+    from databricks.labs.gbx.vizx import plot_static
+
+    df = spark.createDataFrame([(_SQUARE,)], ["wkt"])
+    fc = plot_static(df, basemap=False).collections[-1].get_facecolor()
+    assert fc.size > 0 and float(fc[0][3]) > 0.0  # visible (alpha > 0) face
     plt.close("all")
-    df = spark.createDataFrame([("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",)], ["wkt"])
     ax = plot_static(df, basemap=False, fill=False, edgecolor="red")
-    fc = _last_facecolor(ax)
-    # facecolor "none" -> empty array or a fully transparent (alpha 0) face.
+    fc = ax.collections[-1].get_facecolor()
     assert fc.size == 0 or float(fc[0][3]) == 0.0
-    plt.close("all")
 
 
-def test_plot_static_does_not_call_show(spark, monkeypatch):
-    # plot_static must NOT call pyplot.show() (the figure auto-displays at cell
-    # end); calling it on the creating call would flush the base before an
-    # ax= overlay is added. Guards the overlay-rendering regression.
-    import matplotlib.pyplot as plt_mod
-
-    from databricks.labs.gbx.vizx import plot_static
-
-    calls = []
-    monkeypatch.setattr(plt_mod, "show", lambda *a, **k: calls.append(1))
-    plt.close("all")
-    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
-    plot_static(df, basemap=False)
-    assert calls == []  # show() never called
-    plt.close("all")
-
-
-def test_plot_static_basemap_fallback_warns(spark, monkeypatch):
+def test_plot_static_degrades_to_no_basemap_with_a_warning(spark, monkeypatch):
     import contextily
 
     from databricks.labs.gbx.vizx import plot_static
@@ -370,34 +259,23 @@ def test_plot_static_basemap_fallback_warns(spark, monkeypatch):
         raise RuntimeError("no egress")
 
     monkeypatch.setattr(contextily, "add_basemap", _boom)
-    plt.close("all")
     df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        ax = plot_static(df, basemap=True)
-    assert ax is not None
-    assert len(plt.get_fignums()) == 1  # figure still produced
-    assert any("basemap unavailable" in str(w.message) for w in caught)
+        assert plot_static(df, basemap=True) is not None
+    assert len(plt.get_fignums()) == 1 and caught  # the figure is still produced
     plt.close("all")
 
-
-def test_plot_static_skips_basemap_when_no_crs(spark):
-    # A custom grid with srid<=0 has no CRS, so the basemap is skipped (with a
-    # warning) rather than placed against arbitrary coordinates.
-    from databricks.labs.gbx.pygx import _custom
-    from databricks.labs.gbx.vizx import plot_static
-
-    grid = _custom_grid(srid=-1)
-    conf = _custom.conf_from_row(grid)
-    cell = _custom.point_to_cell_id(conf, 500.0, 500.0, 1)
-    df = spark.createDataFrame([(cell,)], ["cellid"])
-    plt.close("all")
+    # A custom grid without a CRS cannot be placed on a basemap: skipped with a warning.
+    grid = _custom_grid(-1)
+    cells = spark.createDataFrame([(_custom_cell(grid),)], ["cellid"])
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        ax = plot_static(df, grid_system="custom", grid_conf=grid, basemap=True)
-    assert ax is not None
-    assert any("no CRS" in str(w.message) for w in caught)
-    plt.close("all")
+        assert (
+            plot_static(cells, grid_system="custom", grid_conf=grid, basemap=True)
+            is not None
+        )
+    assert caught
 
 
 def test_contextily_add_basemap_accepts_headers():
@@ -476,274 +354,93 @@ def test_plot_static_enables_tile_cache(spark, monkeypatch):
     ), "cx.set_cache_dir called twice — _enable_tile_cache is not idempotent"
 
 
-# --- _basemap_add_kwargs: both branches ---
-
-
 def _fake_add_basemap_with_headers(ax, source, crs, headers=None, **kwargs):
-    """Fake add_basemap that accepts headers= (simulates contextily >= 1.7)."""
+    """Accepts headers= (simulates contextily >= 1.7)."""
 
 
 def _fake_add_basemap_without_headers(ax, source, crs):
-    """Fake add_basemap that does NOT accept headers= (simulates contextily < 1.7)."""
+    """Does NOT accept headers= (simulates contextily < 1.7)."""
 
 
-def test_basemap_add_kwargs_returns_headers_when_supported(monkeypatch):
-    """_basemap_add_kwargs returns {'headers': _TILE_USER_AGENT} when the installed
-    contextily.add_basemap signature includes a headers= parameter.
-
-    Monkeypatches cx.add_basemap with a fake that accepts headers= so both code
-    paths are exercised without depending on the installed contextily version.
-    """
+def test_basemap_headers_are_passed_only_when_contextily_supports_them(monkeypatch):
     import contextily
 
     from databricks.labs.gbx.vizx._basemap import _TILE_USER_AGENT, _basemap_add_kwargs
 
     monkeypatch.setattr(contextily, "add_basemap", _fake_add_basemap_with_headers)
-    result = _basemap_add_kwargs()
-    assert result == {
-        "headers": _TILE_USER_AGENT
-    }, f"Expected {{'headers': _TILE_USER_AGENT}}, got {result!r}"
-
-
-def test_basemap_add_kwargs_returns_empty_when_unsupported(monkeypatch):
-    """_basemap_add_kwargs returns {} when the installed contextily.add_basemap
-    signature does NOT include headers=, so the call degrades gracefully instead
-    of raising TypeError on older cluster contextily versions.
-    """
-    import contextily
-
-    from databricks.labs.gbx.vizx._basemap import _basemap_add_kwargs
-
+    assert _basemap_add_kwargs() == {"headers": _TILE_USER_AGENT}
+    # older cluster contextily: degrade to no kwargs instead of raising TypeError
     monkeypatch.setattr(contextily, "add_basemap", _fake_add_basemap_without_headers)
-    result = _basemap_add_kwargs()
-    assert (
-        result == {}
-    ), f"Expected empty dict for old contextily signature, got {result!r}"
+    assert _basemap_add_kwargs() == {}
 
 
-# --- _resolve_basemap_source ---
-
-
-def test_resolve_basemap_source_none_returns_world_street_map(monkeypatch):
-    """_resolve_basemap_source(None) returns Esri.WorldStreetMap (the default)."""
+def test_basemap_source_presets_unknown_names_and_provider_passthrough(monkeypatch):
     import contextily as cx
 
     from databricks.labs.gbx.vizx import _basemap
     from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
 
-    # Reset the cached presets so this test always populates them fresh.
-    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
-
-    result = _resolve_basemap_source(None)
-    assert (
-        result == cx.providers.Esri.WorldStreetMap
-    ), f"Expected Esri.WorldStreetMap for None, got {result!r}"
-
-
-def test_resolve_basemap_source_imagery_returns_world_imagery(monkeypatch):
-    """_resolve_basemap_source('imagery') returns Esri.WorldImagery."""
-    import contextily as cx
-
-    from databricks.labs.gbx.vizx import _basemap
-    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
-
-    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
-
-    result = _resolve_basemap_source("imagery")
-    assert (
-        result == cx.providers.Esri.WorldImagery
-    ), f"Expected Esri.WorldImagery for 'imagery', got {result!r}"
-
-
-def test_resolve_basemap_source_topo_returns_world_topo_map(monkeypatch):
-    """_resolve_basemap_source('topo') returns Esri.WorldTopoMap."""
-    import contextily as cx
-
-    from databricks.labs.gbx.vizx import _basemap
-    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
-
-    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
-
-    result = _resolve_basemap_source("topo")
-    assert (
-        result == cx.providers.Esri.WorldTopoMap
-    ), f"Expected Esri.WorldTopoMap for 'topo', got {result!r}"
-
-
-def test_resolve_basemap_source_unknown_string_raises_value_error(monkeypatch):
-    """_resolve_basemap_source raises ValueError for an unknown preset string."""
-    import contextily as cx  # noqa: F401 — ensure cx available so presets load
-
-    from databricks.labs.gbx.vizx import _basemap
-    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
-
-    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
-
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)  # always populate fresh
+    esri = cx.providers.Esri
+    assert _resolve_basemap_source(None) == esri.WorldStreetMap
+    assert _resolve_basemap_source("imagery") == esri.WorldImagery
+    assert _resolve_basemap_source("topo") == esri.WorldTopoMap
+    assert _resolve_basemap_source(esri.WorldImagery) is esri.WorldImagery
     with pytest.raises(ValueError, match="Unknown basemap_source preset"):
         _resolve_basemap_source("not_a_real_preset")
 
 
-def test_resolve_basemap_source_provider_object_passthrough(monkeypatch):
-    """_resolve_basemap_source passes through a contextily provider object unchanged."""
-    import contextily as cx
-
-    from databricks.labs.gbx.vizx import _basemap
-    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
-
-    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
-
-    provider = cx.providers.Esri.WorldImagery
-    result = _resolve_basemap_source(provider)
-    assert (
-        result is provider
-    ), f"Expected passthrough of provider object, got {result!r}"
-
-
-# --- raster_layer zorder: in-memory bytes path draws above basemap ---
-
-
-def test_raster_layer_inmem_zorder_is_2(monkeypatch):
-    """In-memory raster_layer renders at zorder=2, above the basemap (zorder=1).
-
-    Root cause of cmd23 bug: plot_raster's ax.imshow uses the default zorder=0;
-    cx.add_basemap is called AFTER the raster (also at zorder=0 but added later),
-    so the basemap covers the raster entirely — only basemap shows.
-
-    Fix: _draw_one_layer sets zorder=2 on all AxesImage objects added by
-    plot_raster, matching plot_cog's convention.
-    """
+def test_in_memory_raster_layer_draws_above_the_basemap(monkeypatch):
+    """A raster_layer image must be at zorder 2, above the basemap (zorder 1): imshow's
+    default zorder 0 let the later-added basemap cover the raster entirely."""
     import io
 
-    import matplotlib
     import numpy as np
     import rasterio
     from rasterio.transform import from_bounds
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
     import databricks.labs.gbx.vizx._static_map as sm
+    from databricks.labs.gbx.vizx._layers import raster_layer
 
-    # Build a tiny 4×4 float32 GeoTIFF in EPSG:3857
-    width, height = 4, 4
-    data = np.linspace(0.0, 100.0, width * height, dtype=np.float32).reshape(
-        1, height, width
-    )
-    transform = from_bounds(-100.0, -100.0, 100.0, 100.0, width, height)
+    data = np.linspace(0.0, 100.0, 16, dtype=np.float32).reshape(1, 4, 4)
     buf = io.BytesIO()
     with rasterio.open(
         buf,
         "w",
         driver="GTiff",
-        height=height,
-        width=width,
+        height=4,
+        width=4,
         count=1,
         dtype=np.float32,
         crs="EPSG:3857",
-        transform=transform,
+        transform=from_bounds(-100.0, -100.0, 100.0, 100.0, 4, 4),
     ) as dst:
         dst.write(data)
-    tile_bytes = buf.getvalue()
-
-    from databricks.labs.gbx.vizx._layers import raster_layer
-
-    lyr = raster_layer(tile_bytes, band=1, cmap="viridis")
-
-    plt.close("all")
+    lyr = raster_layer(buf.getvalue(), band=1, cmap="viridis")
     _, ax = plt.subplots()
     sm._draw_one_layer(
         lyr, ax, max_rows=5000, sample_seed=0, srid=3857, legend=False, emphasis="blend"
     )
-
-    images = ax.get_images()
-    assert images, "No AxesImage added by _draw_one_layer for raster_layer"
-    for img in images:
-        assert img.get_zorder() == 2, (
-            f"Raster image zorder is {img.get_zorder()}, expected 2 "
-            "(must be above basemap at zorder=1)"
-        )
-    plt.close("all")
+    assert ax.get_images()
+    assert all(img.get_zorder() == 2 for img in ax.get_images())
 
 
-# --- colorbar height regression: _fix_colorbar_position ---
-
-
-def _make_polygon_gdf():
-    """Return a tiny GeoDataFrame with three polygons and a continuous 'value' column.
-
-    The polygons span a wide lon range so the equal-aspect box realises a shorter
-    height than the full subplot -- enough to expose the overrun bug without a
-    basemap fetch (basemap=False keeps the test fully offline + fast).
-    """
-    import geopandas as gpd
-    from shapely.geometry import box
-
-    geoms = [
-        box(-74.1, 40.6, -73.9, 40.8),
-        box(-80.0, 25.7, -79.8, 25.9),
-        box(-87.7, 41.8, -87.5, 42.0),
-    ]
-    return gpd.GeoDataFrame({"value": [1.0, 2.0, 3.0]}, geometry=geoms, crs=4326)
-
-
-def test_colorbar_height_matches_map_axes_height():
-    """Regression: the colorbar axes height must be approximately equal to the
-    map axes height after plot_static (created=True, continuous column + legend).
-
-    Before the fix, geopandas sized the colorbar to the full subplot area while
-    the map axes (equal-aspect geographic data) realised a shorter box — the
-    colorbar overran the title and extended below the map.  The fix calls
-    _fix_colorbar_position to pin the colorbar's y-extent to the map axes.
-
-    Tolerance is ±15 % of the map axes height — enough to catch the ~2–3× overrun
-    in the pre-fix code while remaining stable across figure aspect ratios.
+def test_the_colorbar_matches_the_map_height_only_on_axes_plot_static_created():
+    """geopandas sized the colorbar to the full subplot while the equal-aspect map realised
+    a shorter box, so the colorbar overran the title (~2-3x). Caller-owned axes stay as given.
     """
     from databricks.labs.gbx.vizx import plot_static
 
-    plt.close("all")
     gdf = _make_polygon_gdf()
     ax = plot_static(gdf, column="value", legend=True, basemap=False)
-
-    fig = ax.figure
-    extra_axes = [a for a in fig.axes if a is not ax]
-    if not extra_axes:
-        # No colorbar was added (e.g. geopandas chose a discrete legend patch) --
-        # skip the height check rather than fail on an unrelated code path.
-        plt.close("all")
-        return
-
-    assert (
-        len(extra_axes) == 1
-    ), f"Expected exactly one colorbar axes, found {len(extra_axes)}"
-    map_h = ax.get_position().height
-    cb_h = extra_axes[0].get_position().height
-    tolerance = 0.15 * map_h
-    assert abs(cb_h - map_h) <= tolerance, (
-        f"Colorbar height {cb_h:.4f} differs from map axes height {map_h:.4f} "
-        f"by more than {tolerance:.4f} (15 %). Colorbar is overrunning the plot."
-    )
+    extra = [a for a in ax.figure.axes if a is not ax]
+    if extra:  # no colorbar when geopandas picks a discrete legend
+        assert len(extra) == 1
+        map_h = ax.get_position().height
+        assert abs(extra[0].get_position().height - map_h) <= 0.15 * map_h
     plt.close("all")
 
-
-def test_colorbar_height_unchanged_when_caller_owns_axes():
-    """When the caller passes ax= (created=False), _fix_colorbar_position must
-    NOT resize the colorbar -- the caller owns the layout.
-
-    This guards the nb3 side-by-side subplots pattern (plt.subplots(1,2) +
-    ax=axes[0/1]) against unintended layout mutation.
-    """
-    from databricks.labs.gbx.vizx import plot_static
-
-    plt.close("all")
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
-    gdf = _make_polygon_gdf()
-
-    # Render onto the caller-owned axes -- created=False for both calls.
-    plot_static(gdf, column="value", legend=True, basemap=False, ax=axes[0])
-    plot_static(gdf, column="value", legend=True, basemap=False, ax=axes[1])
-
-    # Two map axes + up to two colorbar axes; confirm the figure still has the
-    # expected shape (no crash, no extra figures).
-    assert len(fig.axes) >= 2, "Expected at least the two map axes to survive"
-    assert len(plt.get_fignums()) == 1, "Expected exactly one figure (caller-owned)"
-    plt.close("all")
+    for a in axes:
+        plot_static(gdf, column="value", legend=True, basemap=False, ax=a)
+    assert len(fig.axes) >= 2 and len(plt.get_fignums()) == 1

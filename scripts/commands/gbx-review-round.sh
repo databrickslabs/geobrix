@@ -233,7 +233,7 @@ if grep -q 'No changes found' "$SCAN_FILE"; then
     exit 4
 fi
 
-if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long|Agent execution failed|Failed to parse claude output' "$SCAN_FILE"; then
+if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long|^\[[a-z_]+\] (Agent execution failed|Failed to parse claude output)' "$SCAN_FILE"; then
     rm -f "$SCAN_FILE"
     echo "" >&2
     echo -e "${RED}Isaac Review FAILED silently:${NC} the model call errored (likely 'Prompt is too long' —" >&2

@@ -6,6 +6,10 @@ import pytest
 
 pyspark = pytest.importorskip("pyspark")
 
+# These tests write with Spark to a bare tmp_path and look at the files with plain file I/O (or the reverse). A bare path is the
+# local disk only for a local Spark session; the session a Databricks node provides reads it from DBFS, so they run where the
+# session is local (the dev container, CI) and say so where it is not.
+from test._provided_spark import wanted as _provided_session  # noqa: E402
 from test.sample._fake_overture_catalog import open_fake_overture  # noqa: E402
 
 from pyspark.sql import Row  # noqa: E402
@@ -25,6 +29,11 @@ from databricks.labs.gbx.sample.overture import (  # noqa: E402
     _META_COLS,
     OvertureClient,
     _meta_dataframe,
+)
+
+needs_local_spark_paths = pytest.mark.skipif(
+    _provided_session(),
+    reason="a bare path is DBFS under the session a Databricks node provides, not the driver's disk",
 )
 
 
@@ -93,13 +102,6 @@ def test_discover_all_themes_when_none(spark):
     assert {r["type"] for r in df.collect()} == {"building", "place"}
 
 
-def _local(path):
-    """A Spark URI for a path on the driver's disk. Spark reads a bare path from the platform's default file system, which is
-    DBFS on Databricks, so a source file the code under test opens with plain file I/O is written to ``file:``.
-    """
-    return "file://" + path
-
-
 def _write_fake_overture_parquet(spark, path, bbox_struct=True):
     """Write a tiny GeoParquet-ish parquet with a bbox struct so pushdown can fire."""
     if bbox_struct:
@@ -111,9 +113,10 @@ def _write_fake_overture_parquet(spark, path, bbox_struct=True):
         ]
     else:
         rows = [Row(id=1), Row(id=2)]
-    spark.createDataFrame(rows).write.mode("overwrite").parquet(_local(path))
+    spark.createDataFrame(rows).write.mode("overwrite").parquet(path)
 
 
+@needs_local_spark_paths
 def test_download_distributed_writes_aoi_subset(spark, tmp_path):
     src = str(tmp_path / "src.parquet")
     _write_fake_overture_parquet(spark, src)
@@ -162,6 +165,7 @@ def test_download_distributed_writes_aoi_subset(spark, tmp_path):
     assert subset.collect()[0]["id"] == 1
 
 
+@needs_local_spark_paths
 def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
     """Two assets sharing (theme, type) must both survive — no shard clobber.
 
@@ -180,7 +184,7 @@ def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
             Row(id=10, bbox=Row(xmin=-122.42, ymin=37.75, xmax=-122.41, ymax=37.76)),
             Row(id=11, bbox=Row(xmin=-122.43, ymin=37.75, xmax=-122.42, ymax=37.76)),
         ]
-    ).write.mode("overwrite").parquet(_local(src_a))
+    ).write.mode("overwrite").parquet(src_a)
 
     # Asset B: shard 2 — id 20 inside AOI, id 21 outside
     src_b = str(tmp_path / "shard_b.parquet")
@@ -189,7 +193,7 @@ def test_download_distributed_multi_asset_no_clobber(spark, tmp_path):
             Row(id=20, bbox=Row(xmin=-122.44, ymin=37.75, xmax=-122.43, ymax=37.76)),
             Row(id=21, bbox=Row(xmin=10.0, ymin=50.0, xmax=10.1, ymax=50.1)),
         ]
-    ).write.mode("overwrite").parquet(_local(src_b))
+    ).write.mode("overwrite").parquet(src_b)
 
     out_dir = str(tmp_path / "out_multi")
     client = OvertureClient(release="2024-07-01", _catalog_opener=open_fake_overture)
@@ -285,13 +289,14 @@ def test_empty_meta_dataframe_matches_meta_cols(spark):
     assert empty_meta.count() == 0
 
 
+@needs_local_spark_paths
 def test_download_fallback_injected_fetcher(spark, tmp_path):
     # build a real source parquet, then serve its bytes through a fake _get_fn
     src = str(tmp_path / "asset.parquet")
 
     spark.createDataFrame([Row(id=1), Row(id=2)]).coalesce(1).write.mode(
         "overwrite"
-    ).parquet(_local(src))
+    ).parquet(src)
     # the "asset" is a single part file inside src
     part = [f for f in os.listdir(src) if f.endswith(".parquet")][0]
     src_file = os.path.join(src, part)
@@ -391,7 +396,7 @@ def test_download_routes_cloud_to_distributed(spark, tmp_path):
     # _download_distributed (not the HTTP fallback).
     spark.createDataFrame(
         [Row(id=1, bbox=Row(xmin=-122.42, ymin=37.75, xmax=-122.41, ymax=37.76))]
-    ).write.mode("overwrite").parquet(_local(src))
+    ).write.mode("overwrite").parquet(src)
     client = OvertureClient(release="2024-07-01", _catalog_opener=open_fake_overture)
 
     schema = StructType(
@@ -444,7 +449,7 @@ def test_download_table_merge_idempotent(spark, tmp_path):
 
     spark.createDataFrame(
         [Row(id=1, bbox=Row(xmin=-122.42, ymin=37.75, xmax=-122.41, ymax=37.76))]
-    ).write.mode("overwrite").parquet(_local(src))
+    ).write.mode("overwrite").parquet(src)
     client = OvertureClient(release="2024-07-01", _catalog_opener=open_fake_overture)
 
     schema = StructType(
@@ -518,6 +523,7 @@ def test_read_from_metadata_dataframe(spark, tmp_path):
     assert df.collect()[0]["id"] == 7
 
 
+@needs_local_spark_paths
 def test_download_routes_http_to_fallback(spark, tmp_path):
     """download() with an http:// href routes to _download_fallback (not distributed).
 
@@ -529,7 +535,7 @@ def test_download_routes_http_to_fallback(spark, tmp_path):
     src = str(tmp_path / "http_asset.parquet")
     spark.createDataFrame([Row(id=1), Row(id=2)]).coalesce(1).write.mode(
         "overwrite"
-    ).parquet(_local(src))
+    ).parquet(src)
     part = [f for f in os.listdir(src) if f.endswith(".parquet")][0]
     src_file = os.path.join(src, part)
 
@@ -634,13 +640,14 @@ def test_read_from_table_name(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+@needs_local_spark_paths
 def test_download_via_cli_builds_meta(spark, tmp_path, monkeypatch):
     """_download_via_cli writes per-(theme,type) parquet and returns correct meta rows."""
     # Build a real parquet to serve as the CLI output.
     src = str(tmp_path / "cli_src.parquet")
     spark.createDataFrame([Row(id=1), Row(id=2)]).coalesce(1).write.mode(
         "overwrite"
-    ).parquet(_local(src))
+    ).parquet(src)
     part = [f for f in os.listdir(src) if f.endswith(".parquet")][0]
     src_file = os.path.join(src, part)
 
@@ -795,6 +802,7 @@ def test_run_overture_download_raises_with_stderr_when_all_fail(tmp_path, monkey
     assert fake.calls == ["--stac", "--stac", "--no-stac"]
 
 
+@needs_local_spark_paths
 def test_download_via_cli_idempotent_skips_when_valid(spark, tmp_path, monkeypatch):
     """_download_via_cli skips the subprocess when the target already exists and is valid.
 
@@ -803,9 +811,7 @@ def test_download_via_cli_idempotent_skips_when_valid(spark, tmp_path, monkeypat
     Third call with force=True (target present + valid): CLI runner IS invoked again.
     """
     src = str(tmp_path / "cli_idem_src.parquet")
-    spark.createDataFrame([Row(id=1)]).coalesce(1).write.mode("overwrite").parquet(
-        _local(src)
-    )
+    spark.createDataFrame([Row(id=1)]).coalesce(1).write.mode("overwrite").parquet(src)
     part = [f for f in os.listdir(src) if f.endswith(".parquet")][0]
     src_file = os.path.join(src, part)
 
@@ -881,12 +887,11 @@ def test_download_via_cli_idempotent_skips_when_valid(spark, tmp_path, monkeypat
     ), f"Expected 2 CLI calls after force=True, got {call_count['n']}"
 
 
+@needs_local_spark_paths
 def test_download_via_cli_force_via_download_api(spark, tmp_path, monkeypatch):
     """download(..., force=True) is threaded through to _download_via_cli."""
     src = str(tmp_path / "force_src.parquet")
-    spark.createDataFrame([Row(id=1)]).coalesce(1).write.mode("overwrite").parquet(
-        _local(src)
-    )
+    spark.createDataFrame([Row(id=1)]).coalesce(1).write.mode("overwrite").parquet(src)
     part = [f for f in os.listdir(src) if f.endswith(".parquet")][0]
     src_file = os.path.join(src, part)
 
@@ -962,7 +967,7 @@ def test_download_overture_aoi_one_shot(spark, tmp_path, monkeypatch):
 
     spark.createDataFrame(
         [Row(id=1, bbox=Row(xmin=-122.42, ymin=37.75, xmax=-122.41, ymax=37.76))]
-    ).write.mode("overwrite").parquet(_local(src))
+    ).write.mode("overwrite").parquet(src)
 
     orig_init = ov.OvertureClient.__init__
 

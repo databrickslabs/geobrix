@@ -15,9 +15,15 @@ import struct
 from databricks.labs.gbx.bench.oracle_tables._uc_tile import recipe
 from databricks.labs.gbx.bench.oracles import Build, Case, builder, uc_view
 
+# The session rows of every scalar of this module's table (and of `gbx_bng_eastnorthasbng`, whose rows sit in the shared
+# MVP_S table) also run on the plain Python function behind the pandas UDF (test_family_oracle_l3_callables).
+L3_CALLABLE = True
+L3_CALLABLE_FNS = ("gbx_bng_eastnorthasbng",)
+
 TQ3080 = "POLYGON((530000 180000, 531000 180000, 531000 181000, 530000 181000, 530000 180000))"
 # A point whose coordinates are infinite: there is no cell for it (WKB, since WKT cannot spell infinity).
 INF_POINT = struct.pack("<BIdd", 1, 1, float("inf"), float("inf"))
+NAN_POINT = struct.pack("<BIdd", 1, 1, float("nan"), float("nan"))
 POINT_WKB = struct.pack("<BIdd", 1, 1, 530500.0, 180500.0)
 
 
@@ -196,6 +202,95 @@ GRID_SCALAR = (
     Case("pac_quadrant", PAC, ("POINT(530500 180500)", -3), "exact", "TQ38SW"),
     Case("pac_null_geom", PAC, (None, 3), "null"),
     Case("pac_empty", PAC, ("POINT EMPTY", 3), "null"),
+    # The name of the cell holding (530000, 180000) at every resolution: letters for the 100 km square (TQ), then the
+    # easting and northing digits within it (30000, 80000 metres, cut to the resolution), then a quadrant letter pair
+    # on the half-size resolutions (the point is the south-west corner of its 5 km, 500 m, 50 m and 5 m cells, and the
+    # north-west quarter of TQ at 50 km).
+    *(
+        Case(f"pac_name_res_{res}", PAC, ("POINT(530000 180000)", res), "exact", name)
+        for res, name in (
+            (-1, "T"),
+            (1, "TQ"),
+            (-2, "TQNW"),
+            (2, "TQ38"),
+            (-3, "TQ38SW"),
+            (3, "TQ3080"),
+            (-4, "TQ3080SW"),
+            (4, "TQ300800"),
+            (-5, "TQ300800SW"),
+            (5, "TQ30008000"),
+            (-6, "TQ30008000SW"),
+            (6, "TQ3000080000"),
+        )
+    ),
+    # The polygon and the area (km2) of each of those named cells: a cell is a square of the resolution's size whose
+    # south-west corner is (530000, 180000), except TQ (the 100 km square from (500000, 100000)) and TQNW (the 50 km
+    # quarter of it from (500000, 150000)).
+    *(
+        row
+        for name, (x, y, size) in {
+            "TQ": (500000, 100000, 100000),
+            "TQNW": (500000, 150000, 50000),
+            "TQ38": (530000, 180000, 10000),
+            "TQ38SW": (530000, 180000, 5000),
+            "TQ3080": (530000, 180000, 1000),
+            "TQ3080SW": (530000, 180000, 500),
+            "TQ300800": (530000, 180000, 100),
+            "TQ300800SW": (530000, 180000, 50),
+            "TQ30008000": (530000, 180000, 10),
+            "TQ30008000SW": (530000, 180000, 5),
+            "TQ3000080000": (530000, 180000, 1),
+        }.items()
+        for row in (
+            Case(
+                f"aswkt_{name}",
+                AWKT,
+                (name,),
+                "geom_equals",
+                f"POLYGON(({x} {y}, {x + size} {y}, {x + size} {y + size}, {x} {y + size}, {x} {y}))",
+            ),
+            Case(f"cellarea_{name}", AREA, (name,), "approx", (size / 1000) ** 2),
+        )
+    ),
+    # The 100 km square NE (the letter pair is a square, not a quadrant of N): easting 400-500 km, northing 900-1000 km.
+    Case("pac_100km_ne", PAC, ("POINT(450000 950000)", 1), "exact", "NE"),
+    Case(
+        "aswkt_100km_ne",
+        AWKT,
+        ("NE",),
+        "geom_equals",
+        "POLYGON((400000 900000, 500000 900000, 500000 1000000, 400000 1000000, 400000 900000))",
+    ),
+    Case("cellarea_100km_ne", AREA, ("NE",), "exact", 10000.0),
+    # The centre of the 100 km square NE.
+    Case("centroid_100km_ne", CENT, ("NE",), "geom_equals", "POINT(450000 950000)"),
+    # The 100 km squares at the corners of the 500 km squares and in the other 500 km squares (letter pair: the 500 km
+    # square, then the letter within it, lettered A-Z without I from the top-left, so V is the south-west corner). Each
+    # is a 100 km square at the easting and northing shown.
+    *(
+        row
+        for name, (x, y) in {
+            "SV": (0, 0),
+            "SZ": (400000, 0),
+            "SA": (0, 400000),
+            "SE": (400000, 400000),
+            "TV": (500000, 0),
+            "NV": (0, 500000),
+            "OV": (500000, 500000),
+            "NT": (300000, 600000),
+            "HP": (400000, 1200000),
+        }.items()
+        for row in (
+            Case(
+                f"aswkt_{name}",
+                AWKT,
+                (name,),
+                "geom_equals",
+                f"POLYGON(({x} {y}, {x + 100000} {y}, {x + 100000} {y + 100000}, {x} {y + 100000}, {x} {y}))",
+            ),
+            Case(f"cellarea_{name}", AREA, (name,), "exact", 10000.0),
+        )
+    ),
     # The one resolution contract: a whole number, its digit string or a named size; NULL is NULL; anything
     # else raises naming the value.
     Case("bng_res_null", PAC, ("POINT(530500 180500)", None), "null"),
@@ -380,6 +475,40 @@ GRID_SCALAR += (
     Case("qb_pac_z10", QPAC, (QB_LON, QB_LAT, 10), "exact", QB_C),
     Case("qb_pac_z5", QPAC, (QB_LON, QB_LAT, 5), "exact", QB_C5),
     Case("qb_pac_null_lon", QPAC, (None, QB_LAT, 10), "null"),
+    # A latitude ON the north edge of zoom-10 tile row k (the double of the edge): its row is decided exactly, so the
+    # point lands in the row north of the edge (17, 119, 510), however the platform rounds tan, cos and log. Column
+    # 540 holds longitude 10 (floor((10 + 180) / 360 * 1024)); ids are from quadbin.tile_to_cell.
+    Case(
+        "qb_pac_edge_row_18",
+        QPAC,
+        (10.0, qb_lat(18, 10), 10),
+        "exact",
+        5234312321928527871,
+    ),
+    Case(
+        "qb_pac_edge_row_120",
+        QPAC,
+        (10.0, qb_lat(120, 10), 10),
+        "exact",
+        5234356474192330751,
+    ),
+    Case(
+        "qb_pac_edge_row_511",
+        QPAC,
+        (10.0, qb_lat(511, 10), 10),
+        "exact",
+        5235060702799986687,
+    ),
+    # At longitude 180 the product floors to column n and clamps to the easternmost tile; the quadbin library wraps to
+    # column 0 (5251197165530775551). Tile (n - 1, 0) at zoom 14.
+    Case(
+        "qb_pac_antimeridian_east_tile",
+        QPAC,
+        (180.0, 85.05112878, 14),
+        "exact",
+        5252698365400973311,
+    ),
+    Case("qb_pac_zoom_27_refused", QPAC, (0.0, 0.0, 27), "raises", "27"),
     # The one resolution contract, as for BNG.
     Case("quadbin_res_null", QPAC, (QB_LON, QB_LAT, None), "null"),
     Case("quadbin_res_3_5_raises", QPAC, (QB_LON, QB_LAT, 3.5), "raises", "3.5"),
@@ -533,6 +662,19 @@ GRID_SCALAR += (
         ("session",),
     ),
     Case("custom_inf_point", CPAC, (INF_POINT, G, 1), "null"),
+    # A point outside the grid's bounds, or at its edges: below and past them there is no cell (NULL), at the origin and at
+    # the last metre of resolution 0 (1 km cells, 1000 of them) there are the first and the last.
+    Case("custom_oob_point", CPAC, ("POINT(2000000 2000000)", G, 1), "null"),
+    Case("custom_below_origin_point", CPAC, ("POINT(-1 -1)", G, 1), "null"),
+    Case("custom_nan_point", CPAC, (NAN_POINT, G, 1), "null", surfaces=("session",)),
+    Case("custom_origin_cell", CPAC, ("POINT(0 0)", G, 0), "exact", cg_id(0, 0, 0)),
+    Case(
+        "custom_last_cell",
+        CPAC,
+        ("POINT(999999 999999)", G, 0),
+        "exact",
+        cg_id(999, 999, 0),
+    ),
     Case("cg_aswkb", CAWKB, (CG_CELL, G), "geom_equals", CG_BOX),
     # The exact bytes: the same ring start and direction as the JVM's.
     Case(

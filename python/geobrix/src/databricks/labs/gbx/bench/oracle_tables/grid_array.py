@@ -21,6 +21,11 @@ from databricks.labs.gbx.bench.oracle_tables.grid_scalar import (
 )
 from databricks.labs.gbx.bench.oracles import Case, uc_view
 
+# The session rows of every scalar of this module's table also run on the plain Python function
+# (test_family_oracle_l3_callables). `gbx_bng_tessellate` is not opted in: its rows sit in the shared MVP_G table and
+# are judged as exploded rows.
+L3_CALLABLE = True
+
 
 def _tq(e_km: int, n_km: int) -> str:
     """The 1 km cell whose south-west corner is (e_km, n_km) kilometres, inside TQ."""
@@ -283,6 +288,103 @@ GRID_ARRAY += (
     Case("h3_res_3_5_raises", HGKR, (QB_PT, 3.5, 1), "raises", "3.5"),
     Case("h3_res_digit_string", HGKR, (QB_PT, "8", 1), "cell_set", H3_RING1),
     Case("h3_inf_point", HGKR, (INF_POINT, 8, 1), "null"),
+)
+
+# The `coverage` argument of the geometry rings and loops, on every grid: it picks which cells of the geometry's own
+# covering a ring starts from, and for a POINT every value gives the same cells (a point covers one cell and the
+# outward ring of k = 1 is the same eight cells). Each of the three values is accepted on each grid, and an unknown
+# one is refused naming it.
+_COVERAGE_ARGS = (
+    # (grid, ring fn, loop fn, leading args, ring cells, loop cells)
+    (
+        "bng",
+        GKR,
+        GKL,
+        (POINT, 3),
+        _square(530, 180, 1, False),
+        _square(530, 180, 1, True),
+    ),
+    ("qb", QGKR, QGKL, (QB_PT, 10), QB_RING1, QB_LOOP1),
+    ("cg", CGKR, CGKL, (CG0_PT, G, 0), CG_RING1, CG_LOOP1),
+    ("h3", HGKR, HGKL, (QB_PT, 8), H3_RING1, H3_LOOP1),
+)
+GRID_ARRAY += tuple(
+    Case(
+        f"{grid}_geomk{kind}_coverage_{cov}",
+        fn,
+        (*lead, 1, "boundary-out", cov),
+        "cell_set",
+        cells,
+    )
+    for grid, ring_fn, loop_fn, lead, ring_cells, loop_cells in _COVERAGE_ARGS
+    for kind, fn, cells in (
+        ("ring", ring_fn, ring_cells),
+        ("loop", loop_fn, loop_cells),
+    )
+    for cov in ("coveras", "polyfill", "core")
+) + tuple(
+    Case(
+        f"{grid}_geomkring_bad_coverage",
+        ring_fn,
+        (*lead, 1, "boundary-out", "sideways"),
+        "raises",
+        "sideways",
+    )
+    for grid, ring_fn, loop_fn, lead, ring_cells, loop_cells in _COVERAGE_ARGS
+)
+
+# Geometries that are not a polygon, or smaller than a cell, and the custom grid's edges.
+LINE = "LINESTRING(530500 180400, 532500 180400)"  # across three 1 km cells, clear of every cell centre
+LINE_CELLS = [_tq(530, 180), _tq(531, 180), _tq(532, 180)]
+SUB_CELL = "POLYGON((530100 180100, 530400 180100, 530400 180400, 530100 180400, 530100 180100))"
+GRID_ARRAY += (
+    # k = 0 is the cells the geometry crosses; a polygon inside one cell covers just that cell, at any resolution.
+    Case("geomkring_line_k0", GKR, (LINE, 3, 0), "cell_set", LINE_CELLS),
+    Case("geomkring_sub_cell_coarse", GKR, (SUB_CELL, 1, 0), "cell_set", ["TQ"]),
+    Case("geomkring_sub_cell_1km", GKR, (SUB_CELL, 3, 0), "cell_set", [_tq(530, 180)]),
+    # One ring around the line's cells is the block one cell wider each way (5 x 3), the loop that block without them.
+    Case(
+        "geomkloop_line_k1",
+        GKL,
+        (LINE, 3, 1),
+        "cell_set",
+        [
+            _tq(e, n)
+            for e in range(529, 534)
+            for n in range(179, 182)
+            if _tq(e, n) not in LINE_CELLS
+        ],
+    ),
+    # The custom grid's ring is a square block: 5 x 5 at k = 2 inside the grid, and clamped at the corner where it
+    # would leave it (the 2 x 2 block at (0, 0) for k = 1). A negative k is refused.
+    Case(
+        "cg_kring_k2",
+        CKR,
+        (CG0, G, 2),
+        "cell_set",
+        [cg_id(c, r, 0) for c in range(528, 533) for r in range(178, 183)],
+    ),
+    Case(
+        "cg_kloop_k2",
+        CKL,
+        (CG0, G, 2),
+        "cell_set",
+        [
+            cg_id(c, r, 0)
+            for c in range(528, 533)
+            for r in range(178, 183)
+            if max(abs(c - 530), abs(r - 180)) == 2
+        ],
+    ),
+    Case(
+        "cg_kring_corner_clamped",
+        CKR,
+        (cg_id(0, 0, 0), G, 1),
+        "cell_set",
+        [cg_id(c, r, 0) for c in (0, 1) for r in (0, 1)],
+    ),
+    Case("cg_kring_negative_k", CKR, (CG0, G, -1), "raises", "k"),
+    Case("cg_kloop_negative_k", CKL, (CG0, G, -1), "raises", "k"),
 )
 
 # --- Unity Catalog rows: a grid is defined in one SRID, and a geometry in another is refused with a Fix:.

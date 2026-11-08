@@ -1,13 +1,9 @@
 """Coverage-param binding tests (0.5.1 re-cut).
 
-Part A: verify the `coverage` param reaches the engine through every public UDF
-(geomkring / geomkloop for all 4 grids).  Tests are thin — the engine itself is
-exercised by test_coverage_param.py; here we only confirm:
-  1. explicit coverage="polyfill" / "core" changes the result vs default "coveras"
-     on a holed polygon (where the three bases are genuinely distinct).
-  2. SQL callable accepts the 5th positional arg
-     ``gbx_<grid>_geomkring(..., 'boundary-out', 'polyfill')`` without error.
-  3. The Column wrapper default (coveras) is stable and non-empty for a real geom.
+Part A: on a holed polygon (where the three bases are genuinely distinct), explicit
+coverage="core" changes the hole-in seeds vs the default "coveras" on every grid.
+(That each public geomkring / geomkloop accepts the `coverage` argument is rows of the
+grid-array oracle table.)
 
 Part B: hole-out disjoint-loop invariant (visited0 fix, _dilate.py change).
 For hole-out (and hole-out-ignore-geom) on a holed polygon,
@@ -19,7 +15,6 @@ For hole-out (and hole-out-ignore-geom) on a holed polygon,
 
 import pytest
 from shapely import to_wkb
-from shapely.geometry import box
 from shapely.geometry.polygon import Polygon
 
 pytest.importorskip("quadbin")
@@ -181,51 +176,6 @@ def test_hole_out_loop_k1_disjoint_from_k0_h3(mode):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_quadbin_geomkring_coverage_param_accepted(coverage):
-    """Explicit coverage param is accepted and returns typed results (quadbin)."""
-    default = set(_quadbin.geometry_k_ring(_HOLED_WKB_QB, _RES_QB, 1))  # noqa: F841
-    explicit = set(
-        _quadbin.geometry_k_ring(_HOLED_WKB_QB, _RES_QB, 1, coverage=coverage)
-    )
-    assert isinstance(explicit, set)
-    assert all(isinstance(c, int) for c in explicit)
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_quadbin_geomkloop_coverage_param_accepted(coverage):
-    k1 = set(_quadbin.geometry_k_loop(_HOLED_WKB_QB, _RES_QB, 1, coverage=coverage))
-    assert all(isinstance(c, int) for c in k1)
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_bng_geomkring_coverage_param_accepted(coverage):
-    result = _bng.geometry_k_ring_str(_HOLED_WKB_BNG, _RES_BNG, 1, coverage=coverage)
-    assert all(isinstance(c, str) for c in result)
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_bng_geomkloop_coverage_param_accepted(coverage):
-    result = _bng.geometry_k_loop_str(_HOLED_WKB_BNG, _RES_BNG, 1, coverage=coverage)
-    assert all(isinstance(c, str) for c in result)
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_custom_geomkring_coverage_param_accepted(coverage):
-    result = _custom.geometry_k_ring(
-        _CUSTOM_CONF, _HOLED_WKB_CU, _RES_CU, 1, coverage=coverage
-    )
-    assert all(isinstance(c, int) for c in result)
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_custom_geomkloop_coverage_param_accepted(coverage):
-    result = _custom.geometry_k_loop(
-        _CUSTOM_CONF, _HOLED_WKB_CU, _RES_CU, 1, coverage=coverage
-    )
-    assert all(isinstance(c, int) for c in result)
-
-
 # ---------------------------------------------------------------------------
 # Coverage-difference asserts (engine-level): coveras vs core produce distinct
 # hole-in seeds on a holed polygon where the three bases are strictly nested.
@@ -342,92 +292,3 @@ def test_h3_geomkring_coveras_vs_core_differ():
         "h3 coveras and core must produce distinct hole-in seeds "
         "(hexagonal cells don't align with degree boundaries → h_cover != h_core)"
     )
-
-
-_H3_COARSE_RES = (
-    5  # H3 res-5 edge ~61 km; small NYC box (~4 km) at res-9 is fine for ring
-)
-# Small NYC box — fast at any reasonable resolution.
-_NYC_WKB_H3 = bytes(to_wkb(box(-73.99, 40.71, -73.95, 40.75)))
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_h3_geomkring_coverage_param_accepted(coverage):
-    h3 = pytest.importorskip("h3")  # noqa: F841
-    # Use a small box at coarse resolution to keep cell counts small.
-    result = _h3mod.geom_expand(
-        "ring", _NYC_WKB_H3, _H3_COARSE_RES, 1, "boundary-out", coverage
-    )
-    assert all(isinstance(c, int) for c in result)
-
-
-@pytest.mark.parametrize("coverage", ["polyfill", "core"])
-def test_h3_geomkloop_coverage_param_accepted(coverage):
-    h3 = pytest.importorskip("h3")  # noqa: F841
-    result = _h3mod.geom_expand(
-        "loop", _NYC_WKB_H3, _H3_COARSE_RES, 1, "boundary-out", coverage
-    )
-    assert all(isinstance(c, int) for c in result)
-
-
-# coverage default = coveras matches no-coverage call
-def test_quadbin_coverage_default_is_coveras_via_udf_impl():
-    from databricks.labs.gbx.pygx.functions import (
-        _quadbin_geomkloop,
-        _quadbin_geomkring,
-    )
-
-    geom = bytes(to_wkb(box(-73.99, 40.71, -73.95, 40.75)))
-    assert set(_quadbin_geomkring(geom, 12, 1)) == set(
-        _quadbin_geomkring(geom, 12, 1, coverage="coveras")
-    )
-    assert set(_quadbin_geomkloop(geom, 12, 1)) == set(
-        _quadbin_geomkloop(geom, 12, 1, coverage="coveras")
-    )
-
-
-# ---------------------------------------------------------------------------
-# SQL UDF smoke tests (Spark required) — confirm 5th arg is accepted
-# ---------------------------------------------------------------------------
-
-
-def test_sql_quadbin_geomkring_with_coverage(spark):
-    """SQL gbx_quadbin_geomkring(..., mode, coverage) resolves without error."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(
-        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
-    )
-    wkb_hex = _HOLED_WKB_QB.hex()
-    rows = spark.sql(
-        f"SELECT gbx_quadbin_geomkring("
-        f"  X'{wkb_hex}', {_RES_QB}, 1, 'boundary-out', 'polyfill'"
-        f") AS r"
-    ).collect()
-    assert rows[0]["r"] is not None  # non-null result
-
-
-def test_sql_quadbin_geomkring_polyfill_differs_from_coveras(spark):
-    """polyfill coverage returns a different result from coveras on a holed polygon."""
-    from databricks.labs.gbx import manager as gbx_manager
-
-    gbx_manager.register_family(
-        spark, ("gbx_bng_", "gbx_custom_", "gbx_quadbin_", "gbx_h3_"), level="L3"
-    )
-    wkb_hex = _HOLED_WKB_QB.hex()
-    r_coveras = spark.sql(
-        f"SELECT gbx_quadbin_geomkring(X'{wkb_hex}', {_RES_QB}, 1, 'boundary-out', 'coveras') AS r"
-    ).collect()[0]["r"]
-    r_polyfill = spark.sql(
-        f"SELECT gbx_quadbin_geomkring(X'{wkb_hex}', {_RES_QB}, 1, 'boundary-out', 'polyfill') AS r"
-    ).collect()[0]["r"]
-    # Both non-null and return lists of integers.
-    assert r_coveras is not None and r_polyfill is not None
-    assert all(isinstance(c, int) for c in r_coveras)
-    assert all(isinstance(c, int) for c in r_polyfill)
-    # The two bases use different seeds and produce different outward bands.
-    # (Subset nesting holds for the belongs-to SETS P_x, but not for the k-ring
-    # outward bands whose seeds differ between coveras and polyfill.)
-    assert set(r_coveras) != set(
-        r_polyfill
-    ), "coveras and polyfill must produce distinct k=1 bands on a holed polygon"

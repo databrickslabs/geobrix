@@ -463,3 +463,9 @@ def test_register_family_at_a_level_names_the_functions_that_have_none():
     with pytest.raises(ValueError) as err:
         manager.register_family(None, ("gbx_st_",), only=["st_asmtv"], level="L3")
     assert "gbx_st_asmtv" in str(err.value) and "Fix:" in str(err.value)
+
+
+def test_register_family_only_reads_a_camel_case_name_as_its_sql_name():
+    with pytest.raises(ValueError) as err:
+        manager.register_family(None, ("gbx_bng_",), only=["BNG_Polifyll"], level="L3")
+    assert "gbx_bng_polifyll" in str(err.value)

@@ -134,3 +134,18 @@ def test_is_valid_vec_equals_scalar(res):
 
 def test_is_valid_vec_empty():
     assert _bng.is_valid_vec(np.array([], dtype=np.int64), 3).tolist() == []
+
+
+@pytest.mark.parametrize("res", _RESOLUTIONS)
+@pytest.mark.parametrize(
+    "point",
+    [(530000.0, 180000.0), (450000.0, 950000.0), (0.0, 0.0), (651234.0, 1209876.0)],
+)
+def test_a_cell_name_parses_back_to_its_cell(res, point):
+    """format -> parse -> format is stable at every resolution, over cells in several 100 km squares; the 500 km
+    cell is one letter, and a 100 km cell of the NE/NW/SE/SW squares is a cell, not a quadrant.
+    """
+    cid = _bng.point_to_cell_id(*point, res)
+    name = _bng.format(cid)
+    assert _bng.format(_bng.parse(name)) == name
+    assert _bng.get_resolution(_bng.cell_digits(_bng.parse(name))) == res

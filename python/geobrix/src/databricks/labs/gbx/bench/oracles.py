@@ -232,6 +232,22 @@ HEAVY_PENDING.update(
     }
 )
 
+# Parameters the JVM checks inside `safeEval`, where the lightweight level raises. An unknown `coverage` of a geometry ring
+# (BNG, custom grid; the mode is checked outside `safeEval` and raises on both) and a negative `k` of a custom-grid ring or
+# loop are an error caught as a NULL result there (measured through the JAR).
+_PARAM_IN_SAFEEVAL_L1 = "the JVM checks this parameter inside safeEval, so a bad value is a NULL result; the lightweight level raises, naming the value"
+HEAVY_PENDING.update(
+    {
+        cid: {"L1": _PARAM_IN_SAFEEVAL_L1}
+        for cid in (
+            "bng_geomkring_bad_coverage",
+            "cg_geomkring_bad_coverage",
+            "cg_kring_negative_k",
+            "cg_kloop_negative_k",
+        )
+    }
+)
+
 # Two shapes the lightweight level takes and the JVM level does not (measured through the JAR).
 HEAVY_PENDING.update(
     {
@@ -5057,10 +5073,34 @@ def l3_opted_in(fn) -> bool:
     return fn.oracle in tables or fn.sql_name in fns
 
 
+_ROW_UDF, _PANDAS_SCALAR_UDF = (
+    100,
+    200,
+)  # pyspark's PythonEvalType values for udf and scalar pandas_udf
+
+
+def _scalar_call_of_series_udf(func):
+    """A one-value call of the function behind a pandas UDF (it takes and returns a Series): each argument becomes a
+    one-row Series typed as pandas types it, and the one result value comes back as a Python value.
+    """
+
+    def call(*args):
+        import pandas as pd
+
+        out = func(*[pd.Series([a]) for a in args])
+        v = out.iloc[0]
+        if v is None or v is pd.NA or (isinstance(v, float) and v != v):
+            return None
+        return v.item() if hasattr(v, "item") and not isinstance(v, (bytes, str)) else v
+
+    return call
+
+
 def l3_callable(fn):
     """The plain Python function behind a scalar's session form, or None when it has none (a UDTF, a grouped
     aggregate). A ``callable`` form is the function itself; a ``udf`` form built by a factory has a plain
-    ``_udf_<name>`` beside the factory."""
+    ``_udf_<name>`` beside the factory; a pandas UDF (the ``c0`` variant) is called through its ``func``, one
+    value at a time."""
     from databricks.labs.gbx import manifest
 
     l3 = fn.levels.get("L3", {})
@@ -5069,6 +5109,14 @@ def l3_callable(fn):
     if "factory" in l3 and fn.kind == "scalar":
         module = l3["factory"].split(":")[0]
         return manifest.resolve_ref(f"{module}:_udf_{fn.sql_name[len('gbx_'):]}")
+    c0 = (l3.get("variants") or {}).get("c0")
+    if c0 and fn.kind == "scalar":
+        udf = manifest.resolve_ref(c0)
+        func = getattr(udf, "func", None)
+        if func is not None and getattr(udf, "evalType", None) == _PANDAS_SCALAR_UDF:
+            return _scalar_call_of_series_udf(func)
+        if func is not None and getattr(udf, "evalType", None) == _ROW_UDF:
+            return func  # a row-at-a-time UDF is its plain function
     return None
 
 
@@ -5087,11 +5135,9 @@ def run_l3_callables(cases, tmpdir: Optional[str] = None):
         if "session" not in case.surfaces or case.sql is not None or call is None:
             continue
         try:
-            msgs = []
-            for row in (case.args, *case.variants):
-                args = [resolve_arg(a, tmpdir) for a in row]
-                msgs.append(check(case, call(*args), args))
-            out.append((case, next(filter(None, msgs), None)))
+            rows = _argument_rows(case, tmpdir)
+            outs = [call(*r) for r in rows]
+            out.append((case, _verdict(case, outs, rows)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

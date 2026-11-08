@@ -48,6 +48,7 @@ GRID_GENERATOR = (
     Case("kloopx_k1", BKL, ("TQ3080", 1), "cell_rows", _square(530, 180, 1, True)),
     Case("kloopx_k2", BKL, ("TQ3080", 2), "cell_rows", _square(530, 180, 2, True)),
     Case("kloopx_null", BKL, (None, 1), "no_rows"),
+    Case("kloopx_bad_cell", BKL, ("XX9999", 1), "no_rows"),
     # ---------------------------------------------------------------------------------------------- BNG geometry
     # A point inside TQ3080 covers that cell; one ring of dilation adds its eight neighbours.
     Case(

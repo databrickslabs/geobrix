@@ -179,6 +179,7 @@ GRID_SCALAR = (
         surfaces=("session",),
     ),
     Case("centroid_null", CENT, (None,), "null"),
+    Case("centroid_bad_cell", CENT, ("!!",), "null"),
     # TQ3282 is 2 cells east and 2 north of TQ3080.
     Case("distance_diag", DIST, ("TQ3080", "TQ3282"), "exact", 4),
     Case("distance_same", DIST, ("TQ3080", "TQ3080"), "exact", 0),
@@ -561,6 +562,8 @@ GRID_SCALAR += (
         5252698365400973311,
     ),
     Case("qb_pac_zoom_27_refused", QPAC, (0.0, 0.0, 27), "raises", "27"),
+    # a latitude past the web-mercator bound is clamped to it (the bound's own cell), never NULL
+    Case("qb_pac_lat_clamped", QPAC, (10.0, 89.0, 10), "exact", 5234310114315337727),
     # The one resolution contract, as for BNG.
     Case("quadbin_res_null", QPAC, (QB_LON, QB_LAT, None), "null"),
     Case("quadbin_res_3_5_raises", QPAC, (QB_LON, QB_LAT, 3.5), "raises", "3.5"),

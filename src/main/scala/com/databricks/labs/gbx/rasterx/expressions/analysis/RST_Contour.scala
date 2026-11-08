@@ -75,15 +75,17 @@ object RST_Contour extends WithExpressionInfo {
     private def doInvoke(
         row: InternalRow, levels: ArrayData, interval: Double, base: Double,
         attrField: UTF8String, conf: UTF8String, rdt: DataType
-    ): ArrayData =
+    ): ArrayData = {
+        val lvls = if (levels == null) Array.empty[Double] else levels.toDoubleArray()
+        val attr = Option(attrField).map(_.toString).getOrElse("elev")
+        // A call that cannot make a contour fails (naming the value); only the tile's own failures become NULL.
+        if (RasterSerializationUtil.checksArguments(row)) requireArguments(lvls, interval, attr)
         Option(
           RST_ErrorHandler.safeEval(
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
                 val ds = RasterSerializationUtil.rowToDS(row, rdt)
-                val lvls = if (levels == null) Array.empty[Double] else levels.toDoubleArray()
-                val attr = Option(attrField).map(_.toString).getOrElse("elev")
                 try execute(ds, lvls, interval, base, attr)
                 finally RasterDriver.releaseDataset(ds)
             },
@@ -92,6 +94,16 @@ object RST_Contour extends WithExpressionInfo {
             conf
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
+    }
+
+    /** No levels needs an interval above 0 and finite; the value field must not be blank (as the lightweight level). */
+    private def requireArguments(levels: Array[Double], interval: Double, attrField: String): Unit = {
+        require(attrField != null && attrField.trim.nonEmpty, "gbx_rst_contour: attr_field must be non-empty")
+        if (levels.isEmpty) {
+            require(interval > 0.0 && !interval.isNaN && !interval.isInfinity,
+                s"gbx_rst_contour: levels is empty so interval must be > 0 and finite; got $interval")
+        }
+    }
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
@@ -103,13 +115,7 @@ object RST_Contour extends WithExpressionInfo {
         ds: Dataset, levels: Array[Double], interval: Double, base: Double, attrField: String
     ): ArrayData = {
         require(ds != null, "RST_Contour.execute: source Dataset is null")
-        // Either levels is non-empty, or interval must be positive.
-        if (levels.isEmpty) {
-            require(interval > 0.0 && !interval.isNaN && !interval.isInfinity,
-                s"gbx_rst_contour: levels is empty so interval must be > 0 and finite; got $interval")
-        }
-        require(attrField != null && attrField.nonEmpty,
-            "gbx_rst_contour: attr_field must be non-empty")
+        requireArguments(levels, interval, attrField)
 
         GDALManager.initOgr()
         val ogrDriver = ogr.GetDriverByName("Memory")

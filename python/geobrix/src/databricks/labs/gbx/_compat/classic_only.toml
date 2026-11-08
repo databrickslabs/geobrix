@@ -1,0 +1,187 @@
+# Where GeoBrix reaches past Spark Connect / Serverless, and what keeps it from breaking there.
+#
+# Spark Connect (Serverless and standard access mode) has no JVM bridge (_jvm, _jsc, _jsparkSession), no sparkContext
+# or RDD API, no SparkConf, no runtime spark.conf.set(...), and loads a JAR only as a session artifact. Shipped code
+# may use one of these only behind a gate, and only if it is listed here. The test
+# python/geobrix/test/pyrx/test_connect_serverless_compat.py scans every shipped package (not bench/, a developer
+# harness) and fails on a use that is not listed, and on an entry that matches no code.
+#
+# [[site]]    one per (path, symbol, api): a use the scan finds in the syntax tree. `symbol` is the enclosing function
+#             (a function nested in it is covered too). `api` lists the APIs used there.
+# [[feature]] behaviour no API pattern can see (a refusal on Serverless, a level that needs the JAR). `symbol` must be
+#             defined in the file.
+#
+# path         relative to this package (databricks/labs/gbx/)
+# computes     where the code runs: dedicated | standard | serverless | warehouse
+# gate         capability    the code is reached only after a capability / session check (named in gate_detail)
+#              refusal       it raises or reports a reason with a Fix on compute that cannot run it (gate_detail)
+#              guarded       it is wrapped so a Connect session gets a quiet fallback instead of an error
+#              classic-only  it is classic-only by design and documented (gate_detail names where)
+# why          what the code does, in one sentence
+
+# --- the JVM level (Catalyst companions over py4j) ---------------------------------------------------------------
+
+[[site]]
+path = "manager/jvm.py"
+symbol = "install_l1"
+api = ["_jvm", "_jsparkSession"]
+computes = ["dedicated"]
+gate = "refusal"
+gate_detail = "manager/levels.py _jvm_unavailable refuses level L1 on a Connect session before this runs, and the whole body is inside try/except that returns a fallback reason"
+why = "Installs a JVM companion expression under its SQL name through the py4j gateway"
+
+[[site]]
+path = "manager/jvm.py"
+symbol = "install_l1_engine"
+api = ["_jvm", "_jsparkSession"]
+computes = ["dedicated"]
+gate = "refusal"
+gate_detail = "manager/levels.py _jvm_unavailable refuses level L1 on a Connect session before this runs, and the whole body is inside try/except that returns a fallback reason"
+why = "Installs the JVM form of a GDAL spec engine function through the py4j gateway"
+
+[[site]]
+path = "manager/jvm.py"
+symbol = "install_companion"
+api = ["_jvm", "_jsparkSession"]
+computes = ["dedicated"]
+gate = "guarded"
+gate_detail = "try/except returns a one-line reason instead of raising; the only callers are developer helpers that run on a session with the JAR"
+why = "Installs one named JVM companion with no dispatch wrapper in front of it"
+
+[[site]]
+path = "manager/jvm.py"
+symbol = "_point_jvm_at_payload"
+api = ["conf.set"]
+computes = ["dedicated"]
+gate = "capability"
+gate_detail = "called only inside the L1 installers and by capabilities._detect_uncached when Capabilities.connect is false"
+why = "Tells the JVM where the wheel's native libraries are, through a session conf the JVM reads"
+
+[[site]]
+path = "manager/jvm.py"
+symbol = "_pass_read_cap"
+api = ["conf.set"]
+computes = ["dedicated"]
+gate = "capability"
+gate_detail = "called only inside the L1 installers, which run only when Capabilities.connect is false"
+why = "Gives the JVM the light tier's decoded-size budget as its read cap, unless the session already names one"
+
+[[feature]]
+path = "manager/levels.py"
+symbol = "PREFERENCE"
+computes = ["dedicated"]
+gate = "capability"
+gate_detail = "manager/levels.py _jvm_unavailable: level L1 is unavailable when Capabilities.connect is true (Serverless and standard access), when no JAR of the wheel's version loaded (jar_reason), or when the JVM's GDAL does not load (gdal_reason); the registrar then takes the next level, light, and prints one line with the reason"
+why = "The level table lists the JVM level first for the functions where it measured faster; on any other compute the same names run on the light level"
+
+# --- JAR capability probes ---------------------------------------------------------------------------------------
+
+[[site]]
+path = "manager/capabilities.py"
+symbol = "_identity"
+api = ["_jvm"]
+computes = ["dedicated"]
+gate = "capability"
+gate_detail = "the Connect check (is_connect) runs before any JVM access, and a Serverless session returns before the probe; the py4j branch is taken only when connect is false"
+why = "Reads the JAR's version and sha256 through py4j to compare with the wheel"
+
+[[site]]
+path = "manager/capabilities.py"
+symbol = "_gdal"
+api = ["_jvm"]
+computes = ["dedicated"]
+gate = "capability"
+gate_detail = "the py4j branch is taken only when connect is false; a Connect session probes with a Java UDF instead"
+why = "Asks the JVM whether its GDAL natives load, through py4j"
+
+[[site]]
+path = "manager/capabilities.py"
+symbol = "attach_jar"
+api = ["addArtifact"]
+computes = ["standard"]
+gate = "capability"
+gate_detail = "reached only from register_java, from the Connect branch of _identity and _gdal; a Serverless session returns before any probe (Capabilities.serverless), so no JAR is added there"
+why = "Adds the GeoBrix JAR to a standard-access session as an artifact so its Java probe functions can register; the result only decides the reason line, since the JVM level is not used on Connect"
+
+[[site]]
+path = "manager/capabilities.py"
+symbol = "register_java"
+api = ["registerJavaFunction"]
+computes = ["standard"]
+gate = "capability"
+gate_detail = "reached only from the Connect branch of _identity and _gdal on a non-Serverless session; a refused artifact becomes a fallback reason"
+why = "Registers the two Java probe functions (JAR identity, GDAL load) on a standard-access session"
+
+# --- developer / diagnostic helpers ------------------------------------------------------------------------------
+
+[[site]]
+path = "_native/_selfcheck.py"
+symbol = "_jvm_gdal"
+api = ["_jvm"]
+computes = ["dedicated"]
+gate = "guarded"
+gate_detail = "the access is inside try/except; a Connect session (no _jvm) returns checked=False with the reason, never an error"
+why = "Compares the driver JVM's GDAL release with the wheel's pin in the install self-check"
+
+[[site]]
+path = "crs_grids.py"
+symbol = "_apply_heavy"
+api = ["_jvm"]
+computes = ["dedicated"]
+gate = "guarded"
+gate_detail = "getattr(spark, '_jvm', None) is None on a Connect session (it raises AttributeError there) and the function returns; a JVM without the JAR, or a cluster whose access mode refuses the py4j call, keeps the light registration"
+why = "Pushes the registered PROJ grid directories to the JVM's grid registry when the session has a JVM with the JAR"
+
+[[site]]
+path = "rasterx/sfm.py"
+symbol = "run_sfm"
+api = ["conf.set"]
+computes = ["dedicated", "standard", "serverless"]
+gate = "guarded"
+gate_detail = "try/except: a session that refuses the conf (Serverless) goes on with its default batch size"
+why = "Asks for one image per Arrow batch in the structure-from-motion feature extraction"
+
+# --- Unity Catalog functions on the JAR --------------------------------------------------------------------------
+
+[[site]]
+path = "uc/ddl.py"
+symbol = "function_ddl"
+api = ["java_dependencies"]
+computes = ["warehouse", "serverless"]
+gate = "capability"
+gate_detail = "a UC function is made a Scala function only when uc.install found the JAR of the wheel's version in the install folder (uc._single_jar) or got jar=; without it the same name is the Python handler. Requires environment version 6"
+why = "Creates the JVM-only grid functions as LANGUAGE SCALA functions on the JAR, which Unity Catalog loads for the call"
+
+# --- classic-only or Serverless-refusing behaviour -----------------------------------------------------------------
+
+[[feature]]
+path = "stage.py"
+symbol = "stage_jar"
+computes = ["dedicated", "standard"]
+gate = "classic-only"
+gate_detail = "docs/docs/api/execution-tiers.mdx (Where the JAR helps) and docs/docs/installation.mdx: the JAR is a cluster library of a dedicated cluster, or of a standard cluster whose metastore admin allowlists the path; Serverless cannot load it"
+why = "Copies the wheel's JAR to a Volume folder for use as a cluster library"
+
+[[feature]]
+path = "pyrx/functions.py"
+symbol = "_refuse_serverless_partition_by"
+computes = ["dedicated", "standard"]
+gate = "refusal"
+gate_detail = "RuntimeError with 'Fix: call <aggregate> on Serverless, or run <function> on a dedicated or standard cluster'"
+why = "The merge table functions use TABLE(...) PARTITION BY, whose Python engine fails on Serverless; the aggregate form is the Serverless route"
+
+[[feature]]
+path = "zarr/_access.py"
+symbol = "resolve_access"
+computes = ["dedicated"]
+gate = "refusal"
+gate_detail = "access='auto' falls back to the Volume mount quietly; an explicit access='direct' raises ZarrAccessUnavailable with 'Fix: use access=\"auto\" or \"fuse\" on this compute; direct access needs dedicated compute where UC can vend volume credentials'"
+why = "Direct (cloud-storage) Zarr access needs Unity Catalog temporary Volume credentials, which only dedicated compute may get"
+
+[[feature]]
+path = "uc/forms.py"
+symbol = "_tin_mode"
+computes = ["dedicated"]
+gate = "refusal"
+gate_detail = "raises with 'Fix: run <function> in a notebook or job session on a cluster with the geobrix JAR, or use mode constrained'"
+why = "The conforming TIN mode exists only on the JVM level, so the Unity Catalog function refuses it"

@@ -1509,3 +1509,24 @@ def test_the_drive_module_carries_no_ids_or_internal_names():
     assert not re.search(
         r"^(import|from)\s+drive_upload", top_level, re.M
     )  # loaded lazily only
+
+
+def test_the_transport_refuses_any_host_but_googleapis_and_never_follows_a_redirect():
+    # build_opener is stubbed to fail in this file, so a refusal must come before it
+    with pytest.raises(drive.DriveError):
+        drive.urllib_transport("GET", "https://evil.example/x", {}, None)
+    with pytest.raises(drive.DriveError):
+        drive.urllib_transport(
+            "GET", "https://www.googleapis.com.evil.example/x", {}, None
+        )
+    redirect = drive._NoRedirect().redirect_request
+    assert redirect(None, None, 302, "x", {}, "https://evil.example") is None
+
+
+def test_the_rescan_of_the_finished_zip_finds_a_token_by_entry_and_line(tmp_path):
+    p = tmp_path / "z.zip"
+    with zipfile.ZipFile(str(p), "w") as zf:
+        zf.writestr("notes/clean.md", "nothing here\n")
+        zf.writestr("notes/leak.md", "a\nb\n" + fake("ghp_", "a1B2" * 9) + "\n")
+    found = snap.rescan_zip(p)
+    assert [(f.path, f.line) for f in found] == [("notes/leak.md", 3)]

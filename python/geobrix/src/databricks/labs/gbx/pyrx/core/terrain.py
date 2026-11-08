@@ -196,7 +196,8 @@ def aspect(
     Args:
         ds:              Open rasterio DatasetReader. Band 1 used as DEM.
         trigonometric:   If True, math-convention degrees (CCW from east).
-        zero_for_flat:   If True, flat cells get 0 instead of -9999.
+        zero_for_flat:   If True, flat cells get 0 instead of -9999, and so do the cells GDAL cannot
+                         compute (the border, the neighbours of NoData): the output has no NoData value.
 
     Returns:
         Single-band Float32 GTiff bytes; nodata = -9999.
@@ -210,8 +211,12 @@ def aspect(
     else:
         result = (90.0 - aspect_deg) % 360.0
     flat_mask = (dx == 0.0) & (dy == 0.0)
-    flat_value = 0.0 if zero_for_flat else _NODATA
-    result = np.where(flat_mask, flat_value, result)
+    if zero_for_flat:
+        # As GDAL's `--zero-for-flat`: the output declares no NoData value, so a flat cell, a border cell and a cell
+        # next to NoData are all 0.
+        result = np.where(flat_mask | propagate_invalid(valid), 0.0, result)
+        return emit(ds, result, None, np.zeros(result.shape, bool), "float32")
+    result = np.where(flat_mask, _NODATA, result)
     return emit(ds, result, _NODATA, propagate_invalid(valid), "float32")
 
 

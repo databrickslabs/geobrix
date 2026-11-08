@@ -415,10 +415,13 @@ def test_rst_slope_grouped_parity(spark):
 
 
 def test_rst_aspect_grouped_parity(spark):
-    """rst_aspect_grouped pixel-equals _uf_aspect on a projected DEM tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_aspect
+    """rst_aspect_grouped pixel-equals the engine's row-wise aspect on a projected DEM tile."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
     from databricks.labs.gbx.rasterx.helpers import rst_aspect_grouped
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     dem_bytes = _make_dem_bytes()
     df = _parity_df(spark, dem_bytes)
     g_bytes = _read_grouped(
@@ -426,7 +429,7 @@ def test_rst_aspect_grouped_parity(spark):
     )
     s_bytes = _read_scalar(
         df,
-        _uf_aspect(F.col("tile"), F.lit(None), F.lit(False), F.lit(False)),
+        engine_l3.c0("gbx_rst_aspect")(F.col("tile"), F.lit(False), F.lit(False)),
     )
     _assert_pixel_equal(g_bytes, s_bytes, "rst_aspect_grouped")
 
@@ -435,18 +438,20 @@ def test_rst_aspect_grouped_parity(spark):
 
 
 def test_rst_hillshade_grouped_parity(spark):
-    """rst_hillshade_grouped pixel-equals _uf_hillshade on a projected DEM tile."""
-    from databricks.labs.gbx.pyrx.functions import _uf_hillshade
+    """rst_hillshade_grouped pixel-equals the engine's row-wise hillshade on a projected DEM tile."""
+    from databricks.labs.gbx.engine import l3 as engine_l3
+    from databricks.labs.gbx.engine import run as engine_run
     from databricks.labs.gbx.rasterx.helpers import rst_hillshade_grouped
 
+    if engine_run.unavailable_reason():
+        pytest.skip(engine_run.unavailable_reason())
     dem_bytes = _make_dem_bytes()
     df = _parity_df(spark, dem_bytes)
     g_bytes = _read_grouped(rst_hillshade_grouped(df, 315.0, 45.0, 1.0, out_col="out"))
     s_bytes = _read_scalar(
         df,
-        _uf_hillshade(
+        engine_l3.c0("gbx_rst_hillshade")(
             F.col("tile"),
-            F.lit(None),
             F.lit(315.0),
             F.lit(45.0),
             F.lit(1.0),

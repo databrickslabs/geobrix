@@ -1549,19 +1549,17 @@ def rst_aspect_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import terrain
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _trig = bool(trigonometric)
-    _zff = bool(zero_for_flat)
-
-    def _core(ds, cellid):
-        new_bytes = terrain.aspect(ds, trigonometric=_trig, zero_for_flat=_zff)
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core(
+        "gbx_rst_aspect",
+        {
+            "trigonometric": bool(trigonometric),
+            "zero_for_flat": bool(zero_for_flat),
+        },
+    )
 
     return grouped_tile_map(
         df,
@@ -1595,29 +1593,20 @@ def rst_hillshade_grouped(
     Returns a new DataFrame with the same columns as *df* plus *out_col* (a
     V2_TILE_SCHEMA struct).
     """
-    from databricks.labs.gbx.pyrx import _serde
-    from databricks.labs.gbx.pyrx.core import terrain
+    from databricks.labs.gbx.engine.grouped import core
     from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
     from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
 
-    _az = float(azimuth)
-    _alt = float(altitude)
-    _zf = float(z_factor)
-    _xs = None if xscale is None else float(xscale)
-    _ys = None if yscale is None else float(yscale)
-
-    def _core(ds, cellid):
-        new_bytes = terrain.hillshade(
-            ds,
-            azimuth=_az,
-            altitude=_alt,
-            z_factor=_zf,
-            xscale=_xs,
-            yscale=_ys,
-        )
-        return (
-            None if new_bytes is None else _serde.build_tile(new_bytes, "GTiff", cellid)
-        )
+    _core = core(
+        "gbx_rst_hillshade",
+        {
+            "azimuth": float(azimuth),
+            "altitude": float(altitude),
+            "z_factor": float(z_factor),
+            "xscale": None if xscale is None else float(xscale),
+            "yscale": None if yscale is None else float(yscale),
+        },
+    )
 
     return grouped_tile_map(
         df,

@@ -857,7 +857,8 @@ Every raster function follows the same order of checks on both implementations.
 - **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs on the lightweight level only.
 - **SQL tile functions read a `FILE` column through the same fast path as the Python API.**
 - **`SHOW USER FUNCTIONS` works on DBR 17.3 after `gbx.register`.** The SQL tile functions that mint a `FILE` argument (`gbx_rst_avg`, `gbx_rst_width` and 32 more) run a check once per session. The check asks whether the runtime can list a function with `FILE` in its body. Where it cannot, they pass NULL and read the tile by its path.
-- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram`, `gbx_rst_metadata` and `gbx_rst_summary` keep results that differ from the lightweight ones (an even-count median, the top histogram edge, GDAL's merged metadata, a `gdalinfo` JSON summary). None is a default level. With `zero_for_flat`, GDAL's slope output has no NoData and a 0 border. The lightweight tile keeps -9999 at the border.
+- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram`, `gbx_rst_metadata` and `gbx_rst_summary` keep results that differ from the lightweight ones (an even-count median, the top histogram edge, GDAL's merged metadata, a `gdalinfo` JSON summary). None is a default level.
+- **`rst_aspect` with `zero_for_flat` returns 0 at the border and next to NoData.** GDAL drops the NoData value, so the tile has none. The lightweight tile used to keep -9999 there.
 
 ## Grid functions {#grid-functions}
 

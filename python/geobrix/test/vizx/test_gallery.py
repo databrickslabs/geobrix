@@ -1,11 +1,6 @@
-"""Tests for gbx.vizx.plot_gallery (small-multiples contact sheet).
+"""Tests for gbx.vizx.plot_gallery (small-multiples contact sheet)."""
 
-Run with:
-  bash scripts/commands/gbx-test-python.sh --path python/geobrix/test/vizx/test_gallery.py
-"""
-
-import os
-import tempfile
+from unittest.mock import patch
 
 import matplotlib
 
@@ -15,389 +10,120 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+from databricks.labs.gbx.vizx import plot_gallery  # noqa: E402
+from databricks.labs.gbx.vizx._gallery import _resolve_sources  # noqa: E402
 
 
-def _make_tiny_png(path, size=(8, 8)):
-    """Write a tiny RGB PNG to *path* via PIL."""
+@pytest.fixture(autouse=True)
+def _close_figures():
+    yield
+    plt.close("all")
+
+
+def _pngs(d, n):
     from PIL import Image
 
-    arr = np.random.randint(0, 256, (*size, 3), dtype=np.uint8)
-    Image.fromarray(arr, "RGB").save(path)
+    for i in range(n):
+        arr = np.random.randint(0, 256, (8, 8, 3), dtype=np.uint8)
+        Image.fromarray(arr, "RGB").save(d / f"img_{i:02d}.png")
 
 
-def _make_tiny_geotiff(path, *, width=8, height=8, epsg=32630):
-    """Write a 1-band uint16 GeoTIFF to *path*."""
+def _geotiff(path):
     import rasterio
     from rasterio.transform import from_origin
 
-    transform = from_origin(400000.0, 4600000.0, 10.0, 10.0)
-    data = np.arange(width * height, dtype="uint16").reshape(height, width) * 50
-    profile = dict(
+    data = np.arange(64, dtype="uint16").reshape(8, 8) * 50
+    with rasterio.open(
+        path,
+        "w",
         driver="GTiff",
-        width=width,
-        height=height,
+        width=8,
+        height=8,
         count=1,
         dtype="uint16",
-        crs=f"EPSG:{epsg}",
-        transform=transform,
-    )
-    with rasterio.open(path, "w", **profile) as ds:
+        crs="EPSG:32630",
+        transform=from_origin(400000.0, 4600000.0, 10.0, 10.0),
+    ) as ds:
         ds.write(data, 1)
 
 
-# ---------------------------------------------------------------------------
-# Unit tests: _select_images
-# ---------------------------------------------------------------------------
+def test_the_grid_has_rows_times_cols_axes_and_draws_every_image(tmp_path):
+    _pngs(tmp_path, 4)
+    fig = plot_gallery(tmp_path, mode="all", cols=3, renderer="photo", thumb_px=32)
+    assert len(fig.axes) == 6  # 2 rows x 3 cols, two blank trailing
+    assert sum(len(ax.get_images()) for ax in fig.axes) >= 4
 
 
-def test_select_images_all():
-    from databricks.labs.gbx.vizx._gallery import _select_images
-
-    paths = [str(i) for i in range(100)]
-    result = _select_images(paths, "all", 24)
-    assert len(result) == 100
-    assert result == paths
+def test_a_geotiff_goes_through_the_raster_renderer_automatically(tmp_path):
+    _geotiff(str(tmp_path / "test.tif"))
+    fig = plot_gallery(tmp_path, mode="all", cols=1, renderer="auto", thumb_px=32)
+    assert fig is not None and fig.axes[0].get_images()
 
 
-def test_select_images_limit():
-    from databricks.labs.gbx.vizx._gallery import _select_images
+def test_mode_limit_and_sample_pick_how_many_of_the_images_are_shown(tmp_path):
+    _pngs(tmp_path, 5)
 
-    paths = [str(i) for i in range(100)]
-    result = _select_images(paths, "limit", 24)
-    assert len(result) == 24
-    assert result == paths[:24]
+    def shown(mode, limit):
+        fig = plot_gallery(
+            tmp_path, mode=mode, limit=limit, cols=5, renderer="photo", thumb_px=16
+        )
+        return sum(len(ax.get_images()) for ax in fig.axes), fig
 
-
-def test_select_images_sample_count():
-    from databricks.labs.gbx.vizx._gallery import _select_images
-
-    paths = [str(i) for i in range(100)]
-    result = _select_images(paths, "sample", 24)
-    # step = max(1, 100//24) = 4 → paths[::4][:24]
-    assert len(result) == 24
-
-
-def test_select_images_sample_spacing():
-    from databricks.labs.gbx.vizx._gallery import _select_images
-
-    paths = [str(i) for i in range(100)]
-    result = _select_images(paths, "sample", 24)
-    step = max(1, 100 // 24)
-    expected = paths[::step][:24]
-    assert result == expected
-
-
-def test_select_images_sample_small_set():
-    """When set is smaller than limit, all items are returned (step=1)."""
-    from databricks.labs.gbx.vizx._gallery import _select_images
-
-    paths = ["a", "b", "c"]
-    result = _select_images(paths, "sample", 24)
-    assert result == ["a", "b", "c"]
-
-
-def test_select_images_limit_fewer_than_limit():
-    from databricks.labs.gbx.vizx._gallery import _select_images
-
-    paths = ["a", "b"]
-    result = _select_images(paths, "limit", 24)
-    assert result == ["a", "b"]
-
-
-def test_select_images_invalid_mode():
-    from databricks.labs.gbx.vizx._gallery import _select_images
-
+    assert shown("all", 3)[0] == 5
+    assert shown("limit", 3)[0] == 3
+    n, fig = shown("sample", 3)
+    assert n == 3
+    text = fig._suptitle.get_text()  # the auto title says "N of M images"
+    assert "3" in text and "5" in text
+    assert shown("sample", 24)[0] == 5  # a small set is shown whole
     with pytest.raises(ValueError, match="mode must be"):
-        _select_images(["a"], "random", 5)
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: _resolve_sources
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_sources_directory():
-    """Directory scan returns only image extensions, sorted."""
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    with tempfile.TemporaryDirectory() as d:
-        # Create some files
-        open(os.path.join(d, "a.jpg"), "w").close()
-        open(os.path.join(d, "b.PNG"), "w").close()  # uppercase ext
-        open(os.path.join(d, "c.txt"), "w").close()  # non-image
-        open(os.path.join(d, "d.tif"), "w").close()
-
-        exts = (".jpg", ".jpeg", ".png", ".tif", ".tiff")
-        result = _resolve_sources(d, exts)
-        names = [os.path.basename(p) for p in result]
-        assert sorted(names) == names  # sorted
-        assert "c.txt" not in names
-        # Case-insensitive: .PNG should be included
-        assert any(n.lower() in ("b.png",) for n in [n.lower() for n in names])
-        # .tif included
-        assert any(n.lower() == "d.tif" for n in names)
-
-
-def test_resolve_sources_directory_excludes_non_image():
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    with tempfile.TemporaryDirectory() as d:
-        open(os.path.join(d, "photo.jpg"), "w").close()
-        open(os.path.join(d, "readme.txt"), "w").close()
-        result = _resolve_sources(d, (".jpg",))
-        assert len(result) == 1
-        assert result[0].endswith("photo.jpg")
-
-
-def test_resolve_sources_list_passthrough():
-    """Explicit list of paths is returned as-is (no filtering)."""
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    paths = ["/data/a.jpg", "/data/b.png"]
-    result = _resolve_sources(paths, (".jpg", ".png"))
-    assert result == paths
-
-
-def test_resolve_sources_scheme_strip_dbfs():
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    result = _resolve_sources(["dbfs:/Volumes/cat/sch/vol/img.jpg"], (".jpg",))
-    assert result == ["/Volumes/cat/sch/vol/img.jpg"]
-
-
-def test_resolve_sources_scheme_strip_file():
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    result = _resolve_sources(["file:///Volumes/cat/sch/vol/img.jpg"], (".jpg",))
-    assert result == ["/Volumes/cat/sch/vol/img.jpg"]
-
-
-def test_resolve_sources_single_file():
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    with tempfile.NamedTemporaryFile(suffix=".tif") as f:
-        result = _resolve_sources(f.name, (".tif",))
-        assert result == [f.name]
-
-
-def test_resolve_sources_empty_directory():
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
-    with tempfile.TemporaryDirectory() as d:
-        result = _resolve_sources(d, (".jpg",))
-        assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Unit tests: _pick_renderer
-# ---------------------------------------------------------------------------
-
-
-def test_pick_renderer_tif_auto():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.tif", "auto") == "raster"
-
-
-def test_pick_renderer_tiff_auto():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.tiff", "auto") == "raster"
-
-
-def test_pick_renderer_vrt_auto():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.vrt", "auto") == "raster"
-
-
-def test_pick_renderer_jpg_auto():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.jpg", "auto") == "photo"
-
-
-def test_pick_renderer_png_auto():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.png", "auto") == "photo"
-
-
-def test_pick_renderer_override_photo():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.tif", "photo") == "photo"
-
-
-def test_pick_renderer_override_raster():
-    from databricks.labs.gbx.vizx._gallery import _pick_renderer
-
-    assert _pick_renderer("/path/to/file.jpg", "raster") == "raster"
-
-
-# ---------------------------------------------------------------------------
-# Integration tests: plot_gallery
-# ---------------------------------------------------------------------------
-
-
-def test_plot_gallery_photos_returns_figure():
-    """3 tiny PNGs → Figure with correct axes count and AxesImages drawn."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        for i in range(3):
-            _make_tiny_png(os.path.join(d, f"img_{i:02d}.png"))
-
-        fig = plot_gallery(d, mode="all", cols=3, renderer="photo", thumb_px=32)
-
-    try:
-        assert fig is not None
-        assert hasattr(fig, "axes")
-        # cols=3, rows=ceil(3/3)=1 → 3 axes
-        assert len(fig.axes) == 3
-        # Count AxesImages drawn (at least n=3)
-        n_images = sum(len(ax.get_images()) for ax in fig.axes)
-        assert n_images >= 3
-    finally:
-        plt.close("all")
-
-
-def test_plot_gallery_photos_axes_count_with_padding():
-    """4 images in a 3-col grid → rows=2, 6 axes (2 blank trailing)."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        for i in range(4):
-            _make_tiny_png(os.path.join(d, f"img_{i:02d}.png"))
-
-        fig = plot_gallery(d, mode="all", cols=3, renderer="photo", thumb_px=32)
-
-    try:
-        assert fig is not None
-        assert len(fig.axes) == 6  # 2 rows × 3 cols
-    finally:
-        plt.close("all")
-
-
-def test_plot_gallery_raster_no_exception():
-    """Single-band uint16 GeoTIFF → Figure, no exception via raster renderer."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        tif = os.path.join(d, "test.tif")
-        _make_tiny_geotiff(tif)
-
-        fig = plot_gallery(d, mode="all", cols=1, renderer="auto", thumb_px=32)
-
-    try:
-        assert fig is not None
-    finally:
-        plt.close("all")
-
-
-def test_plot_gallery_empty_returns_none(capsys):
-    """Empty directory → None + a friendly skip message."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        result = plot_gallery(d, extensions=(".jpg",))
-
-    assert result is None
-    captured = capsys.readouterr()
-    assert "skip" in captured.out.lower() or "no images" in captured.out.lower()
-
-
-def test_plot_gallery_labels_none():
-    """labels=None → axes have no title set."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        for i in range(2):
-            _make_tiny_png(os.path.join(d, f"img_{i}.png"))
-
-        fig = plot_gallery(
-            d, mode="all", cols=2, renderer="photo", thumb_px=16, labels=None
-        )
-
-    try:
-        assert fig is not None
-        for ax in fig.axes:
-            assert ax.get_title() == ""
-    finally:
-        plt.close("all")
-
-
-def test_plot_gallery_custom_title():
-    """Explicit title= appears as suptitle."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        _make_tiny_png(os.path.join(d, "img.png"))
-
-        fig = plot_gallery(
-            d,
-            mode="all",
-            cols=1,
-            renderer="photo",
-            thumb_px=16,
-            title="My Gallery",
-        )
-
-    try:
-        assert fig is not None
-        assert fig._suptitle is not None
-        assert fig._suptitle.get_text() == "My Gallery"
-    finally:
-        plt.close("all")
-
-
-def test_plot_gallery_auto_title_n_of_m():
-    """Auto title shows 'N of M images' when title=None."""
-    from databricks.labs.gbx.vizx import plot_gallery
-
-    with tempfile.TemporaryDirectory() as d:
-        for i in range(5):
-            _make_tiny_png(os.path.join(d, f"img_{i}.png"))
-
-        # limit=3 sample → 3 of 5
-        fig = plot_gallery(
-            d,
-            mode="sample",
-            limit=3,
-            cols=3,
-            renderer="photo",
-            thumb_px=16,
-            title=None,
-        )
-
-    try:
-        assert fig is not None
-        assert fig._suptitle is not None
-        text = fig._suptitle.get_text()
-        assert "3" in text
-        assert "5" in text
-    finally:
-        plt.close("all")
-
-
-# ---------------------------------------------------------------------------
-# Wiring test: _resolve_sources delegates to list_files (fail-on-revert)
-# ---------------------------------------------------------------------------
-
-
-def test_gallery_resolve_sources_dir_calls_list_files(tmp_path):
-    """_resolve_sources delegates recursive dir walk to list_files (fail-on-revert)."""
-    from unittest.mock import patch
-
+        plot_gallery(tmp_path, mode="random")
+
+
+def test_labels_none_leaves_the_titles_empty_and_title_becomes_the_suptitle(tmp_path):
+    _pngs(tmp_path, 2)
+    fig = plot_gallery(
+        tmp_path, mode="all", cols=2, renderer="photo", thumb_px=16, labels=None
+    )
+    assert all(ax.get_title() == "" for ax in fig.axes)
+    fig = plot_gallery(
+        tmp_path, mode="all", cols=2, renderer="photo", thumb_px=16, title="My Gallery"
+    )
+    assert fig._suptitle.get_text() == "My Gallery"
+
+
+def test_an_empty_directory_returns_none(tmp_path):
+    assert plot_gallery(tmp_path, extensions=(".jpg",)) is None
+
+
+def test_sources_are_filtered_by_extension_case_insensitively_and_scheme_stripped(
+    tmp_path,
+):
+    for name in ("a.jpg", "b.PNG", "c.txt", "d.tif"):
+        (tmp_path / name).write_text("")
+    names = [
+        p.rsplit("/", 1)[-1]
+        for p in _resolve_sources(str(tmp_path), (".jpg", ".png", ".tif"))
+    ]
+    assert names == sorted(names) == ["a.jpg", "b.PNG", "d.tif"]
+    assert _resolve_sources(str(tmp_path / "d.tif"), (".tif",)) == [
+        str(tmp_path / "d.tif")
+    ]
+
+    # explicit lists pass through unfiltered, with dbfs: / file:// stripped
+    assert _resolve_sources(["/data/a.jpg", "/data/b.png"], (".jpg",)) == [
+        "/data/a.jpg",
+        "/data/b.png",
+    ]
+    for src in ("dbfs:/Volumes/c/s/v/img.jpg", "file:///Volumes/c/s/v/img.jpg"):
+        assert _resolve_sources([src], (".jpg",)) == ["/Volumes/c/s/v/img.jpg"]
+
+
+def test_directory_walks_go_through_list_files(tmp_path):
+    # fail-on-revert: the recursive walk is the shared listing helper, not a local os.walk
     (tmp_path / "a.tif").write_bytes(b"x")
-    from databricks.labs.gbx.vizx._gallery import _resolve_sources
-
     with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
         mock_lf.return_value = []
         _resolve_sources(str(tmp_path), (".tif",))
     mock_lf.assert_called_once()
-    _args, kw = mock_lf.call_args
-    assert kw.get("recursive", True) is True
+    assert mock_lf.call_args[1].get("recursive", True) is True

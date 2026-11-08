@@ -137,44 +137,38 @@ def test_autofit_preserves_source_data_bounds():
     assert abs(hdr["max_lat_e7"] / 1e7 - 37.83) < 0.01, hdr["max_lat_e7"]
 
 
-def test_autofit_noop_when_already_fits():
-    """When the archive already fits, return it unchanged with fits=True."""
-    archive = _multi_zoom_archive()
-    big_budget_mb = (len(archive) * 10) / 1_048_576
-    reduced, report = autofit_archive(archive, max_embed_mb=big_budget_mb)
-    assert reduced == archive
-    assert report["fits"] is True
-    assert report["dropped_zooms"] == []
-
-
-def test_autofit_preserves_tile_type_vector():
-    """Reduced vector archive is still readable and reports MVT tile type."""
+def test_autofit_edge_cases_noop_tile_type_last_resort_and_bad_budget():
     from databricks.labs.gbx.pmtiles import pmtiles_info
 
-    archive = _multi_zoom_archive(TileType.MVT)
-    target_mb = (len(archive) * 0.5) / 1_048_576
-    reduced, _ = autofit_archive(archive, max_embed_mb=target_mb)
-    info = pmtiles_info(reduced)
-    assert info["tile_type"] == "mvt"
-
-
-def test_autofit_keeps_at_least_coarsest_even_if_over_budget():
-    """If even the coarsest level exceeds budget, keep it (degenerate) and flag
-    fits=False so the caller can route to static rather than emit nothing."""
-    archive = _multi_zoom_archive(payload_size=4096)
-    # Absurdly tiny budget: even z0 alone won't fit.
-    reduced, report = autofit_archive(archive, max_embed_mb=0.0000001)
-    reduced_zooms = _tile_zooms(reduced)
-    assert reduced_zooms == [0], "must retain only the coarsest level as last resort"
-    assert report["fits"] is False
-
-
-def test_autofit_rejects_bad_budget():
     archive = _multi_zoom_archive()
-    with pytest.raises(ValueError):
-        autofit_archive(archive, max_embed_mb=0)
-    with pytest.raises(ValueError):
-        autofit_archive(archive, max_embed_mb=-1)
+    # already fits: returned unchanged
+    reduced, report = autofit_archive(
+        archive, max_embed_mb=len(archive) * 10 / 1_048_576
+    )
+    assert reduced == archive and report["fits"] is True
+    assert report["dropped_zooms"] == []
+
+    # a reduced vector archive is still readable and still MVT
+    reduced, _ = autofit_archive(archive, max_embed_mb=len(archive) * 0.5 / 1_048_576)
+    assert pmtiles_info(reduced)["tile_type"] == "mvt"
+
+    # even the coarsest level over budget: keep it (degenerate) and flag fits=False so the
+    # caller can route to static rather than emit nothing
+    reduced, report = autofit_archive(archive, max_embed_mb=0.0000001)
+    assert _tile_zooms(reduced) == [0] and report["fits"] is False
+
+    for bad in (0, -1):
+        with pytest.raises(ValueError):
+            autofit_archive(archive, max_embed_mb=bad)
+
+    import inspect
+
+    from databricks.labs.gbx.vizx._pmtiles import plot_pmtiles
+
+    default = inspect.signature(plot_pmtiles).parameters["interactive_fit"].default
+    assert (
+        default == "downzoom"
+    )  # over-budget archives are reduced, not dropped to static
 
 
 def test_prepare_layers_static_audit_matches_mode_and_uses_rendered_size():

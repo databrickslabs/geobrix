@@ -21,4 +21,28 @@ class BNGParseTest extends AnyFunSuite {
     test("parse still throws on a bad prefix (raising variant preserved)") {
         assertThrows[IllegalArgumentException](BNG.parse("!!"))
     }
+
+    // The six 500 km squares (one letter), by the south-west corner of each.
+    private val SQUARES500 = Seq("S" -> ((0, 0)), "T" -> ((500000, 0)), "N" -> ((0, 500000)),
+        "O" -> ((500000, 500000)), "H" -> ((0, 1000000)), "J" -> ((500000, 1000000)))
+
+    test("a one-letter name is its own 500 km square, and formats back to the name") {
+        SQUARES500.foreach { case (name, (x, y)) =>
+            val id = BNG.parse(name)
+            assert(BNG.format(id) == name, name)
+            val env = BNG.cellIdToGeometry(id).getEnvelopeInternal
+            assert((env.getMinX, env.getMinY, env.getMaxX, env.getMaxY) ==
+                (x.toDouble, y.toDouble, x + 500000.0, y + 500000.0), name)
+            assert(BNG.area(id) == 250000.0, name)
+        }
+    }
+
+    test("a point anywhere in a 500 km square is that square's cell") {
+        SQUARES500.foreach { case (name, (x, y)) =>
+            Seq((x, y), (x + 250000, y + 250000), (x + 499999, y + 499999)).foreach { case (e, n) =>
+                assert(BNG.format(BNG.pointToCellID(e.toDouble, n.toDouble, -1)) == name, s"$name at $e $n")
+                assert(BNG.pointToCellID(e.toDouble, n.toDouble, -1) == BNG.parse(name), name)
+            }
+        }
+    }
 }

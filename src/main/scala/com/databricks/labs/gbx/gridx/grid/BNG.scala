@@ -506,7 +506,7 @@ object BNG extends GridSystem {
         val nLetter: Int = letterMap.indexOf(letterRow)
 
         if (cellID.length == 1) {
-            encode(eLetter, 0, 0, 0, 0, 1, -1)
+            encode(eLetter, nLetter, 0, 0, 0, 1, -1)
         } else {
             val suffix = cellID.slice(cellID.length - 2, cellID.length)
             val quadrant: Int = if (quadrants.contains(suffix) && cellID.length > 2) quadrants.indexOf(suffix) else 0
@@ -596,6 +596,8 @@ object BNG extends GridSystem {
       */
     def getX(digits: Seq[Int], edgeSize: Int): Int = {
         val n = digits.length
+        // a 500 km square: 1(##)(##) holds the 100 km letter indices of its south-west corner
+        if (n < 6) return digits.slice(1, 3).mkString.toInt * 100000
         val k = (n - 6) / 2
         val xDigits = digits.slice(1, 3) ++ digits.slice(5, 5 + k)
         val quadrant = digits.last
@@ -617,6 +619,7 @@ object BNG extends GridSystem {
       */
     def getY(digits: Seq[Int], edgeSize: Int): Int = {
         val n = digits.length
+        if (n < 6) return digits.slice(3, 5).mkString.toInt * 100000
         val k = (n - 6) / 2
         val yDigits = digits.slice(3, 5) ++ digits.slice(5 + k, 5 + 2 * k)
         val quadrant = digits.last
@@ -690,7 +693,8 @@ object BNG extends GridSystem {
         val nShift = 10
         val id =
             if (resolution == -1) {
-                (idPlaceholder + eLetter * eLetterShift) / 100 + quadrant
+                // a 500 km square: the 100 km letter indices of its south-west corner, 1(##)(##); S, T, N, O, H, J
+                10000.0 + Math.floorDiv(eLetter, 5) * 5 * 100 + Math.floorDiv(nLetter, 5) * 5
             } else {
                 idPlaceholder + eLetter * eLetterShift + nLetter * nLetterShift + eBin * eShift + nBin * nShift + quadrant
             }

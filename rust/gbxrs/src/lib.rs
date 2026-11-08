@@ -32,7 +32,10 @@ fn encode(el: i64, nl: i64, eb: i64, nb: i64, q: i64, np: i32, res: i32) -> i64 
     let nls = pow10(1 + 2 * np - 2);
     let base = id.wrapping_add(el.wrapping_mul(els));
     if res == -1 {
-        base.div_euclid(100).wrapping_add(q)
+        // a 500 km square: the 100 km letter indices of its south-west corner, 1(##)(##); S, T, N, O, H, J
+        10000i64
+            .wrapping_add(el.div_euclid(5).wrapping_mul(500))
+            .wrapping_add(nl.div_euclid(5).wrapping_mul(5))
     } else {
         base.wrapping_add(nl.wrapping_mul(nls))
             .wrapping_add(eb.wrapping_mul(pow10(np)))
@@ -184,6 +187,11 @@ mod tests {
     fn edge_cases_match_the_light_tier() {
         let cases = [
             (530000.0, 180000.0, -1, "T"),
+            (130000.0, 680000.0, -1, "N"),
+            (630000.0, 780000.0, -1, "O"),
+            (130000.0, 1180000.0, -1, "H"),
+            (630000.0, 1180000.0, -1, "J"),
+            (130000.0, 180000.0, -1, "S"),
             (530000.0, 180000.0, -3, "TQ38SW"),
             (325000.0, 673000.0, -2, "NTNW"),
             (0.0, 0.0, -6, "SV00000000SW"),

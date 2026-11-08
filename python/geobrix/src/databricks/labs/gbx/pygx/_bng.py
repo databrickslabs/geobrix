@@ -167,6 +167,10 @@ def get_resolution_from_digits(digits) -> int:
 
 def get_x(digits, edge_size: int) -> int:
     n = len(digits)
+    if (
+        n < 6
+    ):  # a 500 km square: 1(##)(##) holds the 100 km letter indices of its south-west corner
+        return int("".join(str(d) for d in digits[1:3])) * 100000
     k = (n - 6) // 2
     x_digits = digits[1:3] + digits[5 : 5 + k]
     quadrant = digits[-1]
@@ -177,6 +181,8 @@ def get_x(digits, edge_size: int) -> int:
 
 def get_y(digits, edge_size: int) -> int:
     n = len(digits)
+    if n < 6:
+        return int("".join(str(d) for d in digits[3:5])) * 100000
     k = (n - 6) // 2
     y_digits = digits[3:5] + digits[5 + k : 5 + 2 * k]
     quadrant = digits[-1]
@@ -222,7 +228,8 @@ def _encode_core(e_letter, n_letter, e_bin, n_bin, quadrant, n_positions, resolu
     e_shift = 10**n_positions
     n_shift = 10
     if resolution == -1:
-        val = (id_placeholder + e_letter * e_letter_shift) // 100 + quadrant
+        # a 500 km square: the 100 km letter indices of its south-west corner, 1(##)(##); S, T, N, O, H, J
+        val = 10000 + (e_letter // 5) * 5 * 100 + (n_letter // 5) * 5
     else:
         val = (
             id_placeholder
@@ -339,7 +346,7 @@ def parse(cell_id: str) -> int:
         raise StopIteration  # an unrecognised prefix, as the row search it replaces
     e_letter, n_letter = pos
     if len(cell_id) == 1:
-        return encode(e_letter, 0, 0, 0, 0, 1, -1)
+        return encode(e_letter, n_letter, 0, 0, 0, 1, -1)
     suffix = cell_id[-2:]
     quadrant = (
         QUADRANTS.index(suffix) if (suffix in QUADRANTS and len(cell_id) > 2) else 0
@@ -460,14 +467,14 @@ def _cell_origin(cell_id: int):
     """
     s = str(abs(int(cell_id)))
     n = len(s)
+    if (
+        n < 6
+    ):  # a 500 km square: 1(##)(##) holds the 100 km letter indices of its south-west corner
+        return -1, get_edge_size(-1), int(s[1:3]) * 100000, int(s[3:5]) * 100000
     quadrant = int(s[-1])
-    if n < 6:
-        resolution = -1
-    else:
-        k = (n - 6) // 2
-        resolution = -(k + 2) if quadrant > 0 else k + 1
-    edge = get_edge_size(resolution)
     k = (n - 6) // 2
+    resolution = -(k + 2) if quadrant > 0 else k + 1
+    edge = get_edge_size(resolution)
     edge_adj = 2 * edge if quadrant > 0 else edge
     x_offset = edge if quadrant in (3, 4) else 0
     y_offset = edge if quadrant in (2, 3) else 0

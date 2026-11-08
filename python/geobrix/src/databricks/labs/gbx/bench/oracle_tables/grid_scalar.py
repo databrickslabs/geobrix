@@ -291,6 +291,58 @@ GRID_SCALAR = (
             Case(f"cellarea_{name}", AREA, (name,), "exact", 10000.0),
         )
     ),
+    # The six 500 km squares (a single letter): S from (0, 0), T from (500000, 0), N from (0, 500000), O from (500000, 500000),
+    # H from (0, 1000000) and J from (500000, 1000000). A name reads as its own square, a point anywhere in the square
+    # (its corner, its centre, its far corner) writes as that name, and the centre of the name's polygon is the square's centre.
+    *(
+        row
+        for name, (x, y) in {
+            "S": (0, 0),
+            "T": (500000, 0),
+            "N": (0, 500000),
+            "O": (500000, 500000),
+            "H": (0, 1000000),
+            "J": (500000, 1000000),
+        }.items()
+        for row in (
+            Case(
+                f"aswkt_500km_{name}",
+                AWKT,
+                (name,),
+                "geom_equals",
+                f"POLYGON(({x} {y}, {x + 500000} {y}, {x + 500000} {y + 500000}, {x} {y + 500000}, {x} {y}))",
+            ),
+            Case(f"cellarea_500km_{name}", AREA, (name,), "exact", 250000.0),
+            Case(
+                f"centroid_500km_{name}",
+                CENT,
+                (name,),
+                "geom_equals",
+                f"POINT({x + 250000} {y + 250000})",
+            ),
+            Case(
+                f"pac_500km_{name}_corner",
+                PAC,
+                (f"POINT({x} {y})", "500km"),
+                "exact",
+                name,
+            ),
+            Case(
+                f"pac_500km_{name}_centre",
+                PAC,
+                (f"POINT({x + 250000} {y + 250000})", -1),
+                "exact",
+                name,
+            ),
+            Case(
+                f"pac_500km_{name}_far_corner",
+                PAC,
+                (f"POINT({x + 499999} {y + 499999})", -1),
+                "exact",
+                name,
+            ),
+        )
+    ),
     # The one resolution contract: a whole number, its digit string or a named size; NULL is NULL; anything
     # else raises naming the value.
     Case("bng_res_null", PAC, ("POINT(530500 180500)", None), "null"),

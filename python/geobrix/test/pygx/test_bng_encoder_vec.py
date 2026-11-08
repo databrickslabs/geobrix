@@ -49,7 +49,7 @@ def test_point_to_cell_id_vec_equals_scalar(res):
 
 @pytest.mark.parametrize("res", _RESOLUTIONS)
 def test_scalar_matches_frozen_reference(res):
-    # Reference = an inlined copy of the ORIGINAL scalar body, proving the
+    # Reference = an inlined copy of the scalar body, proving the
     # refactor introduced no regression. (Kept local so it can't drift with
     # the module under test.)
     import math
@@ -76,7 +76,8 @@ def test_scalar_matches_frozen_reference(res):
         e_shift = 10**n_positions
         n_shift = 10
         if resolution == -1:
-            val = (id_placeholder + e_letter * e_letter_shift) / 100 + quadrant
+            # a 500 km square: the 100 km letter indices of its south-west corner, 1(##)(##)
+            val = 10000 + (e_letter // 5) * 5 * 100 + (n_letter // 5) * 5
         else:
             val = (
                 id_placeholder

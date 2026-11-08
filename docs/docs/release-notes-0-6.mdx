@@ -870,6 +870,7 @@ Every grid function follows one contract for its resolution and its input.
 
 ### Exact cell ids (fix) {#exact-cell-ids}
 
+- **The 500 km squares `S`, `T`, `N`, `O`, `H` and `J` are the right squares.** A one-letter name such as `N` read as `S`, and `T` gave a polygon far east of Great Britain. Each name is now the 500 km square from its south-west corner (`T` from 500000, 0; `N` from 0, 500000), a point writes as the square it lies in, and the name reads back to the same square. This holds on every level, and for the `500km` resolution.
 - **Cell functions that take a `BIGINT` cell no longer return the wrong cell when the batch holds a NULL.** The affected functions are `gbx_quadbin_resolution`, `distance`, `aswkb` and `centroid`, and `gbx_custom_cellaswkb`, `cellaswkt`, `centroid` and `distance`. Pandas rounded ids past 2^53 to a neighbour. They now run row by row.
 - **The grouped aggregates raise for a group with a NULL cell id.** The aggregates are `gbx_quadbin_cellunion_agg`, `gbx_h3_cellfill`, `gbx_quadbin_cellfill` and `gbx_custom_cellfill`. Pandas cannot read exact ids, so the message says to filter first: `WHERE cellid IS NOT NULL`. `gbx_rst_*_rasterize_agg` already did this.
 - **A BNG chip with NULL bytes is an empty geometry** in `gbx_bng_cellunion`, `gbx_bng_cellintersection` and their aggregates, on both levels. The union is the other chip, and the intersection is empty. `gbx_bng_cellintersection` leaves NULL bytes for an empty intersection.

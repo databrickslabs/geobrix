@@ -130,62 +130,116 @@ SINGLE_NODE_CONF = {"spark.databricks.cluster.profile": "singleNode", "spark.mas
 SINGLE_NODE_TAGS = {"ResourceClass": "SingleNode"}
 
 
-def up(w, name: str, n: int, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True, single_node: bool = False) -> List[str]:
-    """Bring the pool to `n` clusters and make them run; their ids. Idempotent: a cluster the pool already has is reused
-    (and started if it ended), a missing slot is created once under a token of its own, and a create that failed after the
-    server made the cluster finds it by its tag before it makes another."""
+CONFIG_FILE = "pool.json"
+ACTIVE_STATES = ("RUNNING", "PENDING", "RESTARTING", "RESIZING")  # a cluster in one of these is up or on its way up: it counts against the cap
+
+
+def config_path(volroot: str, name: str) -> str:
+    return f"{volroot.rstrip('/')}/bench-pool/{name}/{CONFIG_FILE}"
+
+
+def write_config(w, volroot: str, name: str, cfg: dict) -> None:
+    """Record the pool's cap and the shape of a cluster it makes, next to its leases."""
+    try:
+        w.files.create_directory(f"{volroot.rstrip('/')}/bench-pool/{name}")
+    except Exception:  # noqa: BLE001 - it exists, or the upload makes it
+        pass
+    w.files.upload(config_path(volroot, name), io.BytesIO(json.dumps(cfg, sort_keys=True).encode("utf-8")), overwrite=True)
+
+
+def read_config(w, volroot: str, name: str) -> Optional[dict]:
+    """The pool's recorded cap and shape; None when `up` never recorded one (an older pool: it never makes a cluster on a lease)."""
+    if not volroot:
+        return None
+    try:
+        cfg = json.loads(w.files.download(config_path(volroot, name)).contents.read().decode("utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        if _is_missing(exc):
+            return None
+        raise
+    return cfg if isinstance(cfg, dict) and int(cfg.get("cap", 0)) > 0 else None
+
+
+def active_members(w, name: str) -> list:
+    return [c for c in members(w, name) if state_of(c) in ACTIVE_STATES]
+
+
+def _new_member(w, name: str, taken: set, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True, single_node: bool = False) -> str:
+    """Create one cluster of the pool under the next free slot name and wait for it to run; its id. The create is idempotent
+    (one token per slot): a lost response finds the cluster the server made by its tag before it makes another."""
     from databricks.sdk.service import compute
 
     if single_node:
         workers = 0  # a single-node cluster is its driver alone
-    have = members(w, name)
-    ids = [c.cluster_id for c in have]
-    for c in have:
-        if state_of(c) == "TERMINATED":
-            w.clusters.ensure_cluster_is_running(c.cluster_id)
-    taken = {c.cluster_name for c in have}
     k = 0
-    while len(ids) < n:
+    while True:
         k += 1
         cname = f"gbx-bench-{name}-{k}"
-        if cname in taken:
-            continue
-        spec = dict(
-            cluster_name=cname,
-            spark_version=spark_version,
-            node_type_id=node_type,
-            num_workers=workers,
-            autotermination_minutes=AUTOTERMINATION_MIN,
-            data_security_mode=compute.DataSecurityMode.SINGLE_USER,
-            single_user_name=user,
-            custom_tags={POOL_TAG: name, "gbx_bench": "pool", JAR_TAG: NO_JAR, **(SINGLE_NODE_TAGS if single_node else {})},
-            spark_conf=dict(SINGLE_NODE_CONF) if single_node else None,
-            aws_attributes=(
-                compute.AwsAttributes(
-                    availability=compute.AwsAvailability.ON_DEMAND,
-                    first_on_demand=workers + 1,
-                    zone_id="auto",  # the workspace's default zone can be throttled for hours: let Databricks pick one
-                )
-                if on_demand
-                else None
-            ),
-        )
-        try:
-            waiter = _create_cluster(w, spec, _slot_token(name, cname, user))
-            ids.append(waiter.result().cluster_id)
-        except TimeoutError as exc:
-            raise PoolError(
-                f"cluster {cname} did not reach RUNNING in time ({exc}); it is still starting, or the workspace has no "
-                f"capacity for its nodes. `status --name {name}` shows it; `down --name {name}` ends it."
-            ) from exc
-        except Exception as exc:  # noqa: BLE001 - the server may have made it before the response was lost
-            found = [c for c in members(w, name) if c.cluster_name == cname]
-            if not found:
-                raise
-            say = f"pool {name}: create of {cname} failed after the server made it ({type(exc).__name__}); using {found[0].cluster_id}"
-            print(say)
-            w.clusters.ensure_cluster_is_running(found[0].cluster_id)
-            ids.append(found[0].cluster_id)
+        if cname not in taken:
+            break
+    taken.add(cname)
+    spec = dict(
+        cluster_name=cname,
+        spark_version=spark_version,
+        node_type_id=node_type,
+        num_workers=workers,
+        autotermination_minutes=AUTOTERMINATION_MIN,
+        data_security_mode=compute.DataSecurityMode.SINGLE_USER,
+        single_user_name=user,
+        custom_tags={POOL_TAG: name, "gbx_bench": "pool", JAR_TAG: NO_JAR, **(SINGLE_NODE_TAGS if single_node else {})},
+        spark_conf=dict(SINGLE_NODE_CONF) if single_node else None,
+        aws_attributes=(
+            compute.AwsAttributes(
+                availability=compute.AwsAvailability.ON_DEMAND,
+                first_on_demand=workers + 1,
+                zone_id="auto",  # the workspace's default zone can be throttled for hours: let Databricks pick one
+            )
+            if on_demand
+            else None
+        ),
+    )
+    try:
+        return _create_cluster(w, spec, _slot_token(name, cname, user)).result().cluster_id
+    except TimeoutError as exc:
+        raise PoolError(
+            f"cluster {cname} did not reach RUNNING in time ({exc}); it is still starting, or the workspace has no "
+            f"capacity for its nodes. `status --name {name}` shows it; `down --name {name}` ends it."
+        ) from exc
+    except Exception as exc:  # noqa: BLE001 - the server may have made it before the response was lost
+        found = [c for c in members(w, name) if c.cluster_name == cname]
+        if not found:
+            raise
+        print(f"pool {name}: create of {cname} failed after the server made it ({type(exc).__name__}); using {found[0].cluster_id}")
+        w.clusters.ensure_cluster_is_running(found[0].cluster_id)
+        return found[0].cluster_id
+
+
+def up(
+    w, name: str, n: int, *, spark_version: str, node_type: str, workers: int, user: str, on_demand: bool = True,
+    single_node: bool = False, volroot: str = "", warm: Optional[int] = None,
+) -> List[str]:  # fmt: skip
+    """Set up the pool. `n` is its CAP: the most clusters it keeps active at once. With a `volroot` the cap and the shape of a
+    cluster are recorded, so a lease can make one on demand up to the cap; `warm` clusters are started now (default: all `n`,
+    as before). Idempotent: a cluster the pool already has is reused, a missing warm slot is created once under a token of its
+    own, and a create that failed after the server made the cluster finds it by its tag before it makes another."""
+    if single_node:
+        workers = 0
+    shape = dict(spark_version=spark_version, node_type=node_type, workers=workers, user=user, on_demand=on_demand, single_node=single_node)
+    if volroot:
+        write_config(w, volroot, name, dict(shape, cap=n))
+    want = n if warm is None else max(0, min(warm, n))
+    have = members(w, name)
+    ids = [c.cluster_id for c in have]
+    running = sum(1 for c in have if state_of(c) in ACTIVE_STATES)
+    for c in have:
+        if state_of(c) == "TERMINATED" and (warm is None or running < want):
+            w.clusters.ensure_cluster_is_running(c.cluster_id)
+            running += 1
+    taken = {c.cluster_name for c in have}
+    while (len(ids) if warm is None else running) < want:
+        cid = _new_member(w, name, taken, **shape)
+        ids.append(cid)
+        running += 1
     return ids
 
 
@@ -286,6 +340,19 @@ def status(w, name: str, now: Callable[[], float] = time.time, leases: Optional[
             )
         )
     return rows
+
+
+def summary(w, name: str, *, leases: Optional["Leases"] = None, now: Callable[[], float] = time.time) -> dict:
+    """The pool at a glance: its cap (None when never recorded), the clusters active (running or starting), idle (active and
+    not busy), leased (held by a live lease or a job run), and terminated."""
+    cfg = read_config(w, leases.dir.rsplit("/bench-pool/", 1)[0], name) if leases is not None else None
+    rows = status(w, name, now=now, leases=leases)
+    active = [r for r in rows if r["state"] in ACTIVE_STATES]
+    busy = [r for r in active if r["busy"]]
+    return {
+        "cap": int(cfg["cap"]) if cfg else None, "active": len(active), "leased": len(busy), "idle": len(active) - len(busy),
+        "terminated": sum(1 for r in rows if r["state"] == "TERMINATED"), "node_type": (cfg or {}).get("node_type"),
+    }
 
 
 def down(w, name: str, delete: bool = False) -> List[str]:
@@ -479,8 +546,9 @@ def lease_cluster(
     end = clock() + wait_s
     while True:
         pool = members(w, name)
-        if not pool:
-            raise PoolError(f"pool '{name}' has no clusters: gbx:bench:pool up --name {name} --n <n>")
+        cfg = read_config(w, volroot, name)
+        if not pool and cfg is None:
+            raise PoolError(f"pool '{name}' has no clusters: gbx:bench:pool up --name {name} --n <cap>")
         order = {"RUNNING": 0, "TERMINATED": 1}
         for c in sorted(pool, key=lambda c: order.get(state_of(c), 2)):
             try:
@@ -494,9 +562,25 @@ def lease_cluster(
                     on_leased(c.cluster_id)
                 w.clusters.ensure_cluster_is_running(c.cluster_id)  # starts it when terminated, waits when pending
                 return c.cluster_id
+        active = len(active_members(w, name))
+        if cfg is not None and active < int(cfg["cap"]):
+            say(f"pool {name}: {active} of {cfg['cap']} clusters active and all leased: making one (a cold start)")
+            shape = {k: cfg[k] for k in ("spark_version", "node_type", "workers", "user") if k in cfg}
+            if "user" not in shape:
+                shape["user"] = w.current_user.me().user_name
+            shape.update(on_demand=cfg.get("on_demand", True), single_node=cfg.get("single_node", False))
+            cid = _new_member(w, name, {c.cluster_name for c in pool}, **shape)
+            if _try_lease(leases, cid, info):
+                say(f"pool {name}: leased {cid} (new)")
+                if on_leased is not None:
+                    on_leased(cid)
+                return cid
+            continue  # another launch took the cluster just made: look again
         if clock() >= end:
-            raise PoolError(f"every cluster of pool '{name}' is leased; none came free in {wait_s:.0f}s")
-        say(f"pool {name}: every cluster is leased; waiting {poll_s:.0f}s")
+            cap = f" (cap {cfg['cap']}, {active} active)" if cfg is not None else ""
+            raise PoolError(f"every cluster of pool '{name}' is leased{cap}; none came free in {wait_s:.0f}s")
+        cap = f"; {active} of {cfg['cap']} active, the cap" if cfg is not None else ""
+        say(f"pool {name}: every cluster is leased{cap}; waiting {poll_s:.0f}s")
         sleep(poll_s)
 
 

@@ -1,11 +1,14 @@
 """gbx:bench:pool -- bring a pool of bench clusters up, show it, take it down.
 
-    bench_pool.py up     --name P --n N [--spark-version 19.x-scala2.13] [--node-type m5d.2xlarge] [--workers 4 | --single-node]
+    bench_pool.py up     --name P --n CAP [--warm K] [--spark-version 19.x-scala2.13] [--node-type m5d.2xlarge] [--workers 4 | --single-node]
     bench_pool.py status --name P
     bench_pool.py down   --name P [--delete]
 
-The clusters carry the tag ``gbx_bench_pool=<P>`` and end themselves after 60 idle minutes. Only clusters with that tag
-are ever touched; see ``_cluster_pool.py`` for the rules and for how a launch leases one (``--pool P``).
+A pool is a CAP on how many clusters are active at once, not a fixed set. ``up`` records the cap and the shape of a cluster
+(next to the leases on the bundle Volume) and starts ``--warm`` clusters now (default 1); a launch that finds every cluster
+leased starts a stopped one, else makes one, while fewer than the cap are active, else waits. The clusters carry the tag
+``gbx_bench_pool=<P>`` and end themselves after 60 idle minutes. Only clusters with that tag are ever touched; see
+``_cluster_pool.py`` for the rules and for how a launch leases one (``--pool P``).
 """
 
 from __future__ import annotations
@@ -27,7 +30,8 @@ def main(argv=None, w=None) -> int:
     ap = argparse.ArgumentParser(prog="bench_pool.py", description=__doc__.split("\n\n")[0])
     ap.add_argument("action", choices=("up", "status", "down"))
     ap.add_argument("--name", default=os.environ.get("GBX_BENCH_POOL", ""), help="the pool's name (tag value)")
-    ap.add_argument("--n", type=int, default=1, help="up: clusters in the pool")
+    ap.add_argument("--n", type=int, default=1, help="up: the pool's cap, the most clusters active at once")
+    ap.add_argument("--warm", type=int, default=None, help="up: clusters to start now (default 1; 0 starts none; without a Volume configured, all of --n)")
     ap.add_argument("--spark-version", default="19.x-scala2.13")
     ap.add_argument("--node-type", default="m5d.2xlarge")
     ap.add_argument("--workers", type=int, default=4)
@@ -42,11 +46,22 @@ def main(argv=None, w=None) -> int:
     try:
         if a.action == "up":
             me = w.current_user.me().user_name
-            ids = pool.up(w, a.name, a.n, spark_version=a.spark_version, node_type=a.node_type, workers=a.workers, user=me, single_node=a.single_node)
-            print(f"pool {a.name}: {len(ids)} cluster(s) running: {', '.join(ids)} (auto-termination {pool.AUTOTERMINATION_MIN} min)")
+            vol = _volroot()
+            warm = a.warm if a.warm is not None else (1 if vol else None)
+            if not vol:
+                print("NOTE: no GBX_BUNDLE_VOLUME_* configured, so the cap cannot be recorded: starting all --n clusters, as before.", file=sys.stderr)
+            ids = pool.up(w, a.name, a.n, spark_version=a.spark_version, node_type=a.node_type, workers=a.workers, user=me, single_node=a.single_node,
+                          volroot=vol, warm=warm)
+            cap = f"cap {a.n}, " if vol else ""
+            print(f"pool {a.name}: {cap}{len(ids)} cluster(s): {', '.join(ids) or 'none started'} (auto-termination {pool.AUTOTERMINATION_MIN} min)")
         elif a.action == "status":
             vol = _volroot()
-            rows = pool.status(w, a.name, leases=pool.Leases(w, vol, a.name) if vol else None)
+            leases = pool.Leases(w, vol, a.name) if vol else None
+            rows = pool.status(w, a.name, leases=leases)
+            if leases is not None:
+                sm = pool.summary(w, a.name, leases=leases)
+                cap = sm["cap"] if sm["cap"] is not None else "not recorded"
+                print(f"pool {a.name}: cap {cap}, active {sm['active']}, idle {sm['idle']}, leased {sm['leased']}, terminated {sm['terminated']}")
             if not rows:
                 print(f"pool {a.name}: no clusters")
             for r in rows:

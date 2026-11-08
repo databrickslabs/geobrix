@@ -479,7 +479,7 @@ def test_the_command_brings_a_pool_up_shows_it_and_takes_it_down(
 
     w = FakeW()
     w.current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name="me"))
-    assert bench_pool.main(["up", "--name", "p", "--n", "2"], w=w) == 0
+    assert bench_pool.main(["up", "--name", "p", "--n", "2", "--warm", "2"], w=w) == 0
     assert w.created == 2 and "auto-termination 60 min" in capsys.readouterr().out
     assert bench_pool.main(["status", "--name", "p"], w=w) == 0
     assert capsys.readouterr().out.count("RUNNING") == 2
@@ -1107,3 +1107,133 @@ def test_the_refresh_thread_ends_with_the_block_and_when_its_lease_is_lost(pool)
             time.sleep(0.01)
         assert not alive(), "the refresh went on after its lease was lost"
     assert sum("the lease of a was lost" in s for s in said) == 1
+
+
+# ---- a pool is a cap on active clusters, started on demand
+
+
+SHAPE = dict(spark_version="19.x-scala2.13", node_type="m5d.8xlarge", workers=0, user="me", single_node=True)
+CFG = f"{VOL}/bench-pool/p/pool.json"
+
+
+def make_pool(pool, w, cap=2, warm=0, running=0):
+    """A pool recorded with a cap, `running` clusters up."""
+    ids = pool.up(w, "p", cap, volroot=VOL, warm=max(warm, running), **SHAPE)
+    return ids
+
+
+def test_up_records_the_cap_and_the_shape_and_starts_only_the_warm_ones(pool):
+    w = FakeW()
+    ids = pool.up(w, "p", 3, volroot=VOL, warm=1, **SHAPE)
+    assert len(ids) == 1 and w.created == 1, "a cap of 3 is not three clusters"
+    cfg = json.loads(w.fs[CFG])
+    assert cfg["cap"] == 3 and cfg["node_type"] == "m5d.8xlarge" and cfg["single_node"] is True and cfg["user"] == "me"
+    assert pool.read_config(w, VOL, "p")["cap"] == 3
+
+
+def test_up_with_no_warm_cluster_makes_none_and_a_later_up_changes_only_the_cap(pool):
+    w = FakeW()
+    w.add("a")
+    assert pool.up(w, "p", 2, volroot=VOL, warm=0, **SHAPE) == ["a"] and w.created == 0
+    pool.up(w, "p", 4, volroot=VOL, warm=0, **SHAPE)
+    assert pool.read_config(w, VOL, "p")["cap"] == 4 and w.created == 0
+
+
+def test_up_without_a_volume_or_a_warm_count_still_makes_all_n_as_before(pool):
+    w = FakeW()
+    assert len(pool.up(w, "p", 3, **SHAPE)) == 3 and w.created == 3 and CFG not in w.fs
+
+
+def test_a_lease_takes_a_free_running_cluster_before_it_starts_or_makes_one(pool):
+    w = FakeW()
+    w.add("t", state="TERMINATED"), w.add("r")
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=5))
+    assert lease(pool, w) == "r" and w.created == 0 and ("start", "t") not in w.calls
+
+
+def test_a_lease_starts_a_terminated_member_before_it_makes_a_new_cluster(pool):
+    w = FakeW()
+    w.add("t", state="TERMINATED")
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=5))
+    assert lease(pool, w) == "t" and ("start", "t") in w.calls and w.created == 0
+
+
+def test_a_lease_makes_a_cluster_when_all_are_leased_and_the_pool_is_under_its_cap(pool):
+    w = FakeW()
+    w.add("a")
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=2))
+    first = lease(pool, w)
+    assert first == "a"
+    second = lease(pool, w)
+    assert second != "a" and w.created == 1 and second.startswith("new-")
+    made = [kw for kind, *rest in w.calls if kind == "create" for kw in rest][0]
+    assert made["node_type_id"] == "m5d.8xlarge" and made["custom_tags"]["gbx_bench_pool"] == "p"
+    assert made["autotermination_minutes"] == 60 and made["num_workers"] == 0
+    with pytest.raises(pool.PoolError):  # the cap is 2 and both are leased: it waits, then gives up
+        lease(pool, w, wait_s=30)
+    assert w.created == 1
+
+
+def test_clusters_that_are_starting_count_against_the_cap(pool):
+    w = FakeW()
+    w.add("a"), w.add("b", state="PENDING")
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=2))
+    first = lease(pool, w)
+    assert first == "a"
+    with pytest.raises(pool.PoolError):  # b is starting (and free): it is leased, not a third made
+        w.clusters_by_id["b"].state = "PENDING"
+        pool.Leases(w, VOL, "p", lambda: w.now).acquire("b", {"run_id": "other"})
+        lease(pool, w, wait_s=30)
+    assert w.created == 0
+
+
+def test_a_terminated_cluster_does_not_count_against_the_cap(pool):
+    w = FakeW()
+    w.add("a"), w.add("t", state="TERMINATED")
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=2))
+    assert lease(pool, w) == "a"
+    pool.Leases(w, VOL, "p", lambda: w.now).acquire("t", {"run_id": "other"})  # the terminated one is held by someone
+    assert lease(pool, w).startswith("new-") and w.created == 1
+
+
+def test_an_empty_pool_with_a_cap_makes_its_first_cluster_on_demand(pool):
+    w = FakeW()
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=2))
+    cid = lease(pool, w)
+    assert cid.startswith("new-") and w.created == 1
+
+
+def test_a_pool_with_no_recorded_cap_never_makes_a_cluster_on_a_lease(pool):
+    w = FakeW()
+    w.add("a")
+    assert lease(pool, w) == "a"
+    with pytest.raises(pool.PoolError):
+        lease(pool, w, wait_s=30)
+    assert w.created == 0
+    with pytest.raises(pool.PoolError):
+        pool.lease_cluster(FakeW(), "p", VOL, INFO, wait_s=0, poll_s=1, sleep=lambda s: None, clock=lambda: 0.0, say=lambda s: None)
+
+
+def test_the_summary_says_cap_active_idle_and_leased(pool):
+    w = FakeW()
+    w.add("a"), w.add("b"), w.add("t", state="TERMINATED")
+    pool.write_config(w, VOL, "p", dict(SHAPE, cap=3))
+    lease(pool, w)
+    got = pool.summary(w, "p", leases=pool.Leases(w, VOL, "p", lambda: w.now), now=lambda: w.now)
+    assert got["cap"] == 3 and got["active"] == 2 and got["leased"] == 1 and got["terminated"] == 1 and got["idle"] == 1
+    assert pool.summary(w, "other", leases=pool.Leases(w, VOL, "other", lambda: w.now), now=lambda: w.now)["cap"] is None
+
+
+def test_the_command_records_a_cap_warms_one_and_shows_the_summary(pool, capsys, monkeypatch):
+    import bench_pool
+
+    for k, v in (("GBX_BUNDLE_VOLUME_CATALOG", "c"), ("GBX_BUNDLE_VOLUME_SCHEMA", "s"), ("GBX_BUNDLE_VOLUME_NAME", "v")):
+        monkeypatch.setenv(k, v)
+    w = FakeW()
+    w.current_user = SimpleNamespace(me=lambda: SimpleNamespace(user_name="me"))
+    assert bench_pool.main(["up", "--name", "p", "--n", "3", "--single-node"], w=w) == 0
+    assert w.created == 1 and "cap 3" in capsys.readouterr().out
+    assert bench_pool.main(["status", "--name", "p"], w=w) == 0
+    out = capsys.readouterr().out
+    assert "cap 3" in out and "active 1" in out
+    assert bench_pool.main(["up", "--name", "p", "--n", "3", "--warm", "0"], w=w) == 0 and w.created == 1

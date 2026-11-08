@@ -30,7 +30,7 @@ Read this before any run on a workspace: a benchmark, a notebook run, UC tests, 
     - work on the heavy tier, where the JAR is installed on the cluster;
     - anything Serverless cannot run.
   - Every other rule here applies to Serverless too: parts, sizing, prepare-once inputs, fail fast, isolated staging, isolated timing, cleanup. Pin the environment version (env6).
-- **When a fixed cluster is needed, reuse clusters through a pool.** For an iteration or benchmark period, keep N DBR 19 clusters up (`gbx:bench:pool up`). Each run leases one cluster; one run per cluster at a time.
+- **When a fixed cluster is needed, reuse clusters through a pool.** A pool caps the active DBR 19 clusters and starts them on demand (`gbx:bench:pool up --n <cap>`; idle ones end after 60 min). Each run leases one cluster; one run per cluster at a time. A lease takes a free running cluster, else starts a stopped one, else makes one while under the cap.
   - Every pool cluster has a 60-minute idle auto-termination. A lease starts a terminated pool cluster again.
   - Before a lease, check the cluster's JAR fingerprint (path, size and modified time, from the Files metadata). A changed JAR needs a reinstall and a restart.
   - Shut the pool down when the work settles (`gbx:bench:pool down`).

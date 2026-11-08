@@ -9,12 +9,13 @@ LOG_PATH=""
 show_help() {
     show_banner "gbx:bench:pool"
     cat <<'EOT'
-A pool of long-lived DBR19 bench clusters, one run per cluster at a time. A launch with
+A pool caps the active DBR19 bench clusters and starts them on demand, one run per cluster at a time. A launch with
 `gbx:bench:cluster --pool <name>` leases an idle one (starting it when it has ended), runs its smoke and its
 main run on it, and gives it back: no cluster start per run. The clusters end themselves after 60 idle minutes.
 
 Usage: bash scripts/commands/gbx-bench-pool.sh <up|status|down> --name <pool> [options]
-  up       --n <n>               bring the pool to n clusters (creates the missing ones, waits for them to run)
+  up       --n <cap>             the most clusters active at once; records the cap and the cluster shape
+           --warm <k>            clusters to start now (default 1; 0 starts none)
            --spark-version <v>   default 19.x-scala2.13
            --node-type <t>       default m5d.2xlarge
            --workers <n>         default 4

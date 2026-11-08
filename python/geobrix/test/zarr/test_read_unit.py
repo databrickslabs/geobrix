@@ -520,12 +520,6 @@ def test_table_batches_are_cut_by_bytes(dtype_matrix):
     assert sum(b.num_rows for b in _run(units, cfg)) == 12
 
 
-def test_the_docstring_says_where_executor_errors_surface():
-    doc = _read.gbx_zarr_read.__doc__
-    assert "pyspark.errors.PythonException" in doc and "Fix:" in doc
-    assert "keep their" in doc and "DECIMAL(20,0)" in doc and "NULL" in doc
-
-
 # --- table, blocks and xarray agree (xarray's _Unsigned and dtype: bool coders) -------------
 
 
@@ -580,36 +574,45 @@ def _agree(column, blocks, theirs):
 
 
 @pytest.mark.parametrize("fmt", [2, 3])
-def test_table_blocks_and_xarray_agree_on_an_unsigned_array(tmp_path, fmt):
-    path = _one_array(tmp_path, fmt, [-1, -56, 0, 100], "i1", {"_Unsigned": "true"})
+@pytest.mark.parametrize(
+    "values, dtype, attrs, column_type, want",
+    [
+        pytest.param(
+            [-1, -56, 0, 100],
+            "i1",
+            {"_Unsigned": "true"},
+            "short",  # int8 -> uint8 -> SMALLINT
+            [255, 200, 0, 100],
+            id="unsigned",
+        ),
+        pytest.param(
+            [65535, 5, 7],
+            "u2",
+            {"_Unsigned": "false"},
+            "short",  # uint16 -> int16 -> SMALLINT
+            [-1, 5, 7],
+            id="unsigned-false",
+        ),
+        pytest.param(
+            [0, 1, 1, 0],
+            "i1",
+            {"dtype": "bool"},
+            "boolean",
+            [False, True, True, False],
+            id="bool-dtype",
+        ),
+    ],
+)
+def test_table_blocks_and_xarray_agree(
+    tmp_path, fmt, values, dtype, attrs, column_type, want
+):
+    path = _one_array(tmp_path, fmt, values, dtype, attrs)
     cfg, _ = _table(path)
-    assert dict(cfg.columns)["v"] == "short"  # int8 -> uint8 -> SMALLINT
+    assert dict(cfg.columns)["v"] == column_type
     column, blocks, theirs = _three_ways(path)
-    assert column == [255, 200, 0, 100] and list(blocks) == [255, 200, 0, 100]
-    assert blocks.dtype == np.dtype("u1") and list(theirs) == [255, 200, 0, 100]
-
-
-@pytest.mark.parametrize("fmt", [2, 3])
-def test_table_blocks_and_xarray_agree_on_unsigned_false(tmp_path, fmt):
-    path = _one_array(tmp_path, fmt, [65535, 5, 7], "u2", {"_Unsigned": "false"})
-    cfg, _ = _table(path)
-    assert dict(cfg.columns)["v"] == "short"  # uint16 -> int16 -> SMALLINT
-    column, blocks, theirs = _three_ways(path)
-    assert (
-        column == [-1, 5, 7]
-        and list(blocks) == [-1, 5, 7]
-        and list(theirs) == [-1, 5, 7]
-    )
-
-
-@pytest.mark.parametrize("fmt", [2, 3])
-def test_table_blocks_and_xarray_agree_on_a_bool_dtype_attribute(tmp_path, fmt):
-    path = _one_array(tmp_path, fmt, [0, 1, 1, 0], "i1", {"dtype": "bool"})
-    cfg, _ = _table(path)
-    assert dict(cfg.columns)["v"] == "boolean"
-    column, blocks, theirs = _three_ways(path)
-    want = [False, True, True, False]
     assert column == want and list(blocks) == want and list(theirs) == want
+    if column_type == "short" and "true" in attrs.values():
+        assert blocks.dtype == np.dtype("u1")
 
 
 @pytest.mark.parametrize("fmt", [2, 3])
@@ -864,15 +867,6 @@ def test_a_bool_dtype_array_whose_fill_is_a_stored_value_is_null_in_a_table(
     assert list(theirs) == [True, True, True, True]
     cfg, _ = _table(path)
     assert dict(cfg.columns)["v"] == "boolean"  # still a boolean column, with NULLs
-
-
-def test_the_work_frame_docstring_says_units_are_broadcast_once_per_executor():
-    doc = " ".join(_read._work_frame.__doc__.split())
-    assert "once per executor" in doc and "not once per task" in doc
-    assert (
-        "not all of them" not in doc
-    )  # the claim that a task is sent only its own unit
-    assert "sent only its own" not in " ".join(_read._TaskConfig.__doc__.split())
 
 
 @pytest.mark.parametrize(

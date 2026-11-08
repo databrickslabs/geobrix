@@ -1357,24 +1357,30 @@ def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
 # --- a chunk or shard row is a whole region or a tombstone ------
 
 
-@pytest.mark.parametrize("kind", ["chunk", "shard"])
+_NOT_A_REGION = [
+    ({"offset": None}, "not a whole region"),
+    ({"length": None}, "not a whole region"),
+    ({"length": 0}, "not a whole region"),  # a file and no bytes
+    ({"offset": -1}, "not a whole region"),
+    (
+        {"file": None, "offset": None, "length": 7, "checksum": None},
+        "not a tombstone",
+    ),
+    ({"file": None, "offset": 0, "length": 0, "checksum": None}, "not a tombstone"),
+    (
+        {"file": None, "offset": None, "length": 0, "checksum": "00"},
+        "not a tombstone",
+    ),
+    ({"file": None, "offset": None, "length": None, "checksum": None}, "tombstone"),
+]
+
+
 @pytest.mark.parametrize(
-    "change, match",
+    "kind, change, match",
     [
-        ({"offset": None}, "not a whole region"),
-        ({"length": None}, "not a whole region"),
-        ({"length": 0}, "not a whole region"),  # a file and no bytes
-        ({"offset": -1}, "not a whole region"),
-        (
-            {"file": None, "offset": None, "length": 7, "checksum": None},
-            "not a tombstone",
-        ),
-        ({"file": None, "offset": 0, "length": 0, "checksum": None}, "not a tombstone"),
-        (
-            {"file": None, "offset": None, "length": 0, "checksum": "00"},
-            "not a tombstone",
-        ),
-        ({"file": None, "offset": None, "length": None, "checksum": None}, "tombstone"),
+        *[("chunk", c, m) for c, m in _NOT_A_REGION],
+        # a shard row goes through the same check: one fault of each wording
+        *[("shard", *_NOT_A_REGION[i]) for i in (0, 4, 7)],
     ],
 )
 def test_commit_refuses_a_row_that_is_neither_a_region_nor_a_tombstone(

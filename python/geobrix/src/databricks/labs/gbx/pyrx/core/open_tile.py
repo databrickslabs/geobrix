@@ -705,7 +705,7 @@ def _open_all(tiles):
         yield [stack.enter_context(_open(t)) for t in tiles]
 
 
-class _WindowHeaderView:
+class _WindowHeaderView(TransformMethodsMixin):
     """Read-free header view of a source dataset restricted to a sub-window.
 
     Presents the window-varying fields (``width``, ``height``, ``transform``,
@@ -713,7 +713,9 @@ class _WindowHeaderView:
     source header + the window offset/size (no pixel I/O). Every other attribute
     (``crs``, ``count``, ``nodata``, ``dtypes``, ``driver``, ``tags()``,
     ``subdatasets``, ...) proxies straight through to the source dataset via
-    ``__getattr__`` — those are window-invariant. ``read`` is intentionally NOT
+    ``__getattr__`` — those are window-invariant. ``xy`` and ``index`` are the window's own
+    (they map through the window's ``transform``, not the source's), so a coordinate
+    accessor answers for the window as it does for the window's bytes. ``read`` is intentionally NOT
     proxied: this view exists precisely to avoid materialising pixels.
 
     Optional ``pending_count``, ``pending_crs``, and ``pending_nodata`` override
@@ -1034,7 +1036,7 @@ class _SizeEstimate:
             return _tiling._encoded_size_bytes(ds)
 
 
-class _WindowPointView(_SizeEstimate, TransformMethodsMixin, _WindowHeaderView):
+class _WindowPointView(_SizeEstimate, _WindowHeaderView):
     """The dataset ``open_tile`` yields for a virtual tile, for reads of a few pixels.
 
     The header is the window's (``_WindowHeaderView``: dims, transform, and the pending

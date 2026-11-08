@@ -543,6 +543,117 @@ def scan_secrets(
     return unique, notes
 
 
+# --- the cluster config, minus its secrets ---------------------------------------------------------
+# The real examples/tests/databricks_cluster_config.env holds tokens, so a snapshot leaves it out. A
+# derived copy with every secret line removed goes in instead (gitignored, private snapshot only),
+# and restore rebuilds the real file from the example's defaults plus those values.
+CONFIG_DIR = "examples/tests"
+CONFIG_REAL = CONFIG_DIR + "/databricks_cluster_config.env"
+CONFIG_NONSECRET = CONFIG_DIR + "/databricks_cluster_config.nonsecret.env"
+CONFIG_EXAMPLE = CONFIG_DIR + "/databricks_cluster_config.example.env"
+DROPPED_PREFIX = "# Secret keys dropped: "
+SECRET_KEY_RE = re.compile(
+    r"(TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_?KEY|API_?KEY|CREDENTIAL)", re.I
+)
+# Secret-shaped values beyond the scan's patterns: JWTs, and any dapi token whatever its length.
+DERIVE_EXTRA_PATTERNS = [
+    r"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+    r"\bdapi[0-9a-zA-Z]{20,}",
+]
+_CONFIG_LINE = re.compile(r"^\s*(#\s*)?(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+
+
+def _secret_shaped(text: str) -> bool:
+    rx, _ = _compile(SECRET_PATTERNS)
+    extra = re.compile("|".join(DERIVE_EXTRA_PATTERNS).encode())
+    data = text.encode()
+    return bool(rx.search(data) or extra.search(data))
+
+
+def _placeholder(value: str) -> bool:
+    v = value.strip().strip("\"'")
+    return (not v) or "..." in v or v.startswith("<") or v.lower().startswith("your")
+
+
+def derive_nonsecret_config(text: str) -> Tuple[str, List[str], int]:
+    """(file text, secret key names dropped, other secret-shaped lines dropped) for the real
+    config text. A line goes when its key looks like a secret and its value is not a placeholder,
+    or when anything on it (commented or not) has the shape of a token."""
+    kept: List[str] = []
+    names: List[str] = []
+    anonymous = 0
+    for line in text.splitlines():
+        m = _CONFIG_LINE.match(line)
+        key_secret = bool(
+            m and SECRET_KEY_RE.search(m.group(2)) and not _placeholder(m.group(3))
+        )
+        if key_secret or _secret_shaped(line):
+            if m and m.group(2) not in names:
+                names.append(m.group(2))
+            elif not m:
+                anonymous += 1
+            continue
+        kept.append(line)
+    header = [
+        "# Derived by gbx:local:snapshot from databricks_cluster_config.env with the secret lines removed.",
+        "# Gitignored; it lives only in the private snapshot. Restore merges it over the example's defaults.",
+        DROPPED_PREFIX + (", ".join(names) if names else "(none)"),
+        "",
+    ]
+    return "\n".join(header + kept) + "\n", names, anonymous
+
+
+def write_nonsecret_config(root: Path) -> Optional[Tuple[Path, List[str]]]:
+    """Refresh the derived copy from the real config; None when there is no real config."""
+    real = root / CONFIG_REAL
+    if not real.is_file():
+        return None
+    body, names, _ = derive_nonsecret_config(real.read_text(errors="replace"))
+    out = root / CONFIG_NONSECRET
+    if not out.is_file() or out.read_text(errors="replace") != body:
+        out.write_text(body)
+        out.chmod(0o600)
+    return out, names
+
+
+def _config_values(text: str) -> Dict[str, str]:
+    """The active KEY=value lines of a config file (a later line wins)."""
+    out: Dict[str, str] = {}
+    for line in text.splitlines():
+        m = _CONFIG_LINE.match(line)
+        if m and not m.group(1):
+            out[m.group(2)] = m.group(3)
+    return out
+
+
+def rebuild_config(example: str, nonsecret: str) -> str:
+    """The example text with the nonsecret values laid over it: an active line is replaced in
+    place, the rest are appended."""
+    values = _config_values(nonsecret)
+    done = set()
+    lines = []
+    for line in example.splitlines():
+        m = _CONFIG_LINE.match(line)
+        if m and not m.group(1) and m.group(2) in values:
+            lines.append("%s=%s" % (m.group(2), values[m.group(2)]))
+            done.add(m.group(2))
+        else:
+            lines.append(line)
+    rest = [k for k in values if k not in done]
+    if rest:
+        lines += ["", "# Restored from the snapshot"]
+        lines += ["%s=%s" % (k, values[k]) for k in rest]
+    return "\n".join(lines) + "\n"
+
+
+def dropped_keys(nonsecret: str) -> List[str]:
+    for line in nonsecret.splitlines():
+        if line.startswith(DROPPED_PREFIX):
+            rest = line[len(DROPPED_PREFIX) :].strip()
+            return [] if rest == "(none)" else [k.strip() for k in rest.split(",")]
+    return []
+
+
 # --- zip -------------------------------------------------------------------------------------------
 def zip_name(root: Path, now: Optional[datetime] = None) -> str:
     now = now or datetime.now(timezone.utc)
@@ -695,6 +806,12 @@ def cmd_run(root: Path, cfg: Config) -> int:
     with tempfile.TemporaryDirectory(prefix=".snapshot-", dir=str(cfg.dest)) as tmp:
         work = Path(tmp)
         say("snapshot of %s -> %s" % (root.name, cfg.dest))
+        derived = write_nonsecret_config(root)
+        if derived:
+            say(
+                "cluster config: kept %s (dropped %d secret key(s))"
+                % (CONFIG_NONSECRET, len(derived[1]))
+            )
         plan = collect(root, cfg.max_file_bytes)
         say("collected %d files, %s" % (len(plan.files), human(plan.total_bytes)))
         for rel, size in plan.skipped_large:
@@ -802,6 +919,7 @@ def cmd_restore(cfg: Config, name: str, target: Path) -> int:
                     os.chmod(str(dest), stat.S_IMODE(mode))
     say("restored into %s" % target)
     say("  %s/%s/   the working tree" % (target, TREE))
+    restore_cluster_config(target / TREE)
     bundle = target / GITMETA / "unpushed.bundle"
     if bundle.is_file():
         say("  Unpushed commits: clone the repository, then in the clone run")
@@ -823,6 +941,31 @@ def cmd_restore(cfg: Config, name: str, target: Path) -> int:
         "  Copy the working-tree files over the clone; do not copy git-meta/config blindly."
     )
     return 0
+
+
+def restore_cluster_config(tree: Path) -> None:
+    """Rebuild the real cluster config in a restored tree when it is missing. Never overwrites."""
+    real = tree / CONFIG_REAL
+    derived = tree / CONFIG_NONSECRET
+    if real.exists() or not derived.is_file():
+        return
+    example = tree / CONFIG_EXAMPLE
+    nonsecret = derived.read_text(errors="replace")
+    real.write_text(
+        rebuild_config(
+            example.read_text(errors="replace") if example.is_file() else "", nonsecret
+        )
+    )
+    real.chmod(0o600)
+    say(
+        "  rebuilt %s from the example defaults and the snapshot's values" % CONFIG_REAL
+    )
+    keys = dropped_keys(nonsecret)
+    if keys:
+        say("  Re-enter these secret keys there: %s" % ", ".join(keys))
+    say(
+        "  Tokens normally come from the profiles in ~/.databrickscfg (DATABRICKS_CONFIG_PROFILE)."
+    )
 
 
 def last_log(root: Path) -> Optional[Path]:

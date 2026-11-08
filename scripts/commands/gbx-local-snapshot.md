@@ -14,7 +14,7 @@ bash scripts/commands/gbx-local-snapshot.sh [run | --dry-run | list | prune [--k
 - `--dry-run` — list the included and excluded roots, the file count, the size, and any skipped large files. It writes nothing.
 - `list` — list the snapshots in the folder.
 - `prune [--keep N]` — delete snapshots beyond the newest N. Files that do not match the snapshot name are never touched.
-- `restore <name> <dir>` — unpack a snapshot into an empty directory and print the steps to restore the unpushed commits.
+- `restore <name> <dir>` — unpack a snapshot into an empty directory, rebuild the cluster config (see below), and print the steps to restore the unpushed commits.
 - `status` — show the last logged run, the newest snapshot, and whether the hook is installed.
 - `install-hook` — add a marked block to the `pre-push` hook. After a successful push it starts a snapshot in the background and never fails the push.
 - `uninstall-hook` — remove only that block.
@@ -50,6 +50,14 @@ The list is `EXCLUDES` in `scripts/snapshot/snapshot.py`. It covers run state th
 - Virtual environments and `node_modules` at any depth, `__pycache__`, and `*.pyc`.
 - Run logs, coverage output, and agent worktrees.
 - `examples/tests/databricks_cluster_config.env` (your real cluster config, with secrets; recreate it from `databricks_cluster_config.example.env`) and `.superpowers/input/` (scratch input that may hold pasted tokens).
+
+## Cluster config
+
+The real `examples/tests/databricks_cluster_config.env` is never in the zip because it holds tokens. Instead, each `run` writes `examples/tests/databricks_cluster_config.nonsecret.env` (gitignored) just before the secret scan, and that copy goes in.
+
+- It is the real file with every secret line removed: a key named like `*_TOKEN`, `*_SECRET`, or `*_PASSWORD` with a real value, and any line, commented or not, whose text looks like a token or JWT. Its header lists the dropped key names, never the values.
+- Workspace values (profile, cluster and warehouse IDs, Volume paths) are kept. The file only lives in the private snapshot.
+- On `restore`, if the restored tree has no real config, it is rebuilt as the example's defaults with the snapshot's values laid over them. The command then names the dropped keys to re-enter. Tokens normally come from the profile in `~/.databrickscfg`. An existing real config is never overwritten.
 
 ## Limits
 

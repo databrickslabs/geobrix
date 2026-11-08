@@ -597,3 +597,90 @@ def test_the_command_carries_a_md_and_the_example_env_lists_the_keys():
     keys = (REPO_ROOT / "scripts/docker/gbx-container.sh").read_text()
     for key in snap.CONFIG_KEYS:
         assert key in md and key in example and key in keys
+
+
+# --- cluster config: the derived non-secret copy and the rebuild on restore -------------------------
+REAL_CFG = "examples/tests/databricks_cluster_config.env"
+DERIVED_CFG = "examples/tests/databricks_cluster_config.nonsecret.env"
+EXAMPLE_CFG = "examples/tests/databricks_cluster_config.example.env"
+CFG_SECRET = fake("dapi", "0123456789abcdef" * 2)
+CFG_JWT = (
+    fake("eyJ", "hbGciOiJIUzI1NiJ9") + ".eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcDEF123456_-xyz"
+)
+REAL_CFG_TEXT = (
+    "# docs: DATABRICKS_TOKEN=dapi...\n"
+    "#DATABRICKS_TOKEN=" + CFG_SECRET + "\n"
+    "# note " + CFG_JWT + "\n"
+    "DATABRICKS_TOKEN=" + CFG_SECRET + "\n"
+    "MY_CLIENT_SECRET=hunter2\n"
+    "DATABRICKS_CONFIG_PROFILE=oauth-fe\n"
+    "CLUSTER_ID=0101-abcdef-xyz\n"
+    "GBX_UC_WAREHOUSE_ID=abc123def456\n"
+)
+EXAMPLE_CFG_TEXT = (
+    "# example\nDATABRICKS_CONFIG_PROFILE=default\nCLUSTER_ID=\n"
+    "GBX_BUNDLE_VOLUME_CATALOG=main\n# GBX_UC_WAREHOUSE_ID=\n"
+)
+
+
+def test_derived_config_drops_secrets_and_secret_shaped_comments_and_keeps_workspace_values():
+    body, names, anonymous = snap.derive_nonsecret_config(REAL_CFG_TEXT)
+    assert names == ["DATABRICKS_TOKEN", "MY_CLIENT_SECRET"] and anonymous == 1
+    for gone in (CFG_SECRET, CFG_JWT, "hunter2"):
+        assert gone not in body
+    for kept in (
+        "DATABRICKS_CONFIG_PROFILE=oauth-fe",
+        "CLUSTER_ID=0101-abcdef-xyz",
+        "GBX_UC_WAREHOUSE_ID=abc123def456",
+        "# docs: DATABRICKS_TOKEN=dapi...",  # a placeholder, not a secret
+        "# Secret keys dropped: DATABRICKS_TOKEN, MY_CLIENT_SECRET",
+    ):
+        assert kept in body
+    assert not snap._secret_shaped(body)
+
+
+def test_run_includes_the_derived_config_leaves_the_real_one_out_and_the_scan_passes(
+    repo,
+):
+    write(repo.root, ".gitignore", ".superpowers/\n/" + REAL_CFG + "\n")
+    write(repo.root, REAL_CFG, REAL_CFG_TEXT)
+    assert repo.run("run") == 0
+    names = repo.names()
+    assert "worktree/" + DERIVED_CFG in names and "worktree/" + REAL_CFG not in names
+    with zipfile.ZipFile(str(repo.newest_zip())) as zf:
+        text = zf.read("worktree/" + DERIVED_CFG).decode()
+    assert CFG_SECRET not in text and "CLUSTER_ID=0101-abcdef-xyz" in text
+
+
+def _snapshot_with_config(repo):
+    write(repo.root, EXAMPLE_CFG, EXAMPLE_CFG_TEXT)
+    write(repo.root, REAL_CFG, REAL_CFG_TEXT)
+    assert repo.run("run") == 0
+    return repo.dest.parent / "restored"
+
+
+def test_restore_rebuilds_the_config_from_example_defaults_and_snapshot_values(
+    repo, capsys
+):
+    out = _snapshot_with_config(repo)
+    assert repo.run("restore", str(repo.newest_zip()), str(out)) == 0
+    said = capsys.readouterr().out
+    rebuilt = (out / "worktree" / REAL_CFG).read_text()
+    assert "DATABRICKS_CONFIG_PROFILE=oauth-fe" in rebuilt  # the snapshot's value wins
+    assert "CLUSTER_ID=0101-abcdef-xyz" in rebuilt
+    assert "GBX_BUNDLE_VOLUME_CATALOG=main" in rebuilt  # the example's default stays
+    assert (
+        "GBX_UC_WAREHOUSE_ID=abc123def456" in rebuilt
+    )  # appended: only a comment in the example
+    assert CFG_SECRET not in rebuilt and "hunter2" not in rebuilt
+    assert "DATABRICKS_TOKEN, MY_CLIENT_SECRET" in said and "~/.databrickscfg" in said
+    assert CFG_SECRET not in said
+
+
+def test_restore_never_overwrites_an_existing_real_config(repo, tmp_path):
+    _snapshot_with_config(repo)
+    tree = tmp_path / "tree"
+    write(tree, DERIVED_CFG, "CLUSTER_ID=from-snapshot\n")
+    write(tree, REAL_CFG, "CLUSTER_ID=mine\n")
+    snap.restore_cluster_config(tree)
+    assert (tree / REAL_CFG).read_text() == "CLUSTER_ID=mine\n"

@@ -44,6 +44,53 @@ def _vz_columns_virtual(tmpdir):
     return _tile(None, path)
 
 
+def _iso_tile(z, nodata=None):
+    import numpy as np
+
+    return _tile(
+        _gtiff(np.asarray(z, dtype="float32")[np.newaxis], "EPSG:3857", nodata=nodata)
+    )
+
+
+@builder("vz_quadrants")
+def _vz_quadrants(tmpdir):
+    """6 x 6 pixels, one value per 3 x 3 quadrant: 25, 75 / 125, 175."""
+    import numpy as np
+
+    z = np.zeros((6, 6))
+    z[:3, :3], z[:3, 3:], z[3:, :3], z[3:, 3:] = 25.0, 75.0, 125.0, 175.0
+    return _iso_tile(z)
+
+
+@builder("vz_nodata_hole")
+def _vz_nodata_hole(tmpdir):
+    """4 x 4 pixels of 25 with the 2 x 2 in the middle NoData (-9999)."""
+    import numpy as np
+
+    z = np.full((4, 4), 25.0)
+    z[1:3, 1:3] = -9999.0
+    return _iso_tile(z, nodata=-9999.0)
+
+
+@builder("vz_all_high")
+def _vz_all_high(tmpdir):
+    import numpy as np
+
+    return _iso_tile(np.full((4, 4), 300.0))
+
+
+@builder("vz_two_islands")
+def _vz_two_islands(tmpdir):
+    """8 x 8 pixels of 75 with two 3 x 3 islands of 25 at opposite corners."""
+    import numpy as np
+
+    z = np.full((8, 8), 75.0)
+    z[:3, :3] = 25.0
+    z[5:, 5:] = 25.0
+    return _iso_tile(z)
+
+
+_FIVE = [0.0, 50.0, 100.0, 150.0, 200.0]
 _SESSION_ROWS = (
     # [0, 2) holds columns 0 and 1, [2, 4) columns 2 and 3, [4, 6) columns 4 and 5: 12 pixels each, 1200 m2.
     Case(
@@ -69,6 +116,40 @@ _SESSION_ROWS = (
         (Build("vz_columns_virtual"), [1.0, 3.0]),
         "isobands",
         [(0, 1.0, 3.0, 1200.0)],
+        ONLY,
+    ),
+    # one 3 x 3 block (900 m2) in each of four bands; breaks given as inline decimal-looking literals
+    Case(
+        "isoband_quadrants",
+        ISO,
+        (Build("vz_quadrants"), _FIVE),
+        "isobands",
+        [
+            (0, 0.0, 50.0, 900.0),
+            (1, 50.0, 100.0, 900.0),
+            (2, 100.0, 150.0, 900.0),
+            (3, 150.0, 200.0, 900.0),
+        ],
+        ONLY,
+    ),
+    # NoData pixels are in no band: the ring of 12 pixels is one polygon, the hole not counted
+    Case(
+        "isoband_nodata_excluded",
+        ISO,
+        (Build("vz_nodata_hole"), _FIVE),
+        "isobands",
+        [(0, 0.0, 50.0, 1200.0)],
+        ONLY,
+    ),
+    # every pixel at or above the last break: no band, no polygon
+    Case("isoband_all_above", ISO, (Build("vz_all_high"), _FIVE), "isobands", [], ONLY),
+    # two islands of one band stay two polygons; the other band is the 46 pixels around them
+    Case(
+        "isoband_disjoint_islands",
+        ISO,
+        (Build("vz_two_islands"), _FIVE),
+        "isobands",
+        [(0, 0.0, 50.0, 900.0), (0, 0.0, 50.0, 900.0), (1, 50.0, 100.0, 4600.0)],
         ONLY,
     ),
     Case("isoband_null_tile", ISO, (None, [0.0, 1.0]), "null", None, ONLY),

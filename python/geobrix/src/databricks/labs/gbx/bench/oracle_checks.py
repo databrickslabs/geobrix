@@ -82,6 +82,15 @@ def check_tessellation(case, tiles, args) -> Optional[str]:
     from databricks.labs.gbx.bench.oracles import _masked_band, _ref_dataset
 
     e = case.expect
+    if "covering" in e:
+        # coverage "covering": a cell any pixel overlaps gets a tile. `covering` is a point in each such cell, so the
+        # cells are the ones those points lie in, each once.
+        px, py = zip(*e["covering"])
+        want_ids = set(_pixel_cells(e["grid"], e["res"], np.array(px), np.array(py)))
+        ids = [_field(t, "cellid") for t in tiles]
+        if set(ids) == want_ids and len(ids) == len(want_ids):
+            return None
+        return f"{case.cid}: cells {sorted(ids)}, want each of {sorted(want_ids)} once"
     with _ref_dataset(args) as src:
         z = src.read(1, masked=True)
         ys, xs = np.mgrid[0 : src.height, 0 : src.width]

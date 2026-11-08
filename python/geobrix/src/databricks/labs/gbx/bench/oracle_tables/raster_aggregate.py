@@ -973,6 +973,14 @@ RASTER_AGGREGATE += (
         _pixels("h3", "presence"),
         ONLY,
     ),
+    Case(
+        "cgr_value_omitted",
+        CGA,
+        (Build("cgr_presence"), dict(CUSTOM_GRID), *_CELLS["cg"][3]),
+        "pixels",
+        _pixels("cg", "presence"),
+        ONLY,
+    ),
     # A NULL out_srid is the custom grid's CRS; a grid without one has no CRS to fall back to.
     Case(
         "cgr_out_srid_from_grid",

@@ -42,6 +42,24 @@ def _plane(h, w):
     return (x * 7 + y * 13) % 17 + 1
 
 
+@builder("rg_one_big_pixel")
+def _rg_one_big_pixel(tmpdir):
+    """One 1800 m pixel in EPSG:27700 over (530500, 180500)..(532300, 182300): a block of 1 km cells under one pixel."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    return _tile(
+        _gtiff(
+            np.array([[[5.0]]]),
+            "EPSG:27700",
+            nodata=None,
+            origin=(530500.0, 182300.0),
+            px=1800.0,
+        )
+    )
+
+
 @builder("rg_big")
 def _rg_big(tmpdir):
     import numpy as np
@@ -336,6 +354,23 @@ _SESSION_ROWS = (
         (RAMPBNG, G, 0),
         "tessellation",
         {"grid": "custom", "res": 0},
+        ONLY,
+    ),
+    # coverage "covering": one 1800 m pixel overlaps a 3 x 3 block of 1 km cells, and every one of them gets a tile
+    Case(
+        "cg_tess_covering",
+        CGT,
+        (Build("rg_one_big_pixel"), G, 0, "covering"),
+        "tessellation",
+        {
+            "grid": "custom",
+            "res": 0,
+            "covering": [
+                (x, y)
+                for x in (530500, 531500, 532100)
+                for y in (180600, 181500, 182100)
+            ],
+        },
         ONLY,
     ),
     Case(

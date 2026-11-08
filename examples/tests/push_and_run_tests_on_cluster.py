@@ -282,6 +282,9 @@ if PLAN.get("resources"):  # the test resources, shared by every run of the same
 pkg = repo + "/python/geobrix"
 # some tests ask git for the checkout's root or HEAD: the tarball has no history, so give it a one-commit repository
 os.system("cd %%s && git init -q && git -c user.name=gbx -c user.email=gbx@example.com commit -q --allow-empty -m run >/dev/null 2>&1" %% repo)
+if PLAN.get("jar"):  # the heavy tests look for the JAR in the checkout's lib/ (the cluster has it installed as a library as well)
+    os.makedirs(pkg + "/lib", exist_ok=True)
+    shutil.copy(PLAN["jar"]["volume"], pkg + "/lib/" + PLAN["jar"]["name"])
 OUT = STAGE + "/out/" + SLUG
 os.makedirs(OUT, exist_ok=True)
 os.makedirs(STAGE + "/hb", exist_ok=True)

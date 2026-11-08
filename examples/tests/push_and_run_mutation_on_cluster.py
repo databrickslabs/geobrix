@@ -158,7 +158,7 @@ def find_wheel(explicit: str, required: bool = True) -> Path:
                 "wheel stage not run. Fix: bash scripts/commands/gbx-build-wheel.sh --env 6, or pass --wheel <path>."
             )
         p = found[0]
-    if not p.is_file() and required:
+    if not p.is_file() and (required or explicit):
         sys.exit(f"PRECONDITION MISSING: wheel {p} does not exist; run not started.")
     return p
 

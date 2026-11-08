@@ -469,3 +469,8 @@ def test_the_trend_compares_only_runs_with_the_same_tests():
         "AND tests = 'test/pyvx'" in spark.sql_seen[0]
         and "run_id <> 'new'" in spark.sql_seen[0]
     )
+
+
+def test_a_wheel_path_the_user_passed_must_exist_even_in_a_plan_only_run(tmp_path):
+    with pytest.raises(SystemExit):
+        launcher.find_wheel(str(tmp_path / "missing.whl"), required=False)

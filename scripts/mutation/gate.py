@@ -498,6 +498,9 @@ def main(argv=None) -> int:
                     shutil.rmtree(work / sub)
                     shutil.copytree(PKG_ROOT / sub, work / sub, ignore=IGNORE_COPY)
         require_old_kills(old)
+        if not args.old_codes:  # keep the slow old run if the slim run cannot start
+            (out / "K_old.json").write_text(json.dumps(old, indent=0, sort_keys=True))
+            write_fingerprint(out / "K_old.json", fingerprint)
         slim = run_suite("slim", work, py, modules, slim_sel, args, out)
         samples = {f"sample{n}": sample(old, n, args.seed) for n in SAMPLE_SIZES}
         verdict = judge(old, slim, samples)

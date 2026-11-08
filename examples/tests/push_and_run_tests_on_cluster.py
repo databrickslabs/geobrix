@@ -736,7 +736,7 @@ def lease_pool(w, a, plan: dict, pool_name: str, *, jar: Optional[dict], volroot
     its own, named for the run, ended (deleted) at the end."""
     import _cluster_pool as pool
 
-    name = f"gbx-test-fresh-{plan['run_id']}"[:60] if a.fresh_cluster else pool_name
+    name = fresh_pool_name(plan["run_id"], bool(jar)) if a.fresh_cluster else pool_name
     ns = SimpleNamespace(pool=name, node_type=a.node_type, pool_wait_min=a.pool_wait_min if wait_min is None else wait_min)
     try:
         with mut.lease_pool_cluster(w, ns, {"run_id": plan["run_id"]}, volroot=volroot, me=me) as lease:
@@ -799,7 +799,7 @@ def lease_many(stack, w, a, plan: dict, pool: str, *, volroot: str, me: str) -> 
     got = [first]
     if a.fresh_cluster:
         return got
-    cfg = cp.read_config(w, volroot, pool_name_of(a, pool))
+    cfg = cp.read_config(w, volroot, pool_name_of(a, pool, bool(jar)))
     want = a.clusters or (int(cfg["cap"]) if cfg else len(cp.members(w, pool)))  # up to the pool's cap: free ones first, then stopped, then new
     tried = 0
     while len(got) < want and tried < want * 2:
@@ -812,8 +812,13 @@ def lease_many(stack, w, a, plan: dict, pool: str, *, volroot: str, me: str) -> 
     return got
 
 
-def pool_name_of(a, pool: str) -> str:
-    return f"gbx-test-fresh-{a.run_id}"[:60] if a.fresh_cluster else pool
+def fresh_pool_name(run_id: str, with_jar: bool) -> str:
+    """The pool a --fresh-cluster run makes for itself: one per kind, so the light and the JAR pool of one run are two clusters."""
+    return f"gbx-test-fresh-{run_id}-{'jar' if with_jar else 'light'}"[:60]
+
+
+def pool_name_of(a, pool: str, with_jar: bool = False) -> str:
+    return fresh_pool_name(a.run_id, with_jar) if a.fresh_cluster else pool
 
 
 def relane(plan: dict, pool: str, a, n_clusters: int, cores: int) -> None:

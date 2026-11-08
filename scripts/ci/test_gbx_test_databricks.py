@@ -491,3 +491,12 @@ def test_the_tarball_carries_the_ci_workflow_the_scripts_shard_parses():
     assert ".github" in launcher.SUBSET
     listed = subprocess.run(["git", "ls-tree", "-r", "--name-only", "HEAD", "--", ".github/workflows/build_main.yml"], cwd=REPO_ROOT, capture_output=True, text=True).stdout
     assert ".github/workflows/build_main.yml" in listed, "the file the guards read is in the tree the subset archives"
+
+
+def test_a_fresh_cluster_run_makes_one_pool_per_kind_so_light_and_jar_do_not_share_a_cluster():
+    light, jar = launcher.fresh_pool_name("tst-1", False), launcher.fresh_pool_name("tst-1", True)
+    assert light != jar and light.endswith("-light") and jar.endswith("-jar")
+    assert len(launcher.fresh_pool_name("x" * 80, True)) <= 60
+    a = launcher.parse(["--run-id", "tst-1", "--fresh-cluster"])
+    assert launcher.pool_name_of(a, "gbx-test-1n") == light and launcher.pool_name_of(a, "gbx-test-1n-jar", True) == jar
+    assert launcher.pool_name_of(launcher.parse([]), "gbx-test-1n") == "gbx-test-1n"

@@ -12,12 +12,12 @@ object OverlappingTiles {
     def requireArguments(fn: String, tileWidth: Any, tileHeight: Any, overlap: Any): Unit = {
         Seq("tile_width" -> tileWidth, "tile_height" -> tileHeight).foreach { case (name, v) =>
             if (v != null) {
-                val n = v.asInstanceOf[Int]
+                val n = v.asInstanceOf[Number].intValue
                 require(n > 0, s"$fn: $name must be 1 or more pixels, got $n. Fix: pass a window of at least 1 pixel.")
             }
         }
         if (overlap != null) {
-            val n = overlap.asInstanceOf[Int]
+            val n = overlap.asInstanceOf[Number].intValue
             require(
               n >= 0 && n < 100,
               s"$fn: overlap must be from 0 to below 100 percent, got $n. Fix: pass the overlap as a percentage of the tile size."

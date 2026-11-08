@@ -232,6 +232,30 @@ HEAVY_PENDING.update(
     }
 )
 
+# Two answers of the raster tile functions that the JVM level gives differently (measured through the JAR): the JVM
+# stretch takes the nearest-rank percentile of an 8-bit band and rounds the rescale where the lightweight level
+# interpolates the percentile and truncates (the float rows agree within a level, the 8-bit lookup rows by up to 1.24);
+# and the mean filter of a gray + alpha tile leaves the empty window's mask different from the lightweight level's.
+HEAVY_PENDING.update(
+    {
+        "percentile_stretch_byte_lut": {
+            "L1": "the JVM takes the nearest-rank percentile of an 8-bit band and rounds the rescale; the lightweight level interpolates the percentile and truncates, so 8 pixels differ by up to 1.24 levels"
+        },
+        "percentile_stretch_u16_lut": {
+            "L1": "the JVM takes the nearest-rank percentile of a 16-bit band and rounds the rescale; the lightweight level interpolates the percentile and truncates, so one pixel is NoData on one level and not the other"
+        },
+        "asformat_vrt_refused": {
+            "L1": "the JVM writes a VRT tile (a format that names other files, which a tile cannot open again) where the lightweight level refuses it with a Fix"
+        },
+        "buildoverviews_empty_levels": {
+            "L1": "the JVM answers an empty levels array with an error tile; the lightweight level raises the parameter error"
+        },
+        "filter_u8_alpha_mean_1": {
+            "L1": "the JVM mean filter of a gray + alpha tile leaves a different NoData mask at the empty window than the lightweight level, which shows -9999 there as a pixel value"
+        },
+    }
+)
+
 # Two shapes the lightweight level takes and the JVM level does not (measured through the JAR).
 HEAVY_PENDING.update(
     {
@@ -2840,6 +2864,20 @@ def _ref_filter(args):
     )
 
 
+def _ref_filter_blank(fill):
+    """rst_filter of a tile whose NoData is an alpha band: the output declares no NoData, so a window with nothing valid
+    in it shows `fill` (-9999 for a Float32 mean) as a pixel value, and no pixel is masked.
+    """
+
+    def ref(args):
+        import numpy as np
+
+        values, mask = _ref_filter(args)
+        return np.where(mask, fill, values), np.zeros(mask.shape, dtype=bool)
+
+    return ref
+
+
 def _ref_convolve(args):
     """rst_convolve: the unflipped kernel laid over each pixel, zero-padded, a NoData neighbour adding 0
     (oracle_refs.correlate); the result is never NoData."""
@@ -2869,6 +2907,47 @@ def _ref_percentile_stretch(args):
         band.data.astype("float64"), valid, float(args[1]), float(args[2])
     )
     return out, ~valid | (np.floor(out) == 0)
+
+
+def _ref_percentile_stretch_bands(args):
+    """rst_percentile_stretch of every band, each on its own percentiles (oracle_refs): a band with no valid pixel or
+    with equal percentiles is all 0, which is also its NoData."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench import oracle_refs
+
+    outs, masks = [], []
+    with _ref_dataset(args) as ds:
+        for b in range(1, ds.count + 1):
+            band = ds.read(b, masked=True)
+            valid = ~np.ma.getmaskarray(band)
+            z = band.data.astype("float64")
+            lo, hi = (
+                np.percentile(z[valid], (float(args[1]), float(args[2])))
+                if valid.any()
+                else (0.0, 0.0)
+            )
+            if hi <= lo:
+                out = np.zeros(z.shape)
+            else:
+                out = oracle_refs.percentile_scale(
+                    z, valid, float(args[1]), float(args[2])
+                )
+            outs.append(out)
+            masks.append(~valid | (np.floor(out) == 0))
+    return np.stack(outs), np.stack(masks)
+
+
+def _ref_init_nodata_u16(args):
+    """rst_initnodata of a UInt16 tile: it keeps the source's NoData (65535 when it declares none) and its own mask,
+    and a pixel equal to that value is NoData too; the data is untouched."""
+    import numpy as np
+
+    with _ref_dataset(args) as ds:
+        band = ds.read(1, masked=True)
+        sentinel = 65535.0 if ds.nodata is None else ds.nodata
+    z = band.data.astype("float64")
+    return z, np.ma.getmaskarray(band) | (z == sentinel)
 
 
 def _ref_derived_plus_one(args):
@@ -3230,8 +3309,11 @@ _REFS = {
     "dtm_plane": _ref_plane((1.0, 2.0), (0.0, 0.0, 10.0, 10.0)),
     "band": _ref_band_arg,
     "filter": _ref_filter,
+    "filter_blank_9999": _ref_filter_blank(-9999.0),
     "convolve": _ref_convolve,
     "percentile_stretch": _ref_percentile_stretch,
+    "percentile_stretch_bands": _ref_percentile_stretch_bands,
+    "init_nodata_u16": _ref_init_nodata_u16,
     "derived_plus_one": _ref_derived_plus_one,
     "cast": _ref_cast,
     "align_to": _ref_align_to,
@@ -3273,6 +3355,7 @@ _REFS = {
 # GDAL's proximity is a fast two-pass distance, not the exact Euclidean one: it agrees to within a pixel's diagonal.
 _REF_ATOL = {
     "percentile_stretch": 1.0,  # the cast to 8 bits truncates; a reference that rounded would differ by one level
+    "percentile_stretch_bands": 1.0,
     "hillshade": 1.0,
     "aspect": 0.01,
     "color_relief_rgb": 1.0,  # GDAL rounds the interpolated channel to a Byte

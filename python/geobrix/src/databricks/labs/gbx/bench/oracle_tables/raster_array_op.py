@@ -23,6 +23,9 @@ from databricks.labs.gbx.bench.oracles import (
     builder,
 )
 
+# The session rows also run on the plain Python function behind the registered UDF (test_family_oracle_l3_callables).
+L3_CALLABLE = True
+
 STATS = ("avg", "count", "max", "median", "min", "stddev", "sum")
 CB = {s: f"gbx_rst_combine{s}" for s in STATS}
 MG, FB = "gbx_rst_merge", "gbx_rst_frombands"

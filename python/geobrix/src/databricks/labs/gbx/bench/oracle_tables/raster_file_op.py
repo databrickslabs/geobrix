@@ -10,6 +10,9 @@ viewshed functions of the same family keep their rows in the GDAL spec engine ta
 from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import UPSTREAM_ERROR, Build, Case
 
+# The session rows also run on the plain Python function behind the registered UDF (test_family_oracle_l3_callables).
+L3_CALLABLE = True
+
 BO, CG = "gbx_rst_buildoverviews", "gbx_rst_cog_convert"
 TILE, VIRT, ERR, CORRUPT = (
     Build("tile_4326"),
@@ -60,10 +63,25 @@ _SESSION_ROWS = (
         BO,
         (TILE, [2], "bogus"),
         "raises",
-        "bogus",
+        "unsupported resampling 'bogus'; allowed:",
         ONLY,
     ),
-    Case("buildoverviews_bad_levels", BO, (TILE, [1]), "raises", "levels", ONLY),
+    Case(
+        "buildoverviews_bad_levels",
+        BO,
+        (TILE, [1]),
+        "raises",
+        "each level must be >= 2; got 1 in levels [1]",
+        ONLY,
+    ),
+    Case(
+        "buildoverviews_empty_levels",
+        BO,
+        (TILE, []),
+        "raises",
+        "levels must be a non-empty integer array",
+        ONLY,
+    ),
     Case("buildoverviews_null_tile", BO, (None, [2]), "null", None, ONLY),
     Case("buildoverviews_null_levels", BO, (TILE, None), "null", None, ONLY),
     Case(

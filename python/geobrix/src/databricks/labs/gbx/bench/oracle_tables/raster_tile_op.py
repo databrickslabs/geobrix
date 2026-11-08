@@ -21,6 +21,16 @@ from databricks.labs.gbx.bench.oracles import (
     builder,
 )
 
+# The session rows also run on the plain Python function behind the registered UDF (test_family_oracle_l3_callables).
+L3_CALLABLE = True
+# The spec-engine functions run through the same light kernels (warp, resample, clip, indices): their rows, which sit
+# in the SPEC_* tables and the shared MVP_S, reach those kernels through this leg too.
+L3_CALLABLE_FNS = (
+    "gbx_rst_clip", "gbx_rst_evi", "gbx_rst_index", "gbx_rst_nbr", "gbx_rst_ndvi", "gbx_rst_ndwi", "gbx_rst_resample",
+    "gbx_rst_resample_to_res", "gbx_rst_resample_to_size", "gbx_rst_savi", "gbx_rst_summary", "gbx_rst_threshold",
+    "gbx_rst_to_webmercator", "gbx_rst_transform", "gbx_rst_transformcrs",
+)  # fmt: skip
+
 AL, AF, BD, CV = (
     "gbx_rst_align_to",
     "gbx_rst_asformat",
@@ -1042,4 +1052,227 @@ RASTER_TILE_OP = share(
     Case("uc_align_to_corrupt_reference_null", AL, (T4326, CORRUPT), "null", None, ("uc",)),
     # a tile of fewer than three bands has no colour to classify: refused with the Fix to stack the bands
     Case("uc_land_cover_two_bands_refused", LC, (Build("rto_two_bands"), "spectral", 6, 0), "uc_refused", None, ("uc",)),
+)  # fmt: skip
+
+# --- filter on windows with many holes: the seeded fixtures stand in for the old identity checks ----------------------
+# `rto_filter_random` is 24 x 24 with about a quarter of the pixels NoData, `rto_filter_ring` an 8 x 8 ramp with a
+# NoData ring, `rto_filter_empty` a tile that is all NoData, and `rto_filter_u8_alpha` a UInt8 gray band with an alpha
+# band whose one transparent pixel (row 2, column 3) leaves a 1 x 1 window with nothing valid in it.
+
+
+@builder("rto_filter_random")
+def _rto_filter_random(tmpdir):
+    import numpy as np
+
+    rng = np.random.default_rng(20260608)
+    z = rng.uniform(-50.0, 50.0, size=(24, 24))
+    z[rng.random((24, 24)) < 0.25] = -9999.0
+    return _tile(_gtiff(z[np.newaxis], "EPSG:3857"))
+
+
+@builder("rto_filter_ring")
+def _rto_filter_ring(tmpdir):
+    import numpy as np
+
+    z = np.arange(64, dtype="float64").reshape(8, 8)
+    z[0, :] = z[-1, :] = z[:, 0] = z[:, -1] = -9999.0
+    return _tile(_gtiff(z[np.newaxis], "EPSG:3857"))
+
+
+@builder("rto_filter_empty")
+def _rto_filter_empty(tmpdir):
+    import numpy as np
+
+    return _tile(_gtiff(np.full((1, 6, 6), -9999.0), "EPSG:3857"))
+
+
+@builder("rto_filter_u8_alpha")
+def _rto_filter_u8_alpha(tmpdir):
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    gray = np.full((6, 6), 7, dtype="uint8")
+    alpha = np.full((6, 6), 255, dtype="uint8")
+    alpha[2, 3] = 0
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=6,
+            height=6,
+            count=2,
+            dtype="uint8",
+            crs=resolve_crs("EPSG:3857"),
+            transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+            alpha="yes",
+        ) as ds:
+            ds.write(np.stack([gray, alpha]))
+        return _tile(mf.read())
+
+
+RANDOM, RING = Build("rto_filter_random"), Build("rto_filter_ring")
+EMPTY_TILE, U8_ALPHA = Build("rto_filter_empty"), Build("rto_filter_u8_alpha")
+RASTER_TILE_OP += (
+    Case("filter_random_min_3", FI, (RANDOM, 3, "min"), "ref", "filter", ONLY),
+    Case("filter_random_max_5", FI, (RANDOM, 5, "max"), "ref", "filter", ONLY),
+    Case("filter_random_mean_3", FI, (RANDOM, 3, "mean"), "ref", "filter", ONLY),
+    Case("filter_random_median_3", FI, (RANDOM, 3, "median"), "ref", "filter", ONLY),
+    Case("filter_random_median_5", FI, (RANDOM, 5, "median"), "ref", "filter", ONLY),
+    Case("filter_ring_median_3", FI, (RING, 3, "median"), "ref", "filter", ONLY),
+    Case("filter_ring_min_5", FI, (RING, 5, "min"), "ref", "filter", ONLY),
+    Case("filter_ring_max_3", FI, (RING, 3, "max"), "ref", "filter", ONLY),
+    Case("filter_all_nodata_median", FI, (EMPTY_TILE, 3, "median"), "ref", "filter", ONLY),
+    Case("filter_all_nodata_stays_nodata", FI, (EMPTY_TILE, 3, "min"), "tile_meta", {"nodata": -9999.0}, ONLY),
+    # a mean is Float32 whatever the input, so -9999 fits and shows as a pixel value (an alpha layout declares no
+    # NoData); a minimum, maximum or median keeps UInt8, and the window with nothing valid in it stays transparent
+    Case("filter_u8_alpha_mean_1", FI, (U8_ALPHA, 1, "mean"), "ref", "filter_blank_9999", ONLY),
+    Case("filter_u8_alpha_min_1", FI, (U8_ALPHA, 1, "min"), "ref", "filter", ONLY),
+    Case("filter_u8_alpha_max_1", FI, (U8_ALPHA, 1, "max"), "ref", "filter", ONLY),
+    Case("filter_u8_alpha_median_1", FI, (U8_ALPHA, 1, "median"), "ref", "filter", ONLY),
+)  # fmt: skip
+
+
+# --- percentile_stretch beyond the single float band: the 8- and 16-bit lookup path, bands on their own percentiles ---
+# `rto_stretch_u16_bands` is two UInt16 bands (100..200 and 1000..2000) with a NoData pixel of 0 in each,
+# `rto_stretch_flat` a band of one value, `rto_stretch_empty` a band with no valid pixel.
+
+
+def _stretch_tile(bands, nodata):
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    bands = np.asarray(bands)
+    count, h, w = bands.shape
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=w,
+            height=h,
+            count=count,
+            dtype=str(bands.dtype),
+            nodata=nodata,
+            crs=resolve_crs("EPSG:3857"),
+            transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+        ) as ds:
+            ds.write(bands)
+        return _tile(mf.read())
+
+
+@builder("rto_stretch_u16_bands")
+def _rto_stretch_u16_bands(tmpdir):
+    import numpy as np
+
+    b1 = np.linspace(100, 200, 100, dtype="uint16").reshape(10, 10)
+    b2 = np.linspace(1000, 2000, 100, dtype="uint16").reshape(10, 10)
+    b1[0, 0] = b2[0, 0] = 0
+    return _stretch_tile(np.stack([b1, b2]), 0)
+
+
+@builder("rto_stretch_flat")
+def _rto_stretch_flat(tmpdir):
+    import numpy as np
+
+    return _stretch_tile(np.full((1, 6, 6), 5.0, dtype="float32"), None)
+
+
+@builder("rto_stretch_empty")
+def _rto_stretch_empty(tmpdir):
+    import numpy as np
+
+    return _stretch_tile(np.full((1, 6, 6), -9999.0, dtype="float32"), -9999.0)
+
+
+RASTER_TILE_OP += (
+    Case("percentile_stretch_byte_lut", PS, (BYTE, 2.0, 98.0), "ref", "percentile_stretch", ONLY),
+    Case("percentile_stretch_u16_lut", PS, (U16, 5.0, 95.0), "ref", "percentile_stretch", ONLY),
+    Case("percentile_stretch_bands", PS, (Build("rto_stretch_u16_bands"), 2.0, 98.0), "ref", "percentile_stretch_bands", ONLY),
+    Case("percentile_stretch_flat_band", PS, (Build("rto_stretch_flat"), 2.0, 98.0), "ref", "percentile_stretch_bands", ONLY),
+    Case("percentile_stretch_no_valid_pixel", PS, (Build("rto_stretch_empty"), 2.0, 98.0), "ref", "percentile_stretch_bands", ONLY),
+    Case("percentile_stretch_full_range", PS, (RAMP, 0.0, 100.0), "ref", "percentile_stretch", ONLY),
+)  # fmt: skip
+
+
+# --- initnodata on UInt16: the type's fallback, a declared NoData kept, a source's own mask kept ----------------------
+# `rto_u16_masked` is 8 x 8 values 100..163 with an internal mask over every fifth pixel, an unmasked 65535 (the
+# fallback) at pixel 7 and an unmasked 7 at pixel 9; `rto_u16_masked_nd7` the same with NoData 7.
+
+
+def _u16_tile(vals, nodata, mask=None):
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    vals = np.asarray(vals, dtype="uint16")
+    h, w = vals.shape
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(
+                driver="GTiff",
+                width=w,
+                height=h,
+                count=1,
+                dtype="uint16",
+                nodata=nodata,
+                crs=resolve_crs("EPSG:3857"),
+                transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+            ) as ds:
+                ds.write(vals[np.newaxis])
+                if mask is not None:
+                    ds.write_mask(mask)
+            return _tile(mf.read())
+
+
+def _masked_u16_values():
+    import numpy as np
+
+    vals = (np.arange(64) + 100).astype("uint16")
+    vals[7], vals[9] = 65535, 7
+    mask = np.where(np.arange(64) % 5 == 0, 0, 255).astype("uint8")
+    return vals.reshape(8, 8), mask.reshape(8, 8)
+
+
+@builder("rto_u16_plain")
+def _rto_u16_plain(tmpdir):
+    import numpy as np
+
+    return _u16_tile(np.arange(1, 17).reshape(4, 4), None)
+
+
+@builder("rto_u16_nd7")
+def _rto_u16_nd7(tmpdir):
+    import numpy as np
+
+    return _u16_tile(np.ones((4, 4)), 7)
+
+
+@builder("rto_u16_masked")
+def _rto_u16_masked(tmpdir):
+    return _u16_tile(*[_masked_u16_values()[0], None, _masked_u16_values()[1]])
+
+
+@builder("rto_u16_masked_nd7")
+def _rto_u16_masked_nd7(tmpdir):
+    return _u16_tile(*[_masked_u16_values()[0], 7, _masked_u16_values()[1]])
+
+
+RASTER_TILE_OP += (
+    Case("initnodata_u16_stamps_fallback", IN, (Build("rto_u16_plain"),), "tile_meta", {"nodata": 65535.0}, ONLY),
+    Case("initnodata_u16_keeps_nodata", IN, (Build("rto_u16_nd7"),), "tile_meta", {"nodata": 7.0}, ONLY),
+    Case("initnodata_u16_keeps_own_mask", IN, (Build("rto_u16_masked"),), "ref", "init_nodata_u16", ONLY),
+    Case("initnodata_u16_keeps_mask_and_nodata", IN, (Build("rto_u16_masked_nd7"),), "ref", "init_nodata_u16", ONLY),
+)  # fmt: skip
+
+
+# --- asformat to a driver with no file extension, and to one a tile cannot hold -----------------------------------------
+RASTER_TILE_OP += (
+    Case("asformat_gsbg", AF, (PLAIN, "GSBG"), "tile_meta", {"driver": "GSBG"}, ONLY),
+    Case("asformat_vrt_refused", AF, (PLAIN, "VRT"), "raises", "does not open as a tile", ONLY),
 )  # fmt: skip

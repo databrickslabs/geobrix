@@ -9,6 +9,9 @@ light file reader) and reads the file `tile_virtual` is a window of."""
 from databricks.labs.gbx.bench.oracle_tables._uc_tile import share
 from databricks.labs.gbx.bench.oracles import Build, Case, builder
 
+# The session rows also run on the plain Python function behind the registered UDF (test_family_oracle_l3_callables).
+L3_CALLABLE_FNS = ("gbx_rst_fromcontent",)
+
 FC, FF = "gbx_rst_fromcontent", "gbx_rst_fromfile"
 GTIFF, PNG = Build("rc_gtiff_bytes"), Build("rc_png_bytes")
 GARBAGE, VRT = Build("rc_garbage_bytes"), Build("rc_vrt_bytes")

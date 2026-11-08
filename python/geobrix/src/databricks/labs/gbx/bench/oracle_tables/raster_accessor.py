@@ -574,3 +574,9 @@ RASTER_STAT += (
         "recipe_stats_partial_merge", SP, _MERGE, "stats_merge_json", None, BOTH, args=(Build("rtg_ll"),),
     ),
 ) + edges(stats_partial=())  # fmt: skip
+
+# The session rows also run on the plain Python function behind the registered UDF (test_family_oracle_l3_callables):
+# every accessor and statistic but the histogram, whose optional bounds the plain call does not default.
+L3_CALLABLE_FNS = tuple(
+    sorted({c.fn for c in RASTER_ACCESSOR + RASTER_STAT} - {"gbx_rst_histogram"})
+)

@@ -144,18 +144,21 @@ def uncommitted_in_subset() -> list:
     return [ln[3:] for ln in out.splitlines() if ln.strip()]
 
 
-def find_wheel(explicit: str) -> Path:
+def find_wheel(explicit: str, required: bool = True) -> Path:
+    """The env6 wheel to stage. A plan-only run (``required=False``) needs no built wheel: it shows a placeholder."""
     if explicit:
         p = Path(explicit)
     else:
         found = sorted(REPO_ROOT.glob("dist/env6/geobrix-*+env6-py3-none-any.whl"))
+        if len(found) != 1 and not required:
+            return REPO_ROOT / "dist/env6/<env6 wheel, built at launch>"
         if len(found) != 1:
             sys.exit(
                 f"PRECONDITION MISSING: expected one dist/env6/geobrix-*+env6-py3-none-any.whl, found {len(found)}; "
                 "wheel stage not run. Fix: bash scripts/commands/gbx-build-wheel.sh --env 6, or pass --wheel <path>."
             )
         p = found[0]
-    if not p.is_file():
+    if not p.is_file() and required:
         sys.exit(f"PRECONDITION MISSING: wheel {p} does not exist; run not started.")
     return p
 
@@ -387,7 +390,7 @@ def main(argv=None) -> int:
     load_config()
     a.run_id = a.run_id or default_run_id()
     sha = resolve_sha(a.sha)
-    wheel = find_wheel(a.wheel)
+    wheel = find_wheel(a.wheel, required=not a.explain_only)
     volroot = "/Volumes/%s/%s/%s" % tuple(
         (os.environ.get(k) or d).strip()
         for k, d in (("GBX_BUNDLE_VOLUME_CATALOG", "main"), ("GBX_BUNDLE_VOLUME_SCHEMA", "default"), ("GBX_BUNDLE_VOLUME_NAME", "geobrix_samples"))

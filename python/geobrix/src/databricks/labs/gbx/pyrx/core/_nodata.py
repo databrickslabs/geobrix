@@ -252,14 +252,13 @@ def propagate_invalid(valid: np.ndarray, size: int = 3) -> np.ndarray:
 
 def emit(ds, arr: np.ndarray, nodata: float, invalid: np.ndarray, dtype: str) -> bytes:
     """Write *arr* as a single-band GTiff in memory, setting NoData where *invalid*
-    (or non-finite). Float dtypes keep values; uint8 is clipped/rounded to [0,255]. A *nodata* of None writes the
-    values as they are and declares no NoData value."""
+    (or non-finite). Float dtypes keep values; uint8 is clipped/rounded to [0,255]."""
     invalid = invalid | ~np.isfinite(arr)
     if dtype == "uint8":
         base = np.clip(np.round(arr), 0, 255)
     else:
         base = arr.astype("float64")
-    out = (base if nodata is None else np.where(invalid, nodata, base)).astype(dtype)
+    out = np.where(invalid, nodata, base).astype(dtype)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=1, dtype=dtype, nodata=nodata)
     return write_gtiff(profile, out[np.newaxis, ...])

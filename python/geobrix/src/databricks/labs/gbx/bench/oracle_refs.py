@@ -63,16 +63,16 @@ def horn(z, nodata, xres, yres, xscale=1.0, yscale=1.0):
 
 def aspect(z, nodata, xres, yres, trigonometric=False, zero_for_flat=False):
     """The direction of steepest descent, in degrees: clockwise from north, or counter-clockwise from east
-    (both in [0, 360)). A flat cell is NoData. With ``zero_for_flat`` GDAL declares no NoData value, so a flat cell and
-    every cell it cannot compute (the border, the neighbours of NoData) are 0 and nothing is masked.
-    """
+    (both in [0, 360)). A flat cell is NoData, or 0 with ``zero_for_flat``."""
     dzdx, dzdy, mask = horn(z, nodata, xres, yres)
     deg = np.degrees(np.arctan2(dzdy, -dzdx))
     out = deg % 360.0 if trigonometric else (90.0 - deg) % 360.0
     flat = (dzdx == 0) & (dzdy == 0) & ~mask
     if zero_for_flat:
-        return np.where(flat | mask, 0.0, out), np.zeros(mask.shape, bool)
-    return out, mask | flat
+        out = np.where(flat, 0.0, out)
+    else:
+        mask = mask | flat
+    return out, mask
 
 
 def hillshade(

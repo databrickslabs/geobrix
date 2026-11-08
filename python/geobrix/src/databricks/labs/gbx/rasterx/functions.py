@@ -218,16 +218,14 @@ def rst_aspect(
         tile: The single-band DEM tile.
         trigonometric: `true` gives counter-clockwise degrees from east; `false` gives
             compass degrees clockwise from north. SQL default: ``false``.
-        zero_for_flat: `true` gives 0 for flat cells, for the border and for cells next
-            to NoData, and the tile has no NoData value; `false` leaves flat cells NoData.
-            SQL default: ``false``.
+        zero_for_flat: `true` gives 0 for flat cells; `false` leaves them NoData. The
+            border and the cells next to NoData stay NoData. SQL default: ``false``.
         virtualize_dir: Python only: write the result under this directory and return a virtual tile.
         virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
-        A single-band Float32 tile in degrees from 0 to 360; NoData is -9999, unless
-        `zero_for_flat` is true.
+        A single-band Float32 tile in degrees from 0 to 360; NoData is -9999.
 
     SQL: ``gbx_rst_aspect(tile, [trigonometric], [zero_for_flat])``
     """

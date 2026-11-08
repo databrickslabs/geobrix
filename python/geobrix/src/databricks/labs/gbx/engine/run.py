@@ -296,6 +296,41 @@ def _read(gdal, name: str) -> bytes:
         gdal.VSIFCloseL(fh)
 
 
+def _remask_zero_for_flat(gdal, src: str, out: str) -> None:
+    """Aspect with ``--zero-for-flat``: GDAL drops the output's NoData value, so every cell it cannot compute (the
+    border, a cell whose 3 x 3 window holds NoData) comes out 0, which reads as a valid aspect. Declare NoData -9999
+    again and write it in those cells; a flat cell keeps its 0. The cells are the input's: a cell is computed when it
+    and its 8 neighbours are data (not the NoData value, not NaN or infinite)."""
+    import numpy as np
+
+    sds = gdal.Open(src)
+    band = sds.GetRasterBand(1)
+    w, h = sds.RasterXSize, sds.RasterYSize
+    z = np.frombuffer(
+        band.ReadRaster(0, 0, w, h, buf_type=gdal.GDT_Float64), dtype="<f8"
+    ).reshape(h, w)
+    nodata = band.GetNoDataValue()
+    valid = np.isfinite(z) if nodata is None else (np.isfinite(z) & (z != nodata))
+    del band, sds
+    invalid = np.ones((h, w), bool)
+    if h > 2 and w > 2:
+        inner = np.ones((h - 2, w - 2), bool)
+        for dy in range(3):
+            for dx in range(3):
+                inner &= valid[dy : h - 2 + dy, dx : w - 2 + dx]
+        invalid[1:-1, 1:-1] = ~inner
+    ods = gdal.Open(out, gdal.GA_Update)
+    ob = ods.GetRasterBand(1)
+    a = np.frombuffer(
+        ob.ReadRaster(0, 0, w, h, buf_type=gdal.GDT_Float32), dtype="<f4"
+    ).reshape(h, w)
+    a = np.where(invalid, np.float32(-9999.0), a).astype("<f4")
+    ob.WriteRaster(0, 0, w, h, a.tobytes(), buf_type=gdal.GDT_Float32)
+    ob.SetNoDataValue(-9999.0)
+    ob.FlushCache()
+    del ob, ods
+
+
 def _remove(gdal, prefix: str) -> None:
     for rel in gdal.ReadDirRecursive(prefix) or ():
         if not rel.endswith("/"):
@@ -471,6 +506,8 @@ def run(
             if block.alg == "raster calc":
                 _check_expression(gdal, fn, tokens, props, names, prefix, shown)
             _execute(gdal, block.alg, tokens, shown, refused)
+            if block.alg == "raster aspect" and "--zero-for-flat" in tokens:
+                _remask_zero_for_flat(gdal, names[0], out)
             return Result(_read(gdal, out), None, command)
         except DataError as exc:
             return Result(None, _shown(str(exc), shown), command)

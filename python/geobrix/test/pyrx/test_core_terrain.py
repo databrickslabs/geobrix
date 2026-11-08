@@ -79,9 +79,8 @@ def test_aspect_flat_zero_for_flat():
         out = terrain.aspect(ds, zero_for_flat=True)
     with _serde.open_tile(out) as o:
         arr = o.read(1)
-        # As GDAL's --zero-for-flat: flat cells and the 1-px kernel border are all 0, with no NoData value.
-        assert np.allclose(arr, 0.0, atol=1e-3)
-        assert o.nodata is None
+        # Interior flat cells -> 0; the 1-px kernel border is NoData.
+        assert np.allclose(arr[1:-1, 1:-1], 0.0, atol=1e-3)
 
 
 def test_aspect_trigonometric():

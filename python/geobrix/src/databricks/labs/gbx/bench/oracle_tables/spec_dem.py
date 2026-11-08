@@ -144,6 +144,8 @@ _session_dem_rows = (
     Case("aspect_plane_east", AS, (PLANE, False, False), "ref", "aspect", ONLY),
     Case("aspect_flat_nodata", AS, (FLAT, False, False), "ref", "aspect", ONLY),
     Case("aspect_flat_zero", AS, (FLAT, False, True), "ref", "aspect", ONLY),
+    # GDAL drops the output's NoData value with zero_for_flat; the engine puts it back at the border and around the hole
+    Case("aspect_zero_for_flat_hole", AS, (DEM, False, True), "ref", "aspect", ONLY),
     Case("aspect_virtual", AS, (VIRT, False, False), "ref", "aspect", ONLY),
     Case("aspect_null_param", AS, (DEM, None, False), "null", None, ONLY),
     Case("aspect_null_tile", AS, (None, False, False), "null", None, ONLY),

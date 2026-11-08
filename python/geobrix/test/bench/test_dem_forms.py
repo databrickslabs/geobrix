@@ -83,14 +83,24 @@ def test_the_colour_table_is_written_once_and_named_in_the_input(tmp_path):
 
 
 def test_the_probe_forms_run_only_when_named_and_report_nulls():
-    probes = [f for f in lf.FORMS["DEM"] if f.fn in lf.DEM_PROBE_FUNCTIONS]
-    assert {f.fn for f in probes} == set(lf.DEM_PROBE_FUNCTIONS)
+    probes = [f for f in lf.FORMS["DEM"] if f.opt_in and f.fn in lf.DEM_PROBE_FUNCTIONS]
+    assert {f.variant for f in probes} == {"nulls-accessors@mat", "nulls@mem"}
     for f in probes:
-        assert f.opt_in and f.level == "L1" and f.allows_null and f.nullsql
+        assert f.level == "L1" and f.allows_null and f.nullsql
+        assert f.computes == ("dedicated",)
         assert f.nullsql.format(src="t", uc="")
-    assert not [f for f in lf.select_forms("DEM") if f.fn in lf.DEM_PROBE_FUNCTIONS]
-    named = lf.select_forms("DEM", ("gbx_rst_width:nulls@mat",))
-    assert [f.fn for f in named] == ["gbx_rst_width"]
+        assert f.sql.format(src="t", uc="")
+    assert not [f for f in lf.select_forms("DEM") if f.opt_in]
+    named = lf.select_forms("DEM", ("gbx_rst_width:nulls-accessors@mat",))
+    assert [f.variant for f in named] == ["nulls-accessors@mat"]
+
+
+def test_the_accessor_probe_reads_four_accessors_in_one_scan():
+    (f,) = [f for f in lf.FORMS["DEM"] if f.variant == "nulls-accessors@mat"]
+    for fn in lf.DEM_PROBE_ACCESSORS:
+        assert lf.dem_l1_name(fn) in f.sql and lf.dem_l1_name(fn) in f.nullsql
+    assert f.sql.count("FROM {src}") == 1
+    assert "tile.path" in f.nullsql  # which tiles
 
 
 def test_no_input_of_the_set_is_built_on_the_client_at_16x():

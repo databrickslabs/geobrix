@@ -2464,35 +2464,67 @@ for _fn in DEM_FUNCTIONS:
         )
     )
 
-# Probe: do the heavy-first functions that are kept return silent NULLs under load? Each form is the function's JVM level
-# over the corpus tiles (the accessors, whose NULL has no text: the report names how many and which tiles) or over
-# replicated bytes (`fromcontent`, which returns a tile: the report names the `last_error` texts). They run only when
-# `--levels-forms` names them.
-DEM_PROBE_ACCESSORS = ("gbx_rst_width", "gbx_rst_boundingbox", "gbx_rst_memsize")
-DEM_PROBE_FUNCTIONS = DEM_PROBE_ACCESSORS + ("gbx_rst_fromcontent",)
+# Probe: do the heavy-first functions that are kept return silent NULLs under load? One form runs four accessors (width,
+# bounding box, memory size, SRID) in a single scan of the corpus tiles, each through its JVM level under a private name;
+# an accessor's NULL has no text, so the report names how many NULLs each gave and which tiles. `fromcontent`, which
+# returns a tile, runs over replicated bytes and the report names the `last_error` texts with their counts. They run only
+# when `--levels-forms` names them.
+_ACC_PKG = "com.databricks.labs.gbx.rasterx.expressions.accessors."
+DEM_PROBE_ACCESSORS = (
+    "gbx_rst_width",
+    "gbx_rst_boundingbox",
+    "gbx_rst_memsize",
+    "gbx_rst_srid",
+)
+_DEM_PROBE_COMPANION = {fn: _ACC_PKG + "RST_" + c for fn, c in zip(
+    DEM_PROBE_ACCESSORS, ("Width", "BoundingBox", "MemSize", "SRID"))}  # fmt: skip
+DEM_PROBE_FUNCTIONS = ("gbx_rst_width", "gbx_rst_fromcontent")
+_ACC = [dem_l1_name(fn) for fn in DEM_PROBE_ACCESSORS]
+_ACC_ROW = ", ".join(f"{n}(tile) AS a{i}" for i, n in enumerate(_ACC))
+
+
+def setup_probe_accessors(spark):
+    """Install the four accessors under their private names."""
+    from databricks.labs.gbx.manager import jvm
+
+    for fn, fqn in _DEM_PROBE_COMPANION.items():
+        why = jvm.install_private_l1(spark, fqn, dem_l1_name(fn))
+        if why:
+            raise RuntimeError(why)
+
+
 _DEM_PROBE_SCALAR = (
-    "SELECT count(*) AS n, sum(pmod(xxhash64(c), 2147483647)) AS fp, count(c) AS n_out "
-    "FROM (SELECT {fn}(tile) AS c FROM {{src}})"
+    "SELECT count(*) AS n, sum(pmod(xxhash64(a0, a1, a2, a3), 2147483647)) AS fp, count(a0) AS n_out "
+    "FROM (SELECT " + _ACC_ROW + " FROM {src})"
 )
 _DEM_PROBE_NULLS = (
     "SELECT count(*) AS n_null, md5(concat_ws('|', array_sort(collect_list(p)))) AS s, "
-    "slice(array_sort(collect_list(p)), 1, 8) AS first FROM "
-    "(SELECT tile.path AS p, {fn}(tile) AS c FROM {{src}}) WHERE c IS NULL"
-)
-for _fn in DEM_PROBE_ACCESSORS:
-    FORMS["DEM"].append(
-        _dem(
-            _fn,
-            "L1",
-            "nulls@mat",
-            "tiles_mat",
-            _DEM_PROBE_SCALAR.format(fn=_fn),
-            allows_null=True,
-            nullsql=_DEM_PROBE_NULLS.format(fn=_fn),
-            computes=("dedicated",),
-            opt_in=True,
-        )
+    "slice(concat(array("
+    + ", ".join(
+        f"concat('{fn[len('gbx_rst_'):]}=', cast(coalesce(sum(cast(a{i} IS NULL AS int)), 0) AS string))"
+        for i, fn in enumerate(DEM_PROBE_ACCESSORS)
     )
+    + "), array_sort(collect_list(p))), 1, 12) AS first FROM "
+    "(SELECT tile.path AS p, a0, a1, a2, a3 FROM (SELECT tile, "
+    + _ACC_ROW
+    + " FROM {src})) "
+    "WHERE a0 IS NULL OR a1 IS NULL OR a2 IS NULL OR a3 IS NULL"
+)
+FORMS["DEM"].append(
+    _dem(
+        "gbx_rst_width",
+        "L1",
+        "nulls-accessors@mat",
+        "tiles_mat",
+        _DEM_PROBE_SCALAR,
+        setup="databricks.labs.gbx.bench.levels_forms:setup_probe_accessors",
+        register=False,
+        allows_null=True,
+        nullsql=_DEM_PROBE_NULLS,
+        computes=("dedicated",),
+        opt_in=True,
+    )
+)
 _FC = "gbx_rst_fromcontent(content, 'GTiff')"
 FORMS["DEM"].append(
     _dem(

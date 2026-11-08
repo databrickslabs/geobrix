@@ -66,7 +66,9 @@ def test_metadata_passthrough(spark, tmp_path):
 
 
 def _agg_registered(spark):
-    names = {r.function for r in spark.sql("SHOW USER FUNCTIONS").collect()}
+    names = {
+        f.name for f in spark.catalog.listFunctions()
+    }  # SHOW USER FUNCTIONS is not Databricks SQL
     return any(n.endswith("gbx_pmtiles_agg") for n in names)
 
 

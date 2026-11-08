@@ -44,8 +44,8 @@ path = "manager/jvm.py"
 symbol = "install_companion"
 api = ["_jvm", "_jsparkSession"]
 computes = ["dedicated"]
-gate = "guarded"
-gate_detail = "try/except returns a one-line reason instead of raising; the only callers are developer helpers that run on a session with the JAR"
+gate = "refusal"
+gate_detail = "returns a one-line reason with a Fix on a Spark Connect session (capabilities.is_connect) before any JVM access; the rest of the body is in try/except and returns a reason instead of raising"
 why = "Installs one named JVM companion with no dispatch wrapper in front of it"
 
 [[site]]

@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import Optional
 
-from databricks.labs.gbx.manager import l3, sqlwrap
+from databricks.labs.gbx.manager import capabilities, l3, sqlwrap
 
 
 def _priv(fn, level: str) -> str:
@@ -136,7 +136,13 @@ def install_l1_engine(spark, fn, caps) -> Optional[str]:
 def install_companion(spark, fqn: str, name: str) -> Optional[str]:
     """Install the Catalyst companion `fqn` under the session name `name` (its own SQL name, or the private
     `gbx__l1_<x>`), with no dispatch wrapper in front of it. None when it is installed, else one line saying why
-    not. Called only after `capabilities.detect` found a matching JAR."""
+    not. Called only after `capabilities.detect` found a matching JAR. A Spark Connect session (Serverless, standard
+    access mode) has no JVM bridge, so it is refused here, before any JVM access."""
+    if capabilities.is_connect(spark):
+        return (
+            f"{name}: the heavy engine cannot be installed from a Spark Connect session (Serverless or standard "
+            "access mode). Fix: run on dedicated compute, or use the Python level here."
+        )
     try:
         _point_jvm_at_payload(spark)
         _pass_read_cap(spark)

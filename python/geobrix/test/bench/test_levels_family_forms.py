@@ -736,15 +736,15 @@ SECOND_SETS = {
 def test_a_second_function_set_picks_its_own_forms_by_function_and_ends_on_one_floor(
     name,
 ):
-    """The set shares variant names with its family's first set (`l1@n`, `floor@n`): `fn` picks its forms, each name
-    exists once for that function, there is an L1 and an L3 form to judge, and one floor is the last entry.
+    """The set shares variant names with its family's first set (`c0@n`, `floor@n`): `fn` picks its forms, each name
+    exists once for that function, contour has no JVM level so only L3 forms run, and one floor is the last entry.
     """
     family, fn = SECOND_SETS[name]
     spec = lt.SETS[name]
     assert (spec.mvp, spec.fn) == (family, fn)
     got = _chosen(spec)
     assert [f.variant for f in got] == list(spec.forms)
-    assert {f.level for f in got} == {"L1", "L3"}
+    assert {f.level for f in got} == {"L3"}
     assert (
         got[-1].variant.split("@")[0] == "floor"
         and sum(f.variant.split("@")[0] == "floor" for f in got) == 1
@@ -756,7 +756,7 @@ def test_a_second_function_set_picks_its_own_forms_by_function_and_ends_on_one_f
 
 
 def test_the_new_forms_are_selectable_by_the_cluster_ids():
-    """`--levels <family> --levels-forms <ids>`: the qualified ids pick exactly the function's L1, L3 and floor."""
+    """`--levels <family> --levels-forms <ids>`: the qualified ids pick exactly the function's L3 and floor forms."""
     for name, (family, fn) in SECOND_SETS.items():
         spec = lt.SETS[name]
         ids = [f"{fn}:{v}" for v in spec.forms]

@@ -62,11 +62,6 @@ SCALA_FILE_ALLOW = {
 SCALA_SITES = {
     ("rasterx/expressions/RST_BinPoints.scala", "sr.ImportFromEPSG(srid)"): INT_EPSG,
     (
-        "rasterx/expressions/RST_Chm.scala",
-        'val tSrs = srsToken.map(t => s"-t_srs $t ").getOrElse("")',
-    ): DATASET_WKT,
-    ("rasterx/expressions/RST_Chm.scala", "sr.ImportFromWkt(wkt)"): DATASET_WKT,
-    (
         "rasterx/expressions/RST_Clip.scala",
         "if (dsEpsgCode != 0) geomSR.ImportFromEPSG(dsEpsgCode)",
     ): DATASET_INT,

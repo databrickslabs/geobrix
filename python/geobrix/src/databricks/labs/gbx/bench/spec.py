@@ -803,7 +803,8 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"red_band": 1, "nir_band": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT + (_HEAVY + "RST_NDVI.scala",),
+        sources=_INDICES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core(
             "gbx_rst_ndvi", {"red_idx": a["red_band"], "nir_idx": a["nir_band"]}
@@ -962,7 +963,8 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"green_idx": 1, "nir_idx": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NDWI.scala",),
+        sources=_INDICES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core(
             "gbx_rst_ndwi", {"green_idx": a["green_idx"], "nir_idx": a["nir_idx"]}
@@ -976,7 +978,8 @@ REGISTRY: Dict[str, FnSpec] = {
         _BOTH,
         {"nir_idx": 1, "swir_idx": 2},
         min_bands=2,
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_NBR.scala",),
+        sources=_INDICES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=True,
         core_fn=lambda ds, a: _engine_core(
             "gbx_rst_nbr", {"nir_idx": a["nir_idx"], "swir_idx": a["swir_idx"]}
@@ -1404,14 +1407,7 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Band.scala",),
         core=False,
     ),
-    # rst_threshold (timing-only): the two tiers implement DIFFERENT, documented
-    # output contracts (see the lightweight-tier note in raster-functions.mdx).
-    # The heavyweight binarises via gdal_calc — a SINGLE-band 0/1 mask over band 1.
-    # The lightweight KEEPS each passing pixel's original value and sets failing
-    # pixels to NoData, preserving every input band. On a multi-band tile that
-    # surfaces as a band-count divergence (heavy 1 vs light N) on top of the
-    # value-semantics difference. This is a by-design contract difference, not a
-    # bug, so the cell is TIMED but never fingerprint-compared.
+    # rst_threshold (timing-only): the function has no heavyweight level; the engine runs it on GDAL raster calc.
     "rst_threshold": FnSpec(
         "rst_threshold",
         "gbx_rst_threshold",
@@ -1422,7 +1418,8 @@ REGISTRY: Dict[str, FnSpec] = {
             "gbx_rst_threshold", {"op": a["op"], "value": a["value"]}
         )(ds),
         col_fn=lambda t, a: rx.rst_threshold(t, a["op"], a["value"]),
-        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_Threshold.scala",),
+        sources=_EDIT_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         fingerprint=False,
     ),
@@ -1700,7 +1697,8 @@ REGISTRY: Dict[str, FnSpec] = {
             a["c2"],
             a["g"],
         ),
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_EVI.scala",),
+        sources=_INDICES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_savi": FnSpec(
@@ -1715,7 +1713,8 @@ REGISTRY: Dict[str, FnSpec] = {
             {"red_idx": a["red_idx"], "nir_idx": a["nir_idx"], "l": a["l"]},
         )(ds),
         col_fn=lambda t, a: rx.rst_savi(t, a["red_idx"], a["nir_idx"], a["l"]),
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_SAVI.scala",),
+        sources=_INDICES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- generic named-index dispatcher (indices.py): full comparison ---
@@ -1740,7 +1739,8 @@ REGISTRY: Dict[str, FnSpec] = {
                 *[x for k, v in _INDEX_BAND_MAP.items() for x in (F.lit(k), F.lit(v))]
             ),
         ),
-        sources=_INDICES_LIGHT + (_HEAVY + "spectral/RST_Index.scala",),
+        sources=_INDICES_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- map algebra (mapalgebra.py): full comparison ---
@@ -1756,7 +1756,8 @@ REGISTRY: Dict[str, FnSpec] = {
             [_ds_to_gtiff_bytes(ds)], a["expr"]
         ),
         col_fn=lambda t, a: prx._light_rst_mapalgebra(F.array(t), a["expr"]),
-        sources=_MAPALGEBRA_LIGHT + (_HEAVY + "RST_MapAlgebra.scala",),
+        sources=_MAPALGEBRA_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     # --- derived band (derivedband.py): full comparison ---
@@ -2965,7 +2966,8 @@ REGISTRY: Dict[str, FnSpec] = {
         # difference, not a parity bug -- a 2% per-fn tol absorbs it without
         # loosening the strict global tol for any other function.
         rel_tol=0.02,
-        sources=_ANALYSIS_LIGHT + (_HEAVY + "analysis/RST_Contour.scala",),
+        sources=_ANALYSIS_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
     ),
     "rst_polygonize": FnSpec(
@@ -4122,7 +4124,8 @@ REGISTRY: Dict[str, FnSpec] = {
             F.element_at(arr, 1),
             F.coalesce(F.element_at(arr, 2), F.element_at(arr, 1)),
         ),
-        sources=_CHM_LIGHT + (_HEAVY + "RST_Chm.scala",),
+        sources=_CHM_LIGHT,
+        heavy=False,  # no heavyweight level: the JVM expression is deleted
         core=False,
         input_kind="tile_array",
     ),

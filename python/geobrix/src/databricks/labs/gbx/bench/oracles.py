@@ -227,6 +227,7 @@ HEAVY_PENDING.update(
 READ_CAP_ROWS: Dict[str, int] = {
     "decoded_over_cap_error_tile": 4096,
     "dem_decoded_over_cap": 4096,
+    "se_slope_over_cap": 4096,
     "resample_decoded_over_cap": 4096,
     "tile_op_decoded_over_cap": 4096,
     "align_to_big_reference": 4096,
@@ -1158,6 +1159,60 @@ SPEC_SE: Tuple[Case, ...] = (
         "slope",
         ("session",),
     ),
+    # One row per driver class of the bytes rule (the manifest's driver classes), on the DEM surface read as slope:
+    # a driver outside GeoTIFF that the light tier keeps is read as the GeoTIFF it translates to (netCDF, HFA,
+    # JP2OpenJPEG, GPKG), and a driver that names other files (a VRT's XML as the tile's bytes) is an error tile with
+    # a Fix, its sources never opened.
+    Case(
+        "se_bytes_netcdf",
+        SL,
+        (Build("dem_netcdf"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_hfa",
+        SL,
+        (Build("dem_hfa"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_jp2",
+        SL,
+        (Build("dem_jp2"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_gpkg",
+        SL,
+        (Build("dem_gpkg"), "degrees"),
+        "ref",
+        "slope",
+        ("session",),
+    ),
+    Case(
+        "se_bytes_refused_light",
+        SL,
+        (Build("tile_vrt_bytes"), "degrees"),
+        "error_tile_has",
+        _BYTES_REFUSED_LIGHT.format("VRT"),
+        ("session",),
+    ),
+    # The decoded-size gate on a materialized tile (READ_CAP_ROWS lowers the cap): the same error tile and Fix at
+    # every level, the tile small on disk.
+    Case(
+        "se_slope_over_cap",
+        SL,
+        (Build("tile_4326"), "degrees"),
+        "error_tile_has",
+        "the tile is 12 KiB decoded, over this compute's read cap (4 KiB). Fix: retile it first (gbx_rst_retile)",
+        ("session",),
+    ),
     # Reprojecting a tile with no CRS is an error tile that says how to set one (heavy assumed EPSG:4326).
     Case(
         "se_tcrs_no_crs",
@@ -1220,9 +1275,10 @@ SPEC_SE: Tuple[Case, ...] = (
         ("session",),
     ),
     # A materialized tile kept in another driver is translated to GeoTIFF first, under the light bytes rule on every
-    # level: a PNG carries no CRS, so reprojecting it is the no-CRS error tile; HFA (as netCDF, HDF5, JP2OpenJPEG and
-    # GPKG) is read as the GeoTIFF it translates to, as the light tier reads it; a driver that can name other files
-    # (a VRT names its sources, a local file or a URL) is an error tile with a Fix, and nothing it names is opened.
+    # level: a PNG carries no CRS, so reprojecting it is the no-CRS error tile; HFA (as netCDF, JP2OpenJPEG and GPKG,
+    # the slope rows `se_bytes_*` below) is read as the GeoTIFF it translates to, as the light tier reads it; a driver
+    # that can name other files (a VRT names its sources, a local file or a URL) is an error tile with a Fix, and
+    # nothing it names is opened. There is no HDF5 row: GDAL cannot write HDF5 and the container has no h5py.
     Case(
         "se_tcrs_png",
         T,
@@ -1232,7 +1288,7 @@ SPEC_SE: Tuple[Case, ...] = (
         ("session",),
     ),
     Case(
-        "se_tcrs_hfa",
+        "se_bytes_transformcrs_hfa",
         T,
         (Build("tile_4326_hfa"), "EPSG:3857"),
         "tile_props",
@@ -2000,6 +2056,8 @@ def _se_build(name: str, tmpdir: Optional[str] = None):
         yy, xx = np.mgrid[0:64, 0:64].astype("float64")
         z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
         return _tile(_encode(z[np.newaxis].round().astype("uint8"), "PNG"))
+    if name in _DEM_DRIVERS:
+        return _dem_driver_tile(name)
     if name == "se_four_band":
         return [_tile(_gtiff(np.stack([a, b, a + 1.0, b + 20.0]), "EPSG:3857"))]
     if name == "se_error_pair":
@@ -2024,6 +2082,47 @@ def to_netcdf(tif: str, nc: str) -> None:
         uc_perf.write_via_local(
             nc, lambda local: rasterio.shutil.copy(src, local, driver="netCDF")
         )
+
+
+# The DEM surface as a materialized tile in each driver of the bytes rule's kept class: the slope rows `se_bytes_*`
+# (a smooth Int16 surface with no hole, as JP2OpenJPEG and GPKG hold integers and no NoData).
+_DEM_DRIVERS = {
+    "dem_netcdf": "netCDF",
+    "dem_hfa": "HFA",
+    "dem_jp2": "JP2OpenJPEG",
+    "dem_gpkg": "GPKG",
+}
+
+
+def _dem_driver_tile(name: str):
+    """The `dem_*` fixture of `_DEM_DRIVERS`: GDAL copies a GeoTIFF of the surface into the driver's file, whose
+    bytes are the tile's."""
+    import tempfile
+
+    import numpy as np
+    import rasterio.shutil
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    z = 0.5 * xx + 0.3 * yy + 10.0 * np.sin(xx / 7.0) * np.cos(yy / 5.0) + 100.0
+    tif_bytes = _encode(
+        z[np.newaxis].round().astype("int16"),
+        "GTiff",
+        crs=resolve_crs("EPSG:3857"),
+        transform=from_origin(400000.0, 5760000.0, 10.0, 10.0),
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        tif, out = (os.path.join(tmp, f"dem.{e}") for e in ("tif", "bin"))
+        with open(tif, "wb") as fh:
+            fh.write(tif_bytes)
+        with open_data(
+            tif
+        ) as src:  # a copy into a new local file (GDAL writes these drivers by copy)
+            rasterio.shutil.copy(src, out, driver=_DEM_DRIVERS[name])
+        with open(out, "rb") as fh:
+            return _tile(fh.read())
 
 
 def _bytes_class_build(name: str, tmpdir: str):

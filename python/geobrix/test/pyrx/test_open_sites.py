@@ -323,6 +323,13 @@ OPEN_SITES = {
         1,
         "the netCDF fixture is copied from the dataset open_data opened above (GDAL writes netCDF by copy, built locally then moved to the target); no name is opened here",
     ),
+    (
+        "bench/oracles.py",
+        "rasterio.shutil.copy(src, out, driver=_DEM_DRIVERS[name])",
+    ): (
+        1,
+        "the driver-class DEM fixtures are copied from the dataset open_data opened just above into a new file in a local temporary directory; no name is opened here",
+    ),
     ("bench/oracles.py", "a.open() as got,"): (
         2,
         "a bench oracle reads a tile the bench built as its fixture, or the result tile the function under test returned",

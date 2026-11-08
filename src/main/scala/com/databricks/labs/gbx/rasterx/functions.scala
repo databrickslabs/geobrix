@@ -243,8 +243,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
     def rst_derivedband(tile: Column, pythonFunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pythonFunc), lit(funcName)))
-    def rst_filter(tile: Column, kernelSize: Column, operation: Column): Column =
-        ColumnAdapter(RST_Filter.name, Seq(tile, kernelSize, operation))
     def rst_initnodata(tile: Column): Column = ColumnAdapter(RST_InitNoData.name, Seq(tile))
     def rst_isempty(tile: Column): Column = ColumnAdapter(RST_IsEmpty.name, Seq(tile))
     def rst_mapalgebra(tiles: Column, expression: Column): Column = ColumnAdapter(RST_MapAlgebra.name, Seq(tiles, expression))
@@ -290,8 +288,6 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String, coverage: String): Column =
         rst_custom_tessellate(tile, grid, lit(resolution), assignment, coverage)
     def rst_asformat(tile: Column, newFormat: String): Column = rst_asformat(tile, lit(newFormat))
-    def rst_filter(tile: Column, kernelSize: Int, operation: String): Column =
-        rst_filter(tile, lit(kernelSize), lit(operation))
     def rst_mapalgebra(tiles: Column, expression: String): Column = rst_mapalgebra(tiles, lit(expression))
     def rst_rastertoworldcoordx(tile: Column, x: Int, y: Int): Column =
         rst_rastertoworldcoordx(tile, lit(x), lit(y))

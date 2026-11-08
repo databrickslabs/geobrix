@@ -82,19 +82,6 @@ class RST_ExpressionExecuteTest extends AnyFunSuite with BeforeAndAfterAll {
         RasterDriver.releaseDataset(derivedDs)
     }
 
-    test("RST_Filter should apply filter to raster") {
-        val miniDsPath = "/tmp/mini.tif"
-        val (miniDs, _) = GDALTranslate.executeTranslate(miniDsPath, ds, "gdal_translate -outsize 10% 10% -r bilinear", Map.empty)
-        val (filteredDs, _) = RST_Filter.execute(miniDs, 3, "min")
-        filteredDs should not be null
-        filteredDs.getRasterCount shouldBe miniDs.getRasterCount
-        filteredDs.getRasterXSize shouldBe miniDs.getRasterXSize
-        filteredDs.getRasterYSize shouldBe miniDs.getRasterYSize
-        RasterDriver.releaseDataset(filteredDs)
-        RasterDriver.releaseDataset(miniDs)
-        Files.deleteIfExists(Paths.get(miniDsPath))
-    }
-
     test("RST_InitNoData should initialize NoData values in raster") {
         val (noDataDs, _) = RST_InitNoData.execute(ds, Map.empty)
         noDataDs should not be null

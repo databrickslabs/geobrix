@@ -746,26 +746,6 @@ result.show()
 (filled tile; NoData holes searched within 100 pixels)
 """.trim
 
-  val rst_filter_scala_example: String =
-    """
-import com.databricks.labs.gbx.rasterx.{functions => rx}
-import org.apache.spark.sql.functions._
-
-val rasters = spark.table("rasters")
-val result = rasters.select(rx.rst_filter(col("tile"), lit(3), lit("median")).alias("tile"))
-result.show()
-""".trim
-
-  val rst_filter_scala_example_output: String =
-    """
-+-----------------------------------------------------------+
-|tile                                                       |
-+-----------------------------------------------------------+
-|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
-+-----------------------------------------------------------+
-(filtered tile; 3x3 median filter applied)
-""".trim
-
   val rst_fromcontent_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

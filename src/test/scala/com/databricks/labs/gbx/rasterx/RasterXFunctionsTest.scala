@@ -169,11 +169,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_filter should accept tile, kernel size, and operation") {
-        val result = functions.rst_filter(col("tile"), col("size"), col("op"))
-        result should not be null
-    }
-
     test("rst_initnodata should create Column") {
         val result = functions.rst_initnodata(col("tile"))
         result should not be null
@@ -237,7 +232,6 @@ class RasterXFunctionsTest extends AnyFunSuite {
         // string scalars
         functions.rst_asformat(col("tile"), "GTiff") should not be null
         functions.rst_updatetype(col("tile"), "Float32") should not be null
-        functions.rst_filter(col("tile"), 3, "median") should not be null
         functions.rst_mapalgebra(col("tiles"), "{\"calc\": \"A+2*A\"}") should not be null
         // double scalars
         functions.rst_worldtorastercoordx(col("tile"), 1.0, 2.0) should not be null

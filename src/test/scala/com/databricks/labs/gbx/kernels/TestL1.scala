@@ -51,7 +51,6 @@ object TestL1 {
         "com.databricks.labs.gbx.rasterx.expressions.RST_Chm",
         "com.databricks.labs.gbx.rasterx.expressions.RST_Convolve",
         "com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand",
-        "com.databricks.labs.gbx.rasterx.expressions.RST_Filter",
         "com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData",
         "com.databricks.labs.gbx.rasterx.expressions.RST_IsEmpty",
         "com.databricks.labs.gbx.rasterx.expressions.RST_MapAlgebra",

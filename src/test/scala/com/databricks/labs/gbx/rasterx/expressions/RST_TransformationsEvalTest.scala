@@ -12,7 +12,7 @@ import org.apache.spark.sql.types.{StructField, StructType}
 import org.scalatest.matchers.should.Matchers._
 
 /**
-  * Test suite for RST_Clip, RST_Filter, and RST_Transform expressions
+  * Test suite for RST_Clip and RST_Transform expressions
   * through Spark execution.
   */
 class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
@@ -120,93 +120,6 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         row.getAs[Int]("original_bands") shouldBe row.getAs[Int]("clipped_bands")
     }
 
-    test("RST_Filter should apply median filter") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/").toString
-
-        val df: DataFrame = Seq(
-          (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-        ).toDF("id", "path")
-            .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("median")))
-
-        noException should be thrownBy df.collect()
-        val result = df.select("filtered").collect()
-        result should not be empty
-        assert(result.head.get(0) != null)
-    }
-
-    test("RST_Filter should support multiple filter operations") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/").toString
-
-        val operations = Seq("mean", "median", "max", "min")
-        
-        operations.foreach { op =>
-            val df: DataFrame = Seq(
-              (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-            ).toDF("id", "path")
-                .withColumn("raster", udfs.rasterFromPath(col("path")))
-                .withColumn("filtered", rst_filter(col("raster"), lit(3), lit(op)))
-
-            noException should be thrownBy df.collect()
-        }
-    }
-
-    test("RST_Filter should work with different kernel sizes") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/").toString
-
-        val kernelSizes = Seq(3, 5, 7)
-        
-        kernelSizes.foreach { size =>
-            val df: DataFrame = Seq(
-              (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-            ).toDF("id", "path")
-                .withColumn("raster", udfs.rasterFromPath(col("path")))
-                .withColumn("filtered", rst_filter(col("raster"), lit(size), lit("mean")))
-
-            noException should be thrownBy df.collect()
-        }
-    }
-
-    test("RST_Filter should preserve dimensions") {
-        val sc = spark
-        import com.databricks.labs.gbx.rasterx.functions._
-        import sc.implicits._
-        TestL1.installAll(spark)
-
-        val tifPath = this.getClass.getResource("/modis/").toString
-
-        val df: DataFrame = Seq(
-          (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
-        ).toDF("id", "path")
-            .withColumn("raster", udfs.rasterFromPath(col("path")))
-            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("mean")))
-            .withColumn("original_width", rst_width(col("raster")))
-            .withColumn("filtered_width", rst_width(col("filtered")))
-            .withColumn("original_height", rst_height(col("raster")))
-            .withColumn("filtered_height", rst_height(col("filtered")))
-
-        val result = df.select("original_width", "filtered_width", "original_height", "filtered_height").collect()
-        result should not be empty
-        val row = result.head
-        row.getAs[Int]("original_width") shouldBe row.getAs[Int]("filtered_width")
-        row.getAs[Int]("original_height") shouldBe row.getAs[Int]("filtered_height")
-    }
-
     test("RST_Transform should transform raster to WGS84") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._
@@ -312,8 +225,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
                 lit(true)
               )
             )
-            .withColumn("filtered", rst_filter(col("clipped"), lit(3), lit("median")))
-            .withColumn("transformed", rst_transform(col("filtered"), lit(4326)))
+            .withColumn("transformed", rst_transform(col("clipped"), lit(4326)))
 
         noException should be thrownBy df.collect()
         val result = df.select("transformed").collect()
@@ -332,8 +244,7 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
             .format("binaryFile")
             .load(tifPath)
             .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
-            .withColumn("filtered", rst_filter(col("raster"), lit(3), lit("mean")))
-            .withColumn("transformed", rst_transform(col("filtered"), lit(4326)))
+            .withColumn("transformed", rst_transform(col("raster"), lit(4326)))
 
         noException should be thrownBy df.collect()
     }

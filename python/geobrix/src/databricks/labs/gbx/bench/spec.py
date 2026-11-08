@@ -1499,10 +1499,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core=False,
     ),
     # --- focal (focal.py) ---
-    # operation="median" is valid on BOTH engines: the heavy KernelFilter accepts
-    # {avg, min, max, median, mode} (NOT "mean" -> "Invalid operation"), and the
-    # light focal.filt accepts {min, max, median, mean}. "median" is the common
-    # value, so the bench args carry it for both. (Timing-only, not compared.)
+    # The light focal.filt accepts {min, max, median, mean}. There is no heavyweight level (its JVM form left a different
+    # NoData mask than light, and was never measured).
     "rst_filter": FnSpec(
         "rst_filter",
         "gbx_rst_filter",
@@ -1512,9 +1510,9 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: focal.filt(ds, a["kernel_size"], a["operation"]),
         # F.lit the STRING operation arg (kernel_size is numeric -> auto-lit).
         col_fn=lambda t, a: rx.rst_filter(t, a["kernel_size"], F.lit(a["operation"])),
-        sources=_FOCAL_LIGHT
-        + (_HEAVY + "RST_Filter.scala", _OPS + "KernelFilter.scala", _GDAL_BLOCK),
+        sources=_FOCAL_LIGHT + (_GDAL_BLOCK,),
         core=False,
+        heavy=False,
     ),
     "rst_convolve": FnSpec(
         "rst_convolve",

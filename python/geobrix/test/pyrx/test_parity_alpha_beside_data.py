@@ -3,8 +3,8 @@ and for rasters masked by their own mask band.
 
 Every reader and operation below judges each band alone: a pixel is valid for a band when the band's own
 mask says so (NoData, the raster's own mask band) and, for a raster with an alpha band, its alpha is above
-0, at any band count. Both tiers must aggregate, count, filter, vectorise and stretch the same pixels:
-the band statistics, the histogram, the focal filters and convolution,
+0, at any band count. Both tiers must aggregate, count, vectorise and convolve the same pixels:
+the band statistics, the histogram, convolution,
 polygonize and isoband, the derived band and the tessellation chips.
 
 The helpers (Spark session with the JAR, the two tiers' row collectors) are those of
@@ -266,7 +266,7 @@ def test_tessellate_alpha_and_own_mask_parity(spark_with_jar, name, assignment, 
 
 # ---------------------------------------------------------------------------
 # Readers and operations that judge each band alone: histogram, statistics of a masked raster,
-# focal filters, polygonize, isoband, derived band, percentile stretch
+# convolution, polygonize, isoband, derived band
 # ---------------------------------------------------------------------------
 # A pixel that is transparent (an alpha band beside data bands, at any band count) or hidden by the
 # raster's own mask band is valid for no band: both tiers leave it out.
@@ -336,23 +336,6 @@ def test_statistics_of_a_raster_with_its_own_mask_parity(spark_with_jar):
     two (mean 127.5)."""
     want = [(12, 0, 7, 3.5)] * 3 + [(12, 0, 255, 127.5)]
     _assert_band_statistics(spark_with_jar, _masked_rgb_nir(), want)
-
-
-@pytest.mark.parametrize("op", ["max", "min"])
-@pytest.mark.parametrize("name", _STRIPED)
-def test_focal_filter_parity_skips_transparent_and_masked_neighbours(
-    spark_with_jar, name, op
-):
-    from pyspark.sql import functions as f
-
-    outs = _both_tiers(
-        spark_with_jar,
-        _striped(name),
-        lambda m, t: f.call_function("gbx_rst_filter", t, f.lit(3), f.lit(op)),
-    )
-    assert outs["light"]["dtype"] == outs["heavy"]["dtype"]
-    assert (outs["light"]["data"][0] == outs["heavy"]["data"][0]).all(), op
-    assert (outs["light"]["data"][0] == 5).all(), "a hidden 99 reached a window"
 
 
 @pytest.mark.parametrize("name", _STRIPED)

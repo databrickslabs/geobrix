@@ -233,21 +233,8 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally RasterDriver.releaseDataset(ds)
     }
 
-    test("a filter of a raster with no declared NoData is its value, not NaN") {
-        val ds = fixture(RgbNir.copy(interps = Seq(GCI_GrayIndex, GCI_Undefined, GCI_Undefined)), (row, _) => 10.0 + row, size = 6)
-        try {
-            val (out, _) = KernelFilter.filter(ds, 3, "avg")
-            try {
-                val px = new Array[Double](36)
-                out.GetRasterBand(1).ReadRaster(0, 0, 6, 6, px)
-                // rows 2-3 average rows 1-4 over the 3x3 window: (11 + 12 + 13) / 3 = 12 and (12 + 13 + 14) / 3 = 13
-                assert(px(2 * 6 + 2) == 12.0 && px(3 * 6 + 2) == 13.0, px.toSeq.toString)
-            } finally RasterDriver.releaseDataset(out)
-        } finally RasterDriver.releaseDataset(ds)
-    }
-
     // ------------------------------------------------------------------------------------------------
-    // focal filters, polygonize, isoband: a transparent pixel is skipped like NoData, at any band count
+    // convolution, polygonize, isoband: a transparent pixel is skipped like NoData, at any band count
     // ------------------------------------------------------------------------------------------------
 
     /** 6 x 6: 5 over rows 0-1 and 4-5, 99 over rows 2-3, which are transparent (alpha 0; the others 255). */
@@ -255,18 +242,6 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         fixture(l, (row, last) => if (last && l.alphaLast) (if (row == 2 || row == 3) 0.0 else 255.0) else (if (row == 2 || row == 3) 99.0 else 5.0), size = 6)
 
     for (l <- Seq(GrayXA, Rgba)) {
-        test(s"a max filter of ${l.name} skips the transparent neighbours") {
-            val ds = striped(l)
-            try {
-                val (out, _) = KernelFilter.filter(ds, 3, "max")
-                try {
-                    val px = new Array[Double](36)
-                    out.GetRasterBand(1).ReadRaster(0, 0, 6, 6, px)
-                    assert(px.forall(_ == 5.0), px.toSeq.toString)
-                } finally RasterDriver.releaseDataset(out)
-            } finally RasterDriver.releaseDataset(ds)
-        }
-
         test(s"a convolution of ${l.name} equals that of the same raster with its transparent pixels set to 0") {
             // a transparent neighbour adds nothing, as a 0 does; the same Convolve geometry on both
             val ds    = striped(l)

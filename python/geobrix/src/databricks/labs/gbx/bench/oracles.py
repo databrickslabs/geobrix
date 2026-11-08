@@ -133,7 +133,6 @@ _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); t
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
 # The JVM summary is GDAL's own info JSON; the contract is the light JSON. The GDAL spec engine replaces the JVM form.
 _SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL spec engine replaces it"
-_FRACTIONAL_L1 = "the JVM takes kernel_size as an INT: the SQL engine casts 3.9 to 3 before the function runs, so a fractional size is never seen"
 # With zero_for_flat GDAL drops the NoData value, so its border pixels are 0; light keeps them NoData (a documented
 # divergence, which the GDAL spec engine keeps).
 _ASPECT_ZERO_L1 = "GDAL drops the NoData value when zero_for_flat is set, so its border pixels are 0, not NoData"
@@ -169,7 +168,6 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
     },
     "summary": {"L1": _SUMMARY_L1},
     "summary_float32_precision": {"L1": _SUMMARY_L1},
-    "filter_fractional_size": {"L1": _FRACTIONAL_L1},
 }
 
 # The aggregates of the Task 18 batch whose JVM companion differs from the contract, and is not selected for it.
@@ -198,16 +196,6 @@ HEAVY_PENDING.update(
     {
         cid: {"L1": _CONFORMING_L1}
         for cid in ("tri_conforming_light_refused", "elevbbox_conforming_light_refused")
-    }
-)
-
-# An answer of a raster tile function that the JVM level gives differently (measured through the JAR): the mean filter
-# of a gray + alpha tile leaves the empty window's mask different from the lightweight level's.
-HEAVY_PENDING.update(
-    {
-        "filter_u8_alpha_mean_1": {
-            "L1": "the JVM mean filter of a gray + alpha tile leaves a different NoData mask at the empty window than the lightweight level, which shows -9999 there as a pixel value"
-        },
     }
 )
 

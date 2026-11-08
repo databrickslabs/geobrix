@@ -76,9 +76,8 @@ class RST_ExpressionEvalTest extends PlanTest with SilentSparkSession {
                 .withColumn("raster", call_function("gbx_rst_clip", col("raster"), col("clipper"), lit(true)))
                 .cache()
             base.collect()
-            // Test filter and one representative convolve operation for stability
+            // Test one representative convolve operation for stability
             Seq(
-                rst_filter(col("raster"), lit(1), lit("min")),
                 rst_convolve(
                 col("raster"),
                 array(

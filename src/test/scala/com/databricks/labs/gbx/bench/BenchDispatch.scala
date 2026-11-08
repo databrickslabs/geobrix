@@ -12,7 +12,6 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_AsFormat
 import com.databricks.labs.gbx.rasterx.expressions.RST_Clip
 import com.databricks.labs.gbx.rasterx.expressions.RST_Convolve
 import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
-import com.databricks.labs.gbx.rasterx.expressions.RST_Filter
 import com.databricks.labs.gbx.rasterx.expressions.RST_InitNoData
 import com.databricks.labs.gbx.rasterx.expressions.RST_MapAlgebra
 import com.databricks.labs.gbx.rasterx.expressions.RST_Merge
@@ -136,7 +135,7 @@ object BenchDispatch {
     // tile-out transforms with scalar / fixed args
     "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
-    "rst_filter" -> FOCAL, "rst_convolve" -> FOCAL,
+    "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT,
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
     // tile-out transforms with geometry / expression / band-map / function args
@@ -473,10 +472,6 @@ object BenchDispatch {
     case "rst_updatetype"  => fpDerived(RST_UpdateType.execute(ds, Map.empty, argS(a, "new_type", "Float64")))
     case "rst_fillnodata"  =>
       fpDerived(RST_FillNodata.execute(ds, Map.empty, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0)))
-    // KernelFilter accepts {avg, min, max, median, mode} -- NOT "mean" (which
-    // throws "Invalid operation"). "median" is valid on BOTH engines (the light
-    // focal.filt also accepts it), so the bench args carry "median".
-    case "rst_filter"      => fpDerived(RST_Filter.execute(ds, argI(a, "kernel_size", 3), argS(a, "operation", "median")))
     case "rst_convolve"    => fpDerived(RST_Convolve.execute((0L, ds, Map.empty), convolveKernel))
     // RST_AsFormat is a no-op when newFormat == the input driver: execute returns
     // the *input* ds unchanged. fpDerived would then release that input ds, and
@@ -917,7 +912,6 @@ object BenchDispatch {
       case "rst_updatetype"  => rst_updatetype(tile, argS(a, "new_type", "Float64"))
       case "rst_fillnodata"  =>
         rst_fillnodata(tile, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0))
-      case "rst_filter"      => rst_filter(tile, argI(a, "kernel_size", 3), argS(a, "operation", "median"))
       case "rst_convolve"    =>
         import org.apache.spark.sql.functions.{array, lit}
         val kernelCol = array(convolveKernel.map(row => array(row.map(lit): _*)): _*)

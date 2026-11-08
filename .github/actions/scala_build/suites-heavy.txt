@@ -81,7 +81,6 @@ com.databricks.labs.gbx.rasterx.gdal.ValidMaskTest
 com.databricks.labs.gbx.rasterx.operations.AlphaValidityReadersTest
 com.databricks.labs.gbx.rasterx.operations.BandSubsetAlphaTest
 com.databricks.labs.gbx.rasterx.operations.ClipToGeomTest
-com.databricks.labs.gbx.rasterx.operations.KernelFilterTest
 com.databricks.labs.gbx.rasterx.operations.OSRTransformGeometryTest
 com.databricks.labs.gbx.rasterx.operations.PixelCombineRastersTest
 com.databricks.labs.gbx.rasterx.operations.RasterAccessorsTest

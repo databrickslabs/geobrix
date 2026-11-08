@@ -89,6 +89,12 @@ _LIGHT_TEST_DIRS = [
 if importlib.util.find_spec("rasterio") is None:
     collect_ignore = list(_LIGHT_TEST_DIRS)
 
+# On Databricks the session is the platform's: the `spark` fixtures of every dir get it instead of starting a local one
+# (test/_provided_spark.py). Off Databricks nothing changes.
+from test._provided_spark import install as _use_provided_spark  # noqa: E402
+
+_use_provided_spark()
+
 # The driver policy before any rasterio import. Importing the package serves the env wheel's payload and sets the
 # policy's registration-time part (databricks/labs/gbx/__init__.py), so every session that collects a light dir has
 # them before a test module imports rasterio. A rasterio imported first is the PyPI one (another GDAL: partial mode),

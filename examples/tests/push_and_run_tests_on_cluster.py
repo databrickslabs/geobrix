@@ -927,57 +927,60 @@ def launch(a, plan: dict, shards: List[ts.Shard]) -> int:
         with contextlib.ExitStack() as stack:
             runs: Dict[str, int] = {}
             t_submit: Dict[str, float] = {}
-            w.workspace.mkdirs(base_dir)
-            for pool in plan["pools"]:
-                pool_leases = []
-                if pool != "serverless":
-                    pool_leases = lease_many(stack, w, a, plan, pool, volroot=volroot, me=me)
-                    cores = min(mut.cores_of(w.clusters.get(l.cluster_id).node_type_id or "") or 32 for l in pool_leases)
-                    relane(plan, pool, a, len(pool_leases), cores)
-                    pool_info[pool] = {"cluster_id": ", ".join(l.cluster_id for l in pool_leases), "node_type": w.clusters.get(pool_leases[0].cluster_id).node_type_id}
-                spec = plan["pools"][pool]
-                print(f"  {pool}: {sum(len(x) for x in spec['lanes'])} task(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots; expected wall about "
-                      f"{spec['expected_min']:g} min (longest task {spec['longest_min']:g}, serial sum {spec['serial_min']:g})", flush=True)
-                nb_path = f"{base_dir}/tests_{run_id}_{pool}.ipynb"
-                body = base64.b64encode(json.dumps(build_notebook(plan, pool), indent=1).encode()).decode()
-                w.workspace.import_(nb_path, format=ImportFormat.JUPYTER, content=body, overwrite=True)
-                nbs[pool] = nb_path
-                print(f"Uploaded runner notebook {nb_path}", flush=True)
-                job_run = submit_pool_job(w, plan, pool, nb_path, pool_leases)
-                runs[pool] = job_run
-                pool_info.setdefault(pool, {})["job_run"] = job_run
-                t_submit[pool] = time.monotonic()
-                for l in pool_leases:
-                    l.job_run(job_run)
-                try:
-                    print(f"  {pool}: run {job_run}  {w.jobs.get_run(job_run).run_page_url}", flush=True)
-                except Exception:  # noqa: BLE001
-                    pass
-            print(f"  heartbeats: {stage}/hb/; cancel: " + "; ".join(f"databricks jobs cancel-run {r}" for r in runs.values()), flush=True)
-            rc = watch(w, runs, plan, pool_info)
-            rows = collect(w, plan, runs, local_out)
-            for pool, info in pool_info.items():
-                walls = [r["wall_s"] for r in rows if r["pool"] == pool and isinstance(r["wall_s"], int)]
-                info["longest_s"] = max(walls) if walls else "-"
-                info["serial_s"] = sum(walls)
-                info["wall_s"] = int(time.monotonic() - t_submit[pool]) if pool in t_submit else "-"
-                info.update(pool_metrics(w, runs[pool], plan["pools"][pool]))
-            write_timings(REPO_ROOT / a.timings, plan, rows, local_out)
-            text = summary_md(plan, rows, pool_info)
-            (local_out / "summary.md").write_text(text)
-            print("\n" + table_text(rows))
-            for pool, info in pool_info.items():
-                print(f"{pool}: {speedup_line(info)}")
-                for ln in schedule_lines(info):
-                    print(ln)
-            for r in rows:
-                for n, m in r["failures"][:5]:
-                    print(f"  FAIL [{r['name']}] {n}: {m}")
-            print(f"\nWrote {local_out / 'summary.md'}")
-            bad = [r for r in rows if r["verdict"] != "ok"]
-            if rc == 0 and bad:
-                rc = EXIT_FAILED
-            ok = rc == 0
+            finished: set = set()
+            with cancel_on_error(w, runs, finished):  # inside the leases: a failed launch cancels its runs before the clusters are given back
+                w.workspace.mkdirs(base_dir)
+                for pool in plan["pools"]:
+                    pool_leases = []
+                    if pool != "serverless":
+                        pool_leases = lease_many(stack, w, a, plan, pool, volroot=volroot, me=me)
+                        cores = min(mut.cores_of(w.clusters.get(l.cluster_id).node_type_id or "") or 32 for l in pool_leases)
+                        relane(plan, pool, a, len(pool_leases), cores)
+                        pool_info[pool] = {"cluster_id": ", ".join(l.cluster_id for l in pool_leases), "node_type": w.clusters.get(pool_leases[0].cluster_id).node_type_id}
+                    spec = plan["pools"][pool]
+                    print(f"  {pool}: {sum(len(x) for x in spec['lanes'])} task(s) on {spec['clusters']} cluster(s) x {spec['slots']} slots; expected wall about "
+                          f"{spec['expected_min']:g} min (longest task {spec['longest_min']:g}, serial sum {spec['serial_min']:g})", flush=True)
+                    nb_path = f"{base_dir}/tests_{run_id}_{pool}.ipynb"
+                    body = base64.b64encode(json.dumps(build_notebook(plan, pool), indent=1).encode()).decode()
+                    w.workspace.import_(nb_path, format=ImportFormat.JUPYTER, content=body, overwrite=True)
+                    nbs[pool] = nb_path
+                    print(f"Uploaded runner notebook {nb_path}", flush=True)
+                    job_run = submit_pool_job(w, plan, pool, nb_path, pool_leases)
+                    runs[pool] = job_run
+                    pool_info.setdefault(pool, {})["job_run"] = job_run
+                    t_submit[pool] = time.monotonic()
+                    for l in pool_leases:
+                        l.job_run(job_run)
+                    try:
+                        print(f"  {pool}: run {job_run}  {w.jobs.get_run(job_run).run_page_url}", flush=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                print(f"  heartbeats: {stage}/hb/; cancel: " + "; ".join(f"databricks jobs cancel-run {r}" for r in runs.values()), flush=True)
+                rc = watch(w, runs, plan, pool_info)
+                finished.update(runs)
+                rows = collect(w, plan, runs, local_out)
+                for pool, info in pool_info.items():
+                    walls = [r["wall_s"] for r in rows if r["pool"] == pool and isinstance(r["wall_s"], int)]
+                    info["longest_s"] = max(walls) if walls else "-"
+                    info["serial_s"] = sum(walls)
+                    info["wall_s"] = int(time.monotonic() - t_submit[pool]) if pool in t_submit else "-"
+                    info.update(pool_metrics(w, runs[pool], plan["pools"][pool]))
+                write_timings(REPO_ROOT / a.timings, plan, rows, local_out)
+                text = summary_md(plan, rows, pool_info)
+                (local_out / "summary.md").write_text(text)
+                print("\n" + table_text(rows))
+                for pool, info in pool_info.items():
+                    print(f"{pool}: {speedup_line(info)}")
+                    for ln in schedule_lines(info):
+                        print(ln)
+                for r in rows:
+                    for n, m in r["failures"][:5]:
+                        print(f"  FAIL [{r['name']}] {n}: {m}")
+                print(f"\nWrote {local_out / 'summary.md'}")
+                bad = [r for r in rows if r["verdict"] != "ok"]
+                if rc == 0 and bad:
+                    rc = EXIT_FAILED
+                ok = rc == 0
     finally:
         if a.keep_stage:
             print(f"Kept {stage} and {', '.join(nbs.values())} (--keep-stage).")
@@ -1053,6 +1056,29 @@ def watch(w, runs: Dict[str, int], plan: dict, pool_info: dict) -> int:
         if say:
             last_say = now
     return rc
+
+
+def cancel_unfinished(w, runs: Dict[str, int], finished: set) -> List[int]:
+    """Cancel the pool runs this launch submitted that it has not seen end; the run ids it cancelled. A launcher that fails (a
+    Ctrl-C, a lease that times out for a later pool, an error while collecting) must not leave its runs on clusters it gives back,
+    reading a plan and a tarball it is about to delete."""
+    out = []
+    for pool, rid in runs.items():
+        if pool in finished:
+            continue
+        print(f"Cancelling run {rid} of pool {pool}: the launch is ending before it saw it finish.", file=sys.stderr)
+        _cancel(w, rid)
+        out.append(rid)
+    return out
+
+
+@contextlib.contextmanager
+def cancel_on_error(w, runs: Dict[str, int], finished: set):
+    try:
+        yield
+    except BaseException:  # noqa: BLE001 - Ctrl-C included: cancel, then let it go on
+        cancel_unfinished(w, runs, finished)
+        raise
 
 
 def _cancel(w, rid: int) -> None:

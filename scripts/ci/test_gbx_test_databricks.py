@@ -500,3 +500,26 @@ def test_a_fresh_cluster_run_makes_one_pool_per_kind_so_light_and_jar_do_not_sha
     a = launcher.parse(["--run-id", "tst-1", "--fresh-cluster"])
     assert launcher.pool_name_of(a, "gbx-test-1n") == light and launcher.pool_name_of(a, "gbx-test-1n-jar", True) == jar
     assert launcher.pool_name_of(launcher.parse([]), "gbx-test-1n") == "gbx-test-1n"
+
+
+class _CancelW:
+    def __init__(self):
+        self.cancelled = []
+        self.jobs = type("J", (), {"cancel_run": lambda _s, rid: self.cancelled.append(rid)})()
+
+
+def test_a_failed_launch_cancels_the_runs_it_has_not_seen_finish():
+    w = _CancelW()
+    runs, finished = {"gbx-test-1n": 11, "gbx-test-1n-jar": 22}, {"gbx-test-1n"}
+    with pytest.raises(KeyboardInterrupt):
+        with launcher.cancel_on_error(w, runs, finished):
+            raise KeyboardInterrupt
+    assert w.cancelled == [22], "the run that finished is left alone"
+
+
+def test_a_launch_that_ends_well_cancels_nothing():
+    w = _CancelW()
+    with launcher.cancel_on_error(w, {"a": 1}, {"a"}):
+        pass
+    assert w.cancelled == []
+    assert launcher.cancel_unfinished(w, {"a": 1, "b": 2}, set()) == [1, 2] and w.cancelled == [1, 2]

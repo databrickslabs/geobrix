@@ -420,6 +420,23 @@ RASTER_AGGREGATE += (
         "agg_binpoints",
         ONLY,
     ),
+    # a count of a pixel no point falls in is NoData, not 0; the median of two values is their mean
+    Case(
+        "bp_agg_count",
+        BP,
+        (Build("bp_points"), *BP_CANVAS, "count"),
+        "ref",
+        "agg_binpoints",
+        ONLY,
+    ),
+    Case(
+        "bp_agg_median",
+        BP,
+        (Build("bp_points"), *BP_CANVAS, "median"),
+        "ref",
+        "agg_binpoints",
+        ONLY,
+    ),
     # the statistic left out is the maximum
     Case(
         "bp_agg_default_statistic",

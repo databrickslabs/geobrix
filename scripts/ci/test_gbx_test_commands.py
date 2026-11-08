@@ -73,7 +73,7 @@ def test_the_default_run_covers_every_test_parity_file_in_the_repo(sandbox):
 def test_the_default_run_covers_the_cross_tier_suites_that_need_the_jar(sandbox):
     _parity_sandbox(sandbox, TEST_ROOT)
     cross_tier = {_repo_rel(p) for p in TEST_ROOT.rglob("*_cross_tier.py")}
-    assert len(cross_tier) >= 4  # netcdf, the family harness, spec_se, proximity
+    assert len(cross_tier) >= 3  # netcdf, the family harness (it holds the engine rows), proximity
 
     res, ran = _run_parity(sandbox)
 

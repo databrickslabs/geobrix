@@ -355,6 +355,11 @@ def file_minutes(files: List[str], file_seconds: Dict[str, float], default_s: fl
     return {f: file_seconds.get(f, default_s) / 60.0 for f in files}
 
 
+def untimed_file_seconds(shard: Shard, n_files: int) -> float:
+    """What a file nobody timed counts as, in the estimate and in the split alike: its share of the table's minutes for the shard."""
+    return max((shard.expected_min - FIXED_MIN) * 60.0 / max(1, n_files), 1.0)
+
+
 def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
     """Minutes the shard takes: the measured seconds of its files plus the fixed cost of a task; the table when nothing is known.
     An oracle-table shard runs one file for some of its tables, so the file's total says nothing about it: the table counts."""
@@ -363,7 +368,7 @@ def estimate(shard: Shard, root: Path, file_seconds: Dict[str, float]) -> float:
     files = files_of(shard, root)
     known = [f for f in (files or []) if f in file_seconds]
     if files and len(known) >= max(1, len(files) // 2):
-        return FIXED_MIN + sum(file_minutes(files, file_seconds).values())
+        return FIXED_MIN + sum(file_minutes(files, file_seconds, untimed_file_seconds(shard, len(files))).values())
     return float(shard.expected_min)
 
 
@@ -393,8 +398,7 @@ def split_shard(shard: Shard, k: int, root: Path, file_seconds: Dict[str, float]
     if not files or k <= 1:
         return [shard]
     k = min(k, len(files))
-    per_file_s = max((shard.expected_min - FIXED_MIN) * 60.0 / len(files), 1.0)  # a file nobody timed shares the table's minutes
-    mins = file_minutes(files, file_seconds, per_file_s)
+    mins = file_minutes(files, file_seconds, untimed_file_seconds(shard, len(files)))
     parts: List[List[str]] = [[] for _ in range(k)]
     load = [0.0] * k
     for f in sorted(files, key=lambda f: (-mins[f], f)):

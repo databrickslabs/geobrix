@@ -619,3 +619,35 @@ def test_a_split_part_that_holds_only_deselected_tests_does_not_fail_the_run():
     assert not launcher.is_failure(dict(name="ds", verdict="ok"))
     for v in ("FAILED", "ERRORS", "INCOMPLETE"):
         assert launcher.is_failure(dict(name="ds [1/2]", verdict=v))
+
+
+def test_two_shards_with_the_same_task_key_are_refused(shards):
+    a = ts.Shard(name="ds [1/2]", kind="light")
+    b = ts.Shard(name="DS [1/2]", kind="light")
+    with pytest.raises(ValueError, match="same task key"):
+        _plan(_args(), [a, b])
+
+
+def test_the_pool_gets_the_jar_when_any_of_its_shards_needs_it(shards):
+    mixed = ts.select(shards, "pyrx") + ts.select(shards, "heavy rasterx")
+    plan = _plan(_args("--pool-jar", "gbx-test-1n"), mixed)
+    assert plan["pools"]["gbx-test-1n"]["jar"] is True, "light and heavy shards in one pool: the cluster carries the JAR"
+
+
+def test_each_pools_notebook_header_gives_the_times_of_its_own_shards(shards):
+    plan = _plan(_args(), ts.select(shards, "pyrx,heavy rasterx"))
+    plan["shards"]["pyrx-1-2"]["expected_min"] = 17.0
+    plan["shards"]["heavy-rasterx"]["expected_min"] = 2.0
+    light_head = launcher.header_md(plan, "gbx-test-1n")
+    heavy_head = launcher.header_md(plan, "gbx-test-1n-jar")
+    assert "about 17-17 min" in light_head and "about 2-2 min" in heavy_head
+
+
+def test_the_estimate_and_the_split_count_an_untimed_file_the_same(shards):
+    ds = next(s for s in shards if s.name == "ds")
+    files = ts.files_of(ds, REPO_ROOT)
+    secs = {f: 6.0 for f in files[: len(files) // 2 + 1]}  # a bit over half the files timed
+    est = ts.estimate(ds, REPO_ROOT, secs)
+    parts = ts.split_shard(ds, 2, REPO_ROOT, secs)
+    total_parts = sum(p.est_min - ts.FIXED_MIN for p in parts)
+    assert abs((est - ts.FIXED_MIN) - total_parts) < 0.05

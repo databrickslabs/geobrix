@@ -167,6 +167,10 @@ def pool_of(shard: ts.Shard, a) -> str:
 
 def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: Optional[dict], volroot: str, root: Path, resources: Optional[dict] = None) -> dict:
     run_id = a.run_id
+    slugs = [sh.slug for sh in shards]
+    dup = sorted({x for x in slugs if slugs.count(x) > 1})
+    if dup:
+        raise ValueError(f"shards whose names make the same task key: {dup}; the second would replace the first and never run")
     stage = f"{volroot}/test-runs/{run_id}"
     wheel_sha = mut.sha256_file(wheel) if wheel and Path(wheel).is_file() else "0" * 64  # explain-only may name a wheel that is not there
     caps = {"shard_min": a.shard_cap_min, "stall_min": a.stall_min, "start_min": a.start_cap_min}
@@ -180,7 +184,7 @@ def make_plan(a, sha: str, shards: List[ts.Shard], wheel: Optional[Path], jar: O
         n_clusters = max(1, a.clusters)
         lane_list = ts.lanes(items, slots * n_clusters)
         pools[name] = {
-            "jar": bool(items and items[0].pool == ts.POOL_JAR and not a.serverless),
+            "jar": bool(any(sh.pool == ts.POOL_JAR for sh in items) and not a.serverless),
             "lanes": [[s.slug for s in lane] for lane in lane_list],
             "slots": slots, "clusters": n_clusters,
             "serial_min": round(sum(s.expected_min for s in items), 1),
@@ -247,7 +251,7 @@ def header_md(plan: dict, pool: str) -> str:
         f"**Test shards `{plan['run_id']}`** (commit `{plan['sha'][:10]}`): {plan['purpose']}  \n"
         f"**Output:** per shard, `junit.xml` and `pytest.log` in `{plan['stage']}/out/<shard>/` (the launcher downloads them); "
         f"the verdict per shard is passed / failed / errors / skipped, and the notebook's result is that count as JSON.  \n"
-        f"**Time:** each shard about {min(s['expected_min'] for s in plan['shards'].values())}-{max(s['expected_min'] for s in plan['shards'].values())} min "
+        f"**Time:** each shard about {min(plan['shards'][x]['expected_min'] for lane in spec['lanes'] for x in lane):g}-{max(plan['shards'][x]['expected_min'] for lane in spec['lanes'] for x in lane):g} min "
         f"(CI's times); the run about {spec['expected_min']} min after the start, at most {spec['cap_min']} min.  \n"
         f"**Monitoring:** caps: {c['shard_min']:g} min per shard, {c['stall_min']:g} min without a finished test (the shard then dumps its stacks and stops); "
         f"heartbeat `{plan['stage']}/hb/<shard>.json` (the launcher cancels a run whose shards are all stale). "

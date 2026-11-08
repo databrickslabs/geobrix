@@ -231,3 +231,34 @@ def test_a_scalar_accessor_answers_a_reference_from_light_and_bytes_from_the_jvm
     assert (row["m"], row["v"], row["light"]) == (64, 64, 64)
     with pytest.raises(Exception, match="VirtualTileException"):
         jvm_spark.sql("SELECT gbx__l1_rst_width(v) FROM _gbx_w").collect()
+
+
+ENGINE_ONLY_L1 = [
+    f
+    for f in FNS
+    if "L1" in f.levels and f.accepts_virtual_tile and levels.engine_only(f, "L3")
+]
+
+
+def test_there_are_engine_only_rows_with_a_jvm_companion():
+    """The set is derived: the DEM rows whose numpy light form was removed keep their JVM companion."""
+    assert {"gbx_rst_aspect", "gbx_rst_tri", "gbx_rst_tpi", "gbx_rst_roughness"} <= {
+        f.sql_name for f in ENGINE_ONLY_L1
+    }
+
+
+@pytest.mark.parametrize("fn", ENGINE_ONLY_L1, ids=lambda f: f.sql_name)
+def test_the_light_side_of_the_jvm_dispatch_of_an_engine_only_row_is_the_engine(fn):
+    """A row whose only light form is the GDAL spec engine has no numpy kernel for the wrapper to send a virtual tile
+    to: its light side is the engine's row-wise UDF, registered without importing osgeo (a session that lacks the
+    engine still installs the wrapper, and a virtual tile then refuses at the call, naming the env wheel).
+    """
+    from unittest import mock
+
+    spark = mock.MagicMock()
+    with mock.patch.object(
+        jvm.l3, "register_l3", side_effect=AssertionError("no numpy light form")
+    ):
+        name = jvm._install_light_side(spark, fn)
+    assert name == jvm._priv(fn, "L3")
+    assert spark.udf.register.call_args.args[0] == name

@@ -202,6 +202,21 @@ def _takes_its_defaults(fn, spec, built=None) -> bool:
     return True
 
 
+def register_engine_c0(spark, fn, name: str) -> None:
+    """Register `fn`'s row-wise GDAL spec engine UDF under `name`, carrying the driver's remote-path switch and the
+    connect-aware read cap. It reads virtual tiles and bytes alike. Registering it never imports ``osgeo``: where the
+    engine is missing a call refuses, naming the env wheel."""
+    from databricks.labs.gbx import _gdal_policy
+    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+    from databricks.labs.gbx.engine import l3 as engine_l3
+
+    reg = _gdal_policy.carrying_session(spark)
+    grid = _factory_args("proj_grid_dirs")[0]
+    reg.udf.register(
+        name, engine_l3.c0(fn.sql_name, grid, read_cap=report_detected_cap(spark))
+    )
+
+
 def register_l3_engine(spark, fn, form: str = "engine") -> str:
     """Register `fn`'s GDAL spec engine UDFs under its SQL name, each carrying the driver's
     remote-path switch to the workers; returns the form used.
@@ -212,15 +227,11 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
     measured fastest (``levels.engine_form``).
     """
     from databricks.labs.gbx import _gdal_policy
-    from databricks.labs.gbx.ds.file_gbx import report_detected_cap
     from databricks.labs.gbx.engine import l3 as engine_l3
     from databricks.labs.gbx.manager import capabilities, jvm, levels, sqlwrap
 
     reg = _gdal_policy.carrying_session(spark)  # its UDFs carry the driver's switch
     grid = _factory_args("proj_grid_dirs")[0]
-    cap = report_detected_cap(
-        spark
-    )  # the connect-aware read cap, which a worker cannot measure itself
     name = fn.sql_name
     if form == levels.ENGINE:
         form = levels.engine_form(fn)
@@ -230,10 +241,10 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
         and capabilities._sql_functions(spark)
     )
     if not wrapped:
-        reg.udf.register(name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
+        register_engine_c0(spark, fn, name)
         return "engine-c0"
     c0_name, c1_name = jvm._priv(fn, "L3"), jvm._priv(fn, "L3c1")
-    reg.udf.register(c0_name, engine_l3.c0(fn.sql_name, grid, read_cap=cap))
+    register_engine_c0(spark, fn, c0_name)
     reg.udf.register(c1_name, engine_l3.c1(fn.sql_name, grid))
     first = fn.params[0].name
     if fn.gdal.inputs[0][1] == "rasters":

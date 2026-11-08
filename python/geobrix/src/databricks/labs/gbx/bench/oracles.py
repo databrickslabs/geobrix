@@ -152,7 +152,10 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
             "derivedband_syntax_error",
         )
     },
-    "aspect_flat_zero": {"L1": _ASPECT_ZERO_L1},
+    **{
+        cid: {"L1": _ASPECT_ZERO_L1}
+        for cid in ("aspect_flat_zero", "aspect_zero_for_flat_hole")
+    },
     "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
     **{
         cid: {"L1": _VIRTUAL_RAISES_L1}

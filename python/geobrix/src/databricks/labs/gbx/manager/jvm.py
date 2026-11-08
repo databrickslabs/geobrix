@@ -9,7 +9,7 @@ from __future__ import annotations
 import importlib
 from typing import Optional
 
-from databricks.labs.gbx.manager import capabilities, l3, sqlwrap
+from databricks.labs.gbx.manager import capabilities, l3, levels, sqlwrap
 
 
 def _priv(fn, level: str) -> str:
@@ -51,7 +51,11 @@ def _pass_read_cap(spark) -> None:
 def _install_light_side(spark, fn) -> str:
     """Register the light kernel under its private name for the dispatch wrapper; return that name."""
     name = _priv(fn, "L3")
-    l3.register_l3(spark, fn, l3.l3_variant(fn)[0], name=name)
+    if levels.engine_only(fn, "L3"):
+        # a row whose only light form is the GDAL spec engine (no numpy kernel): its row-wise UDF reads the virtual tile
+        l3.register_engine_c0(spark, fn, name)
+    else:
+        l3.register_l3(spark, fn, l3.l3_variant(fn)[0], name=name)
     return name
 
 

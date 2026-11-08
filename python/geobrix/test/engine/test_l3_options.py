@@ -152,9 +152,38 @@ def test_the_force_output_form_returns_a_null_and_an_error_tile_as_they_are(
     assert calls == []
 
 
+def test_the_force_output_form_fills_the_manifest_defaults_for_missing_parameters(
+    monkeypatch,
+):
+    calls = _stub_run(monkeypatch, run.Result(b"II*\x00out", None, "cmd"))
+    l3.forced_c0("gbx_rst_slope").func(_tile(), None, None, True)
+    assert calls[0][2] == {"unit": "degrees", "xscale": None, "yscale": None}
+
+
+def test_the_force_output_form_gives_a_refused_input_as_an_error_tile(monkeypatch):
+    calls = _stub_run(monkeypatch, run.Result(b"never", None, None))
+
+    def refuse(fn, first, read_cap=None, file_refs=None):
+        raise run.DataError("tile is unreadable. Fix: pass a GeoTIFF tile")
+
+    monkeypatch.setattr(l3, "_inputs", refuse)
+    row = l3.forced_c0("gbx_rst_slope").func(
+        _tile(), "degrees", None, None, None, None, True
+    )
+    assert row["raster"] is None and "unreadable" in row["metadata"]["last_error"]
+    assert row["cellid"] == 5 and calls == []
+
+
+def test_the_grouped_core_raises_on_the_driver_when_the_engine_cannot_run(monkeypatch):
+    monkeypatch.setattr(run, "unavailable_reason", lambda: "no osgeo here")
+    with pytest.raises(RuntimeError, match=r"no osgeo here.*Fix:"):
+        grouped.core("gbx_rst_slope", {"unit": "degrees"})
+
+
 def test_the_grouped_core_runs_the_engine_on_the_open_tiles_bytes(monkeypatch):
     from databricks.labs.gbx.pyrx import functions as prx
 
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)
     calls = _stub_run(monkeypatch, run.Result(b"II*\x00out", None, "cmd"))
     monkeypatch.setattr(prx, "_dataset_to_gtiff_bytes", lambda ds: b"II*\x00" + ds)
     core = grouped.core(
@@ -175,6 +204,24 @@ def test_the_python_api_force_output_path_builds_the_engine_udf(spark8):
     assert SLOPE.python.extra_factory_args == "engine"
     col = rx.rst_slope(F.col("tile"), "percent", materialize=True)
     assert "_forced" in str(col)
+
+
+def test_the_force_output_udf_carries_the_remote_path_switch_the_driver_set(
+    monkeypatch,
+):
+    """A call built while GBX_ALLOW_REMOTE_PATHS is on runs its function with the switch on, as a registration does."""
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import BooleanType
+
+    from databricks.labs.gbx import _gdal_policy
+
+    monkeypatch.setattr(_gdal_policy, "_session_read_cap_now", lambda: None)
+    probe = F.udf(lambda x: _gdal_policy.remote_paths_allowed(), BooleanType())
+    monkeypatch.setenv("GBX_ALLOW_REMOTE_PATHS", "1")
+    built = _gdal_policy.carrying_call(probe)
+    monkeypatch.delenv("GBX_ALLOW_REMOTE_PATHS")  # the worker never reads it itself
+    assert built.func(None) is True
+    assert probe.func(None) is False
 
 
 @pytest.mark.parametrize("sql_name", ["gbx_rst_slope"])

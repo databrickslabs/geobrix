@@ -251,12 +251,13 @@ def forced_c0(
     virtualize_dir, virtualize_prefix, materialize)`` and returns a tile."""
     fn = _function(sql_name, None)
     names = [p.name for p in fn.params[1:]]
+    defaults = [_sql_default(p.default) for p in fn.params[1:]]
 
     @F.udf(V2_TILE_SCHEMA, useArrow=True)
     def _forced(first, *rest):
         _setup(grid_dirs)
         args, (vdir, vprefix, mat) = rest[:-3], rest[-3:]
-        values = dict(zip(names, args))
+        values = dict(zip(names, list(args) + defaults[len(args) :]))
         try:
             rasters, passthrough, cellid = _inputs(fn, first, read_cap)
         except run.DataError as exc:

@@ -359,12 +359,29 @@ class CapCarryingCall:
         return getattr(wrapped, name)
 
 
-def _with_cap(f, cap: int):
-    """``f`` (a UDF, a pandas UDF or a UDTF) remade with ``cap`` carried; its kind, return type and determinism stay."""
+def carrying_call(f, allowed: Optional[bool] = None):
+    """``f`` as a Column-API call builds it: remade with the driver's switch (read now, unless ``allowed`` is given)
+    and the session's read cap carried, as a registration carries them (``carrying_session``). For a UDF a binding
+    builds and applies at once, such as the force-output form of a row; anything that is not a light UDF is returned as
+    it is."""
+    if isinstance(f, CapCarryingCall):
+        f = f._f
+    if not is_light_udf(f):
+        return f
+    return _with_cap(
+        f,
+        _session_read_cap_now(),
+        driver_switch() if allowed is None else allowed,
+    )
+
+
+def _with_cap(f, cap: Optional[int], allowed: Optional[bool] = None):
+    """``f`` (a UDF, a pandas UDF or a UDTF) remade with ``cap`` (and ``allowed``, when given) carried; its kind,
+    return type and determinism stay."""
     if isinstance(
         f.func, type
     ):  # a UDTF: the same function over a carrying handler class
-        return carrying(f, None, cap)
+        return carrying(f, allowed, cap)
     from pyspark.sql.utils import is_remote
 
     if (
@@ -378,7 +395,7 @@ def _with_cap(f, cap: int):
     # resolved (from its type hints, or a UDF's own): `F.pandas_udf(func, type, evalType)` would raise PySpark's
     # SPARK-28264 deprecation warning, and the carrying wrapper has no hints for it to infer from.
     out = UserDefinedFunction(
-        _carrying_function(f.func, None, cap), f.returnType, evalType=f.evalType
+        _carrying_function(f.func, allowed, cap), f.returnType, evalType=f.evalType
     )._wrapped()
     return out if getattr(f, "deterministic", True) else out.asNondeterministic()
 

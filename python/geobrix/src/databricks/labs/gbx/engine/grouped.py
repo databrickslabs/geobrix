@@ -15,6 +15,13 @@ def core(sql_name: str, values: Mapping[str, Any]) -> Callable:
     from databricks.labs.gbx.core import proj_grids
     from databricks.labs.gbx.engine import l3, run
 
+    why = run.unavailable_reason()
+    if why:
+        raise RuntimeError(
+            f"{sql_name}: the GDAL spec engine cannot run here: {why}. "
+            "Fix: run this where rasterio's GDAL (osgeo) is installed at the manifest's pin, "
+            "such as a Databricks cluster with the geobrix wheel."
+        )
     fn = manifest.load().functions[sql_name]
     grid_dirs = tuple(
         proj_grids.get_registered_dirs()

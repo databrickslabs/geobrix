@@ -135,7 +135,7 @@ def force_output(
     """
     from pyspark.sql import functions as F
 
-    from databricks.labs.gbx import manifest
+    from databricks.labs.gbx import _gdal_policy, manifest
     from databricks.labs.gbx.pyrx.functions import _validate_force_output
 
     _validate_force_output(virtualize_dir, materialize)
@@ -156,6 +156,8 @@ def force_output(
 
         impl = impl(*_factory_args(fn.python.extra_factory_args))
     cols = _columns(fn, values, fill_all=True)
+    # the driver's remote-path switch goes to the workers, as a registration carries it (`carrying_session`)
+    impl = _gdal_policy.carrying_call(impl)
     return impl(
         *cols, F.lit(virtualize_dir), F.lit(virtualize_prefix), F.lit(materialize)
     )

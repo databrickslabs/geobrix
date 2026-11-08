@@ -1,6 +1,6 @@
 # gbx:local:snapshot
 
-Writes a rolling zip of the files git does not hold: local planning notes, editor and agent settings, local env files, and the commits no remote has yet. The zip goes to a local folder.
+Writes a rolling zip of the files git does not hold. These are local planning notes, editor and agent settings, local env files, and the commits no remote has yet. The zip goes to a local folder.
 
 ## Usage
 

@@ -50,7 +50,7 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 ## Outputs
 
 - Table `mutation_results`: `run_id`, `run_ts`, `git_sha`, `family`, `module`, `function`, `mutant`, `status`, `exit_code`, `killing_test`, `wall_s`, `diff`, `tests`, `node_type`, `purpose`. A rerun of the same run id replaces its rows. New columns are added by schema merge.
-- `summary.md`: kill rate per module (with the change since the run before, when the table holds one), survivors grouped by function with the changed lines, functions no selected test reaches, and the tests that killed the most mutants.
+- `summary.md`: kill rate per module, with the change since the run before when the table holds one. It also lists survivors grouped by function with the changed lines, functions no selected test reaches, and the tests that killed the most mutants.
 - `rows.jsonl`, `run.json`, `K.json`, `killers.jsonl`, `survivors.json`, `progress.json`, `mutmut.log`.
 
 ## Status of a mutant
@@ -67,6 +67,6 @@ Try every mutant of some kernel modules on one large Databricks node, and record
 - Tier 0 only: tests that need a Spark session are skipped.
 - It does not call the gate. The gate compares an old and a slim selection; this run needs one selection and one pass. It uses the gate's helpers (`scripts/mutation/gate.py`) and its pins.
 - The wheel carries the dependencies and the native payload. The package that is mutated and tested is the tarball's.
-- A stopped run (a cap) exits 3 and still writes the rows of the mutants tried; a cancelled notebook writes no table rows, and the files stay in the Volume folder until you remove them.
+- A stopped run (a cap) exits 3 and still writes the rows of the mutants tried. A cancelled notebook writes no table rows. The files stay in the Volume folder until you remove them.
 - Cost: one on-demand node while a run is on it and for 60 idle minutes after the last one. The first run of a phase pays a cold start (about 5 min).
 - Make the pool by hand with `bash scripts/commands/gbx-bench-pool.sh up --name gbx-test-1n --n 1 --single-node --node-type m5d.8xlarge`; end it with `down --name gbx-test-1n --delete`.

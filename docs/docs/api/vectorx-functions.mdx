@@ -530,12 +530,12 @@ All three have the same names and results at every level.
 | `target_crs` cannot be parsed | **raises** |
 | `gbx_st_setcrs` given a CRS with no integer authority code | **raises** |
 
-**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. For a geometry where only *some* vertices carry a Z, such as `LINESTRING Z (15 51 5, 16 52)`, the rule is one: the Z values that exist are kept and the missing ones are `NaN`.
+**Z coordinates.** A geometry whose vertices *all* carry a finite Z keeps its Z. A genuinely 2D geometry stays 2D — no Z ordinate is invented. Some geometries have a Z on only *some* vertices, such as `LINESTRING Z (15 51 5, 16 52)`. Such a geometry keeps the Z values it has, and the missing ones are `NaN`.
 
 - `gbx_st_transformcrs` reprojects X and Y of every vertex and carries the Z through the transformation for the vertices that have one. The vertices without a Z stay `NaN` in the result, and their X and Y are still correct.
 - `gbx_st_setcrs` keeps the Z as-is, since stamping an SRID never moves coordinates.
 
-A missing Z is never filled in with a substitute value such as `0`, which would be indistinguishable from a surveyed elevation downstream, and a Z that exists is never dropped. Every level behaves identically here, in every input encoding.
+A missing Z never gets a substitute value such as `0`, because downstream code cannot tell it from a surveyed elevation. A Z that exists is never dropped. Every level behaves identically here, in every input encoding.
 
 :::caution Known limitations
 These apply in **every** input encoding and at every level — they are properties of the operations, not of how you pass the geometry.

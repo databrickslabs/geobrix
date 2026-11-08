@@ -1272,13 +1272,8 @@ _CHUNK_TABLE_VERDICTS = {
     "where", ["valid", "offset_minus_one", *_CHUNK_TABLE_VERDICTS], ids=str
 )
 def test_lidar_chunk_table_problem_verdicts(tmp_path, where):
-    """The check itself (it reads three small pieces of the file and never calls
-    the decoder, so it is safe to run in this process): a table it lets through
-    comes back parsed, one it refuses comes back as the reason."""
-    import laspy
-
-    from databricks.labs.gbx.ds.lidar import _ChunkTable, _read_chunk_table
-
+    """A table the check lets through reads in full with no record; one it refuses reads
+    nothing and leaves one record in the words that name the problem."""
     # a fixed-chunk file keeps no point count per chunk; only a variable-chunk one can lie
     # about one
     if where == "huge_chunk":
@@ -1303,14 +1298,12 @@ def test_lidar_chunk_table_problem_verdicts(tmp_path, where):
     if where == "huge_chunk":  # 5 million points is more than a chunk may decode to
         entries = _chunk_entries(path)
         _replace_chunk_table(path, [n for _, n in entries], [5_000_000] * len(entries))
-    with laspy.open(path) as r:
-        result = _read_chunk_table(r.header, path, os.path.getsize(path))
+    # the check refuses before the decoder runs, so this is safe in this process
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
     if where in ("valid", "offset_minus_one"):
-        assert isinstance(result, _ChunkTable)
-        assert len(result.entries) == 3  # 120,000 points in chunks of 50,000
-        assert result.chunk_size == 50_000 and result.item_size == 34
+        assert len(rows) == 120_000 and recs == []
     else:
-        assert isinstance(result, str) and _CHUNK_TABLE_VERDICTS[where] in result
+        assert rows == [] and _CHUNK_TABLE_VERDICTS[where] in _only_record(recs)
 
 
 def test_lidar_laz_whose_laszip_record_cannot_be_decoded_is_one_bad_record(tmp_path):
@@ -1413,23 +1406,19 @@ def test_check_laz_lets_a_sound_file_through_and_names_a_refused_one(tmp_path):
 def test_lidar_chunk_table_check_does_not_blame_the_file_for_running_out_of_memory(
     tmp_path, monkeypatch, fails
 ):
-    """Out of memory is the machine's, not the file's: it propagates (like every
+    """Out of memory is the machine's, not the file's: it fails the read (like every
     other catch of a decoder's error in the reader) instead of being recorded as
     an unreadable file."""
-    import laspy
     import lazrs
-
-    from databricks.labs.gbx.ds.lidar import _read_chunk_table
 
     path = _laz(tmp_path / "c.laz", 120_000)
 
     def out_of_memory(*a, **k):
         raise MemoryError("cannot allocate")
 
-    with laspy.open(path) as r:
-        monkeypatch.setattr(lazrs, fails, out_of_memory)
-        with pytest.raises(MemoryError):
-            _read_chunk_table(r.header, path, os.path.getsize(path))
+    monkeypatch.setattr(lazrs, fails, out_of_memory)
+    with pytest.raises(MemoryError):
+        _read(tmp_path, path, "lidar_gbx")
 
 
 @pytest.mark.parametrize("code", [errno.EIO, None])
@@ -1438,18 +1427,12 @@ def test_lidar_chunk_table_check_does_not_blame_the_file_for_an_io_error_in_lazr
 ):
     """An I/O error of the Volume while lazrs reads the table comes back from
     lazrs as a LazrsError ("Failed to use readinto to read bytes"); the error the
-    handle raised is the environment's, not the file's, so it propagates. An
+    handle raised is the environment's, not the file's, so it fails the read. An
     OSError without a system errno (a parser's) is still a verdict on the file."""
     import builtins
     import io
 
-    import laspy
-
-    from databricks.labs.gbx.ds.lidar import _read_chunk_table
-
     path = _laz(tmp_path / "c.laz", 120_000)
-    with laspy.open(path) as r:
-        header = r.header
     real_open = builtins.open
 
     class Failing(io.BufferedReader):
@@ -1457,17 +1440,17 @@ def test_lidar_chunk_table_check_does_not_blame_the_file_for_an_io_error_in_lazr
             raise OSError(code, "Input/output error") if code else OSError("bad")
 
     def failing_open(file, *a, **k):
-        if str(file) == path:
+        if str(file) == path and "b" in (a[0] if a else k.get("mode", "r")):
             return Failing(real_open(file, "rb", buffering=0))
         return real_open(file, *a, **k)
 
     monkeypatch.setattr(builtins, "open", failing_open)
     if code is None:
-        result = _read_chunk_table(header, path, os.path.getsize(path))
-        assert isinstance(result, str) and "chunk table cannot be decoded" in result
+        rows, recs = _read(tmp_path, path, "lidar_gbx")
+        assert rows == [] and "chunk table cannot be decoded" in _only_record(recs)
     else:
         with pytest.raises(OSError) as raised:
-            _read_chunk_table(header, path, os.path.getsize(path))
+            _read(tmp_path, path, "lidar_gbx")
         assert raised.value.errno == code
 
 
@@ -1478,27 +1461,21 @@ def test_lidar_chunk_table_check_retries_a_transient_miss_on_its_open(
     retried like the first open's, and is not a bad file."""
     import builtins
 
-    import laspy
-
     from databricks.labs.gbx.ds import _listing
-    from databricks.labs.gbx.ds.lidar import _ChunkTable, _read_chunk_table
 
     path = _laz(tmp_path / "c.laz", 120_000)
-    with laspy.open(path) as r:
-        header = r.header
-    opens, real_open = [], builtins.open
+    misses, real_open = [], builtins.open
 
     def flaky(file, *a, **k):
-        if str(file) == path:
-            opens.append(file)
-            if len(opens) == 1:
-                raise FileNotFoundError(path)
+        if str(file) == path and not misses and a and "b" in a[0]:
+            misses.append(file)
+            raise FileNotFoundError(path)
         return real_open(file, *a, **k)
 
     monkeypatch.setattr(builtins, "open", flaky)
     monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
-    result = _read_chunk_table(header, path, os.path.getsize(path))
-    assert isinstance(result, _ChunkTable) and len(opens) == 2
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(misses) == 1 and len(rows) == 120_000 and recs == []
 
 
 def test_lidar_read_closes_the_file_when_the_chunk_table_check_raises(

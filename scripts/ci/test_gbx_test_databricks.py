@@ -370,6 +370,7 @@ def test_auto_split_cuts_long_shards_to_about_the_target_and_leaves_short_ones(s
     assert len(out) > len(light)
     assert all(s.est_min <= 6.0 * 1.6 or len(s.paths) == 1 for s in out), [(s.name, s.est_min) for s in out if s.est_min > 9.6]
     assert not [s for s in out if s.name.startswith("manager family") and not s.name.endswith("]")], "the family oracle groups are cut as well"
+
     def all_files(items):
         return sorted(f for s in items for f in (ts.files_of(s, REPO_ROOT) or []))
 

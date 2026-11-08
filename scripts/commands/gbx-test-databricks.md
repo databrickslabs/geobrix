@@ -50,24 +50,28 @@ Run GeoBrix's test shards on warm Databricks pool clusters, side by side. It bea
 - Reads the shards from `.github/workflows/build_main.yml` (the `light` matrix and `light-scripts`) and from `LIGHT_IGNORES` in `.github/actions/python_build/action.yml` (one heavy shard per remaining dir). A shard added to CI is a shard here.
 - Stages a tarball of the committed repo files at `--sha`, the env6 wheel and `plan.json` to `<volume>/test-runs/<run id>/`. It downloads the wheel and tarball back and compares sha256. The JAR goes to `<volume>/test-pool-jars/<sha256 prefix>/`, so the pool reinstalls it only when it differs.
 - Leases the pool's single-node cluster (DBR 19, dedicated). It makes one when the pool has none. It never ends a pool cluster; the pool ends itself after 60 idle minutes (`gbx:bench:pool down` is the owner's call).
-- Cuts long shards by file (stable, balanced by the timings; without timings, by the shard's CI minutes), so no task is much longer than the rest.
+- Cuts long shards by file, so no task is much longer than the rest. The cut balances the recorded timings, or CI's minutes without timings.
 - Leases the free clusters of the pool, up to `--clusters` (default: the pool's cap). It starts stopped clusters, and makes new ones while under the cap. It prints the plan: tasks, clusters, slots, expected wall.
-- Submits one job per pool. Each shard is a task, so it runs in its own Python process. The tasks go into clusters x slots lanes, longest first; the lanes run side by side, and a failed shard does not skip the next one in its lane.
+- Submits one job per pool. Each shard is a task, so it runs in its own Python process.
+- Puts the tasks into clusters x slots lanes, longest first. The lanes run side by side. A failed shard does not skip the next one in its lane.
 - Reports the wall time against the longest task and against running the tasks one after another.
-- Each task installs the wheel in its own session, unpacks the tarball and runs pytest in that process, on the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
-- Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`, prints one table and writes `summary.md` with the first lines of every failure and the skip reasons.
+- Each task installs the wheel in its own session, unpacks the tarball and runs pytest there. The tests use the session the cluster provides (`python/geobrix/test/_provided_spark.py`).
+- Downloads `junit.xml` and `pytest.log` per shard to `test-logs/databricks-tests/<run id>/<shard>/`. It prints one table and writes `summary.md` with the first lines of each failure and the skip reasons.
 - Removes the Volume folder and the runner notebooks after the download. Exit code 1 when any shard failed, errored or did not finish.
 
 ## What to expect
 
-- The first all-light pass (2026-11-08, 8 chunks at once on one 32 vCPU node) ran each chunk 1.6 to 3.4 times slower than alone: the tasks share one Spark driver JVM. A shard alone ran about 20% faster than CI's runner. The plan therefore uses 4 slots per node and gets speed from more clusters.
+- The first all-light pass ran 8 chunks at once on one 32 vCPU node (2026-11-08). Each chunk ran 1.6 to 3.4 times slower than alone, because the tasks share one Spark driver JVM.
+- A shard alone ran about 20% faster than CI's runner. The plan therefore uses 4 slots per node and gets its speed from more clusters.
 - Estimate for the full light bank: about 205 min of work in 44 chunks. On 1 cluster that is about 50 min of wall; on 3 clusters about 18 min; on 4 about 14 min. Raise the pool's cap with `gbx:bench:pool up --name gbx-test-1n --n 3 --warm 0 --single-node --node-type m5d.8xlarge`; the run starts clusters on demand up to the cap.
-- These numbers come from one partial run (cancelled with 12 chunks unstarted) and the CI minutes. The next real run measures the plan and rewrites `timings.json`; the summary then prints the longest chunk against the mean, the tail and the idle slot time. Read those first.
+- These numbers come from one partial run (cancelled with 12 chunks unstarted) and the CI minutes.
+- The next real run measures the plan and rewrites `timings.json`. The summary then prints the longest chunk against the mean, the tail and the idle slot time. Read those first.
 - `affected` runs only the shards that hold a changed test, which is usually a few chunks and a few minutes.
 
 ## Known failures on a node
 
-- Tests that hand a bare local path to Spark (`test/bench`'s array-agg legs and others) fail with `PATH_NOT_FOUND`: Spark reads a bare path from DBFS on Databricks. They need `file:` URIs, as the overture tests now have.
+- Tests that hand a bare local path to Spark fail with `PATH_NOT_FOUND`, for example the array-agg legs of `test/bench`. Spark reads a bare path from DBFS on Databricks. They need `file:` URIs.
+- The overture tests that mix Spark and file I/O on a bare path skip under the provided session, with the reason.
 - `test/bench/test_levels.py`'s worker-peak tests inspect Spark's local-mode Python workers and cannot pass against the cluster's session.
 - The family oracle chunks need several minutes each; the Scala suites never run here.
 

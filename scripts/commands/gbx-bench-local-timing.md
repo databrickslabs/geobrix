@@ -20,6 +20,7 @@ The plain pass takes about 70 seconds on a 12-core arm64 laptop. `--baseline` an
 - `--baseline-k <number>`: the multiple of the baseline that flags a form. Default `1.5`.
 - `--repeats <n>`: measured runs per n. The table, the flags and the baseline use their median. Default `1` for the plain pass and `3` with `--baseline` or `--baseline-write`. `--baseline-write` refuses fewer than 3 (exit 2).
 - `--corpus-dir <path>`: the corpus to time. A folder named `rows` is read in place: nothing is copied, and the pass exits 2 if it holds fewer than 96 tiles. Any other path is the parent of the 96-tile copy. Pass `/Volumes/main/default/bench-corpus/rows` (10,000 tiles) to time the folder shape of a cluster run. The pass then also prints the `readdir_mode` the first tiles get and how long the one cold listing took. The listing cache is cleared first; the operating system's own cache is not. A set whose forms write under the corpus (the `_synth` folder) is refused with exit 2, as the folder is shared.
+- Env `GBX_JAR=<path>`: start Spark with this JAR, not the newest of `python/geobrix/lib` and `target/`. Use it to time a JAR copied out of a tree that other work is rebuilding. The JAR must be the one the payload (`GBX_NATIVE_ROOT`) bundles, or the JVM forms are `na_by_design`.
 - `--dry-run`: check the set's preconditions, print what they are and stop. It takes no lock and runs no pass.
 - `--log <path>`: write the output to a log file (a filename goes to `test-logs/<name>`).
 - `--no-wait`: exit 75 at once if another test run holds the container lock.

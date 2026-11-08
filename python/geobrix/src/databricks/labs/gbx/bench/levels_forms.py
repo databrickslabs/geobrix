@@ -1868,10 +1868,20 @@ def release_cached_inputs(spark) -> None:
     _CACHED_INPUTS.clear()
 
 
-def _se_dems_replicated(size: int, tile_of=None, label: str = "dem"):
+def _se_dems_replicated(
+    size: int,
+    tile_of=None,
+    label: str = "dem",
+    parts: int = 8,
+    literals=None,
+    content: bool = False,
+):
     """`size` px tiles (DEMs, or what `tile_of(size, seed)` builds), n rows: four distinct tiles built once on the client
     and replicated on the executors, then cached (the rows are not rebuilt by each timed query, and no client cap applies
-    to n). The cache lasts one rung: `release_cached_inputs` frees it.
+    to n). The cache lasts one rung: `release_cached_inputs` frees it. The rows are spread over `parts` partitions.
+    `literals(corpus)` names string columns every row carries beside `tile` (`{column: value}`): it runs on each build,
+    so a value that needs a file written first (a colour table) has it. With `content`, the one column is `content`: the
+    bytes of each tile (a GTiff), not the tile struct.
     """
     tile_of = tile_of or _se_dem_tile
 
@@ -1881,12 +1891,16 @@ def _se_dems_replicated(size: int, tile_of=None, label: str = "dem"):
         from databricks.labs.gbx.manifest import TILE_SQL
 
         name = f"mvp_in_se_{label}{size}_mem_v{RECIPE_VERSION}_{n}"
+        extra = literals(corpus) if literals else {}
         if schema is None and spark.catalog.tableExists(name):
             return name
         four = client_dataframe(
             spark,
-            [(i, tile_of(size, i)) for i in range(4)],
-            f"idx int, tile {TILE_SQL}",
+            [
+                (i, tile_of(size, i)["raster"] if content else tile_of(size, i))
+                for i in range(4)
+            ],
+            "idx int, content binary" if content else f"idx int, tile {TILE_SQL}",
             what=f"se_{label}_{size} tiles",
         )
 
@@ -1895,8 +1909,11 @@ def _se_dems_replicated(size: int, tile_of=None, label: str = "dem"):
                 spark.range(n)
                 .select((F.col("id") % 4).cast("int").alias("idx"))
                 .join(F.broadcast(four), "idx")
-                .select("tile")
-                .repartition(8)
+                .select(
+                    "content" if content else "tile",
+                    *[F.lit(v).alias(k) for k, v in extra.items()],
+                )
+                .repartition(parts)
             )
             if schema is None:
                 df = df.cache()
@@ -2297,6 +2314,200 @@ for _fn, _call in _SE_CALC_CALLS.items():
             register=False,
         )
     ]
+
+
+# --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
+#
+# The five companions (aspect, TRI, TPI, roughness, colour relief) on the JVM beside their light form: the engine's
+# row-wise UDF (c0) and its batch UDF (c1) for the four engine functions, the colour-table UDF for colour relief, and
+# the engine's floor. One input for all of them: 1024 px DEM tiles replicated on the executors (128 at 1x, 512 at 4x,
+# 2048 at 16x), spread over 32 partitions, each row also carrying the path of a colour table. Every form is compared by
+# the decoded pixels it returns, and a JVM form (which can return an error tile under load) reports the distinct
+# `last_error` texts it returned with their counts.
+DEM_FUNCTIONS = (
+    "gbx_rst_aspect",
+    "gbx_rst_tri",
+    "gbx_rst_tpi",
+    "gbx_rst_roughness",
+    "gbx_rst_color_relief",
+)
+_DEM_PKG = "com.databricks.labs.gbx.rasterx.expressions.dem."
+_DEM_COMPANION = {fn: _DEM_PKG + "RST_" + c for fn, c in zip(
+    DEM_FUNCTIONS, ("Aspect", "TRI", "TPI", "Roughness", "ColorRelief"))}  # fmt: skip
+# the SQL arguments after the tile; aspect at its defaults (azimuth, flat areas keep their value)
+_DEM_ARGS = {
+    "gbx_rst_aspect": "false, false",
+    "gbx_rst_tri": "",
+    "gbx_rst_tpi": "",
+    "gbx_rst_roughness": "",
+    "gbx_rst_color_relief": "ct",
+}
+DEM_COLOR_TABLE = "0% 49 54 149\n25% 69 117 180\n50% 255 255 191\n75% 244 109 67\n100% 165 0 38\nnv 0 0 0\n"
+BASE_ROWS["dem_1024_mem"] = 128
+BASE_ROWS["dem_bytes_1024_mem"] = 128
+
+
+def _dem_color_table(corpus) -> Dict[str, str]:
+    """Write the colour table beside the run's scratch (a Volume the workers read, or the temp directory locally) and name
+    it in column `ct`."""
+    scratch = _io_scratch(corpus or "")
+    os.makedirs(scratch, exist_ok=True)
+    path = scratch + "/gbx_bench_dem_colors.txt"
+    if not os.path.isfile(path) or open(path).read() != DEM_COLOR_TABLE:
+        with open(path, "w") as fh:
+            fh.write(DEM_COLOR_TABLE)
+    return {"ct": path}
+
+
+INPUTS["dem_1024_mem"] = _se_dems_replicated(
+    1024, label="dem32", parts=32, literals=_dem_color_table
+)
+INPUTS["dem_bytes_1024_mem"] = _se_dems_replicated(
+    1024, label="bytes32", parts=32, content=True
+)
+
+
+def dem_l1_name(fn: str) -> str:
+    """The private session name of a DEM companion (`gbx__l1_<x>`), beside whatever the registrar put under the SQL name."""
+    return "gbx__l1_" + fn[len("gbx_") :]
+
+
+def setup_dem_l1(spark):
+    """Install the five companions under their private names (dedicated compute; a Connect session refuses)."""
+    from databricks.labs.gbx.manager import jvm
+
+    for fn, fqn in _DEM_COMPANION.items():
+        why = jvm.install_private_l1(spark, fqn, dem_l1_name(fn))
+        if why:
+            raise RuntimeError(why)
+
+
+def _dem_call(name: str, fn: str) -> str:
+    args = _DEM_ARGS[fn]
+    return f"{name}(tile{', ' + args if args else ''})"
+
+
+# the pixels of the four distinct tiles (the input cycles four), through the function
+_DEM_VFP = (
+    "SELECT count(*) AS n, sum(pmod(gbx_bench_vfp_raster(t.raster), 2147483647)) AS fp, count(t.raster) AS n_out "
+    "FROM (SELECT {call} AS t FROM (SELECT first(tile) AS tile, first(ct) AS ct FROM {{src}} "
+    "GROUP BY xxhash64(tile.raster)))"
+)
+# the NULL outputs of a tile function by the `last_error` text of the error tile: how many, a digest of the texts, and the
+# first few as `<count> x <text>` (the text cleaned of the separators the row's note uses, cut at 160 characters)
+_DEM_ERRORS = (
+    "SELECT coalesce(sum(c), 0) AS n_null, md5(concat_ws('|', array_sort(collect_list(txt)))) AS s, "
+    "slice(array_sort(collect_list(concat(c, ' x ', txt))), 1, 8) AS first FROM "
+    "(SELECT substr(translate(replace(coalesce(t.metadata['last_error'], '<no last_error>'), chr(10), ' '), "
+    "';,', '  '), 1, 160) AS txt, count(*) AS c "
+    "FROM (SELECT {call} AS t FROM {{src}}) WHERE t.raster IS NULL GROUP BY 1)"
+)
+
+
+def _dem(fn, level, variant, inp, sql, **kw):
+    return Form("DEM", fn, level, variant, inp, sql, **kw)
+
+
+FORMS["DEM"] = []
+for _fn in DEM_FUNCTIONS:
+    _l3 = "c0" if _fn == "gbx_rst_color_relief" else "engine-c0"
+    _calls = {
+        "l1": _dem_call(dem_l1_name(_fn), _fn),
+        "l3": _dem_call(_fn, _fn),
+        "floor": "gbx_bench_floor_c0(tile)",
+    }
+    FORMS["DEM"] += [
+        _dem(
+            _fn,
+            "L1",
+            "today@mem",
+            "dem_1024_mem",
+            _SE_FP.format(call=_calls["l1"]),
+            setup="databricks.labs.gbx.bench.levels_forms:setup_dem_l1",
+            register=False,
+            computes=("dedicated",),
+            allows_null=True,  # an error tile under load is reported, not a lost row
+            vsql=_DEM_VFP.format(call=_calls["l1"]),
+            nullsql=_DEM_ERRORS.format(call=_calls["l1"]),
+        ),
+        _dem(
+            _fn,
+            "L3",
+            f"{_l3}@mem",
+            "dem_1024_mem",
+            _SE_FP.format(call=_calls["l3"]),
+            vsql=_DEM_VFP.format(call=_calls["l3"]),
+        ),
+    ]
+    if (
+        _fn != "gbx_rst_color_relief"
+    ):  # the batch UDF behind the wrapper: recorded, not a peer
+        FORMS["DEM"].append(
+            _dem(
+                _fn,
+                "L3",
+                "engine-c1@mem",
+                "dem_1024_mem",
+                _SE_FP.format(call=_calls["l3"]),
+                vsql=_DEM_VFP.format(call=_calls["l3"]),
+            )
+        )
+    FORMS["DEM"].append(
+        _dem(
+            _fn,
+            "L3",
+            "floor-c0@mem",
+            "dem_1024_mem",
+            _SE_FP.format(call=_calls["floor"]),
+            setup="databricks.labs.gbx.bench.levels_forms:setup_se_floor",
+            register=False,
+        )
+    )
+
+# Probe: do the heavy-first functions that are kept return silent NULLs under load? Each form is the function's JVM level
+# over the corpus tiles (the accessors, whose NULL has no text: the report names how many and which tiles) or over
+# replicated bytes (`fromcontent`, which returns a tile: the report names the `last_error` texts). They run only when
+# `--levels-forms` names them.
+DEM_PROBE_ACCESSORS = ("gbx_rst_width", "gbx_rst_boundingbox", "gbx_rst_memsize")
+DEM_PROBE_FUNCTIONS = DEM_PROBE_ACCESSORS + ("gbx_rst_fromcontent",)
+_DEM_PROBE_SCALAR = (
+    "SELECT count(*) AS n, sum(pmod(xxhash64(c), 2147483647)) AS fp, count(c) AS n_out "
+    "FROM (SELECT {fn}(tile) AS c FROM {{src}})"
+)
+_DEM_PROBE_NULLS = (
+    "SELECT count(*) AS n_null, md5(concat_ws('|', array_sort(collect_list(p)))) AS s, "
+    "slice(array_sort(collect_list(p)), 1, 8) AS first FROM "
+    "(SELECT tile.path AS p, {fn}(tile) AS c FROM {{src}}) WHERE c IS NULL"
+)
+for _fn in DEM_PROBE_ACCESSORS:
+    FORMS["DEM"].append(
+        _dem(
+            _fn,
+            "L1",
+            "nulls@mat",
+            "tiles_mat",
+            _DEM_PROBE_SCALAR.format(fn=_fn),
+            allows_null=True,
+            nullsql=_DEM_PROBE_NULLS.format(fn=_fn),
+            computes=("dedicated",),
+            opt_in=True,
+        )
+    )
+_FC = "gbx_rst_fromcontent(content, 'GTiff')"
+FORMS["DEM"].append(
+    _dem(
+        "gbx_rst_fromcontent",
+        "L1",
+        "nulls@mem",
+        "dem_bytes_1024_mem",
+        "SELECT count(*) AS n, sum(length(t.raster)) AS fp, count(t.raster) AS n_out "
+        f"FROM (SELECT {_FC} AS t FROM {{src}})",
+        allows_null=True,
+        nullsql=_DEM_ERRORS.format(call=_FC).replace("{src}", "{src}"),
+        computes=("dedicated",),
+        opt_in=True,
+    )
+)
 
 
 # --- IO, the read paths: bytes-free reads with a Python decode against the reader with bytes ----------------------------

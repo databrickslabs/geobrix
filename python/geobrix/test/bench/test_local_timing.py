@@ -130,6 +130,31 @@ _SE_DEM_SETS = tuple(
 )
 
 
+_DEM_SETS = (
+    "DEM",
+    "DEM-tri",
+    "DEM-tpi",
+    "DEM-roughness",
+    "DEM-color_relief",
+)
+
+
+def test_every_form_of_the_dem_sets_exists_for_its_function():
+    """Each name of a DEM set picks exactly one form of its function (the companion, the light forms, the floor)."""
+    from databricks.labs.gbx.bench import levels_forms as lf
+
+    for name in _DEM_SETS:
+        spec = lt.SETS[name]
+        assert spec.mvp == "DEM" and spec.forms[0] == "today@mem"
+        assert spec.forms[-1] == "floor-c0@mem"
+        for variant in spec.forms:
+            picked = [
+                f for f in lf.FORMS["DEM"] if f.variant == variant and f.fn == spec.fn
+            ]
+            assert len(picked) == 1, (name, variant)
+    assert lt.SETS["DEM"].fn == "gbx_rst_aspect"
+
+
 def test_every_form_of_the_se_set_exists_for_its_function():
     """A renamed variant would time nothing and still pass: each name of the set picks exactly one form."""
     from databricks.labs.gbx.bench import levels_forms as lf
@@ -145,9 +170,15 @@ def test_every_form_of_the_se_set_exists_for_its_function():
 
 def test_only_the_known_sets_are_implemented(capsys):
     # the letter sets, and one set per multi-level function family of the manifest
-    assert {"IO", "S", "SE", "SE-mapalgebra", "SE-transformcrs", *_SE_DEM_SETS} <= set(
-        lt.SETS
-    )
+    assert {
+        "IO",
+        "S",
+        "SE",
+        "SE-mapalgebra",
+        "SE-transformcrs",
+        *_SE_DEM_SETS,
+        *_DEM_SETS,
+    } <= set(lt.SETS)
     # a second function of a family has a set of its own, named `<family>-<function>`
     assert set(lt.SETS) - {
         "IO",
@@ -156,6 +187,7 @@ def test_only_the_known_sets_are_implemented(capsys):
         "SE-mapalgebra",
         "SE-transformcrs",
         *_SE_DEM_SETS,
+        *_DEM_SETS,
     } - {
         "raster-vectorize-contour",
     } == {

@@ -183,6 +183,30 @@ SETS: Dict[str, SetSpec] = {
             "gbx_rst_threshold",
         )
     },
+    # the terrain functions with a JVM companion: the companion (`today`), the engine's two light UDFs (colour relief has
+    # the colour-table UDF alone) and a floor, over 1024 px DEM tiles replicated in memory. `DEM` is aspect, the set's
+    # first function; the companion is what the pass measures, so it is not a peer of the light forms.
+    **{
+        ("DEM" if fn == "gbx_rst_aspect" else "DEM-" + fn[len("gbx_rst_") :]): SetSpec(
+            mvp="DEM",
+            forms=(
+                ("today@mem", "c0@mem", "floor-c0@mem")
+                if fn == "gbx_rst_color_relief"
+                else ("today@mem", "engine-c0@mem", "engine-c1@mem", "floor-c0@mem")
+            ),
+            reference="c0@mem" if fn == "gbx_rst_color_relief" else "engine-c0@mem",
+            ns=(24, 96, 384),
+            fn=fn,
+            peer_exempt=("today@mem", "engine-c1@mem"),
+        )
+        for fn in (
+            "gbx_rst_aspect",
+            "gbx_rst_tri",
+            "gbx_rst_tpi",
+            "gbx_rst_roughness",
+            "gbx_rst_color_relief",
+        )
+    },
     "SE-transformcrs": SetSpec(
         mvp="SE",
         forms=(
@@ -269,7 +293,9 @@ def _family_sets() -> Dict[str, SetSpec]:
             fn="gbx_rst_retile",
             **tiles,
         ),
-        "raster-vectorize-contour": tile_fn("raster-vectorize", "gbx_rst_contour"),
+        "raster-vectorize-contour": tile_fn(
+            "raster-vectorize", "gbx_rst_contour", l1=False
+        ),  # contour has no JVM level
         "raster-array-op": SetSpec(
             mvp="raster-array-op",
             forms=("h_combine_l3", "floor"),

@@ -125,8 +125,21 @@ gbx_native_env_args
 # --dry-run, which takes no lock and runs only the read-only probe.
 # GBX_NATIVE_PTH=0: the image's startup .pth puts /opt/gbx-native's rasterio ahead of the payload's, while the per-open
 # sidecar mode (pyrx readdir_option) reaches the payload's libgdal: the two differ and the mode is silently off.
+# GBX_JAR: the JAR the pass starts Spark with (default: the newest of python/geobrix/lib, then target/). A path under this
+# checkout becomes its /root/geobrix path. Use it to time a JAR copied out of a tree other work is rebuilding.
+GBX_JAR_ARGS=()
+if [ -n "${GBX_JAR:-}" ]; then
+    _jar_path="$GBX_JAR"
+    case "$_jar_path" in
+        /root/geobrix/*) ;;
+        "$PROJECT_ROOT"/*) _jar_path="/root/geobrix/${_jar_path#"$PROJECT_ROOT"/}" ;;
+        /*) ;;
+        *) _jar_path="/root/geobrix/${_jar_path#./}" ;;
+    esac
+    GBX_JAR_ARGS=(-e "GBX_JAR=$_jar_path")
+fi
 timing_exec() {
-    docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src -e GBX_NATIVE_PTH=0 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} \
+    docker exec -e PYTHONPATH=/root/geobrix/python/geobrix/src -e GBX_NATIVE_PTH=0 ${GBX_NATIVE_ENV_ARGS[@]+"${GBX_NATIVE_ENV_ARGS[@]}"} ${GBX_JAR_ARGS[@]+"${GBX_JAR_ARGS[@]}"} \
         "$GBX_DEV_CONTAINER" $LOCK_PREFIX "$@"
 }
 LOCK_PREFIX=""

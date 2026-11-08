@@ -14,6 +14,7 @@ Standard library only; it drives mutmut 3.8.0 in a throwaway venv.
 import argparse
 import ast
 import collections
+import fcntl
 import glob
 import hashlib
 import io
@@ -327,6 +328,145 @@ def check_fingerprint(codes_file: Path, fp: str) -> None:
         )
 
 
+# ---------------------------------------------------------------------------------------------- the host's worker budget
+
+
+def worker_capacity() -> int:
+    """Workers all gates on this host may use together: GBX_MUTATION_MAX_WORKERS, else the cores less two."""
+    env = os.environ.get("GBX_MUTATION_MAX_WORKERS", "").strip()
+    if env:
+        try:
+            if int(env) >= 1:
+                return int(env)
+        except ValueError:
+            pass
+        sys.exit(f"GBX_MUTATION_MAX_WORKERS={env!r} is not a whole number of at least 1. Fix: unset it or set it to the workers all gates may use together.")
+    return max(1, (os.cpu_count() or 4) - 2)
+
+
+def slots_dir() -> Path:
+    cache = Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache")
+    return Path(os.environ.get("GBX_MUTATION_SLOTS") or cache / "geobrix" / "mutation-slots")
+
+
+class Lease:
+    """Worker slots held by this process. Each is a file under an exclusive flock, which the kernel drops when the
+    process ends, so a gate that crashed or was killed never leaves a slot behind."""
+
+    def __init__(self, fds):
+        self._fds = list(fds)
+
+    @property
+    def n(self) -> int:
+        return len(self._fds)
+
+    def release(self) -> None:
+        for fd in self._fds:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        self._fds = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.release()
+
+
+class WorkerBudget:
+    """A host-wide pool of worker slots, so that all concurrent gates together stay within `capacity` workers.
+
+    A gate asks for its fair share (capacity / gates running, at most its own bound) and takes the free slots up
+    to that; it always gets at least one, and waits for one if none is free. The pool lives in a directory of
+    lock files: `slot-<i>` for each worker and `gate-<pid>` to say a gate is running.
+    """
+
+    def __init__(self, directory=None, capacity=None, wait_timeout=None, grace=20.0, progress=30.0,
+                 clock=time.monotonic, sleep=time.sleep, say=None):
+        self.dir = Path(directory) if directory else slots_dir()
+        self.capacity = capacity or worker_capacity()
+        env_wait = os.environ.get("GBX_MUTATION_SLOT_WAIT", "").strip()
+        self.wait_timeout = wait_timeout if wait_timeout is not None else (float(env_wait) if env_wait else 3600.0)
+        self.grace, self.progress, self.clock, self.sleep = grace, progress, clock, sleep
+        self.say = say or (lambda msg: print(msg, flush=True))
+        self._presence = None
+
+    def _flock(self, path: Path, create: bool = True):
+        """The fd of `path` with its lock taken, or None if another process holds it."""
+        fd = os.open(path, os.O_RDWR | (os.O_CREAT if create else 0), 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(fd)
+            return None
+        return fd
+
+    def register(self) -> None:
+        """Say this gate is running (for the others' fair share); the lock goes with the process."""
+        self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._presence = self._flock(self.dir / f"gate-{os.getpid()}")
+
+    def unregister(self) -> None:
+        if self._presence is not None:
+            os.close(self._presence)
+            (self.dir / f"gate-{os.getpid()}").unlink(missing_ok=True)
+            self._presence = None
+
+    def others(self) -> int:
+        """Gates other than this one that are running. A presence file nobody locks is a dead gate's: removed."""
+        n = 0
+        for f in self.dir.glob("gate-*"):
+            if f.name == f"gate-{os.getpid()}":
+                continue
+            fd = self._flock(f, create=False)
+            if fd is None:
+                n += 1
+            else:
+                os.close(fd)
+                f.unlink(missing_ok=True)
+        return n
+
+    def _take(self, n: int):
+        got = []
+        for i in range(self.capacity):
+            if len(got) >= n:
+                break
+            fd = self._flock(self.dir / f"slot-{i}")
+            if fd is not None:
+                os.ftruncate(fd, 0)
+                os.write(fd, f"{os.getpid()}\n".encode())
+                got.append(fd)
+        return got
+
+    def acquire(self, bound=None, label: str = "") -> Lease:
+        """Take this gate's share of the free slots (at least one). `bound` is the most it wants (--max-children)."""
+        self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        others = self.others()
+        want = max(1, min(bound or self.capacity, self.capacity, self.capacity // (others + 1)))
+        t0 = self.clock()
+        fds, last = self._take(want), t0
+        while not fds:
+            if self.clock() - t0 >= self.wait_timeout:
+                sys.exit(
+                    f"no mutation worker slot became free in {self.wait_timeout:.0f}s ({self.capacity} slots, {self.others()} other gates running). "
+                    f"Fix: wait for the other gates, or raise GBX_MUTATION_MAX_WORKERS (now {self.capacity}) or GBX_MUTATION_SLOT_WAIT."
+                )
+            if self.clock() - last >= self.progress:
+                last = self.clock()
+                self.say(f"[{label}] waiting for a free worker slot: all {self.capacity} are in use by {self.others()} other gates ({self.clock() - t0:.0f}s so far)")
+            self.sleep(min(2.0, self.progress))
+            fds = self._take(want)
+        if len(fds) < want:  # others hold the rest: give them a moment to finish, then go with what we have
+            deadline = self.clock() + self.grace
+            while len(fds) < want and self.clock() < deadline:
+                self.sleep(min(1.0, self.grace))
+                fds += self._take(want - len(fds))
+        self.say(f"[{label}] using {len(fds)} of {self.capacity} workers ({others} other gates running)")
+        return Lease(fds)
+
+
 # ---------------------------------------------------------------------------------------------- the work dir
 
 
@@ -473,9 +613,9 @@ class Side:
     `run(names)` runs only those mutants; `run_all()` runs every one. The mutants keep their exit codes across calls.
     """
 
-    def __init__(self, label, py, modules, selection, args, out, ref_sha=None):
+    def __init__(self, label, py, modules, selection, args, out, ref_sha=None, budget=None):
         self.label, self.py, self.modules, self.selection = label, py, modules, selection
-        self.args, self.out, self.ref_sha = args, out, ref_sha
+        self.args, self.out, self.ref_sha, self.budget = args, out, ref_sha, budget
         self.work = None
         self.keys = None  # the mutants generated, sorted
         self.tested = set()  # mangled names mutmut's stats tie to at least one test
@@ -504,14 +644,22 @@ class Side:
         (work / "pyproject.toml").write_text(base + mutmut_section(self.modules, self.selection))
         shutil.rmtree(work / "mutants", ignore_errors=True)
 
-    def _invoke(self, names, what: str) -> int:
-        """One `mutmut run` (every mutant when `names` is empty). Its output is appended to the label's log."""
+    def _invoke(self, names, what: str, bound=None) -> int:
+        """One `mutmut run` (every mutant when `names` is empty). Its output is appended to the label's log.
+        The workers come from the host's budget: at most `bound` (default --max-children)."""
         work = self.open()
+        bound = bound or self.args.max_children
+        if self.budget is None:
+            return self._spawn(names, what, work, bound or 10)
+        with self.budget.acquire(bound, self.label) as lease:
+            return self._spawn(names, what, work, lease.n)
+
+    def _spawn(self, names, what: str, work: Path, workers: int) -> int:
         env = dict(os.environ, PYTHONPATH=str(work / "_gbx"), PYTHONDONTWRITEBYTECODE="1", TZ="UTC")
         if self.args.oracle_tables:
             env["GBX_ORACLE_TABLES"] = self.args.oracle_tables
         env["PYSPARK_PYTHON"] = str(self.py)
-        cmd = [str(self.py.parent / "mutmut"), "run", "--max-children", str(self.args.max_children), *names]
+        cmd = [str(self.py.parent / "mutmut"), "run", "--max-children", str(workers), *names]
         with open(self.log, "a" if self._logged else "w") as log:
             self._logged = True
             log.write(f"=== {what}\n")
@@ -528,7 +676,7 @@ class Side:
             return self.keys
         t0 = time.time()
         self._prepare()
-        self._invoke([GENERATE_ONLY], "generate the mutants")
+        self._invoke([GENERATE_ONLY], "generate the mutants", bound=2)  # one stats run: it needs a worker or two only for libcst
         codes = collect_codes(self.work)
         if not codes:
             sys.exit(f"[{self.label}] mutmut produced no mutants; see {self.log}")
@@ -579,7 +727,8 @@ def parse(argv):
     p.add_argument("--slim-tests", required=True, help="the slim tests: pytest args, one quoted string")
     p.add_argument("--out", help="output dir (default test-logs/mutation-gate/<family>)")
     p.add_argument("--oracle-tables", default="", help="GBX_ORACLE_TABLES for the family harness, e.g. GRID_SCALAR,GRID_ARRAY")
-    p.add_argument("--max-children", type=int, default=10)
+    p.add_argument("--max-children", type=int, default=None,
+                   help="most mutmut workers this gate may use (default: its share of the host budget, GBX_MUTATION_MAX_WORKERS)")
     p.add_argument("--seed", type=int, default=SAMPLE_SEED)
     p.add_argument("--full", action="store_true",
                    help=f"run every mutant in the old and the slim pass (the default is a stratified sample of {SAMPLE_FIRST}, "
@@ -659,14 +808,17 @@ def main(argv=None) -> int:
     if args.plan:
         print(json.dumps({"work": str(work), "out": str(out), "modules": modules, "old": old_sel, "slim": slim_sel,
                           "venv": str(mutmut_venv()), "host_venv": str(host_venv()), "oracle_tables": args.oracle_tables,
-                          "old_codes": args.old_codes, "old_ref": ref_sha, "mode": mode, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
+                          "old_codes": args.old_codes, "old_ref": ref_sha, "mode": mode,
+                          "workers": {"host_capacity": worker_capacity(), "max_children": args.max_children, "slots": str(slots_dir())}, "mutmut": mutmut_section(modules, old_sel)}, indent=2))
         return 0
 
     out.mkdir(parents=True, exist_ok=True)
     py = ensure_venv(mutmut_venv(), host_venv())
     print(f"mode: {mode}", flush=True)
-    old_side = Side("old", py, modules, old_sel, args, out, ref_sha)
-    slim_side = Side("slim", py, modules, slim_sel, args, out)
+    budget = WorkerBudget()
+    budget.register()
+    old_side = Side("old", py, modules, old_sel, args, out, ref_sha, budget)
+    slim_side = Side("slim", py, modules, slim_sel, args, out, budget=budget)
     t0 = time.time()
     try:
         old_known = json.loads(Path(args.old_codes).read_text()) if args.old_codes else {}
@@ -677,6 +829,7 @@ def main(argv=None) -> int:
     finally:
         old_side.close()
         slim_side.close()
+        budget.unregister()
 
 
 def gate_full(args, *, out, old_side, slim_side, old_known, fingerprint, warn, t0) -> int:

@@ -498,3 +498,164 @@ def test_a_normal_run_is_not_invalid():
     old = _codes({("_a", "f", i): (-24 if i == 0 else 1) for i in range(50)})
     v = gate.judge(old, dict(old), {})
     assert v["pass"] and not v["invalid"]
+
+
+# ------------------------------------------------------------------------------------------- the host's worker budget
+
+
+@pytest.fixture
+def pool_dir(tmp_path):
+    return tmp_path / "slots"
+
+
+def _budget(pool_dir, capacity=6, **kw):
+    kw.setdefault("say", lambda msg: None)
+    kw.setdefault("grace", 0.0)
+    return gate.WorkerBudget(pool_dir, capacity=capacity, **kw)
+
+
+def test_the_capacity_is_the_cores_less_two_unless_the_env_says_otherwise(monkeypatch):
+    monkeypatch.delenv("GBX_MUTATION_MAX_WORKERS", raising=False)
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: 12)
+    assert gate.worker_capacity() == 10
+    monkeypatch.setattr(gate.os, "cpu_count", lambda: 2)
+    assert gate.worker_capacity() == 1  # never below one
+    monkeypatch.setenv("GBX_MUTATION_MAX_WORKERS", "7")
+    assert gate.worker_capacity() == 7
+    monkeypatch.setenv("GBX_MUTATION_MAX_WORKERS", "zero")
+    with pytest.raises(SystemExit) as exc:
+        gate.worker_capacity()
+    assert "Fix:" in str(exc.value)
+
+
+def test_a_lone_gate_takes_up_to_its_bound_and_the_slots_come_back_on_release(pool_dir):
+    b = _budget(pool_dir)
+    b.register()
+    lease = b.acquire(bound=4, label="old")
+    assert lease.n == 4
+    other = _budget(pool_dir).acquire(bound=None, label="x")  # a second holder sees only what is left
+    assert other.n == 2
+    other.release()
+    lease.release()
+    assert _budget(pool_dir).acquire(None, "y").n == 6
+    b.unregister()
+
+
+def test_all_gates_together_never_hold_more_than_the_capacity(pool_dir):
+    leases = [_budget(pool_dir, capacity=6).acquire(4, f"g{i}") for i in range(2)]
+    assert [lease.n for lease in leases] == [4, 2]  # the second takes what is left
+
+
+def test_a_gate_with_others_running_takes_its_fair_share_not_everything(pool_dir):
+    a, b, c = (_budget(pool_dir, capacity=6) for _ in range(3))
+    a.register()
+    # two more gates register, as separate processes would (the presence file is named by pid)
+    for pid in (999991, 999992):
+        fd = a._flock(pool_dir / f"gate-{pid}")
+        assert fd is not None
+        a._extra = getattr(a, "_extra", []) + [fd]
+    assert a.others() == 2
+    lease = a.acquire(None, "old")
+    assert lease.n == 2  # 6 workers over 3 gates
+    lease.release()
+
+
+def test_a_gate_gets_at_least_one_slot_even_when_the_share_rounds_to_zero(pool_dir):
+    b = _budget(pool_dir, capacity=2)
+    b.register()
+    held = []
+    for pid in range(990001, 990006):  # five other gates on a two-slot host
+        held.append(b._flock(pool_dir / f"gate-{pid}"))
+    assert b.others() == 5
+    assert b.acquire(None, "old").n == 1
+
+
+def test_a_gate_waits_for_a_slot_and_says_so_then_times_out_with_a_fix(pool_dir):
+    holder = _budget(pool_dir, capacity=2).acquire(None, "holder")
+    assert holder.n == 2
+    now = [0.0]
+    said = []
+
+    def sleep(dt):
+        now[0] += dt
+
+    waiter = _budget(pool_dir, capacity=2, wait_timeout=100, progress=30, clock=lambda: now[0], sleep=sleep, say=said.append)
+    with pytest.raises(SystemExit) as exc:
+        waiter.acquire(None, "slim")
+    assert "Fix:" in str(exc.value) and "GBX_MUTATION_MAX_WORKERS" in str(exc.value)
+    assert said and "waiting for a free worker slot" in said[0]
+
+
+def test_a_waiting_gate_takes_a_slot_when_one_frees(pool_dir):
+    holder = _budget(pool_dir, capacity=1).acquire(None, "holder")
+    now = [0.0]
+
+    def sleep(dt):
+        now[0] += dt
+        holder.release()  # the other gate finishes while we wait
+
+    waiter = _budget(pool_dir, capacity=1, wait_timeout=100, clock=lambda: now[0], sleep=sleep)
+    assert waiter.acquire(None, "slim").n == 1
+
+
+def test_it_reports_how_many_workers_and_other_gates(pool_dir):
+    said = []
+    b = _budget(pool_dir, capacity=6, say=said.append)
+    b.register()
+    b.acquire(bound=3, label="old").release()
+    assert said == ["[old] using 3 of 6 workers (0 other gates running)"]
+
+
+_HOLDER = """
+import importlib.util, sys, time
+spec = importlib.util.spec_from_file_location("g", sys.argv[1]); g = importlib.util.module_from_spec(spec); spec.loader.exec_module(g)
+b = g.WorkerBudget(sys.argv[2], capacity=4, say=lambda m: None)
+b.register()
+lease = b.acquire(None, "holder")
+print(lease.n, flush=True)
+time.sleep(60)
+"""
+
+
+def test_slots_of_a_killed_gate_are_reclaimed(pool_dir):
+    import signal
+
+    proc = subprocess.Popen([sys.executable, "-c", _HOLDER, str(REPO_ROOT / "scripts" / "mutation" / "gate.py"), str(pool_dir)],
+                            stdout=subprocess.PIPE, text=True)
+    try:
+        assert proc.stdout.readline().strip() == "4"  # the holder has every slot and a presence file
+        me = _budget(pool_dir, capacity=4)
+        assert me.others() == 1
+        assert me._take(1) == []  # nothing free while it lives
+        proc.send_signal(signal.SIGKILL)  # no cleanup runs
+        proc.wait(timeout=10)
+        assert me.others() == 0  # its presence file is dead and removed
+        lease = gate.Lease(me._take(4))
+        assert lease.n == 4  # every slot is back
+        lease.release()
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+def test_a_side_runs_mutmut_with_the_workers_it_leased_and_gives_them_back(tmp_path, monkeypatch, pool_dir):
+    args = type("A", (), {"family": "t", "keep_work": True, "oracle_tables": "", "max_children": 3})()
+    budget = _budget(pool_dir, capacity=8)
+    side = gate.Side("old", None, [], [], args, tmp_path, budget=budget)
+    side.work = tmp_path
+    seen = []
+    monkeypatch.setattr(side, "_spawn", lambda names, what, work, workers: seen.append(workers) or 0)
+    side._invoke(["a"], "run")  # --max-children is the bound
+    side._invoke([gate.GENERATE_ONLY], "generate", bound=2)
+    assert seen == [3, 2]
+    assert _budget(pool_dir, capacity=8).acquire(None, "after").n == 8  # both leases were released
+
+
+def test_plan_shows_the_host_budget_and_max_children_is_optional():
+    base = ["--family", "unit", "--modules", "pygx/_bng", "--tests", "test/pygx/test_bng_batched_walk.py",
+            "--slim-tests", "test/pygx/test_bng_batched_walk.py", "--plan"]
+    res = _sh(*base)
+    plan = json.loads(res.stdout[res.stdout.index("{"):])
+    assert plan["workers"]["max_children"] is None and plan["workers"]["host_capacity"] >= 1
+    res = _sh(*base, "--max-children", "3")
+    assert json.loads(res.stdout[res.stdout.index("{"):])["workers"]["max_children"] == 3

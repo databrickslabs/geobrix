@@ -18,7 +18,7 @@ show_help() {
     echo -e "  ${GREEN}--slim-tests \"<paths>\"${NC} The slim tests (same form)"
     echo -e "  ${GREEN}--oracle-tables <T1,T2>${NC} GBX_ORACLE_TABLES for the family harness (default: all)"
     echo -e "  ${GREEN}--out <dir>${NC}            Output dir (default test-logs/mutation-gate/<family>)"
-    echo -e "  ${GREEN}--max-children <n>${NC}     mutmut workers (default 10; lower it when two gates run at once)"
+    echo -e "  ${GREEN}--max-children <n>${NC}     Most mutmut workers this gate may use (default: its share of the host budget)"
     echo -e "  ${GREEN}--seed <n>${NC}             Sample seed (default 31)"
     echo -e "  ${GREEN}--full${NC}                 Run every mutant in both passes (default: a sample of 50, 100 after a loss)"
     echo -e "  ${GREEN}--old-codes <file>${NC}     Reuse the K_old.json of an earlier run instead of running the old tests again"

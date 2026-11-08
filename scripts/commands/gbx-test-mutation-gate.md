@@ -14,7 +14,7 @@ Check that a slimmer test selection still catches what the old one catches. It m
 - `--slim-tests "<paths>"` — the slim tests, same form.
 - `--oracle-tables <T1,T2>` — sets `GBX_ORACLE_TABLES` for the family harness. Default: all tables.
 - `--out <dir>` — output dir. Default: `test-logs/mutation-gate/<family>`.
-- `--max-children <n>` — mutmut workers. Default: 10. Lower it when two gates run at once.
+- `--max-children <n>` — the most mutmut workers this gate may use. Default: its share of the host budget (see Worker budget).
 - `--seed <n>` — sample seed. Default: 31.
 - `--full` — run every mutant in the old and the slim pass. Default: only a sample (see The verdict).
 - `--old-codes <file>` — reuse the `K_old.json` of an earlier run, so the next slim candidate costs one run, not two. Every run writes `K_old.fingerprint` beside it (the kernel modules, the old selection and the old test files); a reuse whose fingerprint differs is refused with a `Fix:`. A kill set from before fingerprints is accepted unchecked.
@@ -61,6 +61,13 @@ In both modes:
 - `lost.json` — the old kills the slim run lost.
 - `verdict.json`, `report.txt` — the numbers and the verdict.
 - `mutmut_old.log`, `mutmut_slim.log` — the raw runs, one section per mutmut call.
+
+## Worker budget
+
+- All gates on the host together use at most `GBX_MUTATION_MAX_WORKERS` workers. Default: the cores less two.
+- Each mutmut call takes its fair share of the free slots (the budget divided by the gates running, at most `--max-children`). It takes at least one.
+- It prints `using N of M workers (K other gates running)`. With no free slot it waits and prints progress. After `GBX_MUTATION_SLOT_WAIT` seconds (default 3600) it stops with a `Fix:`.
+- The slots are lock files in `~/.cache/geobrix/mutation-slots` (`GBX_MUTATION_SLOTS` moves it). The kernel drops a lock when its process ends, so a killed gate frees its slots.
 
 ## Runs that prove nothing are refused
 

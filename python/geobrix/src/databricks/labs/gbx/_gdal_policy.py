@@ -1195,7 +1195,11 @@ def open_bytes(data, **kwargs):
     owned = not isinstance(data, rio_io.MemoryFile)
     memfile = rio_io.MemoryFile(data) if owned else data
     try:
-        if "driver" not in kwargs and _head(memfile, None).startswith(_HDF5_SIGNATURE):
+        if (
+            kwargs.get("driver") is None
+            and "netCDF" in allowed_names()
+            and _head(memfile, None).startswith(_HDF5_SIGNATURE)
+        ):
             # NetCDF-4 is an HDF5 file, and from memory (no file name to tell them apart) GDAL can hand it to the
             # HDF5Image driver, which reads it with an identity geotransform. Try netCDF first, as the same file
             # opened by path is; bytes it declines (plain HDF5, not a raster) go the way any other bytes go.

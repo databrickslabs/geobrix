@@ -213,6 +213,14 @@ def test_netcdf4_bytes_open_as_netcdf_with_their_georeference(tmp_path):
         assert ds.read().shape == (1, 4, 5)
 
 
+def test_netcdf4_bytes_with_driver_none_open_as_netcdf_too(tmp_path):
+    """A caller that forwards ``driver=None`` names no driver: the bytes still open as netCDF."""
+    raw = _netcdf4_bytes(tmp_path)
+    with _gdal_policy.open_bytes(raw, driver=None) as ds:
+        assert ds.driver == "netCDF"
+        assert tuple(ds.transform.to_gdal()) == (10.0, 0.5, 0.0, 50.0, 0.0, -0.5)
+
+
 def test_hdf5_bytes_netcdf_cannot_read_keep_the_bindings_own_error():
     """The netCDF attempt for HDF5-signature bytes falls back to the allowed list: bytes that are no raster
     in either way raise the binding's error, not a policy error."""

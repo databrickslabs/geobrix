@@ -564,7 +564,7 @@ gbx_resolve_untracked() {
 # worktree) the main checkout's, with one line on stderr naming it. Returns 1, exporting nothing, when neither has it.
 gbx_export_cluster_config() {
     local f
-    f="$(gbx_resolve_untracked examples/tests/databricks_cluster_config.env)" && [[ -f "$f" ]] || return 1
+    f="$(gbx_resolve_untracked examples/tests/databricks_cluster_config.env)" && [[ -f "$f" ]] || { unset GBX_CLUSTER_CONFIG_ENV; return 1; }
     export GBX_CLUSTER_CONFIG_ENV="$f"
 }
 

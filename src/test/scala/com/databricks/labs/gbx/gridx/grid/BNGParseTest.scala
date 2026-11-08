@@ -45,4 +45,12 @@ class BNGParseTest extends AnyFunSuite {
             }
         }
     }
+
+    test("a 500 km cell rings around its own square") {
+        val n = BNG.parse("N")
+        assert(BNG.kRing(n, 0) == Seq(n))
+        val loop = BNG.kLoop(n, 1).map(BNG.format).toSet
+        assert(Set("S", "H", "O", "T", "J").subsetOf(loop))
+        assert(!loop.contains("N"))
+    }
 }

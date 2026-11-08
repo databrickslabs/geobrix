@@ -38,3 +38,21 @@ def test_every_point_of_a_500km_square_is_that_cell(name):
 
 def test_the_six_squares_are_six_distinct_cells():
     assert len({_bng.parse(n) for n in _SQUARES}) == 6
+
+
+def test_a_500km_cell_rings_around_its_own_square():
+    """The ring of N holds the squares next to it that are on the grid: S below, H above, O beside, T and J across."""
+    n = _bng.parse("N")
+    assert _bng.k_ring(n, 0) == [n]
+    loop = {_bng.format(c) for c in _bng.k_loop(n, 1)}
+    assert {"S", "H", "O", "T", "J"} <= loop
+    assert "N" not in loop
+    ring = {_bng.format(c) for c in _bng.k_ring(n, 1)}
+    assert ring == loop | {"N"}
+    assert {_bng.format(c) for c in _bng.k_loop(_bng.parse("O"), 1)} >= {
+        "N",
+        "T",
+        "S",
+        "H",
+        "J",
+    }

@@ -63,6 +63,12 @@ EXCLUDES: List[Tuple[str, str, str]] = [
     ("root", "ci-logs", "fetched CI logs"),
     ("root", "mutants", "mutation-test copies"),
     ("root", ".claude/worktrees", "agent worktrees (own checkouts)"),
+    (
+        "root",
+        "examples/tests/databricks_cluster_config.env",
+        "real cluster config; has secrets, recreate from the .example.env",
+    ),
+    ("root", ".superpowers/input", "scratch input; may hold pasted tokens"),
     ("dir", ".git", "git objects (the bundle covers unpushed commits)"),
     ("dir", "node_modules", "npm packages"),
     ("dir", "__pycache__", "Python bytecode"),

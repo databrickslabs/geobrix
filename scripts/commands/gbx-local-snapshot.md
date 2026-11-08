@@ -49,6 +49,7 @@ The list is `EXCLUDES` in `scripts/snapshot/snapshot.py`. It covers run state th
 - Docker state, the Maven cache at `scripts/docker/m2`, and tool caches.
 - Virtual environments and `node_modules` at any depth, `__pycache__`, and `*.pyc`.
 - Run logs, coverage output, and agent worktrees.
+- `examples/tests/databricks_cluster_config.env` (your real cluster config, with secrets; recreate it from `databricks_cluster_config.example.env`) and `.superpowers/input/` (scratch input that may hold pasted tokens).
 
 ## Limits
 

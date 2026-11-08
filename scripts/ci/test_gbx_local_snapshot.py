@@ -139,6 +139,22 @@ def test_working_tree_keeps_gitignored_local_files_and_drops_run_state(repo):
     assert not any(rel.startswith(".git/") for rel in kept)
 
 
+def test_real_cluster_config_and_scratch_input_are_left_out(repo):
+    r = repo.root
+    write(r, "examples/tests/databricks_cluster_config.env", "A=1")
+    write(r, "examples/tests/databricks_cluster_config.example.env", "A=")
+    write(r, ".superpowers/input/draft.md")
+    write(r, ".superpowers/input/deep/more.txt")
+    write(r, ".superpowers/specs/design.md")
+    kept = {rel for _, rel, _ in snap.collect(r, 10**9).files}
+    assert "examples/tests/databricks_cluster_config.env" not in kept
+    assert not [k for k in kept if k.startswith(".superpowers/input")]
+    assert {
+        "examples/tests/databricks_cluster_config.example.env",
+        ".superpowers/specs/design.md",
+    } <= kept
+
+
 def test_nested_virtual_environments_and_node_modules_are_left_out(repo):
     r = repo.root
     write(r, ".superpowers/zarr-spike/.venv/lib/site.py")
@@ -327,6 +343,14 @@ def test_a_secret_refuses_the_run_and_the_output_never_shows_it(
     assert ".superpowers/notes.md:3" in out and rule in out
     assert text not in out
     assert snap.snapshots(repo.dest) == []
+
+
+def test_secrets_in_the_real_cluster_config_and_scratch_input_are_not_scanned(repo):
+    token = fake("dapi", "0123456789abcdef" * 2)
+    write(repo.root, "examples/tests/databricks_cluster_config.env", "T=" + token)
+    write(repo.root, ".superpowers/input/paste.md", token)
+    assert repo.run("run") == 0
+    assert not [n for n in repo.names() if "cluster_config.env" in n or "input/" in n]
 
 
 def test_a_remote_url_with_a_password_in_git_settings_refuses(repo, capsys):

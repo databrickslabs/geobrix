@@ -23,7 +23,7 @@ Set `GBX_NATIVE_ROOT` in the calling shell to run the container's pytest on a na
 
 ## The oracle table selection
 
-Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged. Unset, nothing is passed and the harness runs every table.
+Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged. Unset, nothing is passed and the harness runs every table. A test the selection leaves out skips with the reason `GBX_ORACLE_TABLES leaves out <table>`. The gate does not count those skips: they did not run by request.
 
 ## Pytest options
 

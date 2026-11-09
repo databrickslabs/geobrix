@@ -249,6 +249,12 @@ for f in "${RUN_FILES[@]}"; do
     N_PASSED=${N_PASSED:-0}
     N_SKIPPED=$(echo "$SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | head -1)
     N_SKIPPED=${N_SKIPPED:-0}
+    # A test the caller's GBX_ORACLE_TABLES selection leaves out did not run by request: it is not
+    # a gate miss. Its skip reason is the harness's "GBX_ORACLE_TABLES leaves out <table>"; -rs folds
+    # equal reasons into one "SKIPPED [n] ..." line, so the counts in brackets are summed.
+    N_DESELECTED=$(echo "$SUMMARY" | grep -E '^SKIPPED' | grep -E 'GBX_ORACLE_TABLES leaves out' \
+        | awk -F'[][]' '{s += $2} END {print s + 0}')
+    N_SKIPPED=$((N_SKIPPED - N_DESELECTED))
     TOTAL_PASSED=$((TOTAL_PASSED + N_PASSED))
 
     if [ $FILE_EXIT -ne 0 ]; then

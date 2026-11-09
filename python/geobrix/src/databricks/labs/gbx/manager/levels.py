@@ -82,11 +82,13 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     # forms returned none. The JVM expressions are deleted. The light level is the engine alone (no numpy form).
     "gbx_rst_slope": ("L3",),
     "gbx_rst_mapalgebra": ("L3",),
-    # The file functions: color_relief has only a pure-core timing (default, unmeasured: highest available).
+    # The file functions: color_relief is light. The JVM form reads the colour table from a path, which a UC Volume path
+    # cannot reach (the credential lives in the Python worker, so it raised FileNotFoundException on JAR compute), and it
+    # is unmeasured; the JVM block stays for a forced L1.
     # cog_convert (its JVM level measured 1.25x and 1.46x slower than light at 4x and 16x rows, so it has none),
     # viewshed (its JVM level cannot take a WKT observer behind the dispatch wrapper) and buildoverviews (light measured
     # 2.2x faster, so it has no JVM level) take the family order, light.
-    "gbx_rst_color_relief": ("L1", "L3"),
+    "gbx_rst_color_relief": ("L3",),
     # contour (0.10x at 4x rows) and isoband (0.39x and 0.42x at 4x and 16x rows) were faster on the JVM, and they pass the
     # 1.2x line, but a virtual tile at L1 raises VirtualTileException, and a virtual tile is the light default input. A SQL
     # wrapper that would send it to light cannot sit under explode (UNSUPPORTED_SQL_UDF_USAGE in Generate). Light first until

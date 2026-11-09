@@ -848,6 +848,7 @@ Every raster function follows the same order of checks on both implementations.
   - `rst_tilexyz` of a one-band raster is an RGBA PNG or RGB JPEG. A NULL `z`, `x` or `y` gives NULL.
   - `rst_cog_convert` writes any block size that is a multiple of 16, and `'AUTO'` is ZSTD. `rst_color_relief` writes RGBA when a stop has an alpha column.
   - `gbx_rst_color_relief` and `gbx_rst_cog_convert` accept a colour table at a remote or `/vsi` path.
+  - `gbx_rst_color_relief` runs the lightweight form, which reads a color table on a Volume.
   - `gbx_rst_polygonize` defaults band 1 and connectedness 4. It raises for another connectedness or a band the tile lacks.
   - `gbx_rst_tooverlappingtiles` raises for a window below one pixel and for an overlap outside 0 to 99 percent.
   - `gbx_rst_viewshed_towers` fails the query when the DSM tile of a tower cannot be read, on every level.

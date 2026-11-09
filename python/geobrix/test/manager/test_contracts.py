@@ -2892,6 +2892,20 @@ def test_transformcrs_is_light_on_a_dedicated_cluster_with_the_jvm_available(
     assert (choice.level, choice.reasons) == ("L3", ())
 
 
+def test_color_relief_is_light_on_a_dedicated_cluster_with_the_jvm_available(
+    monkeypatch,
+):
+    """The JVM form reads the colour table from a path and cannot reach a Volume path, so the default omits L1."""
+    from databricks.labs.gbx.engine import run
+
+    monkeypatch.setattr(run, "unavailable_reason", lambda: None)  # the env wheel
+    fn = MAN.functions["gbx_rst_color_relief"]
+    assert levels.PREFERENCE["gbx_rst_color_relief"] == ("L3",)
+    dedicated = _caps(jar=OK_JAR, jar_reason="", jvm_gdal=MAN.gdal.pin)
+    choice = levels.select(fn, dedicated)
+    assert (choice.level, choice.reasons) == ("L3", ())
+
+
 def test_a_full_registration_probes_the_session_again(monkeypatch, spark):
     from databricks.labs.gbx import register
     from databricks.labs.gbx.manager import capabilities

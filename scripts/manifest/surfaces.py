@@ -699,6 +699,38 @@ def _table(head, rows) -> List[str]:
     ]
 
 
+def _tested_cell(name: str, kind: str) -> str:
+    """The "Tested with GeoBrix" cell: the label (CSS tints the row from it) and the entries, or empty."""
+    from databricks.labs.gbx.drivers._tested import TESTED_DRIVERS, tested_in
+
+    if not tested_in(name, kind):
+        return ""
+    e = TESTED_DRIVERS[name]
+
+    def code(entries: str) -> str:
+        return " or ".join(f"`{x}`" for x in entries.split(", "))
+
+    text = f"{code(e['read'])} (read)"
+    if e["write"]:
+        text += f", {code(e['write'])} (write)"
+    return f'<span className="gbx-tested">Tested</span> {text}'
+
+
+def _guidance_cell(d: dict) -> str:
+    """The "GeoBrix guidance" cell: the note of a driver that has one (a built-in to use, a caveat), with the pages that
+    cover it; empty for the rest."""
+    from databricks.labs.gbx.drivers import _guidance
+
+    if d["driver"] not in _guidance.GUIDANCE:  # the table's intro says what a plain row would
+        return ""
+    return _mdx_cell_keep_code(_guidance.guidance_markdown(d))
+
+
+def _mdx_cell_keep_code(text: str) -> str:
+    """Text for a table cell that already holds code spans and links: only the pipe and the braces are escaped."""
+    return text.replace("|", "\\|").replace("{", "&#123;").replace("}", "&#125;")
+
+
 def render_drivers_page(snapshot: dict) -> str:
     """The generated body of docs/docs/gdal-drivers.mdx, from the committed snapshot of the env wheel's own build
     (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py) and the built-in formats
@@ -706,6 +738,7 @@ def render_drivers_page(snapshot: dict) -> str:
     split into the available ones and the unavailable ones. A driver of both kinds is in both tables and links to
     its row in the other one."""
     from databricks.labs.gbx.drivers._builtin import BUILT_IN_FORMATS
+    from databricks.labs.gbx.drivers._tested import tested_in
 
     yes = "✓"
     drivers = snapshot["drivers"]
@@ -739,42 +772,74 @@ def render_drivers_page(snapshot: dict) -> str:
         ["Format", "GDAL driver", "What GeoBrix uses instead", "Where"], rows
     )
 
+    def row_cells(d, kind, other, head, with_tested):
+        name = d["driver"]
+        cell = [
+            f'<Link id="{_driver_anchor(kind, name)}"></Link>`{name}`',
+            _mdx_cell(d["description"]),
+            yes if d["read"] else "",
+            yes if d["write"] else "",
+        ]
+        if "Tile bytes" in head:
+            cell.append(yes if d["tile_bytes"] else "")
+        req = _mdx_cell(d["requires"])
+        if d[other]:  # a driver of both kinds links to its row in the other table
+            link = f"Also a {other} driver: [see the {other} table](#{_driver_anchor(other, name)})."
+            req = f"{req} {link}".strip()
+        cell.append(req)
+        f = built_in.get(name)
+        cell.append(f"[{_mdx_cell(f['format'])}](#{f['anchor']})" if f else "")
+        if with_tested:
+            cell.append(_tested_cell(name, kind))
+        if "GeoBrix guidance" in head:
+            cell.append(_guidance_cell(d))
+        return cell
+
     def section(kind: str, other: str) -> None:
         mine = [d for d in drivers if d[kind]]
         out.extend(["", f"## {kind.capitalize()} drivers", ""])
-        for title, group in (
-            ("Available", [d for d in mine if d["available"] and d["allowed"]]),
-            ("Unavailable", [d for d in mine if not (d["available"] and d["allowed"])]),
+        usable = [d for d in mine if d["available"] and d["allowed"]]
+        down = [d for d in mine if not (d["available"] and d["allowed"])]
+        tested = [d for d in usable if tested_in(d["driver"], kind)]
+        rest = [d for d in usable if not tested_in(d["driver"], kind)]
+        reader = {
+            "raster": "`raster_gbx` detects the format from the file, so it takes no driver option.",
+            "vector": "`vector_gbx` reads a driver when you set its `driverName` option to the GDAL driver name.",
+        }[kind]
+        for title, group, intro in (
+            (
+                f"Available {kind} drivers: tested with GeoBrix",
+                tested,
+                f"GeoBrix's extended driver tests cover these {kind} drivers in this release.",
+            ),
+            (
+                f"Available {kind} drivers: not tested with GeoBrix",
+                rest,
+                f"These {kind} drivers are registered, and they may work with GeoBrix, but they are use-at-your-own-risk. "
+                f"{reader} "
+                "Plain GDAL, `from osgeo import gdal`, may suit them better than GeoBrix's distributed readers and writers.",
+            ),
+            (f"Unavailable {kind} drivers", down, ""),
         ):
-            out.extend([f"### {title} {kind} drivers", ""])
+            out.extend([f"### {title}", ""])
             if not group:
-                out.extend([f"No {kind} driver is unavailable in the env wheel.", ""])
+                out.extend([f"No {kind} driver is unavailable in the env wheel." if not intro else "None.", ""])
                 continue
+            if intro:
+                out.extend([intro, ""])
+            is_tested = group is tested
             head = ["Driver", "Description", "Read", "Write"]
-            if kind == "raster" and title == "Available":
+            if kind == "raster" and group is not down:
                 head.append("Tile bytes")
-            head.append("Requires" if title == "Available" else "Why")
+            head.append("Why" if group is down else "Requires")
             head.append("GeoBrix built-in")
-            rows = []
-            for d in group:
-                name = d["driver"]
-                cell = [
-                    f'<Link id="{_driver_anchor(kind, name)}"></Link>`{name}`',
-                    _mdx_cell(d["description"]),
-                    yes if d["read"] else "",
-                    yes if d["write"] else "",
-                ]
-                if "Tile bytes" in head:
-                    cell.append(yes if d["tile_bytes"] else "")
-                req = _mdx_cell(d["requires"])
-                if d[other]:  # a driver of both kinds links to its row in the other table
-                    link = f"Also a {other} driver: [see the {other} table](#{_driver_anchor(other, name)})."
-                    req = f"{req} {link}".strip()
-                cell.append(req)
-                f = built_in.get(name)
-                cell.append(f"[{_mdx_cell(f['format'])}](#{f['anchor']})" if f else "")
-                rows.append(cell)
-            out.extend(_table(head, rows))
+            if is_tested:
+                head.append("Tested with GeoBrix")
+            if group is not down:
+                head.append("GeoBrix guidance")
+            out.extend(
+                _table(head, [row_cells(d, kind, other, head, is_tested) for d in group])
+            )
             out.append("")
 
     section("vector", "raster")

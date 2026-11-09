@@ -10,7 +10,7 @@ They are pure Python and need no JAR, so one set serves every compute. They scal
 partitioning work across the cluster rather than reading or writing on a single node.
 
 :::tip Which formats can this runtime read and write?
-Call [`gbx_drivers()`](./api/general-functions#drivers) in SQL, or `drivers()` in Python, to list the drivers of the current environment. Each row says whether the driver reads, writes and is allowed by GeoBrix. It also says if the driver works as shipped, and what it still needs. Pass `'raster'` or `'vector'` to keep one kind. The result reflects the environment as it runs now, so adding or removing packages changes it. See the [drivers in the env wheel](./gdal-drivers) for the shipped list.
+Call [`gbx_drivers()`](./api/general-functions#drivers) in SQL, or `drivers()` in Python, to list the drivers of the current environment. Each row says whether the driver reads, writes and is allowed by GeoBrix. It also says if the driver works as shipped, and what it still needs. Pass `'raster'` or `'vector'` to keep one kind. The `tested` column marks the drivers that GeoBrix's driver tests cover, and `guidance` points to a built-in reader where one exists. The result reflects the environment as it runs now, so adding or removing packages changes it. See the [drivers in the env wheel](./gdal-drivers) for the shipped list.
 
 ```sql
 SELECT driver, description, requires FROM gbx_drivers() WHERE write AND allowed

@@ -149,3 +149,40 @@
   border-left-color: #5cc07a;
   background: rgba(46, 125, 50, 0.08);
 }
+
+
+/* --------------------------------------------------------------------------
+ * Drivers tested with GeoBrix (docs/gdal-drivers). A "Tested" pill, and a subtle tint on the whole table row that
+ * holds it. The pill keeps the meaning when colour is not seen. Same green as the .light tier badge in light mode;
+ * a translucent teal on the dark background. Browsers without :has() show the pill only.
+ * ------------------------------------------------------------------------ */
+.gbx-tested {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 0.05rem 0.45rem;
+  border-radius: 0.7rem;
+  white-space: nowrap;
+  background: #e6f4ea;
+  color: #1e7e34;
+  border: 1px solid #b7dfc2;
+}
+
+[data-theme='dark'] .gbx-tested {
+  background: rgba(37, 194, 160, 0.18);
+  color: #7fe3c8;
+  border-color: rgba(37, 194, 160, 0.5);
+}
+
+.markdown tr:has(.gbx-tested) > td {
+  background-color: rgba(46, 133, 85, 0.1);
+}
+
+.markdown tr:has(.gbx-tested) > td:first-child {
+  box-shadow: inset 3px 0 0 var(--ifm-color-primary);
+}
+
+[data-theme='dark'] .markdown tr:has(.gbx-tested) > td {
+  background-color: rgba(37, 194, 160, 0.12);
+}

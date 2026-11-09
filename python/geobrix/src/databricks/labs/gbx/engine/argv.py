@@ -242,6 +242,9 @@ COLOR_NAMES = (
     "orange",
     "purple",
     "brown",
+    "aqua",
+    "violet",
+    "indigo",
 )
 _NUMBER = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?%?$")
 _CHANNEL = re.compile(r"^\d{1,3}$")

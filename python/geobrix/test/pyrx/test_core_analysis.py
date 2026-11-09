@@ -490,6 +490,14 @@ def test_contour_infinite_level_raises_naming_it():
             analysis.contour(ds, [float("inf")], 0.0, 0.0, "elev")
 
 
+def test_contour_levels_of_only_nan_fall_back_to_the_interval_check():
+    src = _ramp_bytes()
+    with _serde.open_tile(src) as ds:
+        with pytest.raises(ValueError, match="interval must be > 0"):
+            analysis.contour(ds, [float("nan")], 0.0, 0.0, "elev")
+        assert analysis.contour(ds, [float("nan")], 2.0, 0.0, "elev")
+
+
 def test_contour_does_not_trace_the_9999_sentinel_of_a_tile_with_no_nodata():
     band = np.tile(np.arange(10, dtype="float64"), (10, 1))
     band[3:6, 4:6] = -9999.0

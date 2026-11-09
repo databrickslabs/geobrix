@@ -451,11 +451,12 @@ def contour(ds, levels, interval, base, attr_field):
         list[dict]: one ``{"geom_wkb": bytes, "value": float}`` per contour
         LineString.
     """
-    check_contour(levels, interval, attr_field)
-    # sorted, without repeats, NULLs and NaN: the same list the GDAL spec engine's binder writes
+    # sorted, without repeats, NULLs and NaN: the same list the GDAL spec engine's binder writes. A list of only
+    # NULL or NaN is then empty, so the interval is checked (it would divide by 0 unchecked).
     levels = sorted(
         {float(v) for v in (levels or ()) if v is not None and not math.isnan(v)}
     )
+    check_contour(levels, interval, attr_field)
 
     band = ds.read(1).astype("float64")
     # Mask NoData so contours do not trace the sentinel value: the declared one, and -9999 where none is declared.

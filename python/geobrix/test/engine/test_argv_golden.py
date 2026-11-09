@@ -155,6 +155,26 @@ def test_a_malformed_color_table_names_its_first_bad_line_and_carries_a_fix():
     assert "line 3: '150 0 255'" in str(exc.value) and "Fix:" in str(exc.value)
 
 
+def test_every_color_name_gdal_reads_is_accepted():
+    """aqua, violet and indigo are names gdaldem reads (checked against GDAL 3.13), beside the older ones."""
+    fn = MAN.functions["gbx_rst_color_relief"]
+    for name in ("aqua", "violet", "indigo"):
+        assert argv.text_values(fn, {"color_table": f"0 {name}\n10 red"})[0].startswith(
+            f"0 {name}\n"
+        )
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["0 " + "x" * argv._TEXT_MAX, "100 0 0 255\x00"],
+    ids=["too_long", "nul_byte"],
+)
+def test_a_color_table_over_the_size_bound_or_with_a_nul_byte_is_refused(table):
+    fn = MAN.functions["gbx_rst_color_relief"]
+    with pytest.raises(spec.ParamError, match="Fix:"):
+        argv.text_values(fn, {"color_table": table})
+
+
 @pytest.mark.parametrize("case", GOLDEN["zstd_knob"], ids=lambda c: repr(c["knob"]))
 def test_the_level_knob_reads_as_the_size_ladder_defines_it(case, monkeypatch):
     """GBX_ZSTD_LEVEL: fast, max, or plain digits 1..22; anything else is the size ladder."""

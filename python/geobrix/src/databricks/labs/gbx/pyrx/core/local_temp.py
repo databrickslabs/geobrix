@@ -129,12 +129,33 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+# A staged copy is named ``<uuid hex>_<source name>``; the sidecars staged with it carry the same prefix.
+_STAGE_PREFIX_LEN = 33
+
+
+def _staged_sidecars(local: str) -> List[str]:
+    """The sidecar copies staged beside the staged file *local* (same ``<uuid hex>_`` prefix, other names)."""
+    folder, name = os.path.split(local)
+    prefix = name[:_STAGE_PREFIX_LEN]
+    if len(prefix) < _STAGE_PREFIX_LEN or not prefix.endswith("_"):
+        return []
+    try:
+        return [
+            os.path.join(folder, n)
+            for n in os.listdir(folder)
+            if n.startswith(prefix) and n != name
+        ]
+    except OSError:
+        return []
+
+
 def _remove_local(local: str) -> None:
     if os.path.isdir(local):
         shutil.rmtree(local, ignore_errors=True)
-    else:
+        return
+    for path in [*_staged_sidecars(local), local]:
         try:
-            os.remove(local)
+            os.remove(path)
         except OSError:
             pass
 
@@ -146,7 +167,9 @@ def _path_bytes(path: str) -> int:
             for d, _, fs in os.walk(path)
             for f in fs
         )
-    return os.path.getsize(path)
+    return os.path.getsize(path) + sum(
+        os.path.getsize(p) for p in _staged_sidecars(path) if os.path.isfile(p)
+    )
 
 
 def source_signature(path: str) -> tuple:
@@ -179,6 +202,37 @@ def copy_source_sequential(source_path: str, local_path: str) -> None:
             shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
 
     _listing._retry_transient(_do_stage)
+
+
+def copy_source_with_sidecars(source_path: str, local_path: str) -> None:
+    """:func:`copy_source_sequential` of the file, then of the sidecar files beside it (a ``StageCache`` ``copy_fn``
+    for a raster, whose staged copy has to open as the source does)."""
+    copy_source_sequential(source_path, local_path)
+    _copy_sidecars(source_path, local_path)
+
+
+def _copy_sidecars(source_path: str, local_path: str) -> None:
+    """Copy the sidecar files beside *source_path* (``pyrx._env.sidecar_files``) next to the staged *local_path*, named
+    as the staged file is: the staged name is a prefix plus the source's name, and a sidecar keeps the rest of its own
+    name, so GDAL finds it by the same rule as at the source. A staged copy that lost them would open without the CRS
+    or NoData they hold, or not at all (an ESRI ``.bil`` without its ``.hdr``).
+    """
+    from databricks.labs.gbx.ds import _listing
+    from databricks.labs.gbx.pyrx import _env
+
+    src_name, local_name = os.path.basename(source_path), os.path.basename(local_path)
+    if not local_name.endswith(src_name):
+        return
+    prefix = local_name[: len(local_name) - len(src_name)]
+    folder = os.path.dirname(local_path)
+    for side in _env.sidecar_files(source_path):
+        dest = os.path.join(folder, prefix + os.path.basename(side))
+
+        def _do_copy(side=side, dest=dest) -> None:
+            with open(side, "rb") as src, open(dest, "wb") as dst:
+                shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
+
+        _listing._retry_transient(_do_copy)
 
 
 def retried_source_signature(path: str) -> tuple:

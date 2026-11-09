@@ -950,6 +950,59 @@ def _fromfile_read_remote(url, drv, cap_bytes):
     return _serde.build_tile(new_bytes, drv, 0)
 
 
+def _fromfile_read_with_sidecars(local, sides, drv, cap_bytes):
+    """``rst_fromfile`` materialized for a file with sidecars: the file and its sidecars are copied, under their own
+    names, to one local folder (a sequential read of each, as every Volume read is), opened there by path under the
+    driver policy, and written as a GeoTIFF with the CRS, NoData and georeferencing GDAL reads from them. The decoded
+    size is gated first, from the header, as for a file with none."""
+    import os
+    import shutil
+
+    import numpy as _np_cap
+
+    from databricks.labs.gbx.ds import _listing
+    from databricks.labs.gbx.ds.file_gbx import StageTooLargeError, materialize_decision
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        new_local_temp_dir,
+        retried_source_signature,
+    )
+
+    retried_source_signature(
+        local
+    )  # a miss on a Volume's mount is retried here, once, before any copy
+    folder = new_local_temp_dir("gbx_sidecars_")
+    try:
+        for src in [local, *sides]:
+            dest = os.path.join(folder, os.path.basename(src))
+
+            def _copy(src=src, dest=dest):
+                with open(src, "rb") as fin, open(dest, "wb") as fout:
+                    shutil.copyfileobj(fin, fout, length=8 * 1024 * 1024)
+
+            _listing._retry_transient(_copy)
+        with open_data(os.path.join(folder, os.path.basename(local))) as src:
+            decoded = (
+                src.count
+                * src.width
+                * src.height
+                * int(_np_cap.dtype(src.dtypes[0]).itemsize)
+            )
+            if materialize_decision(decoded, "ingest", cap_bytes=cap_bytes) == "error":
+                raise StageTooLargeError(
+                    f"rst_fromfile materialize=True unsuccessful: {decoded / 1024 ** 2:.1f} MiB decoded exceeds the "
+                    f"Serverless materialize cap. Omit materialize=True (the virtual default is Serverless-safe) or "
+                    f"split the source (sizeInMB=)."
+                )
+            data = src.read()
+            mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
+            new_bytes = write_gtiff(
+                src.profile, data, alpha_like=src.colorinterp, mask=mask
+            )
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
+    return _serde.build_tile(new_bytes, drv, 0)
+
+
 def _fromfile_impl(path, driver, materialize, cap_bytes=None):
     """Shared body for both the Python-binding UDF (4-arg) and the SQL UDF (2-arg,
     virtual). Returns a v2 tile row (virtual by default, materialized when asked),
@@ -999,6 +1052,11 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                 # the driver's remote-path switch is on (data_path above refused it otherwise): GDAL reads the URL
                 # (/vsicurl/ and friends) and the pixels are decoded under the same cap as a local file
                 return _fromfile_read_remote(str(path), drv, cap_bytes)
+            sides = _env.sidecar_files(local)
+            if sides:
+                # sidecars beside the file (an .aux.xml with its NoData, an ESRI .hdr): the bytes of the one file are
+                # not the raster, so it is opened with them and written as a GeoTIFF that holds their values
+                return _fromfile_read_with_sidecars(local, sides, drv, cap_bytes)
             staged, is_temp = _stage_local_if_needed(local)
             try:
                 # Serverless-cap guard: gate on the DECODED size (the RAM-relevant

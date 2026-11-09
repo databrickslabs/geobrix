@@ -321,3 +321,35 @@ def test_retried_source_signature_matches_source_signature_after_a_miss(
     calls = _fail_first(monkeypatch, os, "stat", str(f), failures=3)
     assert retried_source_signature(str(f)) == expected
     assert len(calls) > 3
+
+
+def test_stage_cache_stages_the_sidecars_with_the_file_and_removes_them_together(
+    monkeypatch, tmp_path
+):
+    """A raster is staged with the files GDAL reads beside it, under the staged name's prefix; evicting or superseding
+    the copy removes them too (a stage that kept them would fill the disk)."""
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    cache = lt.StageCache(
+        "gbx_test_stage_", lt.copy_source_with_sidecars, lt.source_signature
+    )
+    a = _src(tmp_path, "a.bil", 10)
+    Path(a).with_suffix(".hdr").write_bytes(b"NROWS 1")
+    Path(a + ".aux.xml").write_bytes(b"<PAMDataset/>")
+    with cache.use(a) as p:
+        staged = sorted(os.listdir(os.path.dirname(p)))
+        prefix = os.path.basename(p)[: -len("a.bil")]
+        assert staged == sorted(
+            [prefix + n for n in ("a.bil", "a.hdr", "a.bil.aux.xml")]
+        )
+        assert (
+            Path(os.path.dirname(p)) / (prefix + "a.hdr")
+        ).read_bytes() == b"NROWS 1"
+    _rewrite(a, 4)  # the source is replaced: the superseded copy and its sidecars go
+    with cache.use(a) as q:
+        assert sorted(os.listdir(os.path.dirname(q))) != staged
+        assert not any(
+            n.startswith(os.path.basename(p)[:33])
+            for n in os.listdir(os.path.dirname(q))
+        )

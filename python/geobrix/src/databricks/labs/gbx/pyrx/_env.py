@@ -977,6 +977,97 @@ def _is_plain_file_path(path: str) -> bool:
     return ":" not in head
 
 
+# The companion files a raster driver reads beside its main file, by exact name, besides the ones GDAL checks for every
+# format (_stat_sidecars): ESRI/ENVI headers and projection files, SAGA's header, statistics and colour tables, and the
+# Erdas rrd and ige files. A materialized read has to carry them, or its bytes lose the CRS and NoData they hold.
+_COMPANION_SUFFIXES = (".hdr", ".prj", ".stx", ".clr", ".rrd", ".ige")
+_COMPANION_STEM_EXTS = ("prj", "sgrd", "mgrd", "stx", "clr", "rrd", "ige")
+
+
+def sidecar_files(path) -> list:
+    """The sidecar files that exist beside the raster file *path*, as full paths (sorted, the file itself left out).
+
+    A sidecar is a file GDAL reads with the main one: ``<name>.aux.xml``, ``.ovr`` and ``.msk``, a world file, and
+    the companions of the formats that keep their georeferencing or NoData apart (``.hdr``, ``.prj``, ``.sgrd``).
+    They are looked up by name, as GDAL does with ``GDAL_DISABLE_READDIR_ON_OPEN=TRUE``, so a Volume's folder is not
+    listed. A file the reader stamped as having none (note_sidecar_free) and a path that is not a local or Volume file
+    have none.
+    """
+    try:
+        p = os.fspath(path)
+    except TypeError:
+        return []
+    if not isinstance(p, str) or not _is_plain_file_path(p):
+        return []
+    abs_path = os.path.abspath(p)
+    if _sidecar_free(abs_path):
+        return []
+    folder, name = os.path.split(abs_path)
+    stem = name.rpartition(".")[0] or name
+    names = set(_stat_sidecars(name))
+    for suffix in _COMPANION_SUFFIXES:
+        names.update((name + suffix, name + suffix.upper()))
+    for ext in _COMPANION_STEM_EXTS:
+        names.update((f"{stem}.{ext}", f"{stem}.{ext.upper()}"))
+    names.discard(name)
+    found, seen = [], set()
+    for n in sorted(
+        names, key=lambda x: (x != x.lower(), x)
+    ):  # a lower-case spelling first
+        full = os.path.join(folder, n)
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        key = (
+            st.st_dev,
+            st.st_ino,
+        )  # a case-blind folder shows one file under both spellings
+        if key in seen or not os.path.isfile(full):
+            continue
+        seen.add(key)
+        found.append(full)
+    return found
+
+
+def _same_value(a, b) -> bool:
+    if isinstance(a, float) and isinstance(b, float) and a != a and b != b:
+        return True
+    return a == b
+
+
+def sidecars_alter_open(path) -> bool:
+    """Whether the sidecar files beside *path* change what GDAL opens: the CRS, NoData, geotransform or the scale and
+    offset of a band. When they do not (an ``.ovr``, or statistics in an ``.aux.xml``), the file's own bytes stand for
+    it in a tile; when they do, a tile has to be written from the open dataset so those values are baked into it.
+    """
+    if not any(not f.lower().endswith(".ovr") for f in sidecar_files(path)):
+        return False
+    from rasterio import Env
+
+    from databricks.labs.gbx._gdal_policy import open_data
+
+    def view(ds):
+        return (
+            ds.crs.to_wkt() if ds.crs else None,
+            tuple(ds.nodatavals),
+            tuple(ds.transform),
+            tuple(ds.scales),
+            tuple(ds.offsets),
+        )
+
+    with open_raster(path) as with_sidecars:
+        a = view(with_sidecars)
+    # the same file as its bytes alone are: no PAM sidecar, no folder look-up
+    with Env(GDAL_PAM_ENABLED="NO", **{_READDIR_ON_OPEN: "EMPTY_DIR"}):
+        with open_data(path) as alone:
+            b = view(alone)
+    return not all(
+        _same_value(x, y) if not isinstance(x, tuple) else all(map(_same_value, x, y))
+        for x, y in zip(a, b)
+    )
+
+
 def _user_env_sets_readdir() -> bool:
     """True when a rasterio.Env the caller entered names GDAL_DISABLE_READDIR_ON_OPEN."""
     try:

@@ -85,7 +85,7 @@ from databricks.labs.gbx.pyrx._env import open_raster
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
-    copy_source_sequential,
+    copy_source_with_sidecars,
     new_local_temp_dir,
     retried_source_signature,
 )
@@ -106,7 +106,7 @@ _MAX_TILE_BYTES = 1932735283  # ~1.8 GiB
 # Each source is staged once and shared by every tile task for it on the worker,
 # within a bounded cache.
 _RASTER_STAGE = StageCache(
-    "gbx_stage_", copy_source_sequential, retried_source_signature
+    "gbx_stage_", copy_source_with_sidecars, retried_source_signature
 )
 
 
@@ -1617,7 +1617,11 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         # Passthrough tile: emit original file bytes, no decode.
         # ------------------------------------------------------------------
-        if partition.is_passthrough:
+        # A sidecar that changes the CRS or NoData (a GeoTIFF's .aux.xml) is not in the file's bytes: such a file is
+        # written from the open dataset below, with those values baked in.
+        if partition.is_passthrough and not _env.sidecars_alter_open(
+            partition.file_path
+        ):
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
             with open_raster(partition.file_path) as ds:
@@ -1661,9 +1665,10 @@ class RasterGbxReader(DataSourceReader):
             with _env.capped_block_cache(budget.block_cache_bytes(self.strategy)):
                 with open_raster(local_path) as ds:
                     tile_crs = crs_to_canonical(ds.crs)
+                    window = partition.window or (0, 0, ds.width, ds.height)
                     cellid, raster_bytes, meta = _encode.encode_tile(
                         ds,
-                        window=partition.window,
+                        window=window,
                         source_path=partition.file_path,
                         all_parents=partition.all_parents,
                         tile_format=partition.emit_fmt,
@@ -1683,7 +1688,7 @@ class RasterGbxReader(DataSourceReader):
                 cellid,
                 raster_bytes,
                 path=partition.file_path,
-                window=partition.window,
+                window=window,
                 metadata=meta,
                 crs=tile_crs,
             ),
@@ -1780,7 +1785,8 @@ class RasterGbxReader(DataSourceReader):
                 f"set the reader option sizeInMB=<n> (a positive MB value) to "
                 f"tile it into smaller pieces."
             )
-        passthrough = driver == "GTiff"
+        # a GeoTIFF's own bytes stand for it unless a sidecar beside it changes its CRS or NoData (an .aux.xml)
+        passthrough = driver == "GTiff" and not _env.sidecars_alter_open(path)
         held = (
             size
             if passthrough

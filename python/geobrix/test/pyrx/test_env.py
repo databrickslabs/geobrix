@@ -333,3 +333,51 @@ def test_every_site_that_caps_the_block_cache_applies_the_cap(
         (want, want)
     }  # once per window for the reader
     assert _cache_max() == 1 << 30
+
+
+def test_sidecar_files_lists_the_companions_that_exist_and_none_for_a_stamped_file(
+    tmp_path,
+):
+    from databricks.labs.gbx.pyrx import _env
+
+    f = tmp_path / "s.bil"
+    f.write_bytes(b"x")
+    assert _env.sidecar_files(str(f)) == []
+    for n in ("s.hdr", "s.prj", "s.bil.aux.xml", "other.hdr"):
+        (tmp_path / n).write_bytes(b"x")
+    assert [os.path.basename(p) for p in _env.sidecar_files(str(f))] == sorted(
+        ["s.hdr", "s.prj", "s.bil.aux.xml"]
+    )
+    _env.note_sidecar_free(str(f), "1")
+    assert _env.sidecar_files(str(f)) == []
+
+
+def test_sidecars_alter_open_only_when_they_change_the_crs_or_nodata(tmp_path):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx import _env
+
+    path = str(tmp_path / "a.tif")
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="int16",
+        transform=from_origin(0, 4, 1, 1),
+    ) as dst:
+        dst.write(np.arange(16, dtype="int16").reshape(1, 4, 4))
+    assert _env.sidecars_alter_open(path) is False  # nothing beside it
+    (tmp_path / "a.tif.ovr").write_bytes(b"x")
+    assert _env.sidecars_alter_open(path) is False  # an overview file holds neither
+    (tmp_path / "a.tif.aux.xml").write_text(
+        '<PAMDataset><PAMRasterBand band="1"><NoDataValue>-9999</NoDataValue>'
+        "</PAMRasterBand></PAMDataset>"
+    )
+    assert _env.sidecars_alter_open(path) is True  # the NoData is only in the sidecar
+    (tmp_path / "a.tif.aux.xml").write_text("<PAMDataset/>")
+    assert _env.sidecars_alter_open(path) is False  # a sidecar with nothing to change

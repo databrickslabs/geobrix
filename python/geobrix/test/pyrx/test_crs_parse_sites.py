@@ -122,6 +122,10 @@ SCALA_SITES = {
         "val srcSR = new SpatialReference(); srcSR.ImportFromEPSG(H3.crsID)",
     ): CONST_CRS,
     (
+        "operations/ProjDatabase.scala",
+        "try Try(sr.ImportFromEPSG(4326)).toOption.contains(0)",
+    ): CONST_CRS,  # the probe that PROJ's database reads at all: EPSG:4326 resolves, the result is discarded
+    (
         "rasterx/expressions/vector/RST_Isoband.scala",
         "val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }",
     ): CONST_CRS,

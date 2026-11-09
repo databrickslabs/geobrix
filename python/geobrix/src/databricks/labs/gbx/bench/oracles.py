@@ -2538,10 +2538,11 @@ def _warp_coverage_agreement(src, got, want_crs: str) -> float:
     source's pixels warped nearest by rasterio.warp onto its default grid (a 0 outside, 1 where a source pixel lands).
     """
     import numpy as np
-    from rasterio.crs import CRS
     from rasterio.warp import Resampling, calculate_default_transform, reproject
 
-    dst_crs = CRS.from_user_input(want_crs)
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    dst_crs = resolve_crs(want_crs)
     transform, width, height = calculate_default_transform(
         src.crs, dst_crs, src.width, src.height, *src.bounds
     )

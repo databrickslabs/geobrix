@@ -59,6 +59,9 @@ object GDALManager extends Logging {
     val NativeCopyDirKey = "spark.databricks.labs.gbx.native.copy.dir"
     val NativeCopyDirEnv = "GBX_NATIVE_COPY_DIR"
 
+    /** True when this JVM loaded GDAL from a node-local copy of the payload, so its PROJ database stays where it is. */
+    def loadedFromNodeCopy: Boolean = fromNodeCopy
+
     /** The GDAL a JVM runs: its JNI, and its PROJ and GDAL data (None: the system GDAL finds its own). */
     final case class NativeChoice(jni: String, projData: Option[String], gdalData: Option[String])
 
@@ -77,6 +80,8 @@ object GDALManager extends Logging {
     @volatile private var loaded: Option[NativeChoice] = None
     // the loaded JNI's sha256, taken when it was loaded: its file may be gone by the time a later configuration names a copy
     @volatile private var loadedIdentity: Option[String] = None
+    // whether the loaded GDAL's files are a node-local copy ([[NativeCopy]]), which a finished run does not remove
+    @volatile private var fromNodeCopy = false
     // conf dirs already found to name the loaded JNI: a later init with one of them is a lock-free no-op
     @volatile private var sameAsLoaded: Set[String] = Set.empty
     // PROJ grid directories already on the PROJ search path, in the order applied (a union: none is dropped)
@@ -648,6 +653,7 @@ object GDALManager extends Logging {
                         val identity = jniIdentityOf(realPathOf(resolved.jni))
                         // a payload (not the system GDAL) is loaded from its node-local copy
                         val c = if (dir.isEmpty && env.isEmpty) resolved else nodeLocal(resolved, identity, copyDir)
+                        fromNodeCopy = c.jni != resolved.jni
                         System.load(c.jni)
                         // GDAL's Java classes System.loadLibrary their JNI by name on first use: run that now, so the
                         // check below sees anything it mapped. With none on the library path they print "Native

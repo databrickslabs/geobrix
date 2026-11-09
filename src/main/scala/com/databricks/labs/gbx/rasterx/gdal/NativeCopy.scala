@@ -9,7 +9,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file._
 import java.nio.file.attribute.{BasicFileAttributes, PosixFilePermissions}
 import java.security.MessageDigest
-import java.util.{EnumSet, Properties, UUID}
+import java.util.{EnumSet, Locale, Properties, UUID}
 import scala.jdk.CollectionConverters._
 import scala.util.Try
 
@@ -71,8 +71,13 @@ private[gdal] object NativeCopy extends Logging {
     private val Sticky = 0x200 // 0o1000
 
     /** This JVM's uid: the owner of a file it creates. */
-    private lazy val myUid: Int = {
-        val f = Files.createTempFile("gbx_uid", "")
+    private lazy val myUid: Int = uidOfNewFileIn(Seq(tmpDir(), Paths.get(SystemTmp)))
+
+    /** The owner of a file this JVM makes in the first of `dirs` it can write: `java.io.tmpdir` may belong to another
+      * user (`/local_disk0/tmp` on Databricks Runtime 19), and `/tmp` is the one directory any user can write. */
+    private[gdal] def uidOfNewFileIn(dirs: Seq[Path]): Int = {
+        val made = dirs.iterator.flatMap(d => Try(Files.createTempFile(d, "gbx_uid", "")).toOption).nextOption()
+        val f = made.getOrElse(throw new IOException(s"no directory in ${dirs.mkString(", ")} can be written to find this JVM's uid"))
         try uidOf(f) finally Files.deleteIfExists(f)
     }
 
@@ -86,9 +91,9 @@ private[gdal] object NativeCopy extends Logging {
         val (uid, mode) = (uidOf(d), modeOf(d))
         if (own && uid != myUid) Some(s"$d is owned by uid $uid, not this JVM's uid $myUid")
         else if (!own && uid != myUid && uid != 0) Some(s"$d is owned by uid $uid")
-        else if ((mode & GroupOrOtherWrite) != 0 && (own || (mode & Sticky) == 0))
+        else if ((mode & GroupOrOtherWrite) != 0 && (own || (mode & Sticky) == 0)) {
             Some(f"$d is writable by its group or other users (mode ${mode & 0xfff}%o)")
-        else None
+        } else None
     }
 
     /**
@@ -152,7 +157,7 @@ private[gdal] object NativeCopy extends Logging {
       * base directory with the same real path as an earlier one is left out. */
     def rootsFrom(value: Option[String], localDisk: Option[Path], tmpDir: Path, systemTmp: Path = Paths.get(SystemTmp)): Seq[Path] =
         value.map(_.trim).filter(_.nonEmpty) match {
-            case Some(v) if Off.contains(v.toLowerCase) => Nil
+            case Some(v) if Off.contains(v.toLowerCase(Locale.ROOT)) => Nil
             case Some(v)                                => Seq(Paths.get(v).toAbsolutePath.normalize())
             case None                                   =>
                 val bases = (localDisk.toSeq ++ Seq(tmpDir, systemTmp)).map(_.toAbsolutePath.normalize())
@@ -359,7 +364,7 @@ private[gdal] object NativeCopy extends Logging {
                             files.iterator.flatMap { r =>
                                 val h = manifest(r)
                                 if (sha256(dest.resolve(r)) != h) Some(s"$r does not match its manifest")
-                                else sourceOf(r).filter(Files.isRegularFile(_)).filter(s => sha256(s) != h)
+                                else sourceOf(r).filter(Files.isRegularFile(_)).filter(s => Try(sha256(s)).toOption.exists(_ != h))
                                     .map(s => s"$r differs from its source $s")
                             }.nextOption()
                     })

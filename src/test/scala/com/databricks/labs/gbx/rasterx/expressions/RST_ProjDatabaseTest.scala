@@ -123,6 +123,17 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
         }) shouldBe Seq((2, 3))
     }
 
+    test("a check is kept only when GDAL was loaded from a node-local copy; in place it runs every time") {
+        onFreshThreads(1)(() => {
+            var calls = 0
+            val pass = () => { calls += 1; true }
+            Seq(true, true).foreach(_ => ProjDatabase.reachableCachedWith(fromCopy = true, pass))
+            val copied = calls
+            Seq(true, true).foreach(_ => ProjDatabase.reachableCachedWith(fromCopy = false, pass))
+            (copied, calls)
+        }) shouldBe Seq((1, 3))
+    }
+
     test("a CRS with no authority code is the data's own when PROJ's database is readable") {
         var recovered = false
         ProjDatabase.guardedWith[Int](() => 0, _ == 0, () => true, () => { recovered = true; Nil }) shouldBe 0

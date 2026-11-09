@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.gdal
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager.NativeChoice
 import org.scalatest.funsuite.AnyFunSuite
 
-import java.io.File
+import java.io.{File, IOException}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.PosixFilePermissions
@@ -66,6 +66,15 @@ class NativeCopyTest extends AnyFunSuite {
         assert(NativeCopy.rootsFrom(None, None, real, link) == Seq(real.resolve("geobrix/native")))
         assert(NativeCopy.keyFor("a" * 64, "0.6.0").contains("0.6.0-aaaaaaaaaaaaaaaa"))
         assert(NativeCopy.keyFor("/path/when/unreadable").isEmpty)
+    }
+
+    test("this JVM's uid is read from the first directory it can write, so an unwritable java.io.tmpdir is no refusal") {
+        val missing = Paths.get("/gbx/no/such/dir")
+        val writable = Files.createTempDirectory("gbx_uid_dir")
+        val uid = NativeCopy.uidOfNewFileIn(Seq(writable))
+        assert(NativeCopy.uidOfNewFileIn(Seq(missing, writable)) == uid)
+        assert(entries(writable).isEmpty) // the probe file is removed
+        assertThrows[IOException](NativeCopy.uidOfNewFileIn(Seq(missing)))
     }
 
     test("a payload is copied once, marked done, and its copy outlives the payload") {

@@ -27,9 +27,9 @@ final class ProjDatabaseException(msg: String, cause: Throwable = null) extends 
   *
   * Known limit: the check is a database lookup on this thread's context, which PROJ may answer from its cache, plus
   * a readable `proj.db` on the search path. A context whose database reads fail only now and then is not detected.
-  * A thread whose check passed is not checked again until this JVM changes PROJ's search path ([[invalidate]]), so a
-  * database removed later under an unchanged path is not detected on that thread (the JVM loads GDAL from a node-local
-  * copy of its payload, which a finished run does not remove).
+  * When the JVM loaded GDAL from a node-local copy of its payload (which a finished run does not remove), a thread
+  * whose check passed is not checked again until this JVM changes PROJ's search path ([[invalidate]]). A JVM that
+  * loaded GDAL in place checks every suspect answer, as a database removed later under an unchanged path is possible.
   */
 object ProjDatabase extends Logging {
 
@@ -61,7 +61,12 @@ object ProjDatabase extends Logging {
 
     /** [[reachable]], once per thread and search path: a check that passed holds until [[invalidate]]. A check that
       * fails is not kept, so the next suspect answer checks again. */
-    def reachableCached(): Boolean = cachedWith(() => reachable())
+    def reachableCached(): Boolean = reachableCachedWith(GDALManager.loadedFromNodeCopy, () => reachable())
+
+    /** A GDAL loaded in place keeps its PROJ database in the Python environment, which can be removed later: its check
+      * is never kept. */
+    private[gbx] def reachableCachedWith(fromCopy: Boolean, check: () => Boolean): Boolean =
+        if (fromCopy) cachedWith(check) else check()
 
     private[gbx] def cachedWith(check: () => Boolean): Boolean = {
         val g = generation.get()
@@ -98,7 +103,7 @@ object ProjDatabase extends Logging {
       * thread's suspect answer then came from the path that was replaced (it gave a NULL srid with no error). */
     def guarded[T](read: () => T)(suspect: T => Boolean): T = {
         val g = generation.get()
-        val confirmed = confirmedAt.get() == g
+        val confirmed = GDALManager.loadedFromNodeCopy && confirmedAt.get() == g
         guardedWith(read, suspect, () => reachableCached(), () => GDALManager.recoverProjData(),
           () => confirmed && generation.get() == g)
     }

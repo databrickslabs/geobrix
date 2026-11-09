@@ -207,8 +207,13 @@ def copy_source_sequential(source_path: str, local_path: str) -> None:
 def copy_source_with_sidecars(source_path: str, local_path: str) -> None:
     """:func:`copy_source_sequential` of the file, then of the sidecar files beside it (a ``StageCache`` ``copy_fn``
     for a raster, whose staged copy has to open as the source does)."""
-    copy_source_sequential(source_path, local_path)
-    _copy_sidecars(source_path, local_path)
+    try:
+        copy_source_sequential(source_path, local_path)
+        _copy_sidecars(source_path, local_path)
+    except BaseException:
+        # a copy that failed is not in the cache's books: take what it staged (the file and the sidecars already copied)
+        _remove_local(local_path)
+        raise
 
 
 def _copy_sidecars(source_path: str, local_path: str) -> None:

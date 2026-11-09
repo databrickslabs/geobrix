@@ -277,3 +277,33 @@ def test_a_note_for_a_dual_kind_driver_names_the_kind_that_is_tested():
         "raster_gbx reads and writes via gbx_rst_asformat JP2OpenJPEG;"
     )
     assert "Not tested as a vector driver" in text
+
+
+def test_a_driver_with_a_note_entry_the_runtime_lacks_or_with_no_kind_is_not_said_to_read():
+    """The note of a driver with an entry and no named reader leads with the runtime's state, as a driver with no
+    entry does: not "reads" for a driver the runtime lacks, nor an empty lead for one of neither kind.
+    """
+    name = next(
+        n for n, e in G.GUIDANCE.items() if e.get("kind", "unnamed") == "unnamed"
+    )
+    lacking = G.note(
+        {
+            "driver": name,
+            "raster": True,
+            "vector": True,
+            "allowed": True,
+            "available": False,
+        }
+    )
+    assert lacking.startswith("GeoBrix does not use this driver"), lacking
+    no_kind = G.note(
+        {
+            "driver": name,
+            "raster": False,
+            "vector": False,
+            "allowed": True,
+            "available": True,
+        }
+    )
+    assert no_kind.startswith("GeoBrix has no reader or writer for it"), no_kind
+    assert G.lead_of(lacking) and G.lead_of(no_kind)

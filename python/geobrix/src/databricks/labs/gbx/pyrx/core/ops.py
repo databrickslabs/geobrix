@@ -175,7 +175,7 @@ def as_format(ds, new_format: str) -> bytes:
         raise ValueError(
             f"rst_asformat: driver '{new_format}' cannot encode a tile here (rasterio: {exc}). "
             "Fix: encode to GTiff, COG or PNG instead, or write this format with plain GDAL."
-        ) from None
+        ) from exc
 
 
 # Drivers whose georeferencing a buffered (in-memory) write loses: the JPEG 2000 encoder drops the CRS of the file it

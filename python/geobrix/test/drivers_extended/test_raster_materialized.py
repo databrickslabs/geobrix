@@ -76,7 +76,7 @@ def samples(gb, tmp_path_factory):
 
 @pytest.mark.parametrize("kind", KINDS)
 def test_the_path_reference_holds_the_sidecars(samples, kind):
-    """The reference is the file read by path: it has a CRS and (but SAGA) a NoData value from the sidecars."""
+    """The reference is the file read by path: it has a CRS and a NoData value from the sidecars."""
     _, ref = samples[kind]
     assert ref.crs, f"{kind}: the reference has no CRS"
     assert ref.nodata[0] is not None

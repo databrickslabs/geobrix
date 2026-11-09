@@ -1052,7 +1052,11 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                 # the driver's remote-path switch is on (data_path above refused it otherwise): GDAL reads the URL
                 # (/vsicurl/ and friends) and the pixels are decoded under the same cap as a local file
                 return _fromfile_read_remote(str(path), drv, cap_bytes)
-            sides = _env.sidecar_files(local)
+            # an .ovr holds overviews, not values the full-resolution read needs: it neither changes the pixels nor is
+            # worth a copy, so a file with only that takes the plain path
+            sides = [
+                f for f in _env.sidecar_files(local) if not f.lower().endswith(".ovr")
+            ]
             if sides:
                 # sidecars beside the file (an .aux.xml with its NoData, an ESRI .hdr): the bytes of the one file are
                 # not the raster, so it is opened with them and written as a GeoTIFF that holds their values

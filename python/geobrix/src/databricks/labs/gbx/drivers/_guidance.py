@@ -347,7 +347,9 @@ def note(row: Dict[str, object]) -> str:
     kind = str(entry.get("kind", "unnamed"))
     parts = [_lead(entry, row)]
     if kind == "unnamed":
-        parts.append(_unnamed(row))
+        # generic() says "no reader or writer" for a driver of neither kind and "does not use this driver" where the
+        # runtime lacks it, before any word on what the tests passed
+        parts.append(generic(row))
     caveat = entry.get("caveat")
     if caveat:
         parts.append(str(caveat))

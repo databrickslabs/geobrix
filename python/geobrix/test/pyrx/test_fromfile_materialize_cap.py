@@ -171,3 +171,31 @@ class TestVirtualDefaultNeverRaises:
         assert result is not None, "virtual tile should return a row"
         # Virtual tile: raster is None (bytes-free, points at the path).
         assert result["raster"] is None
+
+
+class TestFromfileWithSidecars:
+    """A file with sidecars is read by the sidecar path under the same decoded-size cap; an overview file alone is not
+    a sidecar that path needs."""
+
+    def test_a_file_with_an_aux_xml_over_the_cap_is_refused(self, tmp_path):
+        tif = tmp_path / "s.tif"
+        _write_raster(str(tif), 512, 512, dtype="uint16")
+        (tmp_path / "s.tif.aux.xml").write_text("<PAMDataset/>")
+
+        from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+        with pytest.raises(StageTooLargeError, match="decoded"):
+            _fromfile_impl(str(tif), "GTiff", True, cap_bytes=64 * 1024)
+
+    def test_an_ovr_alone_takes_the_plain_path(self, tmp_path, monkeypatch):
+        tif = tmp_path / "o.tif"
+        _write_raster(str(tif), 8, 6)
+        (tmp_path / "o.tif.ovr").write_bytes(b"overviews")
+
+        from databricks.labs.gbx.pyrx import functions as prx
+
+        def _not_called(*a, **k):
+            raise AssertionError("the sidecar path was taken for an .ovr alone")
+
+        monkeypatch.setattr(prx, "_fromfile_read_with_sidecars", _not_called)
+        assert prx._fromfile_impl(str(tif), "GTiff", True)["raster"] is not None

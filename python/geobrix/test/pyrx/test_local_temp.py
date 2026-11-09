@@ -353,3 +353,34 @@ def test_stage_cache_stages_the_sidecars_with_the_file_and_removes_them_together
             n.startswith(os.path.basename(p)[:33])
             for n in os.listdir(os.path.dirname(q))
         )
+
+
+def test_a_failed_sidecar_copy_leaves_nothing_staged_and_the_size_counts_the_sidecars(
+    monkeypatch, tmp_path
+):
+    """The size the cache holds a staged raster at includes its sidecars; a copy that fails part way removes the file
+    and the sidecars it had staged (they are in no entry of the cache, so nothing else would).
+    """
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    a = _src(tmp_path, "a.bil", 10)
+    Path(a).with_suffix(".hdr").write_bytes(b"NROWS 1")
+    Path(a + ".aux.xml").write_bytes(b"<PAMDataset/>")
+    folder = tmp_path / "stage"
+    folder.mkdir()
+    ok = str(folder / ("0" * 32 + "_a.bil"))
+    lt.copy_source_with_sidecars(a, ok)
+    assert lt._path_bytes(ok) == 10 + len(b"NROWS 1") + len(b"<PAMDataset/>")
+
+    bad = str(folder / ("1" * 32 + "_a.bil"))
+    real = lt._copy_sidecars
+
+    def _fail_after_one(source_path, local_path):
+        real(source_path, local_path)
+        raise OSError("sidecar copy failed")
+
+    monkeypatch.setattr(lt, "_copy_sidecars", _fail_after_one)
+    with pytest.raises(OSError):
+        lt.copy_source_with_sidecars(a, bad)
+    assert all(n.startswith("0" * 32) for n in os.listdir(folder))

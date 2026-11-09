@@ -182,6 +182,7 @@ _session_dem_rows = (
     ),
     Case("hillshade_null_param", HS, (DEM, None, 45.0, 1.0), "null", None, ONLY),
     Case("tri", TRI, (DEM,), "ref", "tri", ONLY),
+    Case("tri_virtual", TRI, (VIRT,), "ref", "tri", ONLY),
     Case("tri_null_tile", TRI, (None,), "null", None, ONLY),
     Case("tri_error_tile", TRI, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("tpi", TPI, (DEM,), "ref", "tpi", ONLY),

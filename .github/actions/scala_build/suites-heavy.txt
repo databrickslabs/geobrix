@@ -54,6 +54,7 @@ com.databricks.labs.gbx.rasterx.expressions.RST_GridIntegrationTest
 com.databricks.labs.gbx.rasterx.expressions.RST_H3IntegrationTest
 com.databricks.labs.gbx.rasterx.expressions.RST_InitNoDataTest
 com.databricks.labs.gbx.rasterx.expressions.RST_NoVrtPayloadTest
+com.databricks.labs.gbx.rasterx.expressions.RST_ProjDatabaseTest
 com.databricks.labs.gbx.rasterx.expressions.RST_Tessellate_GridSystemMetadataTest
 com.databricks.labs.gbx.rasterx.expressions.RST_TileStructureTest
 com.databricks.labs.gbx.rasterx.expressions.RST_TransformationsEvalTest
@@ -74,6 +75,7 @@ com.databricks.labs.gbx.rasterx.gdal.GDALManagerProjGridsSpec
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerStaleNativeDirTest
 com.databricks.labs.gbx.rasterx.gdal.GDALManagerTest
 com.databricks.labs.gbx.rasterx.gdal.GDALUtilsTest
+com.databricks.labs.gbx.rasterx.gdal.RasterDriversTest
 com.databricks.labs.gbx.rasterx.gdal.ValidMaskTest
 com.databricks.labs.gbx.rasterx.operations.AlphaValidityReadersTest
 com.databricks.labs.gbx.rasterx.operations.BandSubsetAlphaTest

@@ -217,7 +217,7 @@ jobs:
             paths: test/bench
             ignore: test/bench/test_levels.py test/bench/test_levels_legs.py
           - name: other dirs
-            paths: test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models test/engine
+            paths: test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models test/engine test/drivers_extended
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

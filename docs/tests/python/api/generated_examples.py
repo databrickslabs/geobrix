@@ -214,6 +214,11 @@ EXAMPLES = {
         "cg_polyfill_2x2",
         "SELECT gbx_custom_polyfill('POLYGON((530000 180000, 532000 180000, 532000 182000, 530000 182000, 530000 180000))', c1, 0) AS out FROM gbx_example",
     ),
+    "gbx_drivers": (
+        "DRIVERS",
+        "drivers_vector",
+        "SELECT * FROM gbx_drivers('vector')",
+    ),
     "gbx_h3_cell_bbox": (
         "GRID_SCALAR",
         "h3bbox_default",

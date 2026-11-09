@@ -682,3 +682,65 @@ def check_mvt_layer(case, out, args) -> Optional[str]:
         for g, p in e["features"]
     )
     return None if got == want else f"{case.cid}: features {got}, want {want}"
+
+
+def check_drivers(case, rows, args) -> Optional[str]:
+    """`drivers`: the rows of ``gbx_drivers`` for one filter. `expect` is {"kind": the filter the call used
+    (None: every driver), "present": {driver: {column: value}}, "absent": [driver]}. Beyond the named rows: each
+    driver once; the filter holds for every row; ``tile_bytes`` implies a raster driver GeoBrix allows; ``available``
+    implies ``allowed``; a driver that is not available says why in ``requires``; the raster names are rasterio's own
+    registry's (an independent read of the same libgdal).
+    """
+    want = case.expect
+    got = {}
+    for r in rows:
+        name = _field(r, "driver")
+        if name in got:
+            return f"{case.cid}: driver {name!r} is listed twice"
+        got[name] = r
+    kind = want.get("kind")
+    for name, r in got.items():
+        if kind is not None and not _field(r, kind):
+            return f"{case.cid}: {name!r} is not a {kind} driver"
+        if not _field(r, "description"):
+            return f"{case.cid}: {name!r} has no description"
+        if _field(r, "tile_bytes") and not (
+            _field(r, "raster") and _field(r, "allowed")
+        ):
+            return f"{case.cid}: {name!r} holds tile bytes but is not an allowed raster driver"
+        if _field(r, "available") and not _field(r, "allowed"):
+            return f"{case.cid}: {name!r} is available but not allowed"
+        if (
+            not _field(r, "available")
+            and _field(r, "allowed")
+            and not _field(r, "requires")
+        ):
+            return f"{case.cid}: {name!r} is allowed but not available, and says nothing in `requires`"
+        url = _field(r, "help_url")
+        if url is not None and not url.startswith("https://gdal.org/"):
+            return f"{case.cid}: {name!r} has the help URL {url!r}"
+    for name, cols in want.get("present", {}).items():
+        if name not in got:
+            return f"{case.cid}: {name!r} is not listed"
+        for col, value in cols.items():
+            have = _field(got[name], col)
+            have = list(have) if isinstance(have, (list, tuple)) else have
+            if have != value:
+                return f"{case.cid}: {name}.{col} is {have!r}, want {value!r}"
+    for name in want.get("absent", ()):
+        if name in got:
+            return f"{case.cid}: {name!r} is listed"
+    import rasterio
+
+    with rasterio.Env() as env:
+        theirs = set(env.drivers())  # every registered driver, vector ones too
+    if kind is None and set(got) != theirs:
+        return (
+            f"{case.cid}: drivers differ from rasterio's registry: "
+            f"only here {sorted(set(got) - theirs)[:5]}, only rasterio {sorted(theirs - set(got))[:5]}"
+        )
+    if kind is not None and not set(got) <= theirs:
+        return (
+            f"{case.cid}: not in rasterio's registry: {sorted(set(got) - theirs)[:5]}"
+        )
+    return None

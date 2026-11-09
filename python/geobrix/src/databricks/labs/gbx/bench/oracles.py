@@ -5030,6 +5030,7 @@ _ROW_CHECKS = {
     "tessellation": _oracle_check("check_tessellation"),
     "polygons": _oracle_check("check_polygons"),
     "grid_stats": _oracle_check("check_grid_stats"),
+    "drivers": _oracle_check("check_drivers"),
 }
 
 
@@ -5145,6 +5146,9 @@ def run_rows(
                 rows = spark.sql(
                     shape_sql.format(fn=name_of(case.fn), args=cols)
                 ).collect()
+            elif man.functions[case.fn].source:
+                # a table function with no input row: the Python entry takes the arguments alone
+                rows = table_of(case.fn)(*args).collect()
             else:
                 py_args = _python_leg_args(args, man.functions[case.fn])
                 rows = table_of(case.fn)(df, *py_args).collect()

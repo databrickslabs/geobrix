@@ -9,7 +9,8 @@ The manifest is `python/geobrix/src/databricks/labs/gbx/manifest/functions.json`
 - the `function-info.json` entry;
 - the availability matrix row;
 - the doc-test example;
-- the function-count badges.
+- the function-count badges;
+- the as-provided driver table (`docs/docs/gdal-drivers.mdx`), from `manifest/shipped_drivers.json`.
 
 `--check` is the drift gate: it exits 1 with one finding per line.
 
@@ -23,7 +24,7 @@ bash scripts/commands/gbx-manifest-gen.sh [--write | --check] [--only <surface>]
 
 - `--write` — write every generated surface from the manifest (the default)
 - `--check` — exit 1 when a generated surface differs from the manifest, names a machine path, or fails a replacement gate. `--only` skips the gates
-- `--only <surface>` — one of `manifest`, `python`, `docs`, `function-info`, `availability`, `examples`, `counts`
+- `--only <surface>` — one of `manifest`, `python`, `docs`, `function-info`, `availability`, `examples`, `counts`, `drivers`
 - `--log <path>` — write output to a log file (`filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is)
 - `--help`, `-h` — show help and exit
 

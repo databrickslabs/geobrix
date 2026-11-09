@@ -24,7 +24,8 @@ REPO = Path(__file__).resolve().parents[4]
 @pytest.mark.parametrize("fn", FNS, ids=lambda f: f.sql_name)
 def test_signature_shape(fn):
     assert fn.sql_name.startswith("gbx_") and re.fullmatch(r"[a-z0-9_]+", fn.sql_name)
-    assert 1 <= fn.min_args <= fn.max_args == len(fn.params)
+    # a source table function (no input row) may take no required argument
+    assert (0 if fn.source else 1) <= fn.min_args <= fn.max_args == len(fn.params)
     names = [p.name for p in fn.params]
     assert len(set(names)) == len(names) and all(
         re.fullmatch(r"[a-z][a-z0-9_]*", n) for n in names

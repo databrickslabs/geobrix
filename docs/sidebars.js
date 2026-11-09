@@ -111,6 +111,7 @@ const sidebars = {
       items: [
         'choosing-a-format',
         'common-functions',
+        'gdal-drivers',
         {
           type: 'category',
           label: 'Readers',
@@ -190,6 +191,7 @@ const sidebars = {
           ],
         },
         { type: 'doc', id: 'api/pmtiles-functions', label: 'PMTiles' },
+        { type: 'doc', id: 'api/general-functions', label: 'General' },
         {
           type: 'category',
           label: 'Zarr',

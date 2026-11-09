@@ -187,6 +187,7 @@ FAMILY_PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "raster-to-grid": ("L3",),
     "web-tiles": ("L3",),
     "raster-file-op": ("L3",),
+    "general": ("L3",),
 }
 L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
 NAMES = {

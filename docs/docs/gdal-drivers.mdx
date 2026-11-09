@@ -1,0 +1,212 @@
+---
+title: GDAL drivers as provided
+---
+
+# GDAL drivers as provided
+
+The GeoBrix env wheel ships one GDAL build. This page lists the drivers of that build, with what each can do.
+Use it to check whether a format is in the wheel before you install anything.
+
+The list shows the drivers **as provided**. It does not change when you add or remove packages.
+To see the drivers your current environment can run, call [`gbx_drivers()`](./api/general-functions#drivers).
+That function reads GDAL as it runs now, so its rows can differ from this table.
+Its `shipped` column is false for a driver that is not in this list.
+
+GeoBrix [refuses](./security#7-raster-data-other-principals-can-write) some drivers and does not register them.
+They are not in the list, and `gbx_drivers()` does not return them either.
+
+```sql
+SELECT driver, description, requires FROM gbx_drivers() WHERE NOT available
+```
+
+## How to read the table
+
+- **Kind** says whether the driver handles rasters, vectors, or both.
+- **Read** and **Write** are GDAL's flags: it can open a dataset, and it can create or copy one.
+- **Tile bytes** is set when a raster of this driver can be held as the bytes of a tile.
+- **Available** says whether the driver works as shipped. It is `no` for a driver that needs a service or a program this runtime lacks.
+- **Requires** names what the driver needs besides the data file. A format with sidecar files names them here.
+
+## Drivers in the env wheel
+
+{/* BEGIN GENERATED drivers: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Driver | Description | Kind | Read | Write | Tile bytes | Available | Requires |
+|---|---|---|---|---|---|---|---|
+| `AAIGrid` | Arc/Info ASCII Grid | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `ACE2` | ACE2 | raster | ✓ |  | ✓ | ✓ |  |
+| `ADBC` | Arrow Database Connectivity | vector | ✓ |  |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'ADBC:') |
+| `ADRG` | ARC Digitized Raster Graphics | raster | ✓ |  | ✓ | ✓ |  |
+| `AIG` | Arc/Info Binary Grid | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `AirSAR` | AirSAR Polarimetric Image | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `AIVector` | Artificial Intelligence powered vector driver | vector | ✓ |  |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'AIVector:') |
+| `AmigoCloud` | AmigoCloud | vector | ✓ | ✓ |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'AMIGOCLOUD:') |
+| `AVCBin` | Arc/Info Binary Coverage | vector | ✓ |  |  | ✓ | the whole coverage folder |
+| `AVCE00` | Arc/Info E00 (ASCII) Coverage | vector | ✓ |  |  | ✓ |  |
+| `BAG` | Bathymetry Attributed Grid | raster and vector | ✓ | ✓ | ✓ | ✓ |  |
+| `BIGGIF` | Graphics Interchange Format (.gif) | raster | ✓ |  | ✓ | ✓ |  |
+| `BMP` | MS Windows Device Independent Bitmap | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `BSB` | Maptech BSB Nautical Charts | raster | ✓ |  | ✓ | ✓ |  |
+| `BT` | VTP .bt (Binary Terrain) 1.3 Format | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `BYN` | Natural Resources Canada's Geoid | raster | ✓ |  | ✓ | ✓ |  |
+| `CAD` | AutoCAD Driver | raster and vector | ✓ |  | ✓ | ✓ |  |
+| `CALS` | CALS (Type 1) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `Carto` | Carto | vector | ✓ | ✓ |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'CARTO:') |
+| `CEOS` | CEOS Image | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `COASP` | DRDC COASP SAR Processor Raster | raster | ✓ |  | ✓ | ✓ |  |
+| `COG` | Cloud optimized GeoTIFF generator | raster |  | ✓ | ✓ | ✓ |  |
+| `COSAR` | COSAR Annotated Binary Matrix (TerraSAR-X) | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `CPG` | Convair PolGASP | raster | ✓ |  | ✓ | ✓ |  |
+| `CPHD` | Compensated Phase History Data Reader | multidimensional | ✓ |  |  | ✓ |  |
+| `CSV` | Comma Separated Value (.csv) | vector | ✓ | ✓ |  | ✓ |  |
+| `CTG` | USGS LULC Composite Theme Grid | raster | ✓ |  | ✓ | ✓ |  |
+| `DERIVED` | Derived datasets using VRT pixel functions | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `DGN` | Microstation DGN | vector | ✓ | ✓ |  | ✓ |  |
+| `DIMAP` | SPOT DIMAP | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `DOQ1` | USGS DOQ (Old Style) | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `DOQ2` | USGS DOQ (New Style) | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `DTED` | DTED Elevation Raster | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `DXF` | AutoCAD DXF | vector | ✓ | ✓ |  | ✓ |  |
+| `E57` | ASTM E57 3D file format (image part) | raster | ✓ |  | ✓ | ✓ |  |
+| `ECRGTOC` | ECRG TOC format | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `EDIGEO` | French EDIGEO exchange format | vector | ✓ |  |  | ✓ |  |
+| `EHdr` | ESRI .hdr Labelled | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `EIR` | Erdas Imagine Raw | raster | ✓ |  | ✓ | ✓ |  |
+| `Elasticsearch` | Elastic Search | vector | ✓ | ✓ |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'ES:') |
+| `ENVI` | ENVI .hdr Labelled | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `ERS` | ERMapper .ers Labelled | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `ESAT` | Envisat Image Format | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `ESRI Shapefile` | ESRI Shapefile | vector | ✓ | ✓ |  | ✓ | the .shx and .dbf files beside the .shp file, and the .prj file for the CRS |
+| `ESRIJSON` | ESRIJSON | vector | ✓ |  |  | ✓ |  |
+| `FAST` | EOSAT FAST Format | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `FlatGeobuf` | FlatGeobuf | vector | ✓ | ✓ |  | ✓ |  |
+| `GenBin` | Generic Binary (.hdr Labelled) | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `GeoJSON` | GeoJSON | vector | ✓ | ✓ |  | ✓ |  |
+| `GeoJSONSeq` | GeoJSON Sequence | vector | ✓ | ✓ |  | ✓ |  |
+| `GeoRSS` | GeoRSS | vector | ✓ | ✓ |  | ✓ |  |
+| `GFF` | Ground-based SAR Applications Testbed File Format (.gff) | raster | ✓ |  | ✓ | ✓ |  |
+| `GIF` | Graphics Interchange Format (.gif) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GML` | Geography Markup Language (GML) | vector | ✓ | ✓ |  | ✓ |  |
+| `GNMDatabase` | Geographic Network generic DB based model | multidimensional | ✓ | ✓ |  | ✓ |  |
+| `GNMFile` | Geographic Network generic file based model | multidimensional | ✓ | ✓ |  | ✓ |  |
+| `GPKG` | GeoPackage | raster and vector | ✓ | ✓ | ✓ | ✓ |  |
+| `GPSBabel` | GPSBabel | vector | ✓ | ✓ |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'GPSBABEL:') |
+| `GPX` | GPX | vector | ✓ | ✓ |  | ✓ |  |
+| `GRASSASCIIGrid` | GRASS ASCII Grid | raster | ✓ |  | ✓ | ✓ |  |
+| `GRIB` | GRIdded Binary (.grb, .grb2) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GS7BG` | Golden Software 7 Binary Grid (.grd) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GSAG` | Golden Software ASCII Grid (.grd) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GSBG` | Golden Software Binary Grid (.grd) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GSC` | GSC Geogrid | raster | ✓ |  | ✓ | ✓ |  |
+| `GTFS` | General Transit Feed Specification | vector | ✓ |  |  | ✓ |  |
+| `GTiff` | GeoTIFF | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GTX` | NOAA Vertical Datum .GTX | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `GXF` | GeoSoft Grid Exchange Format | raster | ✓ |  | ✓ | ✓ |  |
+| `HDF5` | Hierarchical Data Format Release 5 | raster | ✓ |  | ✓ | ✓ |  |
+| `HDF5Image` | HDF5 Dataset | raster | ✓ |  | ✓ | ✓ |  |
+| `HF2` | HF2/HFZ heightfield raster | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `HFA` | Erdas Imagine Images (.img) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `Idrisi` | Idrisi Vector (.vct) | vector | ✓ |  |  | ✓ |  |
+| `ILWIS` | ILWIS Raster Map | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `IRIS` | IRIS data (.PPI, .CAPPi etc) | raster | ✓ |  | ✓ | ✓ |  |
+| `ISCE` | ISCE raster | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `ISG` | International Service for the Geoid | raster | ✓ |  | ✓ | ✓ |  |
+| `ISIS2` | USGS Astrogeology ISIS cube (Version 2) | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `ISIS3` | USGS Astrogeology ISIS cube (Version 3) | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `JAXAPALSAR` | JAXA PALSAR Product Reader (Level 1.1/1.5) | raster | ✓ |  | ✓ | ✓ |  |
+| `JDEM` | Japanese DEM (.mem) | raster | ✓ |  | ✓ | ✓ |  |
+| `JML` | OpenJUMP JML | vector | ✓ | ✓ |  | ✓ |  |
+| `JP2OpenJPEG` | JPEG-2000 driver based on JP2OpenJPEG library | raster and vector | ✓ | ✓ | ✓ | ✓ |  |
+| `JPEG` | JPEG JFIF | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `JPEGXL` | JPEG-XL | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `JSONFG` | OGC Features and Geometries JSON | vector | ✓ | ✓ |  | ✓ |  |
+| `KML` | Keyhole Markup Language (KML) | vector | ✓ | ✓ |  | ✓ |  |
+| `KRO` | KOLOR Raw | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `L1B` | NOAA Polar Orbiter Level 1b Data Set | raster | ✓ |  | ✓ | ✓ |  |
+| `LAN` | Erdas .LAN/.GIS | raster | ✓ |  | ✓ | ✓ |  |
+| `LCP` | FARSITE v.4 Landscape File (.lcp) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `Leveller` | Leveller heightfield | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `LIBERTIFF` | GeoTIFF (using LIBERTIFF library) | raster | ✓ |  | ✓ | ✓ |  |
+| `LOSLAS` | NADCON .los/.las Datum Grid Shift | raster | ✓ |  | ✓ | ✓ |  |
+| `LVBAG` | Kadaster LV BAG Extract 2.0 | vector | ✓ |  |  | ✓ |  |
+| `MAP` | OziExplorer .MAP | raster | ✓ |  | ✓ | ✓ |  |
+| `MapInfo File` | MapInfo File | vector | ✓ | ✓ |  | ✓ | the .dat, .id and .map files beside the .tab file |
+| `MapML` | MapML | vector | ✓ | ✓ |  | ✓ |  |
+| `MBTiles` | MBTiles | raster and vector | ✓ | ✓ | ✓ | ✓ |  |
+| `MEM` | In Memory raster, vector and multidimensional raster | raster and vector | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `MFF` | Vexcel MFF Raster | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `MFF2` | Vexcel MFF2 (HKV) Raster | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `MiraMonRaster` | MiraMon Raster Images | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `MiraMonVector` | MiraMon Vectors (.pol, .arc, .pnt) | vector | ✓ | ✓ |  | ✓ |  |
+| `MSGN` | EUMETSAT Archive native (.nat) | raster | ✓ |  | ✓ | ✓ |  |
+| `MVT` | Mapbox Vector Tiles | vector | ✓ | ✓ |  | ✓ |  |
+| `NDF` | NLAPS Data Format | raster | ✓ |  | ✓ | ✓ |  |
+| `netCDF` | Network Common Data Format | raster and vector | ✓ | ✓ | ✓ | ✓ |  |
+| `NGSGEOID` | NOAA NGS Geoid Height Grids | raster | ✓ |  | ✓ | ✓ |  |
+| `NITF` | National Imagery Transmission Format | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `NOAA_B` | NOAA GEOCON/NADCON5 .b format | raster | ✓ |  | ✓ | ✓ |  |
+| `NSIDCbin` | NSIDC Sea Ice Concentrations binary (.bin) | raster | ✓ |  | ✓ | ✓ |  |
+| `NTv2` | NTv2 Datum Grid Shift | raster | ✓ |  | ✓ | ✓ |  |
+| `NUMPY` | Numeric Python Array | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `NWT_GRC` | Northwood Classified Grid Format .grc/.tab | raster | ✓ |  | ✓ | ✓ |  |
+| `NWT_GRD` | Northwood Numeric Grid Format .grd/.tab | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `OAPIF` | OGC API - Features | vector | ✓ |  |  | no | a service or program this runtime does not provide (it opens a connection string that starts with 'OAPIF:') |
+| `ODS` | Open Document/ LibreOffice / OpenOffice Spreadsheet | vector | ✓ | ✓ |  | ✓ |  |
+| `OGR_GMT` | GMT ASCII Vectors (.gmt) | vector | ✓ | ✓ |  | ✓ |  |
+| `OGR_PDS` | Planetary Data Systems TABLE | vector | ✓ |  |  | ✓ |  |
+| `OGR_VRT` | VRT - Virtual Datasource | vector | ✓ |  |  | ✓ |  |
+| `OpenFileGDB` | ESRI FileGeodatabase (using OpenFileGDB) | raster and vector | ✓ | ✓ | ✓ | ✓ | the whole .gdb folder |
+| `OSM` | OpenStreetMap XML and PBF | vector | ✓ |  |  | ✓ |  |
+| `PAux` | PCI .aux Labelled | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `PCIDSK` | PCIDSK Database File | raster and vector | ✓ | ✓ | ✓ | ✓ |  |
+| `PCRaster` | PCRaster Raster File | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `PDF` | Geospatial PDF | raster and vector |  | ✓ | ✓ | ✓ |  |
+| `PDS` | NASA Planetary Data System | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `PDS4` | NASA Planetary Data System 4 | raster and vector | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `PGDUMP` | PostgreSQL SQL dump | vector |  | ✓ |  | ✓ |  |
+| `PMTiles` | ProtoMap Tiles | vector | ✓ | ✓ |  | ✓ |  |
+| `PNG` | Portable Network Graphics | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `PNM` | Portable Pixmap Format (netpbm) | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `PRF` | Racurs PHOTOMOD PRF | raster | ✓ |  | ✓ | ✓ |  |
+| `RCM` | Radarsat Constellation Mission XML Product | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `RIK` | Swedish Grid RIK (.rik) | raster | ✓ |  | ✓ | ✓ |  |
+| `RMF` | Raster Matrix Format | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `ROI_PAC` | ROI_PAC raster | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `RPFTOC` | Raster Product Format TOC format | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `RRASTER` | R Raster | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `RS2` | RadarSat 2 XML Product | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `RST` | Idrisi Raster A.1 | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `S102` | S-102 Bathymetric Surface Product | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `S104` | S-104 Water Level Information for Surface Navigation Product | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `S111` | S-111 Surface Currents Product | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `S57` | IHO S-57 (ENC) | vector | ✓ | ✓ |  | ✓ |  |
+| `SAFE` | Sentinel-1 SAR SAFE Product | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `SAGA` | SAGA GIS Binary Grid (.sdat, .sg-grd-z) | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `SAR_CEOS` | CEOS SAR Image | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `Selafin` | Selafin | vector | ✓ | ✓ |  | ✓ |  |
+| `SENTINEL2` | Sentinel 2 | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `SIGDEM` | Scaled Integer Gridded DEM .sigdem | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `SNAP_TIFF` | Sentinel Application Processing GeoTIFF | raster | ✓ |  | ✓ | ✓ |  |
+| `SNODAS` | Snow Data Assimilation System | raster | ✓ |  | ✓ | ✓ |  |
+| `SQLite` | SQLite / Spatialite | vector | ✓ | ✓ |  | ✓ |  |
+| `SRP` | Standard Raster Product (ASRP/USRP) | raster | ✓ |  | ✓ | ✓ |  |
+| `SRTMHGT` | SRTMHGT File Format | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `SXF` | Storage and eXchange Format | vector | ✓ |  |  | ✓ |  |
+| `Terragen` | Terragen heightfield | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `TGA` | TGA/TARGA Image File Format | raster | ✓ |  | ✓ | ✓ |  |
+| `TIGER` | U.S. Census TIGER/Line | vector | ✓ |  |  | ✓ |  |
+| `TIL` | EarthWatch .TIL | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `TopoJSON` | TopoJSON | vector | ✓ |  |  | ✓ |  |
+| `TSX` | TerraSAR-X Product | raster | ✓ |  |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `UK .NTF` | UK .NTF | vector | ✓ |  |  | ✓ |  |
+| `USGSDEM` | USGS Optional ASCII DEM (and CDED) | raster | ✓ |  | ✓ | ✓ |  |
+| `VDV` | VDV-451/VDV-452/INTREST Data Format | vector | ✓ | ✓ |  | ✓ |  |
+| `VFK` | Czech Cadastral Exchange Data Format | vector | ✓ |  |  | ✓ |  |
+| `VICAR` | MIPL VICAR file | raster and vector | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `VRT` | Virtual Raster | raster | ✓ | ✓ |  | ✓ | other files beside the data, such as a header, a sidecar or a referenced file: its bytes alone are not a tile |
+| `WAsP` | WAsP .map format | vector | ✓ | ✓ |  | ✓ |  |
+| `WEBP` | WEBP | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `XLSX` | MS Office Open XML spreadsheet | vector | ✓ | ✓ |  | ✓ |  |
+| `XYZ` | ASCII Gridded XYZ | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `Zarr` | Zarr | raster | ✓ | ✓ | ✓ | ✓ |  |
+| `ZMap` | ZMap Plus Grid | raster | ✓ | ✓ | ✓ | ✓ |  |
+{/* END GENERATED drivers */}

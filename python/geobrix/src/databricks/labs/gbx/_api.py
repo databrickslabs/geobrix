@@ -252,6 +252,34 @@ def table(df, sql_name: str, *values):
     )
 
 
+def source(sql_name: str, *values):
+    """The table function ``sql_name`` called with no input row: ``SELECT * FROM sql_name(values...)`` on the active
+    session. ``values`` are plain Python values (the function's arguments are constants of the call). A trailing
+    optional left as None is not sent (the SQL default applies); one left as None before a value that is set takes
+    its SQL default, never a shifted value.
+    """
+    from databricks.labs.gbx.manifest import sql_type
+
+    fn = _fn(sql_name)
+    if len(values) > fn.max_args:
+        raise TypeError(
+            f"{sql_name} takes at most {fn.max_args} arguments ({len(values)} given)"
+        )
+    vals = list(values) + [None] * (fn.max_args - len(values))
+    set_at = [i for i, v in enumerate(vals) if v is not None]
+    last = max(set_at + [fn.min_args - 1])
+    args = []
+    for i in range(last + 1):
+        p, v = fn.params[i], vals[i]
+        if v is None and i >= fn.min_args:
+            args.append(f"CAST({p.default} AS {sql_type(p.session[0])})")
+        else:
+            args.append(_sql_literal(v, p))
+    spark = _active()
+    ensure(spark, sql_name)
+    return spark.sql(f"SELECT * FROM {sql_name}({', '.join(args)})")
+
+
 def table_by(df, sql_name: str, *values):
     """The table function ``sql_name`` over ``df`` as its table argument, partitioned by the function's key:
     ``SELECT * FROM sql_name(TABLE(SELECT <its columns> FROM df) PARTITION BY (<key>), values...)``.

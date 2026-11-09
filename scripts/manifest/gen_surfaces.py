@@ -32,6 +32,7 @@ SURFACE_KEYS = (
     "availability",
     "examples",
     "counts",
+    "drivers",
 )
 _MACHINE_PATH = re.compile(r"/(Users|home|root)/[A-Za-z0-9_.-]+")
 _TIER_LINE = re.compile(r"^<Tier [^>]*/>( *<Impl [^>]*/>)?\n", re.M)
@@ -173,6 +174,13 @@ def plan(only: Optional[str] = None) -> Dict[Path, str]:
         )
     if want("examples"):
         out[EXAMPLES] = EXAMPLES_HEADER + S.render_examples(man)
+    if want("drivers"):
+        page = REPO / "docs/docs/gdal-drivers.mdx"
+        out[page] = S.replace_region(
+            read(page),
+            *S.mdx_markers("drivers"),
+            S.render_drivers_table(json.loads(read(S.DRIVERS_SNAPSHOT))),
+        )
     if want("counts"):
         readme = REPO / "README.md"
         out[readme] = S.replace_region(

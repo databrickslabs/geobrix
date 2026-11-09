@@ -1,0 +1,74 @@
+---
+sidebar_position: 11
+title: General Function Reference
+---
+
+import FunctionExamples from '@site/src/components/FunctionExamples';
+import Surfaces from '@site/src/components/Surfaces';
+import { Impl } from '@site/src/components/Impl';
+import driversSqlCode from '!!raw-loader!../../tests/python/api/drivers_functions_sql.py';
+import driversPythonCode from '!!raw-loader!../../tests/python/api/drivers_functions_python_light.py';
+
+# General Function Reference
+
+Functions that belong to no one package. They describe the runtime, not a raster, a grid or a geometry.
+
+:::note Import path
+`databricks.labs.gbx.drivers.functions` (Python). In SQL the name is `gbx_drivers`. See [Surfaces and levels](./execution-tiers) for how GeoBrix picks the implementation.
+:::
+
+## Listing GDAL drivers
+
+`gbx_drivers` lists the GDAL drivers that the current environment can run, one row per driver.
+It answers which formats this runtime reads and writes, which are raster or vector, and whether GeoBrix allows them.
+The rows come from GDAL as it runs now, so they change if you add or remove packages.
+The [as-provided list](../gdal-drivers) shows the drivers that the env wheel ships.
+
+### drivers
+
+{/* BEGIN GENERATED gbx_drivers: edit manifest/functions.json, then run gbx:manifest:gen */}
+<Surfaces session python />
+
+| Surface | Call | Returns |
+|---|---|---|
+| SQL (session) | `gbx_drivers([kind])` | rows |
+| Python | `drivers.functions.drivers(kind=None)` | DataFrame |
+
+Rows: `driver` `STRING`, `description` `STRING`, `raster` `BOOLEAN`, `vector` `BOOLEAN`, `read` `BOOLEAN`, `write` `BOOLEAN`, `extensions` `ARRAY<STRING>`, `allowed` `BOOLEAN`, `tile_bytes` `BOOLEAN`, `available` `BOOLEAN`, `requires` `STRING`, `shipped` `BOOLEAN`, `help_url` `STRING`.
+
+| Parameter | SQL type | Default | Description |
+|---|---|---|---|
+| `kind` | `STRING` | `NULL` | `'raster'` or `'vector'` keeps only those drivers; NULL lists every driver. |
+{/* END GENERATED gbx_drivers */}
+
+<Impl udtf/>
+
+:::note Implementation
+Powered by GDAL's driver registry, through the env wheel's Python bindings. Without them, the function raises an error that names the env wheel to install.
+:::
+
+Call it as a table function. Pass `'raster'` or `'vector'` to keep one kind, or leave the argument out for every driver.
+
+| Column | Meaning |
+|---|---|
+| `driver` | GDAL's short name for the driver, such as `GTiff` or `ESRI Shapefile`. |
+| `description` | GDAL's long name for the driver. |
+| `raster`, `vector` | Whether the driver handles rasters, vectors, or both (GeoPackage). |
+| `read`, `write` | Whether the driver can open a dataset, and whether it can create or copy one. |
+| `extensions` | The file extensions GDAL associates with the driver. |
+| `allowed` | Whether GeoBrix lets the driver open data. GeoBrix [refuses](../security#7-raster-data-other-principals-can-write) some drivers and does not register them, so they do not appear. |
+| `tile_bytes` | Whether a raster of this driver can be held as the bytes of a tile. |
+| `available` | Whether the driver works as shipped. It is false for a driver that needs a service, a program or a plugin this runtime lacks. |
+| `requires` | What the driver needs that the runtime does not supply, or NULL. A format that reads sidecar files names them here. |
+| `shipped` | Whether the driver is in the env wheel's own build. A false value means a package in this environment added it. |
+| `help_url` | The driver's page on gdal.org, or NULL. |
+
+A driver can be `available` and still list `requires`.
+A shapefile works as shipped, but its `.shx` and `.dbf` files must sit beside the `.shp` file.
+
+<FunctionExamples
+  name="drivers"
+  sql={driversSqlCode}           sqlSource="docs/tests/python/api/drivers_functions_sql.py"
+  python={driversPythonCode}     pythonSource="docs/tests/python/api/drivers_functions_python_light.py"
+  testFile="docs/tests/python/api/test_drivers_functions_python_light.py"
+/>

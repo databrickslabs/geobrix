@@ -1098,6 +1098,68 @@ def bytes_refused_light_names() -> tuple:
     return tuple(manifest.load().gdal.bytes_refused_light_drivers)
 
 
+def driver_verdict(name: str, raster: bool) -> tuple:
+    """``(allowed, tile_bytes)`` of a GDAL driver that is registered here, under this process's policy.
+
+    ``allowed``: GeoBrix lets the driver open data. A raster driver must be in the manifest's allowed class; no driver
+    may be in the refused one. ``tile_bytes``: a raster of that driver can be held as a tile's bytes (an allowed
+    raster driver outside the ``bytes_refused_light`` class). With the policy off nothing is refused, so every
+    driver is allowed and every raster driver holds tile bytes. This is the one place ``gbx_drivers`` reads the
+    policy, so the listing cannot drift from what opens.
+    """
+    if not enabled():
+        return True, bool(raster)
+    allowed = name not in refused_names() and (not raster or name in allowed_names())
+    tile_bytes = bool(raster) and allowed and name not in bytes_refused_light_names()
+    return allowed, tile_bytes
+
+
+# What a driver in the ``bytes_refused_light`` class needs beside the data (it can name other files).
+BYTES_CLASS_REQUIRES = (
+    "other files beside the data, such as a header, a sidecar or a referenced file: "
+    "its bytes alone are not a tile"
+)
+
+# Vector drivers that read a set of files or a folder. GDAL's driver metadata does not say so, so this small map is
+# the one hand-kept list (a test holds every name to a driver of the build). The raster side needs none: its class
+# is the manifest's ``bytes_refused_light``.
+VECTOR_MULTI_FILE = {
+    "ESRI Shapefile": "the .shx and .dbf files beside the .shp file, and the .prj file for the CRS",
+    "MapInfo File": "the .dat, .id and .map files beside the .tab file",
+    "OpenFileGDB": "the whole .gdb folder",
+    "AVCBin": "the whole coverage folder",
+}
+
+
+def driver_requires(name: str, md) -> tuple:
+    """``(requires, usable)`` of a GDAL driver, from its metadata ``md`` (a mapping of GDAL metadata items) and the
+    policy. ``requires`` is the text of what the driver needs that this runtime or the data must supply, or None;
+    ``usable`` is False when the driver cannot work as shipped.
+
+    - A plugin GDAL knows but has not loaded carries ``DMD_PLUGIN_INSTALLATION_MESSAGE``: unusable, and the message
+      is the text.
+    - A driver opened by a connection string (``DMD_CONNECTION_PREFIX``) talks to a service or runs a program that
+      the runtime does not provide: unusable.
+    - A raster driver of the ``bytes_refused_light`` class reads other files beside the data: usable, with the note.
+    - A vector driver in ``VECTOR_MULTI_FILE`` reads a set of files: usable, with the note.
+    """
+    plugin = md.get("DMD_PLUGIN_INSTALLATION_MESSAGE")
+    if plugin:
+        return str(plugin), False
+    prefix = md.get("DMD_CONNECTION_PREFIX")
+    if prefix:
+        return (
+            f"a service or program this runtime does not provide (it opens a connection string "
+            f"that starts with '{prefix}')",
+            False,
+        )
+    if enabled() and "DCAP_RASTER" in md and name in bytes_refused_light_names():
+        return BYTES_CLASS_REQUIRES, True
+    if name in VECTOR_MULTI_FILE:
+        return VECTOR_MULTI_FILE[name], True
+    return None, True
+
+
 def _bytes_refusal(what: str, driver: str) -> DriverPolicyError:
     return DriverPolicyError(
         f"{what}: is a {driver} raster, a format that can name other files, {REFUSED_PHRASE} from tile bytes. "

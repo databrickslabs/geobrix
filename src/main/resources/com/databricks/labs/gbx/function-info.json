@@ -2723,6 +2723,16 @@
       "since": "0.4.0"
     },
     "_package_other": "--- other ---",
+    "gbx_drivers": {
+      "examples": "Examples:\n      > SELECT driver, description, extensions FROM gbx_drivers('vector') WHERE write AND allowed AND available ORDER BY driver;",
+      "usage_args": "[kind]",
+      "description": "List the GDAL drivers this runtime can run, one row per driver, with what each reads, writes and needs.",
+      "surfaces": [
+        "session",
+        "python"
+      ],
+      "since": "0.6.0"
+    },
     "gbx_quadbin_aswkb": {
       "examples": "Examples:\n      > SELECT gbx_quadbin_aswkb(gbx_quadbin_pointascell(-122.4194, 37.7749, 10)) AS wkb;",
       "usage_args": "cell",

@@ -130,6 +130,7 @@ _MODULE_OF_PREFIX = {
     "h3": "gridx.h3",
     "st": "vectorx",
     "pmtiles": "pmtiles",
+    "drivers": "drivers",
 }
 
 

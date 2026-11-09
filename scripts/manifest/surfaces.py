@@ -26,6 +26,7 @@ MODULE_FILES = {
         "gridx.h3",
         "vectorx",
         "pmtiles",
+        "drivers",
     )
 }
 EXTRA_TYPES = {
@@ -53,6 +54,7 @@ SECTION_OF_PREFIX = {
     "h3": "gridx",
     "st": "vectorx",
     "pmtiles": "pmtiles",
+    "drivers": "other",
 }
 BADGE_OF_PREFIX = {
     "rst": "RasterX",
@@ -62,6 +64,7 @@ BADGE_OF_PREFIX = {
     "h3": "GridX",
     "st": "VectorX",
     "pmtiles": "PMTiles",
+    "drivers": "General",
 }
 
 
@@ -109,7 +112,7 @@ def _docstring(fn, extras, group=None) -> List[str]:
                 8,
             )
             out += ["        " + lines[0]] + ["            " + x for x in lines[1:]]
-        elif fn.kind == "generator":
+        elif fn.kind == "generator" and not fn.source:
             out.append(
                 "        df: The input DataFrame; each row is joined with the rows generated from it."
             )
@@ -158,11 +161,11 @@ def render_python_entry(fn) -> str:
 
     py = fn.python
     extras = PY_EXTRAS[py.extras] if py.extras else ()
-    sig = ["df: DataFrame"] if fn.kind == "generator" else []
+    sig = ["df: DataFrame"] if fn.kind == "generator" and not fn.source else []
     # a table function's first parameter is its table argument, which `df` stands for
     skip = 1 if fn.table_input is not None else 0
     sig += [
-        f"{p.name}: {_py_type(p, fn.table_input is not None)}"
+        f"{p.name}: {_py_type(p, fn.table_input is not None or fn.source)}"
         + ("" if i < fn.min_args else " = None")
         for i, p in enumerate(fn.params)
         if i >= skip
@@ -177,6 +180,8 @@ def render_python_entry(fn) -> str:
     ] + _docstring(fn, extras, py.extras)
     if fn.table_input is not None:
         lines += _call("_api.table_by", ["df", f'"{fn.sql_name}"', *names], 4)
+    elif fn.source:
+        lines += _call("_api.source", [f'"{fn.sql_name}"', *names], 4)
     elif fn.kind == "generator":
         lines += _call("_api.table", ["df", f'"{fn.sql_name}"', *names], 4)
     else:
@@ -220,7 +225,7 @@ def _sqltype(t: Optional[str]) -> str:
 def _py_usage(fn) -> str:
     from databricks.labs.gbx.manifest import PY_EXTRAS
 
-    parts = ["df"] if fn.kind == "generator" else []
+    parts = ["df"] if fn.kind == "generator" and not fn.source else []
     skip = 1 if fn.table_input is not None else 0
     parts += [
         p.name if i < fn.min_args else f"{p.name}=None"
@@ -475,6 +480,13 @@ def example_sql(fn, case) -> str:
             )
         args = [f"c{i}" for i in range(n0)] + consts
         return f"SELECT {fn.sql_name}({', '.join(args)}) AS out FROM gbx_example"
+    if fn.source:  # a table function with no input row: its arguments are constants
+        consts = [_literal(a, fn.params[i]) for i, a in enumerate(case.args)]
+        if None in consts:
+            raise ValueError(
+                f"{fn.sql_name}: oracle row {case.cid!r} has an argument that is not a literal"
+            )
+        return f"SELECT * FROM {fn.sql_name}({', '.join(consts)})"
     args, uses_view = [], False
     for i, a in enumerate(case.args[: len(fn.params)]):
         lit = _literal(a, fn.params[i])
@@ -640,7 +652,7 @@ def render_counts_md(man) -> str:
         label = BADGE_OF_PREFIX[n.split("_")[1]]
         count[label] = count.get(label, 0) + 1
     lines = []
-    for k in ("Functions", "RasterX", "GridX", "VectorX", "PMTiles"):
+    for k in ("Functions", "RasterX", "GridX", "VectorX", "PMTiles", "General"):
         if k in count:
             slug, colour = (
                 ("functions", "2e7d32") if k == "Functions" else (k, "1565c0")
@@ -661,3 +673,43 @@ def render_counts_mdx(man) -> str:
         f"GridX's {sum(by.values())} functions break down as **BNG ({by['bng']})**, **Quadbin ({by['quadbin']})**, "
         f"**custom grids ({by['custom']})**, and **H3 ({by['h3']})**.\n"
     )
+
+
+DRIVERS_SNAPSHOT = PKG / "manifest/shipped_drivers.json"
+
+
+def _mdx_cell(text) -> str:
+    """Text for a table cell in MDX: the characters MDX or the table would read as markup are escaped."""
+    out = str(text) if text else ""
+    for a, b in (("|", "\\|"), ("{", "&#123;"), ("}", "&#125;"), ("<", "&lt;"), (">", "&gt;")):
+        out = out.replace(a, b)
+    return out
+
+
+def render_drivers_table(snapshot: dict) -> str:
+    """The as-provided driver table of docs/docs/gdal-drivers.mdx, from the committed snapshot of the env wheel's
+    own build (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py)."""
+    yes = "✓"
+    rows = [
+        "| Driver | Description | Kind | Read | Write | Tile bytes | Available | Requires |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for d in snapshot["drivers"]:
+        kind = " and ".join(k for k in ("raster", "vector") if d[k]) or "multidimensional"
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{d['driver']}`",
+                    _mdx_cell(d["description"]),
+                    kind,
+                    yes if d["read"] else "",
+                    yes if d["write"] else "",
+                    yes if d["tile_bytes"] else "",
+                    yes if d["available"] else "no",
+                    _mdx_cell(d["requires"]),
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(rows) + "\n"

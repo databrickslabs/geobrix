@@ -25,6 +25,10 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 
 Set `GBX_ORACLE_TABLES` in the calling shell to run only those oracle tables in the family harness (`python/geobrix/test/manager/test_family_cross_tier.py`), for example `GBX_ORACLE_TABLES=GRID_SCALAR,GRID_ARRAY`. The command passes it into the container unchanged, in the `--path` run and in each phase. Unset, nothing is passed and the harness runs every table.
 
+## Driver snapshot
+
+Set `GBX_DRIVERS_SNAPSHOT=write` (with `GBX_NATIVE_ROOT` at the env6 payload) to rewrite `manifest/shipped_drivers.json` from that payload's GDAL, in `python/geobrix/test/core/test_drivers.py`. The command passes it into the container. Run `gbx:manifest:gen --write` afterwards: it renders the docs table from the snapshot.
+
 ## Pytest options
 
 `PYTEST_ADDOPTS` in the calling shell (`--durations=20`, `--junitxml=...`) is passed into the container's pytest, in the `--path` run and in each phase, as `gbx:test:pyrx` does.

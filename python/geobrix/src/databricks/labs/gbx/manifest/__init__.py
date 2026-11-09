@@ -166,6 +166,7 @@ PACKAGE_OF_PREFIX = {
     "h3": "gridx.h3",
     "st": "vectorx",
     "pmtiles": "pmtiles",
+    "drivers": "drivers",
 }
 # How the Python API reads a bare str for a parameter: a column name, or a literal (a CRS, a unit, a mode).
 # `col_null` reads a str as a column too, and sends None as an UNTYPED NULL: where a typed NULL and an untyped one mean
@@ -830,6 +831,9 @@ class Function:
     # The Fix text of a row with no UC function (an L4 spec holding only `stub`): the row has no L4 level, so no UC
     # surface; `gbx.uc.install(..., stubs=True)` makes a raising SQL function of it (scalars only).
     stub: Optional[str] = None
+    # A generator that reads no input row: it is called as `SELECT * FROM fn(args)`, and the Python entry takes the
+    # arguments alone (no DataFrame). Its arguments are constants.
+    source: bool = False
 
     @property
     def max_args(self) -> int:
@@ -976,7 +980,14 @@ def parse(raw: Mapping) -> Manifest:
                 else None
             ),
             stub,
+            bool(r.get("source")),
         )
+        if fns[r["sql_name"]].source and (
+            r["kind"] != "generator" or r.get("table_input")
+        ):
+            raise ValueError(
+                f"{r['sql_name']}: source applies to a generator with no table_input"
+            )
     return Manifest(
         MappingProxyType(fns),
         MappingProxyType(dict(raw["uc_dependencies"])),

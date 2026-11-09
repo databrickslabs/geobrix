@@ -344,15 +344,15 @@ def _backproject_image(
 
 
 def _import_pycolmap():
-    """Lazily import pycolmap, raising a clear error when the photogrammetry
-    extra is not installed. Never imported at module top — this module must
+    """Lazily import pycolmap, raising a clear error when it is not installed. Never imported at module top — this module must
     import cleanly with no optional dependency."""
     try:
         import pycolmap
     except ImportError as exc:
         raise ImportError(
             "rasterx.ortho.place_clusters_shared_enu requires pycolmap "
-            "(install the photogrammetry extra)"
+            "(install it as a separate step after the env wheel: pip install pycolmap, "
+            "or pycolmap-cuda12 on Serverless GPU environment 5)"
         ) from exc
     return pycolmap
 

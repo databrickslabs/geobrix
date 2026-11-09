@@ -84,8 +84,8 @@ class EarthdataClient:
         except ImportError as exc:
             raise ImportError(
                 "earthaccess is required for the NASA Earthdata / EMIT client. "
-                "Install it: pip install 'earthaccess>=0.11,<1' 'botocore<1.44.0' after the env wheel "
-                "(on Databricks), or the plain wheel's geobrix[earthdata] extra (off Databricks)."
+                "Install it as a separate step after the env wheel: "
+                "pip install 'earthaccess>=0.11,<1' 'botocore<1.44.0'."
             ) from exc
         return earthaccess
 

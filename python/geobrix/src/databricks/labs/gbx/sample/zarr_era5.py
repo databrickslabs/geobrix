@@ -32,10 +32,10 @@ is written block by block, never held in memory, so it can be as big as the disk
 noise is drawn per variable and hour, so a block holds the same numbers whatever surrounds it). With no
 argument the call is the one above, file for file.
 
-Needs ``xarray`` and ``zarr`` (the ``zarr_dbr19`` or ``zarr_env6`` extra). The synthetic
-fields come from ``databricks.labs.gbx.zarr._testing``, which ships in the wheel for this
-module, the Zarr tests and the bench harness: keep ``era5_like_dataset`` and
-``make_era5_like`` there (``test_zarr_era5`` fails if they go).
+Needs ``xarray`` and ``zarr`` (the env6 wheel's ``zarr`` extra, or ``zarr_dbr19`` in the
+development loop). The synthetic fields come from ``databricks.labs.gbx.zarr._testing``,
+which ships in the wheel for this module, the Zarr tests and the bench harness: keep
+``era5_like_dataset`` and ``make_era5_like`` there (``test_zarr_era5`` fails if they go).
 """
 
 from __future__ import annotations

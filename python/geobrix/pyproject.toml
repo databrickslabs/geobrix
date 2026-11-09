@@ -24,22 +24,23 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     'Operating System :: OS Independent'
 ]
-# This is the plain wheel, for use OFF Databricks: a laptop, a non-Linux machine, another Python, a
-# GDAL you bring yourself. On Databricks install the env wheel for the runtime instead
-# (geobrix-<version>+env5 for DBR 17.3 / 18, Serverless environment 5 and Lakeflow pipelines;
-# geobrix-<version>+env6 for DBR 19, Serverless environment 6, SQL warehouses and UC functions):
-# it carries one GDAL stack built for it and holds the runtime's preinstalled packages.
+# This is the plain wheel. It exists only for GeoBrix's own development loop: the host venv's
+# editable install (gbx:venv:sync), the dev container, and CI tooling. It is not a user install and
+# is not a release asset. Users run GeoBrix on Databricks and install the env wheel for the
+# runtime instead (geobrix-<version>+env5 for DBR 17.3 / 18, Serverless environment 5 and Lakeflow
+# pipelines; geobrix-<version>+env6 for DBR 19, Serverless environment 6, SQL warehouses and UC
+# functions): it carries one GDAL stack built for it and holds the runtime's preinstalled packages.
 #
-# The base dependencies are the light tier, so `pip install geobrix` gives a working light tier.
-# Floors only, no caps: off Databricks there is no preinstalled base to hold, and a cap only
+# The base dependencies are the light tier, so the editable install gives the dev loop a working
+# light tier. Floors only, no caps: the dev loop has no preinstalled base to hold, and a cap only
 # turns a newer release into a resolution failure. rasterio, pyogrio, pyproj, shapely and
 # netCDF4 bring their own GDAL / PROJ / GEOS builds from PyPI here.
 #
 # PySpark is NOT a base dependency. Every supported runtime provides its own (DBR 17.3/18/19
 # classic ship it on /databricks/spark/python; Serverless env 5/6 and Lakeflow pipelines register
 # a Spark Connect pyspark), and a declared `pyspark` made `%pip install geobrix[...]` download
-# ~450 MB of OSS PySpark on Connect-based compute for nothing. Local/OSS Spark users install
-# PySpark (4.0.0 or newer) themselves; the [test] extra carries it for tests and local runs.
+# ~450 MB of OSS PySpark on Connect-based compute for nothing. The dev loop gets PySpark (4.0.0 or
+# newer) from its locks; the [test] extra carries it for tests and local runs.
 dependencies = [
     "rasterio>=1.3.0",
     "shapely>=2.1.0",
@@ -136,10 +137,11 @@ light_env6 = ["geobrix==0.6.0+env6"]
 light_dbr19_all = ["geobrix==0.6.0+env6"]
 light_env6_all = ["geobrix==0.6.0+env6"]
 # ---------------------------------------------------------------------------
-# Zarr transactional stores (gbx.zarr). Canonical body: zarr_dbr19. Alias: zarr_env6. On
-# Databricks the env6 wheel's [zarr] carries these pins (DBR 19, DBR 19 ML, Serverless env 6):
+# Zarr transactional stores (gbx.zarr). Canonical body: zarr_dbr19. Alias: zarr_env6. Dev loop
+# only: the dev container installs zarr_dbr19 (ensure_zarr_extra in scripts/commands/common.sh) and
+# the light CI all-features lock compiles `.[stac,vizx,zarr_dbr19]`. On Databricks the env6
+# wheel's [zarr] carries these pins (DBR 19, DBR 19 ML, Serverless env 6; envs/env6/extra-zarr.txt):
 #   pip install "geobrix[zarr] @ file:///Volumes/.../geobrix-<version>+env6-py3-none-any.whl"
-# Off Databricks: pip install "geobrix[zarr_dbr19]".
 #
 # Source of the pins: the per-runtime dependency report (2026-10-21), which reads the package
 # tables of the DBR 19, Serverless env 6 and DBR 19 ML release notes. Its result: the pins
@@ -200,21 +202,8 @@ zarr_env6 = ["geobrix[zarr_dbr19]"]
 databricks = [
     "databricks-sdk",
 ]
-# Overture Maps data source (gbx.sample.overture): static-STAC catalog traversal.
-# pystac is the static-catalog reader; pyarrow (a base dependency) does the parquet read; the
-# overturemaps CLI, when installed, is the bbox fast path.
-# overturemaps 1.x requires click>=8.3.0 and tqdm>=4.67.3, so on Databricks it moves preinstalled
-# packages (click 8.1.7-8.2.1 -> 8.5.0 on every runtime; tqdm 4.67.1 -> 4.70.1 on DBR 18/19 and
-# env 5/6, newly installed on DBR 17.3) and it requires shapely by name. The env wheels therefore
-# have no [overture]: there it is a separate `pip install "overturemaps>=1.0.2,<2"` step with
-# those costs (pystac is already an env wheel dependency).
-# The >=1.0.2 floor fences out 1.0.0 and 1.0.1, which predate the fix for absolute STAC catalog hrefs.
-overture = [
-    "pystac>=1.9,<2",
-    "overturemaps>=1.0.2,<2",
-]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.
-# Optional, so users who don't need STAC don't pull pystac-client/planetary-computer.
+# Dev loop: the light CI all-features lock compiles it (`.[stac,vizx]`).
 # The env wheels' [stac] holds the runtime's requests instead (envs/env<N>/extra-stac.txt).
 stac = [
     "pystac-client>=0.7,<1",
@@ -222,22 +211,10 @@ stac = [
     "tenacity>=8,<10",
     "requests>=2.34.2",
 ]
-# NASA Earthdata / LP DAAC client (gbx.earthdata) + the EMIT CH4 sample downloader
-# (gbx.sample.emit). earthaccess pulls s3fs, which ties fsspec+botocore to one release era
-# and CANNOT be installed quietly against a Databricks base carrying old fsspec (2023.5.0) +
-# new botocore (1.40.45): installing it WILL move fsspec (and/or botocore/urllib3). The env
-# wheels therefore have no [earthdata]: there it is a separate
-# `pip install "earthaccess>=0.11,<1" "botocore<1.44.0"` step, and it moves fsspec.
-earthdata = [
-    "earthaccess>=0.11,<1",
-    # earthaccess -> s3fs -> aiobotocore -> botocore. Ceiling <1.44.0 spans supported
-    # bases without forcing botocore above the pre-installed boto3's own floor.
-    "botocore<1.44.0",
-]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based
-# tile simplification.  Optional so light-tier users who don't visualize don't
-# pull the GUI stack.  Package code imports only matplotlib + geopandas at
+# tile simplification.  Dev loop: the light CI all-features lock compiles it
+# (`.[stac,vizx]`).  Package code imports only matplotlib + geopandas at
 # module level; anywidget, tippecanoe, and mapclassify are optional at call time.
 vizx = [
     "matplotlib>=3.7,<4",
@@ -248,24 +225,6 @@ vizx = [
     "tippecanoe>=2.72.0,<3",
     "imageio>=2.28,<3",
     "imageio-ffmpeg>=0.4,<2",
-]
-# Photogrammetry (example-only): COLMAP SfM + ortho render deps. Not a base dependency.
-# On Databricks the env wheel already carries rasterio and pmtiles: there, install pycolmap
-# (or pycolmap-cuda12 on Serverless GPU environment 5) as a separate step.
-photogrammetry = [
-    "pycolmap==4.2.1",
-    "rasterio>=1.3",
-    "pmtiles",
-]
-# Model-backed raster inference (gbx.models): GeoSAM (segment-geospatial / SamGeo)
-# segmentation + Unity Catalog model serving. CPU-importable surface only -- torch and
-# segment-geospatial are imported lazily inside gbx.models (see geosam.py/__init__.py),
-# so importing the package never requires a GPU-capable torch build. The plain
-# `segment-geospatial` PyPI wheel already pulls its own default
-# torch/torchvision/segment-anything/rasterio/shapely closure. On Serverless GPU environment 5,
-# install the env5 wheel and the CUDA-12-pinned GeoSAM packages instead (see the GPU tripwires).
-models = [
-    "segment-geospatial",
 ]
 # ---------------------------------------------------------------------------
 # The 0.5.x GPU extras are TRIPWIRES too, like the light_* names above: each requires the env5

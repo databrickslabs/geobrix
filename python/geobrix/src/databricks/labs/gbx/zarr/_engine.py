@@ -64,7 +64,7 @@ _IO_MEMORY_SHARE = 2  # the budget bounds the threads' chunks to 1 / this
 _RAYON_ENV = "RAYON_NUM_THREADS"
 _INSTALL_FIX = (
     "install the Zarr extra: [zarr] of the env6 wheel on DBR 19 and Serverless environment 6 "
-    '("geobrix[zarr] @ <the +env6 wheel>"), or geobrix[zarr_dbr19] off Databricks'
+    '("geobrix[zarr] @ <the +env6 wheel>"); the development loop installs geobrix[zarr_dbr19]'
 )
 
 

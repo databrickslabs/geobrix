@@ -143,7 +143,7 @@ def test_download_marks_missing_invalid(spark, tmp_path):
     assert r["out_file_path"] is None
 
 
-def test_missing_earthaccess_names_the_extra(monkeypatch):
+def test_missing_earthaccess_names_the_package_and_separate_step(monkeypatch):
     import builtins
 
     real_import = builtins.__import__
@@ -156,5 +156,6 @@ def test_missing_earthaccess_names_the_extra(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     from databricks.labs.gbx.earthdata.client import EarthdataClient
 
-    with pytest.raises(ImportError, match=r"geobrix\[earthdata\]"):
+    with pytest.raises(ImportError, match=r"separate step.*pip install 'earthaccess") as exc:
         EarthdataClient()._ea()  # accessor that imports earthaccess
+    assert "geobrix[earthdata]" not in str(exc.value)  # the extra no longer exists

@@ -202,7 +202,7 @@ The raster reader returns virtual tiles by default. With `virtualTiles=false` it
 
 The table shows the last full ladder on a dedicated cluster. The tiles are 1024 by 1024 GeoTIFF. The unit is seconds. Lower is faster.
 
-{/* refresh: Task 29 */}
+{/* refresh: the measured performance matrix */}
 
 | Form | 1,000 tiles | 4,000 tiles | 10,000 tiles |
 |---|---|---|---|
@@ -337,7 +337,7 @@ The `pmtiles_agg` aggregate folds a group of `(tile, z, x, y)` rows into one arc
 
 The vector readers run on a scaled corpus. It holds five files of 1,000,000 features each, about 5 million polygons per format. The benchmark reads them from a Volume into a Delta table, one measured iteration per format. Cluster: DBR 17.3 LTS. Run it with `gbx:bench:cluster --vector-only --vector-scale`.
 
-{/* refresh: Task 29 */}
+{/* refresh: the measured performance matrix */}
 
 | Format | Rows | `*_gbx` reader |
 |---|---|---|
@@ -353,7 +353,7 @@ The readers are Arrow-native: columnar `pyogrio` batches, with no per-row Python
 
 The vector writers are all `*_gbx` writers. Each single-file writer writes a 14,000,000-feature Delta table to one file. The two-phase writer merges the partition fragments on the driver. Run it with `gbx:bench:cluster --vector-only --vector-scale --vector-legs writer --writer-rows 14000000`.
 
-{/* refresh: Task 29 */}
+{/* refresh: the measured performance matrix */}
 
 | Format | Rows | Time | Throughput |
 |---|---|---|---|

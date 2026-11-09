@@ -112,7 +112,7 @@ A Unity Catalog function runs on a SQL warehouse or any compute that reads the c
 
 A Scala function that needs GDAL is not proven on Unity Catalog. GeoBrix does not offer GDAL raster functions on Unity Catalog with the JAR.
 
-{/* refresh: Task 29 */}
+{/* refresh: the measured performance matrix */}
 
 | Measure | Result |
 |---|---|
@@ -147,7 +147,7 @@ The array form, `gbx_rst_combineavg(collect_list(tile))` and the six other `gbx_
 
 `combine_by_key` and `merge_by_key` (in `rasterx.helpers`) shuffle by key and fold each group once. `merge_by_key` hands each tile to the merge as it arrives, so a key's memory does not follow its tile count. It shuffles with `repartition(N, keys)`, where `N` is `num_partitions` or the session's task slots (at least 64). At 1,000 groups on dedicated compute:
 
-{/* refresh: Task 29 */}
+{/* refresh: the measured performance matrix */}
 
 | Route | Merge | Combine |
 |---|---|---|

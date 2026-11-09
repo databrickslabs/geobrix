@@ -265,6 +265,27 @@ OPEN_SITES = {
         1,
         "converts the dataset object the OpenEx just above opened (allowed drivers only); no name is opened here",
     ),
+    (
+        "engine/run.py",
+        'sds = gdal.OpenEx(src, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=["GTiff"])',
+    ): (
+        1,
+        "the aspect re-mask reads the engine's input, a /vsimem GeoTIFF (the caller's GeoTIFF bytes, or the "
+        "GeoTIFF the conversion above wrote); allowed_drivers names GTiff only",
+    ),
+    (
+        "engine/run.py",
+        'ods = gdal.OpenEx(out, gdal.OF_RASTER | gdal.OF_UPDATE, allowed_drivers=["GTiff"])',
+    ): (
+        1,
+        "the aspect re-mask updates the engine's own output, the /vsimem GeoTIFF the GDAL run just wrote; "
+        "allowed_drivers names GTiff only",
+    ),
+    ("bench/oracle_tables/spec_calc.py", "gdal.BuildVRT(vrt, [tif]).FlushCache()"): (
+        1,
+        "the calc_bands_vrt fixture: a VRT over the GeoTIFF `_calc_file` wrote a line above, in the builder's scratch "
+        "directory (GeoBrix's own fixture, never user data)",
+    ),
     ("pyrx/core/analysis.py", '_rio_shutil.copy(ds, dem_path, driver="GTiff")'): (
         1,
         "copies the DEM from the dataset the caller opened (through open_data or open_bytes); no name is opened here",

@@ -115,8 +115,9 @@ def _calc_bands_vrt(tmpdir):
     """A VRT over that file: a virtual tile of another driver."""
     import os
 
-    from osgeo import gdal
+    from databricks.labs.gbx import _osgeo
 
+    gdal = _osgeo.bindings("the calc_bands_vrt fixture").gdal
     vrt, tif = os.path.join(tmpdir, "calc_bands.vrt"), _calc_file(tmpdir)
     gdal.BuildVRT(vrt, [tif]).FlushCache()
     with open(

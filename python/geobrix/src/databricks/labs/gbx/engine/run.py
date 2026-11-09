@@ -305,7 +305,7 @@ def _remask_zero_for_flat(gdal, src: str, out: str) -> None:
     and its 8 neighbours are data (not the NoData value, not NaN or infinite)."""
     import numpy as np
 
-    sds = gdal.Open(src)
+    sds = gdal.OpenEx(src, gdal.OF_RASTER | gdal.OF_READONLY, allowed_drivers=["GTiff"])
     band = sds.GetRasterBand(1)
     w, h = sds.RasterXSize, sds.RasterYSize
     z = np.frombuffer(
@@ -321,7 +321,7 @@ def _remask_zero_for_flat(gdal, src: str, out: str) -> None:
             for dx in range(3):
                 inner &= valid[dy : h - 2 + dy, dx : w - 2 + dx]
         invalid[1:-1, 1:-1] = ~inner
-    ods = gdal.Open(out, gdal.GA_Update)
+    ods = gdal.OpenEx(out, gdal.OF_RASTER | gdal.OF_UPDATE, allowed_drivers=["GTiff"])
     ob = ods.GetRasterBand(1)
     a = np.frombuffer(
         ob.ReadRaster(0, 0, w, h, buf_type=gdal.GDT_Float32), dtype="<f4"

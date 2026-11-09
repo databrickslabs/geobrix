@@ -691,8 +691,8 @@ def render_drivers_table(snapshot: dict) -> str:
     own build (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py)."""
     yes = "✓"
     rows = [
-        "| Driver | Description | Kind | Read | Write | Tile bytes | Available | Requires |",
-        "|---|---|---|---|---|---|---|---|",
+        "| Driver | Description | Kind | Read | Write | Tile bytes | Available | Requires | GeoBrix built-in |",
+        "|---|---|---|---|---|---|---|---|---|",
     ]
     for d in snapshot["drivers"]:
         kind = " and ".join(k for k in ("raster", "vector") if d[k]) or "multidimensional"
@@ -708,6 +708,7 @@ def render_drivers_table(snapshot: dict) -> str:
                     yes if d["tile_bytes"] else "",
                     yes if d["available"] else "no",
                     _mdx_cell(d["requires"]),
+                    _mdx_cell(d.get("built_in")),
                 ]
             )
             + " |"

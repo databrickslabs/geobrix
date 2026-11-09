@@ -77,6 +77,7 @@ def test_a_raster_driver_row_carries_gdals_flags_and_the_policy():
         "available": True,
         "requires": None,
         "shipped": True,
+        "built_in": None,
         "help_url": "https://gdal.org/drivers/raster/aaigrid.html",
     }
 
@@ -260,3 +261,39 @@ def test_a_refused_driver_is_not_registered_in_the_full_mode():
         pytest.skip("the policy is not in the full mode here")
     names = {r["driver"] for r in listing.driver_rows(gdal)}
     assert not names & set(_gdal_policy.refused_names())
+
+
+# --- the formats GeoBrix handles without the GDAL driver ------------------------------------------------------------
+
+
+def test_a_driver_with_a_built_in_path_carries_its_note():
+    row = listing.driver_row(FakeDriver("Zarr", DCAP_RASTER="YES", DCAP_OPEN="YES"))
+    assert row["built_in"] == listing.BUILT_IN["Zarr"]
+    assert (
+        listing.driver_row(FakeDriver("GTiff", DCAP_RASTER="YES"))["built_in"] is None
+    )
+
+
+def test_the_built_in_notes_name_drivers_of_the_build_and_readers_of_the_manifest():
+    from databricks.labs.gbx import manifest
+
+    registered = {
+        r["driver"] for r in json.loads(listing.SNAPSHOT.read_text())["drivers"]
+    }
+    assert set(listing.BUILT_IN) <= registered
+    readers = {d.name for d in manifest.load().datasources}
+    functions = set(manifest.load().functions)
+    # every `name_gbx` or `gbx_name` a note mentions exists
+    import re
+
+    for note in listing.BUILT_IN.values():
+        for token in re.findall(r"\b\w+_gbx\b|\bgbx_\w+\b", note):
+            assert token in readers or token in functions, (token, note)
+    # a format the notes cover is not marked in a driver the build reaches through rasterio or pyogrio alone
+    assert not {"GTiff", "COG", "GeoJSON", "GPKG", "ESRI Shapefile"} & set(
+        listing.BUILT_IN
+    )
+    for note in listing.BUILT_IN.values():
+        assert len(note.split(".")) >= 2 and all(
+            len(s.split()) <= 25 for s in note.split(". ")
+        )

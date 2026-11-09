@@ -38,11 +38,27 @@ COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("available", "BOOLEAN"),
     ("requires", "STRING"),
     ("shipped", "BOOLEAN"),
+    ("built_in", "STRING"),
     ("help_url", "STRING"),
 )
 # The columns the snapshot holds: every one but `shipped` (which is read from it).
 SNAPSHOT_COLUMNS = tuple(n for n, _ in COLUMNS if n != "shipped")
 _DDL = ", ".join(f"{n}: {t.lower()}" for n, t in COLUMNS)
+
+
+# Formats GeoBrix's own readers and writers handle without the GDAL driver of the same name. One short note per driver,
+# each held to the source: the Zarr package and its engines (zarr/_engine.py), xarray with netCDF4 (ds/_netcdf.py,
+# ds/_write_netcdf.py), the pmtiles package (ds/_pmtiles_read.py, pmtiles/_agg_light.py), mapbox-vector-tile
+# (pyvx/_mvt.py) and Pillow with exifread (ds/exif.py). A driver reached through rasterio or pyogrio is not listed.
+# GDAL has no LAS driver, so the LAS and LAZ reader (laspy) has no row. `test_drivers.py` holds the names and the
+# readers the notes mention to the build and the manifest.
+BUILT_IN = {
+    "Zarr": "The Zarr readers and writers use the zarr package, not this driver.",
+    "netCDF": "`netcdf_gbx` reads with xarray and writes with netCDF4. The COG writer and raster functions that open a netCDF file use this driver.",
+    "PMTiles": "`pmtiles_gbx` and `gbx_pmtiles_agg` use the pmtiles package, not this driver.",
+    "MVT": "`gbx_st_asmvt` and `gbx_st_asmvt_pyramid` encode with mapbox-vector-tile, not this driver.",
+    "JPEG": "`exif_gbx` reads image metadata with Pillow and exifread, not this driver.",
+}
 
 
 def check_kind(kind: Optional[str]) -> Optional[str]:
@@ -96,6 +112,7 @@ def driver_row(drv, shipped: Optional[frozenset] = None) -> Dict[str, Any]:
         "available": allowed and usable,
         "requires": requires,
         "shipped": None if shipped is None else name in shipped,
+        "built_in": BUILT_IN.get(name),
         "help_url": help_url(md.get("DMD_HELPTOPIC")),
     }
 

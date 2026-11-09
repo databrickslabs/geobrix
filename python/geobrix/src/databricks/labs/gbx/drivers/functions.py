@@ -51,7 +51,8 @@ def drivers(
         the driver, `tile_bytes` whether a raster can be held as tile bytes, and
         `available` whether it works as shipped. `requires` names what is missing or
         needed beside the data, `shipped` marks drivers in the env wheel's own build,
-        and `help_url` links GDAL's page.
+        `built_in` names a GeoBrix reader that skips the driver, and `help_url` links
+        GDAL's page.
 
     SQL: ``gbx_drivers([kind])``
     """

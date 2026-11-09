@@ -39,6 +39,12 @@ _RASTER = {
         "write": True,
         "tile_bytes": True,
         "shipped": True,
+        "built_in": None,
+    },
+    # GeoBrix's own Zarr reader and writer use the zarr package
+    "Zarr": {
+        "raster": True,
+        "built_in": "The Zarr readers and writers use the zarr package, not this driver.",
     },
     # a driver that reads a header file beside the data: allowed, but not a tile's bytes
     "ENVI": {"allowed": True, "tile_bytes": False, "available": True},

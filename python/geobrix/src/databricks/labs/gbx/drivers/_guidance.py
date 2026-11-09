@@ -133,7 +133,7 @@ GUIDANCE: Dict[str, Dict[str, object]] = {
         "links": (("Vector reader", "readers/vector"),),
     },
     "CSV": {
-        "text": "Read CSV with Databricks' native CSV support, `read_files`. Then build geometries with the ST functions: `st_point` for X and Y columns, `st_geomfromtext` for WKT.",
+        "text": "Do not read CSV through this driver or `vector_gbx`. Use Databricks' native CSV reader, `read_files`, then `st_point` for X and Y columns or `st_geomfromtext` for WKT.",
         "links": (
             ("Read CSV files", "https://docs.databricks.com/aws/en/query/formats/csv"),
             (

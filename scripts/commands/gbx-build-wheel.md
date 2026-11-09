@@ -104,7 +104,7 @@ The report is `build/env-wheel/env<N>/verify-<arch>.txt`; the last line is `ENV_
 
 ## Release: building and attaching the env wheels
 
-The env wheels are the wheels users install (`docs/docs/installation.mdx` tells them to download `+env6` from the GitHub release). They are not built by the `package geobrix artifacts` workflow: an env wheel carries both architectures' native payload, CI builds the native stack on x86_64 only (`build-gdal-native.yml`), and the wheel build and `--verify both` run in each architecture's toolchain image (aarch64 natively). So the release owner builds and attaches them from an Apple Silicon machine, after that workflow ran with `attach_to_tag` set. The plain wheel (`python/geobrix/pyproject.toml`) is the development loop's editable install and is not a release asset.
+The env wheels are the wheels users install (`docs/docs/installation.mdx` tells them to download `+env6` from the GitHub release). The `package geobrix artifacts` workflow does not build them. An env wheel carries both architectures' native payload. CI builds the native stack on x86_64 only (`build-gdal-native.yml`). The wheel build and `--verify both` run in each architecture's toolchain image, aarch64 natively. So the release owner builds and attaches them from an Apple Silicon machine, after that workflow ran with `attach_to_tag` set. The plain wheel (`python/geobrix/pyproject.toml`) is the development loop's editable install and is not a release asset.
 
 ```bash
 gh auth switch --user mjohns-databricks
@@ -123,7 +123,7 @@ gh release upload v<version> \
 
 If the release ships the Rust module `_gbxrs`, run `bash scripts/commands/gbx-build-rs.sh --arch both` first and add `--extra-payload build/rs/payload` to both build commands (the `--verify` runs need no flag).
 
-The two native builds are skipped when `build/native/out/<arch>/` already holds trees built from the release commit's native inputs (`python3 scripts/native/native_inputs.py check-stamp` is the quick test; `gbx:native:verify-arches` also checks the trees and wheels are one build).
+The two native builds are skipped when `build/native/out/<arch>/` already holds trees built from the release commit's native inputs. `python3 scripts/native/native_inputs.py check-stamp` is the quick test. `gbx:native:verify-arches` also checks that the trees and wheels are one build.
 
 ## Examples
 

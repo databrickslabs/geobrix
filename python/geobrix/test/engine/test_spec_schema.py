@@ -323,6 +323,8 @@ REFUSED_BLOCKS = [
         _row(write=None),
         "write profile",
     ),
+    ("an in_read outside the vocabulary", _row(in_read="rows"), "rows"),
+    ("a same_crs outside the vocabulary", _row(same_crs="reproject"), "reproject"),
     (
         "a field type outside the vocabulary",
         _row(
@@ -470,3 +472,36 @@ def test_a_file_argument_is_allowed_only_as_a_file_the_engine_writes():
         spec.guard_tokens(
             MAN.gdal, "raster color-map", ["--color-map=/etc/passwd"], files
         )
+
+
+def test_the_read_and_crs_rules_are_the_vocabulary_and_the_warp_rows_use_them():
+    """`in_read` is "factor" and `same_crs` is "keep", and nothing else: the shipped rows say so, and the block that
+    says neither parses with both unset."""
+    assert manifest.GDAL_IN_READS == {"factor"} and manifest.GDAL_SAME_CRS == {"keep"}
+    assert MAN.functions["gbx_rst_resample"].gdal.in_read == "factor"
+    assert {
+        n for n, f in MAN.functions.items() if f.gdal and f.gdal.same_crs == "keep"
+    } == {"gbx_rst_transform", "gbx_rst_to_webmercator"}
+    plain = manifest.parse_gdal_spec(_row())
+    assert plain.in_read is None and plain.same_crs is None
+    kept = manifest.parse_gdal_spec(_row(in_read="factor", same_crs="keep"))
+    assert (kept.in_read, kept.same_crs) == ("factor", "keep")
+
+
+def _with_l3(fn, **over):
+    import dataclasses
+
+    l3 = {**fn.levels["L3"], **over}
+    return dataclasses.replace(fn, levels={**fn.levels, "L3": l3})
+
+
+def test_the_engines_file_form_serves_one_tile_and_needs_the_engine_key():
+    resample = MAN.functions["gbx_rst_resample"]
+    spec.validate(resample, MAN.gdal)
+    algebra = _with_l3(MAN.functions["gbx_rst_mapalgebra"], file_ref="engine")
+    with pytest.raises(spec.SpecError, match="array of tiles"):
+        spec.validate(algebra, MAN.gdal)
+    no_engine = _with_l3(MAN.functions["gbx_rst_slope"], file_ref="engine")
+    no_engine.levels["L3"].pop("engine")
+    with pytest.raises(spec.SpecError, match="'engine' key"):
+        spec.validate(no_engine, MAN.gdal)

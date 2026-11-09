@@ -81,6 +81,15 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
     for param, _kind in block.inputs:
         if param not in params:
             raise SpecError(f"{name}: the input '{param}' is not a parameter")
+    l3 = (fn.levels or {}).get("L3", {})
+    if l3.get("file_ref") == "engine":
+        # the engine's FILE-aware form: one wrapper mints one FILE reference from the one tile argument
+        if "engine" not in l3:
+            raise SpecError(f"{name}: file_ref 'engine' needs the L3 'engine' key")
+        if block.inputs[0][1] != "raster":
+            raise SpecError(
+                f"{name}: file_ref 'engine' serves a single tile; the input '{block.inputs[0][0]}' is an array of tiles"
+            )
     by_arg = {a.arg: a for a in block.args}
     for a in block.args:
         if a.arg in ENGINE_ARGS or (

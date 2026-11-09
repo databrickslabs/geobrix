@@ -127,6 +127,7 @@ _SE_DEM_SETS = tuple(
         "index",
         "threshold",
         "color_relief",
+        "contour",
     )
 )
 
@@ -185,7 +186,6 @@ def test_only_the_known_sets_are_implemented(capsys):
         *_SE_DEM_SETS,
         *_DEM_SETS,
     } - {
-        "raster-vectorize-contour",
         "raster-file-op",  # no function of the family has a JVM level left (it times cog_convert's light forms)
     } == {
         f.family

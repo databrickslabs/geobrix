@@ -2254,6 +2254,38 @@ for _fn, _call in _SE_DEM_CALLS.items():
     ]
 
 
+# Contour, a GDAL spec engine row that returns an array of lines, over the same replicated 1024 px tiles: the row-wise UDF
+# (c0), the batch form (a features row has none, so it resolves to c0) and a floor. Its fingerprint is the number of
+# lines and the sum of their WKB lengths.
+_SE_CONTOUR_CALL = "{fn}(tile, array(300D, 500D, 700D))"
+_SE_CONTOUR_FP = "SELECT count(*) AS n, sum(size(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM {{src}})"
+_SE_CONTOUR_VFP = (
+    "SELECT count(*) AS n, sum(aggregate(t, 0L, (a, x) -> a + length(x.geom_wkb) + CAST(x.value AS BIGINT))) AS fp, "
+    "count(t) AS n_out FROM (SELECT {call} AS t FROM (SELECT * FROM {{src}} ORDER BY xxhash64(tile.raster) LIMIT 8))"
+)
+FORMS["SE"] += [
+    _se(
+        "gbx_rst_contour",
+        "L3",
+        f"{v}@mem",
+        "se_dem_1024_mem",
+        _SE_CONTOUR_FP.format(call=_SE_CONTOUR_CALL),
+        vsql=_SE_CONTOUR_VFP.format(call=_SE_CONTOUR_CALL),
+    )
+    for v in ("engine-c0", "engine-c1")
+] + [
+    _se(
+        "gbx_rst_contour",
+        "L3",
+        "floor-c0@mem",
+        "se_dem_1024_mem",
+        _SE_FP.format(call="gbx_bench_floor_c0(tile)"),
+        setup="setup_se_floor",
+        register=False,
+    )
+]
+
+
 # The band-math functions (the spectral indices and threshold) on the same shape as the DEM functions: 512 px tiles of
 # four Float32 bands (red, near infrared, green, shortwave infrared) with NoData holes, replicated on the executors, each
 # function with the engine's row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a floor.

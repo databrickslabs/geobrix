@@ -475,6 +475,43 @@ def test_contour_returns_list_of_struct_dicts():
     )
 
 
+def test_contour_levels_are_sorted_and_without_repeats_and_nulls():
+    src = _ramp_bytes(width=8, height=4)
+    with _serde.open_tile(src) as ds:
+        out = analysis.contour(ds, [5.5, None, 1.5, 5.5], 0.0, 0.0, "elev")
+    assert sorted({e["value"] for e in out}) == [1.5, 5.5]
+    assert [e["value"] for e in out] == sorted(e["value"] for e in out)
+
+
+def test_contour_infinite_level_raises_naming_it():
+    src = _ramp_bytes()
+    with _serde.open_tile(src) as ds:
+        with pytest.raises(ValueError, match="levels must be finite"):
+            analysis.contour(ds, [float("inf")], 0.0, 0.0, "elev")
+
+
+def test_contour_does_not_trace_the_9999_sentinel_of_a_tile_with_no_nodata():
+    band = np.tile(np.arange(10, dtype="float64"), (10, 1))
+    band[3:6, 4:6] = -9999.0
+    profile = dict(
+        driver="GTiff",
+        width=10,
+        height=10,
+        count=1,
+        dtype="float64",
+        crs="EPSG:32633",
+        transform=from_origin(0.0, 10.0, 1.0, 1.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(band, 1)
+        src = mf.read()
+    with _serde.open_tile(src) as ds:
+        out = analysis.contour(ds, [-5000.0, 2.5], 0.0, 0.0, "elev")
+    assert {e["value"] for e in out} == {2.5}
+
+
 # --- viewshed ---------------------------------------------------------------
 def _dem_with_wall_bytes(crs="EPSG:32633"):
     """7x7 flat DEM with a tall wall at column 3 (blocks line of sight)."""

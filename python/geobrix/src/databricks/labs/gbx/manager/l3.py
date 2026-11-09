@@ -223,7 +223,8 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
 
     ``engine-c1`` (and ``engine``, the default, where SQL functions work on a classic session): the batch UDF
     behind a wrapper that sends virtual, NULL and error tiles to the row-wise UDF. ``engine-c0`` (and the
-    default anywhere else, Spark Connect included): the row-wise UDF alone. The default is the form the row
+    default anywhere else, Spark Connect included): the row-wise UDF alone. A row whose output is features has
+    no batch form: every form registers its row-wise UDF, and the returned form says ``engine-c0``. The default is the form the row
     measured fastest (``levels.engine_form``).
     """
     from databricks.labs.gbx import _gdal_policy
@@ -235,11 +236,14 @@ def register_l3_engine(spark, fn, form: str = "engine") -> str:
     name = fn.sql_name
     if form == levels.ENGINE:
         form = levels.engine_form(fn)
-    wrapped = form == "engine-c1" or (
-        form == "engine"
-        and not capabilities.is_connect(spark)
-        and capabilities._sql_functions(spark)
-    )
+    wrapped = fn.gdal.out_kind == "raster" and (
+        form == "engine-c1"
+        or (
+            form == "engine"
+            and not capabilities.is_connect(spark)
+            and capabilities._sql_functions(spark)
+        )
+    )  # a features output has no batch form: its row-wise UDF serves every form
     if not wrapped:
         register_engine_c0(spark, fn, name)
         return "engine-c0"

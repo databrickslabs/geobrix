@@ -9,6 +9,7 @@ pixel is NoData when its 3 x 3 window holds NoData or crosses the border. The fi
 """
 
 import os
+from dataclasses import replace
 
 from databricks.labs.gbx.bench.oracle_tables._uc_tile import edges, share
 from databricks.labs.gbx.bench.oracles import (
@@ -294,15 +295,50 @@ _session_dem_rows += (
 CT = "gbx_rst_contour"
 COLUMNS = Build("vz_columns")
 
+
+def _ramp(nodata, hole):
+    """A 10 x 10 surface that rises by one per pixel to the east (as `vz_columns` does), with a block of `hole` in the
+    columns 4 and 5 (the lines of 2.5 and 6.5 stay clear of it)."""
+    import numpy as np
+
+    z = np.tile(np.arange(10, dtype="float64"), (10, 1))
+    z[3:6, 4:6] = hole
+    return _tile(_gtiff(z[np.newaxis], "EPSG:3857", nodata=nodata))
+
+
+@builder("contour_ramp_sentinel")
+def _ramp_sentinel(tmpdir):
+    """The ramp with a block of -9999 in a tile that declares no NoData: the sentinel is not data."""
+    return _ramp(None, -9999.0)
+
+
+@builder("contour_ramp_declared")
+def _ramp_declared(tmpdir):
+    """The ramp with a block of -1 declared as NoData (-1 lies below every pixel that is data)."""
+    return _ramp(-1.0, -1.0)
+
+
+@builder("contour_all_nodata")
+def _all_nodata(tmpdir):
+    """Every pixel is NoData: there is nothing to trace."""
+    import numpy as np
+
+    return _tile(_gtiff(np.full((1, 10, 10), -9999.0), "EPSG:3857"))
+
+
+SENTINEL, DECLARED = Build("contour_ramp_sentinel"), Build("contour_ramp_declared")
+_X = {1.5: 400020.0, 3.5: 400040.0}
+_REF_ARGS = {  # the features_ref rows: their arguments after the tile are shared by the session and UC rows
+    "contour_dem_levels": (DEM, [100.0, 110.0, 120.0, 130.0]),
+    "contour_dem_interval": (DEM, [], 5.0, 2.0),
+    "contour_dem_hole": (DEM, [90.0, 150.0]),
+    "contour_dem_multiband": (MULTI, [100.0, 120.0]),
+    "contour_dem_int16": (INT16, [100.5, 120.5]),
+    "contour_dem_virtual": (VIRT, [100.0, 120.0]),
+}
+
 _session_dem_rows += (
-    Case(
-        "contour_levels",
-        CT,
-        (COLUMNS, [1.5, 3.5]),
-        "contours",
-        {1.5: 400020.0, 3.5: 400040.0},
-        ONLY,
-    ),
+    Case("contour_levels", CT, (COLUMNS, [1.5, 3.5]), "contours", _X, ONLY),
     Case(
         "contour_interval",
         CT,
@@ -316,19 +352,125 @@ _session_dem_rows += (
         CT,
         (Build("vz_columns_virtual"), [1.5, 3.5]),
         "contours",
-        {1.5: 400020.0, 3.5: 400040.0},
+        _X,
+        ONLY,
+    ),
+    # the value of a line is the level asked for, to the last digit (GDAL's layer holds it rounded to six decimals)
+    Case(
+        "contour_level_exact",
+        CT,
+        (COLUMNS, [1.1234567891, 2.718281828459045]),
+        "contours",
+        {1.1234567891: 400016.234567891, 2.718281828459045: 400032.18281828459},
+        ONLY,
+    ),
+    Case(
+        "contour_interval_exact",
+        CT,
+        (COLUMNS, [], 0.7, 0.15),
+        "contours",
+        {0.15 + k * 0.7: 400000.0 + (0.15 + k * 0.7 + 0.5) * 10 for k in range(7)},
+        ONLY,
+    ),
+    # levels win over an interval; the list is sorted, without repeats and NULLs before GDAL reads it
+    Case(
+        "contour_levels_win",
+        CT,
+        (COLUMNS, [1.5], 2.0, 0.5),
+        "contours",
+        {1.5: 400020.0},
+        ONLY,
+    ),
+    Case("contour_levels_unsorted", CT, (COLUMNS, [3.5, 1.5]), "contours", _X, ONLY),
+    Case(
+        "contour_levels_duplicate", CT, (COLUMNS, [1.5, 3.5, 1.5]), "contours", _X, ONLY
+    ),
+    Case(
+        "contour_levels_null_element",
+        CT,
+        (COLUMNS, [1.5, None, 3.5]),
+        "contours",
+        _X,
+        ONLY,
+    ),
+    Case("contour_levels_none_cross", CT, (COLUMNS, [99.5]), "contours", {}, ONLY),
+    # a NoData region has no line: neither the declared value nor the -9999 sentinel of a tile that declares none
+    Case(
+        "contour_nodata_sentinel",
+        CT,
+        (SENTINEL, [-5000.0, 2.5, 6.5]),
+        "contours",
+        {2.5: 400030.0, 6.5: 400070.0},
+        ONLY,
+    ),
+    Case(
+        "contour_nodata_declared",
+        CT,
+        (DECLARED, [-0.5, 2.5, 6.5]),
+        "contours",
+        {2.5: 400030.0, 6.5: 400070.0},
+        ONLY,
+    ),
+    Case(
+        "contour_all_nodata",
+        CT,
+        (Build("contour_all_nodata"), [], 1.0),
+        "contours",
+        {},
+        ONLY,
+    ),
+    # an argument mistake raises, naming the value; a NULL, error or unreadable tile is NULL
+    Case(
+        "contour_no_interval",
+        CT,
+        (COLUMNS, [], 0.0, 0.0),
+        "raises",
+        "interval must be > 0",
+        ONLY,
+    ),
+    Case(
+        "contour_null_interval",
+        CT,
+        (COLUMNS, [], None),
+        "raises",
+        "interval must be > 0",
+        ONLY,
+    ),
+    Case(
+        "contour_nonfinite_interval",
+        CT,
+        (COLUMNS, [], float("inf")),
+        "raises",
+        ("got inf", "got Infinity"),
+        ONLY,
+    ),
+    Case(
+        "contour_nonfinite_level",
+        CT,
+        (COLUMNS, [float("inf")]),
+        "raises",
+        "levels must be finite",
+        ONLY,
+    ),
+    Case(
+        "contour_blank_attr",
+        CT,
+        (COLUMNS, [1.5], 0.0, 0.0, " "),
+        "raises",
+        "attr_field must be non-empty",
         ONLY,
     ),
     Case("contour_null_tile", CT, (None, [1.5]), "null", None, ONLY),
     Case("contour_error_tile", CT, (ERR, [1.5]), "null", None, ONLY),
     Case("contour_corrupt", CT, (CORRUPT, [1.5]), "null", None, ONLY),
-    Case(
-        "contour_missing_path",
-        CT,
-        (Build("vz_missing"), [1.5]),
-        "raises",
-        "gbx_missing_tile",
-        ONLY,
+    # a virtual tile whose file is not there is data, not a mistake: NULL, the reason logged once
+    Case("contour_missing_path", CT, (Build("vz_missing"), [1.5]), "null", None, ONLY),
+    # The lines against GDAL's older `gdal.ContourGenerateEx` (an entry point apart from `raster contour`), which draws
+    # the same lines: exact. The earlier scikit-image lines, still the Unity Catalog kernel's, are equivalent to them:
+    # the same levels and line counts, within half a pixel, each up to a pixel shorter (see check_features_ref).
+    *(
+        Case(cid, CT, args, "features_ref", "exact", ONLY)
+        for cid, args in _REF_ARGS.items()
     ),
 )
 
@@ -342,6 +484,15 @@ SPEC_DEM = share(
     "hillshade_default", "hillshade_params", "hillshade_scales", "hillshade_sql_defaults", "hillshade_half_scale",
     "hillshade_null_param", "tri", "tri_null_tile", "tri_error_tile", "tpi", "roughness",
     "contour_levels", "contour_interval", "contour_null_tile", "contour_error_tile", "contour_corrupt",
+    "contour_levels_win", "contour_levels_unsorted", "contour_levels_duplicate", "contour_levels_null_element",
+    "contour_level_exact", "contour_interval_exact",
+    "contour_levels_none_cross", "contour_nodata_sentinel", "contour_nodata_declared", "contour_all_nodata",
+    "contour_no_interval", "contour_null_interval", "contour_nonfinite_interval", "contour_nonfinite_level",
+    "contour_blank_attr",
+) + tuple(
+    replace(c, cid=f"uc_{c.cid}", expect="equivalent", surfaces=("uc",))
+    for c in _session_dem_rows
+    if c.kind == "features_ref" and c.args[0] is not VIRT
 ) + edges(
     slope=("degrees",), aspect=(False, False), hillshade=(315.0, 45.0, 1.0), tpi=(), tri=(), roughness=(),
     contour=([1.5],),
@@ -354,7 +505,4 @@ SPEC_DEM = share(
     Case("uc_slope_null_unit", SL, (DEM, None), "null", None, ("uc",)),
     Case("uc_slope_null_tile", SL, (None, "degrees"), "null", None, ("uc",)),
     Case("uc_slope_error_tile", SL, (ERR, "radians"), "error_tile", UPSTREAM_ERROR, ("uc",)),
-    # no levels and no interval makes no line; an empty value field is refused too (the session raises as well)
-    Case("uc_contour_no_interval", CT, (COLUMNS, [], 0.0, 0.0), "raises", "interval must be > 0", ("uc",)),
-    Case("uc_contour_empty_attr", CT, (COLUMNS, [1.5], 0.0, 0.0, " "), "raises", "attr_field must be non-empty", ("uc",)),
 )  # fmt: skip

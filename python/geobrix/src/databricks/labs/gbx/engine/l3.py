@@ -5,6 +5,9 @@
   With ``file_ref=True`` it takes a FILE reference as its second argument (one per tile for an array input).
 - forced_c0 (``forced_c0(sql_name)``): the Python API's force-output form of c0: the same engine run, its tile
   shaped by the force-output keywords (``virtualize_dir``, ``virtualize_prefix``, ``materialize``).
+- A row whose output is features (``gdal.out.kind``) returns an array of structs (``return_type``), NULL for a NULL,
+  empty, error or unreadable tile and for a call GDAL fails (the reason is logged once per function and reason in the
+  process); it has no c1 (``c1`` refuses it), so its batch form is c0.
 - c1 (``c1(sql_name)``): a batch UDF over the raster bytes and the other arguments, returning
   ``struct<raster, error, command>`` (no MAP field, so neither pandas nor Arrow has to carry one); the SQL wrapper
   the manager installs (``sqlwrap.engine_dispatch``) builds the tile, and sends virtual tiles to c0.
@@ -16,11 +19,23 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import logging
+import threading
 from typing import Optional, Tuple
 
 import pandas as pd
 from pyspark.sql import functions as F
-from pyspark.sql.types import BinaryType, StringType, StructField, StructType
+from pyspark.sql.types import (
+    ArrayType,
+    BinaryType,
+    DataType,
+    DoubleType,
+    IntegerType,
+    LongType,
+    StringType,
+    StructField,
+    StructType,
+)
 
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import _tile as tile_checks
@@ -35,6 +50,55 @@ RESULT = StructType(
     ]
 )
 RESULT_SQL = RESULT.simpleString()
+
+
+_FIELD_TYPES = {
+    "DOUBLE": DoubleType(),
+    "INT": IntegerType(),
+    "BIGINT": LongType(),
+    "STRING": StringType(),
+}
+_logged: set = set()
+_logged_lock = threading.Lock()
+
+
+def return_type(fn) -> DataType:
+    """The Spark type a row's engine UDF returns: a tile, or for a features output an array of structs (the geometry
+    as WKB, then the declared fields)."""
+    if fn.gdal.out_kind == "raster":
+        return V2_TILE_SCHEMA
+    if fn.gdal.out_kind == "features":
+        return ArrayType(
+            StructType(
+                [StructField("geom_wkb", BinaryType())]
+                + [StructField(n, _FIELD_TYPES[t]) for n, t, _ in fn.gdal.out_fields]
+            )
+        )
+    raise ValueError(
+        f"{fn.sql_name}: the {fn.gdal.out_kind} output is not built in this release"
+    )
+
+
+def _log_once(sql_name: str, reason: str) -> None:
+    """A failed call of a non-raster row is NULL; its reason is logged once per function and reason in the process."""
+    with _logged_lock:
+        if (sql_name, reason) in _logged:
+            return
+        _logged.add((sql_name, reason))
+    logging.getLogger("databricks.labs.gbx.engine").warning(
+        "%s: NULL, %s", sql_name, reason
+    )
+
+
+def _value(fn, res: Optional[run.Result]):
+    """A features result as SQL sees it: a list of structs, or None for a NULL result or a failed call."""
+    if res is None:
+        return None
+    if res.error is not None:
+        _log_once(fn.sql_name, res.error)
+        return None
+    names = ["geom_wkb"] + [n for n, _, _ in fn.gdal.out_fields]
+    return [dict(zip(names, row)) for row in res.features]
 
 
 def metadata(res: run.Result) -> dict:
@@ -222,8 +286,9 @@ def c0(
     fn = _function(sql_name, fn_ref)
     names = [p.name for p in fn.params[1:]]
     defaults = [_sql_default(p.default) for p in fn.params[1:]]
+    raster_out = fn.gdal.out_kind == "raster"
 
-    @F.udf(V2_TILE_SCHEMA, useArrow=True)
+    @F.udf(return_type(fn), useArrow=True)
     def _c0(first, *args):
         _setup(grid_dirs)
         refs = None
@@ -233,10 +298,14 @@ def c0(
         try:
             rasters, passthrough, cellid = _inputs(fn, first, read_cap, refs)
         except run.DataError as exc:
+            if not raster_out:
+                _log_once(fn.sql_name, str(exc))
+                return None
             return _tile(run.Result(None, str(exc), None), _cellid_of(fn, first))
         if rasters is None:
-            return passthrough
-        return _tile(run.run(fn, rasters, values, _section(section_ref)), cellid)
+            return passthrough if raster_out else None
+        res = run.run(fn, rasters, values, _section(section_ref))
+        return _tile(res, cellid) if raster_out else _value(fn, res)
 
     return _c0
 
@@ -311,6 +380,10 @@ def c1(
     (no pandas hop), else `pandas_udf`. The caller sends only materialized rasters (the wrapper's CASE).
     """
     fn = _function(sql_name, fn_ref)
+    if fn.gdal.out_kind != "raster":
+        raise ValueError(
+            f"{sql_name}: a {fn.gdal.out_kind} output has no batch form; use c0"
+        )
     names = [p.name for p in fn.params[1:]]
     arrow_udf = getattr(F, "arrow_udf", None)
     if arrow_udf is not None:

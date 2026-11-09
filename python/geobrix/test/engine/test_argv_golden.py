@@ -197,3 +197,18 @@ def test_the_engine_settings_table_is_the_golden_one():
     from databricks.labs.gbx.engine import run
 
     assert run.ENGINE_SETTINGS == GOLDEN["engine_settings"]
+
+
+def test_a_contour_level_is_given_back_from_the_layers_rounded_value():
+    """GDAL's output layer holds a level rounded to six decimals; the engine gives the level the call asked for."""
+    fn = MAN.functions["gbx_rst_contour"]
+    fixed = {"levels": [0.1 + 0.2, 1 / 3, 99.5], "interval": 0.0, "base": 0.0}
+    field, snap = argv.level_snapper(fn, fixed)
+    assert field == "value"
+    assert snap(0.3) == 0.1 + 0.2 and snap(0.333333) == 1 / 3 and snap(99.5) == 99.5
+    assert snap(7.25) == 7.25 and snap(None) is None  # no level near it: kept as read
+    field, snap = argv.level_snapper(
+        fn, {"levels": [], "interval": 0.7, "base": 0.15, "attr_field": "elev"}
+    )
+    assert snap(2.25) == 0.15 + 3 * 0.7 and snap(4.35) == 0.15 + 6 * 0.7
+    assert argv.level_snapper(MAN.functions["gbx_rst_slope"], {}) is None

@@ -308,6 +308,29 @@ REFUSED_BLOCKS = [
         _row(args=[{"arg": "unit", "from": "unit"}]),
         "unit",
     ),
+    (
+        "a features output with no field",
+        _row(out={"kind": "features"}, write=None),
+        "at least one field",
+    ),
+    (
+        "a features output with a write profile",
+        _row(out={"kind": "features", "fields": [["value", "DOUBLE", "value"]]}),
+        "write profile",
+    ),
+    (
+        "a raster output with no write profile",
+        _row(write=None),
+        "write profile",
+    ),
+    (
+        "a field type outside the vocabulary",
+        _row(
+            out={"kind": "features", "fields": [["value", "DECIMAL", "value"]]},
+            write=None,
+        ),
+        "DECIMAL",
+    ),
 ]
 
 
@@ -347,6 +370,26 @@ REFUSED_SPECS = [
         "yscale",
     ),
     ("an input the function lacks", _row(**{"in": {"dem": "raster"}}), "dem"),
+    (
+        "a when_empty param the function lacks",
+        _row(
+            args=[
+                {
+                    "arg": "unit",
+                    "from": "unit",
+                    "type": "choice",
+                    "map": {"degrees": "degree"},
+                    "when_empty": "levels",
+                }
+            ]
+        ),
+        "levels",
+    ),
+    (
+        "a checked_name with no fixed word",
+        _row(args=[{"arg": "unit", "from": "unit", "type": "checked_name"}]),
+        "checked_name",
+    ),
 ] + [
     (f"the deny-listed {a}", _row(args=[{"arg": a, "const": "x"}]), a)
     for a in sorted(MAN.gdal.deny)

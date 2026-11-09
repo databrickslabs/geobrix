@@ -74,6 +74,24 @@ def _engine_core(sql_name: str, values: dict) -> Callable:
     return _core
 
 
+def _engine_features(sql_name: str, values: dict) -> Callable:
+    """The pure-core body of an engine row that returns features: the GDAL spec engine on the open dataset's GeoTIFF
+    bytes, returning ``[{"geom_wkb": ..., <field>: ...}]``. Raises the engine's reason when GDAL fails.
+    """
+
+    def _core(ds):
+        from databricks.labs.gbx import manifest
+        from databricks.labs.gbx.engine import l3, run
+
+        fn = manifest.load().functions[sql_name]
+        res = run.run(fn, [prx._dataset_to_gtiff_bytes(ds)], dict(values))
+        if res.error is not None:
+            raise RuntimeError(res.error)
+        return l3._value(fn, res)
+
+    return _core
+
+
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
 # (Python core_fn + col_fn) and in the Scala BenchDispatch case so the two engines
 # convolve with the same coefficients; the bench args carry only `kernel_size` for
@@ -2933,7 +2951,15 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         _BOTH,
         {"levels": [0.2, 0.4, 0.6, 0.8]},
-        core_fn=lambda ds, a: analysis_core.contour(ds, a["levels"], 0.0, 0.0, "elev"),
+        core_fn=lambda ds, a: _engine_features(
+            "gbx_rst_contour",
+            {
+                "levels": a["levels"],
+                "interval": 0.0,
+                "base": 0.0,
+                "attr_field": "elev",
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_contour(
             t, F.array(*[F.lit(float(v)) for v in a["levels"]])
         ),

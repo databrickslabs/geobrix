@@ -150,10 +150,7 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         )
     },
     "tilexyz_virtual": {"L1": _L1_NO_VIRTUAL},
-    **{
-        cid: {"L1": _VIRTUAL_RAISES_L1}
-        for cid in ("contour_virtual", "isoband_virtual")
-    },
+    "isoband_virtual": {"L1": _VIRTUAL_RAISES_L1},
     **{
         cid: {"L1": _XYZ_ERROR_L1}
         for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
@@ -2651,6 +2648,56 @@ def _ref_slope(args):
     return g.data.astype("float64"), g.mask
 
 
+def _ref_contours(args):
+    """GDAL's older `gdal.ContourGenerateEx` on band 1 of the tile `args[0]` (written under a `/vsimem` name), an entry
+    point apart from the `raster contour` algorithm the engine runs: ``({level: [LineString]}, pixel width)``. The levels
+    are `args[1]` (sorted, without repeats and NULLs), or `args[2]` apart from `args[3]` when there are none. NoData is the
+    band's declared value, else -9999.
+    """
+    import uuid
+
+    import shapely
+
+    from databricks.labs.gbx import _osgeo
+
+    b = _osgeo.bindings("the contour reference")
+    gdal, ogr = b.gdal, b.ogr
+    levels = sorted({float(v) for v in (args[1] or ()) if v is not None})
+    interval = float(args[2]) if len(args) > 2 and args[2] is not None else 0.0
+    base = float(args[3]) if len(args) > 3 and args[3] is not None else 0.0
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        ds = gdal.Open(name)
+        band = ds.GetRasterBand(1)
+        nodata = band.GetNoDataValue()
+        mem = ogr.GetDriverByName("Memory").CreateDataSource("ref")
+        lyr = mem.CreateLayer("c", srs=ds.GetSpatialRef())
+        lyr.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+        lyr.CreateField(ogr.FieldDefn("value", ogr.OFTReal))
+        opts = [
+            "ID_FIELD=0",
+            "ELEV_FIELD=1",
+            f"NODATA={-9999.0 if nodata is None else nodata}",
+        ]
+        opts += (
+            ["FIXED_LEVELS=" + ",".join(repr(v) for v in levels)]
+            if levels
+            else [f"LEVEL_INTERVAL={interval!r}", f"LEVEL_BASE={base!r}"]
+        )
+        if gdal.ContourGenerateEx(band, lyr, options=opts) != 0:
+            raise RuntimeError(f"ContourGenerateEx failed: {gdal.GetLastErrorMsg()}")
+        out = {}
+        for f in lyr:
+            out.setdefault(f.GetField("value"), []).append(
+                shapely.from_wkb(bytes(f.GetGeometryRef().ExportToIsoWkb()))
+            )
+        return out, abs(ds.GetGeoTransform()[1])
+    finally:
+        band = lyr = mem = ds = None
+        gdal.Unlink(name)
+
+
 def _ref_gdaldem_slope(args):
     """GDAL's own `gdal.DEMProcessing` slope (Horn, no edges), the `gdaldem` command line's scale handling, through
     `osgeo`: independent of the engine's `raster slope` and of the numpy kernel. The source is the tile written under
@@ -3807,6 +3854,7 @@ _ARG_CHECKS = {
     "geom_srid": _check_geom_srid,
     "isobands": _oracle_check("check_isobands"),
     "contours": _oracle_check("check_contours"),
+    "features_ref": _oracle_check("check_features_ref"),
     "cellfill": _oracle_check("check_cellfill"),
     "mvt_layer": _oracle_check("check_mvt_layer"),
     "grid_partial": _oracle_check("check_grid_partial"),

@@ -210,6 +210,7 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # The band-math functions took the row-wise form in the local pass (512 px four-band tiles, median of 3 runs, 384 tiles,
 # c0 against c1): NDVI 3.5 s against 5.2, NDWI 3.4 against 4.7, NBR 3.8 against 5.4, SAVI 4.2 against 5.7, EVI 3.9
 # against 5.0, rst_index 3.6 against 5.0, threshold 7.5 against 9.1.
+# Contour returns an array of lines, which has no batch form: every engine form registers the row-wise UDF.
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
@@ -226,6 +227,7 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "index",
             "threshold",
             "color_relief",
+            "contour",
         )
     },
 }

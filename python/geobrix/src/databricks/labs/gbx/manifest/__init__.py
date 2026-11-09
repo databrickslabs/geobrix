@@ -98,10 +98,13 @@ GDAL_ARG_KEYS = frozenset(
         "formula",
         "formulas",
         "and",
+        "when_empty",
     }
 )
 GDAL_IN_KINDS = frozenset({"raster", "rasters", "text"})
 GDAL_OUT_KINDS = frozenset({"raster", "features", "json"})
+# The SQL types of a features output's fields, and the pyspark type each is.
+GDAL_FIELD_TYPES = frozenset({"DOUBLE", "INT", "BIGINT", "STRING"})
 GDAL_BINDERS = frozenset(
     {
         "double",
@@ -111,6 +114,8 @@ GDAL_BINDERS = frozenset(
         "crs",
         "geom_wkt",
         "double_list",
+        "positive_double",
+        "checked_name",
         "calc_envelope",
         "calc_formula",
         "calc_named",
@@ -262,6 +267,9 @@ class GdalArg:
     formula: Optional[str] = None
     formulas: Mapping[str, Tuple[str, Tuple[str, ...]]] = MappingProxyType({})
     and_: Optional[str] = None
+    # `when_empty`: the name of a list parameter; the argument is bound only when that list is NULL or empty (an interval
+    # that the fixed levels replace).
+    when_empty: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -279,6 +287,9 @@ class GdalSpec:
         False  # the input must carry a CRS (a tile without one is a data error)
     )
     gdal_min: Optional[str] = None
+    # A features output: (struct field, SQL type, layer field) for each value read from the output layer beside the
+    # geometry; the output is `ARRAY<STRUCT<geom_wkb BINARY, <fields>>>`, one element per feature in layer order.
+    out_fields: Tuple[Tuple[str, str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -542,6 +553,7 @@ def _parse_gdal_arg(raw: Mapping) -> GdalArg:
             }
         ),
         and_=raw.get("and"),
+        when_empty=raw.get("when_empty"),
     )
 
 
@@ -550,20 +562,42 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
     mistyped key can never be read as absent."""
     _closed(raw, GDAL_KEYS, "block")
     out = raw.get("out") or {}
-    _closed(out, frozenset({"kind", "dtype"}), "out")
+    _closed(out, frozenset({"kind", "dtype", "fields"}), "out")
     inputs = tuple(
         (p, _one_of(k, GDAL_IN_KINDS, f"input kind of {p!r}"))
         for p, k in (raw.get("in") or {}).items()
     )
+    kind = _one_of(out.get("kind"), GDAL_OUT_KINDS, "output kind")
+    fields = tuple(
+        (
+            str(n),
+            _one_of(t, GDAL_FIELD_TYPES, f"field type of {n!r}"),
+            str(src),
+        )
+        for n, t, src in out.get("fields", ())
+    )
+    if (kind == "features") != bool(fields):
+        raise ValueError(
+            "gdal spec: a features output declares at least one field, and no other output declares any"
+        )
+    if (kind == "raster") != ("write" in raw):
+        raise ValueError(
+            "gdal spec: a raster output needs a write profile, and a features or JSON output has none"
+        )
     return GdalSpec(
         alg=str(raw.get("alg", "")),
         inputs=inputs,
-        out_kind=_one_of(out.get("kind"), GDAL_OUT_KINDS, "output kind"),
+        out_kind=kind,
         out_dtype=str(out.get("dtype", "input")),
-        write=_one_of(raw.get("write"), GDAL_WRITE, "write profile"),
+        write=(
+            _one_of(raw["write"], GDAL_WRITE, "write profile")
+            if kind == "raster"
+            else ""
+        ),
         args=tuple(_parse_gdal_arg(a) for a in raw.get("args", ())),
         needs_crs=bool(raw.get("needs_crs", False)),
         gdal_min=raw.get("gdal_min"),
+        out_fields=fields,
     )
 
 

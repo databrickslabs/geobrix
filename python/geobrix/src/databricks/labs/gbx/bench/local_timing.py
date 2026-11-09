@@ -184,6 +184,16 @@ SETS: Dict[str, SetSpec] = {
             "gbx_rst_threshold",
         )
     },
+    # contour, a GDAL spec engine row that returns an array of lines: over the same replicated 1024 px tiles as the DEM
+    # functions, with the row-wise UDF (c0), the batch form (which a features row resolves to c0) and a floor
+    "SE-contour": SetSpec(
+        mvp="SE",
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_contour",
+        peer_exempt=("engine-c1@mem",),  # the same UDF as c0: recorded, not a peer
+    ),
     # TRI, the terrain function that keeps a JVM companion: the companion (`today`), the engine's two light UDFs and a floor,
     # over 1024 px DEM tiles replicated in memory. The companion is what the pass measures, so it is not a peer of the light
     # forms.
@@ -281,9 +291,6 @@ def _family_sets() -> Dict[str, SetSpec]:
             fn="gbx_rst_retile",
             **tiles,
         ),
-        "raster-vectorize-contour": tile_fn(
-            "raster-vectorize", "gbx_rst_contour", l1=False
-        ),  # contour has no JVM level
         "raster-array-op": SetSpec(
             mvp="raster-array-op",
             forms=("h_combine_l3", "floor"),

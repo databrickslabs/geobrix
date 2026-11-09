@@ -404,6 +404,9 @@ def check_contour(levels, interval, attr_field) -> None:
     """
     if attr_field is None or str(attr_field).strip() == "":
         raise ValueError("rst_contour: attr_field must be non-empty")
+    bad = next((v for v in levels or () if v is not None and math.isinf(v)), None)
+    if bad is not None:
+        raise ValueError(f"rst_contour: levels must be finite (got {bad})")
     if not levels:
         if not (interval > 0.0) or math.isinf(interval) or math.isnan(interval):
             raise ValueError(
@@ -415,8 +418,9 @@ def check_contour(levels, interval, attr_field) -> None:
 def contour(ds, levels, interval, base, attr_field):
     """Generate contour lines from band 1 as ``(geom_wkb, value)`` features.
 
-    Mirrors the heavyweight ``gbx_rst_contour`` (``gdal.ContourGenerateEx``),
-    implemented with ``skimage.measure.find_contours``:
+    The Unity Catalog handler's kernel (``uc/tier_b.py``), implemented with ``skimage.measure.find_contours``. The
+    session function ``gbx_rst_contour`` runs GDAL's ``raster contour`` instead (the GDAL spec engine); its lines
+    run to the tile's edge, half a pixel past the outermost pixel centres, where these stop at the centres.
 
       * ``levels`` (list[float]): explicit fixed contour values. When non-empty,
         one contour is generated at each level.
@@ -432,8 +436,9 @@ def contour(ds, levels, interval, base, attr_field):
     Output geometries are LineStrings in the source CRS — pixel (row, col)
     coordinates from ``find_contours`` are mapped to world (x, y) via the
     raster transform (``rasterio.transform.xy(..., offset="center")``). NoData
-    pixels are masked to NaN before contouring so contours do not trace the
-    sentinel. Paths with fewer than 2 points are skipped.
+    pixels (and, where the tile declares none, pixels equal to -9999) are masked
+    to NaN before contouring so contours do not trace the sentinel. Paths with
+    fewer than 2 points are skipped.
 
     Args:
         ds:         Open rasterio DatasetReader.
@@ -447,12 +452,17 @@ def contour(ds, levels, interval, base, attr_field):
         LineString.
     """
     check_contour(levels, interval, attr_field)
-    levels = [] if levels is None else [float(v) for v in levels]
+    # sorted, without repeats, NULLs and NaN: the same list the GDAL spec engine's binder writes
+    levels = sorted(
+        {float(v) for v in (levels or ()) if v is not None and not math.isnan(v)}
+    )
 
     band = ds.read(1).astype("float64")
-    # Mask NoData so contours do not trace the sentinel value.
+    # Mask NoData so contours do not trace the sentinel value: the declared one, and -9999 where none is declared.
     msk = ds.read_masks(1)  # 0 where NoData, 255 where valid
     band = np.where(msk == 0, np.nan, band)
+    if ds.nodata is None:
+        band = np.where(band == -9999.0, np.nan, band)
 
     if not levels:
         finite = band[np.isfinite(band)]

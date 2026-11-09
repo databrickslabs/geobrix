@@ -423,6 +423,93 @@ def _calc_binding(fn, arg, value, inputs: Sequence[RasterProps]) -> _Calc:
     return _Calc(expr, tuple((v, i) for v, (i, _) in sorted(resolved.items())))
 
 
+def _as_list(value) -> Optional[List[float]]:
+    """The finite numbers of a list value, sorted and without repeats, or None when it holds none.
+
+    The value is an ``ARRAY<DOUBLE>`` (a list, a tuple or an array) or a comma-separated STRING of numbers. NULL and
+    NaN elements are dropped; an infinite element is refused by the caller. A list that is NULL, empty or holds only
+    NULLs counts as NULL.
+    """
+    if value is None:
+        return None
+    if getattr(value, "ndim", 0) > 0:  # an array
+        value = value.tolist()
+    items = (
+        value
+        if isinstance(value, (list, tuple))
+        else [t for t in str(value).replace(" ", "").split(",") if t != ""]
+    )
+    nums = sorted({float(v) for v in items if not _is_null(v) and str(v).strip() != ""})
+    return nums or None
+
+
+def level_snapper(fn, values: Mapping[str, Any]):
+    """``(layer field, snap)`` for a row whose features carry a contour level, or None.
+
+    GDAL's output layer holds each level rounded to six decimals (0.1 + 0.2 reads 0.3, and 0.1234567 reads 0.123457),
+    so a field read from it is not the level the call asked for. ``snap(value)`` gives that level back: the nearest
+    fixed level, or for an interval the nearest ``offset + k * interval``, when it lies within the rounding (1e-6).
+    """
+    by = {a.arg: a for a in fn.gdal.args}
+    name, lv = by.get("elevation-name"), by.get("levels")
+    if name is None or lv is None or lv.type != "double_list":
+        return None
+    nums = _as_list(values.get(lv.source))
+    if nums is None:
+        iv, off = by.get("interval"), by.get("offset")
+        if iv is None or _is_null(values.get(iv.source)):
+            return None
+        step = float(values[iv.source])
+        base = 0.0
+        if off is not None and not _is_null(values.get(off.source)):
+            base = float(values[off.source])
+
+        def level_of(v: float) -> float:
+            return base + round((v - base) / step) * step
+
+    else:
+        import bisect
+
+        def level_of(v: float) -> float:
+            i = bisect.bisect_left(nums, v)
+            near = nums[max(i - 1, 0) : i + 1]
+            return min(near, key=lambda x: abs(x - v))
+
+    def snap(v):
+        if v is None:
+            return v
+        level = level_of(v)
+        return level if abs(level - v) <= 1e-6 else v
+
+    return name.map["*"], snap
+
+
+def _has_items(value) -> bool:
+    """True when a list value holds a number (a value that is no list of numbers is judged where it is bound)."""
+    try:
+        return _as_list(value) is not None
+    except ValueError:
+        return False
+
+
+def _bind_list(fn, arg, value) -> Optional[str]:
+    """A ``double_list`` value as ``a,b,c``: sorted, without repeats and NULLs (GDAL refuses an unsorted list or a
+    repeat); None when the list is NULL or empty. An infinite element is refused, naming it.
+    """
+    try:
+        nums = _as_list(value)
+    except ValueError:
+        raise _fail(
+            fn, arg, f"{arg.source} must be a list of numbers (got {value!r})"
+        ) from None
+    if nums is None:
+        return None
+    bad = next((x for x in nums if math.isinf(x)), None)
+    if bad is not None:
+        raise _fail(fn, arg, f"{arg.source} must be finite (got {bad})")
+    return ",".join(fmt_double(x) for x in nums)
+
+
 def _band(fn, param, v, props: RasterProps) -> int:
     """A band number of the input: a whole number from 1 to its band count."""
     n = int(v)
@@ -499,11 +586,109 @@ def data_bound(fn, values: Mapping[str, Any]) -> bool:
     )
 
 
+# Binders that write one token of their own from one value (no template, no partner).
+_SPECIAL = ("checked_name", "positive_double", "double_list")
+
+
+def _const_token(a, inputs: Sequence[RasterProps]) -> Optional[str]:
+    """The token of a fixed argument, or None when it writes none (a false flag).
+
+    ``input`` is a result that keeps the source's band type and NoData value; ``declared`` is the band's declared
+    NoData value, else the -9999 sentinel (neither is traced as data); True is a bare flag.
+    """
+    if a.const == "input" and a.arg in ("output-data-type", "nodata"):
+        first = inputs[0]
+        return (
+            f"--{a.arg}={first.dtype}"
+            if a.arg == "output-data-type"
+            else f"--{a.arg}={_nodata_text(source_nodata(first))}"
+        )
+    if a.const == "declared" and a.arg == "input-nodata":
+        nd = inputs[0].nodata
+        return f"--{a.arg}={_nodata_text(nd if nd is not None else -9999.0)}"
+    if a.const is True:
+        return f"--{a.arg}"
+    return None if a.const is False else f"--{a.arg}={_fmt_const(a.const)}"
+
+
+def _special_token(fn, a, v) -> Optional[str]:
+    """The token of a ``checked_name``, ``positive_double`` or ``double_list`` argument. A list that is NULL or empty
+    follows the arg's null rule: raises, writes no token (the empty string) or makes the result NULL (None).
+
+    - ``checked_name``: the value is accepted and not passed on (the function keeps it for compatibility): it must not
+      be blank, and GDAL gets the fixed word the arg's map holds under '*'.
+    - ``positive_double``: a number above 0 and finite, else a refusal naming the value (`when_empty` says why it is
+      needed: the list that is empty).
+    - ``double_list``: ``a,b,c``, sorted and without repeats and NULLs.
+    """
+    if a.type == "checked_name":
+        if v is not None and str(v).strip() == "":
+            raise _fail(fn, a, f"{a.source} must be non-empty (got '{v}')")
+        return f"--{a.arg}={a.map['*']}"
+    if a.type == "positive_double":
+        if _is_null(v) or not 0.0 < float(v) < math.inf:
+            why = f"{a.when_empty} is empty so " if a.when_empty else ""
+            got = "NULL" if v is None else v
+            raise _fail(fn, a, f"{why}{a.source} must be > 0 and finite; got {got}")
+        return f"--{a.arg}={fmt_double(float(v))}"
+    text = _bind_list(fn, a, v)
+    if text is not None:
+        return f"--{a.arg}={text}"
+    if a.null == "raise":
+        raise ParamError(f"{fn.sql_name}: {a.source} must not be NULL")
+    return "" if a.null == "omit" else None  # an omitted list writes no token
+
+
+def _check_together(fn, a, v, by_arg, values) -> None:
+    """A ParamError unless both or neither of two arguments that go together (`with`) are supplied."""
+    partner = by_arg[a.with_] if a.with_ else None
+    if partner is not None and _is_null(v) != _is_null(values.get(partner.source)):
+        raise ParamError(
+            f"{fn.sql_name}: {a.source} and {partner.source} must be supplied together (both or neither). "
+            f"Fix: pass both {a.source} and {partner.source}, or neither."
+        )
+
+
+def _output_tokens(fn, inputs: Sequence[RasterProps]) -> List[str]:
+    """The output tokens of a spec's output kind: a GeoTIFF with the write profile's creation options, or for features
+    GDAL's in-memory layer (it writes no file, and the output name is a label)."""
+    block = fn.gdal
+    if block.out_kind == "raster":
+        from databricks.labs.gbx.pyrx.core.compression import engine_creation_options
+
+        first = inputs[0]
+        dtype = first.dtype if block.out_dtype == "input" else block.out_dtype
+        decoded = sum(
+            r.width * r.height * r.bands * _ITEMSIZE.get(r.dtype, 8) for r in inputs
+        )
+        creation = engine_creation_options(
+            dtype, decoded, first.width, first.height, block.alg
+        )
+        return ["--output=<output>", "--output-format=GTiff"] + [
+            f"--creation-option={o}" for o in creation
+        ]
+    if block.out_kind == "features":
+        return ["--output=<output>", "--output-format=MEM"]
+    raise ValueError(
+        f"{fn.sql_name}: the {block.out_kind} output is not built in this release"
+    )
+
+
+def _plain_token(fn, a, v) -> Optional[str]:
+    """The token of a plain binder (double, int, bool, choice, crs): a string value is refused when it could name a
+    file or a URL (a `crs` is judged by the CRS resolver instead). None for a false bool, which writes no flag.
+    """
+    if a.type != "crs":
+        check_value(fn.sql_name, a.source, v)
+    text = _bind_value(fn, a, v)
+    if text is None:
+        return None
+    return f"--{a.arg}" if a.type == "bool" else f"--{a.arg}={text}"
+
+
 def _template(fn, values, inputs, section) -> Optional[List[str]]:
     """The argv with the placeholder input and output names: bound once per distinct (spec, values, input props),
     so a literal argument is resolved once, not per row."""
-    from databricks.labs.gbx.pyrx.core.compression import engine_creation_options
-
     block = fn.gdal
     in_kind = block.inputs[0][1]
     names = (
@@ -517,18 +702,18 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
     n_texts = 0
     for a in block.args:
         if a.source is None:
-            if a.const == "input" and a.arg in ("output-data-type", "nodata"):
-                # a result that keeps the source's band type and NoData value
-                first = inputs[0]
-                tokens.append(
-                    f"--{a.arg}={first.dtype}"
-                    if a.arg == "output-data-type"
-                    else f"--{a.arg}={_nodata_text(source_nodata(first))}"
-                )
-            elif a.const is True:
-                tokens.append(f"--{a.arg}")
-            elif a.const is not False:
-                tokens.append(f"--{a.arg}={_fmt_const(a.const)}")
+            tok = _const_token(a, inputs)
+            if tok:
+                tokens.append(tok)
+            continue
+        if a.when_empty is not None and _has_items(values.get(a.when_empty)):
+            continue  # the fixed values replace this argument (levels over an interval)
+        if a.type in _SPECIAL:
+            tok = _special_token(fn, a, values.get(a.source))
+            if tok is None:
+                return None
+            if tok:
+                tokens.append(tok)
             continue
         if a.type in ("calc_formula", "calc_named"):
             calc = _formula_binding(fn, a, values, inputs)
@@ -541,12 +726,7 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             tokens += [f"--{a.arg}={calc.expr}", "--dialect=muparser"]
             continue
         v = values.get(a.source)
-        partner = by_arg[a.with_] if a.with_ else None
-        if partner is not None and _is_null(v) != _is_null(values.get(partner.source)):
-            raise ParamError(
-                f"{fn.sql_name}: {a.source} and {partner.source} must be supplied together (both or neither). "
-                f"Fix: pass both {a.source} and {partner.source}, or neither."
-            )
+        _check_together(fn, a, v, by_arg, values)
         if _is_null(v):
             if a.null == "omit":
                 continue
@@ -566,11 +746,9 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
             if _color_table(fn.sql_name, a.source, str(v))[1]:
                 tokens.append(f"--{a.arg}")
             continue
-        if a.type not in ("crs",):
-            check_value(fn.sql_name, a.source, v)
-        text = _bind_value(fn, a, v)
-        if text is not None:
-            tokens.append(f"--{a.arg}" if a.type == "bool" else f"--{a.arg}={text}")
+        tok = _plain_token(fn, a, v)
+        if tok:
+            tokens.append(tok)
     guard_tokens(
         section,
         block.alg,
@@ -581,23 +759,21 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
         ins = [f"--input={v}={names[i]}" for v, i in calc.variables]
     else:
         ins = [f"--input={n}" for n in names]
-    first = inputs[0]
-    dtype = first.dtype if block.out_dtype == "input" else block.out_dtype
-    decoded = sum(
-        r.width * r.height * r.bands * _ITEMSIZE.get(r.dtype, 8) for r in inputs
-    )
-    creation = engine_creation_options(
-        dtype, decoded, first.width, first.height, block.alg
-    )
     return (
         ins
         + ["--input-format=GTiff"]
         + tokens
-        + ["--output=<output>", "--output-format=GTiff"]
-        + [f"--creation-option={o}" for o in creation]
+        + _output_tokens(fn, inputs)
         + (["--num-threads=1"] if block.alg in THREADED else [])
         + ["--quiet"]
     )
+
+
+def _hashable(v):
+    """A list or array value as a tuple, so a call with the same levels shares one bound template."""
+    if isinstance(v, list) or getattr(v, "ndim", 0) > 0:
+        return tuple(v)
+    return v
 
 
 def build(
@@ -620,7 +796,12 @@ def build(
     """
     section = section if section is not None else manifest.load().gdal
     try:
-        key = (id(fn), id(section), tuple(sorted(values.items())), tuple(inputs))
+        key = (
+            id(fn),
+            id(section),
+            tuple(sorted((k, _hashable(v)) for k, v in values.items())),
+            tuple(inputs),
+        )
         hash(key)
     except TypeError:  # an unhashable value: bind it without the cache
         key = None

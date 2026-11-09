@@ -1627,7 +1627,10 @@ def rst_contour(
 
     Returns:
         An array of structs, one per line: `geom_wkb` (a WKB line in the tile's CRS) and
-        `value`. NULL for a NULL tile.
+        `value`. A NoData pixel, or a pixel equal to -9999 in a tile that declares no
+        NoData, is never traced. NULL for a NULL tile, an error tile or a tile that
+        cannot be read; an empty array when no line crosses. Raises when `levels` is
+        empty and `interval` is not above 0 and finite, or when `attr_field` is blank.
 
     SQL: ``gbx_rst_contour(tile, levels, [interval], [base], [attr_field])``
     """

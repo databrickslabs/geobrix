@@ -33,7 +33,8 @@ THREADED = frozenset({"raster reproject"})
 ENGINE_FILE_BINDERS = frozenset({"text_vsimem"})
 # Output formats the engine writes: GTiff for rasters, MEM for features. Never VRT or GDALG (both can reference
 # other files or run a stored pipeline when opened).
-OUTPUT_FORMATS = frozenset({"GTiff", "MEM"})
+OUTPUT_FORMAT_OF = {"raster": "GTiff", "features": "MEM"}
+OUTPUT_FORMATS = frozenset(OUTPUT_FORMAT_OF.values())
 
 
 class SpecError(ValueError):
@@ -109,6 +110,14 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
                 raise SpecError(
                     f"{name}: the formula '{fname}' of '{a.arg}' must be named in lower case and use exactly its bands"
                 )
+        if a.when_empty is not None and a.when_empty not in params:
+            raise SpecError(
+                f"{name}: '{a.arg}' reads '{a.when_empty}' (when_empty), which is not a parameter"
+            )
+        if a.type == "checked_name" and "*" not in a.map:
+            raise SpecError(
+                f"{name}: '{a.arg}' is a checked_name, which needs the fixed word GDAL gets under '*' in its map"
+            )
         if a.and_ is not None and a.and_ not in params:
             raise SpecError(
                 f"{name}: '{a.arg}' reads '{a.and_}' (and), which is not a parameter"

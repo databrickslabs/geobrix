@@ -6251,10 +6251,15 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
 {/* END GENERATED gbx_rst_contour */}
 
 :::note Implementation
-Powered by **scikit-image** (`measure.find_contours`). Returns `ARRAY<struct(geom_wkb, value)>` of contour LineStrings (in the raster CRS) at each fixed `level`, or at `base + k*interval` across the data range when `levels` is empty. NoData is masked before tracing.
+Runs GDAL's `raster contour` in the worker. Returns `ARRAY<struct(geom_wkb, value)>` of contour LineStrings in the raster CRS.
+The lines sit at each fixed `level`, or at `base + k*interval` across the data range when `levels` is empty.
+A NoData pixel is never traced. That includes a pixel equal to -9999 in a tile that declares no NoData value.
 :::
 
-Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values. Or pass `array()` and set `interval` (above 0) for equal-step contours at `base + n*interval`. Each entry is one contour line in the source raster's CRS. From Scala, call it with `call_function("gbx_rst_contour", ...)`.
+Pass a non-empty `levels` `ARRAY<DOUBLE>` for fixed contour values. Or pass `array()` and set `interval` (above 0) for equal-step contours at `base + n*interval`.
+Levels may come in any order. Repeated and NULL elements are dropped, and `levels` wins over `interval` when both are given.
+Each entry is one contour line in the source raster's CRS. A line runs to the tile's edge, half a pixel past the outermost pixel centres.
+An empty array means no line crosses. NULL means a NULL, error or unreadable tile. From Scala, call it with `call_function("gbx_rst_contour", ...)`.
 
 <FunctionExamples
   name="rst_contour"

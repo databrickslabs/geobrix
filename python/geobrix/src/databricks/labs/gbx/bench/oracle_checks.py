@@ -175,6 +175,51 @@ def check_contours(case, out, args) -> Optional[str]:
     return None if ok else f"{case.cid}: lines at {seen}, want {want}"
 
 
+def check_features_ref(case, out, args) -> Optional[str]:
+    """`features_ref`: the lines of the array `out`, by level, against GDAL's older `ContourGenerateEx` on the same tile
+    (`oracles._ref_contours`). `expect` names the rule:
+
+    - ``exact``: the GDAL spec engine runs the algorithm the reference runs. The same levels, the same number of lines
+      per level, and every level's lines within a millionth of a pixel of the reference (Hausdorff distance), with the
+      same total length.
+    - ``equivalent``: the earlier scikit-image lines, which are still the Unity Catalog kernel's. They trace the same
+      crossings, but stop at the outermost pixel centres where GDAL's run to the tile's edge (half a pixel farther
+      along each axis), and the two split a line at a NoData cell differently. The same levels, and each level's
+      lines within one pixel of the reference (Hausdorff distance): measured at 0.5 to 0.86 pixel on a smooth surface
+      and on noise with NoData holes. The line count and length may differ.
+    """
+    import shapely
+    from shapely.ops import unary_union
+
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.bench.oracles import _ref_contours
+
+    if out is None:
+        return f"{case.cid}: got NULL, want contour lines"
+    got = {}
+    for r in out:
+        got.setdefault(float(_field(r, "value")), []).append(
+            parse_geom(bytes(_field(r, "geom_wkb")))
+        )
+    want, px = _ref_contours(args)
+    if sorted(got) != sorted(want):
+        return f"{case.cid}: levels {sorted(got)}, reference {sorted(want)}"
+    exact = case.expect == "exact"
+    for lv in sorted(want):
+        g, w = got[lv], want[lv]
+        away = shapely.hausdorff_distance(unary_union(g), unary_union(w)) / px
+        if not exact:
+            if away > 1.0:
+                return f"{case.cid}: level {lv} lies {away:.3g} px from the reference"
+            continue
+        lg, lw = sum(x.length for x in g), sum(x.length for x in w)
+        if len(g) != len(w):
+            return f"{case.cid}: level {lv} has {len(g)} lines, reference {len(w)}"
+        if away > 1e-6 or abs(lg - lw) > 1e-9 * max(1.0, lw):
+            return f"{case.cid}: level {lv} lies {away:.3g} px from the reference (length {lg}, reference {lw})"
+    return None
+
+
 def check_polygons(case, tiles, args) -> Optional[str]:
     """`polygons`: `expect` is [(value, area)], one per row of a polygonize, order aside."""
     from databricks.labs.gbx._geom import parse_geom

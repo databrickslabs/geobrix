@@ -185,22 +185,13 @@ REPS: List[Rep] = [
         "tile",
         vfp="raster",
     ),
-    # tile to vectors: contour intervals are data dependent, isoband breaks span the corpus' value range
+    # tile to vectors: isoband breaks span the corpus' value range (contour is a GDAL spec engine row: the SE-contour set)
     Rep(
         "raster-vectorize",
         "gbx_rst_isoband",
         _BNG_TILE,
         _SCALAR,
         "{fn}(tile, array(0D, 50D, 100D, 1000D))",
-        floor_sql=_TILE_SCAN,
-    ),
-    # contour lines at three levels inside the corpus' 0..1 value range (the isoband breaks above hold every pixel)
-    Rep(
-        "raster-vectorize",
-        "gbx_rst_contour",
-        _BNG_TILE,
-        _SCALAR,
-        "{fn}(tile, array(0.25D, 0.5D, 0.75D))",
         floor_sql=_TILE_SCAN,
     ),
     # a tile for the world's zoom 0: the whole corpus tile falls inside it

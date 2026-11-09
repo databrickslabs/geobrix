@@ -38,7 +38,7 @@ from typing import Mapping, Optional, Sequence
 
 from databricks.labs.gbx import _gdal_policy, manifest
 from databricks.labs.gbx.engine import argv as argv_mod
-from databricks.labs.gbx.engine.spec import OUTPUT_FORMATS, DataError, ParamError
+from databricks.labs.gbx.engine.spec import OUTPUT_FORMAT_OF, DataError, ParamError
 
 PREFIX = "/vsimem/gbx-spec"
 _TIFF_MAGIC = (
@@ -71,6 +71,8 @@ class Result:
     raster: Optional[bytes]
     error: Optional[str]
     command: Optional[str]
+    # a features output: one tuple per feature, in layer order: (WKB or None, the declared fields' values...)
+    features: Optional[list] = None
 
 
 @functools.lru_cache(maxsize=1)
@@ -348,8 +350,50 @@ def _shown(text: str, names: Mapping[str, str]) -> str:
     return text.replace(PREFIX + "/", "")
 
 
-def _execute(gdal, alg_path: str, tokens, shown, refused):
-    """Instantiate, parse, run and finalize. `refused(message)` makes the exception for a refused argv."""
+def _same(x):
+    return x
+
+
+def _features(gdal, alg, fields, snap=None) -> list:
+    """The output layer's features as (ISO WKB, field values...) tuples, read before ``Finalize`` (which releases the
+    in-memory dataset). A field that is unset or NULL on a feature is None. ``snap`` is ``(layer field, function)``
+    (``argv.level_snapper``): the function gives the exact contour level back from the layer's rounded one.
+    """
+    fix = {src: snap[1] for _n, _t, src in fields if snap and src == snap[0]}
+    ds = alg.Output()
+    if ds is None:
+        raise DataError(gdal.GetLastErrorMsg() or "GDAL returned no output layer")
+    lyr = ds.GetLayer(0)
+    if lyr is None:
+        raise DataError("GDAL returned no output layer")
+    lyr.ResetReading()
+    read = {
+        "DOUBLE": "GetFieldAsDouble",
+        "INT": "GetFieldAsInteger",
+        "BIGINT": "GetFieldAsInteger64",
+        "STRING": "GetFieldAsString",
+    }
+    out = []
+    for f in lyr:
+        g = f.GetGeometryRef()
+        out.append(
+            (None if g is None else bytes(g.ExportToIsoWkb()),)
+            + tuple(
+                (
+                    fix.get(src, _same)(getattr(f, read[t])(src))
+                    if f.IsFieldSetAndNotNull(src)
+                    else None
+                )
+                for _name, t, src in fields
+            )
+        )
+    del lyr, ds
+    return out
+
+
+def _execute(gdal, alg_path: str, tokens, shown, refused, collect=None):
+    """Instantiate, parse, run and finalize. `refused(message)` makes the exception for a refused argv. `collect(alg)`
+    reads the output after the run and before ``Finalize``; its value is returned."""
     alg, group = _instantiate(alg_path)
     try:
         gdal.ErrorReset()
@@ -358,8 +402,12 @@ def _execute(gdal, alg_path: str, tokens, shown, refused):
                 _shown(gdal.GetLastErrorMsg() or "GDAL refused the arguments", shown)
             )
         gdal.ErrorReset()
-        if not (alg.Run() and alg.Finalize()):
+        if not alg.Run():
             raise DataError(gdal.GetLastErrorMsg() or f"GDAL's {alg_path} failed")
+        got = collect(alg) if collect is not None else None
+        if not alg.Finalize():
+            raise DataError(gdal.GetLastErrorMsg() or f"GDAL's {alg_path} failed")
+        return got
     finally:
         del alg, group  # release both handles, the step before its group
 
@@ -506,8 +554,10 @@ def run(
             fmt = next(
                 t.split("=", 1)[1] for t in tokens if t.startswith("--output-format=")
             )
-            if fmt not in OUTPUT_FORMATS:
-                raise ParamError(f"{fn.sql_name}: the engine does not write {fmt}")
+            if fmt != OUTPUT_FORMAT_OF.get(block.out_kind):
+                raise ParamError(
+                    f"{fn.sql_name}: the engine does not write {fmt} for a {block.out_kind} output"
+                )
             data = argv_mod.data_bound(fn, values)
 
             def refused(msg):
@@ -515,6 +565,21 @@ def run(
 
             if block.alg == "raster calc":
                 _check_expression(gdal, fn, tokens, props, names, prefix, shown)
+            if block.out_kind == "features":
+                feats = _execute(
+                    gdal,
+                    block.alg,
+                    tokens,
+                    shown,
+                    refused,
+                    lambda alg: _features(
+                        gdal,
+                        alg,
+                        block.out_fields,
+                        argv_mod.level_snapper(fn, values),
+                    ),
+                )
+                return Result(None, None, command, features=feats)
             _execute(gdal, block.alg, tokens, shown, refused)
             if block.alg == "raster aspect" and "--zero-for-flat" in tokens:
                 _remask_zero_for_flat(gdal, names[0], out)

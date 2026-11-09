@@ -1025,10 +1025,21 @@ On Unity Catalog a virtual tile is refused, and so is a tile over the size limit
 {/* END GENERATED gbx_rst_summary */}
 
 :::note Implementation
-Powered by **rasterio** + **NumPy**. Returns a JSON summary (driver, size, CRS, geotransform, per-band statistics); the Python level's JSON shape differs from the JVM level's `gdalinfo -json` output.
+Runs GDAL's `raster info` with statistics, through the GDAL spec engine. The heavyweight function runs `gdalinfo -json` without statistics.
 :::
 
-Statistical summary of values.
+Describe the tile as JSON, with GDAL's own report: the text of `gdalinfo -json` with statistics.
+The JSON holds the driver, size, coordinate system, geotransform and corner coordinates.
+Each band lists its type, NoData value, `minimum`, `maximum`, `mean` and `stdDev`.
+
+:::warning Breaking change in 0.6
+The JSON is GDAL's, not the earlier GeoBrix shape. A query that reads its keys must change.
+- `bands[].min` and `bands[].max` are now `bands[].minimum` and `bands[].maximum`.
+- `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
+- GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` values with more digits.
+- A band with no valid pixel has no statistics. A tile in another driver reports its own driver. A tile with no band, such as a netCDF container, has an empty `bands` list.
+- On Unity Catalog the function still returns the earlier shape.
+:::
 
 _Examples use the multiband fixture (`rgb_nir_small.tif`, 3 bands) which has real pixel data._
 
@@ -5988,21 +5999,26 @@ On Unity Catalog the function takes a tile of up to 64 MiB decoded and writes it
 | Parameter | SQL type | UC type | Default | Description |
 |---|---|---|---|---|
 | `tile` | `TILE` | `TILE` |  | The tile to fill. |
-| `max_search_dist` | `DOUBLE` | `DOUBLE` | `100.0` | How far, in pixels, to search for valid pixels to interpolate from. |
-| `smoothing_iter` | `INT` | `INT` | `0` | The number of 3x3 smoothing passes over the filled pixels. |
+| `max_search_dist` | `DOUBLE` | `DOUBLE` | `100.0` | How far, in pixels, to search for valid pixels to interpolate from. A whole number. |
+| `smoothing_iter` | `INT` | `INT` | `0` | The number of 3x3 smoothing passes over the filled pixels. A whole number. |
 {/* END GENERATED gbx_rst_fillnodata */}
 
 See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to choose among sampling, resampling, and gap-filling.
 
 :::note Implementation
-Powered by **rasterio** (`rasterio.fill`).
+Runs GDAL's `raster fill-nodata` for each band, through the GDAL spec engine.
 :::
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Fill NoData pixels via `gdal.FillNodata` using inverse-distance interpolation from neighbors within `maxSearchDist` pixels. `smoothingIter` applies an optional post-fill 3×3 smoothing pass.
+Fill NoData pixels with GDAL's inverse-distance interpolation from the valid pixels within `max_search_dist` pixels.
+Each band is filled by its own mask.
+A pixel with no valid pixel in range stays NoData: the function adds no value beyond GDAL's interpolation.
+`smoothing_iter` adds 3×3 smoothing passes over the filled pixels.
+Both numbers must be whole, from 0 to 2147483647. A fraction or a negative number raises and names the value.
+A tile that declares no NoData value comes back as it is.
 
 <FunctionExamples
   name="rst_fillnodata"

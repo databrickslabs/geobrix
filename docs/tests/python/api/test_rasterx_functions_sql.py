@@ -362,6 +362,15 @@ def test_rst_pixelcount_sql_example(spark, multiband_rasters_view):
     assert first == [64, 64, 64], f"Expected [64, 64, 64], got {first!r}"
 
 
+def test_rst_summary_sql_example(spark, multiband_rasters_view):
+    """Test SQL summary example: GDAL's JSON, read through get_json_object (multiband fixture)."""
+    sql = rasterx_functions_sql.rst_summary_sql_example().strip().rstrip(";")
+    row = spark.sql(sql).first()
+    assert row["driver"] == "GTiff"
+    assert float(row["band1_max"]) == 119.0
+    assert float(row["band1_mean"]) == 83.594
+
+
 def test_rst_avg_sql_example(spark, multiband_rasters_view):
     """Test SQL average example (uses multiband fixture)."""
     sql = rasterx_functions_sql.rst_avg_sql_example().strip()

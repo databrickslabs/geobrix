@@ -470,21 +470,6 @@ def _uf_metadata_udf(tile, file_ref):
         return None
 
 
-# summary: PIXEL accessor, StringType return.  2-arg FILE-aware variant.
-@f.udf(StringType())
-def _uf_summary_udf(tile, file_ref):
-    if _tile_is_empty(tile):
-        return None
-    try:
-        from databricks.labs.gbx.pyrx import _env
-
-        _env.configure_gdal_env()
-        with ot._open(tile, file_ref=file_ref) as ds:
-            return accessors.summary(ds)
-    except Exception:  # noqa: BLE001
-        return None
-
-
 # histogram: PIXEL accessor, MapType return.  2-arg FILE-aware variant.
 @f.udf(MapType(StringType(), ArrayType(LongType())))
 def _uf_histogram_udf(tile, file_ref, n_buckets, min_val, max_val, include_nodata):
@@ -647,18 +632,7 @@ def _subdatasets_udf(tile):
         return accessors.subdatasets(ds)
 
 
-# summary / histogram / getsubdataset: PIXEL accessors (_open — need the window).
-@f.udf(StringType())
-def _summary_udf(tile):
-    if _tile_is_empty(tile):
-        return None
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with ot._open(tile) as ds:
-        return accessors.summary(ds)
-
-
+# histogram / getsubdataset: PIXEL accessors (_open — need the window).
 @f.udf(MapType(StringType(), ArrayType(LongType())))
 def _histogram_udf(tile, n_buckets, min_val, max_val, include_nodata):
     accessors.check_n_buckets(n_buckets)
@@ -3126,37 +3100,6 @@ def _rasterize_udf(
         out_crs=out_crs,
     )
     return _serde.build_tile(new_bytes, "GTiff", 0)
-
-
-def _fillnodata_bytes(tile, max_search_dist, smoothing_iter):
-    from databricks.labs.gbx.pyrx import _env
-
-    _env.configure_gdal_env()
-    with _open_op(tile) as ds:
-        return features.fill_nodata(ds, max_search_dist, smoothing_iter)
-
-
-@f.udf(V2_TILE_SCHEMA)
-@_tile_op("max_search_dist", "smoothing_iter")
-def _fillnodata_udf(tile, max_search_dist=100.0, smoothing_iter=0):
-    new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
-    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
-
-
-@f.udf(V2_TILE_SCHEMA)
-@_tile_op("max_search_dist", "smoothing_iter")
-def _fillnodata_v2_udf(
-    tile,
-    max_search_dist,
-    smoothing_iter,
-    virtualize_dir,
-    virtualize_prefix,
-    materialize,
-):
-    new_bytes = _fillnodata_bytes(tile, max_search_dist, smoothing_iter)
-    return _shaped_result_row(
-        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
-    )
 
 
 # --- Tier 1e3: TIN / IDW constructors (point-array -> tile) -----------------

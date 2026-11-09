@@ -92,6 +92,26 @@ def _engine_features(sql_name: str, values: dict) -> Callable:
     return _core
 
 
+def _engine_json(sql_name: str, values: dict) -> Callable:
+    """The pure-core body of an engine row that returns JSON: the GDAL spec engine on the open dataset's GeoTIFF bytes,
+    returning GDAL's text. Raises the engine's reason when GDAL fails."""
+
+    def _core(ds):
+        from databricks.labs.gbx import manifest
+        from databricks.labs.gbx.engine import run
+
+        res = run.run(
+            manifest.load().functions[sql_name],
+            [prx._dataset_to_gtiff_bytes(ds)],
+            dict(values),
+        )
+        if res.error is not None:
+            raise RuntimeError(res.error)
+        return res.text
+
+    return _core
+
+
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
 # (Python core_fn + col_fn) and in the Scala BenchDispatch case so the two engines
 # convolve with the same coefficients; the bench args carry only `kernel_size` for
@@ -1370,7 +1390,7 @@ REGISTRY: Dict[str, FnSpec] = {
         "accessor",
         ("pure-core",),
         {},
-        core_fn=lambda ds, a: accessors.summary(ds),
+        core_fn=lambda ds, a: _engine_json("gbx_rst_summary", {})(ds),
         col_fn=lambda t, a: rx.rst_summary(t),
         sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Summary.scala",),
         core=False,
@@ -1518,9 +1538,13 @@ REGISTRY: Dict[str, FnSpec] = {
         "features",
         _BOTH,
         {"max_search_dist": 10.0, "smoothing_iter": 0},
-        core_fn=lambda ds, a: features.fill_nodata(
-            ds, a["max_search_dist"], a["smoothing_iter"]
-        ),
+        core_fn=lambda ds, a: _engine_core(
+            "gbx_rst_fillnodata",
+            {
+                "max_search_dist": a["max_search_dist"],
+                "smoothing_iter": a["smoothing_iter"],
+            },
+        )(ds),
         col_fn=lambda t, a: rx.rst_fillnodata(
             t, a["max_search_dist"], a["smoothing_iter"]
         ),

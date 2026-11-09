@@ -215,6 +215,10 @@ ENGINE_L3 = ("engine", "engine-c0", "engine-c1")
 # The warp functions took the row-wise form in the local pass (1024 px Float32 tiles in EPSG:4326 with NoData holes, median
 # of 3 runs, 384 tiles, c0 against c1): transform 5.7 s against 8.3, web mercator 6.8 against 9.1, resample 5.7 against 6.0,
 # resample_to_size 5.2 against 6.4, resample_to_res 4.7 against 6.8.
+# The fill took the row-wise form in the local pass (1024 px Float32 tiles in EPSG:4326 with NoData holes, median of 3 runs,
+# three passes, c0 against c1): 0.5 to 1.2 s against 1.0 to 2.0 s at 24 tiles, 1.8 to 2.3 s against 2.8 to 3.0 s at 96, and
+# 6.4 to 9.2 s against 7.9 to 12.6 s at 384 (c1 was the faster in one of the three passes at 384, by 7 percent).
+# The summary returns a string, which has no batch form: every engine form registers the row-wise UDF.
 ENGINE_L3_FORM: Dict[str, str] = {
     "gbx_rst_mapalgebra": "engine-c0",
     **{
@@ -237,6 +241,8 @@ ENGINE_L3_FORM: Dict[str, str] = {
             "resample",
             "resample_to_size",
             "resample_to_res",
+            "fillnodata",
+            "summary",
         )
     },
 }

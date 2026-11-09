@@ -43,8 +43,9 @@ CHECKS = {
     "rst_min": _bands(),
     "rst_numbands": lambda r: r == 3,
     "rst_pixelcount": lambda r: r == [64, 64, 64],
-    "rst_summary": lambda r: isinstance(r, str)
-    and ("GTiff" in r or "driverShortName" in r),
+    "rst_summary": lambda r: isinstance(r, dict)
+    and r["driver"] == "GTiff"
+    and float(r["band1_max"]) == 119.0,
     "rst_tryopen": lambda r: r is True,
     "rst_type": lambda r: r == ["UInt16"] * 3,
     # single band

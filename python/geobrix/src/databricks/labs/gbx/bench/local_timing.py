@@ -215,6 +215,28 @@ SETS: Dict[str, SetSpec] = {
         fn="gbx_rst_contour",
         peer_exempt=("engine-c1@mem",),  # the same UDF as c0: recorded, not a peer
     ),
+    # the fill (every band, each by its own mask), over replicated 1024 px EPSG:4326 tiles with NoData holes, with its two light
+    # UDFs and a floor
+    "SE-fillnodata": SetSpec(
+        mvp="SE",
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_fillnodata",
+        peer_exempt=(
+            "engine-c1@mem",
+        ),  # the batch UDF behind the wrapper: recorded, not a peer
+    ),
+    # the summary, a GDAL spec engine row that returns GDAL's info JSON as a string: over the same replicated 1024 px tiles as the
+    # DEM functions, with the row-wise UDF (c0), the batch form (which a JSON row resolves to c0) and a floor
+    "SE-summary": SetSpec(
+        mvp="SE",
+        forms=("engine-c0@mem", "engine-c1@mem", "floor-c0@mem"),
+        reference="engine-c0@mem",
+        ns=(24, 96, 384),
+        fn="gbx_rst_summary",
+        peer_exempt=("engine-c1@mem",),  # the same UDF as c0: recorded, not a peer
+    ),
     # TRI, the terrain function that keeps a JVM companion: the companion (`today`), the engine's two light UDFs and a floor,
     # over 1024 px DEM tiles replicated in memory. The companion is what the pass measures, so it is not a peer of the light
     # forms.

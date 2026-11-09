@@ -80,6 +80,51 @@ def _vs_wall_file(tmpdir):
     return _tile(None, path, {"col_off": 0, "row_off": 0, "width": 21, "height": 21})
 
 
+@builder("fill_two_bands")
+def _fill_two_bands(tmpdir):
+    """Two 9 x 9 Float32 bands of a gradient, NoData -9999, with a hole in the middle of each (band 2's is wider)."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    yy, xx = np.mgrid[0:9, 0:9].astype("float64")
+    z = np.stack([10.0 + xx + yy, 100.0 + 2.0 * xx - yy])
+    z[0, 4, 4] = -9999.0
+    z[1, 3:6, 3:6] = -9999.0
+    return _tile(_gtiff(z, "EPSG:3857"))
+
+
+@builder("fill_undeclared")
+def _fill_undeclared(tmpdir):
+    """A 9 x 9 Float32 gradient with a -9999 pixel and no NoData declared."""
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    yy, xx = np.mgrid[0:9, 0:9].astype("float64")
+    z = (10.0 + xx + yy)[np.newaxis]
+    z[0, 4, 4] = -9999.0
+    return _tile(_gtiff(z, "EPSG:3857", nodata=None))
+
+
+@builder("fill_all_nodata")
+def _fill_all_nodata(tmpdir):
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    return _tile(_gtiff(np.full((1, 4, 4), -9999.0), "EPSG:3857"))
+
+
+@builder("fill_no_crs")
+def _fill_no_crs(tmpdir):
+    import numpy as np
+
+    from databricks.labs.gbx.bench.oracles import _gtiff
+
+    return _tile(_gtiff(np.arange(16.0).reshape(1, 4, 4), None, nodata=None))
+
+
 WALL = Build("vs_wall")
 SPEC_ANALYSIS = (
     Case(
@@ -95,8 +140,8 @@ SPEC_ANALYSIS = (
                     "band": 1,
                     "type": "Float32",
                     "noDataValue": -9999.0,
-                    "min": 2.0,
-                    "max": 12.0,
+                    "minimum": 2.0,
+                    "maximum": 12.0,
                     "mean": 7.0,
                 }
             ],
@@ -106,15 +151,35 @@ SPEC_ANALYSIS = (
     Case(
         "summary_virtual", S, (VIRT,), "json_subset", {"size": [64, 48]}, ("session",)
     ),
-    # the mean of single-precision pixels is accumulated in double (see avg_float32_precision in raster_accessor.py)
+    # GDAL gives the mean of single-precision pixels accumulated in double, and rounds it to three decimals
     Case(
         "summary_float32_precision",
         S,
         (Build("tile_4326"),),
         "json_subset",
-        {"bands": [{"mean": 47.71793193717277}]},
+        {"bands": [{"mean": 47.718}]},
         ("session",),
     ),
+    # the whole JSON against GDAL's own `gdal.Info(format="json", stats=True)`, through osgeo
+    Case("summary_json", S, (Build("tile_4326"),), "json_ref", None, ("session",)),
+    Case(
+        "summary_two_bands",
+        S,
+        (Build("fill_two_bands"),),
+        "json_ref",
+        None,
+        ("session",),
+    ),
+    # a band with no valid pixel has no statistics; the JSON is still GDAL's
+    Case(
+        "summary_all_nodata",
+        S,
+        (Build("fill_all_nodata"),),
+        "json_ref",
+        None,
+        ("session",),
+    ),
+    Case("summary_no_crs", S, (Build("fill_no_crs"),), "json_ref", None, ("session",)),
     Case("summary_null_tile", S, (None,), "null", None, ("session",)),
     Case("summary_error_tile", S, (ERR,), "null", None, ("session",)),
     # proximity: the distance to the nearest source pixel, judged against scipy's exact Euclidean distance
@@ -169,6 +234,29 @@ SPEC_ANALYSIS = (
     Case("fillnodata_smoothed", FND, (DEM, 100.0, 2), "ref", "fillnodata", ONLY),
     Case("fillnodata_null_tile", FND, (None,), "null", None, ONLY),
     Case("fillnodata_null_distance", FND, (DEM, None, 0), "null", None, ONLY),
+    Case("fillnodata_null_smoothing", FND, (DEM, 100.0, None), "null", None, ONLY),
+    # every band is filled, each by its own mask
+    Case(
+        "fillnodata_two_bands",
+        FND,
+        (Build("fill_two_bands"),),
+        "ref",
+        "fillnodata",
+        ONLY,
+    ),
+    # a tile that declares no NoData has no pixel to fill: it comes back as it is
+    Case(
+        "fillnodata_undeclared",
+        FND,
+        (Build("fill_undeclared"),),
+        "ref",
+        "fillnodata",
+        ONLY,
+    ),
+    # the search distance and the passes are whole numbers of pixels and passes
+    Case("fillnodata_fractional_distance", FND, (DEM, 2.5, 0), "raises", "2.5", ONLY),
+    Case("fillnodata_negative_distance", FND, (DEM, -1.0, 0), "raises", "-1", ONLY),
+    Case("fillnodata_negative_smoothing", FND, (DEM, 100.0, -1), "raises", "-1", ONLY),
     Case("fillnodata_error_in", FND, (ERR,), "error_tile", UPSTREAM_ERROR, ONLY),
     Case("fillnodata_corrupt", FND, (CORRUPT,), "error_tile", None, ONLY),
     # viewshed: 255 up to and including the wall (column 14), 0 behind it
@@ -289,10 +377,12 @@ SPEC_ANALYSIS += (
     Case("polygonize_corrupt", PG, (CORRUPT,), "no_rows", None, ONLY),
 )
 
-# Unity Catalog: the summary, the fill and the proximity of a materialized tile are the session's
+# Unity Catalog: the fill and the proximity of a materialized tile are the session's; the summary's NULL rows are too. The
+# summary's JSON stays the earlier numpy shape on Unity Catalog until its handler runs the engine, so its JSON rows are the
+# session's alone
 SPEC_ANALYSIS = (
     share(
-        SPEC_ANALYSIS, "summary", "summary_float32_precision", "summary_null_tile", "summary_error_tile",
+        SPEC_ANALYSIS, "summary_null_tile", "summary_error_tile",
         "fillnodata_default", "fillnodata_short_search", "fillnodata_smoothed", "fillnodata_null_tile",
         "fillnodata_null_distance", "fillnodata_error_in",
         "proximity_targets", "proximity_default_sources", "proximity_pixel_capped", "proximity_bad_units",

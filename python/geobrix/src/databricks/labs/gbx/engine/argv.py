@@ -141,6 +141,28 @@ def _fail(fn, arg, message: str):
     return (DataError if arg.bad == "data" else ParamError)(f"{fn.sql_name}: {message}")
 
 
+_COUNT_MAX = 2**31 - 1
+
+
+def _count(fn, arg, value) -> int:
+    """`value` as a whole number from 0 to 2^31 - 1 (a count of pixels or passes), else a refusal naming the parameter and
+    the value: GDAL reads the argument as an integer, and a fraction cut to its whole part would run another search.
+    """
+    try:
+        x = float(value)
+        ok = math.isfinite(x) and x == int(x) and 0 <= x <= _COUNT_MAX
+    except (TypeError, ValueError, OverflowError):
+        ok = False
+    if not ok:
+        raise _fail(
+            fn,
+            arg,
+            f"{arg.source} must be a whole number from 0 to {_COUNT_MAX} (got {value}). "
+            "Fix: pass a whole number",
+        )
+    return int(x)
+
+
 def _bind_value(fn, arg, value) -> Optional[str]:
     """One argument's value text, or None to leave a bare flag out (a false `bool`)."""
     t = arg.type
@@ -153,6 +175,8 @@ def _bind_value(fn, arg, value) -> Optional[str]:
         return str(int(value))
     if t == "bool":
         return "" if bool(value) else None
+    if t == "count":
+        return str(_count(fn, arg, value))
     if t == "choice":
         word = str(value).strip().lower()
         choices = {k.lower(): v for k, v in arg.map.items()}
@@ -724,6 +748,8 @@ def estimate_output(
     output pixel in three.
     """
     first = props[0]
+    if fn.gdal.out_kind == "json":
+        return 0  # the text is small; the statistics read the pixels block by block
     dtype = _token_value(tokens, "output-data-type") or (
         first.dtype if fn.gdal.out_dtype == "input" else fn.gdal.out_dtype
     )
@@ -736,6 +762,8 @@ def estimate_output(
     if fn.gdal.alg != "raster reproject":
         pixels = max(pixels, *(p.width * p.height for p in props))
     out = pixels * bands * item
+    if fn.gdal.per_band and bands > 1:
+        out += 2 * pixels * item  # one band's result file and the bytes read from it
     if fn.gdal.alg == "raster reproject" and first.mask:
         out += first.width * first.height * 4 + pixels * 3
     return out
@@ -820,6 +848,10 @@ def _output_tokens(fn, inputs: Sequence[RasterProps]) -> List[str]:
         ]
     if block.out_kind == "features":
         return ["--output=<output>", "--output-format=MEM"]
+    if block.out_kind == "json":
+        return [
+            "--output-format=json"
+        ]  # the text comes back in the algorithm's `output-string`
     raise ValueError(
         f"{fn.sql_name}: the {block.out_kind} output is not built in this release"
     )
@@ -947,7 +979,9 @@ def _template(fn, values, inputs, section) -> Optional[List[str]]:
         + tokens
         + _output_tokens(fn, inputs)
         + (["--num-threads=1"] if block.alg in THREADED else [])
-        + ["--quiet"]
+        + (
+            [] if block.out_kind == "json" else ["--quiet"]
+        )  # `raster info` has no --quiet
     )
 
 

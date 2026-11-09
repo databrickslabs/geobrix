@@ -751,29 +751,37 @@ rst_subdatasets_python_example_output = """
 
 
 # ---------------------------------------------------------------------------
-# rst_summary — statistical summary as JSON string
+# rst_summary — GDAL's JSON summary of the tile, with statistics
 # Fixture: MULTIBAND (rgb_nir_small.tif — 8x8, 3 bands; single-band is all-NoData)
 # ---------------------------------------------------------------------------
 
 
 def rst_summary_python_example(spark):
-    """Get a statistical summary of a raster tile as a JSON string using the light pyrx tier.
+    """Read the driver and the first band's statistics from the summary of a raster tile.
 
-    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
+    The summary is GDAL's own JSON (gdalinfo -json, with statistics). Uses the multiband
+    fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
     """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
     from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
 
     df = spark.table("multiband_rasters")
-    result = df.select(rx.rst_summary("tile").alias("summary")).first()
-    return result["summary"]
+    summary = df.select(rx.rst_summary("tile").alias("summary"))
+    result = summary.select(
+        f.get_json_object("summary", "$.driverShortName").alias("driver"),
+        f.get_json_object("summary", "$.bands[0].maximum").alias("band1_max"),
+        f.get_json_object("summary", "$.bands[0].mean").alias("band1_mean"),
+    ).first()
+    return result.asDict()
 
 
 rst_summary_python_example_output = """
-+------------------------------------------------------------+
-|summary                                                     |
-+------------------------------------------------------------+
-|{"driverShortName": "GTiff", "size": [8, 8], "coordinateS...|
-+------------------------------------------------------------+
++------+---------+----------+
+|driver|band1_max|band1_mean|
++------+---------+----------+
+|GTiff |119.0    |83.594    |
++------+---------+----------+
 """
 
 

@@ -39,7 +39,8 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 
 | Capability | pyrx function(s) | Backing library |
 |---|---|---|
-| **I/O & metadata** | `rst_fromcontent`, `rst_fromfile`, `rst_width`, `rst_height`, `rst_srid`, `rst_numbands`, `rst_metadata`, `rst_summary`, `rst_subdatasets` | rasterio |
+| **I/O & metadata** | `rst_fromcontent`, `rst_fromfile`, `rst_width`, `rst_height`, `rst_srid`, `rst_numbands`, `rst_metadata`, `rst_subdatasets` | rasterio |
+| **Raster summary** | `rst_summary` | GDAL `raster info` in the worker |
 | **Warp / reproject** | `rst_transform`, `rst_to_webmercator` | GDAL `raster reproject` in the worker |
 | **Clip / mask** | `rst_clip` | rasterio + shapely |
 | **Resample** | `rst_resample`, `rst_resample_to_size`, `rst_resample_to_res` | GDAL `raster reproject` in the worker |
@@ -48,6 +49,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **Spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_threshold` | GDAL `raster calc` |
 | **Band math** | `rst_derivedband`, `rst_derivedband_agg`, `rst_combineavg`, `rst_combineavg_agg` | NumPy |
 | **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | GDAL `raster` algorithms in the worker |
+| **Fill NoData** | `rst_fillnodata` | GDAL `raster fill-nodata` in the worker |
 | **Color relief** | `rst_color_relief` | GDAL `raster color-map` in the worker |
 | **Rasterize / polygonize** | `rst_rasterize`, `rst_polygonize`, `rst_h3_rasterize_agg` | rasterio + shapely |
 | **Focal / convolution** | `rst_filter`, `rst_convolve` | scipy.ndimage |

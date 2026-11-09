@@ -47,6 +47,8 @@ class Case:
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props | geom_equals | cell_set
     # geom_equals: `expect` is the WKT of the geometry the output (WKB or WKT) must equal, vertex order aside.
     # json_subset: the output is JSON text that holds every key and value of the `expect` dict (extra keys allowed).
+    # json_ref: the output is JSON text equal to GDAL's own `gdal.Info(format="json", stats=True)` of the first argument
+    # (the same keys, numbers within a relative 1e-9; its path shown as `<input>`).
     # cell_set: `expect` is the cell ids an array output must hold, each once, in any order (an array of chip
     # structs is judged by the first field of each). approx: a number, or a struct or list of numbers, to 1e-9.
     # geom_srid: `expect` is the WKT of the geometry the output (WKB or EWKB) must equal, Z included, and the SRID it
@@ -136,8 +138,9 @@ def uc_view(
 # A JVM level reads tile bytes only; the manager does not pick one for these functions, whose levels are light.
 _L1_NO_VIRTUAL = "the JVM level cannot read a virtual tile (a path, no bytes); the manager keeps these functions on light"
 _VIRTUAL_RAISES_L1 = "a virtual tile at L1 raises VirtualTileException; needs a wrapper-free virtual dispatch"
-# The JVM summary is GDAL's own info JSON; the contract is the light JSON. The GDAL spec engine replaces the JVM form.
-_SUMMARY_L1 = "the JVM summary is gdalinfo's JSON, not the contract's; the GDAL spec engine replaces it"
+# The JVM summary runs gdalinfo without --stats, so a band has no minimum, maximum, mean or standard deviation (H21); the
+# engine's `raster info --stats` gives them. The JVM level keeps the companion until its measurement (the 1.2x rule).
+_SUMMARY_L1 = "the JVM summary runs gdalinfo -json without statistics (a band has no minimum, maximum, mean or stdDev) and names its own temporary file; the engine runs raster info --stats and shows the input as <input>"
 # H20: the JVM derived band is GDAL's VRT pixel function, read lazily: its raster is a Float32 VRT whose function runs when it
 # is read, so the data type is the source's and a function that does not parse or does not exist surfaces as a failed
 # read, not at the call. The companion is deleted in the Task 21 sweep (L1 is not the default for this function).
@@ -160,12 +163,29 @@ HEAVY_PENDING: Dict[str, Dict[str, str]] = {
         cid: {"L1": _XYZ_ERROR_L1}
         for cid in ("xyzpyramid_error_tile", "xyzpyramid_corrupt_tile")
     },
-    "summary_virtual": {"L1": _L1_NO_VIRTUAL},
     "cg_grid_null_arg": {
         "L1": "the JVM grid constructor raises 'must not be null' for a NULL argument; the contract is a NULL grid"
     },
-    "summary": {"L1": _SUMMARY_L1},
-    "summary_float32_precision": {"L1": _SUMMARY_L1},
+    **{
+        cid: {"L1": _SUMMARY_L1}
+        for cid in (
+            "summary",
+            "summary_float32_precision",
+            "summary_json",
+            "summary_two_bands",
+            "summary_all_nodata",
+            "summary_no_crs",
+        )
+    },
+    **{
+        cid: {
+            "L1": "the JVM fill takes a fractional or negative search distance (gdal.FillNodata takes a double); the engine's GDAL algorithm reads a whole number of pixels from 0 and refuses any other value"
+        }
+        for cid in ("fillnodata_fractional_distance", "fillnodata_negative_distance")
+    },
+    "fillnodata_negative_smoothing": {
+        "L1": "the JVM fill refuses a negative smoothing_iter with an error tile ('requirement failed'), where the contract raises"
+    },
 }
 
 # The aggregates of the Task 18 batch whose JVM companion differs from the contract, and is not selected for it.
@@ -3062,20 +3082,29 @@ def _ref_proximity(units: str):
 
 
 def _ref_fillnodata(args):
-    """rst_fillnodata: rasterio's own GDAL `FillNodata` call on band 1, the same search distance and smoothing."""
+    """rst_fillnodata: rasterio's own GDAL `FillNodata` call on every band, the same search distance and smoothing. One
+    band gives a 2-D reference, several a 3-D one. A tile that declares no NoData has no pixel to fill.
+    """
+    import numpy as np
     from rasterio.fill import fillnodata
 
     max_dist = args[1] if len(args) > 1 and args[1] is not None else 100.0
     smoothing = args[2] if len(args) > 2 and args[2] is not None else 0
     with _ref_dataset(args) as ds:
-        out = fillnodata(
-            ds.read(1),
-            mask=ds.read_masks(1),
-            max_search_distance=float(max_dist),
-            smoothing_iterations=int(smoothing),
-        )
         nodata = ds.nodata
-    return out.astype("float64"), out == nodata
+        outs = [
+            fillnodata(
+                ds.read(b),
+                mask=ds.read_masks(b),
+                max_search_distance=float(max_dist),
+                smoothing_iterations=int(smoothing),
+            )
+            for b in range(1, ds.count + 1)
+        ]
+    masks = [np.zeros(o.shape, bool) if nodata is None else o == nodata for o in outs]
+    if len(outs) == 1:
+        return outs[0].astype("float64"), masks[0]
+    return np.stack(outs).astype("float64"), np.stack(masks)
 
 
 def _ref_clip_columns(first: int, count: int):
@@ -3862,6 +3891,102 @@ def _check_json_subset(case: Case, out) -> Optional[str]:
     return None
 
 
+def _ref_info(args) -> dict:
+    """GDAL's own `gdal.Info(..., format="json", stats=True)` on the tile `args[0]`, written under a unique `/vsimem`
+    name, through osgeo: an entry point apart from the `raster info` algorithm the engine runs. Its path is shown as
+    `<input>`, as the engine shows its own."""
+    import uuid
+
+    from databricks.labs.gbx import _osgeo
+
+    gdal = _osgeo.bindings("the summary reference").gdal
+    name = f"/vsimem/gbx_oracle_{uuid.uuid4().hex}.tif"
+    gdal.FileFromMemBuffer(name, _raster_of(args[0]))
+    try:
+        with gdal.ExceptionMgr(useExceptions=False):
+            info = gdal.Info(name, format="json", stats=True)
+        text = info if isinstance(info, str) else json.dumps(info)
+        return json.loads(text.replace(name, "<input>"))
+    finally:
+        for left in (name, name + ".aux.xml"):
+            if gdal.VSIStatL(left) is not None:
+                gdal.Unlink(left)
+
+
+_CRS_PATHS = (".wkt", ".proj:wkt2", ".proj:projjson")
+
+
+def _crs_flaw(got, want, path) -> Optional[str]:
+    """A CRS in GDAL's JSON (WKT or PROJJSON) is judged by CRS equivalence, not by its text: the PROJ database of the
+    worker that wrote it and of the process that judges it can spell one CRS differently (a datum or an ensemble).
+    """
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    def text(v):
+        return v if isinstance(v, str) else json.dumps(v)
+
+    try:
+        same = crs_equal(text(got), text(want))
+    except Exception:  # noqa: BLE001 - a CRS that does not parse is a difference
+        same = False
+    return None if same else f"{path}: not the same CRS as the reference"
+
+
+def _json_flaw(got, want, path="$") -> Optional[str]:
+    """Where JSON `got` departs from `want`: the same keys, lists of the same length, numbers to a relative 1e-9, a CRS
+    by its equivalence."""
+    import math
+
+    if path.endswith(_CRS_PATHS):
+        return _crs_flaw(got, want, path)
+    if isinstance(want, dict):
+        if not isinstance(got, dict) or set(got) != set(want):
+            return f"{path}: keys {sorted(got) if isinstance(got, dict) else got!r}, want {sorted(want)}"
+        return next(
+            (
+                w
+                for w in (_json_flaw(got[k], v, f"{path}.{k}") for k, v in want.items())
+                if w
+            ),
+            None,
+        )
+    if isinstance(want, list):
+        if not isinstance(got, list) or len(got) != len(want):
+            return f"{path}: {got!r}, want {want!r}"
+        return next(
+            (
+                w
+                for w in (
+                    _json_flaw(g, v, f"{path}[{i}]")
+                    for i, (g, v) in enumerate(zip(got, want))
+                )
+                if w
+            ),
+            None,
+        )
+    if isinstance(want, (int, float)) and not isinstance(want, bool):
+        ok = (
+            isinstance(got, (int, float))
+            and not isinstance(got, bool)
+            and math.isclose(got, want, rel_tol=1e-9, abs_tol=1e-12)
+        )
+        return None if ok else f"{path}: {got!r}, want {want!r}"
+    return None if got == want else f"{path}: {got!r}, want {want!r}"
+
+
+def _check_json_ref(case: Case, out, args) -> Optional[str]:
+    """`out` is JSON text equal to GDAL's own info JSON of the tile (`_ref_info`): the same keys everywhere, numbers within
+    a relative 1e-9."""
+    if out is None:
+        return f"{case.cid}: got NULL, want GDAL's info JSON"
+    try:
+        got = json.loads(out)
+    except (TypeError, ValueError):
+        return f"{case.cid}: not JSON: {str(out)[:200]!r}"
+    why = _json_flaw(got, _ref_info(args))
+    return None if why is None else f"{case.cid}: {why}"
+
+
 def _check_tile_size(case: Case, out) -> Optional[str]:
     """`out` is a tile whose raster is `case.expect` = (width, height) pixels."""
     raster = _field(out, "raster")
@@ -3993,6 +4118,7 @@ _ARG_CHECKS = {
     "warp_masked": _check_warp_masked,
     "tile_meta": _check_tile_meta,
     "ref": _check_ref,
+    "json_ref": _check_json_ref,
     "geom_srid": _check_geom_srid,
     "isobands": _oracle_check("check_isobands"),
     "contours": _oracle_check("check_contours"),

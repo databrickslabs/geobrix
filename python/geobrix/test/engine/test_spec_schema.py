@@ -323,6 +323,18 @@ REFUSED_BLOCKS = [
         _row(write=None),
         "write profile",
     ),
+    (
+        "a JSON output with a write profile",
+        _row(out={"kind": "json"}),
+        "write profile",
+    ),
+    (
+        "a JSON output with a field",
+        _row(
+            out={"kind": "json", "fields": [["value", "DOUBLE", "value"]]}, write=None
+        ),
+        "at least one field",
+    ),
     ("an in_read outside the vocabulary", _row(in_read="rows"), "rows"),
     ("a same_crs outside the vocabulary", _row(same_crs="reproject"), "reproject"),
     (
@@ -386,6 +398,22 @@ REFUSED_SPECS = [
             ]
         ),
         "levels",
+    ),
+    ("a per_band row with no band argument", _row(per_band=True), "per_band"),
+    (
+        "a per_band row with a band that is not 1",
+        _row(per_band=True, args=[{"arg": "band", "const": 2}]),
+        "per_band",
+    ),
+    (
+        "a per_band row with a JSON output",
+        _row(
+            per_band=True,
+            out={"kind": "json"},
+            write=None,
+            args=[{"arg": "band", "const": 1}],
+        ),
+        "per_band",
     ),
     (
         "a checked_name with no fixed word",
@@ -505,3 +533,25 @@ def test_the_engines_file_form_serves_one_tile_and_needs_the_engine_key():
     no_engine.levels["L3"].pop("engine")
     with pytest.raises(spec.SpecError, match="'engine' key"):
         spec.validate(no_engine, MAN.gdal)
+
+
+def test_the_analysis_rows_use_the_json_output_the_whole_number_binder_and_the_band_step():
+    """The summary is the one JSON row (`raster info`, with statistics); the fill steps through the bands and reads its two
+    numbers as whole numbers. Neither has an output the engine could not write: JSON comes back as text.
+    """
+    summary, fill = (
+        MAN.functions["gbx_rst_summary"],
+        MAN.functions["gbx_rst_fillnodata"],
+    )
+    assert summary.gdal.out_kind == "json" and summary.gdal.write == ""
+    assert [(a.arg, a.const) for a in summary.gdal.args] == [("stats", True)]
+    assert fill.gdal.per_band and fill.gdal.out_dtype == "input"
+    assert {a.arg: a.type for a in fill.gdal.args if a.source} == {
+        "max-distance": "count",
+        "smoothing-iterations": "count",
+    }
+    assert {f.sql_name for f in ENGINE_FNS if f.gdal.out_kind == "json"} == {
+        "gbx_rst_summary"
+    }
+    assert {f.sql_name for f in ENGINE_FNS if f.gdal.per_band} == {"gbx_rst_fillnodata"}
+    assert spec.OUTPUT_FORMAT_OF["json"] == "json"

@@ -16,6 +16,7 @@ PASS = {
     **{fn: "se_dem_1024_mem" for fn in lf.SE_DEM_FUNCTIONS},
     **{fn: "se_calc_512_mem" for fn in lf.SE_CALC_FUNCTIONS},
     **{fn: "se_warp_1024_mem" for fn in lf.SE_WARP_FUNCTIONS},
+    **{fn: "se_warp_1024_mem" for fn in lf.SE_FILL_FUNCTIONS},
 }
 NEEDED = (
     {  # (level, variant label without the input tag) every function has on its input

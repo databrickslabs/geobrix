@@ -654,22 +654,27 @@ rst_subdatasets_sql_example_output = """
 
 
 def rst_summary_sql_example():
-    """Get statistical summary of a multiband raster tile.
+    """Read the driver and the first band's statistics from the summary of a raster tile.
 
-    Uses the multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
+    The summary is GDAL's own JSON (gdalinfo -json, with statistics). Uses the multiband
+    fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
     """
     return """
 -- multiband_rasters view is from rgb_nir_small.tif (3 bands: red, NIR, green)
-SELECT gbx_rst_summary(tile) AS summary FROM multiband_rasters;
+SELECT
+  get_json_object(summary, '$.driverShortName') AS driver,
+  get_json_object(summary, '$.bands[0].maximum') AS band1_max,
+  get_json_object(summary, '$.bands[0].mean') AS band1_mean
+FROM (SELECT gbx_rst_summary(tile) AS summary FROM multiband_rasters);
 """
 
 
 rst_summary_sql_example_output = """
-+------------------------------------------------------------+
-|summary                                                     |
-+------------------------------------------------------------+
-|{"driverShortName": "GTiff", "size": [8, 8], "coordinateS...|
-+------------------------------------------------------------+
++------+---------+----------+
+|driver|band1_max|band1_mean|
++------+---------+----------+
+|GTiff |119.0    |83.594    |
++------+---------+----------+
 """
 
 

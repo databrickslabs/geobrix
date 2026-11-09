@@ -8,6 +8,7 @@
 - A row whose output is features (``gdal.out.kind``) returns an array of structs (``return_type``), NULL for a NULL,
   empty, error or unreadable tile and for a call GDAL fails (the reason is logged once per function and reason in the
   process); it has no c1 (``c1`` refuses it), so its batch form is c0.
+- A row whose output is JSON (``gdal.out.kind``) returns GDAL's text as a STRING, NULL in the same cases; it has no c1 either.
 - c1 (``c1(sql_name)``): a batch UDF over the raster bytes and the other arguments, returning
   ``struct<raster, error, command>`` (no MAP field, so neither pandas nor Arrow has to carry one); the SQL wrapper
   the manager installs (``sqlwrap.engine_dispatch``) builds the tile, and sends virtual tiles to c0.
@@ -69,9 +70,11 @@ _logged_lock = threading.Lock()
 
 def return_type(fn) -> DataType:
     """The Spark type a row's engine UDF returns: a tile, or for a features output an array of structs (the geometry
-    as WKB, then the declared fields)."""
+    as WKB, then the declared fields), or for a JSON output a string."""
     if fn.gdal.out_kind == "raster":
         return V2_TILE_SCHEMA
+    if fn.gdal.out_kind == "json":
+        return StringType()
     if fn.gdal.out_kind == "features":
         return ArrayType(
             StructType(
@@ -102,12 +105,15 @@ def _log_once(sql_name: str, reason: str) -> None:
 
 
 def _value(fn, res: Optional[run.Result]):
-    """A features result as SQL sees it: a list of structs, or None for a NULL result or a failed call."""
+    """A features or JSON result as SQL sees it: a list of structs or GDAL's text, or None for a NULL result or a failed
+    call."""
     if res is None:
         return None
     if res.error is not None:
         _log_once(fn.sql_name, res.error)
         return None
+    if fn.gdal.out_kind == "json":
+        return res.text
     names = ["geom_wkb"] + [n for n, _, _ in fn.gdal.out_fields]
     return [dict(zip(names, row)) for row in res.features]
 

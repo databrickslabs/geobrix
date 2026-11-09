@@ -392,7 +392,7 @@ def plume_quant():
         .withColumn("gbx_mean_ppmm",
                     F.get_json_object("summary", "$.bands[0].mean").cast("double"))
         .withColumn("gbx_max_ppmm",
-                    F.get_json_object("summary", "$.bands[0].max").cast("double"))
+                    F.get_json_object("summary", "$.bands[0].maximum").cast("double"))
         # Keep -- per plume -- the segment with the strongest clipped max (edge-segment
         # slivers lose to the containing segment).
         .withColumn(

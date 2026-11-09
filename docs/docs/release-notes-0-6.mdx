@@ -121,6 +121,11 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - `levels` may come in any order. Repeated and NULL elements are dropped.
   - An infinite level raises and names the value. Before, it gave no lines.
   - A NULL, error or corrupt tile gives NULL, and a tile with no line to trace gives an empty array.
+- **`gbx_rst_fillnodata` runs GDAL's `raster fill-nodata`.** It used rasterio before. The filled pixels equal the earlier results, with a few differences.
+  - GDAL fills one band for each run. The function runs it once for each band and keeps the tile's other properties, so every band is still filled by its own mask.
+  - `max_search_dist` and `smoothing_iter` must be whole numbers from 0 to 2147483647. A fraction or a negative number raises and names the value. Before, `max_search_dist` took a fraction.
+  - A pixel with no valid pixel within `max_search_dist` stays NoData. The function adds no value beyond GDAL's interpolation.
+  - A NULL number gives NULL. A tile that declares no NoData value comes back as it is.
 - **A virtual tile whose file is missing is retried, then raises with a `Fix:`. It is never a silent NULL.** This holds for every function that runs GDAL's own algorithm, such as slope, aspect, color relief, `raster calc` and contour. A Volume path can lag a write, so the read retries about 10 times. If the file is still missing, the error names the path. Check that it exists and is readable from the workers. A corrupt file still gives an error tile or NULL.
 - **The JAR no longer holds the seven `RST_Combine*` expressions or `RST_BNG_Tessellate`.** On a dedicated cluster, the JVM `gbx_rst_combineavg` took 1.08x and 1.49x the time of the best lightweight SQL form at 4x and 16x rows. The times were 131.56 s against 122.16 s, and 576.44 s against 387.95 s. The DataFrame helper `combine_by_key` took 261.07 s at 16x rows. The raster `gbx_rst_bng_tessellate` took 0.97x and 1.03x the time of the lightweight form, a tie. These eight functions ran the JVM form by default with the JAR. They now run the lightweight form. From Scala, call them with `call_function("gbx_<name>", ...)`. `gbx_rst_combineavg_agg` and the grid `gbx_bng_tessellate` keep their JVM forms. `gbx_rst_frombands` keeps its JVM form: it is not measured yet.
 - **The JAR no longer holds `RST_BuildOverviews`.** On a dedicated cluster the lightweight `gbx_rst_buildoverviews` was 2.2x faster than the JVM form. The function already ran the lightweight form by default and still does. The JVM form wrote the overviews in a sidecar file that the tile bytes did not carry. From Scala, call it with `call_function("gbx_rst_buildoverviews", ...)`.
@@ -173,6 +178,14 @@ These changes affect callers that pass keywords or named arguments.
   - Heavyweight SQL callers that read tile fields from a rasterize aggregate must wrap it.
   - Their optional arguments are positional. The rasterize aggregates take 12 or 13 arguments.
   - `rst_rasterize_agg` takes WKB only.
+- **`gbx_rst_summary` returns GDAL's own JSON.** The function runs GDAL's `raster info` with statistics, in the worker. It returns the text of `gdalinfo -json`. The earlier lightweight shape is gone, so a query that reads its keys must change.
+  - `bands[].min` and `bands[].max` are now `bands[].minimum` and `bands[].maximum`. `mean`, `stdDev`, `type` and `noDataValue` keep their names.
+  - `coordinateSystem.epsg` and `coordinateSystem.crs` are now `coordinateSystem.wkt`. The EPSG code is `stac."proj:epsg"`.
+  - GDAL rounds `minimum`, `maximum`, `mean` and `stdDev` to three decimals. The band's `metadata` holds `STATISTICS_*` strings with more digits.
+  - The JSON adds `description`, `files`, `cornerCoordinates`, `wgs84Extent`, `stac` and, for each band, `block`, `colorInterpretation` and `metadata`. The input is shown as `<input>`.
+  - A band with no valid pixel has no statistics. A tile in another driver reports its own driver. A tile with no band, such as a netCDF container, has an empty `bands` list.
+  - The heavyweight function runs `gdalinfo -json` without statistics, so a band has no `minimum`, `maximum`, `mean` or `stdDev`. It stays a companion, and is no default.
+  - On Unity Catalog the function still returns the earlier shape.
 - **The four cell-fill aggregates return the `BINARY` payload,** not `ARRAY<STRUCT<cellid, value>>`.
 - **`gbx_rst_merge_agg` has no JVM level.** It runs in Python on every compute.
 - **`gbx_st_asmvt_pyramid` takes `layer_name` and `extent` as optional arguments.**
@@ -908,7 +921,7 @@ Every raster function follows the same order of checks on both implementations.
 - **`gbx_rst_derivedband` runs your Python (`exec`) in the session.** Use it in session SQL and Python only. `gbx_rst_clip` runs on the lightweight level only.
 - **SQL tile functions read a `FILE` column through the same fast path as the Python API.**
 - **`SHOW USER FUNCTIONS` works on DBR 17.3 after `gbx.register`.** The SQL tile functions that mint a `FILE` argument (`gbx_rst_avg`, `gbx_rst_width` and 32 more) run a check once per session. The check asks whether the runtime can list a function with `FILE` in its body. Where it cannot, they pass NULL and read the tile by its path.
-- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram`, `gbx_rst_metadata` and `gbx_rst_summary` keep results that differ from the lightweight ones (an even-count median, the top histogram edge, GDAL's merged metadata, a `gdalinfo` JSON summary). None is a default level.
+- **Documented differences.** The JVM `gbx_rst_median`, `gbx_rst_histogram`, `gbx_rst_metadata` and `gbx_rst_summary` keep results that differ from the lightweight ones. The differences are an even-count median, the top histogram edge, GDAL's merged metadata and a summary with no statistics. None is a default level.
 
 ## Grid functions {#grid-functions}
 

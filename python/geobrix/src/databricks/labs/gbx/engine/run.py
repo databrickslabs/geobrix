@@ -80,6 +80,8 @@ class Result:
     command: Optional[str]
     # a features output: one tuple per feature, in layer order: (WKB or None, the declared fields' values...)
     features: Optional[list] = None
+    # a JSON output: GDAL's text, with the engine's /vsimem names shown as <input>
+    text: Optional[str] = None
 
 
 @functools.lru_cache(maxsize=1)
@@ -230,10 +232,22 @@ def _open_source(gdal, sql_name: str, name: str, drivers: Sequence[str]):
 
 
 def _props(
-    gdal, sql_name: str, name: str, needs_crs: bool, drivers: Sequence[str] = ("GTiff",)
+    gdal,
+    sql_name: str,
+    name: str,
+    needs_crs: bool,
+    drivers: Sequence[str] = ("GTiff",),
+    no_band_ok: bool = False,
 ) -> argv_mod.RasterProps:
+    """The header of the input `name`. A dataset with no band (a netCDF or HDF container of subdatasets) is a DataError,
+    unless the row only describes it (`no_band_ok`, a JSON row): its props then hold no band.
+    """
     ds = _open_source(gdal, sql_name, name, drivers)
     try:
+        if ds.RasterCount == 0:
+            if not no_band_ok:
+                raise DataError(f"{sql_name}: the tile has no band to read")
+            return argv_mod.RasterProps(ds.RasterXSize, ds.RasterYSize, 0, "Byte")
         # a tile georeferenced by ground control points has a CRS: its GCP projection
         if (
             needs_crs
@@ -320,6 +334,28 @@ def _to_gtiff(gdal, sql_name: str, src: str, dst: str, drivers: Sequence[str]) -
     finally:
         ds = None
     gdal.Unlink(src)
+
+
+def _describe_in_place(gdal, tokens, names, sources, drivers) -> list:
+    """The argv of a JSON row with each input that was not a GeoTIFF read where it is, in the driver that identifies it
+    (its `src<i>.bin`, already judged by the light bytes rule), not the translated GeoTIFF.
+    """
+    out = list(tokens)
+    for i, src in sources.items():
+        drv = gdal.IdentifyDriverEx(src, gdal.OF_RASTER, allowed_drivers=list(drivers))
+        out = [
+            (
+                f"--input={src}"
+                if t == f"--input={names[i]}"
+                else (
+                    f"--input-format={drv.ShortName}"
+                    if t == "--input-format=GTiff"
+                    else t
+                )
+            )
+            for t in out
+        ]
+    return out
 
 
 def _read(gdal, name: str) -> bytes:
@@ -624,6 +660,63 @@ def _execute(gdal, alg_path: str, tokens, shown, refused, collect=None):
         del alg, group  # release both handles, the step before its group
 
 
+def _fill_bands(
+    gdal, alg: str, tokens, src: str, out: str, prefix: str, shown, refused, bands: int
+) -> None:
+    """A per-band algorithm (``GdalSpec.per_band``) over an input of several bands. GDAL's fill writes the one band it is
+    given, so the engine runs it once for each band (``--band=k``) and writes each result into the same band of a copy of
+    the input made with the call's creation options: every other property of the tile (NoData, colour interpretation,
+    georeferencing, the bands the algorithm does not touch) is the input's. ``out`` holds band 1's result on entry and
+    the whole tile on return.
+    """
+    first = f"{prefix}/band_1.tif"
+    gdal.Rename(out, first)
+    co = [t.split("=", 1)[1] for t in tokens if t.startswith("--creation-option=")]
+    gdal.ErrorReset()
+    sds = _open_geotiff(gdal, src)
+    try:
+        copy = gdal.Translate(
+            out, sds, options=gdal.TranslateOptions(format="GTiff", creationOptions=co)
+        )
+    finally:
+        sds = None
+    if copy is None:
+        raise DataError(gdal.GetLastErrorMsg() or "the tile could not be copied")
+    try:
+        for k in range(1, bands + 1):
+            part = first if k == 1 else f"{prefix}/band_{k}.tif"
+            if k > 1:
+                toks = [
+                    (
+                        f"--band={k}"
+                        if t == "--band=1"
+                        else f"--output={part}" if t.startswith("--output=") else t
+                    )
+                    for t in tokens
+                ]
+                _execute(gdal, alg, toks, shown, refused)
+            _copy_band(
+                gdal, part, copy.GetRasterBand(k), copy.RasterXSize, copy.RasterYSize
+            )
+            gdal.Unlink(part)
+        copy.FlushCache()
+    finally:
+        copy = None
+
+
+def _copy_band(gdal, part: str, band, w: int, h: int) -> None:
+    """The pixels of band 1 of the GeoTIFF `part`, written into `band` (same size and type)."""
+    ds = _open_geotiff(gdal, part)
+    try:
+        if (
+            band.WriteRaster(0, 0, w, h, ds.GetRasterBand(1).ReadRaster(0, 0, w, h))
+            != 0
+        ):
+            raise DataError(gdal.GetLastErrorMsg() or "a band could not be written")
+    finally:
+        ds = None
+
+
 def _blank_inputs(gdal, names, props, prefix, shown) -> dict:
     """For each input name, a blank GeoTIFF with only its props (size, bands, type; no pixels written, no
     georeferencing): what the expression check runs on. Returns real name -> blank name; ``shown`` names each
@@ -701,13 +794,14 @@ def _stage(gdal, fn, rasters, names, prefix, shown, section, src_sizes) -> tuple
             gdal.FileFromMemBuffer(sources[i], data)
             payloads[i] = data
     drivers = _open_drivers(section or manifest.load().gdal)
+    describes = block.out_kind == "json"
     for i, src in sources.items():
         _bytes_source(gdal, fn.sql_name, i, src, payloads[i], drivers)
     props = [
         (
-            _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers)
+            _props(gdal, fn.sql_name, sources[i], block.needs_crs, drivers, describes)
             if i in sources
-            else _props(gdal, fn.sql_name, n, block.needs_crs)
+            else _props(gdal, fn.sql_name, n, block.needs_crs, no_band_ok=describes)
         )
         for i, n in enumerate(names)
     ]
@@ -815,12 +909,28 @@ def run(
             _judge_budget(
                 gdal, fn, tokens, props, names, sources, drivers, decoded, budget
             )
-            for i, src in sources.items():
-                _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
+            if block.out_kind == "json":
+                # a JSON row describes the tile as it is: in its own driver, not translated (a container has no band
+                # to translate)
+                tokens = _describe_in_place(gdal, tokens, names, sources, drivers)
+                command = _shown(" ".join([block.alg] + tokens), shown)
+            else:
+                for i, src in sources.items():
+                    _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)
             if 0 in sources and _keeps_input(gdal, fn, tokens, names[0]):
                 return Result(_read(gdal, names[0]), None, command)
             if block.alg == "raster calc":
                 _check_expression(gdal, fn, tokens, props, names, prefix, shown)
+            if block.out_kind == "json":
+                text = _execute(
+                    gdal,
+                    block.alg,
+                    tokens,
+                    shown,
+                    refused,
+                    lambda alg: str(alg["output-string"]),
+                )
+                return Result(None, None, command, text=_shown(text, shown))
             if block.out_kind == "features":
                 feats = _execute(
                     gdal,
@@ -837,6 +947,18 @@ def run(
                 )
                 return Result(None, None, command, features=feats)
             _execute(gdal, block.alg, tokens, shown, refused)
+            if block.per_band and props[0].bands > 1:
+                _fill_bands(
+                    gdal,
+                    block.alg,
+                    tokens,
+                    names[0],
+                    out,
+                    prefix,
+                    shown,
+                    refused,
+                    props[0].bands,
+                )
             if block.alg == "raster aspect" and "--zero-for-flat" in tokens:
                 _remask_zero_for_flat(gdal, names[0], out)
             if block.alg == "raster reproject":

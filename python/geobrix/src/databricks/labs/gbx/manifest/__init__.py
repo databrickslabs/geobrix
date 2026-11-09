@@ -95,6 +95,7 @@ GDAL_KEYS = frozenset(
         "gdal_min",
         "in_read",
         "same_crs",
+        "per_band",
     }
 )
 # `in_read: "factor"`: a virtual tile of the row is read at the size its `size_from_factor` argument asks for (an overview
@@ -131,6 +132,7 @@ GDAL_BINDERS = frozenset(
         "crs",
         "geom_wkt",
         "double_list",
+        "count",
         "positive_double",
         "checked_name",
         "calc_envelope",
@@ -316,6 +318,9 @@ class GdalSpec:
     # A features output: (struct field, SQL type, layer field) for each value read from the output layer beside the
     # geometry; the output is `ARRAY<STRUCT<geom_wkb BINARY, <fields>>>`, one element per feature in layer order.
     out_fields: Tuple[Tuple[str, str, str], ...] = ()
+    # The algorithm reads and writes one band (its `band` argument, a const of 1): the engine runs it once for each band of
+    # the input and writes every result into the output's band of the same number.
+    per_band: bool = False
 
 
 @dataclass(frozen=True)
@@ -634,6 +639,7 @@ def parse_gdal_spec(raw: Mapping) -> GdalSpec:
             else None
         ),
         out_fields=fields,
+        per_band=bool(raw.get("per_band", False)),
     )
 
 

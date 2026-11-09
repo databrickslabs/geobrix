@@ -265,6 +265,15 @@ OPEN_SITES = {
         1,
         "converts the dataset object the OpenEx just above opened (allowed drivers only); no name is opened here",
     ),
+    ("engine/run.py", "copy = gdal.Translate("): (
+        1,
+        "the per-band fill copies the engine's own input GeoTIFF (the dataset object _open_geotiff opened just above, GTiff only) "
+        "to the call's /vsimem output; no name is opened here",
+    ),
+    ("bench/oracles.py", 'info = gdal.Info(name, format="json", stats=True)'): (
+        1,
+        "the independent summary reference describes the tile bytes the oracle wrote to a unique /vsimem name just above and unlinks both files after; no caller-supplied name is opened",
+    ),
     (
         "engine/run.py",
         'ods = gdal.OpenEx(out, gdal.OF_RASTER | gdal.OF_UPDATE, allowed_drivers=["GTiff"])',

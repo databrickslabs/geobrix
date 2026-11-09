@@ -232,7 +232,7 @@ clipped = (
     .withColumn("clip", rx.rst_clip("scene", "plume_geom", F.lit(True)))
     .withColumn("summary", rx.rst_summary("clip"))
     .withColumn(
-        "gbx_max_ppmm", F.get_json_object("summary", "$.bands[0].max").cast("double")
+        "gbx_max_ppmm", F.get_json_object("summary", "$.bands[0].maximum").cast("double")
     )
 )
 clipped.select(

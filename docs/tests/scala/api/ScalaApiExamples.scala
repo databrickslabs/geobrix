@@ -564,17 +564,22 @@ import org.apache.spark.sql.functions._
 
 // Uses multiband fixture (rgb_nir_small.tif, 3 bands) which has real pixel data.
 val rasters = spark.table("multiband_rasters")
-val result = rasters.select(rx.rst_summary(col("tile")).alias("summary"))
+val summary = rasters.select(rx.rst_summary(col("tile")).alias("summary"))
+val result = summary.select(
+  get_json_object(col("summary"), "$.driverShortName").alias("driver"),
+  get_json_object(col("summary"), "$.bands[0].maximum").alias("band1_max"),
+  get_json_object(col("summary"), "$.bands[0].mean").alias("band1_mean")
+)
 result.show(truncate = false)
 """.trim
 
   val rst_summary_scala_example_output: String =
     """
-+------------------------------------------------------------+
-|summary                                                     |
-+------------------------------------------------------------+
-|{"driverShortName": "GTiff", "size": [8, 8], "coordinateS...|
-+------------------------------------------------------------+
++------+---------+----------+
+|driver|band1_max|band1_mean|
++------+---------+----------+
+|GTiff |119.0    |83.594    |
++------+---------+----------+
 """.trim
 
   val rst_upperleftx_scala_example: String =

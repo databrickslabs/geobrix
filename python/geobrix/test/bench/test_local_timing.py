@@ -133,6 +133,8 @@ _SE_DEM_SETS = tuple(
         "resample",
         "resample_to_size",
         "resample_to_res",
+        "fillnodata",
+        "summary",
     )
 )
 

@@ -1627,7 +1627,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_summary": {
-      "examples": "Examples:\n      > SELECT gbx_rst_summary(tile) AS summary FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT get_json_object(summary, '$.driverShortName') AS driver, get_json_object(summary, '$.bands[0].maximum') AS band1_max, get_json_object(summary, '$.bands[0].mean') AS band1_mean FROM (SELECT gbx_rst_summary(tile) AS summary FROM multiband_rasters);",
       "usage_args": "tile",
       "description": "Return a JSON summary of the raster with per-band statistics.",
       "surfaces": [

@@ -31,9 +31,9 @@ THREADED = frozenset({"raster reproject"})
 # Binders whose value is a file the engine writes under the call's prefix: the one way a deny-listed file argument
 # (color-map) may appear, and only with the engine's placeholder (``<text0>``, ...) as its value.
 ENGINE_FILE_BINDERS = frozenset({"text_vsimem"})
-# Output formats the engine writes: GTiff for rasters, MEM for features. Never VRT or GDALG (both can reference
-# other files or run a stored pipeline when opened).
-OUTPUT_FORMAT_OF = {"raster": "GTiff", "features": "MEM"}
+# Output formats the engine writes: GTiff for rasters, MEM for features, GDAL's JSON text for a JSON output. Never VRT or
+# GDALG (both can reference other files or run a stored pipeline when opened).
+OUTPUT_FORMAT_OF = {"raster": "GTiff", "features": "MEM", "json": "json"}
 OUTPUT_FORMATS = frozenset(OUTPUT_FORMAT_OF.values())
 
 
@@ -70,6 +70,17 @@ def _alg_args(section: GdalSection, alg: str, sql_name: str) -> Sequence[str]:
     return section.allow[alg]
 
 
+def _check_per_band(name: str, block: GdalSpec) -> None:
+    """A per-band row writes a raster and fixes `band` to 1, the argument the engine steps through the input's bands."""
+    if block.per_band and (
+        block.out_kind != "raster"
+        or not any(a.arg == "band" and a.const == 1 for a in block.args)
+    ):
+        raise SpecError(
+            f"{name}: per_band needs a raster output and the fixed argument band = 1, which the engine steps through"
+        )
+
+
 def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None:
     """Raise SpecError unless `block` (default: the row's own) is one the engine runs for `fn`: its algorithm and
     every argument on the allowlist, none on the deny list, every param and input the function's own, and each
@@ -91,6 +102,7 @@ def validate(fn, section: GdalSection, block: Optional[GdalSpec] = None) -> None
                 f"{name}: file_ref 'engine' serves a single tile; the input '{block.inputs[0][0]}' is an array of tiles"
             )
     by_arg = {a.arg: a for a in block.args}
+    _check_per_band(name, block)
     for a in block.args:
         if a.arg in ENGINE_ARGS or (
             a.arg in section.deny and a.type not in ENGINE_FILE_BINDERS

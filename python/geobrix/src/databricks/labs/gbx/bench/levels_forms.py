@@ -2399,6 +2399,65 @@ for _fn, _call in _SE_WARP_CALLS.items():
     ]
 
 
+# The fill (every band, each by its own mask) on the same 1024 px EPSG:4326 tiles with NoData holes as the warp functions, with
+# the engine's row-wise UDF (c0), its batch UDF behind the wrapper (c1) and a floor.
+_SE_FILL_CALLS = {"gbx_rst_fillnodata": "{fn}(tile, 100.0, 0)"}
+SE_FILL_FUNCTIONS = tuple(_SE_FILL_CALLS)
+for _fn, _call in _SE_FILL_CALLS.items():
+    FORMS["SE"] += [
+        _se(
+            _fn,
+            "L3",
+            f"{v}@mem",
+            "se_warp_1024_mem",
+            _SE_FP.format(call=_call),
+            vsql=_SE_VFP.format(call=_call, col="tile.raster", k=8),
+        )
+        for v in ("engine-c0", "engine-c1")
+    ] + [
+        _se(
+            _fn,
+            "L3",
+            "floor-c0@mem",
+            "se_warp_1024_mem",
+            _SE_FLOOR_C0,
+            setup="setup_se_floor",
+            register=False,
+        )
+    ]
+
+
+# The summary, a GDAL spec engine row that returns GDAL's info JSON as a string, over the replicated 1024 px tiles: the row-wise
+# UDF (c0), the batch form (a JSON row has none, so it resolves to c0) and a floor. Its fingerprint is the number of rows and the
+# sum of the JSON lengths.
+_SE_SUMMARY_FP = "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM (SELECT {call} AS t FROM {{src}})"
+_SE_SUMMARY_VFP = (
+    "SELECT count(*) AS n, sum(length(t)) AS fp, count(t) AS n_out FROM "
+    "(SELECT {call} AS t FROM (SELECT * FROM {{src}} ORDER BY xxhash64(tile.raster) LIMIT 8))"
+)
+FORMS["SE"] += [
+    _se(
+        "gbx_rst_summary",
+        "L3",
+        f"{v}@mem",
+        "se_dem_1024_mem",
+        _SE_SUMMARY_FP.format(call="{fn}(tile)"),
+        vsql=_SE_SUMMARY_VFP.format(call="{fn}(tile)"),
+    )
+    for v in ("engine-c0", "engine-c1")
+] + [
+    _se(
+        "gbx_rst_summary",
+        "L3",
+        "floor-c0@mem",
+        "se_dem_1024_mem",
+        _SE_FP.format(call="gbx_bench_floor_c0(tile)"),
+        setup="setup_se_floor",
+        register=False,
+    )
+]
+
+
 # --- DEM, the terrain functions with a JVM companion against their engine forms ---------------------------------------
 #
 # The one companion that is kept (TRI) on the JVM beside its light form: the engine's row-wise UDF (c0) and its batch UDF

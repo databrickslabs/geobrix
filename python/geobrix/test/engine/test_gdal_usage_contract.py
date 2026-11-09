@@ -36,17 +36,27 @@ def test_the_engine_runs_the_pinned_gdal(usage):
     assert run.gdal_release() == MAN.gdal.pin
 
 
-@pytest.mark.parametrize("alg", ALGS)
-def test_every_allowed_and_engine_argument_exists(usage, alg):
-    names = set(_args(usage[alg]))
-    want = set(MAN.gdal.allow[alg]) | {
+# The arguments the engine itself writes for an algorithm, by the output kind of the row that uses it. A JSON row reads
+# the text from `output-string`, and `raster info` has no output file, creation option or --quiet.
+_ENGINE_ARGS_BY_KIND = {
+    "raster": {
         "input",
         "input-format",
         "output",
         "output-format",
         "creation-option",
         "quiet",
-    }
+    },
+    "features": {"input", "input-format", "output", "output-format", "quiet"},
+    "json": {"input", "input-format", "output-format", "output-string"},
+}
+_KIND_OF = {f.gdal.alg: f.gdal.out_kind for f in MAN.functions.values() if f.gdal}
+
+
+@pytest.mark.parametrize("alg", ALGS)
+def test_every_allowed_and_engine_argument_exists(usage, alg):
+    names = set(_args(usage[alg]))
+    want = set(MAN.gdal.allow[alg]) | _ENGINE_ARGS_BY_KIND[_KIND_OF[alg]]
     assert want <= names, sorted(want - names)
     assert ("num-threads" in names) == (alg in spec.THREADED)
 

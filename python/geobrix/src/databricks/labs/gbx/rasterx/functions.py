@@ -2530,16 +2530,18 @@ def rst_fillnodata(
     Args:
         tile: The tile to fill.
         max_search_dist: How far, in pixels, to search for valid pixels to interpolate
-            from. SQL default: ``100.0``.
-        smoothing_iter: The number of 3x3 smoothing passes over the filled pixels. SQL
-            default: ``0``.
+            from. A whole number. SQL default: ``100.0``.
+        smoothing_iter: The number of 3x3 smoothing passes over the filled pixels. A
+            whole number. SQL default: ``0``.
         virtualize_dir: Python only: write the result under this directory and return a virtual tile.
         virtualize_prefix: Python only: the file-name prefix used with ``virtualize_dir``.
         materialize: Python only: ``True`` returns the raster bytes in the tile.
 
     Returns:
         The tile with the NoData pixels that have a valid pixel within `max_search_dist`
-        filled; the rest stay NoData.
+        filled, in every band. The rest stay NoData. Both numbers must be whole, from 0
+        to 2147483647, else the call raises. NULL for a NULL tile or a NULL number; an
+        error tile comes back as it is.
 
     SQL: ``gbx_rst_fillnodata(tile, [max_search_dist], [smoothing_iter])``
     """
@@ -5607,8 +5609,12 @@ def rst_summary(
         tile: The raster tile.
 
     Returns:
-        A JSON string with the driver, size, CRS, geotransform and the statistics of
-        each band.
+        GDAL's description of the raster as JSON: the output of `gdalinfo -json` with
+        statistics. It holds the driver, size, coordinate system and geotransform. Each
+        band lists its type, NoData value and `minimum`, `maximum`, `mean` and `stdDev`.
+        GDAL rounds those four statistics to three decimals. The `metadata` of the band
+        holds `STATISTICS_*` values with more digits. NULL for a NULL tile, an error
+        tile or a tile that cannot be read.
 
     SQL: ``gbx_rst_summary(tile)``
     """

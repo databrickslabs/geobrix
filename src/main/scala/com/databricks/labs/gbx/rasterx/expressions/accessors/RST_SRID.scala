@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.operations.SpatialRefOps
+import com.databricks.labs.gbx.operations.{ProjDatabase, SpatialRefOps}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -39,10 +39,13 @@ object RST_SRID extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, rdt, gated = false)
-                val res = execute(ds)
-                RasterDriver.releaseDataset(ds)
-                res
+                // 0 is also what a thread whose PROJ context cannot read proj.db gives (the CRS from the GeoTIFF keys,
+                // with no authority code): ProjDatabase reads again after re-pointing PROJ, or fails with the reason
+                ProjDatabase.guarded { () =>
+                    val ds = RasterSerializationUtil.rowToDS(row, rdt, gated = false)
+                    try execute(ds)
+                    finally RasterDriver.releaseDataset(ds)
+                }(_ == 0)
             },
             row,
             rdt,
@@ -53,13 +56,15 @@ object RST_SRID extends WithExpressionInfo {
 
     def execute(ds: Dataset): Int = {
         val proj = new SpatialReference(ds.GetProjection())
-        Try(proj.AutoIdentifyEPSG())
+        try {
+            Try(proj.AutoIdentifyEPSG())
 
-        // The top-level PROJCS/GEOGCS authority code when it is a number: an EPSG or ESRI one (GDAL 3.13 identifies
-        // ESRI:54008, for one), as the light tier's srid() gives (core.crs.authority_srid_of). 0 (the light tier: NULL)
-        // when the CRS has no authority code, or a code that is not a number (OGC:CRS84, IGNF:LAMB93), which no SRID
-        // slot can hold.
-        SpatialRefOps.authoritySridOf(proj).getOrElse(0)
+            // The top-level PROJCS/GEOGCS authority code when it is a number: an EPSG or ESRI one (GDAL 3.13 identifies
+            // ESRI:54008, for one), as the light tier's srid() gives (core.crs.authority_srid_of). 0 (the light tier:
+            // NULL) when the CRS has no authority code, or a code that is not a number (OGC:CRS84, IGNF:LAMB93), which
+            // no SRID slot can hold.
+            SpatialRefOps.authoritySridOf(proj).getOrElse(0)
+        } finally proj.delete()
     }
 
     override def name: String = "gbx_rst_srid"

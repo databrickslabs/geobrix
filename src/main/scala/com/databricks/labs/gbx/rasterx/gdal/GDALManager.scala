@@ -263,6 +263,32 @@ object GDALManager extends Logging {
 
     private def baseProjData: String = loaded.flatMap(_.projData).getOrElse("/usr/share/proj")
 
+    /**
+      * Point PROJ at this JVM's PROJ data again, for a thread whose PROJ context cannot read PROJ's database
+      * ([[com.databricks.labs.gbx.operations.ProjDatabase]]); returns the directories applied. OSRSetPROJSearchPaths
+      * makes every thread's PROJ context take the path again at its next use, so a context that lost its database
+      * reopens it. When the loaded payload's `proj.db` is gone (an executor outlives the Python environment it loaded
+      * GDAL from) and another directory this JVM has seen holds the same JNI and a `proj.db`, its data directories
+      * replace the removed ones, as [[laterNative]] does when the loaded JNI itself is gone.
+      */
+    def recoverProjData(): Seq[String] =
+        lock.synchronized {
+            val hasDb = (p: String) => Files.isReadable(Paths.get(p, "proj.db"))
+            loaded.filter(_.projData.exists(p => !hasDb(p))).foreach { c =>
+                sameAsLoaded.iterator
+                    .flatMap(d => payload(d.stripSuffix("/"), NativeDirKey, p => Files.exists(Paths.get(p))).toOption)
+                    .find(_.projData.exists(hasDb))
+                    .foreach { moved =>
+                        logWarning(s"PROJ data of the GDAL loaded from ${c.jni} is gone; the same JNI is at ${moved.jni}")
+                        loaded = Some(moved)
+                        adoptNativeData(moved)
+                    }
+            }
+            val dirs = (appliedGridDirs :+ baseProjData).distinct
+            setProjSearchPath(dirs)
+            dirs
+        }
+
     /** PROJ_DATA/PROJ_LIB for GDAL, and OSRSetPROJSearchPaths, which reaches PROJ contexts that already exist. */
     private def setProjSearchPath(dirs: Seq[String]): Unit = {
         gdal.SetConfigOption("PROJ_DATA", dirs.mkString(":"))

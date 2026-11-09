@@ -1,0 +1,84 @@
+package com.databricks.labs.gbx.operations
+
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import org.apache.spark.internal.Logging
+import org.gdal.gdal.gdal
+import org.gdal.osr.{SpatialReference, osr}
+
+import java.nio.file.{Files, Paths}
+import scala.jdk.CollectionConverters._
+import scala.util.Try
+
+/** Raised when the PROJ context of this thread cannot read PROJ's database (`proj.db`), and pointing PROJ at this JVM's
+  * PROJ data again did not help. Every `safeEval` re-throws it: a CRS read without the database loses its authority
+  * code (a GeoTIFF's CRS comes back as a `LOCAL_CS`), so the row's answer would be a wrong value, not a data error. */
+final class ProjDatabaseException(msg: String, cause: Throwable = null) extends IllegalStateException(msg, cause)
+
+/**
+  * Guards the CRS reads whose answer depends on PROJ's database.
+  *
+  * GDAL gives each thread its own PROJ context, which opens `proj.db` at its first use. A context that cannot read it
+  * (the PROJ data directory is gone or unreadable, as for an executor that outlives the Python environment it loaded
+  * GDAL from) still answers: a GeoTIFF's CRS is built from its keys alone, with no authority code, and an EPSG code
+  * does not resolve. Nothing raises. A result that may come from such a context (no authority code, an unresolved CRS)
+  * is checked here: when the database cannot be read, PROJ is pointed at this JVM's PROJ data again
+  * ([[GDALManager.recoverProjData]]) and the read runs once more; when it still cannot be read, the read fails with
+  * the reason ([[ProjDatabaseException]]).
+  *
+  * Known limit: the check is a database lookup on this thread's context, which PROJ may answer from its cache, plus
+  * a readable `proj.db` on the search path. A context whose database reads fail only now and then is not detected.
+  */
+object ProjDatabase extends Logging {
+
+    /** The directories PROJ searches: its search path when set, else PROJ_DATA / PROJ_LIB. Empty: PROJ's own default. */
+    private def searchDirs(): Seq[String] = {
+        val set = Try(Option(osr.GetPROJSearchPaths()).map(_.asScala.map(_.toString).toSeq).getOrElse(Nil)).getOrElse(Nil)
+        val dirs = if (set.nonEmpty) set else Seq("PROJ_DATA", "PROJ_LIB").flatMap(k => Option(gdal.GetConfigOption(k)))
+        dirs.flatMap(_.split(":")).map(_.trim).filter(_.nonEmpty)
+    }
+
+    /** True when this thread's PROJ context reads PROJ's database: a `proj.db` is readable on the search path (when
+      * one is set) and EPSG:4326 resolves. */
+    def reachable(): Boolean = {
+        val dirs = searchDirs()
+        val fileOk = dirs.isEmpty || dirs.exists(d => Files.isReadable(Paths.get(d, "proj.db")))
+        fileOk && {
+            val sr = new SpatialReference()
+            try Try(sr.ImportFromEPSG(4326)).toOption.contains(0)
+            finally sr.delete()
+        }
+    }
+
+    private def unreachable(dirs: Seq[String], cause: Throwable): ProjDatabaseException =
+        new ProjDatabaseException(
+          s"geobrix: this thread's PROJ context cannot read PROJ's database (proj.db) under ${dirs.mkString(":")}, " +
+              "so a CRS read here loses its authority code. Fix: keep the GDAL payload's PROJ data (share/proj beside " +
+              "its native directory) readable on every node for the life of the cluster, or restart the cluster.",
+          cause
+        )
+
+    /** Point PROJ at this JVM's PROJ data again; a [[ProjDatabaseException]] when the database still cannot be read. */
+    def recoverOrFail(cause: Throwable = null): Unit = recoverOrFail(() => reachable(), () => GDALManager.recoverProjData(), cause)
+
+    private[gbx] def recoverOrFail(isReachable: () => Boolean, recover: () => Seq[String], cause: Throwable): Unit = {
+        val dirs = recover()
+        if (!isReachable()) throw unreachable(dirs, cause)
+        logWarning(s"PROJ's database could not be read on this thread; PROJ was pointed at ${dirs.mkString(":")} again")
+    }
+
+    /** `read()`; when `suspect` holds for its answer (one a context without PROJ's database would give) and the database
+      * cannot be read, [[recoverOrFail]] and `read()` once more. A suspect answer with the database readable is the
+      * data's own (a CRS with no authority code) and is returned as it is. */
+    def guarded[T](read: () => T)(suspect: T => Boolean): T =
+        guardedWith(read, suspect, () => reachable(), () => GDALManager.recoverProjData())
+
+    private[gbx] def guardedWith[T](read: () => T, suspect: T => Boolean, isReachable: () => Boolean, recover: () => Seq[String]): T = {
+        val first = read()
+        if (!suspect(first) || isReachable()) first
+        else {
+            recoverOrFail(isReachable, recover, null)
+            read()
+        }
+    }
+
+}

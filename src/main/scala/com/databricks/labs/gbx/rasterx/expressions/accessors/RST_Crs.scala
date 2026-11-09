@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.operations.ProjDatabase
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -44,9 +45,13 @@ object RST_Crs extends WithExpressionInfo {
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
-                val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
-                val res = execute(ds)
-                RasterDriver.releaseDataset(ds)
+                // a WKT (no authority code) is also what a thread whose PROJ context cannot read proj.db gives (a
+                // GeoTIFF's CRS as a LOCAL_CS): ProjDatabase reads again after re-pointing PROJ, or fails with the reason
+                val res = ProjDatabase.guarded { () =>
+                    val ds = RasterSerializationUtil.rowToDS(row, dt, gated = false)
+                    try execute(ds)
+                    finally RasterDriver.releaseDataset(ds)
+                }(r => r != null && !isAuthorityString(r))
                 if (res == null) null else UTF8String.fromString(res)
             },
             row,
@@ -60,10 +65,12 @@ object RST_Crs extends WithExpressionInfo {
         val proj = ds.GetProjection()
         if (proj == null || proj.isEmpty) return null
         val sr = new SpatialReference(proj)
-        val canonical = SpatialRefOps.crsToCanonical(sr)
-        sr.delete()
-        canonical
+        try SpatialRefOps.crsToCanonical(sr)
+        finally sr.delete()
     }
+
+    /** `NAME:CODE` (what [[SpatialRefOps.crsToCanonical]] gives for a CRS with an authority code), not a WKT. */
+    private def isAuthorityString(s: String): Boolean = !s.contains("[") && s.contains(":")
 
     override def name: String = "gbx_rst_crs"
 

@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.operations.ProjDatabaseException
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.catalyst.InternalRow
@@ -62,6 +63,7 @@ object RST_ErrorHandler extends Logging {
             underHdfLock(RasterSerializationUtil.isHdfTile(row))(eval)
         } catch {
             case e: VirtualTileException => throw e
+            case e: ProjDatabaseException => throw e
             case e: RasterArgumentException => throw e
             case NonFatal(e) =>
                 // Fatal errors (out of memory, stack overflow) fail the task so it can be retried; they are not data.
@@ -88,6 +90,7 @@ object RST_ErrorHandler extends Logging {
             underHdfLock((0 until rows.numElements()).exists(i => RasterSerializationUtil.isHdfTile(rows.getStruct(i, elementFieldCount))))(eval)
         } catch {
             case e: VirtualTileException => throw e
+            case e: ProjDatabaseException => throw e
             case e: RasterArgumentException => throw e
             case NonFatal(e) =>
                 // Check if an input already was an error tile (read structurally, without opening any raster)
@@ -118,6 +121,9 @@ object RST_ErrorHandler extends Logging {
         } catch {
             case e: VirtualTileException =>
                 // Virtual-tile guard must propagate — wrong API usage, not a per-row data error.
+                throw e
+            case e: ProjDatabaseException =>
+                // PROJ's database is unreadable on this thread: the answer would be wrong, not NULL data.
                 throw e
             case NonFatal(t) =>
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
@@ -165,6 +171,7 @@ object RST_ErrorHandler extends Logging {
             eval()
         } catch {
             case e: VirtualTileException => throw e
+            case e: ProjDatabaseException => throw e
             case NonFatal(e) =>
                 val errorMetadata = createErrorMetadata(e)
                 val errorTile = RasterSerializationUtil.tileToRow((RasterSerializationUtil.cellIdOf(tileRow), null, errorMetadata), rasterType, null)
@@ -207,6 +214,7 @@ object RST_ErrorHandler extends Logging {
         } catch {
             case e: VirtualTileException    => throw e
             case e: GeneratorGuardException => throw e
+            case e: ProjDatabaseException   => throw e
             case NonFatal(e) =>
                 logWarning(s"RasterX generator evaluation failed; emitting one NULL row: ${e.getMessage}", e)
                 Seq(InternalRow.fromSeq(Seq(null)))

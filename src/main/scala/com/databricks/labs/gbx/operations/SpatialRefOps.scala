@@ -95,8 +95,20 @@ object SpatialRefOps {
       *   - an int-castable string (e.g. `"4326"`, `" 32633 "`) → `ImportFromEPSG(int)`;
       *   - otherwise one of the kinds [[crsTextKind]] accepts (`EPSG:x` / `ESRI:x` / WKT / PROJJSON / PROJ4 / an OGC
       *     URN / `WGS84`), parsed by `SetFromUserInput` with file and network access off.
-      * Throws IllegalArgumentException if the value cannot be resolved to a valid CRS, or names a file or URL. */
-    def resolveCrs(value: String): SpatialReference = {
+      * Throws IllegalArgumentException if the value cannot be resolved to a valid CRS, or names a file or URL.
+      *
+      * A thread whose PROJ context cannot read PROJ's database resolves no EPSG code: on a failure with the database
+      * unreadable, PROJ is pointed at this JVM's PROJ data again and the value resolved once more
+      * ([[ProjDatabase.recoverOrFail]]), else a [[ProjDatabaseException]], never the "not a valid code" refusal. */
+    def resolveCrs(value: String): SpatialReference =
+        try resolveCrsOnce(value)
+        catch {
+            case e: IllegalArgumentException if value != null && value.trim.nonEmpty && !ProjDatabase.reachable() =>
+                ProjDatabase.recoverOrFail(e)
+                resolveCrsOnce(value)
+        }
+
+    private def resolveCrsOnce(value: String): SpatialReference = {
         require(value != null, "resolveCrs: CRS value is null")
         val trimmed = value.trim
         require(trimmed.nonEmpty, "resolveCrs: CRS value is empty")

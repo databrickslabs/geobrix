@@ -75,6 +75,11 @@ without opening any file. Each task reads up to 8 whole files and returns their 
 most 64 MiB. A file over the read cap fails the read. The cap is 64 MiB on Serverless and 256 MiB on classic
 compute. To read such a file, set `sizeInMB` or retile it first.
 
+A tile holds the bytes of one file, so a materialized read bakes in what the file's sidecars hold.
+The tile holds the CRS and NoData from a GeoTIFF's `.aux.xml`.
+It also holds those from the `.hdr`, `.prj` or `.sgrd` files of an ESRI, ENVI or SAGA raster.
+The same holds for `gbx_rst_fromfile` and `rst_fromfile(materialize=True)`.
+
 :::note Default changed from `auto` to `none`
 Prior to this release the reader defaulted to `splitStrategy=auto`, which
 auto-split large rasters on a decoded-memory budget. The default is now

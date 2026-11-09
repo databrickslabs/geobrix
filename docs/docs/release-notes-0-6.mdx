@@ -436,6 +436,14 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 - **`read_paths(..., on_error="skip")` and `"quarantine"` keep the other files of a batched read.** A file that cannot be read is recorded under its own path. With `"fail"` the read still fails and names that file. A missing-file error on a Volume while a header is read is retried.
 
 
+### Materialized reads keep sidecar files (fix) {#materialized-sidecars}
+
+- **A materialized read keeps the CRS and NoData that sidecar files hold.** A tile holds the bytes of one file. `raster_gbx` with `virtualTiles=false`, `gbx_rst_fromfile` and `rst_fromfile(materialize=True)` dropped the other files.
+  - A GeoTIFF lost the NoData or CRS from its `.aux.xml` file.
+  - An EHdr, ENVI or SAGA raster (`.hdr`, `.prj`, `.sgrd`) failed with `not recognized as being in a supported file format`, or returned `NULL`.
+- **The staged copy now carries the sidecars.** A GeoTIFF whose sidecar changes its CRS, NoData, geotransform, scale or offset is written from the open dataset. Any other GeoTIFF still passes through as its own bytes.
+- **A sidecar is looked up by name,** with no folder listing. A file that the reader found to have no sidecar skips the look-up.
+
 ### Reader staging cache (fix) {#staging-cache}
 
 - **Lightweight readers bound their staged copies (fix).** They copy GeoPackage, FileGDB and (for windowed decodes) raster sources to worker-local disk. The copies used to fill it.
@@ -469,6 +477,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - A variable that flags `0` and `1` as `false true` is a `BOOLEAN`.
   - A `NULL` stays `NULL`.
   - A fractional, scaled or clock-time day count stays a `TIMESTAMP`.
+- **A fill-value cell keeps its fill value in the tile (fix).** xarray decodes the fill value to `NaN`, but the tile's NoData stayed the fill value, so no cell matched it. The cells now hold the fill value, as GDAL reads the file.
 
 ### Raster readers: read a tile index with `read_tiles_table` (fix, new) {#read-tiles-table}
 
@@ -495,6 +504,9 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - It also says whether a raster can be held as tile bytes, whether the driver works as shipped, and what it `requires`.
   - It runs on Serverless and standard clusters. It needs the env wheel's GDAL bindings, and raises an error that names the env wheel without them.
 - **The rows reflect the environment as it runs now.** Adding or removing packages changes them. The `shipped` column marks the drivers of the env wheel's own build, which [GDAL drivers as provided](./gdal-drivers) lists.
+- **`tested` and `tested_with` follow the kind you ask for.** `gbx_drivers('raster')` reports a driver tested only as a vector driver, such as `OpenFileGDB`, as not tested. The `guidance` notes start with one of a few fixed phrases.
+- **`tile_bytes` is false for BAG, GTX, SRTMHGT and raster MBTiles (fix).** Their bytes do not load as a tile, because GDAL identifies them by file name or extension. Read them by path with `raster_gbx` or `gbx_rst_fromfile`. The bytes of a BAG file are refused with a Fix.
+- **CAD (DWG) is tested for reading.** `vector_gbx` with `driverName` set to `CAD` reads AutoCAD R2000 drawings. GeoBrix does not write DWG.
 - See the [General Function Reference](./api/general-functions#drivers).
 
 ## Vector {#vector}
@@ -545,6 +557,10 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
   - `merge` keeps the attributes.
   - See [NetCDF Writer](./writers/netcdf).
 
+- **`vector_gbx` writes KML, GML and DXF from a DataFrame with any number of partitions (fix).** The writer appended each partition to the file. GDAL cannot reopen those formats to append, so a second partition failed. They now write in one pass, as GeoJSON does.
+- **`vector_gbx` writes CSV with a WKT column (fix).** The CSV driver needs the layer option `GEOMETRY=AS_WKT`, and the writer set none. For CSV input, use Databricks' own reader.
+- **A GPX column named like a GPX field is refused with a Fix (fix).** GPX makes `name`, `ele`, `time` and `desc` itself. The error says to rename or drop the column.
+
 ### Vector function arguments (behavior change) {#vector-arguments}
 
 - **A negative or non-finite tolerance raises and names the value.** This covers `st_simplifypreservetopology`, `st_removerepeatedpoints` and `st_snap`, and the grid size of `st_reduceprecision`. They returned garbage or a bare GEOS error. NULL still gives NULL. A NULL `st_removerepeatedpoints` tolerance is the default 0.
@@ -583,6 +599,7 @@ See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, tab
 
 - **The lightweight `rst_asformat` takes a driver name in any case,** and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) are available.
 - **The tile of `rst_asformat(tile, 'COG')` records `metadata['driver'] = 'GTiff'`** (it was `'COG'`). That is the driver its bytes open as, and the one `rst_cog_convert` records. A writer passes those bytes through and keeps the layout and codec you asked for.
+- **`rst_asformat(tile, 'JP2OpenJPEG')` keeps the CRS (fix).** The in-memory writer dropped it. A driver that cannot encode a tile through that writer now raises one `ValueError` that names the driver and gives a Fix. It used to raise a raw `SystemError` or `TypeError`.
 - **Other fixes.**
   - `rst_cog_convert`, `rst_asformat(..., 'COG')` and the lightweight functions that rewrite a striped GeoTIFF no longer log a GDAL warning per tile. Those functions are `rst_asformat`, `rst_merge` and the STAC windowed download.
   - The STAC windowed download and the vizx tile-simplify raster path read a JPEG/YCbCr source. They failed on `PHOTOMETRIC=YCBCR`.

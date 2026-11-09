@@ -153,6 +153,10 @@ df.write.format("vector_gbx").option("driverName", "GeoJSON").mode("overwrite").
 
 Each partition is written concurrently, then merged into one output file. See [Benchmarking](../api/benchmarking) for export timings.
 
+GDAL cannot reopen a KML, GML or DXF file to append to it. For those formats the writer streams every partition into one write.
+A GPX layer makes fields such as `name`, `ele`, `time` and `desc` itself, so a column with one of those names is refused. Rename the column first.
+For CSV, set no layer option: the writer adds the WKT geometry column.
+
 ## Common functions: used vs excluded
 
 See [GBX Common Functions](../common-functions) for the full catalog of shared file-access

@@ -14,8 +14,9 @@ To see the drivers your current environment can run, call [`gbx_drivers()`](./ap
 That function reads GDAL as it runs now, so its rows can differ from this table.
 Its `shipped` column is false for a driver that is not in this list.
 
-GeoBrix [refuses](./security#7-raster-data-other-principals-can-write) some drivers and does not register them.
-They are not in the list, and `gbx_drivers()` does not return them either.
+GeoBrix [turns off](./security#7-raster-data-other-principals-can-write) some drivers by default and does not register them.
+They are not in the tables below, and `gbx_drivers()` does not return them either.
+See [GeoBrix Opt-In Drivers](#geobrix-opt-in-drivers) for the list and how to opt in.
 
 ```sql
 SELECT driver, description, requires FROM gbx_drivers() WHERE NOT available
@@ -258,11 +259,63 @@ No raster driver is unavailable in the env wheel.
 
 ## Other drivers
 
-These drivers handle neither rasters nor vectors, such as multidimensional files and network models.
+No GeoBrix reader, writer or function uses these drivers. They handle neither rasters nor vectors.
+Open them directly with GDAL's Python API, `from osgeo import gdal`, which the env wheel ships.
+They run under the same driver policy, as plain GDAL on the driver, not as a distributed GeoBrix call.
 
 | Driver | Description | Read | Write |
 |---|---|---|---|
 | `CPHD` | Compensated Phase History Data Reader | ✓ |  |
 | `GNMDatabase` | Geographic Network generic DB based model | ✓ | ✓ |
 | `GNMFile` | Geographic Network generic file based model | ✓ | ✓ |
+
+
+## GeoBrix Opt-In Drivers
+
+These drivers are off by default. You can opt in to them, and then you own the risk.
+GeoBrix keeps each one off because it reaches a network service, runs a stored pipeline, or acts on what a file names.
+A file that another principal wrote can then make your cluster send requests or run a pipeline.
+
+### What the policy does
+
+- **It covers the whole Python process.** It is not limited to GeoBrix functions.
+  It adds these drivers to `GDAL_SKIP` and removes them from each GDAL that the process has loaded.
+  A direct `from osgeo import gdal` in the same process therefore lacks them too.
+- **It starts when GeoBrix is imported.** The import adds the drivers to `GDAL_SKIP`, and sets the two VRT settings.
+  The first GeoBrix use of GDAL completes it. The env wheel's startup file only prepares the native libraries.
+  The call `register(spark)` does not start the policy itself, because the import has done it.
+- **To opt in, set `GBX_GDAL_DRIVER_POLICY=off` before `import databricks.labs.gbx`.**
+  A value set after the import has no effect. GeoBrix has already added the drivers to `GDAL_SKIP`.
+- **Set it where each process can read it.** The driver and every executor read the variable in their own Python process.
+  Set it in the cluster's environment variables, or the job cluster's, to reach all of them.
+  A notebook assignment of `os.environ` before the import reaches the driver only. A worker still applies the policy.
+  On the JVM, set `spark.databricks.labs.gbx.gdal.driver_policy=off` in the Spark config, or the same variable in the cluster's environment.
+- **Off removes the whole defence for that process.** The VRT raw-band and Python settings stay as GDAL has them.
+  Prefer a separate process or job for work on data you trust and that needs one of these drivers.
+- **The live view changes too.** `gbx_drivers()` lists these drivers only when the policy is off.
+
+See [The policy covers the whole process](./security#the-policy-covers-the-whole-process) on the Security page.
+
+| Driver | Description | Kind | Why it is off by default | In the shipped build |
+|---|---|---|---|---|
+| `CSW` | OGC CSW (Catalog  Service for the Web) | vector | remote API. Fetches from an OGC catalog service. | ✓ |
+| `DAAS` | Airbus DS Intelligence Data As A Service driver | raster | remote API. Calls the Airbus Data As A Service API. | ✓ |
+| `EEDA` | Earth Engine Data API | vector | remote API. Calls the Earth Engine data API. | ✓ |
+| `EEDAI` | Earth Engine Data API Image | raster | remote API. Calls the Earth Engine image API. | ✓ |
+| `ESRIC` | Esri Compact Cache | raster | acts on what a file names. Fetches a coordinate reference system that the conf.xml gives as a URL. | ✓ |
+| `GDALG` | GDAL Streamed Algorithm driver | raster and vector | stored pipeline. Runs a pipeline that the file stores. | ✓ |
+| `GTI` | GDAL Raster Tile Index | raster | tile index or catalog. Opens the rasters that a tile index names. | ✓ |
+| `HTTP` | HTTP Fetching Wrapper | raster and vector | network service. Fetches a file over HTTP. | ✓ |
+| `KMLSUPEROVERLAY` | Kml Super Overlay | raster | acts on what a file names. Fetches the NetworkLink or Icon href of a file over HTTP. | ✓ |
+| `MRF` | Meta Raster Format | raster | acts on what a file names. Opens a source its file names, and writes cache files at paths its file names. | ✓ |
+| `NGW` | NextGIS Web | raster and vector | remote API. Calls a NextGIS Web server. | ✓ |
+| `OGCAPI` | OGCAPI | raster and vector | network service. Fetches from an OGC API server. | ✓ |
+| `PLMOSAIC` | Planet Labs Mosaics API | raster | remote API. Calls the Planet Labs mosaics API. | ✓ |
+| `PLSCENES` | Planet Labs Scenes API | raster and vector | remote API. Calls the Planet Labs scenes API. | ✓ |
+| `STACIT` | Spatio-Temporal Asset Catalog Items | raster | tile index or catalog. Opens the items that a STAC document names. | ✓ |
+| `STACTA` | Spatio-Temporal Asset Catalog Tiled Assets | raster | tile index or catalog. Opens the tiled assets that a STAC document names. | ✓ |
+| `WCS` | OGC Web Coverage Service | raster | network service. Fetches from an OGC web coverage service. | ✓ |
+| `WFS` | OGC WFS (Web Feature Service) | vector | remote API. Fetches from an OGC web feature service. | ✓ |
+| `WMS` | OGC Web Map Service | raster | network service. Fetches from an OGC web map service. | ✓ |
+| `WMTS` | OGC Web Map Tile Service | raster | network service. Fetches from an OGC web map tile service. | ✓ |
 {/* END GENERATED drivers */}

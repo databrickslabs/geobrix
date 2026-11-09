@@ -783,7 +783,9 @@ def render_drivers_page(snapshot: dict) -> str:
     if other:
         out.extend(["## Other drivers", ""])
         out += [
-            "These drivers handle neither rasters nor vectors, such as multidimensional files and network models.",
+            "No GeoBrix reader, writer or function uses these drivers. They handle neither rasters nor vectors.",
+            "Open them directly with GDAL's Python API, `from osgeo import gdal`, which the env wheel ships.",
+            "They run under the same driver policy, as plain GDAL on the driver, not as a distributed GeoBrix call.",
             "",
         ]
         out += _table(
@@ -799,4 +801,60 @@ def render_drivers_page(snapshot: dict) -> str:
             ],
         )
         out.append("")
+    out += _opt_in_section(snapshot.get("opt_in", []))
     return "\n".join(out).rstrip("\n") + "\n"
+
+
+def _opt_in_section(opt_in: list) -> List[str]:
+    """The last section of docs/docs/gdal-drivers.mdx: the drivers the policy refuses, from the snapshot's
+    ``opt_in`` rows (read from a build with the policy off) and the policy's own reason classes."""
+    yes = "✓"
+    out = [
+        "",
+        "## GeoBrix Opt-In Drivers",
+        "",
+        "These drivers are off by default. You can opt in to them, and then you own the risk.",
+        "GeoBrix keeps each one off because it reaches a network service, runs a stored pipeline, or acts on what a file names.",
+        "A file that another principal wrote can then make your cluster send requests or run a pipeline.",
+        "",
+        "### What the policy does",
+        "",
+        "- **It covers the whole Python process.** It is not limited to GeoBrix functions.",
+        "  It adds these drivers to `GDAL_SKIP` and removes them from each GDAL that the process has loaded.",
+        "  A direct `from osgeo import gdal` in the same process therefore lacks them too.",
+        "- **It starts when GeoBrix is imported.** The import adds the drivers to `GDAL_SKIP`, and sets the two VRT settings.",
+        "  The first GeoBrix use of GDAL completes it. The env wheel's startup file only prepares the native libraries.",
+        "  The call `register(spark)` does not start the policy itself, because the import has done it.",
+        "- **To opt in, set `GBX_GDAL_DRIVER_POLICY=off` before `import databricks.labs.gbx`.**",
+        "  A value set after the import has no effect. GeoBrix has already added the drivers to `GDAL_SKIP`.",
+        "- **Set it where each process can read it.** The driver and every executor read the variable in their own Python process.",
+        "  Set it in the cluster's environment variables, or the job cluster's, to reach all of them.",
+        "  A notebook assignment of `os.environ` before the import reaches the driver only. A worker still applies the policy.",
+        "  On the JVM, set `spark.databricks.labs.gbx.gdal.driver_policy=off` in the Spark config, or the same variable in the cluster's environment.",
+        "- **Off removes the whole defence for that process.** The VRT raw-band and Python settings stay as GDAL has them.",
+        "  Prefer a separate process or job for work on data you trust and that needs one of these drivers.",
+        "- **The live view changes too.** `gbx_drivers()` lists these drivers only when the policy is off.",
+        "",
+        "See [The policy covers the whole process](./security#the-policy-covers-the-whole-process) on the Security page.",
+        "",
+    ]
+    if not opt_in:
+        return out
+    rows = []
+    for r in opt_in:
+        kind = " and ".join(k for k in ("raster", "vector") if r[k]) or "none"
+        rows.append(
+            [
+                f"`{r['driver']}`",
+                _mdx_cell(r["description"] or r["driver"]),
+                kind,
+                _mdx_cell(f"{r['class']}. {r['why']}"),
+                yes if r["in_build"] else "no",
+            ]
+        )
+    out += _table(
+        ["Driver", "Description", "Kind", "Why it is off by default", "In the shipped build"],
+        rows,
+    )
+    out.append("")
+    return out

@@ -1098,6 +1098,45 @@ def bytes_refused_light_names() -> tuple:
     return tuple(manifest.load().gdal.bytes_refused_light_drivers)
 
 
+# Why each refused driver is off by default: (reason class, one sentence). The set of drivers is the manifest's
+# `refused` class (`refused_names()`); this map only says why, and `test_drivers.py` holds its keys to that set. The
+# classes and the facts follow docs/docs/security.mdx, section 7.
+REFUSED_WHY = {
+    "GDALG": ("stored pipeline", "Runs a pipeline that the file stores."),
+    "GTI": ("tile index or catalog", "Opens the rasters that a tile index names."),
+    "STACTA": (
+        "tile index or catalog",
+        "Opens the tiled assets that a STAC document names.",
+    ),
+    "STACIT": ("tile index or catalog", "Opens the items that a STAC document names."),
+    "WMS": ("network service", "Fetches from an OGC web map service."),
+    "WMTS": ("network service", "Fetches from an OGC web map tile service."),
+    "WCS": ("network service", "Fetches from an OGC web coverage service."),
+    "OGCAPI": ("network service", "Fetches from an OGC API server."),
+    "HTTP": ("network service", "Fetches a file over HTTP."),
+    "PLMOSAIC": ("remote API", "Calls the Planet Labs mosaics API."),
+    "PLSCENES": ("remote API", "Calls the Planet Labs scenes API."),
+    "EEDAI": ("remote API", "Calls the Earth Engine image API."),
+    "EEDA": ("remote API", "Calls the Earth Engine data API."),
+    "DAAS": ("remote API", "Calls the Airbus Data As A Service API."),
+    "NGW": ("remote API", "Calls a NextGIS Web server."),
+    "WFS": ("remote API", "Fetches from an OGC web feature service."),
+    "CSW": ("remote API", "Fetches from an OGC catalog service."),
+    "KMLSUPEROVERLAY": (
+        "acts on what a file names",
+        "Fetches the NetworkLink or Icon href of a file over HTTP.",
+    ),
+    "ESRIC": (
+        "acts on what a file names",
+        "Fetches a coordinate reference system that the conf.xml gives as a URL.",
+    ),
+    "MRF": (
+        "acts on what a file names",
+        "Opens a source its file names, and writes cache files at paths its file names.",
+    ),
+}
+
+
 def driver_verdict(name: str, raster: bool) -> tuple:
     """``(allowed, tile_bytes)`` of a GDAL driver that is registered here, under this process's policy.
 

@@ -208,16 +208,35 @@ def test_the_snapshot_file_is_well_formed():
         assert tuple(r) == listing.SNAPSHOT_COLUMNS
 
 
+def _opt_in_of_the_build():
+    """The refused drivers as a process with the policy OFF sees them (they are not registered otherwise)."""
+    import subprocess
+    import sys
+
+    code = (
+        "import json; from databricks.labs.gbx import _osgeo; "
+        "from databricks.labs.gbx.drivers import _listing; "
+        "print(json.dumps(_listing.opt_in_rows(_osgeo.bindings('opt_in').gdal)))"
+    )
+    # the parent's GeoBrix import put the refused names in GDAL_SKIP: a child inherits it, so it is dropped here
+    env = {k: v for k, v in os.environ.items() if k != "GDAL_SKIP"}
+    env[policy.ENV] = "off"
+    out = subprocess.run(
+        [sys.executable, "-c", code], env=env, capture_output=True, text=True
+    )
+    assert out.returncode == 0, out.stderr[-800:]
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
 def test_the_live_drivers_are_the_snapshot_or_the_snapshot_is_refreshed():
     gdal = _live()
-    rows = listing.driver_rows(
-        gdal
-    )  # activate() ran at import of the policy's first use
     from databricks.labs.gbx import _gdal_policy
 
-    _gdal_policy.activate()
+    _gdal_policy.activate()  # the refused drivers are deregistered before the registry is read
     rows = listing.driver_rows(gdal, None, listing.shipped_names())
-    text = listing.snapshot_document(gdal.VersionInfo("RELEASE_NAME"), rows)
+    text = listing.snapshot_document(
+        gdal.VersionInfo("RELEASE_NAME"), rows, _opt_in_of_the_build()
+    )
     if os.environ.get("GBX_DRIVERS_SNAPSHOT") == "write":
         listing.SNAPSHOT.write_text(text)
         listing.shipped_names.cache_clear()
@@ -227,6 +246,33 @@ def test_the_live_drivers_are_the_snapshot_or_the_snapshot_is_refreshed():
         "Fix: GBX_DRIVERS_SNAPSHOT=write gbx:test:python --path python/geobrix/test/core/test_drivers.py "
         "(with GBX_NATIVE_ROOT set to the env6 payload), then gbx:manifest:gen --write"
     )
+
+
+def test_every_refused_driver_has_a_reason_class_and_a_sentence():
+    assert set(policy.REFUSED_WHY) == set(policy.refused_names())
+    for name, (cls, why) in policy.REFUSED_WHY.items():
+        assert cls and why.endswith("."), name
+        assert len(why.split()) <= 25, name
+
+
+def test_the_snapshot_lists_the_refused_set_and_the_opt_in_page_matches_it():
+    """The opt-in section of gdal-drivers.mdx (generated from the snapshot) lists exactly the policy's refused
+    drivers, under the title and anchor the Security page links to."""
+    import re
+    from pathlib import Path
+
+    snap = json.loads(listing.SNAPSHOT.read_text())["opt_in"]
+    assert {r["driver"] for r in snap} == set(policy.refused_names())
+    root = Path(__file__).resolve().parents[4]
+    page = (root / "docs/docs/gdal-drivers.mdx").read_text()
+    assert "\n## GeoBrix Opt-In Drivers\n" in page
+    section = page.split("\n## GeoBrix Opt-In Drivers\n", 1)[1]
+    listed = set(re.findall(r"^\| `([A-Za-z0-9_]+)` \|", section, re.M))
+    assert listed == set(policy.refused_names())
+    security = (root / "docs/docs/security.mdx").read_text()
+    assert "(./gdal-drivers#geobrix-opt-in-drivers)" in security
+    assert "\n#### The policy covers the whole process\n" in security
+    assert "(./security#the-policy-covers-the-whole-process)" in page
 
 
 def test_every_driver_of_this_build_is_shipped_by_definition():
@@ -325,8 +371,12 @@ def test_the_docs_page_links_every_driver_row_and_every_built_in_anchor():
     ).read_text()
     ids = re.findall(r'<Link id="([^"]+)"></Link>', page)
     assert len(ids) == len(set(ids)), "an anchor is used twice"
+    headings = {
+        re.sub(r"[^a-z0-9]+", "-", h.lower()).strip("-")
+        for h in re.findall(r"^#{1,6} (.+)$", page, re.M)
+    }
     for target in re.findall(r"\]\(#([^)]+)\)", page):
-        assert target in ids, f"no anchor {target}"
+        assert target in ids or target in headings, f"no anchor {target}"
     order = [
         page.index(h)
         for h in (

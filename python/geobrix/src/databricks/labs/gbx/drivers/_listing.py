@@ -127,9 +127,37 @@ def list_drivers(kind: Optional[str] = None) -> List[Dict[str, Any]]:
     return driver_rows(gdal, kind, shipped_names())
 
 
-def snapshot_document(gdal_version: str, rows: List[Dict[str, Any]]) -> str:
-    """The text of ``manifest/shipped_drivers.json``: the GDAL release and every driver of ``rows`` by its snapshot
-    columns, one driver per line. The test that refreshes the file (``test_drivers.py``) is the only writer.
+def opt_in_rows(gdal) -> List[Dict[str, Any]]:
+    """The drivers the policy refuses, read in a process that runs with the policy OFF (a refused driver is not
+    registered otherwise): each refused name with its description, its kinds, whether this build has it, and the
+    policy's reason class and sentence. Sorted by name."""
+    out = []
+    for name in sorted(_gdal_policy.refused_names()):
+        drv = gdal.GetDriverByName(name)
+        md = (drv.GetMetadata() or {}) if drv is not None else {}
+        cls, why = _gdal_policy.REFUSED_WHY[name]
+        out.append(
+            {
+                "driver": name,
+                "description": md.get("DMD_LONGNAME") or None,
+                "raster": _yes(md, "DCAP_RASTER"),
+                "vector": _yes(md, "DCAP_VECTOR"),
+                "in_build": drv is not None,
+                "class": cls,
+                "why": why,
+            }
+        )
+    return out
+
+
+def snapshot_document(
+    gdal_version: str,
+    rows: List[Dict[str, Any]],
+    opt_in: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """The text of ``manifest/shipped_drivers.json``: the GDAL release, every driver of ``rows`` by its snapshot
+    columns (one per line), and the ``opt_in`` drivers the policy refuses. The test that refreshes the file
+    (``test_drivers.py``) is the only writer.
     """
     lines = [
         "    " + json.dumps({c: r[c] for c in SNAPSHOT_COLUMNS}, ensure_ascii=False)
@@ -140,6 +168,9 @@ def snapshot_document(gdal_version: str, rows: List[Dict[str, Any]]) -> str:
         + json.dumps(gdal_version)
         + ',\n  "drivers": [\n'
         + ",\n".join(lines)
+        + "\n  ],\n"
+        + '  "opt_in": [\n'
+        + ",\n".join("    " + json.dumps(r, ensure_ascii=False) for r in (opt_in or []))
         + "\n  ]\n}\n"
     )
 

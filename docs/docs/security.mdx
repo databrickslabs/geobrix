@@ -197,6 +197,25 @@ driver list with `GDAL_SKIP` or the per-format options described in the
 Do not leave every driver enabled by default. The smaller the
 allowlist, the smaller the attack surface from a malicious input file.
 
+#### The policy covers the whole process
+
+The driver policy (see [section 7](#7-raster-data-other-principals-can-write)) applies to every GDAL use in the Python process.
+It is not limited to GeoBrix functions. GeoBrix adds the refused drivers to `GDAL_SKIP` and removes them from each GDAL that the process has loaded.
+A direct `from osgeo import gdal` or a `rasterio` call in the same process therefore lacks them too.
+
+The policy starts when `databricks.labs.gbx` is imported, and the first GeoBrix use of GDAL completes it.
+The env wheel's startup file only prepares the native libraries. It does not start the policy.
+To opt in, set `GBX_GDAL_DRIVER_POLICY=off` before that import, in each Python process. A value set after the import has no effect.
+
+- **Cluster or job:** set it in the cluster's environment variables, or the job cluster's. This reaches the driver and every executor.
+- **Notebook:** set `os.environ["GBX_GDAL_DRIVER_POLICY"] = "off"` before the import. This reaches the driver only. A worker still applies the policy.
+- **JVM:** set `spark.databricks.labs.gbx.gdal.driver_policy=off` in the Spark config, or the same variable in the cluster's environment.
+
+Opting in removes the whole defence for that process. You then own the risk of the refused drivers.
+They reach network services, run stored pipelines, or act on what a file names.
+Prefer a separate process or job, and use it only for data you trust.
+The [GeoBrix Opt-In Drivers](./gdal-drivers#geobrix-opt-in-drivers) list names each driver and why it is off by default.
+
 ### 5. Report suspected vulnerabilities privately
 
 If you find something that looks like a security issue in GeoBrix itself,

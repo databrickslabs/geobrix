@@ -178,5 +178,27 @@
     {"driver": "XYZ", "description": "ASCII Gridded XYZ", "raster": true, "vector": false, "read": true, "write": true, "extensions": ["xyz"], "allowed": true, "tile_bytes": true, "available": true, "requires": null, "built_in": null, "help_url": "https://gdal.org/drivers/raster/xyz.html"},
     {"driver": "Zarr", "description": "Zarr", "raster": true, "vector": false, "read": true, "write": true, "extensions": ["zarr"], "allowed": true, "tile_bytes": true, "available": true, "requires": null, "built_in": "The Zarr readers and writers use the zarr package, not this driver.", "help_url": null},
     {"driver": "ZMap", "description": "ZMap Plus Grid", "raster": true, "vector": false, "read": true, "write": true, "extensions": ["dat"], "allowed": true, "tile_bytes": true, "available": true, "requires": null, "built_in": null, "help_url": "https://gdal.org/drivers/raster/zmap.html"}
+  ],
+  "opt_in": [
+    {"driver": "CSW", "description": "OGC CSW (Catalog  Service for the Web)", "raster": false, "vector": true, "in_build": true, "class": "remote API", "why": "Fetches from an OGC catalog service."},
+    {"driver": "DAAS", "description": "Airbus DS Intelligence Data As A Service driver", "raster": true, "vector": false, "in_build": true, "class": "remote API", "why": "Calls the Airbus Data As A Service API."},
+    {"driver": "EEDA", "description": "Earth Engine Data API", "raster": false, "vector": true, "in_build": true, "class": "remote API", "why": "Calls the Earth Engine data API."},
+    {"driver": "EEDAI", "description": "Earth Engine Data API Image", "raster": true, "vector": false, "in_build": true, "class": "remote API", "why": "Calls the Earth Engine image API."},
+    {"driver": "ESRIC", "description": "Esri Compact Cache", "raster": true, "vector": false, "in_build": true, "class": "acts on what a file names", "why": "Fetches a coordinate reference system that the conf.xml gives as a URL."},
+    {"driver": "GDALG", "description": "GDAL Streamed Algorithm driver", "raster": true, "vector": true, "in_build": true, "class": "stored pipeline", "why": "Runs a pipeline that the file stores."},
+    {"driver": "GTI", "description": "GDAL Raster Tile Index", "raster": true, "vector": false, "in_build": true, "class": "tile index or catalog", "why": "Opens the rasters that a tile index names."},
+    {"driver": "HTTP", "description": "HTTP Fetching Wrapper", "raster": true, "vector": true, "in_build": true, "class": "network service", "why": "Fetches a file over HTTP."},
+    {"driver": "KMLSUPEROVERLAY", "description": "Kml Super Overlay", "raster": true, "vector": false, "in_build": true, "class": "acts on what a file names", "why": "Fetches the NetworkLink or Icon href of a file over HTTP."},
+    {"driver": "MRF", "description": "Meta Raster Format", "raster": true, "vector": false, "in_build": true, "class": "acts on what a file names", "why": "Opens a source its file names, and writes cache files at paths its file names."},
+    {"driver": "NGW", "description": "NextGIS Web", "raster": true, "vector": true, "in_build": true, "class": "remote API", "why": "Calls a NextGIS Web server."},
+    {"driver": "OGCAPI", "description": "OGCAPI", "raster": true, "vector": true, "in_build": true, "class": "network service", "why": "Fetches from an OGC API server."},
+    {"driver": "PLMOSAIC", "description": "Planet Labs Mosaics API", "raster": true, "vector": false, "in_build": true, "class": "remote API", "why": "Calls the Planet Labs mosaics API."},
+    {"driver": "PLSCENES", "description": "Planet Labs Scenes API", "raster": true, "vector": true, "in_build": true, "class": "remote API", "why": "Calls the Planet Labs scenes API."},
+    {"driver": "STACIT", "description": "Spatio-Temporal Asset Catalog Items", "raster": true, "vector": false, "in_build": true, "class": "tile index or catalog", "why": "Opens the items that a STAC document names."},
+    {"driver": "STACTA", "description": "Spatio-Temporal Asset Catalog Tiled Assets", "raster": true, "vector": false, "in_build": true, "class": "tile index or catalog", "why": "Opens the tiled assets that a STAC document names."},
+    {"driver": "WCS", "description": "OGC Web Coverage Service", "raster": true, "vector": false, "in_build": true, "class": "network service", "why": "Fetches from an OGC web coverage service."},
+    {"driver": "WFS", "description": "OGC WFS (Web Feature Service)", "raster": false, "vector": true, "in_build": true, "class": "remote API", "why": "Fetches from an OGC web feature service."},
+    {"driver": "WMS", "description": "OGC Web Map Service", "raster": true, "vector": false, "in_build": true, "class": "network service", "why": "Fetches from an OGC web map service."},
+    {"driver": "WMTS", "description": "OGC Web Map Tile Service", "raster": true, "vector": false, "in_build": true, "class": "network service", "why": "Fetches from an OGC web map tile service."}
   ]
 }

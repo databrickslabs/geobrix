@@ -95,19 +95,29 @@ def _count(spark, df, level, variant):
 def test_a_thousand_tiles_through_c1_leave_no_vsimem_file_and_flat_workers(
     spark8, tiles
 ):
-    # A worker's first real engine batch loads GDAL's drivers and the light tier (about 90 MiB, once), and a batch
-    # holds its rows' buffers while it runs (up to about 30 MiB): three passes warm every worker up; five more must
-    # not raise the workers' peak beyond that. A leak of an input (about 256 KiB a call here) would add some
-    # 150 MiB over them.
+    # A worker's first real engine batch loads GDAL's drivers and the light tier (some 65 to 100 MiB, once), and its
+    # first full batch holds its rows' buffers (about 55 MiB more, once). Local[8] keeps more than eight workers and a
+    # pass reaches only some of them, so under load a worker can take one of these in the measured window. So one row on
+    # each of 512 partitions loads every worker, and three passes bring most to their batch peak. A leak of an input
+    # (150 KiB a call here, some 330 MiB over four passes) grows the workers' total in every window, whichever workers a
+    # pass reaches; a first batch is a one-time step, so three windows of four passes cannot all hold the two or more
+    # that would carry the total past 100 MiB. The total must not grow by more than that in all three.
+    warm_rows = tiles.limit(64 * PARTS).repartition(64 * PARTS)
+    assert _count(spark8, warm_rows, "L3", "engine-c1") == (64 * PARTS, 64 * PARTS)
     for _ in range(3):
         assert _count(spark8, tiles, "L3", "engine-c1") == (N, N)
-    warm = _worker_state(spark8)
-    for _ in range(5):
-        assert _count(spark8, tiles, "L3", "engine-c1") == (N, N)
-    later = _worker_state(spark8)
-    states = list(warm.values()) + list(later.values())
-    assert states and all(left == 0 for left, _ in states)
-    grown = (
-        max(r for _, r in later.values()) - max(r for _, r in warm.values())
-    ) // 1024
-    assert grown <= 40, f"the workers' peak RSS grew {grown} MiB over 5,000 more tiles"
+    states = [_worker_state(spark8)]
+    for _ in range(3):
+        for _ in range(4):
+            assert _count(spark8, tiles, "L3", "engine-c1") == (N, N)
+        states.append(_worker_state(spark8))
+    assert states and all(left == 0 for st in states for left, _ in st.values())
+    steady = set.intersection(*(set(st) for st in states))
+    assert steady, "no worker is in every snapshot"
+    grown = [
+        sum(after[pid][1] - before[pid][1] for pid in steady) // 1024
+        for before, after in zip(states, states[1:])
+    ]
+    assert (
+        min(grown) <= 100
+    ), f"the workers' total RSS grew {grown} MiB over three windows of 4,000 tiles"

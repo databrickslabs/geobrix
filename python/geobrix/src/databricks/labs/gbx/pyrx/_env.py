@@ -1030,6 +1030,17 @@ def sidecar_files(path) -> list:
     return found
 
 
+def copied_sidecar_files(path) -> list:
+    """The sidecar files a worker-local copy of the raster *path* carries: :func:`sidecar_files` without the ``.ovr``.
+
+    An external overview file holds reduced-resolution copies of the pixels, which no read of the staged copy needs (a
+    tile is cut at full resolution, and the CRS and NoData an ``.ovr`` could not hold are in the other sidecars) and
+    which can be a large part of the file's size. The staged copy of a raster (``StageCache``), the Volume fallback copy
+    (``_stage_local_if_needed``) and ``rst_fromfile`` all take this list, so they agree on what is copied.
+    """
+    return [f for f in sidecar_files(path) if not f.lower().endswith(".ovr")]
+
+
 def _same_value(a, b) -> bool:
     if isinstance(a, float) and isinstance(b, float) and a != a and b != b:
         return True
@@ -1037,35 +1048,62 @@ def _same_value(a, b) -> bool:
 
 
 def sidecars_alter_open(path) -> bool:
-    """Whether the sidecar files beside *path* change what GDAL opens: the CRS, NoData, geotransform or the scale and
-    offset of a band. When they do not (an ``.ovr``, or statistics in an ``.aux.xml``), the file's own bytes stand for
-    it in a tile; when they do, a tile has to be written from the open dataset so those values are baked into it.
+    """Whether the sidecar files beside *path* change what GDAL opens. When they do not (an ``.ovr``, or statistics in
+    an ``.aux.xml``), the file's own bytes stand for it in a tile; when they do, a tile has to be written from the open
+    dataset so those values are baked into it.
+
+    Compared, between the file opened with its sidecars and the same file alone: the CRS, the GCPs (and their CRS), the
+    geotransform, and for each band the NoData, scale, offset, colour interpretation, colour table and mask flags (an
+    external ``.msk`` shows as a per-dataset mask). Not compared: metadata tags, band descriptions, units, category
+    names, statistics and RPCs. They are descriptive, and a tile that holds the pixels, CRS, NoData and georeferencing
+    is the raster as every operation reads it. Both opens retry a transient miss, as every Volume read does.
     """
     if not any(not f.lower().endswith(".ovr") for f in sidecar_files(path)):
         return False
     from rasterio import Env
 
     from databricks.labs.gbx._gdal_policy import open_data
+    from databricks.labs.gbx.core._retry import _retry_transient
 
     def view(ds):
+        palettes = []
+        for i in ds.indexes:
+            try:
+                palettes.append(tuple(sorted(ds.colormap(i).items())))
+            except ValueError:  # the band has no colour table
+                palettes.append(None)
+        gcps, gcp_crs = ds.gcps
         return (
             ds.crs.to_wkt() if ds.crs else None,
             tuple(ds.nodatavals),
             tuple(ds.transform),
             tuple(ds.scales),
             tuple(ds.offsets),
+            tuple((g.row, g.col, g.x, g.y, g.z) for g in gcps),
+            gcp_crs.to_wkt() if gcp_crs else None,
+            tuple(int(c) for c in ds.colorinterp),
+            tuple(palettes),
+            tuple(tuple(sorted(f.name for f in flags)) for flags in ds.mask_flag_enums),
         )
 
-    with open_raster(path) as with_sidecars:
-        a = view(with_sidecars)
-    # the same file as its bytes alone are: no PAM sidecar, no folder look-up
-    with Env(GDAL_PAM_ENABLED="NO", **{_READDIR_ON_OPEN: "EMPTY_DIR"}):
-        with open_data(path) as alone:
-            b = view(alone)
-    return not all(
-        _same_value(x, y) if not isinstance(x, tuple) else all(map(_same_value, x, y))
-        for x, y in zip(a, b)
-    )
+    def with_sidecars():
+        with open_raster(path) as ds:
+            return view(ds)
+
+    def alone():
+        # the same file as its bytes alone are: no PAM sidecar, no folder look-up
+        with Env(GDAL_PAM_ENABLED="NO", **{_READDIR_ON_OPEN: "EMPTY_DIR"}):
+            with open_data(path) as ds:
+                return view(ds)
+
+    a, b = _retry_transient(with_sidecars), _retry_transient(alone)
+
+    def same(x, y):
+        if isinstance(x, tuple):
+            return len(x) == len(y) and all(map(same, x, y))
+        return _same_value(x, y)
+
+    return not same(a, b)
 
 
 def _user_env_sets_readdir() -> bool:

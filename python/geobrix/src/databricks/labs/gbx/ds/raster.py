@@ -87,7 +87,7 @@ from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
     copy_source_with_sidecars,
     new_local_temp_dir,
-    retried_source_signature,
+    retried_raster_source_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,9 +104,10 @@ _MAX_TILE_BYTES = 1932735283  # ~1.8 GiB
 
 
 # Each source is staged once and shared by every tile task for it on the worker,
-# within a bounded cache.
+# within a bounded cache. The signature takes in the sidecars staged with the file, so an edited .aux.xml or .hdr
+# beside an unchanged file is staged again.
 _RASTER_STAGE = StageCache(
-    "gbx_stage_", copy_source_with_sidecars, retried_source_signature
+    "gbx_stage_", copy_source_with_sidecars, retried_raster_source_signature
 )
 
 

@@ -17,7 +17,7 @@ import uuid
 import warnings
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Hashable, List, Optional
+from typing import Callable, Dict, Hashable, Iterable, List, Optional
 
 #: A write that has not committed within this window is presumed dead; its temp is
 #: reclaimable. The floor is the longest *static* phase of a live write -- the
@@ -77,6 +77,18 @@ def new_local_temp_file(suffix: str = "", prefix: str = "gbx_") -> str:
     """Atomically create a unique empty local-disk temp FILE under local_temp_root();
     returns its path (the fd is closed). Caller owns unlink/cleanup."""
     fd, path = tempfile.mkstemp(suffix=suffix, prefix=prefix, dir=local_temp_root())
+    os.close(fd)
+    return path
+
+
+def new_staged_local_file(source_name: str) -> str:
+    """Atomically create a unique empty local-disk file named ``<uuid hex>_<random><source_name>`` under
+    local_temp_root(), the name :func:`copy_source_with_sidecars` stages a file and its sidecars under (the shared
+    prefix is how :func:`remove_staged` finds the sidecars). Returns its path; the caller owns removal.
+    """
+    fd, path = tempfile.mkstemp(
+        prefix=f"{uuid.uuid4().hex}_", suffix=source_name, dir=local_temp_root()
+    )
     os.close(fd)
     return path
 
@@ -149,18 +161,26 @@ def _staged_sidecars(local: str) -> List[str]:
         return []
 
 
-def _remove_local(local: str) -> None:
+def _remove_local(local: str, sidecars: Iterable[str] = ()) -> None:
+    """Remove a staged copy and the *sidecars* staged with it (a directory is removed whole)."""
     if os.path.isdir(local):
         shutil.rmtree(local, ignore_errors=True)
         return
-    for path in [*_staged_sidecars(local), local]:
+    for path in [*sidecars, local]:
         try:
             os.remove(path)
         except OSError:
             pass
 
 
-def _path_bytes(path: str) -> int:
+def remove_staged(local: str) -> None:
+    """Remove a staged copy that no cache keeps books for (the Volume fallback copy of
+    ``_stage_local_if_needed``) with the sidecars staged beside it, found by their shared prefix.
+    """
+    _remove_local(local, _staged_sidecars(local))
+
+
+def _path_bytes(path: str, sidecars: Iterable[str] = ()) -> int:
     if os.path.isdir(path):
         return sum(
             os.path.getsize(os.path.join(d, f))
@@ -168,7 +188,7 @@ def _path_bytes(path: str) -> int:
             for f in fs
         )
     return os.path.getsize(path) + sum(
-        os.path.getsize(p) for p in _staged_sidecars(path) if os.path.isfile(p)
+        os.path.getsize(p) for p in sidecars if os.path.isfile(p)
     )
 
 
@@ -204,33 +224,36 @@ def copy_source_sequential(source_path: str, local_path: str) -> None:
     _listing._retry_transient(_do_stage)
 
 
-def copy_source_with_sidecars(source_path: str, local_path: str) -> None:
+def copy_source_with_sidecars(source_path: str, local_path: str) -> List[str]:
     """:func:`copy_source_sequential` of the file, then of the sidecar files beside it (a ``StageCache`` ``copy_fn``
-    for a raster, whose staged copy has to open as the source does)."""
+    for a raster, whose staged copy has to open as the source does). Returns the staged sidecar paths, which the
+    cache keeps with the entry (to size and to remove it) instead of listing the folder.
+    """
     try:
         copy_source_sequential(source_path, local_path)
-        _copy_sidecars(source_path, local_path)
+        return _copy_sidecars(source_path, local_path)
     except BaseException:
         # a copy that failed is not in the cache's books: take what it staged (the file and the sidecars already copied)
-        _remove_local(local_path)
+        remove_staged(local_path)
         raise
 
 
-def _copy_sidecars(source_path: str, local_path: str) -> None:
-    """Copy the sidecar files beside *source_path* (``pyrx._env.sidecar_files``) next to the staged *local_path*, named
-    as the staged file is: the staged name is a prefix plus the source's name, and a sidecar keeps the rest of its own
-    name, so GDAL finds it by the same rule as at the source. A staged copy that lost them would open without the CRS
-    or NoData they hold, or not at all (an ESRI ``.bil`` without its ``.hdr``).
+def _copy_sidecars(source_path: str, local_path: str) -> List[str]:
+    """Copy the sidecar files beside *source_path* (``pyrx._env.copied_sidecar_files``) next to the staged *local_path*,
+    named as the staged file is: the staged name is a prefix plus the source's name, and a sidecar keeps the rest of its
+    own name, so GDAL finds it by the same rule as at the source. A staged copy that lost them would open without the
+    CRS or NoData they hold, or not at all (an ESRI ``.bil`` without its ``.hdr``). Returns the paths copied.
     """
     from databricks.labs.gbx.ds import _listing
     from databricks.labs.gbx.pyrx import _env
 
     src_name, local_name = os.path.basename(source_path), os.path.basename(local_path)
     if not local_name.endswith(src_name):
-        return
+        return []
     prefix = local_name[: len(local_name) - len(src_name)]
     folder = os.path.dirname(local_path)
-    for side in _env.sidecar_files(source_path):
+    copied: List[str] = []
+    for side in _env.copied_sidecar_files(source_path):
         dest = os.path.join(folder, prefix + os.path.basename(side))
 
         def _do_copy(side=side, dest=dest) -> None:
@@ -238,6 +261,29 @@ def _copy_sidecars(source_path: str, local_path: str) -> None:
                 shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
 
         _listing._retry_transient(_do_copy)
+        copied.append(dest)
+    return copied
+
+
+def raster_source_signature(path: str) -> tuple:
+    """:func:`source_signature` of a raster file together with the identity (name, size, mtime) of each sidecar a staged
+    copy carries (``_env.copied_sidecar_files``): an ``.aux.xml`` or ``.hdr`` edited beside an unchanged file changes
+    the CRS or NoData GDAL reads from the copy, so the copy has to be staged again."""
+    from databricks.labs.gbx.pyrx import _env
+
+    sides = []
+    for side in _env.copied_sidecar_files(path):
+        st = os.stat(side)
+        sides.append((os.path.basename(side), st.st_size, st.st_mtime_ns))
+    return (source_signature(path), tuple(sides))
+
+
+def retried_raster_source_signature(path: str) -> tuple:
+    """:func:`raster_source_signature` with the transient retry of :func:`retried_source_signature` (the
+    ``StageCache`` ``signature_fn`` of the raster reader)."""
+    from databricks.labs.gbx.ds import _listing
+
+    return _listing._retry_transient(lambda: raster_source_signature(path))
 
 
 def retried_source_signature(path: str) -> tuple:
@@ -276,7 +322,7 @@ class StageCache:
     def __init__(
         self,
         prefix: str,
-        copy_fn: Callable[[str, str], None],
+        copy_fn: Callable[[str, str], Optional[List[str]]],
         signature_fn: Optional[Callable[[str], Hashable]] = None,
     ):
         self._prefix = prefix
@@ -289,6 +335,9 @@ class StageCache:
         )  # source -> local (LRU order)
         self._sizes: Dict[str, int] = {}
         self._sigs: Dict[str, Hashable] = {}
+        # local -> the sidecar copies staged with it (what a ``copy_fn`` returned), so sizing and removing a copy
+        # needs no listing of the folder under the lock
+        self._sidecars: Dict[str, List[str]] = {}
         self._in_use: Dict[str, int] = {}  # local -> active users
         self._retired: List[str] = []  # superseded copies still in use
 
@@ -308,7 +357,7 @@ class StageCache:
                     del self._in_use[local]
                     if local in self._retired:
                         self._retired.remove(local)
-                        _remove_local(local)
+                        self._remove(local)
 
     def _get_or_stage(self, source_path: str, sig: Hashable = None) -> str:
         if source_path in self._entries:
@@ -322,9 +371,10 @@ class StageCache:
         local = os.path.join(cache_dir, f"{uuid.uuid4().hex}_{basename}")
         # Only copy_fn touches the source (readers wrap it in their transient
         # retry); the size comes from the local copy, then idle copies are evicted.
-        self._copy(source_path, local)
+        sidecars = list(self._copy(source_path, local) or ())
         self._entries[source_path] = local
-        self._sizes[source_path] = _path_bytes(local)
+        self._sidecars[local] = sidecars
+        self._sizes[source_path] = _path_bytes(local, sidecars)
         self._sigs[source_path] = sig
         self._evict_to_cap(cache_dir, keep=source_path)
         return local
@@ -340,7 +390,7 @@ class StageCache:
             local = self._entries.pop(src)
             cached -= self._sizes.pop(src)
             self._sigs.pop(src, None)
-            _remove_local(local)
+            self._remove(local)
 
     def _supersede(self, source_path: str) -> None:
         """Drop the cached copy of a source that changed; defer the delete while
@@ -351,7 +401,10 @@ class StageCache:
         if self._in_use.get(local, 0):
             self._retired.append(local)
         else:
-            _remove_local(local)
+            self._remove(local)
+
+    def _remove(self, local: str) -> None:
+        _remove_local(local, self._sidecars.pop(local, ()))
 
     def _ensure_dir(self) -> str:
         if self._dir is None:
@@ -389,5 +442,6 @@ class StageCache:
         self._entries.clear()
         self._sizes.clear()
         self._sigs.clear()
+        self._sidecars.clear()
         self._in_use.clear()
         self._retired.clear()

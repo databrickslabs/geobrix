@@ -381,3 +381,98 @@ def test_sidecars_alter_open_only_when_they_change_the_crs_or_nodata(tmp_path):
     assert _env.sidecars_alter_open(path) is True  # the NoData is only in the sidecar
     (tmp_path / "a.tif.aux.xml").write_text("<PAMDataset/>")
     assert _env.sidecars_alter_open(path) is False  # a sidecar with nothing to change
+
+
+def _gtiff(path, colormap=None):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="uint8",
+        transform=from_origin(0, 4, 1, 1),
+        crs="EPSG:4326",
+    ) as dst:
+        dst.write(np.ones((1, 4, 4), "uint8"))
+        if colormap:
+            dst.write_colormap(1, colormap)
+
+
+def test_sidecars_alter_open_sees_an_external_mask(tmp_path):
+    """An external ``.msk`` is not in the file's bytes: the file opens with a per-dataset mask only with it."""
+    import numpy as np
+    import rasterio
+
+    from databricks.labs.gbx.pyrx import _env
+
+    path = str(tmp_path / "m.tif")
+    _gtiff(path)
+    assert _env.sidecars_alter_open(path) is False
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK="NO"):
+        with rasterio.open(path, "r+") as ds:
+            ds.write_mask(np.zeros((4, 4), "uint8"))
+    assert os.path.exists(path + ".msk")
+    assert _env.sidecars_alter_open(path) is True
+
+
+def test_sidecars_alter_open_sees_a_colour_table_and_gcps_held_in_the_sidecar(
+    tmp_path,
+):
+    """A colour table or ground control points held only in an ``.aux.xml`` change what the file opens as."""
+    from databricks.labs.gbx.pyrx import _env
+
+    path = str(tmp_path / "c.tif")
+    _gtiff(path)
+    (tmp_path / "c.tif.aux.xml").write_text(
+        '<PAMDataset><PAMRasterBand band="1"><ColorTable>'
+        '<Entry c1="1" c2="2" c3="3" c4="255"/></ColorTable></PAMRasterBand>'
+        "</PAMDataset>"
+    )
+    assert _env.sidecars_alter_open(path) is True
+    (tmp_path / "c.tif.aux.xml").write_text("<PAMDataset/>")
+    assert _env.sidecars_alter_open(path) is False
+    (tmp_path / "c.tif.aux.xml").write_text(
+        "<PAMDataset><GCPList><GCP Id='1' Pixel='0' Line='0' X='5' Y='6'/>"
+        "<GCP Id='2' Pixel='4' Line='0' X='9' Y='6'/>"
+        "<GCP Id='3' Pixel='0' Line='4' X='5' Y='2'/></GCPList></PAMDataset>"
+    )
+    assert _env.sidecars_alter_open(path) is True
+
+
+def test_sidecars_alter_open_retries_a_transient_miss_on_each_open(
+    tmp_path, monkeypatch
+):
+    """Both opens (with the sidecars, and the file alone) retry a miss on the mount, as every Volume read does."""
+    from databricks.labs.gbx._gdal_policy import open_data as real_data
+    from databricks.labs.gbx.core import _retry
+    from databricks.labs.gbx.pyrx import _env
+
+    path = str(tmp_path / "r.tif")
+    _gtiff(path)
+    (tmp_path / "r.tif.aux.xml").write_text("<PAMDataset/>")
+    monkeypatch.setattr(_retry.time, "sleep", lambda s: None)
+    fails = {"with": 2, "alone": 2}
+    real_open = _env.open_raster
+
+    def flaky_open(p, *a, **kw):
+        if fails["with"]:
+            fails["with"] -= 1
+            raise FileNotFoundError(p)
+        return real_open(p, *a, **kw)
+
+    def flaky_data(p, *a, **kw):
+        if fails["alone"]:
+            fails["alone"] -= 1
+            raise OSError("not there yet")
+        return real_data(p, *a, **kw)
+
+    monkeypatch.setattr(_env, "open_raster", flaky_open)
+    monkeypatch.setattr("databricks.labs.gbx._gdal_policy.open_data", flaky_data)
+    assert _env.sidecars_alter_open(path) is False
+    assert fails == {"with": 0, "alone": 0}

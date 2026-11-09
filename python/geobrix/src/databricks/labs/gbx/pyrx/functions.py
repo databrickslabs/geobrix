@@ -1054,9 +1054,7 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                 return _fromfile_read_remote(str(path), drv, cap_bytes)
             # an .ovr holds overviews, not values the full-resolution read needs: it neither changes the pixels nor is
             # worth a copy, so a file with only that takes the plain path
-            sides = [
-                f for f in _env.sidecar_files(local) if not f.lower().endswith(".ovr")
-            ]
+            sides = _env.copied_sidecar_files(local)
             if sides:
                 # sidecars beside the file (an .aux.xml with its NoData, an ESRI .hdr): the bytes of the one file are
                 # not the raster, so it is opened with them and written as a GeoTIFF that holds their values
@@ -1099,10 +1097,9 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                     _src_bytes = _fh.read()
             finally:
                 if is_temp:
-                    import os as _os
+                    from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
 
-                    if _os.path.exists(staged):
-                        _os.remove(staged)
+                    remove_staged(staged)
             with MemoryFile(_src_bytes) as _src_mf, open_bytes(_src_mf) as src:
                 data = src.read()
                 # The file's own mask band (not an alpha band) is part of its bytes;

@@ -125,3 +125,40 @@ def test_rst_fromfile_materialized_keeps_the_sidecars(spark, samples, kind):
     assert row["tile"] is not None, f"rst_fromfile returned NULL for {kind}"
     assert row["tile"]["raster"] is not None
     assert_tile_is(tile_dict(row["tile"]), ref, f"rst_fromfile materialize {kind}")
+
+
+def test_a_sidecar_edited_alone_is_read_on_the_next_read(spark, gb, tmp_path_factory):
+    """The worker's staged copy is keyed by the sidecars too: editing only the ``.aux.xml`` (the GeoTIFF is untouched)
+    gives the next read the new CRS and NoData, not those of the copy the first read staged.
+    """
+    gdal = gb.gdal
+    path = _pam_geotiff(gb, str(tmp_path_factory.mktemp("mat_edit")))
+    first_ref = reference(gb, path)
+
+    def read():
+        rows = (
+            spark.read.format("raster_gbx")
+            .option("virtualTiles", "false")
+            .load(path)
+            .collect()
+        )
+        assert len(rows) == 1
+        return tile_dict(rows[0]["tile"])
+
+    assert_tile_is(read(), first_ref, "first read")
+    main_before = os.stat(path)
+    ds = gdal.Open(path)  # read-only: PAM rewrites the sidecar
+    ds.SetProjection(_srs(gb, 4326).ExportToWkt())
+    ds.GetRasterBand(1).SetNoDataValue(-1234.0)
+    ds.FlushCache()
+    ds = None
+    aux = path + ".aux.xml"
+    st = os.stat(aux)  # a coarse-clock mount may give the rewrite the old mtime
+    os.utime(aux, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    assert (
+        os.stat(path).st_mtime_ns == main_before.st_mtime_ns
+    )  # only the sidecar changed
+    second_ref = reference(gb, path)
+    assert second_ref.nodata[0] != first_ref.nodata[0]
+    assert second_ref.crs != first_ref.crs
+    assert_tile_is(read(), second_ref, "read after the sidecar was edited")

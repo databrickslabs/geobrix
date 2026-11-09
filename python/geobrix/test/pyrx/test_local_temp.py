@@ -332,7 +332,7 @@ def test_stage_cache_stages_the_sidecars_with_the_file_and_removes_them_together
 
     monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
     cache = lt.StageCache(
-        "gbx_test_stage_", lt.copy_source_with_sidecars, lt.source_signature
+        "gbx_test_stage_", lt.copy_source_with_sidecars, lt.raster_source_signature
     )
     a = _src(tmp_path, "a.bil", 10)
     Path(a).with_suffix(".hdr").write_bytes(b"NROWS 1")
@@ -370,8 +370,9 @@ def test_a_failed_sidecar_copy_leaves_nothing_staged_and_the_size_counts_the_sid
     folder = tmp_path / "stage"
     folder.mkdir()
     ok = str(folder / ("0" * 32 + "_a.bil"))
-    lt.copy_source_with_sidecars(a, ok)
-    assert lt._path_bytes(ok) == 10 + len(b"NROWS 1") + len(b"<PAMDataset/>")
+    sidecars = lt.copy_source_with_sidecars(a, ok)
+    assert len(sidecars) == 2
+    assert lt._path_bytes(ok, sidecars) == 10 + len(b"NROWS 1") + len(b"<PAMDataset/>")
 
     bad = str(folder / ("1" * 32 + "_a.bil"))
     real = lt._copy_sidecars
@@ -384,3 +385,115 @@ def test_a_failed_sidecar_copy_leaves_nothing_staged_and_the_size_counts_the_sid
     with pytest.raises(OSError):
         lt.copy_source_with_sidecars(a, bad)
     assert all(n.startswith("0" * 32) for n in os.listdir(folder))
+
+
+def _raster_cache(monkeypatch, tmp_path):
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    copies = []
+
+    def copy(src, dst):
+        copies.append(src)
+        return lt.copy_source_with_sidecars(src, dst)
+
+    return lt.StageCache("gbx_test_stage_", copy, lt.raster_source_signature), copies
+
+
+def test_an_edited_sidecar_beside_an_unchanged_file_is_staged_again(
+    monkeypatch, tmp_path
+):
+    """The signature of a raster takes in its staged sidecars: an ``.aux.xml`` or ``.hdr`` changed alone (the main file
+    keeps its size and mtime) gives a new staged copy that holds the new sidecar, and the stale one is removed.
+    """
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    cache, copies = _raster_cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.bil", 10)
+    hdr = Path(a).with_suffix(".hdr")
+    hdr.write_bytes(b"NROWS 1")
+    with cache.use(a) as p1:
+        pass
+    with cache.use(a) as same:
+        assert same == p1  # nothing changed: the copy is reused
+    assert copies == [a]
+    st = os.stat(hdr)
+    hdr.write_bytes(b"NROWS 22")
+    os.utime(hdr, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+    with cache.use(a) as p2:
+        assert p2 != p1 and copies == [a, a]
+        prefix = os.path.basename(p2)[: -len("a.bil")]
+        assert (Path(p2).parent / (prefix + "a.hdr")).read_bytes() == b"NROWS 22"
+    assert not [
+        n for n in os.listdir(Path(p2).parent) if n.startswith(Path(p1).name[:33])
+    ]
+    # a sidecar that appears, and one that goes, also change the signature
+    sig = lt.raster_source_signature
+    before = sig(a)
+    Path(a + ".aux.xml").write_bytes(b"<PAMDataset/>")
+    assert sig(a) != before
+    Path(a + ".aux.xml").unlink()
+    assert sig(a) == before
+
+
+def test_the_stage_leaves_an_overview_file_behind(monkeypatch, tmp_path):
+    """An ``.ovr`` holds reduced copies of the pixels that no read of the staged copy uses: it is neither copied nor part
+    of the signature (the same list ``rst_fromfile`` takes)."""
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    cache, _ = _raster_cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.tif", 10)
+    Path(a + ".ovr").write_bytes(b"o" * 50)
+    before = lt.raster_source_signature(a)
+    with cache.use(a) as p:
+        assert sorted(os.listdir(Path(p).parent)) == [os.path.basename(p)]
+    Path(a + ".ovr").write_bytes(b"o" * 99)
+    assert lt.raster_source_signature(a) == before
+
+
+def test_the_cache_sizes_and_removes_a_copy_from_its_own_books_not_a_listing(
+    monkeypatch, tmp_path
+):
+    """Sizing, eviction and supersede work from the sidecar names the entry holds: with the folder listing made to
+    fail, they still count and remove the sidecars (so none is listed under the cache lock).
+    """
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    def _no_listing(local):
+        raise AssertionError("the cache listed the folder")
+
+    cache, _ = _raster_cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.bil", 10)
+    Path(a).with_suffix(".hdr").write_bytes(b"NROWS 1")
+    monkeypatch.setattr(lt, "_staged_sidecars", _no_listing)
+    with cache.use(a) as p1:
+        assert cache._sizes[a] == 10 + len(b"NROWS 1")
+        folder = Path(p1).parent
+        assert len(os.listdir(folder)) == 2
+    _rewrite(a, 4)  # supersede
+    with cache.use(a):
+        assert len(os.listdir(folder)) == 2
+    cache._evict_to_cap(str(folder), keep="")  # nothing over the cap: kept
+    monkeypatch.setattr(lt, "_stage_cap_bytes", lambda d, c: 0)
+    cache._evict_to_cap(
+        str(folder), keep=""
+    )  # over the cap: the idle copy goes with its sidecar
+    assert os.listdir(folder) == []
+
+
+def test_remove_staged_takes_the_sidecars_found_by_the_prefix(monkeypatch, tmp_path):
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    os.makedirs(tmp_path / "root")
+    a = _src(tmp_path, "a.bil", 10)
+    Path(a).with_suffix(".hdr").write_bytes(b"NROWS 1")
+    Path(a + ".ovr").write_bytes(b"o")
+    tmp = lt.new_staged_local_file("a.bil")
+    assert os.path.basename(tmp).endswith("a.bil")
+    lt.copy_source_with_sidecars(a, tmp)
+    other = tmp_path / "root" / "keep.txt"
+    other.write_bytes(b"k")
+    assert len(os.listdir(tmp_path / "root")) == 3  # file, .hdr, the unrelated file
+    lt.remove_staged(tmp)
+    assert os.listdir(tmp_path / "root") == ["keep.txt"]

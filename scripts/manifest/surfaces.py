@@ -716,16 +716,17 @@ def _tested_cell(name: str, kind: str) -> str:
     return f'<span className="gbx-tested">Tested</span> {text}'
 
 
-def _guidance_cell(d: dict, kind: str) -> str:
+def _guidance_cell(d: dict, kind: str, prefix: str = "./") -> str:
     """The "GeoBrix guidance" cell: the note of a driver that has an entry (a built-in to use, a caveat) or that is
-    tested as a ``kind`` driver (what GeoBrix does with it), with the pages that cover it. An untested driver without an
-    entry is empty: the intro of its table says what a plain row would."""
+    tested as a ``kind`` driver (what GeoBrix does with it), with the pages that cover it. ``prefix`` is the path from
+    the page to the docs root (the driver tables are one level down). An untested driver without an entry is empty:
+    the intro of its table says what a plain row would."""
     from databricks.labs.gbx.drivers import _guidance
     from databricks.labs.gbx.drivers._tested import tested_in
 
     if d["driver"] not in _guidance.GUIDANCE and not tested_in(d["driver"], kind):
         return ""
-    return _mdx_cell_keep_code(_guidance.guidance_markdown(d))
+    return _mdx_cell_keep_code(_guidance.guidance_markdown(d, prefix))
 
 
 def _mdx_cell_keep_code(text: str) -> str:
@@ -733,35 +734,56 @@ def _mdx_cell_keep_code(text: str) -> str:
     return text.replace("|", "\\|").replace("{", "&#123;").replace("}", "&#125;")
 
 
+# The driver tables live on three subpages of docs/docs/gdal-drivers.mdx: kind -> (page path under docs/docs, title).
+DRIVER_SUBPAGES = {
+    "vector": ("gdal-drivers/vector", "Vector drivers"),
+    "raster": ("gdal-drivers/raster", "Raster drivers"),
+    "other": ("gdal-drivers/other", "Other drivers"),
+}
+
+
+def _driver_groups(snapshot: dict, kind: str):
+    """The drivers of one kind in the three groups of its page: available and tested, available and not tested,
+    unavailable (not available in the build, or refused by the policy)."""
+    from databricks.labs.gbx.drivers._tested import tested_in
+
+    mine = [d for d in snapshot["drivers"] if d[kind]]
+    usable = [d for d in mine if d["available"] and d["allowed"]]
+    down = [d for d in mine if not (d["available"] and d["allowed"])]
+    tested = [d for d in usable if tested_in(d["driver"], kind)]
+    rest = [d for d in usable if not tested_in(d["driver"], kind)]
+    return tested, rest, down
+
+
+def _other_drivers(snapshot: dict) -> list:
+    return [d for d in snapshot["drivers"] if not d["raster"] and not d["vector"]]
+
+
 def render_drivers_page(snapshot: dict) -> str:
     """The generated body of docs/docs/gdal-drivers.mdx, from the committed snapshot of the env wheel's own build
     (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py) and the built-in formats
-    (``drivers/_builtin.py``): the built-in formats first, then the vector drivers and the raster drivers, each
-    split into the available ones and the unavailable ones. A driver of both kinds is in both tables and links to
-    its row in the other one."""
+    (``drivers/_builtin.py``): the built-in formats, the index of the three driver pages with their counts, and
+    the opt-in drivers. A built-in format links to its driver's row on the vector or raster page."""
     from databricks.labs.gbx.drivers._builtin import BUILT_IN_FORMATS
-    from databricks.labs.gbx.drivers._tested import tested_in
 
-    yes = "✓"
     drivers = snapshot["drivers"]
     by_name = {d["driver"]: d for d in drivers}
-    built_in = {f["driver"]: f for f in BUILT_IN_FORMATS if f["driver"]}
 
-    def first_anchor(name: str) -> str:
-        d = by_name[name]
-        return _driver_anchor("raster" if d["raster"] else "vector", name)
+    def first_link(name: str) -> str:
+        kind = "raster" if by_name[name]["raster"] else "vector"
+        return f"./{DRIVER_SUBPAGES[kind][0]}#{_driver_anchor(kind, name)}"
 
     out: List[str] = ["## Formats GeoBrix handles without a GDAL driver", ""]
     out += [
         "These GeoBrix readers, writers and functions do not use the GDAL driver of the same format.",
-        "Their path does not depend on the driver rows below.",
+        "Their path does not depend on the driver rows on the pages below.",
         "A format that GeoBrix reads through rasterio or pyogrio, such as GeoTIFF or GeoPackage, uses its driver.",
         "",
     ]
     rows = []
     for f in BUILT_IN_FORMATS:
         drv = f["driver"]
-        cell = f"[`{drv}`](#{first_anchor(drv)})" if drv in by_name else "none"
+        cell = f"[`{drv}`]({first_link(drv)})" if drv in by_name else "none"
         rows.append(
             [
                 f'<Link id="{f["anchor"]}"></Link>{_mdx_cell(f["format"])}',
@@ -773,8 +795,59 @@ def render_drivers_page(snapshot: dict) -> str:
     out += _table(
         ["Format", "GDAL driver", "What GeoBrix uses instead", "Where"], rows
     )
+    out += ["", "## Driver tables", ""]
+    out += [
+        "The drivers of the env wheel's GDAL build are on three pages, by what they handle.",
+        "Each page of vector or raster drivers has three groups: available and tested, available and not tested, and unavailable.",
+        "",
+    ]
+    index = []
+    for kind in ("vector", "raster"):
+        tested, rest, down = _driver_groups(snapshot, kind)
+        path, title = DRIVER_SUBPAGES[kind]
+        index.append(
+            f"- [{title}](./{path}): {len(tested) + len(rest) + len(down)} drivers, "
+            f"{len(tested)} tested with GeoBrix, {len(rest)} available and not tested, {len(down)} unavailable."
+        )
+    other = _other_drivers(snapshot)
+    if other:
+        path, title = DRIVER_SUBPAGES["other"]
+        index.append(
+            f"- [{title}](./{path}): {len(other)} drivers that handle neither rasters nor vectors. "
+            "No GeoBrix reader, writer or function uses them."
+        )
+    out += index
+    out += _opt_in_section(snapshot.get("opt_in", []))
+    return "\n".join(out).rstrip("\n") + "\n"
 
-    def row_cells(d, kind, other, head, with_tested):
+
+def render_drivers_subpage(snapshot: dict, kind: str) -> str:
+    """The generated body of one driver page (docs/docs/gdal-drivers/<kind>.mdx): the tables of the vector or raster
+    drivers in their three groups, or the one table of the other drivers. A driver of both kinds links to its row on
+    the other page; a built-in format links to the built-in table on the parent page."""
+    from databricks.labs.gbx.drivers._builtin import BUILT_IN_FORMATS
+
+    yes = "✓"
+    built_in = {f["driver"]: f for f in BUILT_IN_FORMATS if f["driver"]}
+    out: List[str] = []
+    if kind == "other":
+        out += _table(
+            ["Driver", "Description", "Read", "Write"],
+            [
+                [
+                    f"`{d['driver']}`",
+                    _mdx_cell(d["description"]),
+                    yes if d["read"] else "",
+                    yes if d["write"] else "",
+                ]
+                for d in _other_drivers(snapshot)
+            ],
+        )
+        return "\n".join(out) + "\n"
+
+    other = "raster" if kind == "vector" else "vector"
+
+    def row_cells(d, head, with_tested):
         name = d["driver"]
         cell = [
             f'<Link id="{_driver_anchor(kind, name)}"></Link>`{name}`',
@@ -785,90 +858,61 @@ def render_drivers_page(snapshot: dict) -> str:
         if "Tile bytes" in head:
             cell.append(yes if d["tile_bytes"] else "")
         req = _mdx_cell(d["requires"])
-        if d[other]:  # a driver of both kinds links to its row in the other table
-            link = f"Also a {other} driver: [see the {other} table](#{_driver_anchor(other, name)})."
+        if d[other]:  # a driver of both kinds links to its row on the other page
+            link = (
+                f"Also a {other} driver: [see the {other} page]"
+                f"(./{other}#{_driver_anchor(other, name)})."
+            )
             req = f"{req} {link}".strip()
         cell.append(req)
         f = built_in.get(name)
-        cell.append(f"[{_mdx_cell(f['format'])}](#{f['anchor']})" if f else "")
+        cell.append(
+            f"[{_mdx_cell(f['format'])}](../gdal-drivers#{f['anchor']})" if f else ""
+        )
         if with_tested:
             cell.append(_tested_cell(name, kind))
         if "GeoBrix guidance" in head:
-            cell.append(_guidance_cell(d, kind))
+            cell.append(_guidance_cell(d, kind, "../"))
         return cell
 
-    def section(kind: str, other: str) -> None:
-        mine = [d for d in drivers if d[kind]]
-        out.extend(["", f"## {kind.capitalize()} drivers", ""])
-        usable = [d for d in mine if d["available"] and d["allowed"]]
-        down = [d for d in mine if not (d["available"] and d["allowed"])]
-        tested = [d for d in usable if tested_in(d["driver"], kind)]
-        rest = [d for d in usable if not tested_in(d["driver"], kind)]
-        reader = {
-            "raster": "`raster_gbx` detects the format from the file, so it takes no driver option.",
-            "vector": "`vector_gbx` reads a driver when you set its `driverName` option to the GDAL driver name.",
-        }[kind]
-        for title, group, intro in (
-            (
-                f"Available {kind} drivers: tested with GeoBrix",
-                tested,
-                f"GeoBrix's extended driver tests cover these {kind} drivers in this release.",
-            ),
-            (
-                f"Available {kind} drivers: not tested with GeoBrix",
-                rest,
-                f"These {kind} drivers are registered, and they may work with GeoBrix, but they are use-at-your-own-risk. "
-                f"{reader} "
-                "Plain GDAL, `from osgeo import gdal`, may suit them better than GeoBrix's distributed readers and writers.",
-            ),
-            (f"Unavailable {kind} drivers", down, ""),
-        ):
-            out.extend([f"### {title}", ""])
-            if not group:
-                out.extend([f"No {kind} driver is unavailable in the env wheel." if not intro else "None.", ""])
-                continue
-            if intro:
-                out.extend([intro, ""])
-            is_tested = group is tested
-            head = ["Driver", "Description", "Read", "Write"]
-            if kind == "raster" and group is not down:
-                head.append("Tile bytes")
-            head.append("Why" if group is down else "Requires")
-            head.append("GeoBrix built-in")
-            if is_tested:
-                head.append("Tested with GeoBrix")
-            if group is not down:
-                head.append("GeoBrix guidance")
-            out.extend(
-                _table(head, [row_cells(d, kind, other, head, is_tested) for d in group])
-            )
-            out.append("")
-
-    section("vector", "raster")
-    section("raster", "vector")
-    other = [d for d in drivers if not d["raster"] and not d["vector"]]
-    if other:
-        out.extend(["## Other drivers", ""])
-        out += [
-            "No GeoBrix reader, writer or function uses these drivers. They handle neither rasters nor vectors.",
-            "Open them directly with GDAL's Python API, `from osgeo import gdal`, which the env wheel ships.",
-            "They run under the same driver policy, as plain GDAL on the driver, not as a distributed GeoBrix call.",
-            "",
-        ]
-        out += _table(
-            ["Driver", "Description", "Read", "Write"],
-            [
-                [
-                    f"`{d['driver']}`",
-                    _mdx_cell(d["description"]),
-                    yes if d["read"] else "",
-                    yes if d["write"] else "",
-                ]
-                for d in other
-            ],
-        )
+    tested, rest, down = _driver_groups(snapshot, kind)
+    reader = {
+        "raster": "`raster_gbx` detects the format from the file, so it takes no driver option.",
+        "vector": "`vector_gbx` reads a driver when you set its `driverName` option to the GDAL driver name.",
+    }[kind]
+    for title, group, intro in (
+        (
+            f"Available {kind} drivers: tested with GeoBrix",
+            tested,
+            f"GeoBrix's extended driver tests cover these {kind} drivers in this release.",
+        ),
+        (
+            f"Available {kind} drivers: not tested with GeoBrix",
+            rest,
+            f"These {kind} drivers are registered, and they may work with GeoBrix, but they are use-at-your-own-risk. "
+            f"{reader} "
+            "Plain GDAL, `from osgeo import gdal`, may suit them better than GeoBrix's distributed readers and writers.",
+        ),
+        (f"Unavailable {kind} drivers", down, ""),
+    ):
+        out.extend([f"## {title}", ""])
+        if not group:
+            out.extend([f"No {kind} driver is unavailable in the env wheel." if not intro else "None.", ""])
+            continue
+        if intro:
+            out.extend([intro, ""])
+        is_tested = group is tested
+        head = ["Driver", "Description", "Read", "Write"]
+        if kind == "raster" and group is not down:
+            head.append("Tile bytes")
+        head.append("Why" if group is down else "Requires")
+        head.append("GeoBrix built-in")
+        if is_tested:
+            head.append("Tested with GeoBrix")
+        if group is not down:
+            head.append("GeoBrix guidance")
+        out.extend(_table(head, [row_cells(d, head, is_tested) for d in group]))
         out.append("")
-    out += _opt_in_section(snapshot.get("opt_in", []))
     return "\n".join(out).rstrip("\n") + "\n"
 
 

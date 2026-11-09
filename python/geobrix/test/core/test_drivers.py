@@ -379,39 +379,69 @@ def test_the_built_in_formats_name_drivers_of_the_build_and_readers_of_the_sourc
             assert all(len(x.split()) <= 25 for x in re.split(r"(?<=\.) ", text)), text
 
 
-def test_the_docs_page_links_every_driver_row_and_every_built_in_anchor():
-    """gdal-drivers.mdx (generated from the snapshot): each link to an anchor of the page has its target, the
-    available drivers come before the unavailable ones, and a driver of both kinds is in both tables.
+def test_the_docs_pages_link_every_driver_row_and_every_built_in_anchor():
+    """gdal-drivers.mdx and its three subpages (generated from the snapshot): each link into one of the four pages has
+    its target anchor there, the available drivers come before the unavailable ones, and a driver of both kinds is
+    in both tables, each row linking to the other page.
     """
+    import posixpath
     import re
     from pathlib import Path
 
-    page = (
-        Path(__file__).resolve().parents[4] / "docs/docs/gdal-drivers.mdx"
-    ).read_text()
-    ids = re.findall(r'<Link id="([^"]+)"></Link>', page)
-    assert len(ids) == len(set(ids)), "an anchor is used twice"
-    headings = {
-        re.sub(r"[^a-z0-9]+", "-", h.lower()).strip("-")
-        for h in re.findall(r"^#{1,6} (.+)$", page, re.M)
+    docs = Path(__file__).resolve().parents[4] / "docs/docs"
+    urls = {
+        "gdal-drivers": docs / "gdal-drivers.mdx",
+        "gdal-drivers/vector": docs / "gdal-drivers/vector.mdx",
+        "gdal-drivers/raster": docs / "gdal-drivers/raster.mdx",
+        "gdal-drivers/other": docs / "gdal-drivers/other.mdx",
     }
-    for target in re.findall(r"\]\(#([^)]+)\)", page):
-        assert target in ids or target in headings, f"no anchor {target}"
-    order = [
-        page.index(h)
-        for h in (
-            "## Formats GeoBrix handles without a GDAL driver",
-            "### Available vector drivers: tested with GeoBrix",
-            "### Available vector drivers: not tested with GeoBrix",
-            "### Unavailable vector drivers",
-            "### Available raster drivers: tested with GeoBrix",
-            "### Available raster drivers: not tested with GeoBrix",
-            "### Unavailable raster drivers",
-        )
-    ]
-    assert order == sorted(order)
+    pages = {u: f.read_text() for u, f in urls.items()}
+
+    def slug(h):
+        return re.sub(r"[^a-z0-9]+", "-", h.lower()).strip("-")
+
+    anchors = {}
+    for u, page in pages.items():
+        ids = re.findall(r'<Link id="([^"]+)"></Link>', page)
+        assert len(ids) == len(set(ids)), f"{u}: an anchor is used twice"
+        anchors[u] = set(ids) | {
+            slug(h) for h in re.findall(r"^#{1,6} (.+)$", page, re.M)
+        }
+    for u, page in pages.items():
+        for target in re.findall(r"\]\(([^)\s]+)\)", page):
+            path, _, frag = target.partition("#")
+            if path.startswith("https://"):
+                continue
+            dest = (
+                posixpath.normpath(posixpath.join(posixpath.dirname(u), path))
+                if path
+                else u
+            )
+            if dest not in anchors:
+                continue  # a page outside the four: the docs build checks it
+            assert not frag or frag in anchors[dest], f"{u}: no anchor {target}"
+    vector, raster = pages["gdal-drivers/vector"], pages["gdal-drivers/raster"]
+    for page, kind in ((vector, "vector"), (raster, "raster")):
+        order = [
+            page.index(h)
+            for h in (
+                f"## Available {kind} drivers: tested with GeoBrix",
+                f"## Available {kind} drivers: not tested with GeoBrix",
+                f"## Unavailable {kind} drivers",
+            )
+        ]
+        assert order == sorted(order), kind
     drivers = json.loads(listing.SNAPSHOT.read_text())["drivers"]
     for d in drivers:
-        name = re.sub(r"[^a-z0-9]+", "-", d["driver"].lower()).strip("-")
-        assert (f"vector-{name}" in ids) == bool(d["vector"]), d["driver"]
-        assert (f"raster-{name}" in ids) == bool(d["raster"]), d["driver"]
+        name = slug(d["driver"])
+        assert (f"vector-{name}" in anchors["gdal-drivers/vector"]) == bool(
+            d["vector"]
+        ), d["driver"]
+        assert (f"raster-{name}" in anchors["gdal-drivers/raster"]) == bool(
+            d["raster"]
+        ), d["driver"]
+        if d["vector"] and d["raster"]:
+            assert f"(./raster#raster-{name})" in vector, d["driver"]
+            assert f"(./vector#vector-{name})" in raster, d["driver"]
+    built_in = re.findall(r"\(\.\./gdal-drivers#(builtin-[^)]+)\)", vector + raster)
+    assert built_in and set(built_in) <= anchors["gdal-drivers"]

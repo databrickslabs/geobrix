@@ -111,7 +111,13 @@ const sidebars = {
       items: [
         'choosing-a-format',
         'common-functions',
-        'gdal-drivers',
+        {
+          type: 'category',
+          label: 'GDAL drivers as provided',
+          collapsed: true,
+          link: { type: 'doc', id: 'gdal-drivers' },
+          items: ['gdal-drivers/vector', 'gdal-drivers/raster', 'gdal-drivers/other'],
+        },
         {
           type: 'category',
           label: 'Readers',

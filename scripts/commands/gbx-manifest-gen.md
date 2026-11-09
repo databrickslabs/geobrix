@@ -10,7 +10,7 @@ The manifest is `python/geobrix/src/databricks/labs/gbx/manifest/functions.json`
 - the availability matrix row;
 - the doc-test example;
 - the function-count badges;
-- the as-provided driver table (`docs/docs/gdal-drivers.mdx`), from `manifest/shipped_drivers.json`.
+- the as-provided driver tables (`docs/docs/gdal-drivers.mdx` and its `vector`, `raster` and `other` subpages), from `manifest/shipped_drivers.json`.
 
 `--check` is the drift gate: it exits 1 with one finding per line.
 

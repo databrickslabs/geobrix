@@ -175,12 +175,20 @@ def plan(only: Optional[str] = None) -> Dict[Path, str]:
     if want("examples"):
         out[EXAMPLES] = EXAMPLES_HEADER + S.render_examples(man)
     if want("drivers"):
+        snapshot = json.loads(read(S.DRIVERS_SNAPSHOT))
         page = REPO / "docs/docs/gdal-drivers.mdx"
         out[page] = S.replace_region(
             read(page),
             *S.mdx_markers("drivers"),
-            S.render_drivers_page(json.loads(read(S.DRIVERS_SNAPSHOT))),
+            S.render_drivers_page(snapshot),
         )
+        for kind, (path, _title) in S.DRIVER_SUBPAGES.items():
+            sub = REPO / "docs/docs" / f"{path}.mdx"
+            out[sub] = S.replace_region(
+                read(sub),
+                *S.mdx_markers("drivers"),
+                S.render_drivers_subpage(snapshot, kind),
+            )
     if want("counts"):
         readme = REPO / "README.md"
         out[readme] = S.replace_region(

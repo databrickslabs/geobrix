@@ -1,0 +1,22 @@
+---
+title: Other GDAL drivers as provided
+sidebar_label: Other
+---
+
+import Link from '@docusaurus/Link';
+
+# Other GDAL drivers as provided
+
+No GeoBrix reader, writer or function uses these drivers. They handle neither rasters nor vectors.
+Open them directly with GDAL's Python API, `from osgeo import gdal`, which the env wheel ships.
+They run under the same driver policy, as plain GDAL on the driver, not as a distributed GeoBrix call.
+
+See the [legend and how to read the tables](../gdal-drivers#how-to-read-the-tables) on the parent page, and the [opt-in drivers](../gdal-drivers#geobrix-opt-in-drivers) section for the drivers GeoBrix turns off.
+
+{/* BEGIN GENERATED drivers: edit manifest/functions.json, then run gbx:manifest:gen */}
+| Driver | Description | Read | Write |
+|---|---|---|---|
+| `CPHD` | Compensated Phase History Data Reader | ✓ |  |
+| `GNMDatabase` | Geographic Network generic DB based model | ✓ | ✓ |
+| `GNMFile` | Geographic Network generic file based model | ✓ | ✓ |
+{/* END GENERATED drivers */}

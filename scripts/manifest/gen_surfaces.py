@@ -179,7 +179,7 @@ def plan(only: Optional[str] = None) -> Dict[Path, str]:
         out[page] = S.replace_region(
             read(page),
             *S.mdx_markers("drivers"),
-            S.render_drivers_table(json.loads(read(S.DRIVERS_SNAPSHOT))),
+            S.render_drivers_page(json.loads(read(S.DRIVERS_SNAPSHOT))),
         )
     if want("counts"):
         readme = REPO / "README.md"

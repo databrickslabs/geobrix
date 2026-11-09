@@ -686,31 +686,117 @@ def _mdx_cell(text) -> str:
     return out
 
 
-def render_drivers_table(snapshot: dict) -> str:
-    """The as-provided driver table of docs/docs/gdal-drivers.mdx, from the committed snapshot of the env wheel's
-    own build (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py)."""
-    yes = "✓"
-    rows = [
-        "| Driver | Description | Kind | Read | Write | Tile bytes | Available | Requires | GeoBrix built-in |",
-        "|---|---|---|---|---|---|---|---|---|",
+def _driver_anchor(kind: str, name: str) -> str:
+    """The anchor of a driver's row in the vector or raster table: vector-gpkg, raster-esri-shapefile."""
+    return f"{kind}-" + re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def _table(head, rows) -> List[str]:
+    return [
+        "| " + " | ".join(head) + " |",
+        "|" + "---|" * len(head),
+        *("| " + " | ".join(r) + " |" for r in rows),
     ]
-    for d in snapshot["drivers"]:
-        kind = " and ".join(k for k in ("raster", "vector") if d[k]) or "multidimensional"
+
+
+def render_drivers_page(snapshot: dict) -> str:
+    """The generated body of docs/docs/gdal-drivers.mdx, from the committed snapshot of the env wheel's own build
+    (``manifest/shipped_drivers.json``, refreshed by test/core/test_drivers.py) and the built-in formats
+    (``drivers/_builtin.py``): the built-in formats first, then the vector drivers and the raster drivers, each
+    split into the available ones and the unavailable ones. A driver of both kinds is in both tables and links to
+    its row in the other one."""
+    from databricks.labs.gbx.drivers._builtin import BUILT_IN_FORMATS
+
+    yes = "✓"
+    drivers = snapshot["drivers"]
+    by_name = {d["driver"]: d for d in drivers}
+    built_in = {f["driver"]: f for f in BUILT_IN_FORMATS if f["driver"]}
+
+    def first_anchor(name: str) -> str:
+        d = by_name[name]
+        return _driver_anchor("raster" if d["raster"] else "vector", name)
+
+    out: List[str] = ["## Formats GeoBrix handles without a GDAL driver", ""]
+    out += [
+        "These GeoBrix readers, writers and functions do not use the GDAL driver of the same format.",
+        "Their path does not depend on the driver rows below.",
+        "A format that GeoBrix reads through rasterio or pyogrio, such as GeoTIFF or GeoPackage, uses its driver.",
+        "",
+    ]
+    rows = []
+    for f in BUILT_IN_FORMATS:
+        drv = f["driver"]
+        cell = f"[`{drv}`](#{first_anchor(drv)})" if drv in by_name else "none"
         rows.append(
-            "| "
-            + " | ".join(
+            [
+                f'<Link id="{f["anchor"]}"></Link>{_mdx_cell(f["format"])}',
+                cell,
+                _mdx_cell(f["uses"]),
+                _mdx_cell(f["where"]),
+            ]
+        )
+    out += _table(
+        ["Format", "GDAL driver", "What GeoBrix uses instead", "Where"], rows
+    )
+
+    def section(kind: str, other: str) -> None:
+        mine = [d for d in drivers if d[kind]]
+        out.extend(["", f"## {kind.capitalize()} drivers", ""])
+        for title, group in (
+            ("Available", [d for d in mine if d["available"] and d["allowed"]]),
+            ("Unavailable", [d for d in mine if not (d["available"] and d["allowed"])]),
+        ):
+            out.extend([f"### {title} {kind} drivers", ""])
+            if not group:
+                out.extend([f"No {kind} driver is unavailable in the env wheel.", ""])
+                continue
+            head = ["Driver", "Description", "Read", "Write"]
+            if kind == "raster" and title == "Available":
+                head.append("Tile bytes")
+            head.append("Requires" if title == "Available" else "Why")
+            head.append("GeoBrix built-in")
+            rows = []
+            for d in group:
+                name = d["driver"]
+                cell = [
+                    f'<Link id="{_driver_anchor(kind, name)}"></Link>`{name}`',
+                    _mdx_cell(d["description"]),
+                    yes if d["read"] else "",
+                    yes if d["write"] else "",
+                ]
+                if "Tile bytes" in head:
+                    cell.append(yes if d["tile_bytes"] else "")
+                req = _mdx_cell(d["requires"])
+                if d[other]:  # a driver of both kinds links to its row in the other table
+                    link = f"Also a {other} driver: [see the {other} table](#{_driver_anchor(other, name)})."
+                    req = f"{req} {link}".strip()
+                cell.append(req)
+                f = built_in.get(name)
+                cell.append(f"[{_mdx_cell(f['format'])}](#{f['anchor']})" if f else "")
+                rows.append(cell)
+            out.extend(_table(head, rows))
+            out.append("")
+
+    section("vector", "raster")
+    section("raster", "vector")
+    other = [d for d in drivers if not d["raster"] and not d["vector"]]
+    if other:
+        out.extend(["## Other drivers", ""])
+        out += [
+            "These drivers handle neither rasters nor vectors, such as multidimensional files and network models.",
+            "",
+        ]
+        out += _table(
+            ["Driver", "Description", "Read", "Write"],
+            [
                 [
                     f"`{d['driver']}`",
                     _mdx_cell(d["description"]),
-                    kind,
                     yes if d["read"] else "",
                     yes if d["write"] else "",
-                    yes if d["tile_bytes"] else "",
-                    yes if d["available"] else "no",
-                    _mdx_cell(d["requires"]),
-                    _mdx_cell(d.get("built_in")),
                 ]
-            )
-            + " |"
+                for d in other
+            ],
         )
-    return "\n".join(rows) + "\n"
+        out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"

@@ -274,26 +274,72 @@ def test_a_driver_with_a_built_in_path_carries_its_note():
     )
 
 
-def test_the_built_in_notes_name_drivers_of_the_build_and_readers_of_the_manifest():
+def test_the_built_in_formats_name_drivers_of_the_build_and_readers_of_the_source():
+    import importlib
+    import re
+
     from databricks.labs.gbx import manifest
+    from databricks.labs.gbx.drivers import _builtin
 
     registered = {
         r["driver"] for r in json.loads(listing.SNAPSHOT.read_text())["drivers"]
     }
-    assert set(listing.BUILT_IN) <= registered
-    readers = {d.name for d in manifest.load().datasources}
-    functions = set(manifest.load().functions)
-    # every `name_gbx` or `gbx_name` a note mentions exists
-    import re
-
-    for note in listing.BUILT_IN.values():
-        for token in re.findall(r"\b\w+_gbx\b|\bgbx_\w+\b", note):
-            assert token in readers or token in functions, (token, note)
-    # a format the notes cover is not marked in a driver the build reaches through rasterio or pyogrio alone
+    formats = _builtin.BUILT_IN_FORMATS
+    anchors = [f["anchor"] for f in formats]
+    assert len(set(anchors)) == len(anchors) and all(
+        re.fullmatch(r"builtin-[a-z0-9]+", a) for a in anchors
+    )
+    assert {f["driver"] for f in formats if f["driver"]} <= registered
+    assert set(listing.BUILT_IN) == {f["driver"] for f in formats if f["driver"]}
+    assert any(f["driver"] is None for f in formats), "LAS and LAZ have no GDAL driver"
     assert not {"GTiff", "COG", "GeoJSON", "GPKG", "ESRI Shapefile"} & set(
         listing.BUILT_IN
     )
-    for note in listing.BUILT_IN.values():
-        assert len(note.split(".")) >= 2 and all(
-            len(s.split()) <= 25 for s in note.split(". ")
+    readers = {d.name for d in manifest.load().datasources}
+    functions = set(manifest.load().functions)
+    helpers = {
+        "gbx_zarr_read": "databricks.labs.gbx.zarr._read",
+        "gbx_zarr_write": "databricks.labs.gbx.zarr._write",
+        "pmtiles_info": "databricks.labs.gbx.pmtiles._inspect",
+    }
+    for f in formats:
+        for text in (f["where"], f["note"] or ""):
+            for token in re.findall(r"\b\w+_gbx\b|\bgbx_\w+\b|\bpmtiles_info\b", text):
+                if token in helpers:
+                    assert hasattr(importlib.import_module(helpers[token]), token)
+                else:
+                    assert token in readers or token in functions, (token, text)
+        for text in (f["note"] or "", f["uses"], f["where"]):
+            assert all(len(x.split()) <= 25 for x in re.split(r"(?<=\.) ", text)), text
+
+
+def test_the_docs_page_links_every_driver_row_and_every_built_in_anchor():
+    """gdal-drivers.mdx (generated from the snapshot): each link to an anchor of the page has its target, the
+    available drivers come before the unavailable ones, and a driver of both kinds is in both tables.
+    """
+    import re
+    from pathlib import Path
+
+    page = (
+        Path(__file__).resolve().parents[4] / "docs/docs/gdal-drivers.mdx"
+    ).read_text()
+    ids = re.findall(r'<Link id="([^"]+)"></Link>', page)
+    assert len(ids) == len(set(ids)), "an anchor is used twice"
+    for target in re.findall(r"\]\(#([^)]+)\)", page):
+        assert target in ids, f"no anchor {target}"
+    order = [
+        page.index(h)
+        for h in (
+            "## Formats GeoBrix handles without a GDAL driver",
+            "### Available vector drivers",
+            "### Unavailable vector drivers",
+            "### Available raster drivers",
+            "### Unavailable raster drivers",
         )
+    ]
+    assert order == sorted(order)
+    drivers = json.loads(listing.SNAPSHOT.read_text())["drivers"]
+    for d in drivers:
+        name = re.sub(r"[^a-z0-9]+", "-", d["driver"].lower()).strip("-")
+        assert (f"vector-{name}" in ids) == bool(d["vector"]), d["driver"]
+        assert (f"raster-{name}" in ids) == bool(d["raster"]), d["driver"]

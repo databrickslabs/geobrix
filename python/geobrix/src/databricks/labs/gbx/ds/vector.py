@@ -1656,7 +1656,10 @@ class VectorGbxReader(DataSourceReader):
         import shapely
 
         n = batch.num_rows
-        wkb = batch.column(gcol)
+        if gcol in batch.schema.names:
+            wkb = batch.column(gcol)
+        else:  # a layer with no geometry (a CSV with X and Y columns): the geometry column is NULL
+            wkb = pa.nulls(n, pa.binary())
         if partition.as_wkb:
             geom_out = wkb.cast(pa.binary())
         else:

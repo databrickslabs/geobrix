@@ -44,6 +44,24 @@ def test_vector_gbx_reads_wkb_schema(spark, tmp_path):
     assert df.count() == 2
 
 
+@pytest.mark.parametrize("as_wkb", ["true", "false"])
+def test_vector_gbx_reads_a_layer_with_no_geometry_as_a_table(spark, tmp_path, as_wkb):
+    """A CSV with X and Y columns has no geometry in GDAL (the open options that make a point are not passed): the
+    rows come back with a NULL geometry instead of failing on the missing column."""
+    from databricks.labs.gbx import manager as gbx_manager
+
+    gbx_manager.register_sources(spark)
+    p = os.path.join(str(tmp_path), "xy.csv")
+    with open(p, "w") as f:
+        f.write("X,Y,name\n10,50,a\n11,51,b\n")
+    df = spark.read.format("vector_gbx").option("asWKB", as_wkb).load(p)
+    assert df.columns == ["X", "Y", "name", "geom_0", "geom_0_srid", "geom_0_srid_proj"]
+    rows = df.orderBy("name").collect()
+    assert [r["name"] for r in rows] == ["a", "b"]
+    assert [r["X"] for r in rows] == ["10", "11"]
+    assert all(r["geom_0"] is None for r in rows)
+
+
 def test_vector_gbx_wkt_option(spark, tmp_path):
     from databricks.labs.gbx import manager as gbx_manager
 

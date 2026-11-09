@@ -222,20 +222,16 @@ for _c in RASTER_CASES:
 RASTER_FINDINGS: Dict[Tuple[str, str], str] = {
     (
         "asformat",
-        "JP2OpenJPEG-int16-4326",
-    ): "the encoded tile has no CRS; GDAL's own JP2 writer keeps EPSG:4326",
-    (
-        "asformat",
         "NITF-int16-4326",
-    ): "raises: NITF needs the creation option ICORDS=G or ICORDS=D to store a CRS, and the call passes none",
+    ): "NITF needs the creation option ICORDS=G or ICORDS=D to store a CRS, and the call passes none",
     (
         "asformat",
         "SRTMHGT-int16-4326",
-    ): "raises SystemError 'Unknown GDAL Error' from rasterio's buffered writer",
+    ): "raises ValueError 'cannot encode a tile here': rasterio's buffered writer fails with SystemError 'Unknown GDAL Error'",
     (
         "asformat",
         "MBTiles-uint8-3857",
-    ): "raises TypeError 'not all arguments converted during string formatting' in rasterio's write_transform",
+    ): "raises ValueError 'cannot encode a tile here': rasterio's write_transform fails with TypeError 'not all arguments converted during string formatting'",
     (
         "asformat",
         "BAG-float32-4326",

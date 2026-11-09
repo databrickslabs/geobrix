@@ -6,6 +6,7 @@ Faithful ports of the heavyweight ``gbx_rst_tryopen`` / ``gbx_rst_asformat`` /
 rasterio's bundled GDAL (no JAR)."""
 
 import os
+import shutil
 
 import rasterio
 import shapely.wkb
@@ -21,7 +22,10 @@ from databricks.labs.gbx._gdal_policy import (
 )
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    new_local_temp_dir,
+    new_local_temp_file,
+)
 
 # Heavyweight gdaladdo resampling name -> rasterio.enums.Resampling name.
 # Mirrors the AllowedResampling set in RST_BuildOverviews.scala; "near" is the
@@ -156,12 +160,46 @@ def as_format(ds, new_format: str) -> bytes:
     data = ds.read()
     profile = _comp.source_profile(ds.profile, unless_jpeg=True)
     profile.update(driver=new_format)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            if new_format == "GTiff":
-                _comp.match_alpha(dst, ds.colorinterp)
+    try:
+        if new_format in _FILE_WRITERS:
+            return _encode_via_file(profile, data, _FILE_WRITERS[new_format])
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                if new_format == "GTiff":
+                    _comp.match_alpha(dst, ds.colorinterp)
+                dst.write(data)
+            return mf.read()
+    except (SystemError, TypeError) as exc:
+        # the binding's own failure of a driver that cannot encode a tile through a buffer: a clear refusal, not a
+        # raw SystemError or TypeError from rasterio's writer
+        raise ValueError(
+            f"rst_asformat: driver '{new_format}' cannot encode a tile here (rasterio: {exc}). "
+            "Fix: encode to GTiff, COG or PNG instead, or write this format with plain GDAL."
+        ) from None
+
+
+# Drivers whose georeferencing a buffered (in-memory) write loses: the JPEG 2000 encoder drops the CRS of the file it
+# creates in memory. They write to a file with their own extension, and the bytes are read back.
+_FILE_WRITERS = {"JP2OpenJPEG": ".jp2"}
+
+
+def _encode_via_file(profile: dict, data, extension: str) -> bytes:
+    """The bytes of *data* written with *profile* to a file named with *extension* in a local folder of its own."""
+    folder = new_local_temp_dir("gbx_asformat_")
+    try:
+        path = os.path.join(folder, "tile" + extension)
+        # the source's strip or tile layout is a GeoTIFF's, not the format's: the encoder chooses its own
+        profile = {
+            k: v
+            for k, v in profile.items()
+            if k not in ("blockxsize", "blockysize", "tiled")
+        }
+        with open_data(path, "w", **profile) as dst:
             dst.write(data)
-        return mf.read()
+        with open(path, "rb") as fh:
+            return fh.read()
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)
 
 
 def check_overview_args(levels, resampling):

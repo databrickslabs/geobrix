@@ -70,6 +70,10 @@ def test_every_spec_argument_is_canonical_and_its_choices_exist(usage, fn):
             if a.type == "choice"
             else [a.const] if isinstance(a.const, str) else []
         )
+        if a.const == "input" and a.arg == "output-data-type":
+            # the engine's own word (argv.py): the source's band type, written as that type's GDAL name when the
+            # argv is built, so it is no choice of the spec to check
+            words = []
         if choices:
             assert set(words) <= set(choices), (a.arg, words, choices)
 

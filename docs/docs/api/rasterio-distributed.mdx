@@ -47,7 +47,7 @@ See the [RasterX Function Reference](./raster-functions) for runnable per-functi
 | **COG conversion** | `rst_cog_convert` | rasterio (GDAL's COG driver) |
 | **Spectral indices** | `rst_ndvi`, `rst_evi`, `rst_savi`, `rst_ndwi`, `rst_nbr`, `rst_index`, `rst_threshold` | GDAL `raster calc` |
 | **Band math** | `rst_derivedband`, `rst_derivedband_agg`, `rst_combineavg`, `rst_combineavg_agg` | NumPy |
-| **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | NumPy |
+| **Terrain (Horn 3×3)** | `rst_slope`, `rst_aspect`, `rst_hillshade`, `rst_tri`, `rst_tpi`, `rst_roughness` | GDAL `raster` algorithms in the worker |
 | **Color relief** | `rst_color_relief` | NumPy (see [Known divergences](#known-behavior-divergences)) |
 | **Rasterize / polygonize** | `rst_rasterize`, `rst_polygonize`, `rst_h3_rasterize_agg` | rasterio + shapely |
 | **Focal / convolution** | `rst_filter`, `rst_convolve` | scipy.ndimage |

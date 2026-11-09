@@ -42,7 +42,8 @@ The light level runs every function on every compute. It is the default for the 
 | Accessors and statistics that return an `ARRAY<...>`, `MAP<...>` or `STRUCT<...>` | Arrow scalar UDF | The only form. The JVM form was faster on a materialized tile (`gbx_rst_avg` took 0.59x and 0.65x the light time at 4x and 16x rows). Such a function can sit under `explode` or `inline`, where the SQL function that sends a virtual tile to light is refused, so the JVM form could not be the default. It is no longer shipped. |
 | Band math, spectral indices and canopy height | GDAL `raster calc` in the worker | The JVM form ran `gdal_calc.py` in a subprocess for each row. The lightweight form is the default on every compute, and the JVM form is no longer shipped. |
 | Warps and resampling | rasterio | 2.1x to 4.7x faster than the JVM form |
-| Terrain (aspect, hillshade, TRI, TPI) | NumPy | At parity with the JVM form (0.8x to 1.0x) |
+| Terrain (aspect, hillshade, TPI, roughness, color relief) | GDAL algorithm in the worker | The JVM form was 1.05x to 1.17x faster at 16x rows, under the 1.2x bar. It is no longer shipped. |
+| `gbx_rst_tri` | JVM form on JAR compute, GDAL algorithm elsewhere | The JVM form was 1.24x faster at 16x rows, so it is the default where the JAR runs. |
 | `gbx_rst_slope`, `gbx_rst_mapalgebra`, `gbx_rst_transformcrs` | GDAL algorithm in the worker | The JVM form took 0.97x to 1.15x the time at 4x and 16x rows for slope and map algebra. For `gbx_rst_transformcrs` it took 0.99x and 0.78x, but returned NULL tiles under load where the lightweight forms returned none. It is no longer shipped |
 | Edits on virtual tiles | Header only, no pixel read | 1.1x to 12.5x faster than on a materialized tile |
 | Grouped raster aggregates | Grouped-aggregate UDF | See [Aggregates by compute](#aggregates-by-compute) |

@@ -101,11 +101,17 @@ object ProjDatabase extends Logging {
       * before the read; else it is read once more, and that answer stands. The database may have become readable
       * between the read and the check: another thread's [[recoverOrFail]] re-points every thread's PROJ, and this
       * thread's suspect answer then came from the path that was replaced (it gave a NULL srid with no error). */
-    def guarded[T](read: () => T)(suspect: T => Boolean): T = {
+    def guarded[T](read: () => T)(suspect: T => Boolean): T =
+        guardedFrom(GDALManager.loadedFromNodeCopy, read, suspect, () => reachableCached(), () => GDALManager.recoverProjData())
+
+    /** [[guarded]] over what it reads: whether GDAL was loaded from a node-local copy (`fromCopy`), the check and the
+      * recovery. This thread's earlier confirmation counts only when the search path is the same one after the read. */
+    private[gbx] def guardedFrom[T](
+        fromCopy: Boolean, read: () => T, suspect: T => Boolean, isReachable: () => Boolean, recover: () => Seq[String]
+    ): T = {
         val g = generation.get()
-        val confirmed = GDALManager.loadedFromNodeCopy && confirmedAt.get() == g
-        guardedWith(read, suspect, () => reachableCached(), () => GDALManager.recoverProjData(),
-          () => confirmed && generation.get() == g)
+        val confirmed = fromCopy && confirmedAt.get() == g
+        guardedWith(read, suspect, isReachable, recover, () => confirmed && generation.get() == g)
     }
 
     private[gbx] def guardedWith[T](

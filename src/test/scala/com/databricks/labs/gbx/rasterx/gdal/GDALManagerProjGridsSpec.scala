@@ -136,6 +136,32 @@ class GDALManagerProjGridsSpec extends AnyFunSuite with BeforeAndAfterAll {
         searchPath() should not contain user
     }
 
+    test("a user's PROJ_LIB of several directories is a search path after the grid directories") {
+        val (user, grid) = (Files.createTempDirectory("gbx_user_proj").toString, Files.createTempDirectory("gbx_user_grid").toString)
+        try {
+            GDALManager.configureGDAL(ExpressionConfig(
+              Map("spark.gdal.PROJ_LIB" -> s"$user:$baseProjDir", "spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS" -> grid), null
+            ))
+            // grid directories, then the user's directories in their order; PROJ_DATA and PROJ_LIB name the one with proj.db
+            searchPath() should contain inOrder (grid, user, baseProjDir)
+            Seq("PROJ_DATA", "PROJ_LIB").foreach(k => gdal.GetConfigOption(k) shouldBe baseProjDir)
+            epsgOnNewThread(2154) shouldBe 0
+        } finally GDALManager.configureGDAL("/tmp", "/tmp")
+        searchPath() should not contain user
+    }
+
+    test("a search path no directory of which holds proj.db is applied whole, and PROJ_DATA names its last directory") {
+        val (a, b) = (Files.createTempDirectory("gbx_no_db_a").toString, Files.createTempDirectory("gbx_no_db_b").toString)
+        val before = searchPath()
+        try {
+            GDALManager.setProjSearchPath(Seq(a, b))
+            searchPath() shouldBe Seq(a, b)
+            Seq("PROJ_DATA", "PROJ_LIB").foreach(k => gdal.GetConfigOption(k) shouldBe b)
+        } finally GDALManager.setProjSearchPath(before)
+        searchPath() shouldBe before
+        gdal.GetConfigOption("PROJ_DATA") shouldBe baseProjDir
+    }
+
     test("a search-path directory that is gone does not keep PROJ from its database") {
         val gone = Files.createTempDirectory("gbx_gone_dir")
         Files.delete(gone)

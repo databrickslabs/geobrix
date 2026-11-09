@@ -334,7 +334,7 @@ object GDALManager extends Logging {
       * thread that takes the path in between gets a directory that holds `proj.db`. A directory that is gone stays on
       * the path: PROJ skips it, and a grid directory on a Volume may be back by the next lookup.
       */
-    private def setProjSearchPath(dirs: Seq[String]): Unit = {
+    private[gdal] def setProjSearchPath(dirs: Seq[String]): Unit = {
         val path = dirs.map(_.trim).filter(_.nonEmpty).distinct
         if (path.nonEmpty) {
             val db = path.find(d => Files.isReadable(Paths.get(d, "proj.db"))).getOrElse(path.last)
@@ -682,24 +682,46 @@ object GDALManager extends Logging {
       * payload is gone or changes while it is copied.
       */
     private def nodeLocal(c: NativeChoice, identity: String, copyDir: Option[String]): NativeChoice = {
-        val setting = copyDir.filter(_.trim.nonEmpty)
-            .orElse(sessionConf(NativeCopyDirKey))
-            .orElse(clusterConf(NativeCopyDirKey))
-            .orElse(sys.env.get(NativeCopyDirEnv))
+        val setting = copyDirSetting(copyDir, sessionConf(NativeCopyDirKey), clusterConf(NativeCopyDirKey), sys.env.get(NativeCopyDirEnv))
         val onPath = libraryPath().map(d => Paths.get(d, JniName)).find(Files.exists(_))
-        val roots = NativeCopy.rootsFrom(setting, NativeCopy.localDisk(), NativeCopy.tmpDir())
+        nodeLocalWith(
+          c, setting, NativeCopy.localDisk(), NativeCopy.tmpDir(), onPath,
+          roots => NativeCopy.stabilizeFirst(c, roots, identity, NativeCopy.sha256), logWarning(_)
+        )
+    }
+
+    /** The copy directory setting, the first set of: the caller's config (a blank value is none), the session's conf, the
+      * cluster's conf, the [[NativeCopyDirEnv]] environment variable. A later source is not read once an earlier one is set. */
+    private[gdal] def copyDirSetting(
+        caller: Option[String], session: => Option[String], cluster: => Option[String], env: => Option[String]
+    ): Option[String] =
+        caller.filter(_.trim.nonEmpty).orElse(session).orElse(cluster).orElse(env)
+
+    /** [[nodeLocal]]'s decision, over what it reads: `c` is returned as it is when `setting` is `off` (no roots) or the JNI
+      * is on the JVM's library path (`onPath`); else `copy` is given the roots ([[NativeCopy.rootsFrom]]). Its refusal
+      * (the payload changed) throws IllegalStateException; an IOException (no root passed, a lock or file failed) is
+      * `warn`ed and `c` is returned: the JVM loads in place. */
+    private[gdal] def nodeLocalWith(
+        c: NativeChoice,
+        setting: Option[String],
+        localDisk: Option[java.nio.file.Path],
+        tmpDir: java.nio.file.Path,
+        onPath: Option[java.nio.file.Path],
+        copy: Seq[java.nio.file.Path] => Either[String, NativeChoice],
+        warn: String => Unit
+    ): NativeChoice = {
+        val roots = NativeCopy.rootsFrom(setting, localDisk, tmpDir)
         if (roots.isEmpty) c
         else if (onPath.isDefined) {
             logInfo(s"$JniName is on this JVM's library path (${onPath.get}): GDAL is loaded in place, not copied")
             c
         } else {
-            val sha = (p: java.nio.file.Path) => jniIdentityOf(p.toString)
-            try NativeCopy.stabilizeFirst(c, roots, identity, sha) match {
-                case Right(copy)   => copy
+            try copy(roots) match {
+                case Right(copied) => copied
                 case Left(refusal) => throw new IllegalStateException(refusal)
             } catch {
                 case e: java.io.IOException =>
-                    logWarning(s"GDAL native payload: no node-local copy ($e); loading it from ${c.jni}")
+                    warn(s"GDAL native payload: no node-local copy ($e); loading it from ${c.jni}")
                     c
             }
         }

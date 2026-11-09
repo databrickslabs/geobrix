@@ -153,6 +153,27 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
         reads shouldBe 1
     }
 
+    test("guarded keeps a suspect answer only for a thread that confirmed PROJ's database on the same path before and after the read") {
+        def run(fromCopy: Boolean, confirm: Boolean, changePathDuringRead: Boolean): (Int, Int) =
+            onFreshThreads(1)(() => {
+                if (confirm) ProjDatabase.cachedWith(() => true) shouldBe true
+                var reads = 0
+                val out = ProjDatabase.guardedFrom[Int](
+                  fromCopy,
+                  () => { reads += 1; if (reads == 1) { if (changePathDuringRead) ProjDatabase.invalidate(); 0 } else 27700 },
+                  _ == 0, () => true, () => fail("recovered")
+                )
+                (out, reads)
+            }).head
+        // a copy-loaded JVM, a thread that confirmed the path: its suspect answer is the data's own, with one read
+        run(fromCopy = true, confirm = true, changePathDuringRead = false) shouldBe ((0, 1))
+        // another thread re-pointed PROJ during the read: the answer came from the replaced path, so it is read again
+        run(fromCopy = true, confirm = true, changePathDuringRead = true) shouldBe ((27700, 2))
+        // no confirmation, or a JVM that loaded GDAL in place: the suspect answer is read again
+        run(fromCopy = true, confirm = false, changePathDuringRead = false) shouldBe ((27700, 2))
+        run(fromCopy = false, confirm = true, changePathDuringRead = false) shouldBe ((27700, 2))
+    }
+
     test("a refusal raised before another thread pointed PROJ at its data again is tried again") {
         val attempts = Iterator[() => Int](() => throw new IllegalArgumentException("27700 is not a valid EPSG code"), () => 27700)
         ProjDatabase.retriedWith[Int](() => attempts.next()(), _.isInstanceOf[IllegalArgumentException], () => true,

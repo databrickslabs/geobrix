@@ -105,6 +105,21 @@ class RST_ProjDatabaseTest extends PlanTest with SilentSparkSession {
         }
     }
 
+    test("a thread checks PROJ's database once per search path; a failed check is checked again") {
+        onFreshThreads(1)(() => {
+            var calls = 0
+            val pass = () => { calls += 1; true }
+            ProjDatabase.cachedWith(() => { calls += 1; false }) shouldBe false
+            ProjDatabase.cachedWith(pass) shouldBe true
+            ProjDatabase.cachedWith(pass) shouldBe true
+            val beforeChange = calls
+            // a new search path: the thread checks again
+            ProjDatabase.invalidate()
+            ProjDatabase.cachedWith(pass) shouldBe true
+            (beforeChange, calls)
+        }) shouldBe Seq((2, 3))
+    }
+
     test("a CRS with no authority code is the data's own when PROJ's database is readable") {
         var recovered = false
         ProjDatabase.guardedWith[Int](() => 0, _ == 0, () => true, () => { recovered = true; Nil }) shouldBe 0

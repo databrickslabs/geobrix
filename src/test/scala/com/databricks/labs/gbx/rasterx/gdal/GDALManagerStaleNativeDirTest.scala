@@ -77,6 +77,41 @@ class GDALManagerStaleNativeDirTest extends AnyFunSuite {
         assert(out("FIND") != "<not found>", s"GDAL's data directory still names the removed payload: GDAL_DATA=${out("GDAL_DATA")}")
     }
 
+    test("a removed PROJ database is recovered from a later payload with the same JNI, keeping the user's PROJ_DATA") {
+        val staged = stagedPayload()
+        assume(staged.isDefined, "PRECONDITION MISSING: no staged GDAL (build/native/out/<arch>/stage-native); recovery row not run")
+        val (firstRoot, first) = wheelRoot(staged.get, linked = true)
+        // the first payload's PROJ and GDAL data are its own files, so the probe can remove its proj.db
+        Files.delete(firstRoot.resolve("_native/share"))
+        Seq("proj", "gdal").foreach { n =>
+            val to = Files.createDirectories(firstRoot.resolve(s"_native/share/$n"))
+            new File(staged.get.resolve(s"share/$n").toString).listFiles().filter(_.isFile)
+                .foreach(f => Files.copy(f.toPath, to.resolve(f.getName)))
+        }
+        val (_, second) = wheelRoot(staged.get, linked = false)
+        val user = Files.createTempDirectory("gbx_user_proj")
+        val java = new File(System.getProperty("java.home"), "bin/java").getPath
+        val pb = new ProcessBuilder(
+          java, s"-Djava.library.path=$first/lib", "-cp", System.getProperty("java.class.path"),
+          "com.databricks.labs.gbx.rasterx.gdal.ProjRecoveryProbe", first.toString, second.toString, user.toString
+        ).redirectErrorStream(true)
+        val proc = pb.start()
+        val lines = mutable.ArrayBuffer.empty[String]
+        val src = Source.fromInputStream(proc.getInputStream)
+        try src.getLines().foreach(lines += _) finally src.close()
+        proc.waitFor(300, TimeUnit.SECONDS)
+        val out = lines.filter(_.contains("=")).map { l => val i = l.indexOf('='); l.take(i) -> l.drop(i + 1) }.toMap
+        assert(lines.contains("DONE"), s"the probe did not finish: ${lines.takeRight(6).mkString(" | ")}")
+        assert(out("PRE") == "27700", s"srid before the delete: ${out("PRE")}")
+        assert(out("GONE") == "true", "the first payload's proj.db is still there")
+        assert(out("SRID") == "27700", s"srid after the first payload's proj.db is gone: ${out("SRID")}")
+        val dirs = out("PROJ_DATA").split(":").toSeq
+        assert(dirs.contains(user.toString), s"the user's PROJ_DATA directory was dropped: ${out("PROJ_DATA")}")
+        assert(dirs.contains(s"$second/../share/proj"), s"PROJ_DATA did not move to the later payload: ${out("PROJ_DATA")}")
+        assert(!dirs.contains(s"$first/../share/proj"), s"PROJ_DATA still names the removed data: ${out("PROJ_DATA")}")
+        assert(out("LOADED") == s"$second/../share/proj", s"the loaded choice did not move: ${out("LOADED")}")
+    }
+
     // laterNative is pure: these rows need no GDAL (the child-JVM row above is the end-to-end one)
     private def jniDir(bytes: Array[Byte]): Path = {
         val d = Files.createTempDirectory("gbx_native_dir")

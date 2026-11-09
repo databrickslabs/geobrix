@@ -211,7 +211,7 @@ If the import succeeds and the query returns raster dimensions, the install is r
 
 ## Env wheel and JAR {#heavyweight}
 
-The JVM engine runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. The JVM loads them from the wheel.
+The JVM engine runs on a dedicated cluster with two cluster libraries: the env wheel and the GeoBrix JAR. The wheel carries the native GDAL, PROJ and GEOS. On first use, each node copies the native libraries to local disk. The JVM loads them from that copy, so a finished notebook's Python environment cannot remove them.
 
 1. Stage the env wheel for the runtime in a Unity Catalog Volume: `+env5` on DBR 17.3 and 18, `+env6` on DBR 19.
 2. Stage the JAR with `gbx.stage_jar`, as described [below](#stage-jar).
@@ -257,10 +257,11 @@ GeoBrix 0.5.x installed native GDAL with a cluster init script. **Remove that in
 These pages describe 0.6.x. To install 0.5.x with its init script, use the assets of the [v0.5.2 release](https://github.com/databrickslabs/geobrix/releases/tag/v0.5.2). They include the init script, the GDAL bundle and `geobrix-docs-0.5.2.zip`, the docs for that release.
 :::
 
-Two optional settings apply to the JVM engine:
+Three optional settings apply to the JVM engine:
 
 - **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster. See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
 - **HTTP.** Leave `GDAL_HTTP_VERSION` unset. See [Remote reads](./readers/raster#remote-reads-over-https).
+- **Native copy location.** Each node copies the native libraries to `/local_disk0/geobrix/native`, about 130 MB per GeoBrix build. Set `spark.databricks.labs.gbx.native.copy.dir` in the cluster's Spark config to use another folder. Set it to `off` to load from the wheel.
 
 ### Verify the JVM engine
 

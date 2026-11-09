@@ -260,6 +260,7 @@ These changes affect callers that pass keywords or named arguments.
   - Results are within millimetres of Ordnance Survey's test points.
   - Results differ from earlier values by about 1.7 m in central London and up to about 5 m elsewhere in Great Britain.
   - See [Grids that ship with GeoBrix](./api/coordinate-reference-systems#grids-that-ship-with-geobrix).
+- **The JVM engine loads GDAL from a node-local copy (new).** On first use, each node copies the native libraries to local disk. The JVM then loads them from that copy, not from a notebook's Python environment. Set `spark.databricks.labs.gbx.native.copy.dir` to use another folder, or to `off` to load from the wheel. See [Env wheel and JAR](./installation#heavyweight).
 - **`projsync` needs a local target directory.** Syncing straight into a Volume leaves `cache.db` at 0 bytes with a `disk I/O error`. Sync to local disk, then copy to the Volume. See [Fetch grids with projsync](./api/coordinate-reference-systems#fetch-grids-from-the-proj-cdn-with-projsync).
 
 ## Unity Catalog {#unity-catalog}

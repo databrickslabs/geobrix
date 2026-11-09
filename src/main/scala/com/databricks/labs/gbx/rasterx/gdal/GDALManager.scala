@@ -30,6 +30,10 @@ import scala.util.{Success, Try}
   * an ExpressionConfig (`confDir`) adopts. A caller with none (`initOgr`, KernelGdal, the vector writers) takes the
   * session's directory only for a first load, so on a stale executor it keeps the removed PROJ_DATA until an
   * ExpressionConfig caller adopts; that path is not covered.
+  *
+  * A payload named by [[NativeDirKey]] or `GBX_NATIVE_ROOT` is first copied to the node's local disk ([[NativeCopyDirKey]],
+  * [[NativeCopy]]), and the JVM loads from that copy, so a run's removed Python environment takes no library or data
+  * directory from under it. Each node makes one copy per payload; the later-run adoption above is the fallback.
   */
 object GDALManager extends Logging {
 
@@ -48,10 +52,16 @@ object GDALManager extends Logging {
     /** The env wheel's `_native/<arch>` directory (Python `_native.native_dir()`); its `lib/` holds the JNI. */
     val NativeDirKey = "spark.databricks.labs.gbx.native.dir"
 
+    /** Where each node copies the payload before its JVM loads it ([[NativeCopy]]): a directory, or `off` to load in
+      * place. Unset: `/local_disk0/geobrix/native` on a node with that disk (Databricks), else in place. Read at the
+      * JVM's first GDAL load from the caller's config, the session's conf, the cluster's conf, then [[NativeCopyDirEnv]]. */
+    val NativeCopyDirKey = "spark.databricks.labs.gbx.native.copy.dir"
+    val NativeCopyDirEnv = "GBX_NATIVE_COPY_DIR"
+
     /** The GDAL a JVM runs: its JNI, and its PROJ and GDAL data (None: the system GDAL finds its own). */
     final case class NativeChoice(jni: String, projData: Option[String], gdalData: Option[String])
 
-    private val JniName = "libgdalalljni.so"
+    private[gdal] val JniName = "libgdalalljni.so"
     private val LegacyJni = s"/usr/lib/$JniName"
     private val PayloadJni = s"(.*/_native/(?:x86_64|aarch64))/lib/$JniName".r
     private val LibgdalFile = """.*/libgdal(-[0-9a-f]{8})?\.so(\.\d+)+""".r
@@ -228,7 +238,7 @@ object GDALManager extends Logging {
       * GDAL already loaded (a JVM cannot change GDAL) and puts any PROJ grid directories it brings that are not yet
       * on PROJ's search path there. */
     def init(config: ExpressionConfig): Unit = {
-        ensureJniLoaded(config.nativeDir)
+        ensureJniLoaded(config.nativeDir, config.configs.get(NativeCopyDirKey))
         lock.synchronized {
             if (!isEnabled) {
                 Try {
@@ -269,7 +279,8 @@ object GDALManager extends Logging {
       * makes every thread's PROJ context take the path again at its next use, so a context that lost its database
       * reopens it. When the loaded payload's `proj.db` is gone (an executor outlives the Python environment it loaded
       * GDAL from) and another directory this JVM has seen holds the same JNI and a `proj.db`, its data directories
-      * replace the removed ones, as [[laterNative]] does when the loaded JNI itself is gone.
+      * replace the removed ones, as [[laterNative]] does when the loaded JNI itself is gone. Any other directory
+      * PROJ_DATA names (a user's `spark.gdal.PROJ_DATA`) stays on the path, after the grid directories.
       */
     def recoverProjData(): Seq[String] =
         lock.synchronized {
@@ -281,19 +292,29 @@ object GDALManager extends Logging {
                     .foreach { moved =>
                         logWarning(s"PROJ data of the GDAL loaded from ${c.jni} is gone; the same JNI is at ${moved.jni}")
                         loaded = Some(moved)
-                        adoptNativeData(moved)
+                        adoptNativeData(moved, c.projData)
                     }
             }
-            val dirs = (appliedGridDirs :+ baseProjData).distinct
+            val dirs = projPathKeeping(None)
             setProjSearchPath(dirs)
             dirs
         }
+
+    /** The PROJ search path to apply again: the grid directories, then every other directory PROJ_DATA names now (a
+      * user's `spark.gdal.PROJ_DATA`) except `replaced` (a payload's PROJ data this JVM no longer uses), then the base. */
+    private def projPathKeeping(replaced: Option[String]): Seq[String] = {
+        val current = Option(gdal.GetConfigOption("PROJ_DATA")).toSeq.flatMap(_.split(":")).map(_.trim).filter(_.nonEmpty)
+        val others = current.filterNot(d => appliedGridDirs.contains(d) || replaced.contains(d) || d == baseProjData)
+        (appliedGridDirs ++ others :+ baseProjData).distinct
+    }
 
     /** PROJ_DATA/PROJ_LIB for GDAL, and OSRSetPROJSearchPaths, which reaches PROJ contexts that already exist. */
     private def setProjSearchPath(dirs: Seq[String]): Unit = {
         gdal.SetConfigOption("PROJ_DATA", dirs.mkString(":"))
         gdal.SetConfigOption("PROJ_LIB", dirs.mkString(":")) // legacy alias PROJ still honors
         org.gdal.osr.osr.SetPROJSearchPaths(new java.util.Vector[String](dirs.asJava))
+        // a thread's cached "PROJ reads its database" no longer holds for the new path
+        com.databricks.labs.gbx.operations.ProjDatabase.invalidate()
     }
 
     /**
@@ -551,9 +572,9 @@ object GDALManager extends Logging {
       * [[NativeDirKey]] value of the caller's ExpressionConfig; None (no ExpressionConfig: KernelGdal, the vector
       * writers, OGR) uses the session's ([[sessionNativeDir]]). Throws IllegalStateException with
       * [[resolveNative]]'s refusal, and when `confDir` names another JNI than the one already loaded (a JVM cannot
-      * unload a GDAL).
+      * unload a GDAL). `copyDir` is the caller's [[NativeCopyDirKey]] value, read at the first load only.
       */
-    def ensureJniLoaded(confDir: Option[String]): NativeChoice = loaded match {
+    def ensureJniLoaded(confDir: Option[String], copyDir: Option[String] = None): NativeChoice = loaded match {
         case Some(c) if confDir.forall(d => d.isEmpty || sameAsLoaded.contains(d)) => c
         case _                                                                      =>
             lock.synchronized {
@@ -568,14 +589,14 @@ object GDALManager extends Logging {
                                     logInfo(s"GDAL JNI loaded from ${c.jni}, which is gone; the same JNI is at ${moved.jni}")
                                     loaded = Some(moved)
                                     sameAsLoaded = Set(d)
-                                    adoptNativeData(moved)
+                                    adoptNativeData(moved, c.projData)
                             }
                         }
                         loaded.getOrElse(c)
                     case None    =>
                         val dir = confDir.filter(_.nonEmpty).orElse(sessionNativeDir())
                         val env = sys.env.get("GBX_NATIVE_ROOT").filter(_.nonEmpty)
-                        val c = resolveNative(
+                        val resolved = resolveNative(
                           dir,
                           env,
                           System.getProperty("os.arch", ""),
@@ -589,10 +610,12 @@ object GDALManager extends Logging {
                             case Left(refusal) => throw new IllegalStateException(refusal)
                         }
                         if (dir.isEmpty && env.isEmpty) {
-                            logInfo(s"No $NativeDirKey and no GBX_NATIVE_ROOT: this JVM runs the system GDAL (${c.jni})")
+                            logInfo(s"No $NativeDirKey and no GBX_NATIVE_ROOT: this JVM runs the system GDAL (${resolved.jni})")
                         }
                         // hashed before the load, while the file is certainly there: it may be gone when a later run names a copy
-                        val identity = jniIdentityOf(realPathOf(c.jni))
+                        val identity = jniIdentityOf(realPathOf(resolved.jni))
+                        // a payload (not the system GDAL) is loaded from its node-local copy
+                        val c = if (dir.isEmpty && env.isEmpty) resolved else nodeLocal(resolved, identity, copyDir)
                         System.load(c.jni)
                         // GDAL's Java classes System.loadLibrary their JNI by name on first use: run that now, so the
                         // check below sees anything it mapped. With none on the library path they print "Native
@@ -611,6 +634,36 @@ object GDALManager extends Logging {
                         c
                 }
             }
+    }
+
+    /**
+      * `c` copied to the node's local disk ([[NativeCopy.stabilize]]), else `c` itself: no copy root (a node with no
+      * `/local_disk0`, or [[NativeCopyDirKey]] `off`), a JNI on the JVM's library path (GDAL's Java classes load that one
+      * by name, so a copy would map a second JNI), or a copy that cannot be written (logged). Throws the refusal when the
+      * payload is gone or changes while it is copied.
+      */
+    private def nodeLocal(c: NativeChoice, identity: String, copyDir: Option[String]): NativeChoice = {
+        val setting = copyDir.filter(_.trim.nonEmpty)
+            .orElse(sessionConf(NativeCopyDirKey))
+            .orElse(clusterConf(NativeCopyDirKey))
+            .orElse(sys.env.get(NativeCopyDirEnv))
+        val onPath = libraryPath().map(d => Paths.get(d, JniName)).find(Files.exists(_))
+        NativeCopy.rootFrom(setting, NativeCopy.localDisk()) match {
+            case None                          => c
+            case Some(_) if onPath.isDefined   =>
+                logInfo(s"$JniName is on this JVM's library path (${onPath.get}): GDAL is loaded in place, not copied")
+                c
+            case Some(root)                    =>
+                val sha = (p: java.nio.file.Path) => jniIdentityOf(p.toString)
+                try NativeCopy.stabilize(c, root, identity, sha) match {
+                    case Right(copy)   => copy
+                    case Left(refusal) => throw new IllegalStateException(refusal)
+                } catch {
+                    case e: java.io.IOException =>
+                        logWarning(s"GDAL native payload: no node-local copy under $root ($e); loading it from ${c.jni}")
+                        c
+                }
+        }
     }
 
     /** The GDAL release, once GDAL's Java classes have called into the JNI just loaded (their constants class reads
@@ -637,10 +690,15 @@ object GDALManager extends Logging {
       * (Spark SQL hands a task the session's `spark.*` settings), on the driver the active session's conf. Spark SQL
       * is reached only here, and its absence (UC Scala) is no error.
       */
-    private[gdal] def sessionNativeDir(): Option[String] = {
-        val task = Option(org.apache.spark.TaskContext.get()).flatMap(t => Option(t.getLocalProperty(NativeDirKey)))
+    private[gdal] def sessionNativeDir(): Option[String] = sessionConf(NativeDirKey)
+
+    /** The session's `key`: the task's local property on an executor, the active session's conf on the driver. */
+    private def sessionConf(key: String): Option[String] = {
+        def task: Option[String] =
+            try Option(org.apache.spark.TaskContext.get()).flatMap(t => Option(t.getLocalProperty(key)))
+            catch { case _: LinkageError => None }
         def session: Option[String] =
-            try SessionConf.get(NativeDirKey)
+            try SessionConf.get(key)
             catch {
                 case _: LinkageError => None
                 case NonFatal(_)     => None
@@ -692,11 +750,12 @@ object GDALManager extends Logging {
     /** The data directories of `c`, a copy of the payload whose files the JVM loaded GDAL from, replacing the removed
       * ones. GDAL fixes its GDAL_DATA directory at its first file lookup, so the option alone would not move it:
       * clearing the finder makes the next lookup read the option again. PROJ is set once and last (the grid directories
-      * included), so that no PROJ context is created in between with the base directory alone. */
-    private def adoptNativeData(c: NativeChoice): Unit = {
+      * included), so that no PROJ context is created in between with the base directory alone. `replaced` is the PROJ
+      * data directory `c` replaces; any other directory PROJ_DATA names stays. */
+    private def adoptNativeData(c: NativeChoice, replaced: Option[String]): Unit = {
         c.gdalData.foreach(gdal.SetConfigOption("GDAL_DATA", _))
         gdal.FinderClean()
-        setProjSearchPath((appliedGridDirs :+ baseProjData).distinct)
+        setProjSearchPath(projPathKeeping(replaced))
     }
 
     private def applyNativeData(c: NativeChoice): Unit = {

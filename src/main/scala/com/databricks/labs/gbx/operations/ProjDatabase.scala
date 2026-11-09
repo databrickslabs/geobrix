@@ -27,6 +27,9 @@ final class ProjDatabaseException(msg: String, cause: Throwable = null) extends 
   *
   * Known limit: the check is a database lookup on this thread's context, which PROJ may answer from its cache, plus
   * a readable `proj.db` on the search path. A context whose database reads fail only now and then is not detected.
+  * A thread whose check passed is not checked again until this JVM changes PROJ's search path ([[invalidate]]), so a
+  * database removed later under an unchanged path is not detected on that thread (the JVM loads GDAL from a node-local
+  * copy of its payload, which a finished run does not remove).
   */
 object ProjDatabase extends Logging {
 
@@ -46,6 +49,27 @@ object ProjDatabase extends Logging {
             val sr = new SpatialReference()
             try Try(sr.ImportFromEPSG(4326)).toOption.contains(0)
             finally sr.delete()
+        }
+    }
+
+    // the search-path generation at which this thread's check last passed (-1: never)
+    private val generation = new java.util.concurrent.atomic.AtomicLong(0L)
+    private val confirmedAt = ThreadLocal.withInitial[java.lang.Long](() => -1L)
+
+    /** A change of PROJ's search path: every thread checks again at its next suspect answer. */
+    def invalidate(): Unit = { generation.incrementAndGet(); () }
+
+    /** [[reachable]], once per thread and search path: a check that passed holds until [[invalidate]]. A check that
+      * fails is not kept, so the next suspect answer checks again. */
+    def reachableCached(): Boolean = cachedWith(() => reachable())
+
+    private[gbx] def cachedWith(check: () => Boolean): Boolean = {
+        val g = generation.get()
+        if (confirmedAt.get() == g) true
+        else {
+            val ok = check()
+            if (ok) confirmedAt.set(g)
+            ok
         }
     }
 
@@ -70,7 +94,7 @@ object ProjDatabase extends Logging {
       * cannot be read, [[recoverOrFail]] and `read()` once more. A suspect answer with the database readable is the
       * data's own (a CRS with no authority code) and is returned as it is. */
     def guarded[T](read: () => T)(suspect: T => Boolean): T =
-        guardedWith(read, suspect, () => reachable(), () => GDALManager.recoverProjData())
+        guardedWith(read, suspect, () => reachableCached(), () => GDALManager.recoverProjData())
 
     private[gbx] def guardedWith[T](read: () => T, suspect: T => Boolean, isReachable: () => Boolean, recover: () => Seq[String]): T = {
         val first = read()

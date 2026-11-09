@@ -228,3 +228,111 @@ def test_a_virtual_tile_with_an_overview_is_read_at_its_target_size(engine, tmp_
     assert sizes == [None]
     with rasterio.MemoryFile(rasters[0]) as mf, mf.open() as ds:
         assert (ds.width, ds.height) == (64, 64)
+
+
+# --- a pixel no source pixel reaches is masked, never a valid 0 ----------------------------------------------------------
+def _ramp(nodata=None, epsg="EPSG:4326", w=20, h=15, origin=(0.0, 60.0), px=1.0):
+    """A one-band ramp 1..w*h (no 0) on a `px` degree grid: any 0 in a result is a fill, not a value."""
+    from databricks.labs.gbx.bench import oracles
+
+    z = np.arange(1, w * h + 1, dtype="float32").reshape(1, h, w)
+    return oracles._gtiff(z, epsg, nodata=nodata, origin=origin, px=px)
+
+
+def _open_result(res):
+    from rasterio.io import MemoryFile
+
+    assert res.error is None, res.error
+    mf = MemoryFile(bytes(res.raster))
+    return mf, mf.open()
+
+
+def test_the_pixels_outside_a_shrunk_footprint_are_masked_when_no_nodata_is_declared(
+    engine,
+):
+    # EPSG:4326 -> EPSG:3035 turns the rectangle: its corners leave the output's bounding box
+    mf, ds = _open_result(engine.run(M[TR], [_ramp()], {"srid": 3035}))
+    with mf, ds:
+        assert ds.count == 1 and ds.nodata is None
+        masks = ds.read_masks(1)
+        assert (masks == 0).any() and (masks != 0).any()
+        band = ds.read(1, masked=True)
+        assert (band.compressed() >= 1).all()  # a valid pixel is a source value
+        assert (band.data[masks == 0] == 0).all()  # the fill stays 0 under the mask
+        assert ds.mask_flag_enums[0][0].name == "per_dataset"
+
+
+def test_the_masked_footprint_pixels_are_the_ones_the_warp_does_not_reach(engine):
+    from rasterio.crs import CRS
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    raw = _ramp()
+    mf, ds = _open_result(engine.run(M[TR], [raw], {"srid": 3035}))
+    with mf, ds:
+        got = ds.read_masks(1) != 0
+        w, h = ds.width, ds.height
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(raw) as smf, smf.open() as src:
+        transform, rw, rh = calculate_default_transform(
+            src.crs, CRS.from_epsg(3035), src.width, src.height, *src.bounds
+        )
+        cover = np.zeros((rh, rw), "u1")
+        reproject(
+            np.full((src.height, src.width), 255, "u1"),
+            cover,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            dst_transform=transform,
+            dst_crs=CRS.from_epsg(3035),
+            resampling=Resampling.nearest,
+        )
+    rows, cols = min(h, rh), min(w, rw)
+    same = (got[:rows, :cols] == (cover[:rows, :cols] != 0)).mean()
+    assert same > 0.98, same
+
+
+def test_a_declared_nodata_source_is_reprojected_as_before_with_no_mask_band(engine):
+    mf, ds = _open_result(engine.run(M[TR], [_ramp(nodata=-9999.0)], {"srid": 3035}))
+    with mf, ds:
+        assert ds.nodata == -9999.0
+        assert ds.mask_flag_enums[0][0].name == "nodata"
+        assert (ds.read(1) == -9999.0).any()  # the outside is the declared NoData
+
+
+def test_a_resample_that_leaves_no_pixel_unreached_has_no_mask_band(engine):
+    mf, ds = _open_result(
+        engine.run(M[RS], [_ramp()], {"factor": 0.5, "algorithm": "near"})
+    )
+    with mf, ds:
+        assert ds.mask_flag_enums[0][0].name == "all_valid"
+
+
+def test_a_source_own_mask_and_the_footprint_are_both_masked(engine, tmp_path):
+    import rasterio
+    from rasterio.enums import MaskFlags
+    from rasterio.transform import from_origin
+
+    path = tmp_path / "own_mask.tif"
+    z = (np.arange(300) % 250 + 1).astype("uint8").reshape(1, 15, 20)
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=20,
+        height=15,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0.0, 60.0, 1.0, 1.0),
+    ) as dst:
+        dst.write(z)
+        m = np.full((15, 20), 255, "u1")
+        m[:2, :2] = 0
+        dst.write_mask(m)
+    mf, ds = _open_result(engine.run(M[TR], [path.read_bytes()], {"srid": 3035}))
+    with mf, ds:
+        assert MaskFlags.per_dataset in ds.mask_flag_enums[0]
+        masks = ds.read_masks(1)
+        assert (masks == 0).sum() > 4  # the 2 x 2 source pixels and the corners outside
+        assert (ds.read(1, masked=True).compressed() > 0).all()

@@ -387,28 +387,54 @@ def _keeps_input(gdal, fn, tokens, name: str) -> bool:
         ds = None
 
 
-def _carry_own_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> None:
-    """A source with its own mask band (not an alpha band: JPEG-compressed imagery often has one) keeps it through a
-    warp. GDAL's warp reads the mask but writes none, so the masked pixels would come out valid. The mask is warped
-    like the pixels, as data (nearest), by the same arguments: it is written inverted, so a pixel no source pixel
-    reaches stays valid, as the pixels outside the footprint do. The result is the output's own mask band.
+def _mask_to_carry(gdal, ds):
+    """What a warp of the open source `ds` must carry as a mask, as ``(valid, inverted)``, else None.
+
+    The source's own mask band (not an alpha band: JPEG-compressed imagery often has one) is carried: ``valid`` is its
+    255/0 bytes. A source that declares no NoData in any band and has no alpha band gets its footprint as a mask: GDAL's
+    warp fills the pixels no source pixel reaches with 0, which reads as a valid value, and GeoBrix never makes a value
+    where data is missing. ``valid`` is then all 255, and ``inverted`` is False: a pixel the warp does not reach is
+    masked. With a NoData value (or an alpha band) the pixels outside the footprint are already NoData (or transparent),
+    so only a source's own mask is carried, ``inverted``: a pixel no source pixel reaches stays as the warp left it.
     """
+    import numpy as np
+
+    w, h = ds.RasterXSize, ds.RasterYSize
+    bands = [ds.GetRasterBand(i + 1) for i in range(ds.RasterCount)]
+    own = bands[0].GetMaskFlags() == gdal.GMF_PER_DATASET
+    declared = any(b.GetNoDataValue() is not None for b in bands) or any(
+        b.GetColorInterpretation() == gdal.GCI_AlphaBand for b in bands
+    )
+    if own:
+        valid = np.frombuffer(bands[0].GetMaskBand().ReadRaster(0, 0, w, h), "u1")
+    elif declared:
+        return None
+    else:
+        valid = np.full(w * h, 255, "u1")
+    return valid, declared
+
+
+def _carry_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> None:
+    """The output's own mask band, from the source (see ``_mask_to_carry``): the mask is warped like the pixels, as data
+    (nearest), by the same arguments. The output gets no mask band when every pixel of it is valid; the bands stay as
+    they are (no alpha band is added)."""
     import numpy as np
 
     ds = _open_geotiff(gdal, src)
     try:
-        band = ds.GetRasterBand(1)
-        if band.GetMaskFlags() != gdal.GMF_PER_DATASET:
+        carry = _mask_to_carry(gdal, ds)
+        if carry is None:
             return
+        valid, inverted = carry
         w, h = ds.RasterXSize, ds.RasterYSize
-        mask = np.frombuffer(band.GetMaskBand().ReadRaster(0, 0, w, h), dtype="u1")
-        inverted = np.where(mask == 0, 255, 0).astype("u1")
-        if not inverted.any():
+        # a pixel the mask warp does not reach is 0: valid pixels are written 255 (or, inverted, masked ones 255)
+        coverage = np.where(valid == 0, 255, 0) if inverted else valid
+        if inverted and not coverage.any():
             return
         mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Byte)
         mem.SetGeoTransform(ds.GetGeoTransform())
         mem.SetProjection(ds.GetProjection())
-        mem.GetRasterBand(1).WriteRaster(0, 0, w, h, inverted.tobytes())
+        mem.GetRasterBand(1).WriteRaster(0, 0, w, h, coverage.astype("u1").tobytes())
         gdal.GetDriverByName("GTiff").CreateCopy(f"{prefix}/mask_in.tif", mem)
         mem = None
     finally:
@@ -440,6 +466,9 @@ def _carry_own_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> Non
             wd.GetRasterBand(1).ReadRaster(0, 0, wd.RasterXSize, wd.RasterYSize),
             dtype="u1",
         )
+        out_valid = np.where(warped == 0, 255, 0) if inverted else warped
+        if out_valid.all():
+            return
         with gdal.config_options({"GDAL_TIFF_INTERNAL_MASK": "YES"}, thread_local=True):
             od = _open_geotiff(gdal, out, update=True)
             if (od.RasterXSize, od.RasterYSize) != (wd.RasterXSize, wd.RasterYSize):
@@ -447,9 +476,8 @@ def _carry_own_mask(gdal, tokens, src: str, out: str, prefix: str, shown) -> Non
                     "the source's mask band does not warp onto the output grid"
                 )
             od.CreateMaskBand(gdal.GMF_PER_DATASET)
-            valid = np.where(warped == 0, 255, 0).astype("u1")
             od.GetRasterBand(1).GetMaskBand().WriteRaster(
-                0, 0, od.RasterXSize, od.RasterYSize, valid.tobytes()
+                0, 0, od.RasterXSize, od.RasterYSize, out_valid.astype("u1").tobytes()
             )
             od.FlushCache()
     finally:
@@ -721,7 +749,7 @@ def run(
             if block.alg == "raster aspect" and "--zero-for-flat" in tokens:
                 _remask_zero_for_flat(gdal, names[0], out)
             if block.alg == "raster reproject":
-                _carry_own_mask(gdal, tokens, names[0], out, prefix, shown)
+                _carry_mask(gdal, tokens, names[0], out, prefix, shown)
             return Result(_read(gdal, out), None, command)
         except DataError as exc:
             return Result(None, _shown(str(exc), shown), command)

@@ -81,7 +81,10 @@ class Case:
     # tile metadata's driver), layout (the GeoTIFF IMAGE_STRUCTURE layout), compression (its IMAGE_STRUCTURE codec), pixels_of_arg0 (the pixels of the first
     # argument unchanged), transform_of_arg0 (its geotransform) and grid_of_arg1 (the width, height, CRS and geotransform
     # of the second argument), and materialized (True: the raster bytes are in the tile and it has no path; False: a
-    # path and no bytes). A result that is still a virtual tile is read as its next reader reads it.
+    # path and no bytes), mask_band (True: the raster has its own per-dataset mask band; False: it has none). A result that
+    # is still a virtual tile is read as its next reader reads it.
+    # warp_masked: `expect` is the CRS of a reprojection of a source that declares no NoData: the pixels outside its
+    # footprint are masked by the output's own mask band, never a valid 0.
     expect: Any = None
     # "python" alone: a row of the Python API leg only (a behaviour SQL does not share).
     surfaces: Tuple[str, ...] = ("session", "uc")
@@ -199,6 +202,16 @@ HEAVY_PENDING.update(
         "resample_upsample_over_budget": {
             "L1": "the JVM resample makes the 1.9 GiB result; the engine refuses a call whose input and output together pass the decoded budget"
         },
+    }
+)
+
+# A reprojection of a source with no NoData declared masks the pixels outside the footprint; the JVM companions
+# fill them with 0, which reads as a valid value. Task 19 measures them.
+_WARP_MASK_L1 = "the JVM warp fills the pixels outside the footprint of a source with no NoData with 0, a valid value; the engine masks them"
+HEAVY_PENDING.update(
+    {
+        cid: {"L1": _WARP_MASK_L1}
+        for cid in ("transform_undeclared_masked", "webmercator_undeclared_masked")
     }
 )
 
@@ -2520,6 +2533,65 @@ def _check_tile(case: Case, out, args) -> Optional[str]:
     return None
 
 
+def _warp_coverage_agreement(src, got, want_crs: str) -> float:
+    """The share of the pixels both grids hold on which the output's validity equals the reference footprint: the
+    source's pixels warped nearest by rasterio.warp onto its default grid (a 0 outside, 1 where a source pixel lands).
+    """
+    import numpy as np
+    from rasterio.crs import CRS
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    dst_crs = CRS.from_user_input(want_crs)
+    transform, width, height = calculate_default_transform(
+        src.crs, dst_crs, src.width, src.height, *src.bounds
+    )
+    cover = np.zeros((height, width), "u1")
+    reproject(
+        np.ones((src.height, src.width), "u1"),
+        cover,
+        src_transform=src.transform,
+        src_crs=src.crs,
+        dst_transform=transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.nearest,
+    )
+    rows, cols = min(got.height, height), min(got.width, width)
+    valid = got.read_masks(1)[:rows, :cols] != 0
+    return float((valid == (cover[:rows, :cols] != 0)).mean())
+
+
+def _check_warp_masked(case: Case, out, args) -> Optional[str]:
+    """A reprojection of a source that declares no NoData into `case.expect` (a CRS): the pixels no source pixel reaches
+    are masked by the output's own mask band, never a valid 0. The bands and the count stay (no NoData, no alpha band),
+    the valid pixels hold source values (the source's smallest is above 0), and the footprint is the reference's (rasterio
+    warp, to the pixels on its edge)."""
+    from databricks.labs.gbx.core.crs import crs_equal
+
+    raster = _field(out, "raster")
+    if raster is None:
+        return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
+    with open_bytes(_raster_of(args[0])) as src, open_bytes(bytes(raster)) as got:
+        if not crs_equal(got.crs, case.expect):
+            return f"{case.cid}: CRS {got.crs} is not {case.expect}"
+        if got.count != src.count or got.nodata is not None:
+            return f"{case.cid}: {got.count} band(s), NoData {got.nodata}; want {src.count} band(s), none declared"
+        why = _tile_meta_flaws(case, out, got, {"mask_band": True})
+        if why:
+            return f"{case.cid}: {why}"
+        masks = got.read_masks(1)
+        if not (masks == 0).any():
+            return (
+                f"{case.cid}: no pixel is masked, the footprint leaves pixels outside"
+            )
+        valid = got.read(1)[masks != 0]
+        if valid.size == 0 or float(valid.min()) < float(src.read(1).min()):
+            return f"{case.cid}: a valid pixel is below the source's smallest ({valid.min() if valid.size else 'none'})"
+        same = _warp_coverage_agreement(src, got, case.expect)
+        if same < 0.98:
+            return f"{case.cid}: only {same:.1%} of the footprint matches the reference warp"
+    return None
+
+
 @contextlib.contextmanager
 def _open_out(out):
     """The raster of a result tile, open for reading: its bytes, or, for a virtual result (which records
@@ -2545,6 +2617,17 @@ def _extent_flaw(got, want) -> Optional[str]:
     return None
 
 
+def _mask_band_flaw(got, want) -> Optional[str]:
+    """The `mask_band` key of a `tile_meta` expectation against the open raster `got`: True wants the dataset's own
+    mask band, False wants none."""
+    if "mask_band" not in want:
+        return None
+    has = any(f.name == "per_dataset" for f in got.mask_flag_enums[0])
+    if has == want["mask_band"]:
+        return None
+    return f"{'a' if has else 'no'} mask band, want {'one' if want['mask_band'] else 'none'}"
+
+
 def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
     """What is wrong with the open raster `got` of a result tile `out` against the dict `want` (see `Case`), else None."""
     from databricks.labs.gbx.core.crs import authority_srid_of, crs_equal
@@ -2555,7 +2638,7 @@ def _tile_meta_flaws(case: Case, out, got, want) -> Optional[str]:
         return f"CRS {got.crs}, want none"
     if "srid" in want and authority_srid_of(got.crs) != want["srid"]:
         return f"SRID {authority_srid_of(got.crs)} is not {want['srid']}"
-    why = _extent_flaw(got, want)
+    why = _extent_flaw(got, want) or _mask_band_flaw(got, want)
     if why:
         return why
     if "dtype" in want and got.dtypes[0] != want["dtype"]:
@@ -3896,6 +3979,7 @@ _VALUE_CHECKS = {
 # the kinds whose check reads the case's arguments too
 _ARG_CHECKS = {
     "tile_props": _check_tile,
+    "warp_masked": _check_warp_masked,
     "tile_meta": _check_tile_meta,
     "ref": _check_ref,
     "geom_srid": _check_geom_srid,

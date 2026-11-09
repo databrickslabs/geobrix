@@ -78,6 +78,27 @@ def _ramp(tmpdir):
     return _tile(_gtiff(z, "EPSG:3857", nodata=None))
 
 
+def _ramp_tile(crs, origin, px):
+    """A 20 x 15 float32 ramp, 1..300, with no NoData declared: a 0 in a result is a fill, never a source value."""
+    import numpy as np
+
+    z = np.arange(1, 301, dtype="float32").reshape(1, 15, 20)
+    return _tile(_gtiff(z, crs, nodata=None, origin=origin, px=px))
+
+
+@builder("warp_ramp_geo")
+def _ramp_geo(tmpdir):
+    """The ramp in EPSG:4326, one degree a pixel from (0, 60): a reprojection to EPSG:3035 turns it, and its corners
+    fall outside the output's bounding box."""
+    return _ramp_tile("EPSG:4326", (0.0, 60.0), 1.0)
+
+
+@builder("warp_ramp_laea")
+def _ramp_laea(tmpdir):
+    """The ramp in EPSG:3035, 20 km a pixel from (2000000, 2000000): a reprojection to web mercator turns it."""
+    return _ramp_tile("EPSG:3035", (2000000.0, 2000000.0), 20000.0)
+
+
 @builder("tile_gcp")
 def _gcp_tile(tmpdir):
     """A 16 x 12 float32 ramp georeferenced by four ground control points in EPSG:4326 (0.01 degrees a pixel from
@@ -164,6 +185,24 @@ _session_warp_rows = (
         "transform_gcp",
         ONLY,
     ),
+    # a source with no NoData declared: the pixels outside the reprojected footprint are masked, not a valid 0
+    Case(
+        "transform_undeclared_masked",
+        TR,
+        (Build("warp_ramp_geo"), 3035),
+        "warp_masked",
+        "EPSG:3035",
+        ONLY,
+    ),
+    # a source with a declared NoData is unchanged: the outside is the NoData value, and there is no mask band
+    Case(
+        "transform_declared_unchanged",
+        TR,
+        (T4326, 3035),
+        "tile_meta",
+        {"nodata": -9999.0, "count": 1, "mask_band": False},
+        ONLY,
+    ),
     Case("transform_null_tile", TR, (None, 3857), "null", None, ONLY),
     Case("transform_null_srid", TR, (T4326, None), "null", None, ONLY),
     Case("transform_error_in", TR, (ERR, 3857), "error_tile", UPSTREAM_ERROR, ONLY),
@@ -174,6 +213,14 @@ _session_warp_rows = (
     ),
     # the default resampling is bilinear; the grid is the one rasterio's calculate_default_transform picks (51 x 62)
     Case("webmercator_default", WM, (T4326,), "tile_size", (51, 62), ONLY),
+    Case(
+        "webmercator_undeclared_masked",
+        WM,
+        (Build("warp_ramp_laea"), "near"),
+        "warp_masked",
+        "EPSG:3857",
+        ONLY,
+    ),
     Case("webmercator_virtual", WM, (VIRT, "near"), "tile_props", "EPSG:3857", ONLY),
     Case("webmercator_bad_word", WM, (T4326, "sinc"), "raises", "sinc", ONLY),
     # the word is checked also for a tile that needs no reprojection
@@ -223,6 +270,15 @@ _session_warp_rows = (
         (T4326, 0.5, "average"),
         "ref",
         "resample_average_nodata",
+        ONLY,
+    ),
+    # a resample whose pixels all land in the source has no mask band, with no NoData declared too
+    Case(
+        "resample_undeclared_no_mask",
+        RS,
+        (Build("warp_ramp"), 0.5),
+        "tile_meta",
+        {"nodata": None, "count": 1, "mask_band": False},
         ONLY,
     ),
     Case("resample_zero", RS, (T4326, 0.0), "raises", "factor", ONLY),

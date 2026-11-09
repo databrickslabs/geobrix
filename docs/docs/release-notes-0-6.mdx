@@ -112,6 +112,7 @@ See the [migration guide](./migration-0-6) for the old and new import for each e
   - `rst_resample_to_res` gives pixels of exactly the resolution you ask for. When the resolution does not divide the extent, the extent changes by less than one pixel.
   - `bilinear` and `cubic` can differ from the earlier pixels beside NoData. `near`, `average` and every reprojection give the same pixels.
   - A call whose input and result together pass the compute's decoded size gives an error tile with a `Fix:`. Before, only the input counted.
+  - A reprojection of a tile with no NoData value masks the pixels outside its footprint, with the tile's own mask band. Before, they were valid zeros. The band count stays.
   - `rst_resample` reads a virtual tile at the target size when the factor is below 1. A file with overviews serves the shrink from them.
   - A size from a factor that ends in .5 pixels rounds to the even size. The JVM form rounds up.
 - **`gbx_rst_contour` runs GDAL's `raster contour`.** It traced the lines with scikit-image before. The lines cross the same levels, and each level's lines lie within one pixel of the earlier ones.

@@ -4975,7 +4975,7 @@ Runs GDAL's own `raster reproject` algorithm in the worker, on every compute.
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Reproject to a target SRID: a positive EPSG or ESRI code. A tile already in that CRS comes back as it is. A code that names no CRS gives an error tile with the reason. A tile with no CRS also gives an error tile; set its CRS first with `rst_setcrs`. Use `rst_transformcrs` for a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems).
+Reproject to a target SRID: a positive EPSG or ESRI code. A tile already in that CRS comes back as it is. A code that names no CRS gives an error tile with the reason. A tile with no CRS also gives an error tile; set its CRS first with `rst_setcrs`. Use `rst_transformcrs` for a target given as a CRS string. See [Coordinate Reference Systems](./coordinate-reference-systems). A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
 
 <FunctionExamples
   name="rst_transform"
@@ -5006,7 +5006,7 @@ Reproject to a target SRID: a positive EPSG or ESRI code. A tile already in that
 Powered by **rasterio** (`rasterio.warp`) + **pyproj**. Reprojection uses the GDAL build bundled with rasterio.
 :::
 
-Reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems).
+Reproject to a target CRS given as a *string* (`EPSG:x` / `ESRI:x` / WKT / PROJ4; an int-castable string is treated as a SRID). See [Coordinate Reference Systems](./coordinate-reference-systems). A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
 
 Distinct from `rst_transform` (integer EPSG only): `rst_transformcrs` accepts any CRS string — an authority code (`EPSG:3857`, `ESRI:54008`), WKT, or PROJ4 — so you can reproject to a non-EPSG target. An int-castable string (`'3857'`) is treated as an EPSG SRID. See the [CRS: SRID int vs CRS string](#rst_crs) note above.
 
@@ -5255,7 +5255,7 @@ Runs GDAL's own `raster reproject` algorithm in the worker, on every compute.
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
 :::
 
-Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`. A resampling word that names none raises an error that names it. A tile with no CRS gives an error tile.
+Reproject a raster to EPSG:3857 (Web Mercator) using bilinear resampling by default. The returned tile carries `srid = 3857`. A resampling word that names none raises an error that names it. A tile with no CRS gives an error tile. A tile with no NoData value gets a mask band over the pixels outside the footprint; they are never a valid 0.
 
 <FunctionExamples
   name="rst_to_webmercator"

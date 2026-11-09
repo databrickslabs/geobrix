@@ -4840,7 +4840,7 @@ See [interpolation & fill](./grid-raster-tessellation#interpolation-and-fill) to
 Runs GDAL's own `raster reproject` algorithm in the worker, on every compute.
 :::
 
-Resample a raster tile by a multiplicative factor, scaling pixel dimensions up or down relative to the source. A factor of 0 or less, or an unknown algorithm, raises an error that names the value. A virtual tile is read at the target size, so a file with overviews serves a shrink from them. A result too large for the compute's memory gives an error tile with a `Fix:`.
+Resample a raster tile by a multiplicative factor, scaling pixel dimensions up or down relative to the source. A factor of 0 or less, or an unknown algorithm, raises an error that names the value. A virtual tile is read at the target size, so a file with overviews serves a shrink from them. An overview carries the resampling algorithm it was built with. A shrink served from it therefore differs in its pixels from the same call on a materialized tile. To apply your `algorithm` to every pixel, materialize the tile first. A result too large for the compute's memory gives an error tile with a `Fix:`.
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).
@@ -4932,7 +4932,7 @@ Part of the `rst_resample*` family — see the [Esri Resample note](#rst_resampl
 Runs GDAL's own `raster reproject` algorithm in the worker, on every compute.
 :::
 
-Resample a raster tile to an explicit pixel grid size. A size of 0 or less raises an error that names it.
+Resample a raster tile to an explicit pixel grid size. A size of 0 or less raises an error that names it. A size that is not a whole number raises too.
 
 :::note Python-only keywords
 The **Python** function takes three optional keywords that SQL does not: `virtualize_dir`, `virtualize_prefix` and `materialize`. They choose whether the tile carries raster bytes or a virtual reference. See [force-output params](#virtual-tile-overrides).

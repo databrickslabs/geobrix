@@ -31,7 +31,7 @@ import scala.util.{Success, Try}
   * session's directory only for a first load, so on a stale executor it keeps the removed PROJ_DATA until an
   * ExpressionConfig caller adopts; that path is not covered.
   *
-  * A payload named by [[NativeDirKey]] or `GBX_NATIVE_ROOT` is first copied to the node's local disk ([[NativeCopyDirKey]],
+  * A payload named by [[NativeDirKey]] or `GBX_NATIVE_ROOT` is first copied to the node's local disk or temporary directory ([[NativeCopyDirKey]],
   * [[NativeCopy]]), and the JVM loads from that copy, so a run's removed Python environment takes no library or data
   * directory from under it. Each node makes one copy per payload; the later-run adoption above is the fallback.
   */
@@ -53,7 +53,8 @@ object GDALManager extends Logging {
     val NativeDirKey = "spark.databricks.labs.gbx.native.dir"
 
     /** Where each node copies the payload before its JVM loads it ([[NativeCopy]]): a directory, or `off` to load in
-      * place. Unset: `/local_disk0/geobrix/native` on a node with that disk (Databricks), else in place. Read at the
+      * place. Unset: `/local_disk0/geobrix/native` on a node with that disk (Databricks), else `<java.io.tmpdir>/geobrix/native`,
+      * the first that passes the safety checks and has the space; else in place. A directory that is set is the only try. Read at the
       * JVM's first GDAL load from the caller's config, the session's conf, the cluster's conf, then [[NativeCopyDirEnv]]. */
     val NativeCopyDirKey = "spark.databricks.labs.gbx.native.copy.dir"
     val NativeCopyDirEnv = "GBX_NATIVE_COPY_DIR"
@@ -668,8 +669,9 @@ object GDALManager extends Logging {
     }
 
     /**
-      * `c` copied to the node's local disk ([[NativeCopy.stabilize]]), else `c` itself: no copy root (a node with no
-      * `/local_disk0`, or [[NativeCopyDirKey]] `off`), a JNI on the JVM's library path (GDAL's Java classes load that one
+      * `c` copied to the first copy root that passes ([[NativeCopy.stabilizeFirst]]: [[NativeCopyDirKey]] alone when set,
+      * else `/local_disk0/geobrix/native`, then `<java.io.tmpdir>/geobrix/native`), else `c` itself: [[NativeCopyDirKey]]
+      * `off`, a JNI on the JVM's library path (GDAL's Java classes load that one
       * by name, so a copy would map a second JNI), or a copy that cannot be written (logged). Throws the refusal when the
       * payload is gone or changes while it is copied.
       */
@@ -679,21 +681,21 @@ object GDALManager extends Logging {
             .orElse(clusterConf(NativeCopyDirKey))
             .orElse(sys.env.get(NativeCopyDirEnv))
         val onPath = libraryPath().map(d => Paths.get(d, JniName)).find(Files.exists(_))
-        NativeCopy.rootFrom(setting, NativeCopy.localDisk()) match {
-            case None                          => c
-            case Some(_) if onPath.isDefined   =>
-                logInfo(s"$JniName is on this JVM's library path (${onPath.get}): GDAL is loaded in place, not copied")
-                c
-            case Some(root)                    =>
-                val sha = (p: java.nio.file.Path) => jniIdentityOf(p.toString)
-                try NativeCopy.stabilize(c, root, identity, sha) match {
-                    case Right(copy)   => copy
-                    case Left(refusal) => throw new IllegalStateException(refusal)
-                } catch {
-                    case e: java.io.IOException =>
-                        logWarning(s"GDAL native payload: no node-local copy under $root ($e); loading it from ${c.jni}")
-                        c
-                }
+        val roots = NativeCopy.rootsFrom(setting, NativeCopy.localDisk(), NativeCopy.tmpDir())
+        if (roots.isEmpty) c
+        else if (onPath.isDefined) {
+            logInfo(s"$JniName is on this JVM's library path (${onPath.get}): GDAL is loaded in place, not copied")
+            c
+        } else {
+            val sha = (p: java.nio.file.Path) => jniIdentityOf(p.toString)
+            try NativeCopy.stabilizeFirst(c, roots, identity, sha) match {
+                case Right(copy)   => copy
+                case Left(refusal) => throw new IllegalStateException(refusal)
+            } catch {
+                case e: java.io.IOException =>
+                    logWarning(s"GDAL native payload: no node-local copy ($e); loading it from ${c.jni}")
+                    c
+            }
         }
     }
 

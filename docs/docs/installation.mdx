@@ -261,7 +261,7 @@ Three optional settings apply to the JVM engine:
 
 - **netCDF-4 filters.** Reading zstd, blosc or bzip2 netCDF-4 needs `HDF5_PLUGIN_PATH` in the cluster's environment variables. Without it the result is a silent NULL. The variable also reaches other HDF5 libraries on the cluster. See [Compressed netCDF-4 variables](./readers/netcdf#compressed-netcdf-4-variables-zstd-blosc-bzip2).
 - **HTTP.** Leave `GDAL_HTTP_VERSION` unset. See [Remote reads](./readers/raster#remote-reads-over-https).
-- **Native copy location.** Each node copies the native libraries to `/local_disk0/geobrix/native`, about 130 MB per GeoBrix build. Set `spark.databricks.labs.gbx.native.copy.dir` in the cluster's Spark config to use another folder. Set it to `off` to load from the wheel.
+- **Native copy location.** Each node copies the native libraries once per GeoBrix build, about 130 MB. It uses `/local_disk0/geobrix/native` when no other user owns `/local_disk0`, else `/tmp/geobrix/native`. Each candidate needs three times the copy's size free. Set `spark.databricks.labs.gbx.native.copy.dir` in the cluster's Spark config to use one folder only. Set it to `off` to load from the wheel.
 
 ### Verify the JVM engine
 

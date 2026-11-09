@@ -51,11 +51,13 @@ class NativeCopyTest extends AnyFunSuite {
         try s.iterator().asScala.map(_.getFileName.toString).toSet finally s.close()
     }
 
-    test("the copy root: a setting, off, else the local disk's geobrix/native, else none") {
-        assert(NativeCopy.rootFrom(Some("/x/copies"), None).contains(Paths.get("/x/copies")))
-        assert(NativeCopy.rootFrom(Some(" OFF "), Some(Paths.get("/local_disk0"))).isEmpty)
-        assert(NativeCopy.rootFrom(None, Some(Paths.get("/local_disk0"))).contains(Paths.get("/local_disk0/geobrix/native")))
-        assert(NativeCopy.rootFrom(Some(""), None).isEmpty)
+    test("the copy roots: a setting alone, off, else the local disk's geobrix/native then the tmpdir's, else the tmpdir's") {
+        val tmp = Paths.get("/tmp")
+        assert(NativeCopy.rootsFrom(Some("/x/copies"), Some(Paths.get("/local_disk0")), tmp) == Seq(Paths.get("/x/copies")))
+        assert(NativeCopy.rootsFrom(Some(" OFF "), Some(Paths.get("/local_disk0")), tmp).isEmpty)
+        assert(NativeCopy.rootsFrom(None, Some(Paths.get("/local_disk0")), tmp) ==
+            Seq(Paths.get("/local_disk0/geobrix/native"), Paths.get("/tmp/geobrix/native")))
+        assert(NativeCopy.rootsFrom(Some(""), None, tmp) == Seq(Paths.get("/tmp/geobrix/native")))
         assert(NativeCopy.keyFor("a" * 64, "0.6.0").contains("0.6.0-aaaaaaaaaaaaaaaa"))
         assert(NativeCopy.keyFor("/path/when/unreadable").isEmpty)
     }
@@ -161,6 +163,49 @@ class NativeCopyTest extends AnyFunSuite {
         val key = made.resolve(NativeCopy.keyFor(id).get)
         assert(PosixFilePermissions.toString(Files.getPosixFilePermissions(key)) == "rwx------")
         assert(copy.jni.startsWith(key.toString))
+    }
+
+    test("an unsafe first candidate falls to the next; an explicit unsafe root does not fall through") {
+        val (_, _, c) = payload()
+        val id = sha(Paths.get(c.jni))
+        val unsafe = Files.createTempDirectory("gbx_copies")
+        Files.setPosixFilePermissions(unsafe, PosixFilePermissions.fromString("rwxrwx---")) // as another owner's would be
+        val good = Files.createTempDirectory("gbx_copies").resolve("geobrix/native")
+        val Right(copy) = NativeCopy.stabilizeFirst(c, Seq(unsafe, good), id, sha)
+        assert(copy.jni.startsWith(good.toRealPath().toString), copy.jni)
+        assert(entries(unsafe).isEmpty, "a refused root was written")
+        // a root that is set is the only candidate: refused, the caller loads in place, no other root is made
+        val other = Files.createTempDirectory("gbx_copies").resolve("geobrix/native")
+        val roots = NativeCopy.rootsFrom(Some(unsafe.toString), Some(other.getParent.getParent), other.getParent.getParent)
+        assert(roots == Seq(unsafe.toAbsolutePath.normalize()))
+        val e = intercept[java.io.IOException](NativeCopy.stabilizeFirst(c, roots, id, sha))
+        assert(e.getMessage.contains("no native copy root passed") && e.getMessage.contains("writable by its group"), e.getMessage)
+        assert(!Files.exists(other), "an unset-default root was made after a set root was refused")
+        // when every candidate is refused, the message names each with its reason
+        val all = intercept[java.io.IOException](NativeCopy.stabilizeFirst(c, Seq(unsafe, unsafe.resolve("x")), id, sha))
+        assert(all.getMessage.contains(unsafe.toString) && all.getMessage.contains(unsafe.resolve("x").toString), all.getMessage)
+    }
+
+    test("a candidate with less than 3x the payload free is skipped") {
+        val (_, _, c) = payload()
+        val id = sha(Paths.get(c.jni))
+        val small = Files.createTempDirectory("gbx_copies").resolve("small")
+        val big = Files.createTempDirectory("gbx_copies").resolve("big")
+        val payloadSize = "jni-bytes".length + "gdal".length + "x".length + "bin".length + "db".length + "<x/>".length
+        // `small` does not exist until secureRoot makes it: match it by prefix of its parent's real path
+        val parentReal = small.getParent.toRealPath()
+        val free = (p: Path) => if (p.startsWith(parentReal)) 3L * payloadSize - 1 else 3L * payloadSize
+        val Right(copy) = NativeCopy.stabilizeFirst(c, Seq(small, big), id, sha, free)
+        assert(copy.jni.startsWith(big.toRealPath().toString), copy.jni)
+        assert(!Files.exists(small.resolve(NativeCopy.keyFor(id).get)), "the skipped candidate holds a copy")
+        // exactly 3x is enough
+        val Right(exact) = NativeCopy.stabilize(c, Files.createTempDirectory("gbx_copies"), id, sha, _ => 3L * payloadSize)
+        assert(Files.isRegularFile(Paths.get(exact.jni)))
+        // less is refused by stabilize itself, as an IOException the caller treats as "load in place"
+        val e = intercept[NativeCopy.InsufficientSpace](
+          NativeCopy.stabilize(c, Files.createTempDirectory("gbx_copies"), id, sha, _ => 3L * payloadSize - 1)
+        )
+        assert(e.getMessage.contains("bytes free"), e.getMessage)
     }
 
     test("concurrent initialisers, threads and JVMs, make one copy") {

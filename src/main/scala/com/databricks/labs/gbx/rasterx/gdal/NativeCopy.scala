@@ -32,8 +32,11 @@ import scala.util.Try
   *
   * The JVM loads native code from the copy, so no other user may be able to write it. The root and each copy are made
   * owner-only (0700). A root that another user owns or can write, or that sits under a directory another user can
-  * write (one that is not sticky, as `/tmp` is), is refused ([[UnsafeCopyRoot]]), and the JVM loads in place. The done
-  * marker holds a manifest, the sha256 of every copied file. A JVM reuses a copy only when its files are exactly the
+  * write (one that is not sticky, as `/tmp` is), is refused ([[UnsafeCopyRoot]]). With no root set, the JVM tries
+  * `/local_disk0/geobrix/native`, then `<java.io.tmpdir>/geobrix/native`, and uses the first that passes (on Databricks
+  * Runtime 19, `/local_disk0` belongs to another uid, so the copy lands in `/tmp`); a root that is set is the only
+  * candidate. A candidate whose filesystem has less than 3 times the payload's size free is skipped too. When none
+  * passes, the JVM loads in place. The done marker holds a manifest, the sha256 of every copied file. A JVM reuses a copy only when its files are exactly the
   * manifest's, each with its sha256, and each source file that is still there has the same sha256. Any other copy is
   * removed and made again.
   */
@@ -44,8 +47,10 @@ private[gdal] object NativeCopy extends Logging {
     private val LockName = ".gbx-copy.lock"
     private val TmpPrefix = ".tmp-"
     private val Sha256 = "[0-9a-f]{64}".r
-    /** The root when none is set: Databricks' local disk, when the node has one. */
+    /** The first candidate root when none is set: Databricks' local disk, when the node has one. */
     val DatabricksLocalDisk = "/local_disk0"
+    /** A candidate needs this many times the payload's size free on its filesystem. */
+    val FreeSpaceFactor = 3L
     val DefaultSubdir = "geobrix/native"
     private val Off = Set("off", "none", "false")
 
@@ -54,6 +59,9 @@ private[gdal] object NativeCopy extends Logging {
 
     /** A copy root another user could write: the JVM loads the payload in place instead (the caller's IOException). */
     final class UnsafeCopyRoot(msg: String) extends IOException(msg)
+
+    /** A copy root whose filesystem has too little free space for the payload: the next candidate is tried. */
+    final class InsufficientSpace(msg: String) extends IOException(msg)
 
     private val OwnerOnly = PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------"))
     private val GroupOrOtherWrite = 0x12 // 0o022
@@ -134,14 +142,22 @@ private[gdal] object NativeCopy extends Logging {
         md.digest().map("%02x".format(_)).mkString
     }
 
-    /** The root a JVM copies into: `value` (the conf or environment setting) when set, `off` for none, else
-      * `<local disk>/geobrix/native` when the node has a writable [[DatabricksLocalDisk]], else none (load in place). */
-    def rootFrom(value: Option[String], localDisk: Option[Path]): Option[Path] =
+    /** The roots a JVM tries to copy into, in order: `value` (the conf or environment setting) when set, alone, so a root
+      * that is set and refused is not replaced by another; `off` for none; else `<local disk>/geobrix/native` when the
+      * node has a writable [[DatabricksLocalDisk]], then `<tmpDir>/geobrix/native`. */
+    def rootsFrom(value: Option[String], localDisk: Option[Path], tmpDir: Path): Seq[Path] =
         value.map(_.trim).filter(_.nonEmpty) match {
-            case Some(v) if Off.contains(v.toLowerCase) => None
-            case Some(v)                                => Some(Paths.get(v).toAbsolutePath.normalize())
-            case None                                   => localDisk.map(_.resolve(DefaultSubdir))
+            case Some(v) if Off.contains(v.toLowerCase) => Nil
+            case Some(v)                                => Seq(Paths.get(v).toAbsolutePath.normalize())
+            case None                                   =>
+                (localDisk.toSeq ++ Seq(tmpDir)).map(_.resolve(DefaultSubdir).toAbsolutePath.normalize()).distinct
         }
+
+    /** The JVM's temporary directory (`java.io.tmpdir`, usually `/tmp`). */
+    def tmpDir(): Path = Paths.get(System.getProperty("java.io.tmpdir", "/tmp"))
+
+    /** The free bytes on the filesystem that holds `dir`. */
+    private def usableSpace(dir: Path): Long = Files.getFileStore(dir).getUsableSpace
 
     /** [[DatabricksLocalDisk]] when it is a writable directory on this node. */
     def localDisk(): Option[Path] =
@@ -169,7 +185,13 @@ private[gdal] object NativeCopy extends Logging {
       * Left: the refusal, when the payload is gone or changes while it is copied. An IOException for any other failure
       * (the root cannot be written): the caller loads in place.
       */
-    def stabilize(c: NativeChoice, requested: Path, identity: String, sha: Path => String): Either[String, NativeChoice] = {
+    def stabilize(
+        c: NativeChoice,
+        requested: Path,
+        identity: String,
+        sha: Path => String,
+        freeSpace: Path => Long = usableSpace
+    ): Either[String, NativeChoice] = {
         val key = keyFor(identity).getOrElse(throw new IOException(s"the JNI at ${c.jni} could not be hashed"))
         val src = Paths.get(c.jni).getParent.getParent
         val arch = src.getFileName.toString
@@ -191,6 +213,13 @@ private[gdal] object NativeCopy extends Logging {
                     Right(choice)
                 } else {
                     removeUnfinished(root)
+                    val need = FreeSpaceFactor * payloadBytes(src, c)
+                    val free = freeSpace(root)
+                    if (free < need) {
+                        throw new InsufficientSpace(
+                          s"geobrix: the native copy root $root has $free bytes free, less than the $need (${FreeSpaceFactor}x the payload) it needs"
+                        )
+                    }
                     if (Files.exists(dest)) {
                         // a copy with no done marker, or with other bytes: set aside and removed, then made again
                         val aside = root.resolve(s"$TmpPrefix$key-old-${UUID.randomUUID()}")
@@ -220,6 +249,57 @@ private[gdal] object NativeCopy extends Logging {
                 }
             }
         }
+    }
+
+    /**
+      * [[stabilize]] under the first of `roots` that passes its checks and has the space. A root that fails is logged at
+      * INFO and the next is tried. Left: the refusal of [[stabilize]], as there. An IOException naming every root and why
+      * it was refused when none passes: the caller loads in place.
+      */
+    def stabilizeFirst(
+        c: NativeChoice,
+        roots: Seq[Path],
+        identity: String,
+        sha: Path => String,
+        freeSpace: Path => Long = usableSpace
+    ): Either[String, NativeChoice] = {
+        @annotation.tailrec
+        def go(rest: List[Path], refused: Vector[String]): Either[String, NativeChoice] = rest match {
+            case Nil          =>
+                throw new IOException(
+                  if (refused.isEmpty) "no native copy root" else s"no native copy root passed: ${refused.mkString("; ")}"
+                )
+            case root :: more =>
+                val tried: Either[IOException, Either[String, NativeChoice]] =
+                    try Right(stabilize(c, root, identity, sha, freeSpace))
+                    catch { case e: IOException => Left(e) }
+                tried match {
+                    case Right(r) =>
+                        logInfo(s"GDAL native payload: node-local copy root $root chosen")
+                        r
+                    case Left(e)  =>
+                        logInfo(s"GDAL native payload: node-local copy root $root refused: ${e.getMessage}" +
+                            (if (more.nonEmpty) s"; trying ${more.head}" else ""))
+                        go(more, refused :+ s"$root (${e.getMessage})")
+                }
+        }
+        go(roots.toList, Vector.empty)
+    }
+
+    /** The bytes `copyPayload` copies: the payload's `lib`, `bin`, `hdf5-plugins` and the PROJ and GDAL data. */
+    private def payloadBytes(src: Path, c: NativeChoice): Long = {
+        val dirs = Seq("lib", "bin", "hdf5-plugins").map(src.resolve) ++ (c.projData.toSeq ++ c.gdalData.toSeq).map(Paths.get(_))
+        dirs.filter(Files.isDirectory(_)).map { d =>
+            var total = 0L
+            Try(Files.walkFileTree(d, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Int.MaxValue, new SimpleFileVisitor[Path] {
+                override def visitFile(f: Path, a: BasicFileAttributes): FileVisitResult = {
+                    total += a.size
+                    FileVisitResult.CONTINUE
+                }
+                override def visitFileFailed(f: Path, e: IOException): FileVisitResult = FileVisitResult.CONTINUE
+            }))
+            total
+        }.sum
     }
 
     private def copyChoice(dest: Path, arch: String): NativeChoice = {

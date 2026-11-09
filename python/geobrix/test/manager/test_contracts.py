@@ -382,6 +382,8 @@ def test_the_dem_verdicts_tri_keeps_its_jvm_level_and_the_rest_are_light():
         "gbx_rst_roughness": "engine-c0",
         "gbx_rst_aspect": levels.ENGINE,
         "gbx_rst_tpi": levels.ENGINE,
+        "gbx_rst_fillnodata": "engine-c0",
+        "gbx_rst_summary": "engine-c0",
     }
     for name, form in forms.items():
         assert levels.engine_form(MAN.functions[name]) == form, name

@@ -358,6 +358,27 @@ def _describe_in_place(gdal, tokens, names, sources, drivers) -> list:
     return out
 
 
+def _drop_stored_statistics(gdal, paths) -> None:
+    """Remove the STATISTICS_* tags a staged input carries. ``raster info --stats`` returns a band's stored statistics
+    instead of computing them, so a tile whose tags came from its source (a clip, a derived tile) would report the
+    source's minimum, maximum and mean. The staged copy is the engine's own; a format that cannot be updated stores no
+    such tag in the bytes and is left as it is."""
+    for path in paths:
+        ds = gdal.OpenEx(path, gdal.OF_RASTER | gdal.OF_UPDATE)
+        if ds is None:
+            continue
+        try:
+            for k in range(1, ds.RasterCount + 1):
+                band = ds.GetRasterBand(k)
+                md = band.GetMetadata() or {}
+                kept = {n: v for n, v in md.items() if not n.startswith("STATISTICS_")}
+                if len(kept) != len(md):
+                    band.SetMetadata(kept)
+        finally:
+            ds.FlushCache()
+            ds = None
+
+
 def _read(gdal, name: str) -> bytes:
     size = gdal.VSIStatL(name).size
     fh = gdal.VSIFOpenL(name, "rb")
@@ -983,6 +1004,9 @@ def run(
                 # to translate)
                 tokens = _describe_in_place(gdal, tokens, names, sources, drivers)
                 command = _shown(" ".join([block.alg] + tokens), shown)
+                _drop_stored_statistics(
+                    gdal, [sources.get(i, names[i]) for i in range(len(names))]
+                )
             else:
                 for i, src in sources.items():
                     _to_gtiff(gdal, fn.sql_name, src, names[i], drivers)

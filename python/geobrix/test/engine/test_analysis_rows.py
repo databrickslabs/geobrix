@@ -96,6 +96,27 @@ def test_a_container_tile_with_no_band_is_summarized_with_no_bands_and_a_fill_re
     assert refused.raster is None and "no band" in refused.error
 
 
+def test_the_summary_computes_its_statistics_from_the_pixels_not_from_stored_tags():
+    z = np.arange(1, 13, dtype="float64").reshape(1, 3, 4)
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff", width=4, height=3, count=1, dtype="float32", nodata=NODATA
+        ) as ds:
+            ds.write(z.astype("float32"))
+            ds.update_tags(
+                1,
+                STATISTICS_MINIMUM="500",
+                STATISTICS_MAXIMUM="900",
+                STATISTICS_MEAN="700",
+                STATISTICS_STDDEV="1",
+            )
+        stale = mf.read()
+    res = run.run(SUMMARY, [stale], {})
+    assert res.error is None
+    band = json.loads(res.text)["bands"][0]
+    assert (band["minimum"], band["maximum"], band["mean"]) == (1.0, 12.0, 6.5)
+
+
 def test_a_band_with_no_valid_pixel_has_no_statistics_and_the_summary_is_still_given():
     res = run.run(SUMMARY, [_tif(np.full((1, 4, 4), NODATA))], {})
     assert res.error is None
@@ -228,3 +249,16 @@ def test_a_pixel_the_fill_reaches_becomes_valid_in_a_tiles_own_mask_and_the_rest
     monkeypatch.setattr(run, "_unmask_filled", lambda *a, **k: None)
     plain = run.run(FILL, [raw], {"max_search_dist": 100.0, "smoothing_iter": 0})
     assert np.array_equal(_mask_of(plain.raster)[0], valid)
+
+
+def test_a_masked_multi_band_tile_keeps_its_mask_through_the_per_band_fill():
+    yy, xx = np.mgrid[0:64, 0:64].astype("float64")
+    z = np.stack([10.0 + xx + yy, 200.0 - xx])
+    src = oracles._gtiff(z, "EPSG:3857", nodata=None)
+    raw = run.run(MAN.functions["gbx_rst_transform"], [src], {"srid": 32632}).raster
+    valid, _, _ = _mask_of(raw)
+    assert not valid.all()
+    near = run.run(FILL, [raw], {"max_search_dist": 1.0, "smoothing_iter": 0})
+    assert near.error is None
+    short, _, _ = _mask_of(near.raster)
+    assert (valid <= short).all() and short.sum() > valid.sum() and not short.all()

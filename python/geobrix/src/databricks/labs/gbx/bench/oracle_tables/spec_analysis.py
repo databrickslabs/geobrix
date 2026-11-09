@@ -267,7 +267,7 @@ SPEC_ANALYSIS = (
         FND,
         (Build("fill_masked"), 1.0, 0),
         "fill_mask",
-        None,
+        "partial",
         ONLY,
     ),
     Case("fillnodata_null_smoothing", FND, (DEM, 100.0, None), "null", None, ONLY),

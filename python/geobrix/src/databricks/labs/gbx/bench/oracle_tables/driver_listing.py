@@ -39,7 +39,6 @@ _RASTER = {
         "write": True,
         "tile_bytes": True,
         "shipped": True,
-        "built_in": None,
         # covered by the extended driver tests, through the named reader, the generic one and rst_asformat
         "tested": True,
         "tested_with": "gtiff_gbx, raster_gbx (read), gbx_rst_asformat (write)",
@@ -65,11 +64,8 @@ _RASTER = {
     },
     # tested as a vector driver only: a raster listing says it is not tested (`tested` follows the kind asked for)
     "OpenFileGDB": {"tested": False, "tested_with": None},
-    # GeoBrix's own Zarr reader and writer use the zarr package
-    "Zarr": {
-        "raster": True,
-        "built_in": "The Zarr readers and writers use the zarr package, not this driver.",
-    },
+    # GeoBrix's own Zarr reader and writer use the zarr package; the guidance says so
+    "Zarr": {"raster": True},
     # a driver that reads a header file beside the data: allowed, but not a tile's bytes
     "ENVI": {
         "allowed": True,

@@ -77,7 +77,6 @@ def test_a_raster_driver_row_carries_gdals_flags_and_the_policy():
         "available": True,
         "requires": None,
         "shipped": True,
-        "built_in": None,
         "tested": True,
         "tested_with": "raster_gbx (read), gbx_rst_asformat (write)",
         "guidance": "raster_gbx reads and writes via gbx_rst_asformat AAIGrid; the format is detected from the file. It has no named reader or writer.",
@@ -335,12 +334,21 @@ def test_a_refused_driver_is_not_registered_in_the_full_mode():
 # --- the formats GeoBrix handles without the GDAL driver ------------------------------------------------------------
 
 
-def test_a_driver_with_a_built_in_path_carries_its_note():
-    row = listing.driver_row(FakeDriver("Zarr", DCAP_RASTER="YES", DCAP_OPEN="YES"))
-    assert row["built_in"] == listing.BUILT_IN["Zarr"]
-    assert (
-        listing.driver_row(FakeDriver("GTiff", DCAP_RASTER="YES"))["built_in"] is None
+def test_a_driver_with_a_built_in_path_names_it_in_its_guidance():
+    """There is no built_in column: the guidance of each such driver names the GeoBrix reader or function instead."""
+    import re
+
+    from databricks.labs.gbx.drivers import _builtin
+
+    assert "built_in" not in listing.driver_row(
+        FakeDriver("Zarr", DCAP_RASTER="YES", DCAP_OPEN="YES")
     )
+    assert "built_in" not in {n for n, _ in listing.COLUMNS}
+    rows = {r["driver"]: r for r in json.loads(listing.SNAPSHOT.read_text())["drivers"]}
+    for f in _builtin.BUILT_IN_FORMATS:
+        if f["driver"]:
+            first = re.search(r"`(\w+)`", f["where"]).group(1)
+            assert first in rows[f["driver"]]["guidance"], f["driver"]
 
 
 def test_the_built_in_formats_name_drivers_of_the_build_and_readers_of_the_source():
@@ -359,11 +367,10 @@ def test_the_built_in_formats_name_drivers_of_the_build_and_readers_of_the_sourc
         re.fullmatch(r"builtin-[a-z0-9]+", a) for a in anchors
     )
     assert {f["driver"] for f in formats if f["driver"]} <= registered
-    assert set(listing.BUILT_IN) == {f["driver"] for f in formats if f["driver"]}
     assert any(f["driver"] is None for f in formats), "LAS and LAZ have no GDAL driver"
-    assert not {"GTiff", "COG", "GeoJSON", "GPKG", "ESRI Shapefile"} & set(
-        listing.BUILT_IN
-    )
+    assert not {"GTiff", "COG", "GeoJSON", "GPKG", "ESRI Shapefile"} & {
+        f["driver"] for f in formats
+    }
     readers = {d.name for d in manifest.load().datasources}
     functions = set(manifest.load().functions)
     helpers = {
@@ -372,13 +379,13 @@ def test_the_built_in_formats_name_drivers_of_the_build_and_readers_of_the_sourc
         "pmtiles_info": "databricks.labs.gbx.pmtiles._inspect",
     }
     for f in formats:
-        for text in (f["where"], f["note"] or ""):
+        for text in (f["where"],):
             for token in re.findall(r"\b\w+_gbx\b|\bgbx_\w+\b|\bpmtiles_info\b", text):
                 if token in helpers:
                     assert hasattr(importlib.import_module(helpers[token]), token)
                 else:
                     assert token in readers or token in functions, (token, text)
-        for text in (f["note"] or "", f["uses"], f["where"]):
+        for text in (f["uses"], f["where"]):
             assert all(len(x.split()) <= 25 for x in re.split(r"(?<=\.) ", text)), text
 
 

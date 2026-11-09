@@ -34,7 +34,7 @@ The [as-provided list](../gdal-drivers) shows the drivers that the env wheel shi
 | SQL (session) | `gbx_drivers([kind])` | rows |
 | Python | `drivers.functions.drivers(kind=None)` | DataFrame |
 
-Rows: `driver` `STRING`, `description` `STRING`, `raster` `BOOLEAN`, `vector` `BOOLEAN`, `read` `BOOLEAN`, `write` `BOOLEAN`, `extensions` `ARRAY<STRING>`, `allowed` `BOOLEAN`, `tile_bytes` `BOOLEAN`, `available` `BOOLEAN`, `requires` `STRING`, `shipped` `BOOLEAN`, `built_in` `STRING`, `tested` `BOOLEAN`, `tested_with` `STRING`, `guidance` `STRING`, `docs` `ARRAY<STRING>`, `help_url` `STRING`.
+Rows: `driver` `STRING`, `description` `STRING`, `raster` `BOOLEAN`, `vector` `BOOLEAN`, `read` `BOOLEAN`, `write` `BOOLEAN`, `extensions` `ARRAY<STRING>`, `allowed` `BOOLEAN`, `tile_bytes` `BOOLEAN`, `available` `BOOLEAN`, `requires` `STRING`, `shipped` `BOOLEAN`, `tested` `BOOLEAN`, `tested_with` `STRING`, `guidance` `STRING`, `docs` `ARRAY<STRING>`, `help_url` `STRING`.
 
 | Parameter | SQL type | Default | Description |
 |---|---|---|---|
@@ -61,7 +61,6 @@ Call it as a table function. Pass `'raster'` or `'vector'` to keep one kind, or 
 | `available` | Whether the driver works as shipped. It is false for a driver that needs a service, a program or a plugin this runtime lacks. |
 | `requires` | What the driver needs that the runtime does not supply, or NULL. A format that reads sidecar files names them here. |
 | `shipped` | Whether the driver is in the env wheel's own build. A false value means a package in this environment added it. |
-| `built_in` | A GeoBrix reader or writer that handles the format without this driver, or NULL. Zarr, PMTiles and MVT are examples. LAS and LAZ use laspy, and GDAL has no driver for them. |
 | `tested` | Whether GeoBrix's extended driver tests cover the driver in this release. It describes the release, not the environment. |
 | `tested_with` | The GeoBrix readers, writers and functions the tests used, or NULL for a driver that is not tested. |
 | `guidance` | A short note on what GeoBrix offers for the format: the built-in reader or writer to use, and what it covers. Every driver has one. |

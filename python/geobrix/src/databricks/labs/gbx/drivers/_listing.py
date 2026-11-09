@@ -20,7 +20,6 @@ from pyspark.sql.functions import udtf
 
 from databricks.labs.gbx import _gdal_policy, _osgeo
 from databricks.labs.gbx.drivers import _guidance, _tested
-from databricks.labs.gbx.drivers._builtin import BUILT_IN
 
 KINDS = ("raster", "vector")
 GDAL_DOCS = "https://gdal.org/"
@@ -40,7 +39,6 @@ COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("available", "BOOLEAN"),
     ("requires", "STRING"),
     ("shipped", "BOOLEAN"),
-    ("built_in", "STRING"),
     ("tested", "BOOLEAN"),
     ("tested_with", "STRING"),
     ("guidance", "STRING"),
@@ -108,7 +106,6 @@ def driver_row(
         "available": allowed and usable,
         "requires": requires,
         "shipped": None if shipped is None else name in shipped,
-        "built_in": BUILT_IN.get(name),
         "tested": _tested.is_tested(name, kind),
         "tested_with": _tested.tested_with(name, kind),
         "help_url": help_url(md.get("DMD_HELPTOPIC")),

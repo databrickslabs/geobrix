@@ -83,8 +83,13 @@ def _yes(md, key: str) -> bool:
     return str(md.get(key, "")).upper() == "YES"
 
 
-def driver_row(drv, shipped: Optional[frozenset] = None) -> Dict[str, Any]:
-    """One driver of GDAL's registry as the row of ``gbx_drivers`` (a dict by column)."""
+def driver_row(
+    drv, shipped: Optional[frozenset] = None, kind: Optional[str] = None
+) -> Dict[str, Any]:
+    """One driver of GDAL's registry as the row of ``gbx_drivers`` (a dict by column). ``kind`` is the filter the
+    listing was asked for: ``tested`` and ``tested_with`` then describe that kind only (a driver tested as a vector
+    driver is not tested as a raster one); with None they cover every kind the driver is tested as.
+    """
     md = drv.GetMetadata() or {}
     name = drv.ShortName
     raster, vector = _yes(md, "DCAP_RASTER"), _yes(md, "DCAP_VECTOR")
@@ -104,8 +109,8 @@ def driver_row(drv, shipped: Optional[frozenset] = None) -> Dict[str, Any]:
         "requires": requires,
         "shipped": None if shipped is None else name in shipped,
         "built_in": BUILT_IN.get(name),
-        "tested": _tested.is_tested(name),
-        "tested_with": _tested.tested_with(name),
+        "tested": _tested.is_tested(name, kind),
+        "tested_with": _tested.tested_with(name, kind),
         "help_url": help_url(md.get("DMD_HELPTOPIC")),
     }
     row["guidance"] = _guidance.guidance(row)
@@ -122,7 +127,7 @@ def driver_rows(
     kind = check_kind(kind)
     rows: Dict[str, Dict[str, Any]] = {}
     for i in range(gdal.GetDriverCount()):
-        row = driver_row(gdal.GetDriver(i), shipped)
+        row = driver_row(gdal.GetDriver(i), shipped, kind)
         if kind is None or row[kind]:
             rows.setdefault(row["driver"], row)
     return sorted(rows.values(), key=lambda r: (r["driver"].lower(), r["driver"]))

@@ -42,6 +42,9 @@ class RasterCase:
     ramp: bool = False  # a smooth surface, for a lossy format
     name: str = ""  # the file's name, when the driver needs one
     note: str = ""
+    counts: bool = (
+        True  # False: the tests run, but the driver is not counted as tested (GeoBrix has its own reader and writer)
+    )
 
     @property
     def id(self) -> str:
@@ -194,8 +197,10 @@ RASTER_CASES: List[RasterCase] = [
     RasterCase("WEBP", ".webp", "uint8", 3, None, co=("LOSSLESS=YES",)),
     RasterCase("JPEGXL", ".jxl", "uint8", 3, None),
     RasterCase("RMF", ".rsw", "uint8", 3, None),
-    RasterCase("netCDF", ".nc", "float32", 1, -9999.0, reader="netcdf_gbx"),
-    RasterCase("netCDF", ".nc", "int16", 1, -9999, 32633, UTM),
+    RasterCase(
+        "netCDF", ".nc", "float32", 1, -9999.0, reader="netcdf_gbx", counts=False
+    ),
+    RasterCase("netCDF", ".nc", "int16", 1, -9999, 32633, UTM, counts=False),
     RasterCase("MBTiles", ".mbtiles", "uint8", 3, None, 3857, MERC, path_only=True),
     RasterCase(
         "GPKG",
@@ -248,22 +253,6 @@ RASTER_FINDINGS: Dict[Tuple[str, str], str] = {
         "asformat",
         "GPKG-uint8-3857",
     ): "returns an error tile: \"A file system object called '/vsimem/... .tif' already exists\"",
-    (
-        "fromcontent",
-        "BAG-float32-4326",
-    ): "gbx_drivers reports tile_bytes true, but the bytes open with 0 bands; GDAL reads 2 from the file",
-    (
-        "fromcontent",
-        "GTX-float32-4326",
-    ): "gbx_drivers reports tile_bytes true, but the bytes do not open: the tile's temporary file is named .tif and GTX identifies by extension",
-    (
-        "fromcontent",
-        "SRTMHGT-int16-4326",
-    ): "gbx_drivers reports tile_bytes true, but the bytes do not open: SRTMHGT identifies by the file name",
-    (
-        "fromcontent",
-        "MBTiles-uint8-3857",
-    ): "gbx_drivers reports tile_bytes true, but the bytes do not open: the tile's temporary file is named .tif",
 }
 
 

@@ -116,3 +116,27 @@ def test_a_csv_with_x_and_y_columns_reads_as_a_table_with_no_geometry(
     assert cols == list(ref.columns) == ["X", "Y", "id", "name", "val"]
     assert [str(rows[0][c]) for c in cols] == [str(ref.iloc[0][c]) for c in cols]
     assert rows[0]["geom_0"] is None
+
+
+def test_a_dwg_of_a_line_reads_with_its_layer_and_geometry_type(spark):
+    """The second DWG sample: layer "0" holds one LineString, as pyogrio reads it. A DWG has no CRS, so none is set."""
+    import os
+    from test.drivers_extended._vector import DATA
+
+    import shapely
+
+    path = os.path.join(DATA, "line_r2000.dwg")
+    rows = (
+        spark.read.format("vector_gbx")
+        .option("driverName", "CAD")
+        .option("layerName", "0")
+        .load(path)
+        .collect()
+    )
+    assert_rows_are(rows, reference(path, "0"), "vector_gbx CAD line")
+    assert len(rows) == 1
+    gname = geom_column(list(rows[0].asDict()))
+    assert shapely.from_wkb(bytes(rows[0][gname])).geom_type in (
+        "LineString",
+        "MultiLineString",
+    )

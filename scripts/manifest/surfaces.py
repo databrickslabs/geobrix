@@ -705,7 +705,7 @@ def _tested_cell(name: str, kind: str) -> str:
 
     if not tested_in(name, kind):
         return ""
-    e = TESTED_DRIVERS[name]
+    e = TESTED_DRIVERS[name][kind]
 
     def code(entries: str) -> str:
         return " or ".join(f"`{x}`" for x in entries.split(", "))
@@ -716,12 +716,14 @@ def _tested_cell(name: str, kind: str) -> str:
     return f'<span className="gbx-tested">Tested</span> {text}'
 
 
-def _guidance_cell(d: dict) -> str:
-    """The "GeoBrix guidance" cell: the note of a driver that has one (a built-in to use, a caveat), with the pages that
-    cover it; empty for the rest."""
+def _guidance_cell(d: dict, kind: str) -> str:
+    """The "GeoBrix guidance" cell: the note of a driver that has an entry (a built-in to use, a caveat) or that is
+    tested as a ``kind`` driver (what GeoBrix does with it), with the pages that cover it. An untested driver without an
+    entry is empty: the intro of its table says what a plain row would."""
     from databricks.labs.gbx.drivers import _guidance
+    from databricks.labs.gbx.drivers._tested import tested_in
 
-    if d["driver"] not in _guidance.GUIDANCE:  # the table's intro says what a plain row would
+    if d["driver"] not in _guidance.GUIDANCE and not tested_in(d["driver"], kind):
         return ""
     return _mdx_cell_keep_code(_guidance.guidance_markdown(d))
 
@@ -792,7 +794,7 @@ def render_drivers_page(snapshot: dict) -> str:
         if with_tested:
             cell.append(_tested_cell(name, kind))
         if "GeoBrix guidance" in head:
-            cell.append(_guidance_cell(d))
+            cell.append(_guidance_cell(d, kind))
         return cell
 
     def section(kind: str, other: str) -> None:

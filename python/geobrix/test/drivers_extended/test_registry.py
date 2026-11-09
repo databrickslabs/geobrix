@@ -24,11 +24,6 @@ SPECIAL = {
             "test_the_bytes_of_a_vrt_are_refused_with_a_reason",
         ),
     ),
-    "MEM": (
-        "vector",
-        "gbx_rst_contour",
-        ("test_mem_is_the_in_memory_output_of_the_engines_feature_functions",),
-    ),
 }
 
 
@@ -39,16 +34,20 @@ def _ordered(readers):
 
 
 def derived() -> dict:
-    """The registry the cases give: for each driver, the GeoBrix entries whose paths all pass."""
+    """The registry the cases give: for each driver and kind, the GeoBrix entries whose paths all pass. A case with
+    ``counts=False`` runs, but its driver is not listed (GeoBrix has its own reader and writer for the format).
+    """
     out = {}
 
     def add(driver, kind, reads, write):
-        e = out.setdefault(driver, {"read": [], "write": [], "kinds": []})
-        e["kinds"].append(kind)
-        e["read"] += reads
-        e["write"] += [write] if write else []
+        out.setdefault(driver, {})[kind] = {
+            "read": ", ".join(dict.fromkeys(reads)),
+            "write": write,
+        }
 
     for driver, cases in R.BY_DRIVER.items():
+        if not all(c.counts for c in cases):
+            continue
         if all(
             R.RASTER_FINDINGS.get((p, c.id)) is None
             for c in cases
@@ -78,14 +77,7 @@ def derived() -> dict:
             )
     for driver, (kind, entry, _) in SPECIAL.items():
         add(driver, kind, [entry], None)
-    return {
-        d: {
-            "read": ", ".join(dict.fromkeys(e["read"])),
-            "write": ", ".join(dict.fromkeys(e["write"])) or None,
-            "kinds": tuple(k for k in ("raster", "vector") if k in e["kinds"]),
-        }
-        for d, e in sorted(out.items())
-    }
+    return {d: out[d] for d in sorted(out)}
 
 
 def test_the_registry_is_the_passing_cases_and_nothing_else():
@@ -122,7 +114,7 @@ def test_each_tested_driver_is_in_the_build_and_in_the_table_of_its_kind():
     }
     for driver, e in TESTED_DRIVERS.items():
         assert driver in snap, f"{driver} is not a driver of the env wheel's build"
-        for kind in e["kinds"]:
+        for kind, entry in e.items():
             assert snap[driver][kind], f"{driver} is not a {kind} driver"
+            assert entry["read"], (driver, kind)
         assert snap[driver]["allowed"] and snap[driver]["available"], driver
-        assert e["read"], driver

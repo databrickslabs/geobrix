@@ -43,7 +43,7 @@ _RASTER = {
         # covered by the extended driver tests, through the named reader, the generic one and rst_asformat
         "tested": True,
         "tested_with": "gtiff_gbx, raster_gbx (read), gbx_rst_asformat (write)",
-        "guidance": "gtiff_gbx reads and writes GeoTIFFs. Prefer it to this driver.",
+        "guidance": "gtiff_gbx reads and writes GeoTIFFs, on this driver. Prefer it to calling the driver directly.",
         "docs": [
             "https://databrickslabs.github.io/geobrix/docs/readers/geotiff",
             "https://databrickslabs.github.io/geobrix/docs/writers/geotiff",
@@ -56,11 +56,15 @@ _RASTER = {
         "guidance": "Not tested with GeoBrix: raster_gbx may read it; plain GDAL may suit it better.",
         "docs": [],
     },
-    # an in-process dataset: no files, and no tile bytes
+    # an in-process dataset: no files, and no tile bytes; no test lists it
     "MEM": {
         "tile_bytes": False,
         "requires": "an in-process dataset that lives in memory: it cannot be held as tile bytes",
+        "tested": False,
+        "tested_with": None,
     },
+    # tested as a vector driver only: a raster listing says it is not tested (`tested` follows the kind asked for)
+    "OpenFileGDB": {"tested": False, "tested_with": None},
     # GeoBrix's own Zarr reader and writer use the zarr package
     "Zarr": {
         "raster": True,
@@ -78,6 +82,10 @@ _RASTER = {
     "COG": {"read": False, "write": True},
 }
 _VECTOR = {
+    "OpenFileGDB": {
+        "tested": True,
+        "tested_with": "file_gdb_gbx, vector_gbx (read), file_gdb_gbx (write)",
+    },
     "ESRI Shapefile": {
         "raster": False,
         "vector": True,

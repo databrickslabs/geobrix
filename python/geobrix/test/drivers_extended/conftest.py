@@ -58,3 +58,17 @@ def spark(gb):
     )
     gbx.register(session)
     yield session
+
+
+# node id of each test that ran -> "passed", "skipped", "xfailed" or "failed" (read by test_zz_ran.py, which runs last)
+OUTCOMES: dict = {}
+
+
+def pytest_runtest_logreport(report):
+    if report.when == "call" or (report.when == "setup" and report.outcome != "passed"):
+        if hasattr(report, "wasxfail") and report.outcome == "skipped":
+            outcome = "xfailed"
+        else:
+            outcome = report.outcome
+        if report.nodeid not in OUTCOMES or report.when == "call":
+            OUTCOMES[report.nodeid] = outcome

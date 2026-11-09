@@ -180,7 +180,18 @@ def build_ogr_vrt(gb, case, path):
         )
 
 
+DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+
+def build_cad_point(gb, case, path):
+    """A DWG (AutoCAD R2000) of one point, GDAL's own CAD driver test file (data/README.txt gives its source)."""
+    import shutil
+
+    shutil.copy(os.path.join(DATA, "point2d_r2000.dwg"), path)
+
+
 BUILDERS: Dict[str, Callable] = {
+    "cad_point": build_cad_point,
     "gpx": build_gpx,
     "osm": build_osm,
     "mbtiles": build_mbtiles,
@@ -270,7 +281,24 @@ VECTOR_CASES: List[VectorCase] = [
         build="osm",
         keeps_attrs=False,
     ),
-    VectorCase("MVT", "t.pbf", build="mvt", epsg=3857, keeps_attrs=False),
+    VectorCase(
+        "MVT",
+        "t.pbf",
+        build="mvt",
+        epsg=3857,
+        keeps_attrs=False,
+        counts=False,  # GeoBrix has its own MVT encoder and PMTiles reader and writer
+    ),
+    VectorCase(
+        "CAD",
+        "point2d_r2000.dwg",
+        (POINT,),
+        build="cad_point",
+        layers=("0",),
+        epsg=None,
+        fields=False,
+        keeps_attrs=False,
+    ),
     VectorCase("OGR_VRT", "o.vrt", build="ogr_vrt", layers=("v",), keeps_attrs=False),
     VectorCase(
         "MBTiles",

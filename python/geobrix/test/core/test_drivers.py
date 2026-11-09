@@ -80,8 +80,11 @@ def test_a_raster_driver_row_carries_gdals_flags_and_the_policy():
         "built_in": None,
         "tested": True,
         "tested_with": "raster_gbx (read), gbx_rst_asformat (write)",
-        "guidance": "Tested with GeoBrix: read it with raster_gbx and write it with gbx_rst_asformat.",
-        "docs": [],
+        "guidance": "raster_gbx reads and writes via gbx_rst_asformat AAIGrid; the format is detected from the file. It has no named reader or writer.",
+        "docs": [
+            "https://databrickslabs.github.io/geobrix/docs/readers/raster",
+            "https://databrickslabs.github.io/geobrix/docs/api/raster-functions",
+        ],
         "help_url": "https://gdal.org/drivers/raster/aaigrid.html",
     }
 

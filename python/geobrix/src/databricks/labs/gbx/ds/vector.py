@@ -910,7 +910,7 @@ def _should_stream(driver):
     memory + single pass), vs. reading all fragments at once.
 
     Applies to every pyogrio single-file writer: GeoJSON, ESRI Shapefile, GPKG,
-    OpenFileGDB. Streaming is the union of what the alternatives lack: one pass
+    OpenFileGDB, KML, GML and DXF. Streaming is the union of what the alternatives lack: one pass
     (no per-fragment file re-opens, and no GeoJSON quadratic re-encode) AND
     bounded memory (never the whole dataset in driver memory, which OOMs the
     single-node driver on large inputs). GDAL sizes the shapefile `.dbf` fields
@@ -919,7 +919,20 @@ def _should_stream(driver):
     OpenFileGDB geometry column is renamed per batch to its format default (see
     ``_write_streaming``).
     """
-    return driver in ("GeoJSON", "ESRI Shapefile", "GPKG", "OpenFileGDB")
+    return driver in _STREAMED_DRIVERS
+
+
+# The pyogrio writers that stream the fragments into one write. KML, GML and DXF are on it because GDAL cannot reopen
+# their file to append a second fragment: they need the one write.
+_STREAMED_DRIVERS = (
+    "GeoJSON",
+    "ESRI Shapefile",
+    "GPKG",
+    "OpenFileGDB",
+    "KML",
+    "GML",
+    "DXF",
+)
 
 
 def _stream_record_batches(frag_paths, drop_cols, rename=None):
@@ -1976,6 +1989,13 @@ class VectorGbxWriter(DataSourceWriter):
                     _copy_tree_to_fuse(src, dst)
                 else:
                     _copy_file_to_fuse(src, dst)  # byte-only -> Volume-safe
+        except Exception as e:  # noqa: BLE001
+            if self.driver == "GPX" and type(e).__name__ == "FieldError":
+                raise ValueError(
+                    f"vector_gbx: GPX could not create a column of the DataFrame ({e}). GPX makes its own fields, "
+                    "such as name, ele, time and desc. Fix: rename or drop a column that has one of those names."
+                ) from e
+            raise
         finally:
             if local_dir is not None:
                 shutil.rmtree(local_dir, ignore_errors=True)
@@ -2005,6 +2025,9 @@ class VectorGbxWriter(DataSourceWriter):
             kw["layer"] = _GDB_DEFAULT_LAYER
         if self.driver == "OpenFileGDB":
             kw["layer_options"] = {"TARGET_ARCGIS_VERSION": self._gdb_target}
+        elif self.driver == "CSV":
+            # the CSV driver writes a geometry column only on request: as the WKT text, in a column named WKT
+            kw["layer_options"] = {"GEOMETRY": "AS_WKT"}
         return kw
 
     def _write_streaming(self, frags, local_out, geom_type, crs) -> None:

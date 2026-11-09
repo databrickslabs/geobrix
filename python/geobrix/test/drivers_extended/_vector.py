@@ -291,33 +291,13 @@ VECTOR_FINDINGS: Dict[Tuple[str, str], str] = {
         "MVT",
     ): "vector_gbx lists a tile folder's files and opens metadata.json, which is no vector dataset; GDAL opens the folder whole",
     (
-        "write2",
-        "KML",
-    ): "the writer merges partitions by appending to the file, and GDAL cannot reopen a KML to append; one partition writes",
-    (
-        "write2",
-        "GML",
-    ): "the writer merges partitions by appending to the file, and GDAL cannot reopen a GML to append; one partition writes",
-    (
-        "write2",
-        "DXF",
-    ): "raises 'CreateLayer() not supported by this dataset': the writer merges partitions by appending to the file, and GDAL cannot reopen a DXF to append; one partition writes",
-    (
-        "write1",
-        "CSV",
-    ): "raises 'Cannot find OGR geometry field': the CSV driver needs the layer option GEOMETRY=AS_WKT, and the writer passes no layer options",
-    (
-        "write2",
-        "CSV",
-    ): "raises 'Cannot find OGR geometry field': the CSV driver needs the layer option GEOMETRY=AS_WKT, and the writer passes no layer options",
-    (
         "write1",
         "GPX",
-    ): "raises FieldError: a column named like a GPX built-in field (name) cannot be created again",
+    ): "raises ValueError with a Fix: a column named like a GPX built-in field (name) cannot be created again",
     (
         "write2",
         "GPX",
-    ): "raises FieldError: a column named like a GPX built-in field (name) cannot be created again",
+    ): "raises ValueError with a Fix: a column named like a GPX built-in field (name) cannot be created again",
 }
 
 

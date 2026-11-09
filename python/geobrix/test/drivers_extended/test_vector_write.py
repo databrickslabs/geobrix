@@ -94,3 +94,32 @@ def test_the_writer_makes_a_dataset_that_pyogrio_reads_back(
         } == want
     if case.keeps_crs and case.epsg:
         assert same_crs(ref.crs.to_wkt() if ref.crs else None, "EPSG:4326")
+
+
+def test_a_column_named_like_a_gpx_built_in_field_is_refused_with_a_fix(
+    spark, tmp_path
+):
+    """GPX creates ``name`` itself: the writer says so and what to do, not a bare FieldError."""
+    from pyspark.sql.types import BinaryType, StringType, StructField, StructType
+
+    schema = StructType(
+        [
+            StructField("geom_0", BinaryType()),
+            StructField("name", StringType()),
+            StructField("geom_0_srid", StringType()),
+        ]
+    )
+    df = spark.createDataFrame(
+        [(bytearray(shapely.from_wkt("POINT (10 50)").wkb), "w1", "4326")], schema
+    )
+    w = (
+        df.write.format("vector_gbx")
+        .option("driverName", "GPX")
+        .option("layerName", "waypoints")
+    )
+    with pytest.raises(Exception) as raised:
+        w.mode("overwrite").save(str(tmp_path / "out"))
+    text = str(raised.value)
+    assert (
+        "Fix:" in text and "name" in text and "FieldError" not in text.split("Fix:")[0]
+    )

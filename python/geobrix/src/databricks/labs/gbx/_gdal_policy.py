@@ -1143,6 +1143,8 @@ def driver_requires(name: str, md) -> tuple:
     - A raster driver of the ``bytes_refused_light`` class reads other files beside the data: usable, with the note.
     - A vector driver in ``VECTOR_MULTI_FILE`` reads a set of files: usable, with the note.
     """
+    # Conservative reading (accepted): the presence of the key means the plugin is not loaded. Whether GDAL keeps the
+    # key on a plugin that loaded is unchecked, because the env wheel's build has no deferred plugin to test it on.
     plugin = md.get("DMD_PLUGIN_INSTALLATION_MESSAGE")
     if plugin:
         return str(plugin), False

@@ -20,7 +20,6 @@ from __future__ import annotations
 import fnmatch
 import os
 import re as _re
-import shutil
 import threading
 import uuid
 from collections import OrderedDict
@@ -45,7 +44,11 @@ from databricks.labs.gbx.pyrx.core.budget import (  # noqa: F401  (re-exported)
     size_text,
     tile_read_cap,
 )
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    copy_source_with_sidecars,
+    new_staged_local_file,
+    remove_staged,
+)
 
 __all__ = [
     "to_local_path",
@@ -1458,15 +1461,12 @@ def _stage_local_if_needed(path: str) -> tuple[str, bool]:
             f"GBX_STAGE_MAX_BYTES={stage_max:,}; use FUSE (as_local_file) instead"
         )
 
-    # Copy fallback: stage to a local temp (original behavior).
-    tmp = new_local_temp_file(suffix=os.path.splitext(path)[1] or ".tif")
-    try:
-        with open(path, "rb") as _src, open(tmp, "wb") as _dst:
-            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-    except Exception:
-        if os.path.exists(tmp):
-            os.remove(tmp)
-        raise
+    # Copy fallback: stage to a local temp, with the sidecars beside the file (an .aux.xml with its NoData, an ESRI .hdr)
+    # under the same prefix, as a raster stage does: GDAL finds them by the staged name, and a copy without them opens
+    # without the CRS or NoData they hold. The staged name is ``<uuid hex>_<random><source name>`` so that
+    # ``remove_staged`` finds the sidecars by the prefix.
+    tmp = new_staged_local_file(os.path.basename(path.rstrip("/")) or "source.tif")
+    copy_source_with_sidecars(path, tmp)  # removes what it staged if it fails
     return tmp, True
 
 
@@ -1665,10 +1665,7 @@ class _OpenerContext:
             # not opened (a corrupt file the probe could not read either, or an interrupt):
             # the copy just made would otherwise stay on local disk, once per attempt
             if is_temp and not opened:
-                try:
-                    os.remove(local_path)
-                except OSError:
-                    pass
+                remove_staged(local_path)
         if is_temp:
             self._staged_temps[id(ds)] = local_path
             if self._unlink_staged and ds.driver in _SINGLE_HANDLE_DRIVERS:
@@ -1698,7 +1695,7 @@ class _OpenerContext:
                 pass
         if tmp:
             try:
-                os.remove(tmp)
+                remove_staged(tmp)
             except Exception:
                 pass
 

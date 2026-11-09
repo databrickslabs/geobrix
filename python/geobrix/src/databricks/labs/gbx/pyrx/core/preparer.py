@@ -20,7 +20,7 @@ from databricks.labs.gbx.ds.file_gbx import StageTooLargeError  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _is_fuse_path  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _probe_direct_open  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file, remove_staged
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -306,8 +306,8 @@ def prepare_cogs(
                         predictor=predictor,
                     )
                 finally:
-                    if is_temp and os.path.exists(local_src):
-                        os.remove(local_src)
+                    if is_temp:
+                        remove_staged(local_src)
         f_elapsed = round(time.time() - f_t0, 2)
         rss = _peak_rss_mib()
         peak = max(peak, rss)

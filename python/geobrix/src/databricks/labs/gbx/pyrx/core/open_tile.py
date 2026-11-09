@@ -52,7 +52,7 @@ from databricks.labs.gbx.pyrx.core.budget import (
     refuse_window_over_cap,
     tile_read_cap,
 )
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file, remove_staged
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 from databricks.labs.gbx.zarr import _tiles as _zarr_tiles  # stdlib + numpy only
@@ -536,13 +536,6 @@ def open_tile(
             yield _open_bytes(stack, clipped)
 
 
-def _safe_remove(path: str) -> None:
-    try:
-        os.remove(path)
-    except OSError:
-        pass
-
-
 def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) -> str:
     """Shared local-path resolver for open_tile, _open, and open_header.
 
@@ -573,7 +566,7 @@ def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) ->
         raw = to_local_path(tile.path)
     local_path, is_temp = _stage_local_if_needed(raw)
     if is_temp:
-        stack.callback(_safe_remove, local_path)
+        stack.callback(remove_staged, local_path)
     return local_path
 
 

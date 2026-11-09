@@ -423,6 +423,40 @@ def test_stage_local_force_stage_env_always_copies(tmp_path, monkeypatch):
     os.remove(path)
 
 
+def test_stage_local_fallback_copy_carries_the_sidecars_and_remove_takes_them(
+    tmp_path, monkeypatch
+):
+    """The copy fallback stages the sidecars (an .aux.xml with its NoData) under the staged name's prefix, so GDAL opens
+    the copy as it opens the source; an .ovr stays behind; ``remove_staged`` removes the file and the sidecars.
+    """
+    from databricks.labs.gbx.ds import file_gbx
+    from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx.core import preparer as m
+    from databricks.labs.gbx.pyrx.core.local_temp import remove_staged
+
+    root = tmp_path / "root"
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(root))
+    f = tmp_path / "src.tif"
+    _write_src(str(f))
+    (tmp_path / "src.tif.aux.xml").write_text(
+        '<PAMDataset><PAMRasterBand band="1"><NoDataValue>7</NoDataValue>'
+        "</PAMRasterBand></PAMDataset>"
+    )
+    (tmp_path / "src.tif.ovr").write_bytes(b"o" * 64)
+    monkeypatch.setattr(file_gbx, "_is_fuse_path", lambda p: True)
+    monkeypatch.setenv("GBX_FORCE_STAGE", "1")
+
+    path, is_temp = m._stage_local_if_needed(str(f))
+    assert is_temp is True
+    names = sorted(os.listdir(root))
+    assert len(names) == 2 and not any(n.endswith(".ovr") for n in names)
+    assert os.path.exists(path + ".aux.xml")
+    with _env.open_raster(path) as ds:
+        assert ds.nodata == 7.0  # the staged copy reads the sidecar
+    remove_staged(path)
+    assert os.listdir(root) == []
+
+
 # ---------------------------------------------------------------------------
 # GBX_STAGE_MAX_BYTES guard
 # ---------------------------------------------------------------------------

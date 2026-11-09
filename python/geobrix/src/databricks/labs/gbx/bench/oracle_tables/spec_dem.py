@@ -463,8 +463,16 @@ _session_dem_rows += (
     Case("contour_null_tile", CT, (None, [1.5]), "null", None, ONLY),
     Case("contour_error_tile", CT, (ERR, [1.5]), "null", None, ONLY),
     Case("contour_corrupt", CT, (CORRUPT, [1.5]), "null", None, ONLY),
-    # a virtual tile whose file is not there is data, not a mistake: NULL, the reason logged once
-    Case("contour_missing_path", CT, (Build("vz_missing"), [1.5]), "null", None, ONLY),
+    # a virtual tile whose file is not there is retried, then raises naming the path (a Volume that has not caught
+    # up fails the task so that Spark retries); only bytes GDAL cannot read give NULL
+    Case(
+        "contour_missing_path",
+        CT,
+        (Build("vz_missing"), [1.5]),
+        "raises",
+        "gbx_missing_tile",
+        ONLY,
+    ),
     # The lines against GDAL's older `gdal.ContourGenerateEx` (an entry point apart from `raster contour`), which draws
     # the same lines: exact. The earlier scikit-image lines, still the Unity Catalog kernel's, are equivalent to them:
     # the same levels and line counts, within half a pixel, each up to a pixel shorter (see check_features_ref).

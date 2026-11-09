@@ -64,6 +64,12 @@ _validated: dict = (
 _validated_lock = threading.Lock()
 
 
+class MissingSourceError(FileNotFoundError):
+    """A virtual tile's file (or a FILE reference's) is still missing after the transient retries: raised, never an
+    error tile or a NULL, so Spark retries the task (a UC Volume read can lag a write) and the failure names the path.
+    """
+
+
 @dataclass(frozen=True)
 class Result:
     """A call's outcome: the output GeoTIFF, or the reason it failed (an error tile), and the argv it ran."""
@@ -178,6 +184,14 @@ def virtual_source(sql_name: str, path: str) -> None:
         )
         if drv is None:
             gdal.ErrorReset()
+            if gdal.VSIStatL(
+                path
+            ) is None and not _gdal_policy._names_a_refused_connection(
+                path, at_start=True
+            ):
+                # a file that is not there is no driver's to identify: a missing file, which the caller retries
+                # (a UC Volume path can lag a write) and then raises, never a data error
+                raise FileNotFoundError(f"{path}: {_gdal_policy._MISSING}")
             other = gdal.IdentifyDriverEx(path, gdal.OF_RASTER)
             what = (
                 f"a {other.ShortName} file"

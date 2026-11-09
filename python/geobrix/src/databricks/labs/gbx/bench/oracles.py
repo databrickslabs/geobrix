@@ -1305,8 +1305,9 @@ SPEC_SE: Tuple[Case, ...] = (
         ("session",),
     ),
     # Virtual tiles: a VRT is read (the policy allows it); a stored GDAL pipeline, a VRT over one, a VRT with a
-    # Python pixel function, a VRT raw band (a file's bytes read with no driver) and a missing file are error
-    # tiles, never run and never a failed query.
+    # Python pixel function and a VRT raw band (a file's bytes read with no driver) are error tiles, never run and
+    # never a failed query. A missing file is not data: it is retried, then raises naming the path (a Volume that has
+    # not caught up fails the task so that Spark retries).
     Case(
         "se_slope_virtual_vrt",
         SL,
@@ -1403,8 +1404,8 @@ SPEC_SE: Tuple[Case, ...] = (
         "se_slope_virtual_missing",
         SL,
         (Build("dem_missing"), "degrees"),
-        "error_tile",
-        None,
+        "raises",
+        "se_no_such_dem",
         ("session",),
     ),
     # One grammar: GDAL's muparser evaluates every expression (the pinned build carries it, the native self-check

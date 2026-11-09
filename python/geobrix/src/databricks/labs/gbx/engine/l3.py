@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import errno
 import logging
 import threading
 from typing import Optional, Tuple
@@ -128,28 +129,76 @@ _chain_text = (
 )  # the shared mapping (engine and light tier read one chain)
 
 
+class _Settled(Exception):
+    """A failure of a virtual-tile read that is not a missing file: it leaves the transient retry as it is."""
+
+    def __init__(self, exc: BaseException):
+        super().__init__(str(exc))
+        self.exc = exc
+
+
+def _is_missing(exc: BaseException) -> bool:
+    """Whether a read failed because the tile's file is not there: a FileNotFoundError or ENOENT anywhere in the
+    chain, or GDAL's own "No such file or directory". A refusal of the driver policy (GDAL reports a refused
+    driver's connection string as missing) is not a missing file."""
+    if run.policy_reason(_chain_text(exc)) is not None:
+        return False
+    cur, depth = exc, 0
+    while cur is not None and depth < 8:
+        if isinstance(cur, FileNotFoundError) or (
+            isinstance(cur, OSError) and cur.errno == errno.ENOENT
+        ):
+            return True
+        cur, depth = cur.__cause__ or cur.__context__, depth + 1
+    return _gdal_policy._MISSING in _chain_text(exc)
+
+
 def _virtual_raster(fn, tile, read_cap: Optional[int], file_ref=None) -> bytes:
     """A virtual tile's window as GeoTIFF bytes, read under the engine's input rules: its file (and a VRT's
     sources) must open with a driver the virtual-tile policy allows, and its decoded window must fit this compute's
-    read cap, judged from the header before any pixel is read. Any failure is a DataError (an error tile).
+    read cap, judged from the header before any pixel is read. A corrupt or refused file is a DataError (an error
+    tile). A file that is not there is not data: it is retried as transient (``_retry_transient``, the limits of
+    every Volume read; a UC Volume can lag a write) and, still missing, raises ``MissingSourceError`` with a Fix.
     ``file_ref`` is the tile's FILE reference: a read through it is not staged through the path as well.
     """
+    from databricks.labs.gbx.core._retry import _retry_transient
     from databricks.labs.gbx.pyrx.core import open_tile as ot
     from databricks.labs.gbx.zarr import _tiles as zarr_tiles
 
     vt = ot._to_virtual_tile(tile)
     try:
         with contextlib.ExitStack() as stack:
-            if not zarr_tiles.is_zarr_tile(
+            is_zarr = zarr_tiles.is_zarr_tile(
                 vt
-            ):  # a Zarr tile is decoded by GeoBrix, not opened by a GDAL driver
+            )  # a Zarr tile is decoded by GeoBrix, not opened by a GDAL driver
+            if not is_zarr:
                 # the path GDAL opens, resolved once as every light read resolves it (the remote-path gate, the
-                # dbfs:/ and file:/ spellings, /Volumes staging); the policy and the reads below judge that path
+                # dbfs:/ and file:/ spellings, /Volumes staging, which retries a Volume file on its own); the
+                # policy and the reads below judge that path
                 vt = dataclasses.replace(
                     vt, path=ot._resolve_local_or_windowed(vt, file_ref, stack)
                 )
-                run.virtual_source(fn.sql_name, vt.path)
-            return _read_virtual(fn, vt, read_cap, file_ref)
+
+            def attempt() -> bytes:
+                try:
+                    if not is_zarr:
+                        run.virtual_source(fn.sql_name, vt.path)
+                    return _read_virtual(fn, vt, read_cap, file_ref)
+                except (MemoryError, RecursionError):
+                    raise
+                except (
+                    Exception
+                ) as exc:  # noqa: BLE001 - sorted: a missing file is retried, the rest settles
+                    if _is_missing(exc):
+                        raise FileNotFoundError(str(exc)) from exc
+                    raise _Settled(exc) from None
+
+            failure = None
+            try:
+                return _retry_transient(attempt)
+            except _Settled as settled:
+                failure = settled.exc
+            raise failure  # the failure itself, for the classification below
     except (MemoryError, RecursionError):
         raise
     except _gdal_policy.RemotePathError as exc:
@@ -157,6 +206,12 @@ def _virtual_raster(fn, tile, read_cap: Optional[int], file_ref=None) -> bytes:
     except (
         Exception
     ) as exc:  # noqa: BLE001 - an unreadable virtual tile is data, as on every light function
+        if _is_missing(exc):
+            raise run.MissingSourceError(
+                f"{fn.sql_name}: the virtual tile's file {vt.path} is missing or unreadable, still after the "
+                f"retries for a file a Volume has not caught up with ({exc}). "
+                "Fix: check the path exists and is readable from the workers"
+            ) from None
         # a source the policy stopped while GDAL read the tile: GDAL's message is in the chain (rasterio's read
         # failure, or the DataError the read raised), so the reason is judged on the whole chain
         text = _chain_text(exc)

@@ -245,3 +245,71 @@ def test_the_python_api_force_output_runs_the_engine(spark8, tmp_path, sql_name)
         rx.rst_slope(F.col("tile"), virtualize_dir=str(tmp_path / "v")).alias("s")
     ).collect()
     assert r["s"]["raster"] is None and r["s"]["path"].startswith(str(tmp_path / "v"))
+
+
+# --- a virtual tile whose file is missing: retried as transient, then raised, never NULL ---------------------------
+
+
+def _read_script(monkeypatch, failures, error):
+    """`_read_virtual` fails `failures` times with `error`, then returns bytes; the retry's sleeps are recorded."""
+    from databricks.labs.gbx.core import _retry
+
+    calls, sleeps = [], []
+    monkeypatch.setattr(run, "virtual_source", lambda sql_name, path: None)
+    monkeypatch.setattr(_retry.time, "sleep", sleeps.append)
+
+    def read(fn, vt, cap, ref=None):
+        calls.append(vt.path)
+        if len(calls) <= failures:
+            raise error
+        return b"II*\x00"
+
+    monkeypatch.setattr(l3, "_read_virtual", read)
+    return calls, sleeps
+
+
+def test_a_file_that_appears_after_two_failed_attempts_is_read(monkeypatch):
+    calls, sleeps = _read_script(
+        monkeypatch, 2, FileNotFoundError("/tmp/gbx_v1.tif: No such file or directory")
+    )
+    assert l3._virtual_raster(SLOPE, _virtual(1), None) == b"II*\x00"
+    assert len(calls) == 3 and len(sleeps) == 2
+
+
+def test_a_file_still_missing_raises_with_the_path_and_a_fix_after_ten_attempts(
+    monkeypatch,
+):
+    calls, sleeps = _read_script(
+        monkeypatch, 99, FileNotFoundError("/tmp/gbx_v1.tif: No such file or directory")
+    )
+    with pytest.raises(run.MissingSourceError) as raised:
+        l3._virtual_raster(SLOPE, _virtual(1), None)
+    assert "/tmp/gbx_v1.tif" in str(raised.value) and "Fix:" in str(raised.value)
+    assert isinstance(raised.value, FileNotFoundError)
+    assert len(calls) == 10 and len(sleeps) == 9
+
+
+def test_gdals_own_missing_file_message_is_retried_the_same(monkeypatch):
+    err = OSError("Read failed. See previous exception")
+    err.__cause__ = RuntimeError("/tmp/gbx_v1.tif: No such file or directory")
+    calls, _ = _read_script(monkeypatch, 99, err)
+    with pytest.raises(run.MissingSourceError):
+        l3._virtual_raster(SLOPE, _virtual(1), None)
+    assert len(calls) == 10
+
+
+def test_unreadable_bytes_stay_an_error_tile_and_are_not_retried(monkeypatch):
+    calls, sleeps = _read_script(
+        monkeypatch, 99, OSError("x.tif: TIFFReadDirectory: corrupt directory")
+    )
+    with pytest.raises(run.DataError, match="could not be read"):
+        l3._virtual_raster(SLOPE, _virtual(1), None)
+    assert len(calls) == 1 and not sleeps
+
+
+def test_a_missing_file_is_not_swallowed_into_a_null_by_the_udf_input_path(
+    monkeypatch,
+):
+    _read_script(monkeypatch, 99, FileNotFoundError("gone"))
+    with pytest.raises(run.MissingSourceError):
+        l3._inputs(SLOPE, _virtual(1))
